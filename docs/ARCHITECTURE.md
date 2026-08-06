@@ -347,6 +347,7 @@ Seit 2026-04-19 ist diese Registry DB-backed (`runtimes` Tabelle) statt JSON-har
 | `lmstudio` | `lms load/unload` via SSH | Host der Runtime (Host-Registry) | Start/Stop pro Modell |
 | `vllm_docker` | `docker start/stop/restart` via SSH | Host der Runtime (Host-Registry) | Start/Stop Container |
 | `llamacpp_docker` | `docker start/stop/restart` via SSH (wie `vllm_docker`) | Host der Runtime (Host-Registry) | Start/Stop Container |
+| `ssh_process` | `nohup`-Start / `stop_command` bzw. `pkill -x` via SSH, Zustand per `pgrep -x` | Host der Runtime (Host-Registry) | Installieren + Start/Stop |
 | `unsloth` | tmux `new-session` / `kill-session` via SSH | Host der Runtime (Host-Registry) | Start/Stop Studio |
 | `openai_compatible` | Nur Health-Probe (remote Lifecycle) | Extern | Enable/Disable |
 | `cloud` | Nur Health-Probe (z. B. Ollama Cloud) | Extern | Enable/Disable |
@@ -392,6 +393,77 @@ dem Spark gibt. Modellwechsel bei llama.cpp = anderer Container bzw. anderes
 `launch_command`; hot-swapping hinter einem Port waere ein spaeterer
 llama-swap-PR. Seed-Vorlage: `llamacpp-example` in `backend/config/runtimes.json`
 (`enabled: false`).
+
+##### `ssh_process` — Host-Engine statt Container (NEU 2026-08-06)
+
+Nicht jede lokale Engine ist ein Container. `ds4-server` (DwarfStar 4, C/CUDA,
+von Salvatore Sanfilippo) wird per `start.sh`/`stop.sh` als **Host-Prozess**
+gefahren und liest ein *asymmetrisches* GGUF, das vLLM gar nicht laden kann —
+deshalb bringt das Repo seinen eigenen Server mit. `ssh_process` ist die
+generische Antwort darauf: gleicher OpenAI-`/v1`-Vertrag, nur ohne Docker.
+
+Das Handle ist `runtimes.process_name` — exakt die Rolle, die `container_name`
+bei den Docker-Typen spielt. Ohne ihn koennte MC einen Prozess starten, ihn
+danach aber weder sehen noch stoppen; die Runtime meldet deshalb `unknown`
+statt `stopped`.
+
+| Beobachtung | Zustand | Warum |
+|---|---|---|
+| Prozess + HTTP 200 | `ready` | bedient Anfragen |
+| Prozess, kein HTTP | `warming` | laedt Gewichte (110 GiB dauern Minuten) |
+| kein Prozess | `stopped` | — |
+| SSH kaputt / `pgrep` exit >1 | `unknown` | „wir wissen es nicht" ist nicht „nichts laeuft" |
+
+* **Start** ist idempotent (laeuft es schon, passiert nichts) und wird gegen die
+  Prozesstabelle verifiziert: `nohup … &` liefert Exit 0 in dem Moment, in dem
+  die Shell forkt — ob die Engine ueberlebt hat, sagt das nicht. Dieselbe
+  Klasse Luege wie ADR-059, eine Ebene tiefer.
+* **Stop** nimmt das Skript der Engine (`stop_command`), sonst `pkill -x`, und
+  prueft anschliessend, dass wirklich nichts mehr laeuft. `pgrep -x`/`pkill -x`
+  matchen exakt auf den Namen — ein Pattern wuerde den `bash -lc`-Wrapper und
+  fremde Shells mittreffen.
+* **Auto-Recovery bleibt Docker-only** (`runtime_watcher`): ein Docker-Start ist
+  gegen ein Label pruefbar, das der Daemon fuehrt; ein Prozess, der eine Stunde
+  110 GiB laedt, koennte durch einen Neustart auf Probe-Timeout schlimmer
+  dastehen als vorher. Manueller Start bleibt ein Klick entfernt.
+
+##### Speicher-Exklusivitaet (`exclusive_memory`)
+
+Eine GB10-Box haelt **ein** ~110-GB-Modell. Zwei koexistieren nicht, und der
+Fehlerfall ist kein sauberer Fehler, sondern ein OOM minutenlang nach dem
+Start, waehrend das erste Modell weiter bedient. `runtime_manager.ensure_exclusive_host()`
+stoppt deshalb vor dem Start jeder `exclusive_memory`-Runtime **jede andere**
+aktivierte exklusive Runtime auf **demselben** Host — Docker-Typen ueber
+`evict_spark_runtime_containers`, `ssh_process` ueber deren Stop-Pfad. Scheitert
+das Stoppen, wird der Start abgebrochen.
+
+Das ist bewusst **nicht** `single_instance`: das Flag begrenzt seit Phase 24
+(HERM-04/D-08) die *Agent-Bindungen* einer Runtime und sperrt den Switch-Dialog.
+Ein 110-GB-Modell, auf das kein Agent umschalten darf, waere das Gegenteil des
+Ziels. Bestehende Runtimes sind unberuehrt: das Feld ist per Default `false`,
+und ohne Flag ist der Hook ein No-op.
+
+##### One-Click-Installation von Recipes
+
+`local_recipes.install_template` + `POST /api/v1/local-registry/{slug}/install`
+(admin) bringen eine Engine per Klick auf die Box. Der Job laeuft **detached**
+auf der Box (`nohup`, Log in eine Datei dort) und wird byte-offset-weise in ein
+Redis-Log getailt, das die UI cursorbasiert pollt — eine offene SSH-Sitzung
+ueber Stunden waere beim ersten Netz-Hicksser tot, und mit ihr der halbe
+110-GiB-Download. Den Exit-Code transportiert ein `MC_EXIT:<code>`-Marker, den
+der Wrapper anhaengt; in-band ist das der einzige Weg aus einem `nohup`-Job.
+
+Der Job-Runner selbst (`services/job_log.JobLog`) ist aus `host_bootstrap`
+herausgezogen und wird von beiden benutzt — die Redis-Keys blieben dabei
+unveraendert. Vor dem Start wird `df` gegen `est_weights_gb` geprueft und
+**gewarnt, nicht blockiert**: die Groessenangabe ist eine Schaetzung, und der
+Operator kennt evtl. einen Mount, den wir nicht sehen. Idempotenz ist Sache des
+`install_template` (clone nur wenn fehlend, vorhandene Gewichte ueberspringen).
+
+Credits: `local_recipes.author` / `author_url` stehen auf jeder Karte im
+Modell-Browser („von {author} ↗"). Fuer die mitgelieferten Rezepte traegt die
+Migration 0177 sie nach — der Seeder ist insert-only und haette bestehende
+Zeilen nie wieder angefasst.
 
 ##### Box-Wizard — eine GPU-Box per Klick anbinden
 

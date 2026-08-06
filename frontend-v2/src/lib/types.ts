@@ -1695,6 +1695,9 @@ export type RuntimeState =
 
 export type RuntimeType =
   | "vllm_docker"
+  | "llamacpp_docker"
+  /** Host process behind an OpenAI /v1 port, managed over SSH (PR 6). */
+  | "ssh_process"
   | "lmstudio"
   | "unsloth"
   | "unsloth_porsche"
@@ -1713,6 +1716,13 @@ export interface Runtime {
    *  and other agents cannot switch into it. Backend enforces; frontend
    *  uses this purely as a UX hint (disabled state + lock icon). */
   single_instance?: boolean;
+  /** "Braucht die ganze Box" — vor dem Start wird jede andere exklusive
+   *  Runtime auf demselben Host gestoppt. NICHT dasselbe wie single_instance
+   *  (das begrenzt Agent-Bindungen, nicht den Speicher). */
+  exclusive_memory?: boolean;
+  /** ssh_process: Prozessname für pgrep/pkill — das Gegenstück zu container_name. */
+  process_name?: string | null;
+  stop_command?: string | null;
   provider: string;
   /** Vendor group for the UI ("Anthropic Pro/Max", "Ollama Cloud", …),
    *  derived server-side from the endpoint — same rule as the list order and
@@ -1891,7 +1901,7 @@ export interface LocalRecipe {
   slug: string;
   display_name: string;
   description: string | null;
-  /** "sparkrun" | "vllm_docker" | "llamacpp_docker" */
+  /** "sparkrun" | "vllm_docker" | "llamacpp_docker" | "ssh_process" */
   engine: string;
   model_identifier: string;
   quant: string | null;
@@ -1905,6 +1915,13 @@ export interface LocalRecipe {
   /** Name des sparkrun-Rezepts — nur damit ist ein Deploy über switch-recipe möglich. */
   recipe_ref: string | null;
   launch_template: string | null;
+  /** Nur ssh_process: Befehl, der die Engine auf die Box bringt (One-Click). */
+  install_template: string | null;
+  stop_template: string | null;
+  process_name: string | null;
+  /** Urheber des Modells/der Engine — die Karte zeigt „von {author}". */
+  author: string | null;
+  author_url: string | null;
   source_registry: string;
   source_url: string | null;
   tags: string[];
@@ -2382,6 +2399,20 @@ export interface HostBootstrapLog {
   message: string | null;
   /** What the run actually changed, e.g. ["docker_installed"]. */
   actions: string[];
+  running: boolean;
+  lines: HostBootstrapLogLine[];
+  /** Send this back as `cursor` on the next poll to get only new lines. */
+  cursor: number;
+}
+
+/** Live-Log einer Recipe-Installation — gleiche Form wie HostBootstrapLog. */
+export interface RecipeInstallLog {
+  host_id: string;
+  slug: string;
+  /** "idle" | "running" | "done" | "failed" */
+  status: string;
+  phase: string | null;
+  message: string | null;
   running: boolean;
   lines: HostBootstrapLogLine[];
   /** Send this back as `cursor` on the next poll to get only new lines. */

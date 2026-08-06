@@ -14,6 +14,11 @@
  * (api.runtimes.sparkrun.switchRecipe). Einträge ohne sparkrun-recipe_ref
  * bleiben deshalb bewusst deaktiviert statt einen Weg anzubieten, der scheitert.
  *
+ * ssh_process-Einträge (PR 6) haben noch gar keine Runtime-Zeile und liegen
+ * beim ersten Mal auch noch nicht auf der Box — die gehen in den
+ * SshProcessDeployDialog (installieren, dann anlegen + über den bestehenden
+ * Start-Endpoint starten).
+ *
  * Styling: ausschliesslich semantische Klassen aus globals.css — wie in der
  * ModelCatalogSection, kein zweites Designsystem, keine colors.ts-Konstanten.
  */
@@ -42,6 +47,7 @@ import type {
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
 
 /**
  * Grober Passt-Check gegen eine Box der Spark-Klasse (GB10, 128 GB Unified
@@ -64,8 +70,15 @@ function isNew(recipe: LocalRecipe, now: number): boolean {
   return now - seen < NEW_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 }
 
-/** Nur sparkrun-Rezepte lassen sich heute über switch-recipe deployen. */
+/**
+ * Deploybar sind zwei Sorten, auf zwei verschiedenen Wegen:
+ *   sparkrun     → Recipe-Switch auf einer bestehenden Spark-Runtime
+ *   ssh_process  → eigener Dialog: installieren, Runtime anlegen, starten
+ * Alles andere (vllm_docker/llamacpp_docker) läuft über den BoxWizard und
+ * bleibt hier bewusst deaktiviert, statt einen Weg anzubieten, der scheitert.
+ */
 function isDeployable(recipe: LocalRecipe): boolean {
+  if (recipe.engine === "ssh_process") return !!recipe.launch_template;
   return recipe.engine === "sparkrun" && !!recipe.recipe_ref;
 }
 
@@ -172,6 +185,24 @@ function RecipeCard({
             <p className="mt-1 text-[11px] text-muted line-clamp-2">
               {recipe.description}
             </p>
+          )}
+
+          {recipe.author && (
+            <div data-testid="local-registry-author" className="mt-1 text-[10px] text-dim">
+              {t("byAuthor")}{" "}
+              {recipe.author_url ? (
+                <a
+                  href={recipe.author_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-muted underline underline-offset-2"
+                >
+                  {recipe.author} ↗
+                </a>
+              ) : (
+                <span className="text-muted">{recipe.author}</span>
+              )}
+            </div>
           )}
         </div>
 
@@ -283,6 +314,7 @@ export function LocalModelBrowser() {
   const [search, setSearch] = useState("");
   const [engineFilter, setEngineFilter] = useState<string>("");
   const [pending, setPending] = useState<LocalRecipe | null>(null);
+  const [installing, setInstalling] = useState<LocalRecipe | null>(null);
   const [targetRuntimeId, setTargetRuntimeId] = useState<string>("");
   const [togglingSlug, setTogglingSlug] = useState<string | null>(null);
   const [refreshResult, setRefreshResult] =
@@ -409,6 +441,10 @@ export function LocalModelBrowser() {
   );
 
   const openDeploy = (recipe: LocalRecipe) => {
+    if (recipe.engine === "ssh_process") {
+      setInstalling(recipe);
+      return;
+    }
     setPending(recipe);
     setTargetRuntimeId(vllmRuntimes[0]?.id ?? "");
   };
@@ -590,6 +626,13 @@ export function LocalModelBrowser() {
         }}
         onCancel={() => setPending(null)}
       />
+
+      {installing && (
+        <SshProcessDeployDialog
+          recipe={installing}
+          onClose={() => setInstalling(null)}
+        />
+      )}
     </div>
   );
 }

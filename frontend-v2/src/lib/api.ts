@@ -1671,6 +1671,11 @@ export const api = {
       container_name?: string | null;
       launch_command?: string | null;
       host_id?: string | null;
+      // ssh_process (PR 6): Prozess-Handle + eigenes Stop-Skript, und die
+      // Ansage „diese Runtime braucht die Box allein".
+      stop_command?: string | null;
+      process_name?: string | null;
+      exclusive_memory?: boolean;
     }): Promise<Runtime> =>
       request("/api/v1/runtimes", { method: "POST", body: JSON.stringify(data) }),
     vllm: {
@@ -1845,6 +1850,30 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ enabled }),
       }),
+    // One-Click-Installation der Engine auf einer Box. Antwortet sofort;
+    // 409 solange für dieselbe (Box, Recipe) noch eine Installation läuft.
+    install: (
+      slug: string,
+      data: {
+        host_id: string;
+        port?: number;
+        ctx?: number;
+        src_dir?: string | null;
+        gguf_dir?: string | null;
+      },
+    ): Promise<{ status: string; host_id: string; slug: string }> =>
+      request(`/api/v1/local-registry/${slug}/install`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    installLog: (
+      slug: string,
+      hostId: string,
+      cursor = 0,
+    ): Promise<import("@/lib/types").RecipeInstallLog> =>
+      request(
+        `/api/v1/local-registry/${slug}/install/log?host_id=${encodeURIComponent(hostId)}&cursor=${cursor}`,
+      ),
   },
   lmstudio: {
     list: (): Promise<LMStudioModelsResponse> =>
@@ -1960,7 +1989,13 @@ export const api = {
       launch_template?: string | null;
       container_name?: string | null;
       image?: string | null;
-    }): Promise<{ launch_command: string }> =>
+      // ssh_process: kein Image, dafür Checkout, Gewichts-Ordner, Kontext —
+      // und ein eigenes Stop-Skript, das derselbe Renderer ausfüllt.
+      stop_template?: string | null;
+      src_dir?: string | null;
+      gguf_dir?: string | null;
+      ctx?: number | null;
+    }): Promise<{ launch_command: string; stop_command: string | null }> =>
       request("/api/v1/hosts/launch-command", { method: "POST", body: JSON.stringify(data) }),
   },
 

@@ -75,6 +75,11 @@ const mkRecipe = (overrides: Partial<LocalRecipe> = {}): LocalRecipe => ({
   gb10_validated: false,
   recipe_ref: null,
   launch_template: null,
+  install_template: null,
+  stop_template: null,
+  process_name: null,
+  author: null,
+  author_url: null,
   source_registry: "builtin",
   source_url: null,
   tags: [],
@@ -388,6 +393,7 @@ describe("BoxWizard — component", () => {
     const launchCommand = vi.spyOn(api.hosts, "launchCommand").mockResolvedValue({
       launch_command:
         "docker run -d --rm --name mc-qwen3-8b-gguf --label mc.runtime.slug=qwen3-8b-gguf -p 8080:8080 ghcr.io/ggml-org/llama.cpp:server-cuda -hf Qwen/Qwen3-8B-GGUF --host 0.0.0.0 --port 8080 --jinja",
+      stop_command: null,
     });
     const create = vi
       .spyOn(api.runtimes, "create")

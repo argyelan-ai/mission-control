@@ -921,7 +921,7 @@ async def _seeded_host(session) -> Host:
 @pytest.mark.asyncio
 async def test_install_endpoint_starts_a_job(auth_client, session):
     await local_registry.seed_local_recipes(session)
-    host = await _seeded_host(session)
+    await _seeded_host(session)
     started = {}
 
     async def fake_start(host_id, slug, resolved, **kwargs):
