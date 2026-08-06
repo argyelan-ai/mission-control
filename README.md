@@ -1,13 +1,55 @@
+<div align="center">
+
 # Mission Control
 
-[![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-0fa3a3.svg)](LICENSE)
+**Your self-hosted AI agent fleet — with guardrails, a real git workflow
+and zero cloud.**
 
-**Self-hosted command center for AI agent fleets.** Create agents, give them
-souls, dispatch tasks, watch them ship — from a single dark-mode control room,
-running entirely on your own hardware.
+Create agents, give them souls, dispatch tasks, watch them ship — from a
+single dark-mode control room, running entirely on your own hardware.
+
+[![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?color=0fa3a3&labelColor=1c1c1c)](https://github.com/argyelan-ai/mission-control/releases)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-0fa3a3?labelColor=1c1c1c)](LICENSE)
+
+[![Claude Code](https://img.shields.io/badge/Claude_Code-Pro%2FMax_ready-0fa3a3?labelColor=1c1c1c&logo=claude&logoColor=white)](#run-your-own-models--zero-cloud)
+[![vLLM](https://img.shields.io/badge/vLLM-self--hosted-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+[![Ollama](https://img.shields.io/badge/Ollama-supported-0fa3a3?labelColor=1c1c1c&logo=ollama&logoColor=white)](#run-your-own-models--zero-cloud)
+[![LM Studio](https://img.shields.io/badge/LM_Studio-supported-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+[![OpenAI-compatible](https://img.shields.io/badge/any_OpenAI--compatible-%2Fv1-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+
+[Install](#install-in-one-line) · [Why](#why-mission-control) ·
+[Platforms](#runs-on) · [Docs](docs/) · [Roadmap](#roadmap) ·
+[Community](#community)
 
 ![Mission Control — control room](docs/assets/mc-home.png)
+
+</div>
+
+## Why Mission Control
+
+Running one AI coding agent is easy. Running several is chaos — and that's
+the problem Mission Control exists to solve:
+
+- **Terminals everywhere.** Five agents in five windows, no overview of who
+  is doing what, no record of what happened overnight. MC gives you one
+  control room: task boards, live terminals, full history.
+- **No guardrails.** Agents stall silently, wander off-task, or need a
+  babysitter. MC adds structure: a dispatch handshake (work counts as picked
+  up only when the agent confirms), watchdogs for everything that hangs,
+  review gates before anything merges, human approvals for risky actions.
+- **The cloud sees your code.** Agent SaaS means your repos and prompts on
+  someone else's servers. MC is fully self-hosted — and if you pair it with
+  vLLM, LM Studio or Ollama, nothing leaves your network. Not the code, not
+  the prompts, not the model.
+- **From prompt to merge is a manual slog.** Copy-pasting agent output into
+  commits doesn't scale. In MC every task gets its own branch, an automatic
+  PR and a review — the way a real team works.
+- **Paying twice for the same model.** Most agent platforms want an API key
+  and bill per token — on top of the Claude subscription you already have.
+  MC runs the real Claude Code binary on your **existing Pro/Max plan**
+  (`claude setup-token`): no API key, no separate metered bill. Or skip
+  Anthropic entirely and use your own GPU.
 
 ## How it works
 
@@ -28,33 +70,120 @@ curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/in
 
 It checks prerequisites, pulls the prebuilt images (or builds locally),
 configures secrets, boots the stack and opens the browser — where a first-run
-wizard walks you through admin account, LLM provider key and a demo board.
-Updating later is `./install.sh --update`. Details in
-[Quickstart](#quickstart) · [Windows](docs/setup/windows.md) ·
+wizard walks you through admin account, LLM access (an API key — or just your
+existing Claude subscription) and a demo board.
+Updating later is `./install.sh --update`.
+
+### Runs on
+
+| Platform | Path | Effort |
+|---|---|---|
+| **Linux server / NAS** (headless) | the one-liner above | ~5 min |
+| **macOS** | the one-liner above | ~5 min |
+| **Runtipi** | [community app store](https://github.com/argyelan-ai/tipi-store) — add it under *Settings → App Stores*, then install from the store | 2 clicks |
+| **Portainer** | [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json) as an App Template source | a few clicks |
+| **Umbrel / CasaOS** | manifests [prepared](deploy/catalogs/), store submissions in progress | — |
+| **Windows 10/11** | WSL2 + the one-liner — [guide](docs/setup/windows.md); a one-click bootstrapper is on the [roadmap](#roadmap) | ~10 min |
+| **Windows Server / company VM** (Hyper-V, VMware ESXi) | a small Linux VM next to your Windows VMs — [guide](docs/setup/windows.md#windows-server--company-hypervisors) | ~10 min |
+
+Details: [Quickstart](#quickstart) · [Windows](docs/setup/windows.md) ·
 [Updating](docs/setup/updating.md) ·
 [Build a vertical](docs/setup/build-a-vertical.md).
 
+## Run your own models — zero cloud
+
+Mission Control treats local LLMs as first-class citizens, not a fallback.
+Point an agent at any OpenAI-compatible endpoint — a vLLM box with your GPU,
+LM Studio on your desktop, Ollama, or a hosted `/v1` — or run Claude Code
+with your Anthropic subscription. Mix both in one fleet — and that mix is
+where the money is: give your lead agent a frontier model for the hard
+calls, and let cheap local models grind through the routine tasks. Most
+agent tools force one provider for the whole team; MC decides per agent.
+
+![One team, mixed runtimes — every agent runs its own brain](docs/assets/mixed-fleet.svg)
+
+**Already on Claude Pro or Max? You're done.** Agents run the genuine Claude
+Code binary authenticated via `claude setup-token` — your existing
+subscription powers the whole fleet. No API key, no second metered bill.
+
+| Runtime | What it is | Agent harness |
+|---|---|---|
+| **Claude Code** (Anthropic) | Opus/Sonnet via Pro/Max subscription — `claude setup-token` | `claude` binary in `mc-claude-agent` |
+| **vLLM** (self-hosted) | Your own GPU box; lifecycle (start/stop) managed over SSH | OpenAI-shim in `mc-agent-base` |
+| **llama.cpp** (self-hosted) | `llama-server` from the official multi-arch image — small GGUF models next to the big vLLM one, same tag on ARM64 (DGX Spark) and x86 | OpenAI-shim in `mc-agent-base` |
+| **Any `/v1` host process** | Community inference servers that aren't Docker at all (e.g. DwarfStar 4 serving DeepSeek-V4-Flash on a DGX Spark) — start/stop/health over SSH | OpenAI-shim in `mc-agent-base` |
+| **LM Studio** | Locally loaded models, `lms load/unload` managed | OpenAI-shim in `mc-agent-base` |
+| **Ollama Cloud / any OpenAI-compatible `/v1`** | Hosted or hand-registered endpoints | OpenAI-shim in `mc-agent-base` |
+| **omp** (headless) | Structured NDJSON lifecycle instead of a scraped terminal — newest harness (ADR-045) | `bridge.py` in `mc-omp-agent` |
+| **Host agents** | Native processes on the host machine (macOS launchd) instead of containers | native `claude` binary |
+
+Agents are bound to a runtime and can be **switched in one click** — Claude ↔
+local model — through an atomic switch service: config is re-rendered, the
+container swaps only when the image family changes (seconds for same-family
+switches), a health check gates the result and everything rolls back on
+failure. Credential routing is centralized: Anthropic runtimes get the OAuth
+token, everything else gets `OPENAI_BASE_URL`/`OPENAI_MODEL` — the paths never
+mix.
+
+**Finding and deploying local models is a click, not an SSH session.** A
+curated **local model registry** ships with MC and refreshes from online
+registries on demand — every entry credited to the people who published the
+recipe or quant. The **model browser** on the runtimes page shows what fits
+your hardware (VRAM/context check before deploy, validated-hardware badges)
+and deploys onto your box through the existing runtime machinery. New GPU
+box? The **box wizard** connects it end to end: SSH probe, hardware
+inventory, an idempotent bootstrap that installs the Docker basics (never
+`curl | sh` — the installer is downloaded, checksummed and logged first),
+then engine + model + a registered runtime.
+
 ## Highlights
 
-- **Multi-runtime agent fleet** — Docker cli-bridge agents (Claude Code binary
-  or OpenAI-compatible runtimes like vLLM / LM Studio / Ollama) and host-side
-  agents, switchable per agent at runtime with automatic rollback.
-- **Task orchestration** — boards, projects, phase-based planning,
-  dispatch-ACK handshake, watchdogs, automatic re-assignment, review gates.
-- **Agent git workflow** — one repo per project, one branch per task,
-  automatic PRs and squash-merges via the GitHub CLI.
-- **Repos registry** — a first-class repo model shared across projects, with
-  per-repo work rules (test commands, branch policy, house style) injected
-  into every dispatch for that codebase.
-- **Knowledge & memory** — a Markdown vault as source of truth, hybrid FTS5 +
-  vector search (Qdrant), per-agent lessons, daily LLM-distilled insights.
-- **Live terminals** — attach to any agent's tmux session from the browser.
-- **Integrations (all optional)** — Slack team chat (Socket Mode, no public URL
-  needed, [setup guide](docs/setup/slack.md)), Discord per-agent channels,
-  Telegram approvals + report delivery, voice agent (LiveKit + realtime speech
-  API).
-- **Scope-based permissions** — 16 API scopes per agent, PBKDF2 agent tokens,
-  JWT user auth with roles.
+**Orchestration with guardrails**
+Boards, projects and phase-based planning; a dispatch-ACK handshake so no
+task silently disappears; review gates and human approval queues;
+autonomous loops that grind through a backlog round by round — each round
+passing the same gates (ADR-051); cron automations with run history;
+21 fine-grained API scopes per agent.
+
+**Resilient by design**
+Watchdogs for timeouts, stuck reviews and silent aborts; automatic
+re-assignment when an agent goes dark; **context recovery** — a crashed or
+recycled agent reconstructs its task thread and keeps going instead of
+starting from zero; runtime switches roll back automatically on failed
+health checks; a **switch grace state** so a model swap or a 10-minute
+first load never fires false unreachable alarms; **runtime auto-recovery**
+— when a crashed GPU box comes back, the watcher restarts its runtime by
+itself (one attempt, cooldown, gives up loudly after two failures);
+automatic daily backups (`make backup-schedule`).
+
+**A real git workflow**
+One repo per project, one branch per task, automatic PRs and squash-merges
+via the GitHub CLI. A first-class repos registry with per-repo work rules
+(test commands, branch policy, house style) injected into every dispatch.
+
+**Your fleet, in your pocket**
+Run the whole operation from Slack: dispatch work by chat message, get
+reports and files back in-thread, approve risky actions from your phone —
+plus Discord per-agent channels, Telegram approvals and a real-time voice
+assistant. Remote access via [Tailscale](#access-from-your-phone-anywhere-tailscale),
+never the public internet.
+
+**Knowledge & memory**
+A Markdown vault as source of truth, hybrid full-text + vector search
+(Qdrant), per-agent lessons, daily LLM-distilled insights — and full cost
+transparency: token spend and cost per agent and per task.
+
+**Live & hands-on**
+A real terminal into every agent from the browser — watch it work, type
+into its session; one-click agent creation from role templates (reviewer,
+lead, researcher); a playful 3D office view of who's working on what.
+
+**Built in the open**
+[71 architecture decision records](docs/decisions/), 5,000+ tests, and a CI
+pipeline that boots a fresh install end-to-end on every commit — the same
+one-liner you run is the one that's tested. Secure by default: everything
+binds to localhost until you opt in, Docker is reachable only through a
+filtering socket-proxy, secrets are Fernet-encrypted.
 
 <details>
 <summary><b>Full feature list</b></summary>
@@ -67,15 +196,21 @@ Updating later is `./install.sh --update`. Details in
 - **Repos registry** — one repo shared across projects, GitHub import, per-repo work rules injected into every dispatch (ADR-050)
 - **Approvals & inbox** — human sign-off gates for risky actions, with a review queue
 - **Workflows, automations & scheduler** — reusable action sequences and cron jobs with run history
+- **Autonomous loops** — agents work down a backlog in rounds, every round passing the full gates (ADR-051)
 - **Multi-agent consensus** — ask several agents the same question, aggregate the answers
 - **Watchdogs** — ACK timeouts, stuck-review escalation, silent-abort auto-block (ADR-046)
+- **Context recovery** — crashed/recycled agents reconstruct their task thread and continue (ADR-026)
 
 ### Agents & runtimes
 - **Agent registry & detail** — overview, skills, config and memory per agent; templates for one-click roles
 - **Multi-runtime fleet** — agents as Docker containers or native host processes
 - **Runtime registry & one-click switching** — move an agent between Claude and local models with rollback
+- **Local model registry & browser** — curated, UI-refreshable catalog of local models/recipes with hardware-fit checks, one-click deploy and credits to the recipe/quant authors
+- **Box wizard** — connect a fresh GPU box from the UI: SSH probe, hardware inventory, checksummed bootstrap, engine + model, done
+- **Three local engines** — vLLM for the big workhorse models, llama.cpp for small GGUF models beside it, and any `/v1`-speaking host process (ssh_process) for community servers that ship without Docker
+- **Switch grace & auto-recovery** — model swaps show a loading state instead of false alarms; runtimes on a crashed-and-returned box restart themselves
 - **Live sessions** — real terminal into every agent, right in the browser
-- **Scope-based permissions** — 16 fine-grained API scopes per agent, PBKDF2 agent tokens
+- **Scope-based permissions** — 21 fine-grained API scopes per agent, PBKDF2 agent tokens
 - **Skills & CLI plugins** — per-agent capability allow-lists from a shared plugin cache
 - **Slack, Discord & Telegram** — team chat with the agents, per-agent channels, notifications, approvals on your phone
 - **Voice assistant** — real-time spoken conversation with the fleet
@@ -132,7 +267,7 @@ troubleshooting): [docs/setup/github.md](docs/setup/github.md).
 <details>
 <summary><b>More screenshots</b> — first-run wizard, agent registry, runtime manager</summary>
 
-*The first-run wizard — from empty install to configured in three steps:*
+*The first-run wizard — from empty install to configured in four steps:*
 ![First-run wizard](docs/assets/mc-setup-wizard.png)
 
 *The agent registry — one fleet, mixed runtimes (Claude + local Qwen via vLLM):*
@@ -141,25 +276,6 @@ troubleshooting): [docs/setup/github.md](docs/setup/github.md).
 *The runtime manager — GPU hosts, models, live binding of agents to runtimes:*
 ![Runtime manager](docs/assets/mc-runtimes.png)
 </details>
-
-## Supported runtimes
-
-| Runtime | What it is | Agent harness |
-|---|---|---|
-| **Claude Code** (Anthropic) | Opus/Sonnet via Pro/Max subscription — `claude setup-token` | `claude` binary in `mc-claude-agent` |
-| **vLLM** (self-hosted) | Your own GPU box; lifecycle (start/stop) managed over SSH | OpenAI-shim in `mc-agent-base` |
-| **LM Studio** | Locally loaded models, `lms load/unload` managed | OpenAI-shim in `mc-agent-base` |
-| **Ollama Cloud / any OpenAI-compatible `/v1`** | Hosted or hand-registered endpoints | OpenAI-shim in `mc-agent-base` |
-| **omp** (headless) | Structured NDJSON lifecycle instead of a scraped terminal — newest harness (ADR-045) | `bridge.py` in `mc-omp-agent` |
-| **Host agents** | Native processes on the host machine (macOS launchd) instead of containers | native `claude` binary |
-
-Agents are bound to a runtime and can be **switched in one click** — Claude ↔
-local model — through an atomic switch service: config is re-rendered, the
-container swaps only when the image family changes (seconds for same-family
-switches), a health check gates the result and everything rolls back on
-failure. Credential routing is centralized: Anthropic runtimes get the OAuth
-token, everything else gets `OPENAI_BASE_URL`/`OPENAI_MODEL` — the paths never
-mix.
 
 ## Architecture
 
@@ -190,13 +306,9 @@ Decision records: [`docs/decisions/`](docs/decisions/)
 ## Quickstart
 
 Prerequisites: Docker (with Compose v2), `git`, `openssl`, and optionally
-`python3` (nicer secret generation).
-
-**Platforms:** developed on macOS, CI-tested on Linux (the fresh-boot E2E job
-runs the full quickstart on Ubuntu). On Windows, use **WSL2**
-(recommended) or native PowerShell with `setup.ps1` — both experimental, see
-[docs/setup/windows.md](docs/setup/windows.md). Host-side agents (launchd)
-are macOS-only; the Docker fleet is not.
+`python3` (nicer secret generation). Platform specifics — including Windows
+(WSL2) and Windows Server — are covered in the [Runs on](#runs-on) matrix
+above; host-side agents (launchd) are macOS-only, the Docker fleet is not.
 
 One line (checks prerequisites, clones, configures, pulls the prebuilt
 images from GHCR — or builds locally as fallback — boots and migrates):
@@ -229,8 +341,9 @@ below is optional and off by default.
 - **Portainer** — add the raw URL of
   [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json)
   as an App Template source (*Settings → App Templates*).
-- CasaOS and Umbrel submissions are prepared in
-  [`deploy/catalogs/`](deploy/catalogs/).
+- CasaOS and Umbrel manifests are prepared in
+  [`deploy/catalogs/`](deploy/catalogs/) — store submissions are in
+  progress.
 
 Catalog installs run the core stack (boards, API runtimes, vault,
 sessions); host-level fleet extras need the manual install above.
@@ -275,34 +388,6 @@ Provision) once it runs. Agent souls and settings are rendered from
 Step-by-step: [docs/setup/first-agent.md](docs/setup/first-agent.md).
 Updating an install: [docs/setup/updating.md](docs/setup/updating.md).
 
-## Development
-
-`make help` shows the common entry points (`make test`, `make up`,
-`make build-dev`, …). Manually:
-
-```bash
-# Backend tests (pytest — SQLite in-memory + fakeredis, no Docker needed)
-cd backend && python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]" && pytest -v
-
-# Frontend tests (vitest — jsdom, no browser needed)
-cd frontend-v2 && npm install && npm run test:run
-
-# Rebuild after code changes
-docker compose up --build -d backend
-docker compose up --build -d frontend
-```
-
-~2000 tests total. Design system spec lives in [`DESIGN.md`](DESIGN.md)
-(dark-mode only, single teal accent) and [`PRODUCT.md`](PRODUCT.md).
-
-## Language note
-
-The codebase grew in a German-speaking home lab: many ADRs
-(`docs/decisions/`), inline comments and some UI strings are German.
-The README, setup flow and API are English; full i18n is on the roadmap
-and contributions are welcome.
-
 ## Access from your phone, anywhere (Tailscale)
 
 MC binds to localhost by default — nothing is reachable from other machines
@@ -331,6 +416,62 @@ to run.
 the last 10. Install a daily 03:00 schedule with `make backup-schedule`
 (launchd on macOS, cron on Linux). Restore the latest pair with
 `./backup.sh restore` — it recreates the database and restores `~/.mc`.
+
+## Roadmap
+
+The near-term focus is making the fleet as easy to install as the core:
+
+- **Prebuilt agent images** — provision your first agent without any local
+  Docker build.
+- **cli-bridge as a managed service** — no more keeping a Python script
+  running in a terminal (launchd/systemd units).
+- **Windows one-click bootstrapper** — `setup.ps1` sets up WSL2 + Docker and
+  runs the standard installer.
+- **Umbrel & CasaOS store listings** — manifests are ready, submissions in
+  progress.
+- **GPU box provisioning wizard** — add a GPU machine (e.g. DGX Spark or an
+  RTX workstation) from the UI: SSH bootstrap, driver check, vLLM /
+  llama.cpp recipe, health check, runtime registered. In design.
+- **Docs site & German translation** — the handbook is being restructured to
+  become a proper docs site.
+
+## Community
+
+- **Questions & ideas** — [GitHub Discussions](https://github.com/argyelan-ai/mission-control/discussions)
+- **Bugs** — [GitHub Issues](https://github.com/argyelan-ai/mission-control/issues)
+- **Contributing** — see [CONTRIBUTING.md](CONTRIBUTING.md); the
+  [ADRs](docs/decisions/) are the best way to understand why things are
+  built the way they are.
+- **Security reports** — see [SECURITY.md](SECURITY.md).
+
+## Development
+
+`make help` shows the common entry points (`make test`, `make up`,
+`make build-dev`, …). Manually:
+
+```bash
+# Backend tests (pytest — SQLite in-memory + fakeredis, no Docker needed)
+cd backend && python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e ".[test]" && pytest -v
+
+# Frontend tests (vitest — jsdom, no browser needed)
+cd frontend-v2 && npm install && npm run test:run
+
+# Rebuild after code changes
+docker compose up --build -d backend
+docker compose up --build -d frontend
+```
+
+5,000+ tests total (≈4,600 backend, ≈400 frontend). Design system spec lives
+in [`DESIGN.md`](DESIGN.md) (dark-mode only, single teal accent) and
+[`PRODUCT.md`](PRODUCT.md).
+
+## Language note
+
+The codebase grew in a German-speaking home lab: many ADRs
+(`docs/decisions/`), inline comments and some UI strings are German.
+The README, setup flow and API are English; full i18n is on the roadmap
+and contributions are welcome.
 
 ## Security notes
 
