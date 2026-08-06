@@ -1796,7 +1796,9 @@
       "filesCount": "{name} · {count} Dateien",
       "loadArrow": "↓ Laden",
       "loadingVariants": "Lade Varianten...",
-      "noVariants": "Keine GGUF-Varianten gefunden"
+      "noVariants": "Keine GGUF-Varianten gefunden",
+      "download": "Herunterladen",
+      "load": "Laden"
     },
     "modelEditor": {
       "model": "Modell:",

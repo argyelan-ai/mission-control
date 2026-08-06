@@ -69,6 +69,8 @@ export function MetaChip({
   title,
   className,
   testId,
+  /** For subjects that are present but unavailable (a busy agent). */
+  dimmed,
   children,
 }: {
   tone?: Tone;
@@ -76,6 +78,7 @@ export function MetaChip({
   title?: string;
   className?: string;
   testId?: string;
+  dimmed?: boolean;
   children: React.ReactNode;
 }) {
   const c = CHIP[tone];
@@ -87,11 +90,57 @@ export function MetaChip({
         "shrink-0 inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none",
         className,
       )}
-      style={{ color: c.color, border: `1px solid ${c.border}`, background: c.background }}
+      style={{
+        color: c.color,
+        border: `1px solid ${c.border}`,
+        background: c.background,
+        ...(dimmed ? { opacity: 0.45 } : {}),
+      }}
     >
       {icon}
       {children}
     </span>
+  );
+}
+
+/**
+ * The one labelled action button on a row.
+ *
+ * Deploy, Create as runtime, Update, Add and Load each had their own padding,
+ * radius, tracking and font family — three geometries across two families for
+ * the same job. 44px tall on a thumb, 28px once a pointer is aiming.
+ */
+export function RowAction({
+  tone = "accent",
+  icon,
+  onClick,
+  disabled,
+  title,
+  testId,
+  children,
+}: {
+  tone?: Tone;
+  icon?: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  testId?: string;
+  children: React.ReactNode;
+}) {
+  const c = CHIP[tone];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      data-testid={testId}
+      className="shrink-0 inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 label-sys cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      style={{ color: c.color, border: `1px solid ${c.border}`, background: c.background }}
+    >
+      {icon}
+      {children}
+    </button>
   );
 }
 

@@ -49,7 +49,7 @@ import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
-import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
@@ -206,17 +206,15 @@ function RecipeCard({
         </>
       }
       action={
-        <button
-          type="button"
-          data-testid="local-registry-deploy"
+        <RowAction
+          testId="local-registry-deploy"
+          icon={<Rocket size={10} />}
           onClick={() => onDeploy(recipe)}
           disabled={!deployable}
           title={deployable ? t("deployTitle", { name: recipe.display_name }) : t("deployUnavailableTitle")}
-          className="inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 sm:py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <Rocket size={10} />
           {t("deploy")}
-        </button>
+        </RowAction>
       }
       overflow={
         <OverflowMenu

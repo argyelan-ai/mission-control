@@ -53,7 +53,7 @@ export function AutostartToggle({ slug }: { slug: string }) {
       // Same box as MetaChip so the row reads as one chip family; it just
       // happens to be interactive. min-h-6 keeps it at the WCAG 2.2 SC 2.5.8
       // minimum of 24px.
-      className="shrink-0 inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 min-h-6 leading-none transition-opacity"
+      className="shrink-0 inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 min-h-11 sm:min-h-6 leading-none transition-opacity"
       style={{
         border: `1px solid ${unknown ? C.borderActive : enabled ? `${STATUS.online}40` : C.borderActive}`,
         color: unknown ? C.textDim : enabled ? STATUS_TEXT.online : C.textMuted,

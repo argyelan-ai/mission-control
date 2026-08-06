@@ -47,7 +47,7 @@ import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
-import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
@@ -188,16 +188,14 @@ function ModelRow({
       }
       action={
         isNew ? (
-          <button
-            type="button"
+          <RowAction
+            icon={binding ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
             onClick={() => onBind(model)}
             disabled={binding}
             title={t("createRuntimeRowTitle", { id: model.id })}
-            className="shrink-0 inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 sm:py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {binding ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
             {t("createAsRuntime")}
-          </button>
+          </RowAction>
         ) : undefined
       }
     />

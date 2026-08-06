@@ -31,7 +31,7 @@ import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
-import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 
 // ── Phase model ───────────────────────────────────────────────────────────────
 // The build pipeline moves manifest → build → recreate → done|failed. "idle"
@@ -69,19 +69,14 @@ function AgentPills({ agents }: { agents: CliToolStatus["agents_affected"] }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {agents.map((a) => (
-        <span
+        <MetaChip
           key={a.id}
+          tone="accent"
           title={a.busy ? t("agentBusyTitle") : a.name}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px]"
-          style={{
-            backgroundColor: C.accentSubtle,
-            border: `1px solid ${C.borderAccent}`,
-            color: C.textSecondary,
-            opacity: a.busy ? 0.45 : 1,
-          }}
+          dimmed={a.busy}
         >
-          🤖 {a.name}
-        </span>
+          {a.name}
+        </MetaChip>
       ))}
     </div>
   );
@@ -144,19 +139,14 @@ function CliToolCard({
       }
       action={
         tool.update_available && !running ? (
-          <button
+          <RowAction
+            tone="warn"
+            icon={<ArrowUpCircle size={10} />}
             onClick={() => onUpdate(tool)}
             title={t("updateToTitle", { version: tool.latest ?? "" })}
-            className="shrink-0 inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 sm:py-1 text-[10px] font-medium cursor-pointer transition-colors"
-            style={{
-              color: STATUS_TEXT.warning,
-              border: `1px solid ${STATUS.warning}`,
-              background: "transparent",
-            }}
           >
-            <ArrowUpCircle size={10} />
             {t("updateButton", { version: tool.latest ?? "" })}
-          </button>
+          </RowAction>
         ) : undefined
       }
     />

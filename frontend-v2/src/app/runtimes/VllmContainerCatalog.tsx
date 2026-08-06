@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import type { VllmContainer } from "@/lib/types";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { C, STATUS_TEXT } from "@/lib/colors";
-import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 
 function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onAdd: () => void }) {
   const t = useTranslations("runtimes.vllmCatalog");
@@ -35,18 +35,9 @@ function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onA
         </>
       }
       action={
-        <button
-          onClick={onAdd}
-          className="flex items-center gap-1 text-xs px-2.5 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md cursor-pointer transition-colors"
-          style={{
-            color: C.info,
-            border: `1px solid ${C.info}4D`,
-            background: "transparent",
-          }}
-        >
-          <Plus size={11} />
+        <RowAction icon={<Plus size={10} />} onClick={onAdd}>
           {t("add")}
-        </button>
+        </RowAction>
       }
     />
   );

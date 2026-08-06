@@ -1337,7 +1337,7 @@ function ApiKeysSection({
                       disabled={!newValue || createMutation.isPending}
                       className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
                       style={{
-                        background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+                        background: C.accent,
                       }}
                     >
                       {createMutation.isPending ? (
@@ -1380,7 +1380,7 @@ function ApiKeysSection({
                       disabled={!editValue || updateMutation.isPending}
                       className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
                       style={{
-                        background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+                        background: C.accent,
                       }}
                     >
                       {updateMutation.isPending ? (
@@ -1641,7 +1641,7 @@ function GithubSection() {
               onClick={handleSave}
               disabled={saveMutation.isPending}
               className="text-xs px-3 py-2 rounded-lg font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
-              style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
+              style={{ background: C.accent }}
             >
               {saveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : tRoot("save")}
             </button>
@@ -1676,7 +1676,7 @@ function UsersSection() {
           style={{
             background: showCreateForm
               ? "transparent"
-              : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+              : C.accent,
             color: showCreateForm ? "var(--color-text-secondary)" : "var(--color-on-accent)",
             border: showCreateForm ? "1px solid var(--color-border)" : "none",
           }}
@@ -1938,7 +1938,7 @@ function UserRow({
                 onClick={() => updateMutation.mutate({ role })}
                 disabled={updateMutation.isPending}
                 className="px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
-                style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
+                style={{ background: C.accent }}
               >
                 {updateMutation.isPending ? (
                   <Loader2 size={12} className="animate-spin" />

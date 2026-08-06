@@ -5,6 +5,8 @@ import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDownToLine,
+  ExternalLink,
   Play,
   Power,
   Square,
@@ -45,7 +47,7 @@ import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
 import { Section, SectionNav, requestSectionOpen } from "@/components/shared/Section";
-import { ListRow, MetaChip, MetaText, type Tone } from "@/components/shared/ListRow";
+import { ListRow, MetaChip, MetaText, RowAction, type Tone } from "@/components/shared/ListRow";
 
 // ── State Configuration ───────────────────────────────────────────────────────
 
@@ -242,17 +244,23 @@ function ActiveDownloads() {
                   disabled={cancelMutation.isPending && cancelMutation.variables === dl.name}
                   title={t("cancel")}
                   aria-label={t("cancelDownloadAria")}
-                  className="flex items-center justify-center w-6 h-6 rounded-md transition-all cursor-pointer disabled:opacity-40"
-                  style={{
-                    background: `${C.error}14`,
-                    border: `1px solid ${C.error}33`,
-                    color: STATUS_TEXT.error,
-                  }}
+                  className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer disabled:opacity-40"
                 >
+                  <span
+                    aria-hidden
+                    className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${C.error}33`,
+                      color: STATUS_TEXT.error,
+                      ["--action-hover" as string]: `${C.error}1A`,
+                    }}
+                  >
                   {cancelMutation.isPending && cancelMutation.variables === dl.name
                     ? <Loader2 size={10} className="animate-spin" />
-                    : <span style={{ fontSize: "12px", lineHeight: 1 }}>✕</span>
+                    : <X size={12} />
                   }
+                  </span>
                 </button>
               </div>
             </div>
@@ -635,10 +643,17 @@ function QuantPicker({ modelId, onDownload, isPending }: {
               <button
                 onClick={() => onDownload(quant)}
                 disabled={isPending}
-                className="text-xs px-2 py-0.5 rounded cursor-pointer disabled:opacity-40"
-                style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
+                aria-label={t("download")}
+                title={t("download")}
+                className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer disabled:opacity-40"
               >
-                ↓
+                <span
+                  aria-hidden
+                  className="flex items-center justify-center w-7 h-7 rounded-md"
+                  style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
+                >
+                  <ArrowDownToLine size={12} />
+                </span>
               </button>
             </div>
           );
@@ -718,30 +733,16 @@ function ModelCatalog() {
   const isLms = tab === "lms";
   const isMutating = downloadLmsMutation.isPending || downloadHfMutation.isPending;
 
-  // Tab-specific colors: LMS = online-green, HF = warning-orange
-  const lmsColor = C.online;
-  const hfColor = C.warning;
+  // The download source is a choice, not a state. Green/orange here meant
+  // nothing — the selected tab carries the accent, the other stays neutral.
 
+  // Inside the Models tab strip this panel is already the selected surface — a
+  // second "Download model" collapse head on top of it was one disclosure
+  // nested in another, each with its own chrome.
   return (
-    <div
-      className="mb-6 rounded-xl overflow-hidden"
-      style={{ border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
-    >
-      {/* Header */}
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-4 py-3 cursor-pointer"
-        style={{ color: C.textSecondary }}
-      >
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Download size={14} />
-          {t("downloadModel")}
-        </div>
-        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>
-
-      {open && (
-        <div className="px-4 pb-4">
+    <div>
+      {(
+        <div>
           {/* Tab Toggle */}
           <div
             className="flex gap-1 mb-4 p-1 rounded-lg"
@@ -755,15 +756,10 @@ function ModelCatalog() {
                   setSubmitted("");
                   setMessage(null);
                 }}
-                className="flex-1 text-xs py-1.5 rounded-md transition-colors cursor-pointer"
+                className="flex-1 text-xs py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors cursor-pointer"
                 style={{
                   background: tab === t ? C.borderActive : "transparent",
-                  color:
-                    tab === t
-                      ? t === "lms"
-                        ? lmsColor
-                        : hfColor
-                      : C.textMuted,
+                  color: tab === t ? C.accent : C.textMuted,
                   fontWeight: tab === t ? 500 : 400,
                 }}
               >
@@ -778,10 +774,10 @@ function ModelCatalog() {
               href="https://lmstudio.ai/models"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs mb-3 w-fit"
+              className="flex items-center gap-1.5 text-xs mb-3 w-fit min-h-11 sm:min-h-0"
               style={{ color: C.textMuted }}
             >
-              <span>↗</span>
+              <ExternalLink size={11} />
               {t("openLmsSite")}
             </a>
           )}
@@ -795,7 +791,7 @@ function ModelCatalog() {
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               placeholder={isLms ? t("lmsPlaceholder") : t("hfPlaceholder")}
               aria-label={isLms ? t("searchLmsAria") : t("hfRepoAria")}
-              className="flex-1 text-sm px-3 py-2 rounded-lg outline-none"
+              className="flex-1 text-sm px-3 py-2.5 sm:py-2 min-h-11 sm:min-h-0 rounded-md outline-none"
               style={{
                 background: C.border,
                 border: `1px solid ${C.borderSubtle}`,
@@ -805,13 +801,11 @@ function ModelCatalog() {
             <button
               onClick={handleSearch}
               disabled={!query.trim()}
-              className="text-xs px-3 py-2 rounded-lg disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+              className="text-xs px-3 py-2.5 sm:py-2 min-h-11 sm:min-h-0 rounded-md disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
               style={{
-                background: isLms ? `${lmsColor}1F` : `${hfColor}1F`,
-                border: isLms
-                  ? `1px solid ${lmsColor}40`
-                  : `1px solid ${hfColor}40`,
-                color: isLms ? lmsColor : hfColor,
+                background: C.accentSubtle,
+                border: `1px solid ${C.borderAccent}`,
+                color: C.accent,
               }}
             >
               {t("search")}
@@ -843,52 +837,44 @@ function ModelCatalog() {
                 {t("noResults", { query: submitted })}
               </div>
             ) : (
-              <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.borderSubtle}` }}>
-                {catalogData.models.map((m, i) => {
+              <div className="flex flex-col gap-1.5">
+                {catalogData.models.map((m) => {
                   const baseName = m.model_id.split("/").pop()?.replace(/-gguf$/i, "").toLowerCase() ?? "";
                   const installed = baseName.length > 0 && installedIds.some((id) => id.toLowerCase().includes(baseName));
                   return (
                     <div key={m.model_id}>
-                      <div
-                        className="flex items-center justify-between px-3 py-2.5"
-                        style={{
-                          borderBottom:
-                            i < catalogData.models.length - 1 && pickingModel !== m.model_id
-                              ? `1px solid ${C.borderSubtle}`
-                              : undefined,
-                        }}
-                      >
-                        <div>
-                          <div className="text-sm" style={{ color: C.textPrimary }}>
-                            {m.name}
-                          </div>
-                          <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
+                      <ListRow
+                        testId="lms-search-row"
+                        tone={installed ? "ok" : "idle"}
+                        name={m.name}
+                        summary={[m.params, m.size_gb != null ? `${m.size_gb} GB` : null]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        chips={
+                          installed ? (
+                            <MetaChip tone="ok" icon={<Check size={10} />}>
+                              {t("installed")}
+                            </MetaChip>
+                          ) : undefined
+                        }
+                        meta={
+                          <MetaText className="tabular-nums shrink-0">
                             {[m.params, m.size_gb != null ? `${m.size_gb} GB` : null]
                               .filter(Boolean)
                               .join(" · ")}
-                          </div>
-                        </div>
-                        {installed ? (
-                          <div
-                            className="text-xs px-2 py-1 rounded"
-                            style={{ background: `${C.online}1A`, color: C.online }}
-                          >
-                            ✓
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setPickingModel(pickingModel === m.model_id ? null : m.model_id)}
-                            className="text-xs px-2.5 py-1 rounded cursor-pointer"
-                            style={{
-                              background: C.accentSubtle,
-                              border: `1px solid ${C.borderAccent}`,
-                              color: C.accent,
-                            }}
-                          >
-                            {pickingModel === m.model_id ? "✕" : t("loadArrow")}
-                          </button>
-                        )}
-                      </div>
+                          </MetaText>
+                        }
+                        action={
+                          installed ? undefined : (
+                            <RowAction
+                              icon={pickingModel === m.model_id ? <X size={10} /> : <ArrowDownToLine size={10} />}
+                              onClick={() => setPickingModel(pickingModel === m.model_id ? null : m.model_id)}
+                            >
+                              {pickingModel === m.model_id ? t("cancel") : t("load")}
+                            </RowAction>
+                          )
+                        }
+                      />
                       {pickingModel === m.model_id && (
                         <QuantPicker
                           modelId={m.model_id}
@@ -928,45 +914,29 @@ function ModelCatalog() {
                 <div className="text-xs mb-2 px-1" style={{ color: C.textMuted }}>
                   {t("filesCount", { name: hfData.name, count: hfData.files.length })}
                 </div>
-                <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.borderSubtle}` }}>
-                  {hfData.files.map((f, i) => (
-                    <div
+                <div className="flex flex-col gap-1.5">
+                  {hfData.files.map((f) => (
+                    <ListRow
                       key={f.filename}
-                      className="flex items-center justify-between px-3 py-2.5"
-                      style={{
-                        borderBottom:
-                          i < hfData.files.length - 1
-                            ? `1px solid ${C.borderSubtle}`
-                            : undefined,
-                      }}
-                    >
-                      <div>
-                        <div className="text-sm" style={{ color: C.textPrimary }}>
-                          {f.filename}
-                        </div>
-                        <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-                          {f.size_gb} GB
-                        </div>
-                      </div>
-                      <button
-                        onClick={() =>
-                          downloadHfMutation.mutate({ repoId: submitted, filename: f.filename })
-                        }
-                        disabled={isMutating}
-                        className="text-xs px-2.5 py-1 rounded disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
-                        style={{
-                          background: `${hfColor}1F`,
-                          border: `1px solid ${hfColor}40`,
-                          color: hfColor,
-                        }}
-                      >
-                        {downloadHfMutation.isPending ? (
-                          <Loader2 size={11} className="animate-spin" />
-                        ) : (
-                          t("loadArrow")
-                        )}
-                      </button>
-                    </div>
+                      testId="hf-file-row"
+                      tone="idle"
+                      name={f.filename}
+                      summary={`${f.size_gb} GB`}
+                      meta={<MetaText className="tabular-nums shrink-0">{f.size_gb} GB</MetaText>}
+                      action={
+                        <RowAction
+                          icon={downloadHfMutation.isPending
+                            ? <Loader2 size={10} className="animate-spin" />
+                            : <ArrowDownToLine size={10} />}
+                          onClick={() =>
+                            downloadHfMutation.mutate({ repoId: submitted, filename: f.filename })
+                          }
+                          disabled={isMutating}
+                        >
+                          {t("load")}
+                        </RowAction>
+                      }
+                    />
                   ))}
                 </div>
               </div>
@@ -1029,7 +999,7 @@ function BoundAgents({ runtime }: { runtime: Runtime }) {
           <span key={a.id} className="inline-flex items-center gap-1">
             <Link
               href={`/agents/${a.id}`}
-              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md font-mono text-[10px] leading-none min-h-[24px] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
               style={{
                 backgroundColor: C.accentSubtle,
                 color: C.textSecondary,
@@ -1040,20 +1010,16 @@ function BoundAgents({ runtime }: { runtime: Runtime }) {
               <EntityIcon value="🤖" size={13} className="inline-block align-[-2px] mr-1" />{a.name}
             </Link>
             {a.pending_runtime_sync && (
-              <span
-                className="rounded px-1 py-0.5 text-[10px]"
-                style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
-                title={t("pendingSyncTitle")}
-              >
+              <MetaChip tone="warn" title={t("pendingSyncTitle")}>
                 {t("pendingSync")}
-              </span>
+              </MetaChip>
             )}
           </span>
         ))}
         <button
           onClick={() => setBindOpen(true)}
           title={t("bindAgent")}
-          className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[10px] leading-none min-h-[24px] cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+          className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
           style={{
             color: C.textSecondary,
             border: `1px dashed ${C.borderActive}`,
@@ -1125,15 +1091,13 @@ function RuntimeModelEditor({
     setEditing(false);
   };
 
+  // 20px hit areas missed WCAG 2.2 SC 2.5.8 (24x24); comfortable on a thumb.
+  const iconBtnClass =
+    "flex items-center justify-center w-11 h-11 sm:w-6 sm:h-6 min-w-11 sm:min-w-6 rounded-md cursor-pointer";
   const iconBtn = (color: string) => ({
-    padding: "3px",
-    borderRadius: "5px",
     background: "transparent" as const,
     border: "1px solid transparent",
     color,
-    cursor: "pointer" as const,
-    display: "flex" as const,
-    alignItems: "center" as const,
   });
 
   if (editing) {
@@ -1164,6 +1128,7 @@ function RuntimeModelEditor({
           disabled={mutation.isPending}
           title={t("save")}
           aria-label={t("save")}
+          className={iconBtnClass}
           style={iconBtn(C.accent)}
         >
           {mutation.isPending ? (
@@ -1177,6 +1142,7 @@ function RuntimeModelEditor({
           disabled={mutation.isPending}
           title={t("cancel")}
           aria-label={t("cancel")}
+          className={iconBtnClass}
           style={iconBtn(C.textMuted)}
         >
           <X size={13} />
@@ -1204,6 +1170,7 @@ function RuntimeModelEditor({
         }}
         title={t("editModel")}
         aria-label={t("editModel")}
+        className={iconBtnClass}
         style={iconBtn(C.textMuted)}
       >
         <Pencil size={12} />
@@ -1516,14 +1483,12 @@ function KvResetScheduleToggle() {
         }}
         title={t("scheduleTitle")}
       >
-        ⏱ {t("toggle")}
+        <Clock size={11} />
+        {t("toggle")}
         {activeSchedule && (
-          <span
-            className="text-xs px-1 rounded"
-            style={{ background: `${C.online}1F`, color: C.online, fontSize: "9px" }}
-          >
+          <MetaChip tone="ok" className="tabular-nums">
             {activeSchedule.time_of_day}
-          </span>
+          </MetaChip>
         )}
       </button>
 
