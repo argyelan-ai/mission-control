@@ -71,12 +71,12 @@ for arg in "$@"; do
   esac
 done
 
-# When the compose renderer emits prefixed image names (MC_AGENT_IMAGE_PREFIX,
-# default "" until the v0.2.0 release flips it to ghcr.io/argyelan-ai/), tag
+# The compose renderer emits prefixed image names (MC_AGENT_IMAGE_PREFIX,
+# default ghcr.io/argyelan-ai/ since v0.2.0). Tag
 # every local build under the prefixed name+tag too — a locally built image
 # then always shadows the registry pull. Both variables must mirror the
 # renderer (compose_renderer.py) or local builds stop shadowing pulls.
-IMAGE_PREFIX="${MC_AGENT_IMAGE_PREFIX-}"
+IMAGE_PREFIX="${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}"
 IMAGE_TAG="${MC_AGENT_IMAGE_TAG:-latest}"
 
 tag_prefixed() {

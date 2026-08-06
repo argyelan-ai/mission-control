@@ -61,14 +61,15 @@ COMPOSE_WRITE_LOCK_TTL = 60  # seconds
 
 # Agent image names are prefix+tag configurable so self-hosters can run
 # published GHCR images while developers keep bare local names.
-# DEFAULT IS "" (bare local names) until the v0.2.0 release publishes
-# mc-claude-agent + mc-agent-base to GHCR — the release commit flips the
-# default. Flipping earlier would break every existing install: compose
-# does NOT fall back from a missing registry name to a bare local image
-# (adversarial-review finding, 2026-08-06). scripts/build-agent-images.sh
+# Default is the published GHCR images (since v0.2.0 — the release that
+# first published mc-claude-agent + mc-agent-base). Existing installs
+# upgrading past this point either run scripts/build-agent-images.sh once
+# (dual-tags local builds so they shadow the pull) or pin
+# MC_AGENT_IMAGE_PREFIX="" in .env to stay on bare local names. compose
+# does NOT fall back from a missing registry name to a bare local image. scripts/build-agent-images.sh
 # tags every local build under BOTH names so a local build always shadows
 # a registry pull once the prefix is active.
-_AGENT_IMAGE_PREFIX = os.environ.get("MC_AGENT_IMAGE_PREFIX", "")
+_AGENT_IMAGE_PREFIX = os.environ.get("MC_AGENT_IMAGE_PREFIX", "ghcr.io/argyelan-ai/")
 _AGENT_IMAGE_TAG = os.environ.get("MC_AGENT_IMAGE_TAG") or "latest"
 
 

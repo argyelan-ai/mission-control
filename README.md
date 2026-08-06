@@ -422,8 +422,6 @@ the last 10. Install a daily 03:00 schedule with `make backup-schedule`
 
 The near-term focus is making the fleet as easy to install as the core:
 
-- **Prebuilt agent images** — the pipeline is in place; the v0.2.0 release
-  publishes `mc-claude-agent` + `mc-agent-base`, ending the local build step.
 - **Umbrel & CasaOS store listings** — manifests are ready, submissions in
   progress.
 - **GPU box provisioning wizard** — add a GPU machine (e.g. DGX Spark or an
