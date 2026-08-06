@@ -117,7 +117,7 @@ function CliToolCard({
             <button
               onClick={() => onUpdate(tool)}
               title={t("updateToTitle", { version: tool.latest ?? "" })}
-              className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer transition-colors"
+              className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-1 min-h-6 text-[10px] font-medium cursor-pointer transition-colors"
               style={{
                 color: STATUS_TEXT.warning,
                 border: `1px solid ${STATUS.warning}`,
