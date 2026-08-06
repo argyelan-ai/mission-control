@@ -111,7 +111,12 @@ async def test_resolution_comment_does_not_affect_review_status(client, fake_red
 
 @pytest.mark.asyncio
 async def test_resolution_comment_does_not_affect_done_status(client, fake_redis):
-    """Task on done stays done."""
+    """Task on done stays done.
+
+    Since the closed-task guard (2026-08-06) the request is refused outright
+    with 409 — a delivered-type comment on a closed task is a dead order.
+    The invariant this test protects (no status resurrection) holds a
+    fortiori; an addendum for the record belongs in a `message` comment."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s, task_status="done")
 
@@ -122,7 +127,7 @@ async def test_resolution_comment_does_not_affect_done_status(client, fake_redis
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert resp.status_code == 201
+    assert resp.status_code == 409
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
