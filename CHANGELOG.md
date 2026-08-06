@@ -6,6 +6,15 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-06
+
+**Release highlights:** problem-first README + 18-page user handbook ·
+prebuilt agent images on GHCR (first agent without a local build) ·
+`make bridge-install` (cli-bridge as a managed service) · `setup.ps1`
+WSL2 bootstrapper for Windows (verified end-to-end on real hardware) ·
+demo crew in the seed · agent archive/restore fixed · fresh screenshots ·
+compose no longer inherits the maintainer's host layout.
+
 ### Added
 - **Agent images can come from GHCR** — the compose renderer derives agent
   image names from `MC_AGENT_IMAGE_PREFIX`/`MC_AGENT_IMAGE_TAG`. The default
