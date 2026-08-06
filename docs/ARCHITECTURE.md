@@ -393,6 +393,53 @@ dem Spark gibt. Modellwechsel bei llama.cpp = anderer Container bzw. anderes
 llama-swap-PR. Seed-Vorlage: `llamacpp-example` in `backend/config/runtimes.json`
 (`enabled: false`).
 
+##### Box-Wizard — eine GPU-Box per Klick anbinden
+
+`frontend-v2/src/app/runtimes/BoxWizard.tsx` (Button „Box hinzufügen" im
+Hosts-Kopf) fuehrt in fuenf Schritten von SSH-Zugangsdaten zur laufenden
+Runtime: Verbindung testen → Basis-Check/Bootstrap → Engine+Modell →
+Uebersicht → Ergebnis. Er **ersetzt nichts** — er ruft der Reihe nach
+`POST /hosts`, `POST /runtimes` und den bestehenden Start-Endpoint. Einen
+eigenen Deploy- oder Lifecycle-Pfad gibt es bewusst nicht.
+
+Drei Backend-Bausteine, alle in `routers/hosts.py`:
+
+1. **`POST /hosts/probe`** (`services/host_probe.py`) — Inventar der Box in
+   **einem** SSH-Kommando: arch/os, GPUs samt VRAM, Docker + NVIDIA-Runtime,
+   freier Platz, RAM, `sudo -n`. Rein lesend. Eine unerreichbare Box ist ein
+   **200 mit `reachable: false`** plus Grund, kein 500 — genau diesen Zustand
+   soll Schritt 1 anzeigen koennen. Body akzeptiert Ad-hoc-Zugangsdaten
+   (Box hat noch keine Row) oder eine `host_id`.
+2. **`POST /hosts/{id}/bootstrap`** + **`GET /hosts/{id}/bootstrap/log?cursor=N`**
+   (`services/host_bootstrap.py`) — schliesst idempotent genau drei Luecken:
+   Docker fehlt, NVIDIA-Container-Toolkit fehlt (nur wenn eine GPU da ist),
+   Benutzer nicht in der docker-Gruppe. Laeuft als asyncio-Background-Task,
+   Fortschritt in Redis (`mc:host:bootstrap:{id}:log` als Liste +
+   `:status` als Dokument, beide TTL 1h). Der Poll-Vertrag ist cursorbasiert:
+   der Client schickt zurueck, was er bekam, und erhaelt nur neue Zeilen —
+   Status und Zeilen kommen aus **einem** Read, damit die UI nie „fertig"
+   zeigt und dabei die letzten Zeilen fehlen.
+3. **`POST /hosts/launch-command`** (`services/launch_template.py`) — rendert
+   einen Registry-Eintrag zum `launch_command` (`{port}`/`{model}`/`{slug}`/
+   `{container_name}`/`{image}`). Reine Funktion hinter einem Endpoint, damit
+   es genau **einen** Renderer gibt; der Wizard zeigt den String und schickt
+   denselben an `POST /runtimes`. `--label mc.runtime.slug=<slug>` ist Pflicht
+   — ohne das Label findet MC den Container spaeter nicht wieder.
+
+Harte Grenzen des Bootstraps: **keine Treiber-, Kernel- oder Reboot-Aktionen**
+(ein fehlendes `nvidia-smi` wird nur gemeldet), jede Aktion wird **vor** der
+Ausfuehrung geloggt, jeder privilegierte Schritt laeuft ueber `sudo -n` — ohne
+passwortloses sudo endet der Lauf mit Status `needs_sudo` und einem
+kopierbaren Befehl statt in einem unsichtbaren Passwort-Prompt. Der
+Docker-Installer wird geladen, **gehasht und geloggt**, dann ausgefuehrt —
+nie `curl | sh`. Saemtliche Remote-Arbeit geht durch
+`runtime_manager._ssh_run`; eine zweite SSH-Implementierung gibt es nicht.
+
+Der Passt-Check in Schritt 3 misst gegen das **geprobte** Inventar (Summe des
+GPU-VRAM, ersatzweise RAM) und loest damit die 121-GB-Konstante des
+Modell-Browsers ab. `sparkrun`-Rezepte erscheinen im Wizard nicht: die werden
+ueber `switch-recipe` auf einer bestehenden Spark-Runtime deployt.
+
 #### Host-Registry (NEU 2026-07-02, ADR-048)
 
 Seit ADR-048 sind die **Hosts** der LLM-Runtimes selbst DB-Rows: Tabelle `hosts` (Migration `0133_host_registry`, Model `backend/app/models/host.py`) mit `kind` = `ssh` | `flask_wol` | `local` plus Verbindungsdaten (`ssh_host`/`ssh_user`/`ssh_key_path`, `control_url`, `wol_mac_address`, `power_managed`). `runtimes.host_id` (FK, nullable, `ondelete=SET NULL`) bindet eine Runtime an ihren Host — damit ist das alte Muster „neue Box = neuer runtime_type + Copy-Paste-Control-Code" abgelöst (ADR-042 bleibt für die `flask_wol`-Mechanik gültig).

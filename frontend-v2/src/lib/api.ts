@@ -1659,6 +1659,20 @@ export const api = {
       request("/api/v1/runtimes/compat-matrix"),
     addLmstudio: (data: { lms_identifier: string; display_name: string; endpoint?: string }): Promise<Runtime> =>
       request("/api/v1/runtimes", { method: "POST", body: JSON.stringify(data) }),
+    // Generic runtime creation (same endpoint as addLmstudio, full body) — the
+    // box wizard's last step. host_id binds the row to the registry host.
+    create: (data: {
+      slug: string;
+      display_name: string;
+      runtime_type: string;
+      endpoint: string;
+      healthcheck_path?: string | null;
+      model_identifier?: string | null;
+      container_name?: string | null;
+      launch_command?: string | null;
+      host_id?: string | null;
+    }): Promise<Runtime> =>
+      request("/api/v1/runtimes", { method: "POST", body: JSON.stringify(data) }),
     vllm: {
       discover: (): Promise<import("@/lib/types").VllmDiscoverResponse> =>
         request("/api/v1/runtimes/vllm/discover"),
@@ -1924,6 +1938,30 @@ export const api = {
       request(`/api/v1/hosts/${id}`, { method: "DELETE" }),
     metrics: (id: string): Promise<HostMetrics> =>
       request(`/api/v1/hosts/${id}/metrics`),
+    // Box-Wizard: read-only inventory over SSH. An unreachable box is a 200
+    // with reachable:false — only a malformed request rejects.
+    probe: (
+      data: { host_id?: string; ssh_host?: string; ssh_user?: string | null; ssh_key_path?: string | null },
+    ): Promise<import("@/lib/types").HostProbeResult> =>
+      request("/api/v1/hosts/probe", { method: "POST", body: JSON.stringify(data) }),
+    // 409 while a bootstrap for this host is still running.
+    bootstrap: (id: string): Promise<{ status: string; host_id: string }> =>
+      request(`/api/v1/hosts/${id}/bootstrap`, { method: "POST" }),
+    bootstrapLog: (id: string, cursor = 0): Promise<import("@/lib/types").HostBootstrapLog> =>
+      request(`/api/v1/hosts/${id}/bootstrap/log?cursor=${cursor}`),
+    // Pure render — turns a local-registry entry into the launch_command the
+    // wizard then posts to POST /runtimes. Nothing is created or started here;
+    // the renderer lives in the backend so there is only one of it.
+    launchCommand: (data: {
+      engine: string;
+      model_identifier: string;
+      slug: string;
+      port: number;
+      launch_template?: string | null;
+      container_name?: string | null;
+      image?: string | null;
+    }): Promise<{ launch_command: string }> =>
+      request("/api/v1/hosts/launch-command", { method: "POST", body: JSON.stringify(data) }),
   },
 
   // ── CLI Sessions (global) ────────────────────────────────────────────────

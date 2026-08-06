@@ -13,13 +13,14 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plus, Server, Trash2, WifiOff, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Server, Trash2, Wand2, WifiOff, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind, HostMetrics } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { BoxWizard } from "./BoxWizard";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -631,6 +632,7 @@ export function HostsSection() {
   // modal: undefined = closed, null = create, Host = edit
   const [modalHost, setModalHost] = useState<Host | null | undefined>(undefined);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const { data: hosts, isLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],
@@ -685,18 +687,37 @@ export function HostsSection() {
           </p>
         </div>
         {isAdmin && (
-          <button
-            onClick={() => setModalHost(null)}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
-            style={{
-              background: C.accentSubtle,
-              border: `1px solid ${C.borderAccent}`,
-              color: C.accent,
-            }}
-          >
-            <Plus size={11} />
-            {t("addHostButton")}
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Wizard = der geführte Weg (testen → Basis → Modell → läuft).
+                „Host" bleibt daneben als Direkteingabe für alle, die genau
+                wissen was sie eintragen — und für flask_wol/local, die der
+                Wizard bewusst nicht abdeckt. */}
+            <button
+              data-testid="hosts-add-box"
+              onClick={() => setWizardOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              style={{
+                background: C.accentSubtle,
+                border: `1px solid ${C.borderAccent}`,
+                color: C.accent,
+              }}
+            >
+              <Wand2 size={11} />
+              {t("addBoxButton")}
+            </button>
+            <button
+              onClick={() => setModalHost(null)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              style={{
+                background: C.borderSubtle,
+                border: `1px solid ${C.border}`,
+                color: C.textMuted,
+              }}
+            >
+              <Plus size={11} />
+              {t("addHostButton")}
+            </button>
+          </div>
         )}
       </div>
 
@@ -752,6 +773,8 @@ export function HostsSection() {
       {modalHost !== undefined && (
         <HostFormModal host={modalHost} onClose={() => setModalHost(undefined)} />
       )}
+
+      {wizardOpen && <BoxWizard onClose={() => setWizardOpen(false)} />}
     </div>
   );
 }
