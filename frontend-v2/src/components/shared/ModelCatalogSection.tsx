@@ -45,7 +45,7 @@ import type {
 } from "@/lib/types";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
-import { Section } from "@/components/shared/Section";
+import { SectionOrFragment } from "@/components/shared/Section";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
@@ -132,29 +132,27 @@ function ModelRow({
       data-testid="catalog-model-row"
       data-bound={model.bound ? "true" : "false"}
       data-cli-only={isCliOnly ? "true" : "false"}
-      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md border ${
+      // One line per model, not two. A provider like Anthropic lists eleven of
+      // these; at two lines each the catalog alone owned half the page.
+      className={`flex items-center gap-2 px-2.5 py-1 rounded-md border min-h-7 ${
         isNew ? "bg-surface border-subtle" : "border-transparent"
       }`}
     >
-      <div className="min-w-0 flex-1">
-        <div
+      <div className="min-w-0 flex-1 flex items-baseline gap-2">
+        <span
           className={`font-mono text-[11px] truncate ${
             isNew ? "text-primary" : "text-muted"
           }`}
-          title={model.id}
+          title={model.display_name && model.display_name !== model.id
+            ? `${model.id} · ${model.display_name}`
+            : model.id}
         >
           {model.id}
-        </div>
-        {(model.display_name || model.context_window) && (
-          <div className="text-[10px] truncate text-dim">
-            {model.display_name !== model.id ? model.display_name : null}
-            {model.display_name && model.display_name !== model.id && model.context_window
-              ? " · "
-              : null}
-            {model.context_window
-              ? t("contextK", { n: Math.round(model.context_window / 1024) })
-              : null}
-          </div>
+        </span>
+        {model.context_window != null && (
+          <span className="shrink-0 text-[10px] tabular-nums text-dim">
+            {t("contextK", { n: Math.round(model.context_window / 1024) })}
+          </span>
         )}
       </div>
 
@@ -231,8 +229,8 @@ function ProviderGroup({
       data-status={provider.status}
       className="rounded-lg border border-subtle bg-elevated overflow-hidden"
     >
-      {/* Kopfzeile */}
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      {/* Kopfzeile — eine Zeile: Status, Name, Protokoll, Anzahl, Prüfzeit. */}
+      <div className="flex items-center gap-2 px-3 py-1.5">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -243,28 +241,30 @@ function ProviderGroup({
             size={13}
             className={`shrink-0 text-dim transition-transform ${open ? "rotate-90" : ""}`}
           />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-primary truncate">
-                {provider.display_name || provider.key}
-              </span>
-              <span className="label-sys shrink-0">{provider.protocol}</span>
-              {newCount > 0 && (
-                <span
-                  data-testid="catalog-new-count"
-                  className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-                >
-                  {newCount} {t("newLabel")}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px]">
-              <chrome.Icon size={11} className={`shrink-0 ${TONE_TEXT[chrome.tone]}`} />
-              <span className={TONE_TEXT[chrome.tone]}>{t(chrome.labelKey)}</span>
-              <span className="text-dim">·</span>
-              <span className="text-muted">{t("checked", { time: timeAgo(provider.cached_at, locale) })}</span>
-            </div>
-          </div>
+          <chrome.Icon
+            size={11}
+            className={`shrink-0 ${TONE_TEXT[chrome.tone]}`}
+            aria-label={t(chrome.labelKey)}
+          />
+          <span className="text-sm font-medium text-primary truncate">
+            {provider.display_name || provider.key}
+          </span>
+          <span className="label-sys shrink-0">{provider.protocol}</span>
+          <span className="shrink-0 label-sys tabular-nums text-dim">{models.length}</span>
+          {newCount > 0 && (
+            <span
+              data-testid="catalog-new-count"
+              className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
+            >
+              {newCount} {t("newLabel")}
+            </span>
+          )}
+          <span
+            className="hidden sm:inline shrink-0 text-[10px] text-dim truncate"
+            title={t(chrome.labelKey)}
+          >
+            {t("checked", { time: timeAgo(provider.cached_at, locale) })}
+          </span>
         </button>
 
         {provider.endpoint && (
@@ -334,7 +334,7 @@ interface PendingBind {
   model: ModelCatalogModel;
 }
 
-export function ModelCatalogSection() {
+export function ModelCatalogSection({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useTranslations("runtimes.modelCatalog");
   const locale = useLocale();
   const queryClient = useQueryClient();
@@ -411,7 +411,8 @@ export function ModelCatalogSection() {
     : null;
 
   return (
-    <Section
+    <SectionOrFragment
+      embedded={embedded}
       id="model-catalog"
       title={t("title")}
       hint={t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
@@ -464,7 +465,7 @@ export function ModelCatalogSection() {
       )}
 
       {providers.length > 0 && (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5 max-h-[22rem] overflow-y-auto pr-1 overscroll-contain">
           {providers.map((p) => (
             <ProviderGroup
               key={p.key}
@@ -500,6 +501,6 @@ export function ModelCatalogSection() {
         onConfirm={() => pending && bindMutation.mutate(pending)}
         onCancel={() => setPending(null)}
       />
-    </Section>
+    </SectionOrFragment>
   );
 }

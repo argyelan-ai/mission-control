@@ -46,7 +46,7 @@ import type {
 } from "@/lib/types";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
-import { Section } from "@/components/shared/Section";
+import { SectionOrFragment } from "@/components/shared/Section";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
 
@@ -109,13 +109,16 @@ function RecipeCard({
       data-testid="local-recipe-card"
       data-slug={recipe.slug}
       data-engine={recipe.engine}
-      className={`rounded-lg border bg-elevated px-3 py-2.5 ${
+      // One row, not a five-line card: name + badges + identifier + specs all
+      // ride the same wrapping line. Eight recipes used to be 999 px.
+      title={recipe.description ?? undefined}
+      className={`rounded-md border bg-elevated px-2.5 py-1.5 ${
         recipe.enabled ? "border-subtle" : "border-subtle opacity-60"
       }`}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className="flex min-w-0 items-center gap-1.5">
             <span className="text-sm font-medium text-primary truncate">
               {recipe.display_name}
             </span>
@@ -161,35 +164,33 @@ function RecipeCard({
             )}
           </div>
 
-          <div
-            className="mt-0.5 font-mono text-[11px] truncate text-muted"
+          <span
+            className="font-mono text-[11px] truncate text-muted"
             title={recipe.model_identifier}
           >
             {recipe.model_identifier}
-          </div>
+          </span>
 
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-dim">
+          <span className="flex shrink-0 items-center gap-1.5 text-[10px] text-dim">
             <span className="label-sys rounded-sm bg-surface px-1.5 py-px">
               {recipe.engine}
             </span>
             {recipe.quant && <span>{recipe.quant}</span>}
             {recipe.est_weights_gb != null && (
-              <span>{t("sizeGb", { n: recipe.est_weights_gb })}</span>
+              <span className="tabular-nums">{t("sizeGb", { n: recipe.est_weights_gb })}</span>
             )}
             {recipe.context_len != null && (
-              <span>{t("contextK", { n: Math.round(recipe.context_len / 1024) })}</span>
+              <span className="tabular-nums">
+                {t("contextK", { n: Math.round(recipe.context_len / 1024) })}
+              </span>
             )}
             {recipe.arch !== "any" && <span>{recipe.arch}</span>}
-          </div>
-
-          {recipe.description && (
-            <p className="mt-1 text-[11px] text-muted line-clamp-2">
-              {recipe.description}
-            </p>
-          )}
+          </span>
+          {/* Die Beschreibung sitzt im title des Rows — sichtbar kostet sie
+              zwei Zeilen pro Rezept und sagt fast immer dasselbe. */}
 
           {recipe.author && (
-            <div data-testid="local-registry-author" className="mt-1 text-[10px] text-dim">
+            <span data-testid="local-registry-author" className="shrink-0 text-[10px] text-dim">
               {t("byAuthor")}{" "}
               {recipe.author_url ? (
                 <a
@@ -198,12 +199,12 @@ function RecipeCard({
                   rel="noopener noreferrer"
                   className="text-muted underline underline-offset-2"
                 >
-                  {recipe.author} ↗
+                  {recipe.author}
                 </a>
               ) : (
                 <span className="text-muted">{recipe.author}</span>
               )}
-            </div>
+            </span>
           )}
         </div>
 
@@ -305,7 +306,7 @@ function RefreshSummary({ result }: { result: LocalRegistryRefreshResult }) {
 
 // ── Sektion ──────────────────────────────────────────────────────────────────
 
-export function LocalModelBrowser() {
+export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useTranslations("runtimes.localRegistry");
   const locale = useLocale();
   const queryClient = useQueryClient();
@@ -451,7 +452,8 @@ export function LocalModelBrowser() {
   };
 
   return (
-    <Section
+    <SectionOrFragment
+      embedded={embedded}
       id="local-models"
       title={t("title")}
       hint={t("subtitle", { time: timeAgo(lastUpdated, locale) })}
@@ -556,7 +558,7 @@ export function LocalModelBrowser() {
       )}
 
       {visible.length > 0 && (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5 max-h-[22rem] overflow-y-auto pr-1 overscroll-contain">
           {visible.map((r) => (
             <RecipeCard
               key={r.slug}
@@ -631,6 +633,6 @@ export function LocalModelBrowser() {
           onClose={() => setInstalling(null)}
         />
       )}
-    </Section>
+    </SectionOrFragment>
   );
 }

@@ -156,6 +156,23 @@ export function Section({
   );
 }
 
+/**
+ * A Section that can opt out of its own chrome.
+ *
+ * The model surfaces (provider catalog, local recipes, download) each used to
+ * be a top-level section. They now live as tabs inside one "Models" section,
+ * so they render their body only — but they still work standalone, which is
+ * what keeps their tests and any other mounting point valid.
+ */
+export function SectionOrFragment({
+  embedded,
+  children,
+  ...section
+}: SectionProps & { embedded?: boolean }) {
+  if (embedded) return <>{children}</>;
+  return <Section {...section}>{children}</Section>;
+}
+
 export interface SectionNavItem {
   id: string;
   label: string;

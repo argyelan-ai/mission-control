@@ -1679,13 +1679,87 @@ function KvResetScheduleToggle() {
 }
 
 
+// ── Models section (provider catalog · local recipes · download) ──────────────
+
+type ModelsTab = "providers" | "local" | "download";
+
+function ModelsSection() {
+  const t = useTranslations("runtimes.models");
+  const [tab, setTab] = useState<ModelsTab>("providers");
+
+  // Same query keys the child components use, so TanStack serves these from
+  // cache — the counts cost no extra request.
+  const { data: catalog } = useQuery({
+    queryKey: ["model-catalog"],
+    queryFn: () => api.modelCatalog.list(),
+  });
+  const { data: local } = useQuery({
+    queryKey: ["local-registry", false],
+    queryFn: () => api.localRegistry.list({ enabled: true }),
+    retry: false,
+  });
+
+  const providerCount = catalog?.providers?.length ?? 0;
+  const recipeCount = local?.recipes?.length ?? 0;
+
+  const tabs: { id: ModelsTab; label: string; count?: number }[] = [
+    { id: "providers", label: t("tabProviders"), count: providerCount },
+    { id: "local", label: t("tabLocal"), count: recipeCount },
+    { id: "download", label: t("tabDownload") },
+  ];
+
+  return (
+    <Section
+      id="models"
+      title={t("title")}
+      hint={t("subtitle")}
+      count={providerCount + recipeCount}
+    >
+      <div
+        role="tablist"
+        aria-label={t("title")}
+        className="flex items-center gap-1 mb-3 flex-wrap"
+      >
+        {tabs.map((item) => {
+          const active = tab === item.id;
+          return (
+            <button
+              key={item.id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(item.id)}
+              data-testid={`models-tab-${item.id}`}
+              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs cursor-pointer transition-colors"
+              style={{
+                background: active ? C.accentSubtle : "transparent",
+                border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
+                color: active ? C.textPrimary : C.textMuted,
+              }}
+            >
+              {item.label}
+              {item.count != null && (
+                <span className="label-sys tabular-nums" style={{ color: C.textDim }}>
+                  {item.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "providers" && <ModelCatalogSection embedded />}
+      {tab === "local" && <LocalModelBrowser embedded />}
+      {tab === "download" && <ModelCatalog />}
+    </Section>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function RuntimesPage() {
   const t = useTranslations("runtimes");
   const tHosts = useTranslations("runtimes.hosts");
-  const tCatalog = useTranslations("runtimes.modelCatalog");
-  const tLocal = useTranslations("runtimes.localRegistry");
+  const tModels = useTranslations("runtimes.models");
   const tCli = useTranslations("runtimes.cliTools");
   const queryClient = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
@@ -1782,8 +1856,7 @@ export default function RuntimesPage() {
             { id: "vllm", label: "vLLM Docker", count: vllmRuntimes.length },
             { id: "lmstudio", label: "LM Studio", count: lmsRuntimes.length + unattachedModels.length },
             { id: "hosts", label: tHosts("title") },
-            { id: "model-catalog", label: tCatalog("title") },
-            { id: "local-models", label: tLocal("title") },
+            { id: "models", label: tModels("title") },
             { id: "cli-tools", label: tCli("title") },
           ]}
         />
@@ -1829,8 +1902,6 @@ export default function RuntimesPage() {
           count={lmsRuntimes.length + unattachedModels.length}
           actions={<KvResetScheduleToggle />}
         >
-
-          <ModelCatalog />
 
           <ActiveDownloads />
 
@@ -1886,11 +1957,12 @@ export default function RuntimesPage() {
         {/* Hosts Registry (ADR-048) */}
         <HostsSection />
 
-        {/* Modell-Katalog (was es bei den Anbietern gibt) */}
-        <ModelCatalogSection />
-
-        {/* Lokale Modelle (was auf eigener Hardware läuft) */}
-        <LocalModelBrowser />
+        {/* Modelle — eine Sektion, drei Sichten. Vorher waren „Model catalog"
+            (was es beim Anbieter gibt), „Local models" (was auf eigener
+            Hardware läuft) und „Download model" drei getrennte Blöcke, die
+            zusammen über die Hälfte der Seitenhöhe belegten. Nur die gewählte
+            Sicht rendert; Funktionen und Endpunkte bleiben unverändert. */}
+        <ModelsSection />
 
         {/* CLI-Tools (festgebackene Agent-Werkzeuge) */}
         <CliToolsSection />
