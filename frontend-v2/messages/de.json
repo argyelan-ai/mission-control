@@ -994,7 +994,7 @@
     },
     "autonomy": {
       "title": "Autonomie-Stufen",
-      "description": "Lege pro Aktion fest, ob Agenten autonom handeln (L1), dich benachrichtigen (L2) oder auf Freigabe warten (L3).",
+      "description": "Lege pro Aktion fest, ob Agenten selbst handeln, dich melden oder auf deine Freigabe warten.",
       "action": "Aktion",
       "custom": "custom",
       "legend": "L1 = Auto | L2 = Melden | L3 = Freigabe",

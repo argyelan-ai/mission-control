@@ -994,7 +994,7 @@
     },
     "autonomy": {
       "title": "Autonomy Levels",
-      "description": "Decide for each action whether agents act autonomously (L1), notify you (L2), or wait for approval (L3).",
+      "description": "Decide for each action whether agents act on their own, notify you, or wait for your approval.",
       "action": "Action",
       "custom": "custom",
       "legend": "L1 = Auto | L2 = Notify | L3 = Approve",
