@@ -2174,7 +2174,8 @@
       "tabProviders": "Anbieter",
       "tabLocal": "Eigene Hardware",
       "tabDownload": "Herunterladen"
-    }
+    },
+    "downloadMoved": "Modelle herunterladen → Sektion Modelle"
   },
   "bench": {
     "common": {
@@ -2343,6 +2344,10 @@
       "collapse": "{name} einklappen",
       "expand": "{name} ausklappen",
       "jumpTo": "Zu Abschnitt springen"
+    },
+    "cappedList": {
+      "showAll": "{n} weitere anzeigen",
+      "showFewer": "Weniger anzeigen"
     }
   }
 }

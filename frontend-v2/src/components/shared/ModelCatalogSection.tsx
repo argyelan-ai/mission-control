@@ -46,6 +46,7 @@ import type {
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
+import { CappedList } from "@/components/shared/CappedList";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
@@ -465,7 +466,7 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
       )}
 
       {providers.length > 0 && (
-        <div className="flex flex-col gap-1.5 max-h-[22rem] overflow-y-auto pr-1 overscroll-contain">
+        <CappedList testId="catalog-list" maxRows={2}>
           {providers.map((p) => (
             <ProviderGroup
               key={p.key}
@@ -474,7 +475,7 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
               onBind={(provider, model) => setPending({ provider, model })}
             />
           ))}
-        </div>
+        </CappedList>
       )}
 
       <ConfirmDialog

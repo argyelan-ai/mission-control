@@ -47,6 +47,7 @@ import type {
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
+import { CappedList } from "@/components/shared/CappedList";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
 
@@ -558,7 +559,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
       )}
 
       {visible.length > 0 && (
-        <div className="flex flex-col gap-1.5 max-h-[22rem] overflow-y-auto pr-1 overscroll-contain">
+        <CappedList testId="recipe-list" maxRows={6}>
           {visible.map((r) => (
             <RecipeCard
               key={r.slug}
@@ -575,7 +576,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
               toggling={togglingSlug === r.slug}
             />
           ))}
-        </div>
+        </CappedList>
       )}
 
       <ConfirmDialog

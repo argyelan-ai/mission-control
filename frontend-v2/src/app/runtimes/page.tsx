@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -44,7 +44,7 @@ import { Plug } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
-import { Section, SectionNav } from "@/components/shared/Section";
+import { Section, SectionNav, requestSectionOpen } from "@/components/shared/Section";
 
 // ── State Configuration ───────────────────────────────────────────────────────
 
@@ -1683,9 +1683,26 @@ function KvResetScheduleToggle() {
 
 type ModelsTab = "providers" | "local" | "download";
 
+const MODELS_TAB_EVENT = "mc:models-tab";
+
+/** Jump to the Models section and select a tab (used by the LM Studio pointer). */
+function openModelsTab(tab: ModelsTab) {
+  requestSectionOpen("models");
+  window.dispatchEvent(new CustomEvent(MODELS_TAB_EVENT, { detail: tab }));
+  requestAnimationFrame(() => {
+    document.getElementById("models")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 function ModelsSection() {
   const t = useTranslations("runtimes.models");
   const [tab, setTab] = useState<ModelsTab>("providers");
+
+  useEffect(() => {
+    const onTab = (e: Event) => setTab((e as CustomEvent<ModelsTab>).detail);
+    window.addEventListener(MODELS_TAB_EVENT, onTab);
+    return () => window.removeEventListener(MODELS_TAB_EVENT, onTab);
+  }, []);
 
   // Same query keys the child components use, so TanStack serves these from
   // cache — the counts cost no extra request.
@@ -1903,6 +1920,19 @@ export default function RuntimesPage() {
           count={lmsRuntimes.length + unattachedModels.length}
           actions={<KvResetScheduleToggle />}
         >
+
+          {/* The download panel moved into the Models section. This keeps the
+              familiar spot from dead-ending. */}
+          <button
+            type="button"
+            onClick={() => openModelsTab("download")}
+            data-testid="lms-download-pointer"
+            className="inline-flex items-center gap-1.5 mb-3 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
+            style={{ color: C.textMuted }}
+          >
+            <Download size={11} />
+            {t("downloadMoved")}
+          </button>
 
           <ActiveDownloads />
 

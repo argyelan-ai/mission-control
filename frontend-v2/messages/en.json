@@ -2174,7 +2174,8 @@
       "tabProviders": "Providers",
       "tabLocal": "Own hardware",
       "tabDownload": "Download"
-    }
+    },
+    "downloadMoved": "Download models → Models section"
   },
   "bench": {
     "common": {
@@ -2343,6 +2344,10 @@
       "collapse": "Collapse {name}",
       "expand": "Expand {name}",
       "jumpTo": "Jump to section"
+    },
+    "cappedList": {
+      "showAll": "Show {n} more",
+      "showFewer": "Show fewer"
     }
   }
 }
