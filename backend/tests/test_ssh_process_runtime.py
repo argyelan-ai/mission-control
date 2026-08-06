@@ -1015,3 +1015,27 @@ async def test_recipe_list_exposes_the_credit_fields(auth_client, session):
     assert ds4["process_name"] == "ds4-server"
     assert ds4["stop_template"]
     assert all(r["author"] for r in body["recipes"])
+
+
+def test_migration_backfill_matches_the_seed_credits():
+    """Two sources for the same fact: the seed file (fresh install) and the
+    0177 backfill (existing DB). If they drift, the credit on Marks card
+    depends on when he installed MC — which is exactly the bug this catches."""
+    import json
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parent.parent
+    seed = json.loads((backend / "config" / "local-recipes.json").read_text(encoding="utf-8"))
+    migration = (
+        backend / "alembic" / "versions" / "0177_ssh_process_runtime.py"
+    ).read_text(encoding="utf-8")
+
+    for entry in seed:
+        # The ds4 entry is new in this migration — it arrives via the seeder,
+        # never via a backfill, so it is deliberately not in that table.
+        if entry["slug"] == "deepseek-v4-flash-ds4":
+            continue
+        assert f'"{entry["author"]}"' in migration, (
+            f"{entry['slug']}: seed author is not what the migration backfills"
+        )
+        assert f'"{entry["author_url"]}"' in migration, entry["slug"]

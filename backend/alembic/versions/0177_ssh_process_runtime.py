@@ -49,7 +49,7 @@ _BUILTIN_AUTHORS = {
     "qwen36-general-spark": ("Alibaba Qwen Team", "https://qwenlm.github.io"),
     "laguna-s21-nvfp4": ("poolside", "https://poolside.ai"),
     "qwen3-coder-next-80b-a3b-gb10": (
-        "saricles (Quant) · Alibaba Qwen Team (Modell)",
+        "saricles (quant) · Alibaba Qwen Team (model)",
         "https://huggingface.co/saricles/Qwen3-Coder-Next-NVFP4-GB10",
     ),
     "deepseek-v4-flash-spark": ("DeepSeek", "https://www.deepseek.com"),
@@ -58,7 +58,7 @@ _BUILTIN_AUTHORS = {
         "https://deepmind.google/technologies/gemma/",
     ),
     "qwen36-27b-nvfp4": (
-        "Unsloth (Quant) · Alibaba Qwen Team (Modell)",
+        "Unsloth (quant) · Alibaba Qwen Team (model)",
         "https://huggingface.co/unsloth/Qwen3.6-27B-NVFP4",
     ),
     "qwen3-embedding-0.6b": (
