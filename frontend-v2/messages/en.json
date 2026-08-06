@@ -1392,6 +1392,13 @@
       "settingSaved": "Saved — applied immediately",
       "settingSaveFailed": "Saving failed",
       "docsNote": "Full setup guide: docs/setup/telegram.md in the repository. The health watchdog reads its Telegram credentials from .env on purpose (it must work when MC is down) — it is not affected by these settings."
+    },
+    "groups": {
+      "account": "Account",
+      "fleet": "Fleet",
+      "connections": "Connections",
+      "secrets": "Secrets",
+      "system": "System"
     }
   },
   "skills": {

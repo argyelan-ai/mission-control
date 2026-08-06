@@ -1392,6 +1392,13 @@
       "settingSaved": "Gespeichert — sofort wirksam",
       "settingSaveFailed": "Speichern fehlgeschlagen",
       "docsNote": "Vollständige Anleitung: docs/setup/telegram.md im Repository. Der Health-Wächter liest seine Telegram-Zugangsdaten bewusst aus .env (er muss auch bei liegendem MC funktionieren) — diese Einstellungen betreffen ihn nicht."
+    },
+    "groups": {
+      "account": "Konto",
+      "fleet": "Flotte",
+      "connections": "Anschlüsse",
+      "secrets": "Geheimnisse",
+      "system": "System"
     }
   },
   "skills": {

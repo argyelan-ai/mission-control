@@ -593,11 +593,12 @@ function HostCard({
             onClick={onEdit}
             title={t("edit")}
             aria-label={t("editHostAria", { name: host.display_name })}
-            className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer"
+            className="action-btn flex items-center justify-center w-7 h-7 min-w-[28px] rounded-md transition-colors cursor-pointer"
             style={{
-              background: C.borderSubtle,
-              border: `1px solid ${C.borderSubtle}`,
+              background: "transparent",
+              border: `1px solid ${C.borderActive}`,
               color: C.textMuted,
+              ["--action-hover" as string]: C.bgHover,
             }}
           >
             <Pencil size={12} />
@@ -607,11 +608,12 @@ function HostCard({
             disabled={deletePending}
             title={t("delete")}
             aria-label={t("deleteHostAria", { name: host.display_name })}
-            className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
+            className="action-btn flex items-center justify-center w-7 h-7 min-w-[28px] rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
             style={{
-              background: `${C.error}14`,
+              background: "transparent",
               border: `1px solid ${C.error}33`,
               color: STATUS_TEXT.error,
+              ["--action-hover" as string]: `${C.error}1A`,
             }}
           >
             {deletePending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}

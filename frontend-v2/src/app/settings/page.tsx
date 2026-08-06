@@ -56,27 +56,36 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 
 // labelKey pattern (docs/i18n.md): keys resolve via t() at the render site —
 // never store translated strings in module constants.
+// Thirteen entries in one flat list put "change my password" next to "how much
+// autonomy do agents have" next to "where does the Slack token live". The
+// groups answer one question each: whose account, how the fleet behaves, what
+// it talks to, what secrets it holds, who administers it.
+type SettingsGroup = "account" | "fleet" | "connections" | "secrets" | "system";
+
+const GROUP_ORDER: SettingsGroup[] = ["account", "fleet", "connections", "secrets", "system"];
+
 interface SettingsSection {
   id: string;
   labelKey: string;
   icon: LucideIcon;
+  group: SettingsGroup;
   adminOnly?: boolean;
 }
 
 const SECTIONS: SettingsSection[] = [
-  { id: "profile", labelKey: "sections.profile", icon: User },
-  { id: "security", labelKey: "sections.security", icon: Shield },
-  { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, adminOnly: true },
-  { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, adminOnly: true },
-  { id: "apikeys", labelKey: "sections.apikeys", icon: Key, adminOnly: true },
-  { id: "github", labelKey: "sections.github", icon: Github, adminOnly: true },
-  { id: "slack", labelKey: "sections.slack", icon: MessageSquare, adminOnly: true },
-  { id: "telegram", labelKey: "sections.telegram", icon: Send, adminOnly: true },
-  { id: "credentials", labelKey: "sections.credentials", icon: KeyRound, adminOnly: true },
-  { id: "costs", labelKey: "sections.costs", icon: DollarSign, adminOnly: true },
-  { id: "users", labelKey: "sections.users", icon: Users, adminOnly: true },
-  { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard },
-  { id: "about", labelKey: "sections.about", icon: Info },
+  { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
+  { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
+  { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard, group: "account" },
+  { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
+  { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
+  { id: "costs", labelKey: "sections.costs", icon: DollarSign, group: "fleet", adminOnly: true },
+  { id: "github", labelKey: "sections.github", icon: Github, group: "connections", adminOnly: true },
+  { id: "slack", labelKey: "sections.slack", icon: MessageSquare, group: "connections", adminOnly: true },
+  { id: "telegram", labelKey: "sections.telegram", icon: Send, group: "connections", adminOnly: true },
+  { id: "apikeys", labelKey: "sections.apikeys", icon: Key, group: "secrets", adminOnly: true },
+  { id: "credentials", labelKey: "sections.credentials", icon: KeyRound, group: "secrets", adminOnly: true },
+  { id: "users", labelKey: "sections.users", icon: Users, group: "system", adminOnly: true },
+  { id: "about", labelKey: "sections.about", icon: Info, group: "system" },
 ];
 
 // ── Keyboard shortcuts reference ──────────────────────────────────────────────
@@ -214,15 +223,18 @@ function InputField({
         readOnly={readOnly}
         className={cn(
           inputBaseClasses,
-          readOnly ? "opacity-50 cursor-not-allowed" : "cursor-text",
+          // No opacity on read-only: textMuted at 50% opacity put the email
+          // address near 2:1. Read-only means "you cannot change this", not
+          // "you cannot read this". The dimmed surface carries the state.
+          readOnly ? "cursor-not-allowed" : "cursor-text",
           rightElement && "pr-10"
         )}
         style={{
-          backgroundColor: C.bgDeep,
+          backgroundColor: readOnly ? "transparent" : C.bgDeep,
           borderWidth: 1,
           borderStyle: "solid",
-          borderColor: "var(--color-border)",
-          color: readOnly ? "var(--color-text-muted)" : "var(--color-text-primary)",
+          borderColor: readOnly ? "var(--color-border-subtle)" : "var(--color-border)",
+          color: readOnly ? "var(--color-text-secondary)" : "var(--color-text-primary)",
         }}
         onFocus={(e) => {
           if (!readOnly) {
@@ -261,11 +273,10 @@ function SaveButton({
       onClick={onClick}
       disabled={loading || disabled}
       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-[var(--color-on-accent)] cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-      style={{
-        background: success
-          ? C.online
-          : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
-      }}
+      // Flat accent, not a gradient. A decorative 135deg ramp on the primary
+      // action reads as a grey smear on this palette, and the system's first
+      // rule is that nothing is coloured without meaning.
+      style={{ background: success ? C.online : C.accent }}
     >
       {loading ? (
         <Loader2 size={14} className="animate-spin" />
@@ -671,24 +682,20 @@ function AutonomySection() {
       />
 
       <div className="mc-card p-4 sm:p-6" style={cardStyle}>
-        {/* Desktop header row — hidden on mobile */}
+        {/* Desktop header row — hidden on mobile. The level columns are no
+            longer labelled here: each row's buttons carry the words. */}
         <div
-          className="hidden sm:grid items-center gap-3 px-3 py-2 mb-1"
+          className="hidden sm:grid items-center gap-3 px-3 pb-2"
           style={{
-            gridTemplateColumns: "1fr 80px 80px 80px",
+            gridTemplateColumns: "1fr 92px 92px 92px",
             color: "var(--color-text-muted)",
           }}
         >
-          <span className="text-xs font-medium uppercase tracking-wide">{t("autonomy.action")}</span>
-          {LEVEL_OPTIONS.map((opt) => (
-            <span key={opt.value} className="text-xs font-medium text-center" style={{ color: opt.color }}>
-              {t(opt.labelKey)}
-            </span>
-          ))}
+          <span className="label-sys">{t("autonomy.action")}</span>
         </div>
 
         {/* Action Rows */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col">
           {Object.keys(defaults).map((action) => {
             const meta = KNOWN_AUTONOMY_ACTIONS.has(action)
               ? {
@@ -699,98 +706,85 @@ function AutonomySection() {
             const current = levels[action] ?? defaults[action] ?? "L3";
             const isDefault = !levels[action] || levels[action] === defaults[action];
 
+            // One segmented control, shared by both layouts. The buttons used
+            // to read "L1/L2/L3" while the column headers read
+            // "Auto/Notify/Approve" — two vocabularies for one choice, plus a
+            // legend underneath translating between them.
+            const levelControl = (
+              <div
+                role="radiogroup"
+                aria-label={meta.label}
+                className="grid grid-cols-3 sm:contents rounded-md overflow-hidden"
+                style={{ border: "1px solid var(--color-border)" }}
+              >
+                {LEVEL_OPTIONS.map((opt, i) => {
+                  const isActive = current === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      role="radio"
+                      aria-checked={isActive}
+                      onClick={() => handleChange(action, opt.value)}
+                      disabled={updateMutation.isPending}
+                      title={`${opt.value} — ${t(opt.labelKey)}`}
+                      className="flex items-center justify-center gap-1 h-8 sm:h-7 sm:rounded-md text-xs font-medium transition-colors cursor-pointer disabled:opacity-50 sm:border"
+                      style={{
+                        backgroundColor: isActive
+                          ? `color-mix(in srgb, ${opt.color} 18%, transparent)`
+                          : "transparent",
+                        color: isActive ? opt.color : "var(--color-text-muted)",
+                        borderLeft: i > 0 ? "1px solid var(--color-border)" : undefined,
+                        borderColor: isActive ? opt.color : "var(--color-border)",
+                      }}
+                    >
+                      {isActive && <Check size={11} className="shrink-0" />}
+                      <span>{t(opt.labelKey)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+
+            const name = (
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                    {meta.label}
+                  </span>
+                  {!isDefault && (
+                    <span
+                      className="text-[10px] px-1 py-0.5 rounded"
+                      style={{ color: C.accent, backgroundColor: C.accentSubtle }}
+                    >
+                      {t("autonomy.custom")}
+                    </span>
+                  )}
+                </div>
+                {meta.desc && (
+                  <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+                    {meta.desc}
+                  </div>
+                )}
+              </div>
+            );
+
             return (
+              // A plain row with a hairline, not a bordered card. Eleven cards
+              // inside one card is a nested-card stack, and it cost ~92 px per
+              // row for what is a 11x3 matrix.
               <div
                 key={action}
-                className="rounded-md px-3 py-2.5 transition-colors"
+                className="px-3 py-2.5 sm:grid sm:items-center sm:gap-3 transition-colors"
                 style={{
-                  backgroundColor: "var(--color-bg-surface)",
-                  border: "1px solid var(--color-border-subtle)",
+                  gridTemplateColumns: "1fr 92px 92px 92px",
+                  borderTop: "1px solid var(--color-border-subtle)",
                 }}
               >
-                {/* Mobile: stacked layout */}
-                <div className="sm:hidden">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                      {meta.label}
-                    </span>
-                    {!isDefault && (
-                      <span className="text-[10px] px-1 py-0.5 rounded" style={{ color: C.accent, backgroundColor: C.accentSubtle }}>
-                        {t("autonomy.custom")}
-                      </span>
-                    )}
-                  </div>
-                  {meta.desc && (
-                    <div className="text-xs mb-2.5" style={{ color: "var(--color-text-muted)" }}>{meta.desc}</div>
-                  )}
-                  <div className="grid grid-cols-3 gap-2">
-                    {LEVEL_OPTIONS.map((opt) => {
-                      const isActive = current === opt.value;
-                      return (
-                        <button
-                          key={opt.value}
-                          onClick={() => handleChange(action, opt.value)}
-                          disabled={updateMutation.isPending}
-                          className="flex items-center justify-center gap-1 h-8 rounded-md text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
-                          style={{
-                            backgroundColor: isActive ? `color-mix(in srgb, ${opt.color} 20%, transparent)` : "transparent",
-                            color: isActive ? opt.color : "var(--color-text-muted)",
-                            border: `1px solid ${isActive ? opt.color : "var(--color-text-dim)"}`,
-                          }}
-                        >
-                          {isActive && <Check size={11} />}
-                          <span>{t(opt.labelKey)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Desktop: grid layout */}
-                <div
-                  className="hidden sm:grid items-center gap-3"
-                  style={{ gridTemplateColumns: "1fr 80px 80px 80px" }}
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                      {meta.label}
-                      {!isDefault && (
-                        <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded" style={{ color: C.accent, backgroundColor: C.accentSubtle }}>
-                          {t("autonomy.custom")}
-                        </span>
-                      )}
-                    </div>
-                    {meta.desc && (
-                      <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>{meta.desc}</div>
-                    )}
-                  </div>
-                  {LEVEL_OPTIONS.map((opt) => {
-                    const isActive = current === opt.value;
-                    return (
-                      <button
-                        key={opt.value}
-                        onClick={() => handleChange(action, opt.value)}
-                        disabled={updateMutation.isPending}
-                        className="flex items-center justify-center h-7 rounded-md text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
-                        style={{
-                          backgroundColor: isActive ? `color-mix(in srgb, ${opt.color} 20%, transparent)` : "transparent",
-                          color: isActive ? opt.color : "var(--color-text-muted)",
-                          border: `1px solid ${isActive ? opt.color : "var(--color-text-dim)"}`,
-                        }}
-                      >
-                        {isActive && <Check size={12} className="mr-0.5" />}
-                        {opt.value}
-                      </button>
-                    );
-                  })}
-                </div>
+                <div className="mb-2 sm:mb-0">{name}</div>
+                {levelControl}
               </div>
             );
           })}
-        </div>
-
-        <div className="mt-4 text-xs" style={{ color: "var(--color-text-muted)" }}>
-          {t("autonomy.legend")}
         </div>
       </div>
     </SectionMotion>
@@ -2218,14 +2212,27 @@ function SettingsContent() {
           initial={{ opacity: 0, x: -8 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.1, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-          className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r overflow-x-auto md:overflow-y-auto py-3 tab-strip-nav"
+          className="w-full md:w-52 shrink-0 border-b md:border-b-0 md:border-r overflow-x-auto md:overflow-y-auto py-3 tab-strip-nav"
           style={{
             borderColor: "var(--color-border-subtle)",
-            backgroundColor: "var(--color-bg-surface)",
+            // Transparent on desktop: the filled panel used to stop mid-page
+            // with a hard edge floating in the dark. The divider carries the
+            // separation; the surface is only needed for the mobile strip.
+            backgroundColor: "transparent",
           }}
         >
-          <ul className="flex md:flex-col gap-1 md:gap-0.5 px-2 min-w-max md:min-w-0">
-            {visibleSections.map((section) => {
+          {GROUP_ORDER.map((group) => {
+            const items = visibleSections.filter((s) => s.group === group);
+            if (items.length === 0) return null;
+            return (
+              <div key={group} className="md:mb-3 last:mb-0 flex md:block items-center">
+                {/* Group labels are desktop-only: on mobile the nav is one
+                    horizontal strip, where headings would break the scan. */}
+                <div className="hidden md:block label-sys px-3 pb-1 pt-2">
+                  {t(`groups.${group}`)}
+                </div>
+                <ul className="flex md:flex-col gap-1 md:gap-0.5 px-2 min-w-max md:min-w-0">
+            {items.map((section) => {
               const Icon = section.icon;
               const isActive = activeSection === section.id;
               return (
@@ -2268,12 +2275,18 @@ function SettingsContent() {
                 </li>
               );
             })}
-          </ul>
+                </ul>
+              </div>
+            );
+          })}
         </motion.nav>
 
         {/* Right: Section Content */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
-          <div className="max-w-2xl min-w-0">
+          {/* 3xl, not 2xl: two nav columns already eat ~530 px of a 1440 px
+              screen, and the dense sections (autonomy matrix, key lists) were
+              being squeezed while 300 px sat empty on the right. */}
+          <div className="max-w-3xl min-w-0">
             <AnimatePresence mode="wait">
               {activeSection === "profile" && <ProfileSection />}
               {activeSection === "security" && <SecuritySection />}
