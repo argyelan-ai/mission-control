@@ -18,7 +18,8 @@ class Runtime(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     slug: str = Field(index=True, unique=True, max_length=64)
     display_name: str = Field(max_length=128)
-    runtime_type: str = Field(max_length=32)  # lmstudio | vllm_docker | unsloth | openai_compatible | cloud
+    # lmstudio | vllm_docker | llamacpp_docker | unsloth | openai_compatible | cloud
+    runtime_type: str = Field(max_length=32)
     endpoint: str = Field(max_length=512)
     healthcheck_path: str | None = Field(default=None, max_length=128)
 
@@ -26,11 +27,12 @@ class Runtime(SQLModel, table=True):
     model_identifier: str | None = Field(default=None, max_length=256)
 
     # Type-specific management hooks
-    container_name: str | None = Field(default=None, max_length=128)  # vllm_docker
+    container_name: str | None = Field(default=None, max_length=128)  # vllm_docker, llamacpp_docker
     lms_identifier: str | None = Field(default=None, max_length=256)  # lmstudio
     lms_cli_path: str | None = Field(default=None, max_length=256)  # lmstudio
 
-    # Recipe-aware re-launch (vllm_docker). When `docker start <container_name>`
+    # Recipe-aware re-launch (vllm_docker, llamacpp_docker). When
+    # `docker start <container_name>`
     # finds no container (e.g. sparkrun `--rm` auto-removed it after stop),
     # start_runtime() executes this command via SSH instead. The command is
     # responsible for labelling the resulting container so stop/restart can

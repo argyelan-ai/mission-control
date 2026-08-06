@@ -6,7 +6,8 @@ YAML anchors.
 
 Image rules:
 - runtime.runtime_type == "cloud"                                  → mc-claude-agent:latest
-- runtime.runtime_type in {vllm_docker, lmstudio, openai_compatible, unsloth} → mc-agent-base:latest
+- runtime.runtime_type in {vllm_docker, llamacpp_docker, lmstudio, openai_compatible, unsloth}
+  → mc-agent-base:latest
 - runtime is None                                                  → keep static fallback
                                                                       (preserve existing assignment for
                                                                        legacy agents without runtime_id).
@@ -165,7 +166,14 @@ def pick_image_for_runtime(runtime: Runtime | None) -> str | None:
     # allowlist for the same reason as omp (never fall through to a shim).
     if rt_type == "kimi":
         return KIMI_IMAGE
-    if rt_type in ("vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud"):
+    # llamacpp_docker is an OpenAI-compatible ENGINE, so the agent side needs
+    # the same openclaude shim as vllm_docker. The llama.cpp server image
+    # itself is not chosen here — this function returns the AGENT container
+    # image; the engine image lives in the launch command / local recipe
+    # (config/local-recipes.json, default ghcr.io/ggml-org/llama.cpp:server*).
+    if rt_type in (
+        "vllm_docker", "llamacpp_docker", "lmstudio", "openai_compatible", "unsloth", "cloud"
+    ):
         return OPENCLAUDE_IMAGE
     return None
 

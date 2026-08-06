@@ -92,7 +92,8 @@ async def build_runtime_env(
         # default (unset here — the bridge's own default applies) so a
         # genuinely stuck cloud turn is still caught quickly.
         #
-        # runtime_type is definitive for vllm_docker/lmstudio/unsloth — those
+        # runtime_type is definitive for vllm_docker/llamacpp_docker/lmstudio/
+        # unsloth — those
         # only exist as self-hosted processes. openai_compatible is
         # ambiguous (it's also used for managed APIs like Ollama Cloud), so
         # it's gated on runtime.host_id being set — per the Runtime model's
@@ -104,7 +105,7 @@ async def build_runtime_env(
         # (checked: no config/extra JSON column) — if one is added later,
         # read it here and let it win over this type-based default.
         _is_slow_local_runtime = (
-            runtime.runtime_type in ("vllm_docker", "lmstudio", "unsloth")
+            runtime.runtime_type in ("vllm_docker", "llamacpp_docker", "lmstudio", "unsloth")
             or (runtime.runtime_type == "openai_compatible" and runtime.host_id is not None)
         )
         if _is_slow_local_runtime:

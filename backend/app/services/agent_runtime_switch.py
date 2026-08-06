@@ -64,6 +64,7 @@ HEALTH_TIMEOUT_RESTART = 30
 # Cloud (Anthropic, Ollama) already ship a model_identifier from the seed.
 _PROBEABLE_RUNTIME_TYPES = {
     "vllm_docker",
+    "llamacpp_docker",
     "lmstudio",
     "openai_compatible",
     "unsloth",
@@ -333,7 +334,8 @@ async def validate_compatibility(
       - runtime.enabled is False
     Soft rules (warn-only, returned for UI display):
       - agent uses tools, runtime.supports_tools is False
-      - runtime is vllm_docker and not ready (state read via runtime_state, best effort)
+      - runtime is a docker engine (vllm_docker / llamacpp_docker) and not
+        ready (state read via runtime_state, best effort)
     """
     if not runtime.enabled:
         raise RuntimeIncompatibleError(
@@ -348,13 +350,14 @@ async def validate_compatibility(
             f"tool-calling. Tool-using prompts werden vermutlich fehlschlagen."
         )
 
-    if runtime.runtime_type == "vllm_docker":
+    if runtime.runtime_type in ("vllm_docker", "llamacpp_docker"):
         try:
             from app.services.runtime_state import get_runtime_state_dict  # type: ignore[import-not-found]
             state = await get_runtime_state_dict(runtime)
             if isinstance(state, dict) and state.get("state") not in (None, "ready", "running"):
+                engine = "llama.cpp" if runtime.runtime_type == "llamacpp_docker" else "vLLM"
                 warnings.append(
-                    f"vLLM-Container '{runtime.slug}' ist aktuell "
+                    f"{engine}-Container '{runtime.slug}' ist aktuell "
                     f"'{state.get('state')}' — Health-Check kann fehlschlagen."
                 )
         except ImportError:

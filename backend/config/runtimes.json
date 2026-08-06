@@ -238,5 +238,27 @@
     "gpu_profile": "dgx_spark_heavy",
     "memory_notes": "omp headless driver (bridge.py --serve). Reuses the Qwen vLLM on the DGX Spark (same endpoint as qwen-general). OpenAI-compatible transport, no anthropic auth.",
     "startup_notes": "Container boots bridge.py --serve; ready when the Window-0 pane prints OMP_BRIDGE_READY. Qwen must be warm (2-5 min after vLLM start)."
+  },
+  {
+    "id": "llamacpp-example",
+    "display_name": "llama.cpp Example (GGUF)",
+    "runtime_type": "llamacpp_docker",
+    "provider": "local",
+    "endpoint": "http://192.0.2.10:8080/v1",
+    "healthcheck_path": "/health",
+    "container_name": "mc-llamacpp-example",
+    "model_identifier": null,
+    "launch_command": "docker run -d --rm --name mc-llamacpp-example --label mc.runtime.slug=llamacpp-example -p 8080:8080 ghcr.io/ggml-org/llama.cpp:server-cuda -hf Qwen/Qwen3-8B-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 -c 32768 --jinja",
+    "role_tags": [],
+    "supports_tools": true,
+    "supports_reasoning": false,
+    "supports_streaming": true,
+    "preferred_context_len": 32768,
+    "max_context_len": 32768,
+    "gpu_profile": "dgx_spark_light",
+    "memory_notes": "Template, disabled on purpose — copy it, adjust endpoint/model, then enable. Small GGUF models are meant to run ALONGSIDE a big vLLM model, not instead of it.",
+    "startup_notes": "The launch_command MUST keep --label mc.runtime.slug=<id>: stop, restart and the start-verification find the container by that label. Use the :server tag instead of :server-cuda on a CPU-only box (the image is multi-arch, the same tag runs on ARM64 and x86). The first start also downloads the GGUF, which can take far longer than the model load itself.",
+    "ui_order": 12,
+    "enabled": false
   }
 ]
