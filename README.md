@@ -19,7 +19,7 @@ single dark-mode control room, running entirely on your own hardware.
 [![OpenAI-compatible](https://img.shields.io/badge/any_OpenAI--compatible-%2Fv1-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
 
 [Install](#install-in-one-line) · [Why](#why-mission-control) ·
-[Platforms](#runs-on) · [Docs](docs/) · [Roadmap](#roadmap) ·
+[Platforms](#runs-on) · [Handbook](docs/handbook/index.md) · [Roadmap](#roadmap) ·
 [Community](#community)
 
 ![Mission Control — control room](docs/assets/mc-home.png)
@@ -83,10 +83,11 @@ Updating later is `./install.sh --update`.
 | **Runtipi** | [community app store](https://github.com/argyelan-ai/tipi-store) — add it under *Settings → App Stores*, then install from the store | 2 clicks |
 | **Portainer** | [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json) as an App Template source | a few clicks |
 | **Umbrel / CasaOS** | manifests [prepared](deploy/catalogs/), store submissions in progress | — |
-| **Windows 10/11** | WSL2 + the one-liner — [guide](docs/setup/windows.md); a one-click bootstrapper is on the [roadmap](#roadmap) | ~10 min |
+| **Windows 10/11** | `.\setup.ps1` — bootstraps WSL2 + Docker, then runs the standard installer ([guide](docs/setup/windows.md)) | 2–3 clicks |
 | **Windows Server / company VM** (Hyper-V, VMware ESXi) | a small Linux VM next to your Windows VMs — [guide](docs/setup/windows.md#windows-server--company-hypervisors) | ~10 min |
 
-Details: [Quickstart](#quickstart) · [Windows](docs/setup/windows.md) ·
+Details: [Quickstart](#quickstart) · [Handbook](docs/handbook/index.md) ·
+[Windows](docs/setup/windows.md) ·
 [Updating](docs/setup/updating.md) ·
 [Build a vertical](docs/setup/build-a-vertical.md).
 
@@ -421,12 +422,8 @@ the last 10. Install a daily 03:00 schedule with `make backup-schedule`
 
 The near-term focus is making the fleet as easy to install as the core:
 
-- **Prebuilt agent images** — provision your first agent without any local
-  Docker build.
-- **cli-bridge as a managed service** — no more keeping a Python script
-  running in a terminal (launchd/systemd units).
-- **Windows one-click bootstrapper** — `setup.ps1` sets up WSL2 + Docker and
-  runs the standard installer.
+- **Prebuilt agent images** — the pipeline is in place; the v0.2.0 release
+  publishes `mc-claude-agent` + `mc-agent-base`, ending the local build step.
 - **Umbrel & CasaOS store listings** — manifests are ready, submissions in
   progress.
 - **GPU box provisioning wizard** — add a GPU machine (e.g. DGX Spark or an
