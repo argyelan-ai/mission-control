@@ -2,7 +2,7 @@
 ToolsMdBuilder — generates TOOLS.md for agents.
 
 Extracted from agents.py for better testability and shorter files.
-Pure function (no DB dependency, pure string generation).
+Pure string generation, no DB dependency (reads settings.mc_repo_path).
 """
 from app.config import settings
 from app.constants import REFLECTION_MIN_CHARS, REFLECTION_REQUIRED_FIELDS

@@ -95,13 +95,13 @@ Credential reachability from inside the backend container (investigated 2026-07-
   (KIMI_CODE_HOME of the host variant). Verified present on this host. Because
   several agents may hold their own credential file, all of them are globbed and
   the newest still-valid one wins.
-* **grok** — reachable SINCE 2026-07-28. ``docker-compose.yml`` now bind-mounts
-  ``~/.grok/auth.json`` read-only into the backend (next to the pre-existing
-  ``~/.grok/logs`` and ``~/.grok/sessions`` harvester mounts), so
-  ``read_grok_token()`` finds the file. Still no ``docker exec`` shell-out: the
-  backend must never reach into an agent container for secrets. A missing mount
-  degrades to the manifest with an explanatory ``credential_missing`` status,
-  exactly as before.
+* **grok** — needs the OPT-IN ``~/.grok`` bind mount from
+  ``docker-compose.override.example.yml`` (host-agent integrations block);
+  the base compose no longer mounts any personal tool directories. With the
+  mount, ``read_grok_token()`` finds ``~/.grok/auth.json``. Still no
+  ``docker exec`` shell-out: the backend must never reach into an agent
+  container for secrets. Without the mount it degrades to the manifest with
+  an explanatory ``credential_missing`` status.
 """
 
 from __future__ import annotations
@@ -506,9 +506,10 @@ def read_kimi_token() -> str:
 def read_grok_token() -> str:
     """Read the Grok CLI OAuth token from ``~/.grok/auth.json``.
 
-    Almost always raises inside Docker: compose mounts only ~/.grok/logs and
-    ~/.grok/sessions, never the credential file (see module docstring). Kept as a
-    real reader so that mounting the file is the only change ever needed.
+    Raises inside Docker unless the operator enabled the opt-in ``~/.grok``
+    mount from docker-compose.override.example.yml (see module docstring).
+    Kept as a real reader so that mounting the directory is the only change
+    ever needed.
     """
     path = Path(settings.home_host) / ".grok" / "auth.json"
     try:

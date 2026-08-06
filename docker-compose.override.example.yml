@@ -8,6 +8,10 @@
 #
 # Note: `volumes` lists in an override are MERGED (appended) with the base
 # docker-compose.yml, so the entries below are additions, not replacements.
+#
+# IMPORTANT: when you uncomment the `# services:` block below, DELETE the
+# `services: {}` placeholder line first — two top-level `services` keys make
+# compose fail with 'mapping key "services" already defined'.
 
 services: {}
 
