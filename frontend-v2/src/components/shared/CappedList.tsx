@@ -28,6 +28,7 @@ export function CappedList({
   children,
   testId,
   role,
+  fadeTo = "var(--color-p2-bg)",
 }: {
   maxRows?: number;
   className?: string;
@@ -35,6 +36,8 @@ export function CappedList({
   testId?: string;
   /** Set to "list" when the rows carry role="listitem". */
   role?: string;
+  /** Colour the soft edge fades into — must match the surface behind the list. */
+  fadeTo?: string;
 }) {
   const t = useTranslations("common.cappedList");
   const [expanded, setExpanded] = useState(false);
@@ -57,8 +60,7 @@ export function CappedList({
             aria-hidden
             className="pointer-events-none absolute inset-x-0 -bottom-4 h-8"
             style={{
-              background:
-                "linear-gradient(to bottom, transparent, var(--color-p2-bg) 70%)",
+              background: `linear-gradient(to bottom, transparent, ${fadeTo} 70%)`,
             }}
           />
         )}

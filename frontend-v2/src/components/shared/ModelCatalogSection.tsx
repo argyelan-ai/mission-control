@@ -310,6 +310,8 @@ function ProviderGroup({
             <CappedList
               maxRows={6}
               role="list"
+              // This list sits on the provider card, not on the page canvas.
+              fadeTo="var(--color-bg-elevated)"
               className="gap-1"
               testId={`catalog-models-${provider.key}`}
             >
