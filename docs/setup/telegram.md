@@ -82,10 +82,17 @@ If the chat turns out not to be a forum, MC degrades gracefully: everything
 lands in the plain chat instead of topics, and the log says so. It does not
 crash, it just gets noisier.
 
-## 4. Put the values into `.env`
+## 4. Enter the values in Settings → Telegram
 
-Unlike the Slack tokens (which live encrypted in MC's `secrets` table),
-today the Telegram tokens are read from `.env`:
+**Settings → Telegram** in the MC UI is the home of this configuration: paste
+both bot tokens (stored encrypted in the `secrets` table, like Slack's),
+enter the chat IDs, and hit **Test connection** — it runs `getMe` against
+both bots and tells you exactly which one is unhappy. Changes apply to the
+running backend immediately, no restart. The same page has per-function
+toggles (reports, approvals, team chat, Jarvis), so you can switch a
+configured function off without deleting any token.
+
+`.env` still works as the fallback for headless installs:
 
 ```
 TELEGRAM_BOT_TOKEN=1234567890:AA…
@@ -94,8 +101,11 @@ TELEGRAM_REPORTS_BOT_TOKEN=9876543210:BB…
 TELEGRAM_REPORTS_CHAT_ID=123456789
 ```
 
-Then `docker compose up -d backend`. Approval buttons and reports are live
-now — they need nothing further.
+Then `docker compose up -d backend`. Values saved in the settings page win
+over `.env`. Approval buttons and reports are live now — they need nothing
+further. (One deliberate exception: the health watchdog
+`scripts/poll-health-check.sh` reads its Telegram credentials from `.env`
+only — it must be able to alarm you while MC itself is down.)
 
 ## 5. Turn on the team-chat mirror (optional)
 

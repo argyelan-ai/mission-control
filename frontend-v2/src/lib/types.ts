@@ -1042,6 +1042,34 @@ export interface Credential {
   updated_at: string;
 }
 
+/** GET /api/v1/channels/settings — effective runtime channel config. */
+export interface ChannelSettingsResponse {
+  values: Record<string, string | boolean | null>;
+  /** Keys the operator pinned via the settings page (rest = env default). */
+  overridden: string[];
+  state: {
+    telegram_command_bot_configured: boolean;
+    telegram_reports_configured: boolean;
+    telegram_approvals_active: boolean;
+    slack_reports_configured: boolean;
+  };
+}
+
+/** One bot's slice of POST /api/v1/channels/telegram/test-connection. */
+export interface TelegramBotStatus {
+  token_set: boolean;
+  chat_id_set: boolean;
+  connected: boolean;
+  bot_username: string | null;
+  error: string | null;
+}
+
+/** Result of the Telegram connection test — never carries token material. */
+export interface TelegramConnectionResult {
+  command_bot: TelegramBotStatus;
+  reports_bot: TelegramBotStatus;
+}
+
 /** Result of POST /api/v1/slack/test-connection — never carries token material. */
 export interface SlackConnectionResult {
   connected: boolean;

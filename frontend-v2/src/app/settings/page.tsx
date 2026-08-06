@@ -30,6 +30,7 @@ import {
   ExternalLink,
   DollarSign,
   MessageSquare,
+  Send,
   type LucideIcon,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
@@ -46,6 +47,7 @@ import AppShell from "@/components/layout/AppShell";
 import { CredentialsTab } from "@/components/settings/CredentialsTab";
 import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { SlackTab } from "@/components/settings/SlackTab";
+import { TelegramTab } from "@/components/settings/TelegramTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -69,6 +71,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "apikeys", labelKey: "sections.apikeys", icon: Key, adminOnly: true },
   { id: "github", labelKey: "sections.github", icon: Github, adminOnly: true },
   { id: "slack", labelKey: "sections.slack", icon: MessageSquare, adminOnly: true },
+  { id: "telegram", labelKey: "sections.telegram", icon: Send, adminOnly: true },
   { id: "credentials", labelKey: "sections.credentials", icon: KeyRound, adminOnly: true },
   { id: "costs", labelKey: "sections.costs", icon: DollarSign, adminOnly: true },
   { id: "users", labelKey: "sections.users", icon: Users, adminOnly: true },
@@ -1051,9 +1054,11 @@ function IntelligenceSection() {
 function ApiKeysSection({
   onNavigateToGithub,
   onNavigateToSlack,
+  onNavigateToTelegram,
 }: {
   onNavigateToGithub: () => void;
   onNavigateToSlack: () => void;
+  onNavigateToTelegram: () => void;
 }) {
   const t = useTranslations("settings.apikeys");
   const tRoot = useTranslations("settings");
@@ -1111,13 +1116,20 @@ function ApiKeysSection({
   // Slack follows the same rule: both tokens belong to the Slack section,
   // which explains what each one is for and can test them.
   const nonGithubProviders = (providers ?? []).filter(
-    (tmpl) => tmpl.provider !== "github" && tmpl.provider !== "slack"
+    (tmpl) =>
+      tmpl.provider !== "github" && tmpl.provider !== "slack" && tmpl.provider !== "telegram"
   );
   const hasGithubSecret = (secrets ?? []).some(
     (s) => s.provider === "github" || s.key === "github_owner" || s.key === "github_token"
   );
   const hasSlackSecret = (secrets ?? []).some(
     (s) => s.provider === "slack" || s.key === "slack_bot_token" || s.key === "slack_app_token"
+  );
+  const hasTelegramSecret = (secrets ?? []).some(
+    (s) =>
+      s.provider === "telegram" ||
+      s.key === "telegram_bot_token" ||
+      s.key === "telegram_reports_bot_token"
   );
 
   return (
@@ -1175,6 +1187,31 @@ function ApiKeysSection({
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
                   {t("goToSlack")}
+                  <ExternalLink size={12} />
+                </button>
+              </div>
+            </div>
+          )}
+          {hasTelegramSecret && (
+            <div className="mc-card p-4" style={cardStyle}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Send size={14} style={{ color: "var(--color-text-muted)" }} />
+                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                      Telegram
+                    </span>
+                  </div>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+                    {t("telegramManagedHint")}
+                  </p>
+                </div>
+                <button
+                  onClick={onNavigateToTelegram}
+                  className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+                  style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+                >
+                  {t("goToTelegram")}
                   <ExternalLink size={12} />
                 </button>
               </div>
@@ -2246,10 +2283,12 @@ function SettingsContent() {
                 <ApiKeysSection
                   onNavigateToGithub={() => setActiveSection("github")}
                   onNavigateToSlack={() => setActiveSection("slack")}
+                  onNavigateToTelegram={() => setActiveSection("telegram")}
                 />
               )}
               {activeSection === "github" && isAdmin && <GithubSection />}
               {activeSection === "slack" && isAdmin && <SlackTab />}
+              {activeSection === "telegram" && isAdmin && <TelegramTab />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}

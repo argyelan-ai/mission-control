@@ -9,6 +9,8 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from app.config import settings
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from tests.conftest import test_engine
@@ -206,12 +208,13 @@ async def test_visual_verify_503_when_playwright_unreachable(client, fake_redis)
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_send_media_group_falls_back_to_single_photo_for_one_item(tmp_path):
+async def test_send_media_group_falls_back_to_single_photo_for_one_item(tmp_path, monkeypatch):
     """Media group with only 1 photo → falls back to send_photo."""
     from app.services.telegram_reports import TelegramReportsService
     svc = TelegramReportsService()
-    svc._token = "fake:token"
-    svc._chat_id = "123"
+    # _token/_chat_id read settings at call time now (channels settings page)
+    monkeypatch.setattr(settings, "telegram_reports_bot_token", "fake:token", raising=False)
+    monkeypatch.setattr(settings, "telegram_reports_chat_id", "123", raising=False)
 
     # Dummy PNG
     p = tmp_path / "one.png"
@@ -226,12 +229,13 @@ async def test_send_media_group_falls_back_to_single_photo_for_one_item(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_send_media_group_skips_missing_files(tmp_path):
+async def test_send_media_group_skips_missing_files(tmp_path, monkeypatch):
     """Non-existent files are filtered out, no crash."""
     from app.services.telegram_reports import TelegramReportsService
     svc = TelegramReportsService()
-    svc._token = "fake:token"
-    svc._chat_id = "123"
+    # _token/_chat_id read settings at call time now (channels settings page)
+    monkeypatch.setattr(settings, "telegram_reports_bot_token", "fake:token", raising=False)
+    monkeypatch.setattr(settings, "telegram_reports_chat_id", "123", raising=False)
 
     # Only 1 file exists
     p_real = tmp_path / "real.png"

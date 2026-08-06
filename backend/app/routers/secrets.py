@@ -115,6 +115,27 @@ PROVIDER_TEMPLATES = [
         "placeholder": "xapp-...",
     },
     {
+        "provider": "telegram",
+        "key": "telegram_bot_token",
+        "label": "Telegram Bot Token (commands + approvals)",
+        "description": (
+            "The command bot: approval buttons and operator notifications. "
+            "From @BotFather -> /newbot. Stored encrypted; applied to the "
+            "running backend immediately."
+        ),
+        "placeholder": "1234567890:AA...",
+    },
+    {
+        "provider": "telegram",
+        "key": "telegram_reports_bot_token",
+        "label": "Telegram Reports Bot Token",
+        "description": (
+            "The reports bot: final agent reports and deliverables. A second "
+            "bot keeps info delivery out of the command chat. From @BotFather."
+        ),
+        "placeholder": "1234567890:AA...",
+    },
+    {
         "provider": "x",
         "key": "x_api_key",
         "label": "X (Twitter) API Key",
@@ -150,6 +171,33 @@ def _maybe_invalidate_github_cache(key: str) -> None:
     if key in ("github_owner", "github_token"):
         from app.services.github_config import invalidate_github_config_cache
         invalidate_github_config_cache()
+
+
+async def _maybe_apply_channel_config(session, key: str, *, deleted: bool = False) -> None:
+    """Telegram token edits must apply live (channels settings page).
+
+    On delete, the singleton first falls back to the env default (a fresh
+    Settings() re-reads .env) — apply_channel_overrides only ever SETS
+    present tokens and would otherwise leave the deleted one in memory.
+    Never raises: the secret write itself already succeeded.
+    """
+    from app.services.channel_config import TELEGRAM_TOKEN_SECRET_KEYS
+
+    if key not in TELEGRAM_TOKEN_SECRET_KEYS:
+        return
+    try:
+        from app.config import Settings, settings
+        from app.services.channel_config import apply_channel_overrides
+
+        if deleted:
+            setattr(settings, key, getattr(Settings(), key, ""))
+        await apply_channel_overrides(session)
+    except Exception as e:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("mc.channels").warning(
+            "channel config apply after secret %s failed: %s", key, e
+        )
 
 
 class SecretCreate(BaseModel):
@@ -222,6 +270,7 @@ async def create_secret(
     await session.commit()
     await session.refresh(secret)
     _maybe_invalidate_github_cache(secret.key)
+    await _maybe_apply_channel_config(session, secret.key)
 
     return {
         "id": str(secret.id),
@@ -256,6 +305,7 @@ async def update_secret(
     session.add(secret)
     await session.commit()
     _maybe_invalidate_github_cache(secret.key)
+    await _maybe_apply_channel_config(session, secret.key)
 
     decrypted = safe_decrypt(secret.encrypted_value)
     return {
@@ -282,3 +332,4 @@ async def delete_secret(
     await session.delete(secret)
     await session.commit()
     _maybe_invalidate_github_cache(key)
+    await _maybe_apply_channel_config(session, key, deleted=True)

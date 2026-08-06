@@ -14,6 +14,7 @@ from app.models.deploy_history import DeployHistory
 from app.models.discord_config import DiscordConfig
 from app.models.meeting import AgentMeeting, AgentMeetingMessage, AgentMessage
 from app.models.memory import BoardMemory
+from app.models.app_setting import AppSetting  # noqa: F401
 from app.models.secret import Secret
 from app.models.tag import Tag, TagAssignment
 from app.models.checkpoint import TaskCheckpoint

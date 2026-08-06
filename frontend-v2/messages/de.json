@@ -976,7 +976,8 @@
       "costs": "Kosten",
       "users": "Benutzer",
       "shortcuts": "Tastenkürzel",
-      "about": "Über"
+      "about": "Über",
+      "telegram": "Telegram"
     },
     "security": {
       "title": "Sicherheit",
@@ -1091,7 +1092,9 @@
       "update": "Aktualisieren",
       "deleteTitle": "API-Key löschen",
       "deleteBody": "{label} wirklich löschen?",
-      "delete": "Löschen"
+      "delete": "Löschen",
+      "telegramManagedHint": "Telegram-Tokens werden in der Telegram-Sektion verwaltet, zusammen mit Verbindungstest und Funktions-Schaltern.",
+      "goToTelegram": "Zu Telegram"
     },
     "github": {
       "title": "GitHub",
@@ -1288,7 +1291,17 @@
           "filesWrite": "Logs und Screenshots hochladen",
           "filesRead": "Sprachnachrichten für die Transkription herunterladen"
         }
-      }
+      },
+      "togglesTitle": "Funktionen",
+      "togglesHint": "Eine konfigurierte Funktion abschalten, ohne Tokens zu löschen. Aus verhält sich exakt wie nicht konfiguriert; Telegram läuft unabhängig weiter.",
+      "toggleReports": "Reports",
+      "toggleReportsHint": "Finale Agenten-Reports und Deliverables in den Reports-Kanal.",
+      "toggleApprovals": "Approvals",
+      "toggleApprovalsHint": "Blocker-Freigaben mit Buttons im Approvals-Kanal.",
+      "toggleTeamChat": "Team-Chat",
+      "toggleTeamChatHint": "Thread-Gespräche in den Slack-Kanal spiegeln.",
+      "settingSaved": "Gespeichert — sofort wirksam",
+      "settingSaveFailed": "Speichern fehlgeschlagen"
     },
     "costs": {
       "title": "Modell-Preistabelle",
@@ -1340,6 +1353,45 @@
       "deleteTitle": "Preis löschen",
       "deleteBody": "Preis für \"{pattern}\" wirklich löschen?",
       "delete": "Löschen"
+    },
+    "telegram": {
+      "title": "Telegram",
+      "intro": "Optionaler Kanal neben Slack: Reports, Approval-Buttons und der Jarvis-Sprachassistent können dich auch auf Telegram erreichen. Zwei Bots halten Info-Zustellung aus dem Befehls-Chat heraus. Änderungen gelten sofort — kein Neustart.",
+      "commandBot": "Befehls-Bot",
+      "reportsBot": "Reports-Bot",
+      "botNotSetUp": "nicht eingerichtet",
+      "botConnected": "verbunden als @{username}",
+      "botConnectedNoChat": "verbunden als @{username} — Chat-ID fehlt",
+      "botNotConnected": "Token ungültig oder Telegram nicht erreichbar",
+      "testing": "Teste…",
+      "testConnection": "Verbindung testen",
+      "commandTokenLabel": "Bot-Token (Befehle + Approvals)",
+      "commandTokenHint": "Von @BotFather → /newbot. Approval-Buttons und Operator-Hinweise laufen über diesen Bot.",
+      "chatIdLabel": "Chat-ID (Befehls-Chat)",
+      "chatIdHint": "Dein privater Chat mit dem Befehls-Bot. Dem Bot eine Nachricht schicken, dann die ID via getUpdates oder @userinfobot ablesen.",
+      "reportsTokenLabel": "Reports-Bot-Token",
+      "reportsTokenHint": "Ein zweiter Bot von @BotFather hält finale Reports und Dateien aus dem Befehls-Chat heraus.",
+      "reportsChatIdLabel": "Chat-ID (Reports-Chat)",
+      "reportsChatIdHint": "Meist dieselbe ID wie oben — beide Bots dürfen sich einen Chat teilen.",
+      "togglesTitle": "Funktionen",
+      "togglesHint": "Eine konfigurierte Funktion abschalten, ohne Tokens zu löschen. Aus verhält sich exakt wie nicht konfiguriert; Slack läuft unabhängig weiter.",
+      "toggleReports": "Reports",
+      "toggleReportsHint": "Finale Agenten-Reports und Deliverables.",
+      "toggleApprovals": "Approvals",
+      "toggleApprovalsHint": "Blocker-Freigaben mit Inline-Buttons.",
+      "toggleTeamChat": "Team-Chat",
+      "toggleTeamChatHint": "Thread-Gespräche in die Telegram-Gruppe spiegeln (Forum-Themen).",
+      "toggleJarvis": "Jarvis-Assistent",
+      "toggleJarvisHint": "Text- und Sprachnachrichten an den Befehls-Bot beantwortet Jarvis.",
+      "save": "Speichern",
+      "pasteToReplace": "{masked} (einfügen zum Ersetzen)",
+      "hideLabel": "{label} verbergen",
+      "showLabel": "{label} anzeigen",
+      "tokenSaved": "Token gespeichert — sofort wirksam",
+      "tokenSaveFailed": "Token speichern fehlgeschlagen",
+      "settingSaved": "Gespeichert — sofort wirksam",
+      "settingSaveFailed": "Speichern fehlgeschlagen",
+      "docsNote": "Vollständige Anleitung: docs/setup/telegram.md im Repository. Der Health-Wächter liest seine Telegram-Zugangsdaten bewusst aus .env (er muss auch bei liegendem MC funktionieren) — diese Einstellungen betreffen ihn nicht."
     }
   },
   "skills": {
