@@ -110,6 +110,8 @@ subscription powers the whole fleet. No API key, no second metered bill.
 |---|---|---|
 | **Claude Code** (Anthropic) | Opus/Sonnet via Pro/Max subscription — `claude setup-token` | `claude` binary in `mc-claude-agent` |
 | **vLLM** (self-hosted) | Your own GPU box; lifecycle (start/stop) managed over SSH | OpenAI-shim in `mc-agent-base` |
+| **llama.cpp** (self-hosted) | `llama-server` from the official multi-arch image — small GGUF models next to the big vLLM one, same tag on ARM64 (DGX Spark) and x86 | OpenAI-shim in `mc-agent-base` |
+| **Any `/v1` host process** | Community inference servers that aren't Docker at all (e.g. DwarfStar 4 serving DeepSeek-V4-Flash on a DGX Spark) — start/stop/health over SSH | OpenAI-shim in `mc-agent-base` |
 | **LM Studio** | Locally loaded models, `lms load/unload` managed | OpenAI-shim in `mc-agent-base` |
 | **Ollama Cloud / any OpenAI-compatible `/v1`** | Hosted or hand-registered endpoints | OpenAI-shim in `mc-agent-base` |
 | **omp** (headless) | Structured NDJSON lifecycle instead of a scraped terminal — newest harness (ADR-045) | `bridge.py` in `mc-omp-agent` |
@@ -122,6 +124,17 @@ switches), a health check gates the result and everything rolls back on
 failure. Credential routing is centralized: Anthropic runtimes get the OAuth
 token, everything else gets `OPENAI_BASE_URL`/`OPENAI_MODEL` — the paths never
 mix.
+
+**Finding and deploying local models is a click, not an SSH session.** A
+curated **local model registry** ships with MC and refreshes from online
+registries on demand — every entry credited to the people who published the
+recipe or quant. The **model browser** on the runtimes page shows what fits
+your hardware (VRAM/context check before deploy, validated-hardware badges)
+and deploys onto your box through the existing runtime machinery. New GPU
+box? The **box wizard** connects it end to end: SSH probe, hardware
+inventory, an idempotent bootstrap that installs the Docker basics (never
+`curl | sh` — the installer is downloaded, checksummed and logged first),
+then engine + model + a registered runtime.
 
 ## Highlights
 
@@ -137,7 +150,11 @@ Watchdogs for timeouts, stuck reviews and silent aborts; automatic
 re-assignment when an agent goes dark; **context recovery** — a crashed or
 recycled agent reconstructs its task thread and keeps going instead of
 starting from zero; runtime switches roll back automatically on failed
-health checks; automatic daily backups (`make backup-schedule`).
+health checks; a **switch grace state** so a model swap or a 10-minute
+first load never fires false unreachable alarms; **runtime auto-recovery**
+— when a crashed GPU box comes back, the watcher restarts its runtime by
+itself (one attempt, cooldown, gives up loudly after two failures);
+automatic daily backups (`make backup-schedule`).
 
 **A real git workflow**
 One repo per project, one branch per task, automatic PRs and squash-merges
@@ -188,6 +205,10 @@ filtering socket-proxy, secrets are Fernet-encrypted.
 - **Agent registry & detail** — overview, skills, config and memory per agent; templates for one-click roles
 - **Multi-runtime fleet** — agents as Docker containers or native host processes
 - **Runtime registry & one-click switching** — move an agent between Claude and local models with rollback
+- **Local model registry & browser** — curated, UI-refreshable catalog of local models/recipes with hardware-fit checks, one-click deploy and credits to the recipe/quant authors
+- **Box wizard** — connect a fresh GPU box from the UI: SSH probe, hardware inventory, checksummed bootstrap, engine + model, done
+- **Three local engines** — vLLM for the big workhorse models, llama.cpp for small GGUF models beside it, and any `/v1`-speaking host process (ssh_process) for community servers that ship without Docker
+- **Switch grace & auto-recovery** — model swaps show a loading state instead of false alarms; runtimes on a crashed-and-returned box restart themselves
 - **Live sessions** — real terminal into every agent, right in the browser
 - **Scope-based permissions** — 21 fine-grained API scopes per agent, PBKDF2 agent tokens
 - **Skills & CLI plugins** — per-agent capability allow-lists from a shared plugin cache
