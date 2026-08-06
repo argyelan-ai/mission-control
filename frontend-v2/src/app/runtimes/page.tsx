@@ -1713,7 +1713,8 @@ function ModelsSection() {
       id="models"
       title={t("title")}
       hint={t("subtitle")}
-      count={providerCount + recipeCount}
+      // No count on the header: providers and recipes are different things and
+      // their sum ("11") would read as a model count. Each tab counts itself.
     >
       <div
         role="tablist"
