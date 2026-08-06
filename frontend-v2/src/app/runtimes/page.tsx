@@ -1220,6 +1220,21 @@ function RuntimeModelEditor({
   );
 }
 
+/**
+ * Engine-Bezeichnung auf der Karte. Ohne Eintrag fällt sie auf „vLLM Docker"
+ * zurück — was für jede neue Engine falsch ist, solange sie hier fehlt.
+ */
+const RUNTIME_TYPE_LABELS: Record<string, string> = {
+  lmstudio: "LM Studio",
+  unsloth_porsche: "Unsloth · PORSCHE",
+  unsloth: "Unsloth Studio",
+  llamacpp_docker: "llama.cpp Docker",
+  ssh_process: "Host-Prozess (SSH)",
+  openai_compatible: "OpenAI-kompatibel",
+  cloud: "Cloud",
+  vllm_docker: "vLLM Docker",
+};
+
 export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeGb?: number; live?: RuntimeLiveStatus }) {
   const t = useTranslations("runtimes");
   const queryClient = useQueryClient();
@@ -1337,11 +1352,7 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
               </>
             )}
             <span className="text-xs" style={{ color: C.textMuted }}>
-              {runtime.runtime_type === "lmstudio"
-                ? "LM Studio"
-                : runtime.runtime_type === "unsloth_porsche"
-                  ? "Unsloth · PORSCHE"
-                  : "vLLM Docker"}
+              {RUNTIME_TYPE_LABELS[runtime.runtime_type] ?? "vLLM Docker"}
             </span>
             {/* Host chip (ADR-048) — only when the runtime is bound to a host */}
             {runtime.host && (
