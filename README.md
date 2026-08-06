@@ -95,7 +95,10 @@ Details: [Quickstart](#quickstart) · [Windows](docs/setup/windows.md) ·
 Mission Control treats local LLMs as first-class citizens, not a fallback.
 Point an agent at any OpenAI-compatible endpoint — a vLLM box with your GPU,
 LM Studio on your desktop, Ollama, or a hosted `/v1` — or run Claude Code
-with your Anthropic subscription. Mix both in one fleet:
+with your Anthropic subscription. Mix both in one fleet — and that mix is
+where the money is: give your lead agent a frontier model for the hard
+calls, and let cheap local models grind through the routine tasks. Most
+agent tools force one provider for the whole team; MC decides per agent.
 
 ![One team, mixed runtimes — every agent runs its own brain](docs/assets/mixed-fleet.svg)
 

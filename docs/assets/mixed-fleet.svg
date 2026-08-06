@@ -86,5 +86,6 @@
   </g>
 
   <!-- tagline -->
-  <text x="600" y="398" fill="#B8B8B8" font-size="13" text-anchor="middle">Switch any agent between runtimes in one click — health-checked, with automatic rollback.</text>
+  <text x="600" y="390" fill="#F5F5F5" font-size="14" font-weight="600" text-anchor="middle">Frontier quality where it matters — cheap local models for the routine work.</text>
+  <text x="600" y="410" fill="#6E6E6E" font-size="12" text-anchor="middle">Switch any agent between runtimes in one click — health-checked, with automatic rollback.</text>
 </svg>
