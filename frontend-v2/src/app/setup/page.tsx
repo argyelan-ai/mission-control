@@ -16,15 +16,24 @@ import { C } from "@/lib/colors";
 
 import type { GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
-const DEMO_TASKS: Array<[string, TaskStatus, Priority]> = [
-  ["Draft launch announcement blog post", "done", "high"],
-  ["Set up staging environment", "done", "medium"],
-  ["Landing page hero section", "review", "high"],
-  ["Load-test the API gateway", "in_progress", "high"],
-  ["Write onboarding e-mail sequence", "in_progress", "medium"],
-  ["Legal review of the license FAQ", "blocked", "medium"],
-  ["Social media launch thread", "inbox", "medium"],
-  ["Post-launch retro board", "inbox", "low"],
+// Keep in sync with scripts/demo-seed.py (same crew, same board) until the
+// seed moves into one backend endpoint.
+const DEMO_AGENTS: Array<[string, string, string, boolean]> = [
+  ["Atlas", "🧭", "Board lead — plans phases, dispatches subtasks to the crew", true],
+  ["Nova", "⚡", "Builder — implements tasks on their own branches", false],
+  ["Bolt", "🔧", "Builder — infrastructure and performance work", false],
+  ["Vega", "🔍", "Reviewer — gates every merge before it lands", false],
+];
+
+const DEMO_TASKS: Array<[string, TaskStatus, Priority, string | null]> = [
+  ["Draft launch announcement blog post", "done", "high", "Nova"],
+  ["Set up staging environment", "done", "medium", "Bolt"],
+  ["Landing page hero section", "review", "high", "Nova"],
+  ["Load-test the API gateway", "in_progress", "high", "Bolt"],
+  ["Write onboarding e-mail sequence", "in_progress", "medium", "Atlas"],
+  ["Legal review of the license FAQ", "blocked", "medium", "Vega"],
+  ["Social media launch thread", "inbox", "medium", null],
+  ["Post-launch retro board", "inbox", "low", null],
 ];
 
 const inputClasses =
@@ -37,6 +46,7 @@ const inputStyle = {
 
 export default function SetupWizardPage() {
   const t = useTranslations("setup");
+  const tProviderDesc = useTranslations("providerDescriptions");
   const router = useRouter();
   const [step, setStep] = useState<2 | 3 | 4>(2);
 
@@ -123,8 +133,28 @@ export default function SetupWizardPage() {
         objective: "Ship v1.0 publicly: site live, docs done, launch thread out.",
         color: C.accent,
       });
-      for (const [title, status, priority] of DEMO_TASKS) {
-        await api.tasks.create(board.id, { title, status, priority });
+      const agentIds: Record<string, string> = {};
+      for (const [name, emoji, role, isLead] of DEMO_AGENTS) {
+        // "manual" = registry entry only — "cli-bridge" would schedule
+        // auto-provisioning and greet the fresh install with four
+        // provision_failed warnings (review finding 2026-08-06).
+        const agent = await api.agents.create({
+          name,
+          emoji,
+          role,
+          board_id: board.id,
+          is_board_lead: isLead,
+          agent_runtime: "manual",
+        });
+        agentIds[name] = agent.id;
+      }
+      for (const [title, status, priority, assignee] of DEMO_TASKS) {
+        await api.tasks.create(board.id, {
+          title,
+          status,
+          priority,
+          ...(assignee ? { assigned_agent_id: agentIds[assignee] } : {}),
+        });
       }
       setSeeded(true);
     } catch (err) {
@@ -217,7 +247,9 @@ export default function SetupWizardPage() {
                 </select>
                 {providers[selected] && (
                   <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                    {providers[selected].description}
+                    {tProviderDesc.has(providers[selected].key)
+                      ? tProviderDesc(providers[selected].key)
+                      : providers[selected].description}
                   </p>
                 )}
               </div>
