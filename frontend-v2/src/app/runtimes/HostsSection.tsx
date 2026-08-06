@@ -65,10 +65,13 @@ function SingleHostMetricsBar({ host }: { host: Host }) {
     refetchInterval: 5_000,
   });
 
+  // scaleX, not width: animating width relayouts the bar every frame.
   const barStyle = (pct: number) => ({
-    width: `${Math.min(pct, 100)}%`,
+    width: "100%",
     background: barColor(pct),
-    transition: "width 0.6s cubic-bezier(0.16,1,0.3,1)",
+    transform: `scaleX(${Math.min(pct, 100) / 100})`,
+    transformOrigin: "left" as const,
+    transition: "transform 0.6s cubic-bezier(0.16,1,0.3,1)",
   });
 
   // flask_wol hosts report awake/health instead of GPU metrics — checked
