@@ -118,10 +118,31 @@ def _find_demo_board() -> dict | None:
 
 
 def _demo_agents_on(board_id: str) -> list[dict]:
-    agents = _call("GET", "/api/v1/agents") or []
+    # include_archived: a half-finished cleanup leaves demo agents archived,
+    # and the default listing hides those — they would become invisible
+    # orphans to every later --cleanup run.
+    agents = _call("GET", "/api/v1/agents?include_archived=true") or []
     demo_names = {name for name, _, _, _ in DEMO_AGENTS}
     return [a for a in agents
             if a.get("board_id") == board_id and a.get("name") in demo_names]
+
+
+def _abort_on_name_collision() -> None:
+    """Agent slugs derive from names and key vault tokens + compose blocks.
+
+    Creating a demo "Nova" while a REAL agent named Nova exists anywhere
+    would overwrite that agent's vault token; a later --cleanup could then
+    tear the real agent down. Refuse instead of risking it.
+    """
+    agents = _call("GET", "/api/v1/agents?include_archived=true") or []
+    demo_names = {name.lower() for name, _, _, _ in DEMO_AGENTS}
+    clashes = sorted({a["name"] for a in agents
+                      if (a.get("name") or "").lower() in demo_names})
+    if clashes:
+        sys.exit("Refusing to seed: agent name(s) already in use: "
+                 f"{', '.join(clashes)}. The demo crew would collide with "
+                 "them (slugs share vault tokens). Rename or remove those "
+                 "agents first, or skip the demo seed.")
 
 
 def cleanup() -> None:
@@ -129,8 +150,9 @@ def cleanup() -> None:
     if not board:
         print("No demo board found — nothing to clean up.")
         return
-    # Demo agents first (archive → delete, the two-stage lifecycle), so the
-    # board delete never trips over agent FKs.
+    # Demo agents first (archive → delete, the two-stage lifecycle) — the
+    # board delete is a soft archive and leaves agent rows behind, so the
+    # crew must be removed explicitly or it lingers in the registry.
     for agent in _demo_agents_on(board["id"]):
         _call("POST", f"/api/v1/agents/{agent['id']}/archive",
               tolerate_http_errors=True)
@@ -153,6 +175,7 @@ def seed() -> None:
     if setup.get("setup_required"):
         sys.exit("No admin account yet — open the UI, register the first "
                  "admin (and finish the wizard), then re-run the seed.")
+    _abort_on_name_collision()
     if _find_demo_board():
         sys.exit(f"Demo board already exists (slug '{SLUG}') — "
                  "run with --cleanup first if you want a fresh one.")
@@ -172,7 +195,10 @@ def seed() -> None:
             "role": role,
             "board_id": board["id"],
             "is_board_lead": is_lead,
-            "agent_runtime": "cli-bridge",
+            # "manual" = registry entry only. "cli-bridge" would schedule
+            # auto-provisioning and greet a fresh install with four
+            # provision_failed warnings (review finding 2026-08-06).
+            "agent_runtime": "manual",
         })
         agent_ids[name] = agent["id"]
     created = 0

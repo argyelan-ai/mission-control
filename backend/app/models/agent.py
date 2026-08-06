@@ -56,8 +56,13 @@ class Agent(SQLModel, table=True):
     # but its DB row + files + token remain, so it can be restored. Delete is
     # gated on this being set. Kept as a plain timestamp, not a status enum —
     # `status`/`provision_status` stay orthogonal (runtime/provisioning state).
-    # timestamptz (0175): agent_lifecycle stamps tz-aware utcnow(); a naive
-    # column made asyncpg reject the value and 500 every archive call.
+    # timezone=True is REQUIRED here even though the DB column (0157) was
+    # always timestamptz: SQLAlchemy's asyncpg dialect renders the bind cast
+    # from the MODEL type, so a naive field emitted `$1::TIMESTAMP WITHOUT
+    # TIME ZONE` and asyncpg rejected the tz-aware utcnow() agent_lifecycle
+    # writes — every archive call 500'd. Model-level fix only; no migration
+    # needed (review finding 2026-08-06: an ALTER ... USING on the already-
+    # aware column would silently shift values on non-UTC servers).
     archived_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True, index=True),

@@ -135,13 +135,16 @@ export default function SetupWizardPage() {
       });
       const agentIds: Record<string, string> = {};
       for (const [name, emoji, role, isLead] of DEMO_AGENTS) {
+        // "manual" = registry entry only — "cli-bridge" would schedule
+        // auto-provisioning and greet the fresh install with four
+        // provision_failed warnings (review finding 2026-08-06).
         const agent = await api.agents.create({
           name,
           emoji,
           role,
           board_id: board.id,
           is_board_lead: isLead,
-          agent_runtime: "cli-bridge",
+          agent_runtime: "manual",
         });
         agentIds[name] = agent.id;
       }
