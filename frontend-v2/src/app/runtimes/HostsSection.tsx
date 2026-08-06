@@ -564,15 +564,20 @@ function HostCard({
             onClick={onEdit}
             title={t("edit")}
             aria-label={t("editHostAria", { name: host.display_name })}
-            className="action-btn flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] rounded-md transition-colors cursor-pointer"
-            style={{
-              background: "transparent",
-              border: `1px solid ${C.borderActive}`,
-              color: C.textMuted,
-              ["--action-hover" as string]: C.bgHover,
-            }}
+            className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer"
           >
-            <Pencil size={12} />
+            <span
+              aria-hidden
+              className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+              style={{
+                background: "transparent",
+                border: `1px solid ${C.borderActive}`,
+                color: C.textMuted,
+                ["--action-hover" as string]: C.bgHover,
+              }}
+            >
+              <Pencil size={12} />
+            </span>
           </button>
         ) : undefined
       }

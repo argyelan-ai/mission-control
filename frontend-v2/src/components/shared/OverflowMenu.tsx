@@ -95,14 +95,19 @@ export function OverflowMenu({
         aria-label={label}
         title={label}
         data-testid={testId}
-        className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] rounded-md cursor-pointer transition-colors"
-        style={{
-          background: open ? C.bgHover : "transparent",
-          border: `1px solid ${open ? C.borderActive : "transparent"}`,
-          color: open ? C.textPrimary : C.textMuted,
-        }}
+        className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer"
       >
-        <MoreHorizontal size={14} />
+        <span
+          aria-hidden
+          className="flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+          style={{
+            background: open ? C.bgHover : "transparent",
+            border: `1px solid ${open ? C.borderActive : "transparent"}`,
+            color: open ? C.textPrimary : C.textMuted,
+          }}
+        >
+          <MoreHorizontal size={14} />
+        </span>
       </button>
 
       {open &&

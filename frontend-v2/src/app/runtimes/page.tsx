@@ -151,18 +151,26 @@ function ActionButton({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className="action-btn flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
-      style={{
-        background: "transparent",
-        // Disabled used to render at rgba(168,168,168,0.16) — about 1.1:1, so
-        // the operator could not tell "disabled" from "not there". textDim
-        // clears the 3:1 floor for UI components (WCAG 1.4.11).
-        border: `1px solid ${disabled ? C.borderSubtle : c.border}`,
-        color: disabled ? C.textDim : c.text,
-        ["--action-hover" as string]: c.hover,
-      }}
+      // The hit area is 44px on a thumb, but the drawn control stays 28px:
+      // stretching the border to the full target turned Stop into a big empty
+      // red box. Touch target and visual weight are two different things.
+      className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer disabled:cursor-not-allowed"
     >
-      {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+      <span
+        aria-hidden
+        className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+        style={{
+          background: "transparent",
+          // Disabled used to render at rgba(168,168,168,0.16) — about 1.1:1, so
+          // the operator could not tell "disabled" from "not there". textDim
+          // clears the 3:1 floor for UI components (WCAG 1.4.11).
+          border: `1px solid ${disabled ? C.borderSubtle : c.border}`,
+          color: disabled ? C.textDim : c.text,
+          ["--action-hover" as string]: c.hover,
+        }}
+      >
+        {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+      </span>
     </button>
   );
 }
