@@ -129,7 +129,8 @@ function ModelRow({
   const isNew = model.bound === false && !isCliOnly;
 
   return (
-    <li
+    <div
+      role="listitem"
       data-testid="catalog-model-row"
       data-bound={model.bound ? "true" : "false"}
       data-cli-only={isCliOnly ? "true" : "false"}
@@ -194,7 +195,7 @@ function ModelRow({
           {t("boundBadge")}
         </span>
       )}
-    </li>
+    </div>
   );
 }
 
@@ -303,7 +304,15 @@ function ProviderGroup({
       {open && (
         <div className="px-3 pb-3">
           {models.length > 0 ? (
-            <ul className="flex flex-col gap-1">
+            // Anthropic alone lists eleven models; showing every one of them
+            // by default made an expanded provider taller than the rest of the
+            // page put together.
+            <CappedList
+              maxRows={6}
+              role="list"
+              className="gap-1"
+              testId={`catalog-models-${provider.key}`}
+            >
               {models.map((m) => (
                 <ModelRow
                   key={m.id}
@@ -312,7 +321,7 @@ function ProviderGroup({
                   onBind={(model) => onBind(provider, model)}
                 />
               ))}
-            </ul>
+            </CappedList>
           ) : probeSucceeded ? (
             <div className="py-3 text-center text-[11px] text-muted">
               {t("providerReachableNoModels")}

@@ -27,11 +27,14 @@ export function CappedList({
   className,
   children,
   testId,
+  role,
 }: {
   maxRows?: number;
   className?: string;
   children: React.ReactNode;
   testId?: string;
+  /** Set to "list" when the rows carry role="listitem". */
+  role?: string;
 }) {
   const t = useTranslations("common.cappedList");
   const [expanded, setExpanded] = useState(false);
@@ -44,7 +47,9 @@ export function CappedList({
   return (
     <div data-testid={testId}>
       <div className="relative">
-        <div className={cn("flex flex-col gap-1.5", className)}>{shown}</div>
+        <div role={role} className={cn("flex flex-col gap-1.5", className)}>
+          {shown}
+        </div>
         {capped && (
           // Soft edge under the last full row: signals "the list continues"
           // without dimming any row, because it sits in the gap below them.
