@@ -37,6 +37,7 @@ import {
   Eye,
   EyeOff,
   ChevronRight,
+  ExternalLink,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
@@ -48,6 +49,8 @@ import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
+import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
+import { OverflowMenu } from "@/components/shared/OverflowMenu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
 
@@ -106,141 +109,121 @@ function RecipeCard({
     recipe.min_vram_gb != null && recipe.min_vram_gb > SPARK_CLASS_USABLE_GB;
 
   return (
-    <div
-      data-testid="local-recipe-card"
-      data-slug={recipe.slug}
-      data-engine={recipe.engine}
-      // One row, not a five-line card: name + badges + identifier + specs all
-      // ride the same wrapping line. Eight recipes used to be 999 px.
-      title={recipe.description ?? undefined}
-      className={`rounded-md border bg-elevated px-2.5 py-1.5 ${
-        recipe.enabled ? "border-subtle" : "border-subtle opacity-60"
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="text-sm font-medium text-primary truncate">
-              {recipe.display_name}
-            </span>
-            {fresh && (
-              <span
-                data-testid="local-registry-new-badge"
-                className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-              >
-                {t("newBadge")}
-              </span>
-            )}
-            {recipe.running && (
-              <span
-                data-testid="local-registry-running-badge"
-                title={t("runningTitle")}
-                className="shrink-0 inline-flex items-center gap-1 label-sys text-ok border border-subtle rounded-sm px-1.5 py-px"
-              >
-                <CheckCircle2 size={10} />
-                {t("runningBadge")}
-              </span>
-            )}
-            {recipe.gb10_validated && (
-              <span
-                data-testid="local-registry-gb10-badge"
-                title={t("gb10Title")}
-                className="shrink-0 label-sys text-ok border border-subtle rounded-sm px-1.5 py-px"
-              >
-                {t("gb10Badge")}
-              </span>
-            )}
-            {tooBig && (
-              <span
-                data-testid="local-registry-fit-warning"
-                title={t("fitWarningTitle", {
-                  needed: recipe.min_vram_gb ?? 0,
-                  limit: SPARK_CLASS_USABLE_GB,
-                })}
-                className="shrink-0 inline-flex items-center gap-1 label-sys text-warn border border-warn bg-warn-subtle rounded-sm px-1.5 py-px"
-              >
-                <AlertTriangle size={10} />
-                {t("fitWarning")}
-              </span>
-            )}
-          </div>
-
-          <span
-            className="font-mono text-[11px] truncate text-muted"
-            title={recipe.model_identifier}
-          >
-            {recipe.model_identifier}
-          </span>
-
-          <span className="flex shrink-0 items-center gap-1.5 text-[10px] text-dim">
-            <span className="label-sys rounded-sm bg-surface px-1.5 py-px">
-              {recipe.engine}
-            </span>
-            {recipe.quant && <span>{recipe.quant}</span>}
-            {recipe.est_weights_gb != null && (
-              <span className="tabular-nums">{t("sizeGb", { n: recipe.est_weights_gb })}</span>
-            )}
-            {recipe.context_len != null && (
-              <span className="tabular-nums">
-                {t("contextK", { n: Math.round(recipe.context_len / 1024) })}
-              </span>
-            )}
-            {recipe.arch !== "any" && <span>{recipe.arch}</span>}
-          </span>
-          {/* Die Beschreibung sitzt im title des Rows — sichtbar kostet sie
-              zwei Zeilen pro Rezept und sagt fast immer dasselbe. */}
-
-          {recipe.author && (
-            <span data-testid="local-registry-author" className="shrink-0 text-[10px] text-dim">
-              {t("byAuthor")}{" "}
-              {recipe.author_url ? (
-                <a
-                  href={recipe.author_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-muted underline underline-offset-2"
-                >
-                  {recipe.author}
-                </a>
-              ) : (
-                <span className="text-muted">{recipe.author}</span>
-              )}
-            </span>
+    <ListRow
+      testId="local-recipe-card"
+      dataAttrs={{ "data-slug": recipe.slug, "data-engine": recipe.engine }}
+      tone={recipe.running ? "ok" : "idle"}
+      muted={!recipe.enabled}
+      name={recipe.display_name}
+      chips={
+        <>
+          {/* Page-wide chip order: state → type → size/detail. */}
+          {fresh && (
+            <MetaChip tone="accent" testId="local-registry-new-badge">
+              {t("newBadge")}
+            </MetaChip>
           )}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => onToggleEnabled(recipe)}
-            disabled={toggling}
-            aria-label={recipe.enabled ? t("hide") : t("unhide")}
-            title={recipe.enabled ? t("hide") : t("unhide")}
-            className="rounded-sm p-1.5 text-dim border border-transparent cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {toggling ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : recipe.enabled ? (
-              <Eye size={12} />
-            ) : (
-              <EyeOff size={12} />
-            )}
-          </button>
-
-          <button
-            type="button"
-            data-testid="local-registry-deploy"
-            onClick={() => onDeploy(recipe)}
-            disabled={!deployable}
-            title={deployable ? t("deployTitle", { name: recipe.display_name }) : t("deployUnavailableTitle")}
-            className="inline-flex items-center gap-1 rounded-sm px-2 py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Rocket size={10} />
-            {t("deploy")}
-          </button>
-        </div>
-      </div>
-    </div>
+          {recipe.running && (
+            <MetaChip
+              tone="ok"
+              icon={<CheckCircle2 size={10} />}
+              title={t("runningTitle")}
+              testId="local-registry-running-badge"
+            >
+              {t("runningBadge")}
+            </MetaChip>
+          )}
+          {tooBig && (
+            <MetaChip
+              tone="warn"
+              icon={<AlertTriangle size={10} />}
+              title={t("fitWarningTitle", {
+                needed: recipe.min_vram_gb ?? 0,
+                limit: SPARK_CLASS_USABLE_GB,
+              })}
+              testId="local-registry-fit-warning"
+            >
+              {t("fitWarning")}
+            </MetaChip>
+          )}
+          {recipe.gb10_validated && (
+            <MetaChip tone="idle" title={t("gb10Title")} testId="local-registry-gb10-badge">
+              {t("gb10Badge")}
+            </MetaChip>
+          )}
+          <MetaChip tone="idle">{recipe.engine}</MetaChip>
+          {recipe.quant && <MetaChip tone="idle">{recipe.quant}</MetaChip>}
+          {recipe.arch !== "any" && <MetaChip tone="idle">{recipe.arch}</MetaChip>}
+        </>
+      }
+      meta={
+        <>
+          <MetaText mono title={recipe.model_identifier}>
+            {recipe.model_identifier}
+          </MetaText>
+          {recipe.est_weights_gb != null && (
+            <MetaText className="tabular-nums shrink-0">
+              {t("sizeGb", { n: recipe.est_weights_gb })}
+            </MetaText>
+          )}
+          {recipe.context_len != null && (
+            <MetaText className="tabular-nums shrink-0">
+              {t("contextK", { n: Math.round(recipe.context_len / 1024) })}
+            </MetaText>
+          )}
+          {/* Credit for the recipe author (PR #285) belongs to the row's meta
+              line, not to a style of its own. */}
+          {recipe.author && (
+            <MetaText className="shrink-0">
+              <span data-testid="local-registry-author">
+                {t("byAuthor")}{" "}
+                {recipe.author_url ? (
+                  <a
+                    href={recipe.author_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline underline-offset-2 inline-flex items-center gap-0.5"
+                  >
+                    {recipe.author}
+                    <ExternalLink size={9} aria-hidden />
+                  </a>
+                ) : (
+                  recipe.author
+                )}
+              </span>
+            </MetaText>
+          )}
+        </>
+      }
+      action={
+        <button
+          type="button"
+          data-testid="local-registry-deploy"
+          onClick={() => onDeploy(recipe)}
+          disabled={!deployable}
+          title={deployable ? t("deployTitle", { name: recipe.display_name }) : t("deployUnavailableTitle")}
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 min-h-7 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Rocket size={10} />
+          {t("deploy")}
+        </button>
+      }
+      overflow={
+        <OverflowMenu
+          label={t("rowActions", { name: recipe.display_name })}
+          testId={`recipe-more-${recipe.slug}`}
+          actions={[
+            {
+              id: "visibility",
+              label: recipe.enabled ? t("hide") : t("unhide"),
+              icon: recipe.enabled ? Eye : EyeOff,
+              loading: toggling,
+              onClick: () => onToggleEnabled(recipe),
+            },
+          ]}
+        />
+      }
+    />
   );
 }
 

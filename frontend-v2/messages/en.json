@@ -1883,7 +1883,8 @@
       "deleteHostAria": "Delete host {name}",
       "runtimeSingular": "Runtime",
       "runtimePlural": "Runtimes",
-      "addBoxButton": "Add box"
+      "addBoxButton": "Add box",
+      "rowActions": "More actions for {name}"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint not detected",
@@ -2083,7 +2084,8 @@
       "installDone": "Installation finished.",
       "installCreateAndStart": "Create runtime & start",
       "installRuntimeCreated": "Runtime created and started — weights are still loading.",
-      "close": "Close"
+      "close": "Close",
+      "rowActions": "More actions for {name}"
     },
     "bindAgentModal": {
       "title": "Bind agent",
@@ -2175,7 +2177,11 @@
       "tabLocal": "Own hardware",
       "tabDownload": "Download"
     },
-    "downloadMoved": "Download models → Models section"
+    "downloadMoved": "Download models → Models section",
+    "infrastructure": {
+      "title": "Infrastructure",
+      "subtitle": "The boxes and the pinned agent tools underneath"
+    }
   },
   "bench": {
     "common": {

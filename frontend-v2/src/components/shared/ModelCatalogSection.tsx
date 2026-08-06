@@ -47,6 +47,7 @@ import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
+import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
@@ -129,73 +130,73 @@ function ModelRow({
   const isNew = model.bound === false && !isCliOnly;
 
   return (
-    <div
-      role="listitem"
-      data-testid="catalog-model-row"
-      data-bound={model.bound ? "true" : "false"}
-      data-cli-only={isCliOnly ? "true" : "false"}
-      // One line per model, not two. A provider like Anthropic lists eleven of
-      // these; at two lines each the catalog alone owned half the page.
-      className={`flex items-center gap-2 px-2.5 py-1 rounded-md border min-h-7 ${
-        isNew ? "bg-surface border-subtle" : "border-transparent"
-      }`}
-    >
-      <div className="min-w-0 flex-1 flex items-baseline gap-2">
+    <ListRow
+      testId="catalog-model-row"
+      dataAttrs={{
+        role: "listitem",
+        "data-bound": model.bound ? "true" : "false",
+        "data-cli-only": isCliOnly ? "true" : "false",
+      }}
+      tone={isNew ? "accent" : "idle"}
+      className="!py-1 !min-h-7"
+      name={
         <span
-          className={`font-mono text-[11px] truncate ${
-            isNew ? "text-primary" : "text-muted"
-          }`}
-          title={model.display_name && model.display_name !== model.id
-            ? `${model.id} · ${model.display_name}`
-            : model.id}
+          className="font-mono text-[11px]"
+          title={
+            model.display_name && model.display_name !== model.id
+              ? `${model.id} · ${model.display_name}`
+              : model.id
+          }
         >
           {model.id}
         </span>
-        {model.context_window != null && (
-          <span className="shrink-0 text-[10px] tabular-nums text-dim">
-            {t("contextK", { n: Math.round(model.context_window / 1024) })}
-          </span>
-        )}
-      </div>
-
-      {isCliOnly ? (
-        <span
-          data-testid="catalog-cli-only-badge"
-          title={model.note ?? t("cliOnlyTitle")}
-          className="shrink-0 inline-flex items-center gap-1 label-sys text-dim border border-subtle rounded-sm px-1.5 py-px"
-        >
-          <Terminal size={10} />
-          {t("cliOnlyBadge")}
-        </span>
-      ) : isNew ? (
+      }
+      chips={
         <>
-          <span
-            data-testid="catalog-new-badge"
-            className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-          >
-            {t("newBadge")}
-          </span>
+          {isCliOnly && (
+            <MetaChip
+              tone="idle"
+              icon={<Terminal size={10} />}
+              title={model.note ?? t("cliOnlyTitle")}
+              testId="catalog-cli-only-badge"
+            >
+              {t("cliOnlyBadge")}
+            </MetaChip>
+          )}
+          {isNew && (
+            <MetaChip tone="accent" testId="catalog-new-badge">
+              {t("newBadge")}
+            </MetaChip>
+          )}
+          {!isNew && !isCliOnly && (
+            <MetaChip tone="idle" title={t("boundTitle")}>
+              {t("boundBadge")}
+            </MetaChip>
+          )}
+        </>
+      }
+      meta={
+        model.context_window != null ? (
+          <MetaText className="tabular-nums shrink-0">
+            {t("contextK", { n: Math.round(model.context_window / 1024) })}
+          </MetaText>
+        ) : undefined
+      }
+      action={
+        isNew ? (
           <button
             type="button"
             onClick={() => onBind(model)}
             disabled={binding}
             title={t("createRuntimeRowTitle", { id: model.id })}
-            className="shrink-0 inline-flex items-center gap-1 rounded-sm px-2 py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            className="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 min-h-7 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {binding ? (
-              <Loader2 size={10} className="animate-spin" />
-            ) : (
-              <Plus size={10} />
-            )}
+            {binding ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
             {t("createAsRuntime")}
           </button>
-        </>
-      ) : (
-        <span className="shrink-0 label-sys" title={t("boundTitle")}>
-          {t("boundBadge")}
-        </span>
-      )}
-    </div>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -232,52 +233,44 @@ function ProviderGroup({
       className="rounded-lg border border-subtle bg-elevated overflow-hidden"
     >
       {/* Kopfzeile — eine Zeile: Status, Name, Protokoll, Anzahl, Prüfzeit. */}
-      <div className="flex items-center gap-2 px-3 py-1.5">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left cursor-pointer"
-        >
+      <ListRow
+        testId="catalog-provider-row"
+        tone={chrome.tone === "ok" ? "ok" : chrome.tone === "warn" ? "warn" : "error"}
+        className="!border-transparent !bg-transparent"
+        onClick={() => setOpen((v) => !v)}
+        leading={
           <ChevronRight
             size={13}
             className={`shrink-0 text-dim transition-transform ${open ? "rotate-90" : ""}`}
           />
-          <chrome.Icon
-            size={11}
-            className={`shrink-0 ${TONE_TEXT[chrome.tone]}`}
-            aria-label={t(chrome.labelKey)}
-          />
-          <span className="text-sm font-medium text-primary truncate">
-            {provider.display_name || provider.key}
-          </span>
-          <span className="label-sys shrink-0">{provider.protocol}</span>
-          <span className="shrink-0 label-sys tabular-nums text-dim">{models.length}</span>
-          {newCount > 0 && (
-            <span
-              data-testid="catalog-new-count"
-              className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-            >
-              {newCount} {t("newLabel")}
-            </span>
-          )}
-          <span
-            className="hidden sm:inline shrink-0 text-[10px] text-dim truncate"
-            title={t(chrome.labelKey)}
-          >
-            {t("checked", { time: timeAgo(provider.cached_at, locale) })}
-          </span>
-        </button>
-
-        {provider.endpoint && (
-          <span
-            className="hidden sm:block shrink-0 max-w-[220px] truncate font-mono text-[10px] text-dim"
-            title={provider.endpoint}
-          >
-            {provider.endpoint}
-          </span>
-        )}
-      </div>
+        }
+        name={provider.display_name || provider.key}
+        chips={
+          <>
+            <MetaChip tone="idle">{provider.protocol}</MetaChip>
+            <MetaChip tone="idle" className="tabular-nums">
+              {models.length}
+            </MetaChip>
+            {newCount > 0 && (
+              <MetaChip tone="accent" testId="catalog-new-count">
+                {newCount} {t("newLabel")}
+              </MetaChip>
+            )}
+          </>
+        }
+        meta={
+          <>
+            <MetaText className="hidden sm:inline shrink-0" title={t(chrome.labelKey)}>
+              {t("checked", { time: timeAgo(provider.cached_at, locale) })}
+            </MetaText>
+            {provider.endpoint && (
+              <MetaText mono className="hidden sm:inline max-w-[220px]" title={provider.endpoint}>
+                {provider.endpoint}
+              </MetaText>
+            )}
+          </>
+        }
+      />
 
       {/* Ehrliches Status-Band — nennt Zustand UND Grund */}
       {chrome.headlineKey && (

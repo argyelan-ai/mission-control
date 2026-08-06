@@ -169,8 +169,32 @@ export function SectionOrFragment({
   children,
   ...section
 }: SectionProps & { embedded?: boolean }) {
-  if (embedded) return <>{children}</>;
-  return <Section {...section}>{children}</Section>;
+  if (!embedded) return <Section {...section}>{children}</Section>;
+
+  // Embedded is a demotion, not a deletion: the sub-heading is one type step
+  // quieter than a real section header, but the count and the section's own
+  // actions (add a box, check for updates) have to survive the move.
+  return (
+    <div id={section.id} data-testid={`section-${section.id}`} className="scroll-mt-4">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+          <h3 className="label-sys" style={{ color: C.textSecondary }}>
+            {section.title}
+          </h3>
+          {section.count != null && (
+            <span className="label-sys tabular-nums" style={{ color: C.textDim }}>
+              {section.count}
+            </span>
+          )}
+          {section.badge}
+        </div>
+        {section.actions && (
+          <div className="flex items-center gap-1.5 shrink-0">{section.actions}</div>
+        )}
+      </div>
+      {children}
+    </div>
+  );
 }
 
 export interface SectionNavItem {

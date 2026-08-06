@@ -1883,7 +1883,8 @@
       "deleteHostAria": "Host {name} löschen",
       "runtimeSingular": "Runtime",
       "runtimePlural": "Runtimes",
-      "addBoxButton": "Box hinzufügen"
+      "addBoxButton": "Box hinzufügen",
+      "rowActions": "Weitere Aktionen für {name}"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint nicht erkannt",
@@ -2083,7 +2084,8 @@
       "installDone": "Installation abgeschlossen.",
       "installCreateAndStart": "Runtime anlegen & starten",
       "installRuntimeCreated": "Runtime angelegt und gestartet — Gewichte laden noch.",
-      "close": "Schliessen"
+      "close": "Schliessen",
+      "rowActions": "Weitere Aktionen für {name}"
     },
     "bindAgentModal": {
       "title": "Agent binden",
@@ -2175,7 +2177,11 @@
       "tabLocal": "Eigene Hardware",
       "tabDownload": "Herunterladen"
     },
-    "downloadMoved": "Modelle herunterladen → Sektion Modelle"
+    "downloadMoved": "Modelle herunterladen → Sektion Modelle",
+    "infrastructure": {
+      "title": "Infrastruktur",
+      "subtitle": "Die Boxen und die festgebackenen Agent-Werkzeuge darunter"
+    }
   },
   "bench": {
     "common": {

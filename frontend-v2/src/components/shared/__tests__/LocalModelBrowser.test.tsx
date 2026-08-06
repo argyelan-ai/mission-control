@@ -295,7 +295,9 @@ describe("LocalModelBrowser", () => {
       expect(list).toHaveBeenCalledWith({ enabled: true }),
     );
 
-    await userEvent.click(await screen.findByRole("button", { name: "Hide entry" }));
+    // "Hide" is a secondary action: open the row overflow menu first.
+    await userEvent.click(await screen.findByTestId("recipe-more-qwen-general"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Hide entry" }));
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("qwen-general", false),
     );
