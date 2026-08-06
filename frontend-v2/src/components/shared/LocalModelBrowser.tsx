@@ -115,6 +115,16 @@ function RecipeCard({
       tone={recipe.running ? "ok" : "idle"}
       muted={!recipe.enabled}
       name={recipe.display_name}
+      summary={[
+        recipe.engine,
+        recipe.quant,
+        recipe.est_weights_gb != null ? t("sizeGb", { n: recipe.est_weights_gb }) : null,
+        recipe.context_len != null
+          ? t("contextK", { n: Math.round(recipe.context_len / 1024) })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       chips={
         <>
           {/* Page-wide chip order: state → type → size/detail. */}
@@ -202,7 +212,7 @@ function RecipeCard({
           onClick={() => onDeploy(recipe)}
           disabled={!deployable}
           title={deployable ? t("deployTitle", { name: recipe.display_name }) : t("deployUnavailableTitle")}
-          className="inline-flex items-center gap-1 rounded-md px-2 py-1 min-h-7 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
+          className="inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 sm:py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Rocket size={10} />
           {t("deploy")}
@@ -459,7 +469,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
           type="button"
           onClick={() => refreshMutation.mutate()}
           disabled={refreshMutation.isPending}
-          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-subtle bg-surface text-muted transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md border border-subtle bg-surface text-muted transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {refreshMutation.isPending ? (
             <Loader2 size={11} className="animate-spin" />
@@ -488,14 +498,14 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
             onChange={(e) => setSearch(e.target.value)}
             aria-label={t("searchLabel")}
             placeholder={t("searchPlaceholder")}
-            className="w-full rounded-md border border-subtle bg-surface py-1.5 pl-7 pr-2.5 text-xs text-primary outline-none"
+            className="w-full rounded-md border border-subtle bg-surface py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 pl-7 pr-2.5 text-xs text-primary outline-none"
           />
         </div>
         <select
           value={engineFilter}
           onChange={(e) => setEngineFilter(e.target.value)}
           aria-label={t("engineFilterLabel")}
-          className="rounded-md border border-subtle bg-surface px-2 py-1.5 text-xs text-muted cursor-pointer"
+          className="rounded-md border border-subtle bg-surface px-2 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 text-xs text-muted cursor-pointer"
         >
           <option value="">{t("engineAll")}</option>
           {engines.map((e) => (
@@ -504,12 +514,12 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
             </option>
           ))}
         </select>
-        <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
+        <label className="flex items-center gap-1.5 min-h-11 sm:min-h-0 px-1 text-xs text-muted cursor-pointer">
           <input
             type="checkbox"
             checked={showHidden}
             onChange={(e) => setShowHidden(e.target.checked)}
-            className="cursor-pointer"
+            className="cursor-pointer w-4 h-4"
           />
           {t("showHidden")}
         </label>

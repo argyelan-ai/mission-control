@@ -1,22 +1,34 @@
 "use client";
 
+import { useState } from "react";
+import { useTranslations } from "next-intl";
+import { ChevronDown } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
 /**
- * The one list grammar for /runtimes.
+ * The one list grammar for /runtimes — with a mobile anatomy of its own.
  *
  * The page had grown eight row components (runtimes, LM Studio models, hosts,
  * CLI tools, catalog providers, catalog models, local recipes, discovered
  * containers) and roughly a dozen chip styles across three radii, three text
  * sizes and three padding scales. Every section had invented its own row.
  *
- * Every row on the page is now this component, in this order:
+ * Desktop is one line:
  *
- *   [status dot] name [meta chips] ............ [one primary action] [overflow]
+ *   [status dot] name [meta chips] ......... [one primary action] [overflow]
  *
- * and every chip is a MetaChip. If a row needs something this cannot express,
- * the answer is to extend this component, not to hand-roll a row next to it.
+ * Mobile is NOT that line reflowed. Letting the chips wrap produced rows from
+ * 38 to 154 px tall, six chips over five lines, and no two rows the same
+ * height — a squeezed desktop, which is exactly what it looked like. At 390 px
+ * a row is two fixed lines instead:
+ *
+ *   [status dot] name .................... [action] [overflow]   (44px targets)
+ *   one-line summary — the single fact worth reading ........... [expand]
+ *
+ * Everything else (the full chip set, identifiers, live status, bound agents)
+ * lives behind the expand toggle. The row therefore has ONE height until the
+ * operator asks for more.
  */
 
 /**
@@ -98,11 +110,7 @@ export function MetaText({
   return (
     <span
       title={title}
-      className={cn(
-        "min-w-0 truncate text-[11px]",
-        mono && "font-mono",
-        className,
-      )}
+      className={cn("min-w-0 truncate text-[11px]", mono && "font-mono", className)}
       style={{ color: C.textMuted }}
     >
       {children}
@@ -117,6 +125,7 @@ export function ListRow({
   chips,
   meta,
   detail,
+  summary,
   action,
   overflow,
   leading,
@@ -137,6 +146,12 @@ export function ListRow({
   meta?: React.ReactNode;
   /** Second line for things that need a sentence (live status, agents). */
   detail?: React.ReactNode;
+  /**
+   * The one fact worth reading at 390px. Shown instead of the chips on mobile;
+   * without it a row falls back to wrapping chips, which is the thing this
+   * component exists to prevent.
+   */
+  summary?: React.ReactNode;
   /** Exactly one primary action. Everything else goes in `overflow`. */
   action?: React.ReactNode;
   overflow?: React.ReactNode;
@@ -148,8 +163,15 @@ export function ListRow({
   dataAttrs?: Record<string, string>;
   className?: string;
 }) {
-  const body = (
-    <>
+  const t = useTranslations("common.listRow");
+  const [expanded, setExpanded] = useState(false);
+  const hasMore = Boolean(chips || meta || detail);
+  const showAccessory = hasMore && !onClick;
+
+  const head = (
+    // min-h-11 on mobile so every row is the same height whether or not it
+    // carries an action button; 38px from sm up where a pointer is aiming.
+    <div className="flex items-center gap-2 min-h-11 sm:min-h-[38px]">
       {leading}
       <span
         aria-hidden
@@ -157,49 +179,105 @@ export function ListRow({
         style={{ background: DOT[tone] }}
       />
       <span className="min-w-0 flex-1 flex flex-col gap-0.5">
-        <span className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0">
-          <span
-            className="text-sm font-medium truncate"
-            style={{ color: C.textPrimary }}
-          >
+        <span className="flex items-center gap-x-2 gap-y-1 min-w-0 sm:flex-wrap">
+          <span className="text-sm font-medium truncate" style={{ color: C.textPrimary }}>
             {name}
           </span>
           {nameSuffix}
-          {chips}
-          {meta}
+          {/* Chips ride the name line on desktop only. */}
+          <span className="hidden sm:contents">
+            {chips}
+            {meta}
+          </span>
         </span>
-        {detail && <span className="flex items-center gap-2 flex-wrap">{detail}</span>}
+        {detail && <span className="hidden sm:flex items-center gap-2 flex-wrap">{detail}</span>}
       </span>
-      {(action || overflow) && (
-        <span className="flex items-center gap-1.5 shrink-0">
+      {(action || overflow || showAccessory) && (
+        <span className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           {action}
           {overflow}
+          {showAccessory && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-label={expanded ? t("collapse") : t("expand")}
+              data-testid={testId ? `${testId}-expand` : undefined}
+              className="sm:hidden flex items-center justify-center w-11 h-11 min-w-11 -mr-1 rounded-md cursor-pointer"
+            >
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className="transition-transform duration-150 motion-reduce:transition-none"
+                style={{ color: C.textDim, transform: expanded ? "rotate(180deg)" : "none" }}
+              />
+            </button>
+          )}
         </span>
       )}
-    </>
+    </div>
   );
 
   const classes = cn(
-    "flex items-center gap-2 rounded-md border px-2.5 py-1.5 min-h-[38px] w-full text-left transition-colors",
+    "rounded-md border px-2.5 py-1.5 w-full text-left transition-colors",
     muted && "opacity-60",
     onClick && "cursor-pointer hover:bg-[var(--color-bg-hover)]",
     className,
   );
-  const style = {
-    background: C.bgElevated,
-    borderColor: C.borderSubtle,
-  } as const;
+  const style = { background: C.bgElevated, borderColor: C.borderSubtle } as const;
 
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} data-testid={testId} {...dataAttrs} className={classes} style={style}>
-        {body}
-      </button>
-    );
-  }
+  const inner = (
+    <>
+      {head}
+
+      {/* Mobile: one summary line under the name; the whole cell is the
+          disclosure target, the way a native list row behaves. The action
+          buttons sit above it in the head and stop propagation themselves. */}
+      {summary && (
+        <div
+          className="sm:hidden truncate text-[11px] leading-4"
+          style={{ color: C.textMuted }}
+        >
+          {summary}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="sm:hidden flex flex-col gap-2 pt-2">
+          {(chips || meta) && (
+            <div className="flex items-center gap-x-2 gap-y-1.5 flex-wrap">
+              {chips}
+              {meta}
+            </div>
+          )}
+          {detail && <div className="flex items-center gap-2 flex-wrap">{detail}</div>}
+        </div>
+      )}
+    </>
+  );
+
   return (
-    <div data-testid={testId} {...dataAttrs} className={classes} style={style}>
-      {body}
+    <div
+      data-testid={testId}
+      {...dataAttrs}
+      className={cn(classes, onClick && "cursor-pointer")}
+      style={style}
+      {...(onClick
+        ? {
+            role: "button",
+            tabIndex: 0,
+            onClick,
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            },
+          }
+        : {})}
+    >
+      {inner}
     </div>
   );
 }

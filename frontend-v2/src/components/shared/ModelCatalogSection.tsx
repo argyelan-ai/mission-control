@@ -150,6 +150,11 @@ function ModelRow({
           {model.id}
         </span>
       }
+      summary={
+        model.context_window != null
+          ? t("contextK", { n: Math.round(model.context_window / 1024) })
+          : undefined
+      }
       chips={
         <>
           {isCliOnly && (
@@ -188,7 +193,7 @@ function ModelRow({
             onClick={() => onBind(model)}
             disabled={binding}
             title={t("createRuntimeRowTitle", { id: model.id })}
-            className="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 min-h-7 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 sm:py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {binding ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
             {t("createAsRuntime")}
@@ -244,6 +249,7 @@ function ProviderGroup({
           />
         }
         name={provider.display_name || provider.key}
+        summary={[provider.protocol, `${models.length}`, t(chrome.labelKey)].join(" · ")}
         chips={
           <>
             <MetaChip tone="idle">{provider.protocol}</MetaChip>
@@ -438,7 +444,7 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
           type="button"
           onClick={() => refreshMutation.mutate()}
           disabled={refreshMutation.isPending}
-          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-subtle bg-surface text-muted transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md border border-subtle bg-surface text-muted transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {refreshMutation.isPending ? (
             <Loader2 size={11} className="animate-spin" />

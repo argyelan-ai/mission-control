@@ -2354,6 +2354,10 @@
     "cappedList": {
       "showAll": "{n} weitere anzeigen",
       "showFewer": "Weniger anzeigen"
+    },
+    "listRow": {
+      "expand": "Details anzeigen",
+      "collapse": "Details ausblenden"
     }
   }
 }

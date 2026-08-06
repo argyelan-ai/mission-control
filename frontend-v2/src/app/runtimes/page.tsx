@@ -151,7 +151,7 @@ function ActionButton({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className="action-btn flex items-center justify-center w-7 h-7 min-w-[28px] rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+      className="action-btn flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
       style={{
         background: "transparent",
         // Disabled used to render at rgba(168,168,168,0.16) — about 1.1:1, so
@@ -503,6 +503,13 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
         dataAttrs={{ "data-model": model.id }}
         tone={model.is_loaded ? "ok" : "idle"}
         name={model.display_name}
+        summary={[
+          model.is_loaded ? t("states.ready") : t("states.stopped"),
+          "LM Studio",
+          model.size_gb > 0 ? `${model.size_gb.toFixed(1)} GB` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         chips={
           <>
             {model.is_embedding && <MetaChip tone="idle">EMBED</MetaChip>}
@@ -1305,6 +1312,10 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
                 : "idle"
         }
         name={runtime.display_name}
+        // At 390px: state, engine, host. Everything else is one tap away.
+        summary={[t(stateConfig.labelKey), engineLabel, runtime.host?.slug]
+          .filter(Boolean)
+          .join(" · ")}
         nameSuffix={
           runtime.api_key_secret_id ? (
             <span title={t("apiKeyStored")} className="shrink-0 leading-none">
@@ -1489,7 +1500,7 @@ function KvResetScheduleToggle() {
     <div className="shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+        className="flex items-center gap-1.5 text-xs px-2.5 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
         style={{
           background: open ? `${C.warning}1A` : C.borderSubtle,
           border: open ? `1px solid ${C.warning}4D` : `1px solid ${C.borderSubtle}`,
@@ -1633,7 +1644,7 @@ function ModelsSection() {
               aria-selected={active}
               onClick={() => setTab(item.id)}
               data-testid={`models-tab-${item.id}`}
-              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs cursor-pointer transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 min-h-11 sm:min-h-0 sm:px-2.5 sm:py-1.5 text-xs cursor-pointer transition-colors"
               style={{
                 background: active ? C.accentSubtle : "transparent",
                 border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
@@ -1726,7 +1737,7 @@ export default function RuntimesPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setAddOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 color: C.accent,
                 border: `1px solid ${C.borderAccent}`,
@@ -1738,7 +1749,7 @@ export default function RuntimesPage() {
             </button>
             <button
               onClick={() => refetch()}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 color: C.textMuted,
                 border: `1px solid ${C.borderSubtle}`,
@@ -1841,7 +1852,7 @@ export default function RuntimesPage() {
             type="button"
             onClick={() => openModelsTab("download")}
             data-testid="lms-download-pointer"
-            className="inline-flex items-center gap-1.5 mt-2 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
+            className="inline-flex items-center gap-1.5 mt-2 rounded-md px-2 py-2 sm:py-1 min-h-11 sm:min-h-0 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
             style={{ color: C.textMuted }}
           >
             <Download size={11} />

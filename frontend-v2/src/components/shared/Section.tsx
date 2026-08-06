@@ -235,8 +235,14 @@ export function SectionNav({ items }: { items: SectionNavItem[] }) {
   return (
     <nav
       aria-label={t("jumpTo")}
-      className="flex items-center gap-1 flex-wrap mb-6 pb-3"
-      style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
+      // Sticky on mobile: the page is ~2900px there, so the three stations have
+      // to stay reachable without scrolling back to the top. Solid surface, not
+      // a blur — the palette bans glass as decoration.
+      className="sticky top-0 z-20 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 flex items-center gap-1 overflow-x-auto sm:flex-wrap mb-4 sm:mb-6 py-2 sm:py-0 sm:pb-3"
+      style={{
+        borderBottom: `1px solid ${C.borderSubtle}`,
+        backgroundColor: "var(--color-p2-bg)",
+      }}
       data-testid="section-nav"
     >
       {items.map((item) => (
@@ -244,7 +250,7 @@ export function SectionNav({ items }: { items: SectionNavItem[] }) {
           key={item.id}
           type="button"
           onClick={() => jump(item.id)}
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
+          className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 min-h-11 sm:min-h-0 sm:px-2 sm:py-1.5 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
           style={{ color: C.textSecondary }}
         >
           {item.label}

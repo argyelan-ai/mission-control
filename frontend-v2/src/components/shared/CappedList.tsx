@@ -71,7 +71,7 @@ export function CappedList({
           type="button"
           onClick={() => setExpanded((v) => !v)}
           data-testid={testId ? `${testId}-toggle` : undefined}
-          className="mt-4 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
+          className="mt-4 inline-flex items-center gap-1 rounded-md px-2 py-2 sm:py-1 min-h-11 sm:min-h-0 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
           style={{ color: C.textSecondary }}
         >
           {expanded ? (

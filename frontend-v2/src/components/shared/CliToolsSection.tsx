@@ -105,6 +105,13 @@ function CliToolCard({
       dataAttrs={{ "data-tool": tool.tool }}
       tone={running ? "warn" : tool.update_available ? "warn" : "ok"}
       name={tool.tool}
+      summary={[
+        tool.installed ?? "—",
+        tool.update_available && tool.latest ? `→ ${tool.latest}` : null,
+        tool.image ?? t("hostCliBrew"),
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       chips={
         <>
           {running && (
@@ -140,7 +147,7 @@ function CliToolCard({
           <button
             onClick={() => onUpdate(tool)}
             title={t("updateToTitle", { version: tool.latest ?? "" })}
-            className="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 min-h-7 text-[10px] font-medium cursor-pointer transition-colors"
+            className="shrink-0 inline-flex items-center justify-center gap-1 rounded-md px-2.5 min-h-11 sm:min-h-7 sm:py-1 text-[10px] font-medium cursor-pointer transition-colors"
             style={{
               color: STATUS_TEXT.warning,
               border: `1px solid ${STATUS.warning}`,
@@ -493,7 +500,7 @@ export function CliToolsSection({ embedded = false }: { embedded?: boolean } = {
         <button
           onClick={() => checkMutation.mutate()}
           disabled={checkMutation.isPending}
-          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
         >
           {checkMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}

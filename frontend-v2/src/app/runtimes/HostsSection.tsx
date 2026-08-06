@@ -527,6 +527,11 @@ function HostCard({
       tone={host.enabled ? "ok" : "idle"}
       muted={!host.enabled}
       name={host.display_name}
+      summary={[
+        host.enabled ? t("active") : t("disabled"),
+        t(KIND_LABEL_KEY[host.kind]),
+        `${boundCount} ${boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}`,
+      ].join(" · ")}
       chips={
         <>
           <MetaChip tone={host.enabled ? "ok" : "idle"}>
@@ -559,7 +564,7 @@ function HostCard({
             onClick={onEdit}
             title={t("edit")}
             aria-label={t("editHostAria", { name: host.display_name })}
-            className="action-btn flex items-center justify-center w-7 h-7 min-w-[28px] rounded-md transition-colors cursor-pointer"
+            className="action-btn flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] rounded-md transition-colors cursor-pointer"
             style={{
               background: "transparent",
               border: `1px solid ${C.borderActive}`,
@@ -649,7 +654,7 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
             <button
               data-testid="hosts-add-box"
               onClick={() => setWizardOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 background: C.accentSubtle,
                 border: `1px solid ${C.borderAccent}`,
@@ -661,7 +666,7 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
             </button>
             <button
               onClick={() => setModalHost(null)}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 background: C.borderSubtle,
                 border: `1px solid ${C.border}`,

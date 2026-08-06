@@ -95,7 +95,7 @@ export function OverflowMenu({
         aria-label={label}
         title={label}
         data-testid={testId}
-        className="flex items-center justify-center w-7 h-7 min-w-[28px] rounded-md cursor-pointer transition-colors"
+        className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] rounded-md cursor-pointer transition-colors"
         style={{
           background: open ? C.bgHover : "transparent",
           border: `1px solid ${open ? C.borderActive : "transparent"}`,
@@ -134,7 +134,7 @@ export function OverflowMenu({
                     setOpen(false);
                     a.onClick();
                   }}
-                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed"
+                  className="flex items-center gap-2.5 w-full px-3 py-2.5 min-h-11 sm:min-h-0 sm:py-2 text-xs text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed"
                   style={{
                     color: a.disabled
                       ? C.textDim
