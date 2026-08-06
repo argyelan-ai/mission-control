@@ -483,6 +483,10 @@ export function LocalModelBrowser() {
       }
     >
 
+      {/* Filterleiste — nur wenn es überhaupt etwas zu filtern gibt.
+          Filter über einer leeren Registry sind reines Rauschen. */}
+      {recipes.length > 0 && (
+      <>
       {/* Filterleiste */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[180px] flex-1">
@@ -522,6 +526,8 @@ export function LocalModelBrowser() {
           {t("showHidden")}
         </label>
       </div>
+      </>
+      )}
 
       {refreshResult && <RefreshSummary result={refreshResult} />}
 

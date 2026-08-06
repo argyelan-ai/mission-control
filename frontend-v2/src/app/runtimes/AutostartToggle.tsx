@@ -50,7 +50,9 @@ export function AutostartToggle({ slug }: { slug: string }) {
       title={title}
       disabled={unknown || busy}
       onClick={() => mutation.mutate(!enabled)}
-      className="flex items-center gap-1.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium transition-opacity"
+      // min-h-6: at py-0.5 the switch was 22 px tall and missed the 24x24
+      // minimum in WCAG 2.2 SC 2.5.8.
+      className="flex items-center gap-1.5 shrink-0 rounded px-1.5 py-1 min-h-6 text-[10px] font-medium transition-opacity"
       style={{
         border: `1px solid ${unknown ? C.borderSubtle : enabled ? STATUS.online : C.borderSubtle}`,
         color: unknown ? C.textDim : enabled ? STATUS_TEXT.online : C.textMuted,
