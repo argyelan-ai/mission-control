@@ -59,13 +59,17 @@ logger = logging.getLogger("mc.compose_renderer")
 COMPOSE_WRITE_LOCK_KEY = "mc:compose:agents-yml:write"
 COMPOSE_WRITE_LOCK_TTL = 60  # seconds
 
-# Agent image names are prefix+tag configurable so self-hosters run the
-# published GHCR images while developers can keep bare local names
-# (MC_AGENT_IMAGE_PREFIX="" in .env). scripts/build-agent-images.sh tags
-# every local build under BOTH names, so a local build always wins over a
-# registry pull regardless of the prefix in use.
-_AGENT_IMAGE_PREFIX = os.environ.get("MC_AGENT_IMAGE_PREFIX", "ghcr.io/argyelan-ai/")
-_AGENT_IMAGE_TAG = os.environ.get("MC_AGENT_IMAGE_TAG", "latest")
+# Agent image names are prefix+tag configurable so self-hosters can run
+# published GHCR images while developers keep bare local names.
+# DEFAULT IS "" (bare local names) until the v0.2.0 release publishes
+# mc-claude-agent + mc-agent-base to GHCR — the release commit flips the
+# default. Flipping earlier would break every existing install: compose
+# does NOT fall back from a missing registry name to a bare local image
+# (adversarial-review finding, 2026-08-06). scripts/build-agent-images.sh
+# tags every local build under BOTH names so a local build always shadows
+# a registry pull once the prefix is active.
+_AGENT_IMAGE_PREFIX = os.environ.get("MC_AGENT_IMAGE_PREFIX", "")
+_AGENT_IMAGE_TAG = os.environ.get("MC_AGENT_IMAGE_TAG") or "latest"
 
 
 def _agent_image(name: str) -> str:
@@ -74,12 +78,15 @@ def _agent_image(name: str) -> str:
 
 def _image_is(image: str | None, base_name: str) -> bool:
     """True if ``image`` refers to ``base_name`` regardless of registry
-    prefix or tag — legacy agents.yml files carry bare local names
-    (``mc-kimi-agent:latest``) while new renders carry GHCR-prefixed ones.
+    prefix, tag or digest — legacy agents.yml files carry bare local names
+    (``mc-kimi-agent:latest``) while prefixed renders carry registry names.
     """
     if not image:
         return False
-    repo = image.rsplit(":", 1)[0]
+    repo = image.split("@", 1)[0]
+    head, sep, tail = repo.rpartition(":")
+    if sep and "/" not in tail:  # strip the tag, but not a registry port
+        repo = head
     return repo == base_name or repo.endswith(f"/{base_name}")
 
 
@@ -87,12 +94,14 @@ CLAUDE_IMAGE = _agent_image("mc-claude-agent")
 OPENCLAUDE_IMAGE = _agent_image("mc-agent-base")
 # ADR-045: third harness image — omp headless driver (bridge.py --serve) instead
 # of an interactive openclaude pane. Selected by runtime_type == "omp".
-# omp/kimi binaries are pinned arm64-only, so these two are NOT published to
-# GHCR yet — build-agent-images.sh dual-tags them locally instead.
-OMP_IMAGE = _agent_image("mc-omp-agent")
+# omp/kimi stay BARE local names on purpose: their binaries are pinned
+# arm64-only, the images will never be published to a registry, and a
+# prefixed name would send `docker compose` on a pull that can only fail
+# (adversarial-review finding, 2026-08-06).
+OMP_IMAGE = "mc-omp-agent:latest"
 # Fourth harness image — Kimi Code CLI (tmux+poll.sh like claude, own binary).
 # Selected by harness == "kimi" / runtime_type == "kimi".
-KIMI_IMAGE = _agent_image("mc-kimi-agent")
+KIMI_IMAGE = "mc-kimi-agent:latest"
 
 HARNESS_IMAGES: dict[str, str] = {
     "claude": CLAUDE_IMAGE,
@@ -647,13 +656,13 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
     # ADR-045: three-way anchor selection — omp agents hang off the dedicated
     # `omp-agent-base` anchor; openclaude off `openclaude-agent-base`; the
     # anthropic fleet off the default `claude-agent-base`.
-    if image == OMP_IMAGE:
+    if _image_is(image, "mc-omp-agent"):
         anchor = "omp-agent-base"
         anchor_default_image = OMP_IMAGE
-    elif image == KIMI_IMAGE:
+    elif _image_is(image, "mc-kimi-agent"):
         anchor = "kimi-agent-base"
         anchor_default_image = KIMI_IMAGE
-    elif image == OPENCLAUDE_IMAGE:
+    elif _image_is(image, "mc-agent-base"):
         anchor = "openclaude-agent-base"
         anchor_default_image = OPENCLAUDE_IMAGE
     else:
@@ -699,9 +708,9 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
         f"      - ${{HOME}}/.mc/deliverables/{slug}:/deliverables",
         _REFERENCES_VOLUME_TEMPLATE,
     ]
-    if image == OMP_IMAGE:
+    if _image_is(image, "mc-omp-agent"):
         lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/omp-sessions:{_OMP_SESSIONS_TARGET}")
-    if image == KIMI_IMAGE:
+    if _image_is(image, "mc-kimi-agent"):
         lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/kimi-config:/home/agent/.kimi-code")
     if is_vault_writer:
         lines.append("      - ${HOME}/.mc/vault:/vault:rw")
