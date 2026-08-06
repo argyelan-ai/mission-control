@@ -1047,23 +1047,34 @@ async def agent_delegate_task(
     from app.services.operations import check_dispatch_allowed
 
     current_task_id = agent.current_task_id
-    if not current_task_id:
+    current_task: Task | None = None
+    if current_task_id:
+        current_task = await session.get(Task, current_task_id)
+        if not current_task or current_task.status != "in_progress":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Aktiver Task ist nicht in_progress — Delegation blockiert.",
+            )
+        if current_task.board_id != board_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Task gehoert nicht zu diesem Board.",
+            )
+    elif not agent.is_board_lead:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Kein aktiver Task — Delegation nur aus aktiver Arbeit heraus moeglich.",
         )
-    current_task = await session.get(Task, current_task_id)
-    if not current_task or current_task.status != "in_progress":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Aktiver Task ist nicht in_progress — Delegation blockiert.",
-        )
-
-    if current_task.board_id != board_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Task gehoert nicht zu diesem Board.",
-        )
+    else:
+        # Root delegation (live incident 2026-08-06): a Board Lead handling a
+        # chat order has NO active task. The hard 409 here made Boss hand-roll
+        # API calls — and lose the task step. A lead may open a ROOT task:
+        # no parent, no callback (nothing to resume), same guards otherwise.
+        if agent.board_id != board_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Agent gehoert nicht zu diesem Board.",
+            )
 
     target_agent = await session.get(Agent, payload.assigned_agent_id)
     if not target_agent:
@@ -1108,27 +1119,41 @@ async def agent_delegate_task(
                     "teilnimmst — Herkunft muss ein eigener Thread sein."
                 ),
             )
-    else:
+    elif current_task is not None:
         origin_thread_id = current_task.origin_thread_id
+
+    # Root mode: no parent to inherit from — board default project, explicit
+    # priority or medium, and callback is meaningless (nothing to resume).
+    if current_task is None:
+        project_id = None
+        board_row = await session.get(Board, board_id)
+        if board_row is not None:
+            project_id = board_row.default_project_id
+        with_callback = False
+    else:
+        project_id = current_task.project_id
+        with_callback = payload.callback
 
     # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
         board_id=board_id,
-        project_id=current_task.project_id,
-        parent_task_id=current_task.id,
+        project_id=project_id,
+        parent_task_id=current_task.id if current_task else None,
         title=payload.title,
         description=payload.description,
         status="inbox",
-        priority=payload.priority or current_task.priority,
+        priority=payload.priority
+        or (current_task.priority if current_task else "medium"),
         task_type="story",
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
         origin_thread_id=origin_thread_id,
         # Callback pattern: subtask points back to the delegating agent
-        callback_agent_id=agent.id if payload.callback else None,
+        callback_agent_id=agent.id if with_callback else None,
         is_auto_created=True,
-        auto_reason=f"delegation from {agent.name}",
+        auto_reason=f"delegation from {agent.name}"
+        + ("" if current_task else " (root, no active task)"),
     )
 
     # Dispatch guard BEFORE commit — no zombie subtask if the system/agent isn't dispatchable right now
@@ -1144,7 +1169,7 @@ async def agent_delegate_task(
 
     session.add(subtask)
 
-    if payload.callback:
+    if with_callback and current_task is not None:
         # Explicit flush before the current_task UPDATE. Without a flush,
         # SQLAlchemy could order the operations wrong in the following
         # emit_event() call (which internally does session.commit(),
@@ -1159,22 +1184,24 @@ async def agent_delegate_task(
         current_task.callback_agent_id = agent.id
         session.add(current_task)
 
-    # Progress comment with delegation context
-    comment = TaskComment(
-        id=uuid.uuid4(),
-        task_id=current_task.id,
-        author_type="agent",
-        author_agent_id=agent.id,
-        content=(
-            f"Delegiert an **{target_agent.name}**: {payload.title}\n\n"
-            f"Subtask-ID: {subtask.id}\n"
-            + ("Warte auf Callback — Parent reaktiviert sich automatisch wenn Subtask `done` ist."
-               if payload.callback
-               else "Fire-and-Forget — Parent laeuft weiter.")
-        ),
-        comment_type="progress",
-    )
-    session.add(comment)
+    # Progress comment with delegation context — on the parent, when there is
+    # one. A root delegation logs via the activity event only.
+    if current_task is not None:
+        comment = TaskComment(
+            id=uuid.uuid4(),
+            task_id=current_task.id,
+            author_type="agent",
+            author_agent_id=agent.id,
+            content=(
+                f"Delegiert an **{target_agent.name}**: {payload.title}\n\n"
+                f"Subtask-ID: {subtask.id}\n"
+                + ("Warte auf Callback — Parent reaktiviert sich automatisch wenn Subtask `done` ist."
+                   if with_callback
+                   else "Fire-and-Forget — Parent laeuft weiter.")
+            ),
+            comment_type="progress",
+        )
+        session.add(comment)
 
     await emit_event(
         session,
@@ -1182,12 +1209,13 @@ async def agent_delegate_task(
         title=f"{agent.name} delegiert an {target_agent.name}: {payload.title}",
         severity="info",
         board_id=board_id,
-        task_id=current_task.id,
+        task_id=current_task.id if current_task else subtask.id,
         agent_id=agent.id,
         detail={
             "subtask_id": str(subtask.id),
             "target_agent": target_agent.name,
-            "callback": payload.callback,
+            "callback": with_callback,
+            "root_delegation": current_task is None,
         },
     )
 
@@ -1200,14 +1228,18 @@ async def agent_delegate_task(
 
     logger.info(
         "Delegate: %s → %s (subtask %s, parent %s %s)",
-        agent.name, target_agent.name, subtask.id, current_task.id,
-        "blocked" if payload.callback else "in_progress",
+        agent.name, target_agent.name, subtask.id,
+        current_task.id if current_task else "-",
+        "blocked" if with_callback else ("root" if current_task is None else "in_progress"),
     )
 
     return DelegateResponse(
         subtask_id=subtask.id,
         assigned_to=target_agent.name,
-        your_status="blocked" if payload.callback else "in_progress",
+        your_status=(
+            "blocked" if with_callback
+            else ("no_task" if current_task is None else "in_progress")
+        ),
     )
 
 
