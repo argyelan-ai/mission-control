@@ -299,6 +299,17 @@ class Settings(BaseSettings):
     # slower and the operator learns about a new model from the page again.
     model_catalog_check_interval: int = 3600  # 1 hour
 
+    # Local Model Registry — curated catalogue of models/recipes for own GPU
+    # boxes (services/local_registry.py). Comma-separated URLs; each must serve
+    # a JSON ARRAY of recipe objects in the seed schema (config/local-recipes.json
+    # is itself a valid payload). Empty (the default) means builtin seed only —
+    # MC makes no outbound request for this feature at all.
+    local_registry_sources: str = ""
+    # 0 = background loop disabled (POST /local-registry/refresh keeps working).
+    # Six hours: a curated registry gains an entry a handful of times per year,
+    # and the operator has a button for the impatient case.
+    local_registry_check_interval: int = 21600  # 6 hours
+
     # Lifecycle Safety Watchdog (ADR-046) — global kill-switch for the
     # silent-abort auto-block check (task_runner._check_stuck_in_progress).
     # The idle THRESHOLD stays per-agent in agents.dispatch_config
