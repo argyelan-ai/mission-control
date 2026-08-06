@@ -35,7 +35,7 @@ services:
     restart: on-failure
 
   backend:
-    image: ghcr.io/argyelan-ai/mc-backend:0.1.1@sha256:5c9d24bbe7271c35e3db240c3e1ed0c20ca1a60ec7d512f6ae8818a004a53cf2
+    image: ghcr.io/argyelan-ai/mc-backend:0.2.0@sha256:9a8176f638e21ff585e7d49cb3a9c068741380fb69e48f0b7312641a351899ce
     depends_on:
       - db
       - redis
@@ -50,7 +50,7 @@ services:
     restart: on-failure
 
   frontend:
-    image: ghcr.io/argyelan-ai/mc-frontend:0.1.1@sha256:0e5c3b4893e168b159b0288205db78b900f6e6d83fbd7fb091e19790a8c7f607
+    image: ghcr.io/argyelan-ai/mc-frontend:0.2.0@sha256:01a4246e52aaaa4b88e9117e2a573dfb96d1f794e01fa087ef3f80a294009f22
     depends_on:
       - backend
     restart: on-failure
