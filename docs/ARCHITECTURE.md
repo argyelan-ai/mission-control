@@ -529,6 +529,47 @@ task-completion path. A Redis failure counter trips a circuit breaker after
 restart-loop). Force path for operators who don't want to wait:
 `POST /runtimes/db/{slug}/sync-agents`.
 
+#### Switch-Grace + Auto-Recovery (NEU 2026-08-05)
+
+Two operational gaps around the same fact: a Spark recipe switch takes
+2.5–8.5 min and a cold first load 10–15 min, during which the engine is
+legitimately down.
+
+**Grace.** `services/runtime_grace.py` holds one Redis marker per runtime
+(`mc:runtime-switching:{slug}` → `{phase, source, started_at}`, TTL 20 min).
+`phase` is `evicting|launching|loading`, `source` is
+`switch_recipe|manual_start|auto_recovery`. `sparkrun_manager.switch_recipe`
+sets it **before** the eviction and clears it on every abort path;
+`runtime_manager.start_runtime`/`restart_runtime` set it for
+`DOCKER_ENGINE_TYPES` and clear it when the call itself fails. A marked
+runtime is written to the live snapshot as `status: "switching"` + `phase`
+**without** incrementing the failure counter or emitting
+`runtime.unreachable` — that combination is what produced a notification
+storm on every planned switch. The watcher is the single place a successful
+switch ends: the first probe that sees the engine serve clears the marker.
+The TTL is the safety net for a backend that dies mid-switch; once it
+expires, alerting behaves exactly as before. `/runtimes` renders a
+"switching model / loading" chip instead of the red unreachable line.
+
+**Auto-Recovery.** `runtime_autostart` (ADR-057) only covers "start on host
+boot" — after a hard box crash the Spark comes back with no container and
+nothing starts it. The watcher now makes exactly ONE start attempt when all
+of these hold: confirmed outage (fail counter at `UNREACHABLE_EVENT_THRESHOLD`),
+no grace marker, runtime `enabled` and of a docker engine type, resolved host
+`kind == "ssh"`, the box answers a trivial SSH command (box up, container
+gone — not a box that is simply off), and a `SET nx ex 900` cooldown claim
+succeeds (that claim is also the multi-worker race guard). Events:
+`runtime.auto_recovery_started`/`_succeeded` (info),
+`_failed`/`_given_up` (**warning** → operator notification). The attempt
+counter (`mc:runtime-recovery:failures:{slug}`, TTL 6h) is incremented
+*before* the attempt and cleared by the next probe that actually sees the
+engine serve, so a start that returns ok but never produces a serving engine
+still counts; after 2 consecutive attempts the watcher gives up until an
+operator intervenes. Kill switch: `settings.runtime_auto_recovery_enabled`
+(`RUNTIME_AUTO_RECOVERY_ENABLED=false`) disables recovery only — grace stays
+active either way. Everything is best-effort: with Redis down there is no
+grace and no recovery, and the watcher behaves exactly as it did before.
+
 **omp** provider was renamed `qwen-spark` → `mc-openai` and its hardcoded
 Spark model defaults removed from the seeds (`runtimes.json`,
 `register-omp-runtime.sh` now ship `model_identifier: null`) — the first
@@ -1018,6 +1059,7 @@ Alle ADRs in `docs/decisions/`:
 | Neue Task-Status / Workflow | `backend/app/models/task.py` + Routers + Frontend types | Watchdog + Task Lifecycle |
 | Runtime-Wechsel pro Agent | `backend/app/services/agent_runtime_switch.py` (atomic) | Tests + UI-Modal in `RuntimeSwitchModal.tsx` |
 | Runtime-Drift-Probing / -Intervall | `backend/app/services/runtime_watcher.py` (`settings.runtime_watcher_interval`/`_enabled`) | ADR-054 — 2-Probe-Confirm, `/runtimes/live-status` |
+| Runtime-Auto-Recovery (ein Startversuch nach bestätigtem Ausfall) | `backend/app/services/runtime_watcher.py` (`settings.runtime_auto_recovery_enabled`) | Kill-Switch `RUNTIME_AUTO_RECOVERY_ENABLED=false`; Cooldown 15 min, Aufgabe nach 2 Fehlversuchen. Switch-Grace bleibt aktiv |
 | Agent-Model-Sync nach Drift | `backend/app/services/runtime_propagation.py` (`docker restart`, kein respawn) | ADR-054 — Circuit-Breaker 3 Fehlversuche, Force-Route `POST /runtimes/db/{slug}/sync-agents` |
 | Engine-Control (Autostart-Flag) | `backend/app/services/runtime_autostart.py` (SSH via `runtime_manager._ssh_run`) | ADR-057 — `runtimes.autostart_supported`/`autostart_flag_path`, `GET/POST /runtimes/db/{slug}/autostart`, `AutostartToggle.tsx` |
 | Docker-Compose Image-Mapping | `backend/app/services/compose_renderer.py` (DB-driven) | `docker/docker-compose.agents.yml` ist generator-managed |

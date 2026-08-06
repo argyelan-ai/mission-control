@@ -286,6 +286,14 @@ class Settings(BaseSettings):
     runtime_watcher_enabled: bool = True
     runtime_watcher_interval: int = 90  # seconds between probe ticks
 
+    # PR5 kill-switch: when the watcher sees a confirmed outage on a docker
+    # engine whose host answers again (box rebooted, container gone), it makes
+    # exactly ONE start attempt, rate-limited by a 15-min cooldown and giving
+    # up after 2 consecutive failures. Set RUNTIME_AUTO_RECOVERY_ENABLED=false
+    # to keep the engine strictly operator-started. Does NOT affect the
+    # switch-grace state — planned switches stay silent either way.
+    runtime_auto_recovery_enabled: bool = True
+
     # CLI Tool Updates — periodic check of installed vs. pinned vs. latest
     # upstream CLI tool versions (openclaude/claude/omp). 0 = disabled.
     cli_update_check_interval: int = 21600  # 6 hours
