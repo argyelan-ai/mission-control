@@ -271,7 +271,8 @@ STUCK_BLOCK_MINUTES_SLOW = 45     # default for slow/local runtimes with documen
 # local reasoning → need a materially higher stale floor before we trust the
 # frozen last_task_activity_at as a "dead turn".
 _SLOW_RUNTIME_TYPES = {
-    "vllm_docker", "llamacpp_docker", "lmstudio", "openai_compatible", "unsloth", "cloud",
+    "vllm_docker", "llamacpp_docker", "ssh_process", "lmstudio", "openai_compatible",
+    "unsloth", "cloud",
 }
 
 

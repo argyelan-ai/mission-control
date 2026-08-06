@@ -158,8 +158,12 @@ def test_seed_file_is_public_safe_and_valid():
     raw = SEED_FILE.read_text(encoding="utf-8")
     entries = json.loads(raw)
     assert len(entries) >= 8
+    # "ssh_process" is a legitimate engine name (PR 6), so it is masked out
+    # before the scan — what must stay forbidden is an ssh COMMAND or target
+    # (`ssh user@box`), which is exactly what the bare token would catch.
+    scanned = raw.replace("ssh_process", "<engine>").replace("ssh-process", "<engine>")
     for forbidden in ("192" ".168.", "100" ".", "/Users" "/", "tail", "ssh"):  # split literals: der Leak-Scanner soll den Seed treffen, nicht diesen Test
-        assert forbidden not in raw, f"seed leaks {forbidden!r}"
+        assert forbidden not in scanned, f"seed leaks {forbidden!r}"
     slugs = [e["slug"] for e in entries]
     assert len(slugs) == len(set(slugs)), "duplicate slug in seed"
 
@@ -685,7 +689,7 @@ def _revisions() -> list[tuple[str, tuple[str, ...]]]:
     return out
 
 
-def test_migration_0175_is_the_single_head():
+def test_migration_chain_has_a_single_head():
     """Two heads make `alembic upgrade head` refuse to run — that has broken a
     real deploy before (see tests/test_alembic_chain_integrity.py)."""
     entries = _revisions()
@@ -694,7 +698,9 @@ def test_migration_0175_is_the_single_head():
     heads = sorted(revs - referenced)
 
     assert "0176_local_recipes" in revs
-    assert heads == ["0176_local_recipes"], f"expected one head, got {heads}"
-    parents = dict(entries)["0176_local_recipes"]
-    assert parents == ("0175_app_settings",)
-    assert len("0176_local_recipes") <= 32  # alembic_version.version_num is varchar(32)
+    assert heads == ["0177_ssh_process_runtime"], f"expected one head, got {heads}"
+    chain = dict(entries)
+    assert chain["0176_local_recipes"] == ("0175_app_settings",)
+    assert chain["0177_ssh_process_runtime"] == ("0176_local_recipes",)
+    for rev in ("0176_local_recipes", "0177_ssh_process_runtime"):
+        assert len(rev) <= 32  # alembic_version.version_num is varchar(32)
