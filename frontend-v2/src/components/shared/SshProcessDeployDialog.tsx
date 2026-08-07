@@ -49,6 +49,22 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 /** ds4 und Verwandte hören auf 8888; abweichende Ports trägt der Operator ein. */
 const DEFAULT_PORT = 8888;
 
+/**
+ * Container-Engines, die MC über `container_name` wiederfindet. Ohne diesen
+ * Namen liest `get_runtime_state` für eine Docker-Runtime dauerhaft "unknown" —
+ * für ssh_process gibt es dagegen gar keinen Container zu benennen.
+ */
+const DOCKER_ENGINES = new Set(["vllm_docker", "llamacpp_docker"]);
+
+/**
+ * Der Port, mit dem der Dialog aufmacht. vLLM-kompatible Stacks bedienen per
+ * Konvention 8000 (der sparkinfer-Stack kann wegen `network_mode: host` sogar
+ * nur 8000), Host-Engines wie ds4 hören auf 8888.
+ */
+export function defaultPortFor(recipe: LocalRecipe): number {
+  return DOCKER_ENGINES.has(recipe.engine) ? 8000 : DEFAULT_PORT;
+}
+
 export function extractApiError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   const jsonStart = msg.indexOf("{");
@@ -96,7 +112,7 @@ export function SshProcessDeployDialog({
   useBodyScrollLock(true);
 
   const [hostId, setHostId] = useState<string>("");
-  const [port, setPort] = useState<number>(DEFAULT_PORT);
+  const [port, setPort] = useState<number>(() => defaultPortFor(recipe));
   const [runtimeSlug, setRuntimeSlug] = useState<string>(recipe.slug);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -215,6 +231,11 @@ export function SshProcessDeployDialog({
         launch_command: rendered.launch_command,
         stop_command: rendered.stop_command,
         process_name: recipe.process_name,
+        // Docker-Engines werden per Namen inspiziert und gestartet; die
+        // compose-Rezepte setzen exakt diesen Namen im Override.
+        container_name: DOCKER_ENGINES.has(recipe.engine)
+          ? `mc-${runtimeSlug}`
+          : undefined,
         // Eine 110-GB-Engine teilt sich die Box mit niemandem.
         exclusive_memory: true,
         host_id: host.id,

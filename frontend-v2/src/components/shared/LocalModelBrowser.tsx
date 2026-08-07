@@ -77,12 +77,22 @@ function isNew(recipe: LocalRecipe, now: number): boolean {
 
 /**
  * Deploybar sind zwei Sorten, auf zwei verschiedenen Wegen:
- *   sparkrun     → Recipe-Switch auf einer bestehenden Spark-Runtime
- *   ssh_process  → eigener Dialog: installieren, Runtime anlegen, starten
- * Alles andere (vllm_docker/llamacpp_docker) läuft über den BoxWizard und
- * bleibt hier bewusst deaktiviert, statt einen Weg anzubieten, der scheitert.
+ *   sparkrun          → Recipe-Switch auf einer bestehenden Spark-Runtime
+ *   selbst-installend → eigener Dialog: installieren, Runtime anlegen, starten
+ *
+ * Die zweite Sorte hängt bewusst an der FÄHIGKEIT, nicht an der Engine: ein
+ * Eintrag, der sowohl sagt, wie er sich installiert, als auch, wie er startet,
+ * kann über den Install-Dialog gehen — ob dahinter ein Host-Prozess (ds4) oder
+ * ein docker-compose-Stack (sparkinfer) steckt, ändert am Ablauf nichts.
+ * Einträge ohne diese Templates laufen weiter über den BoxWizard und bleiben
+ * hier deaktiviert, statt einen Weg anzubieten, der scheitert.
  */
+export function isSelfInstalling(recipe: LocalRecipe): boolean {
+  return !!recipe.install_template && !!recipe.launch_template;
+}
+
 function isDeployable(recipe: LocalRecipe): boolean {
+  if (isSelfInstalling(recipe)) return true;
   if (recipe.engine === "ssh_process") return !!recipe.launch_template;
   return recipe.engine === "sparkrun" && !!recipe.recipe_ref;
 }
@@ -435,7 +445,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
   );
 
   const openDeploy = (recipe: LocalRecipe) => {
-    if (recipe.engine === "ssh_process") {
+    if (isSelfInstalling(recipe) || recipe.engine === "ssh_process") {
       setInstalling(recipe);
       return;
     }

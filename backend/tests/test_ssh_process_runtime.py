@@ -1030,10 +1030,17 @@ def test_migration_backfill_matches_the_seed_credits():
         backend / "alembic" / "versions" / "0177_ssh_process_runtime.py"
     ).read_text(encoding="utf-8")
 
+    # Entries that are the same age as 0177 or younger arrive via the seeder,
+    # never via a backfill, so they are deliberately not in that table. The
+    # seeder is insert-only per slug, which is what makes a later slug reach an
+    # existing DB without a migration of its own (see test_local_registry).
+    seeded_not_backfilled = {
+        "deepseek-v4-flash-ds4",          # new in 0177 itself
+        "deepseek-v4-flash-sparkinfer",   # PR 7, no migration
+    }
+
     for entry in seed:
-        # The ds4 entry is new in this migration — it arrives via the seeder,
-        # never via a backfill, so it is deliberately not in that table.
-        if entry["slug"] == "deepseek-v4-flash-ds4":
+        if entry["slug"] in seeded_not_backfilled:
             continue
         assert f'"{entry["author"]}"' in migration, (
             f"{entry['slug']}: seed author is not what the migration backfills"

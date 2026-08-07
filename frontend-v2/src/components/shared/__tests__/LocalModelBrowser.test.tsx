@@ -248,7 +248,7 @@ describe("LocalModelBrowser", () => {
     );
   });
 
-  it("disables deploy for engines that cannot be switched yet", async () => {
+  it("disables deploy for entries that bring no way to install or launch themselves", async () => {
     mockBackend([
       mkRecipe({
         slug: "gemma-cpp",
@@ -274,7 +274,7 @@ describe("LocalModelBrowser", () => {
       expect(btn).toBeDisabled();
       expect(btn).toHaveAttribute(
         "title",
-        expect.stringContaining("PR 3/4"),
+        expect.stringContaining("neither an install nor a launch template"),
       );
       await userEvent.click(btn);
     }

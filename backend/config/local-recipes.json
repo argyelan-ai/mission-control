@@ -206,5 +206,33 @@
       "community"
     ],
     "notes": "NOT validated on a GB10 by us — gb10_validated stays false until we have watched it run. The GGUF is asymmetric: ONLY ds4-server can read these weights, vLLM cannot, which is why this ships its own server instead of a recipe. The first install pulls ~110 GiB and builds a pinned CUDA fork; that takes hours and occupies the box alone. Start is idempotent — if something already answers on the port, start.sh does nothing. Port 8888, health GET /v1/models, engine log ~/ds4-server.log. start.sh defaults CTX to 1000000 (~1M tokens); MC passes 262144 deliberately, as KV cache costs ~9.5 KiB/token. Where the weights come from is decided by the upstream installer (Entrpi/ds4-on-spark), not by MC."
+  },
+  {
+    "slug": "deepseek-v4-flash-sparkinfer",
+    "display_name": "DeepSeek V4 Flash (SparkInfer, Spark)",
+    "description": "DeepSeek V4 Flash as a pinned docker-compose stack: EXL3 weights, SparkInfer/vLLM fork, 262K context, OpenAI API on port 8000. The alternative reading of the same model to the ds4 entry — same weights family, different engine.",
+    "engine": "vllm_docker",
+    "model_identifier": "0xSero/deepseek-v4-flash-0731-spark",
+    "quant": "exl3",
+    "est_weights_gb": 107.0,
+    "min_vram_gb": 115.0,
+    "context_len": 262144,
+    "arch": "arm64",
+    "gb10_validated": false,
+    "author": "0xSero + Local Inference Lab (SparkInfer)",
+    "author_url": "https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer",
+    "install_template": "mkdir -p {src_dir} && if [ -d {src_dir}/deepseek-v4-flash-0731-spark-sparkinfer/.git ]; then git -C {src_dir}/deepseek-v4-flash-0731-spark-sparkinfer pull --ff-only; else git clone https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer {src_dir}/deepseek-v4-flash-0731-spark-sparkinfer; fi && cd {src_dir}/deepseek-v4-flash-0731-spark-sparkinfer && printf 'services:\\n  deepseek-v4-flash:\\n    container_name: mc-{slug}\\n    labels:\\n      - mc.runtime.slug={slug}\\n' > compose.override.yaml && docker compose -f compose.yaml -f compose.override.yaml pull && docker compose -f compose.yaml -f compose.override.yaml up -d && ok=0 && for i in $(seq 1 480); do if curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then ok=1; break; fi; if [ $((i % 20)) -eq 0 ]; then echo \"MC: warte auf /health — $((i / 2)) min vergangen (der erste Start laedt ~107 GB Gewichte).\"; fi; sleep 30; done && if [ \"$ok\" = 1 ]; then echo \"MC: /health antwortet — der Stack serviert auf Port 8000.\"; else echo \"MC: /health nach 4 h nicht erreicht — auf der Box 'docker compose -f compose.yaml -f compose.override.yaml logs' pruefen.\"; false; fi",
+    "launch_template": "cd {src_dir}/deepseek-v4-flash-0731-spark-sparkinfer && printf 'services:\\n  deepseek-v4-flash:\\n    container_name: mc-{slug}\\n    labels:\\n      - mc.runtime.slug={slug}\\n' > compose.override.yaml && docker compose -f compose.yaml -f compose.override.yaml up -d",
+    "stop_template": "cd {src_dir}/deepseek-v4-flash-0731-spark-sparkinfer && docker compose -f compose.yaml -f compose.override.yaml stop",
+    "source_url": "https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer",
+    "source_registry": "builtin",
+    "tags": [
+      "general",
+      "reasoning",
+      "solo",
+      "compose",
+      "community"
+    ],
+    "notes": "NOT validated on a GB10 by us — gb10_validated stays false until we have watched it run. Compose stack, not a `docker run`: MC writes a compose.override.yaml next to the upstream compose.yaml that adds `container_name: mc-<slug>` and the `mc.runtime.slug=<slug>` label, which is how stop, restart, the start verification and the exclusivity sweep find the container. The override is rewritten on every launch, so a re-clone cannot silently orphan the runtime. Port 8000 is fixed and NOT configurable: the upstream compose uses `network_mode: host` without a port mapping. GB10/SM121 and Linux aarch64 only — on any other box the image exits on purpose, which is the recipe working, not failing. The install pulls the pinned image and then downloads ~107 GB of weights INSIDE the container on first start (coalesce + draft build follow), so the install job waits up to 4 h for /health; subsequent starts are fast. KV cache is a 584-byte padded FP8 sparse-MLA record under the `nvfp4_ds_mla` control path — the repo title says NVFP4, the record is FP8. Dynamic draft depth (K1–K5) ships disabled: it trips a grammar-mask assertion on strict JSON-schema requests, so fixed K5 is the published profile. Upstream measured 34–39 tok/s decode median on code generation. HF_TOKEN is read from the environment if the weights ever go gated. Direct comparison candidate to deepseek-v4-flash-ds4 (same model, DwarfStar 4 engine, port 8888)."
   }
 ]
