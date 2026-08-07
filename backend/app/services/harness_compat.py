@@ -31,7 +31,10 @@ HARNESS_LABELS: dict[str, str] = {
 # legacy runtime_type from before decoupling — such rows are plain OpenAI
 # providers (the harness aspect now lives on the agent).
 _OPENAI_TYPES = frozenset(
-    {"vllm_docker", "llamacpp_docker", "lmstudio", "openai_compatible", "unsloth", "cloud", "omp"}
+    {
+        "vllm_docker", "llamacpp_docker", "ssh_process", "lmstudio",
+        "openai_compatible", "unsloth", "cloud", "omp",
+    }
 )
 
 # HARNESS_PROTOCOLS intentionally covers "hermes" + "grok" too (ADR-064/066)

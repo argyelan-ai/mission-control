@@ -27,20 +27,20 @@ Hard boundaries, all deliberate:
   invisible password prompt is the worst possible outcome here.
 
 Progress lives in Redis: a list of log lines plus a status document, both with
-a 1h TTL so a crashed run cannot pin a host in "running" forever.
+a 1h TTL so a crashed run cannot pin a host in "running" forever. That part is
+``services/job_log.JobLog`` since PR 6 — the recipe installer needs the exact
+same protocol, and two copies of a progress format drift apart at the first
+new status value. The Redis keys are unchanged.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import time
-from datetime import datetime, timezone
 
-from app.redis_client import get_redis
 from app.services.host_probe import PROBE_COMMAND, parse_probe_output
 from app.services.host_resolver import ResolvedHost
+from app.services.job_log import JobLog
 
 logger = logging.getLogger("mc.host_bootstrap")
 
@@ -61,54 +61,49 @@ STATUS_FAILED = "failed"
 STATUS_NEEDS_SUDO = "needs_sudo"
 TERMINAL_STATUSES = (STATUS_DONE, STATUS_FAILED, STATUS_NEEDS_SUDO)
 
+_NAMESPACE = "host:bootstrap"
+
 _DOCKER_INSTALLER_URL = "https://get.docker.com"
 
 
+def _job(host_id: str) -> JobLog:
+    return JobLog(_NAMESPACE, host_id, log_ttl=LOG_TTL, status_ttl=STATUS_TTL, logger=logger)
+
+
 def log_key(host_id: str) -> str:
-    return f"mc:host:bootstrap:{host_id}:log"
+    return _job(host_id).log_key
 
 
 def status_key(host_id: str) -> str:
-    return f"mc:host:bootstrap:{host_id}:status"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _job(host_id).status_key
 
 
 class _Run:
     """One bootstrap run against one host.
 
-    Holds nothing but the host, the redis keys and a step counter — all state
-    that outlives the run is in Redis, so a poll from any backend worker sees
-    the same picture.
+    Holds nothing but the host, its job log and the list of things it actually
+    changed — all state that outlives the run is in Redis, so a poll from any
+    backend worker sees the same picture.
     """
 
     def __init__(self, host_id: str, host: ResolvedHost):
         self.host_id = str(host_id)
         self.host = host
         self.actions: list[str] = []  # what we actually changed, for the summary
+        self.job = _job(self.host_id)
 
     async def log(self, text: str, level: str = "info") -> None:
-        redis = await get_redis()
-        entry = json.dumps({"ts": time.time(), "level": level, "text": text})
-        await redis.rpush(log_key(self.host_id), entry)
-        await redis.expire(log_key(self.host_id), LOG_TTL)
-        logger.info("bootstrap[%s] %s: %s", self.host_id, level, text)
+        await self.job.append(text, level)
 
     async def set_status(
         self, status: str, *, phase: str, message: str | None = None
     ) -> None:
-        redis = await get_redis()
-        doc = {
-            "status": status,
-            "phase": phase,
-            "message": message,
-            "host_id": self.host_id,
-            "updated_at": _now_iso(),
-            "actions": self.actions,
-        }
-        await redis.set(status_key(self.host_id), json.dumps(doc), ex=STATUS_TTL)
+        await self.job.set_status(
+            status,
+            phase=phase,
+            message=message,
+            extra={"host_id": self.host_id, "actions": self.actions},
+        )
 
     async def run_ssh(self, command: str, *, timeout: float) -> tuple[str, str, int]:
         from app.services.runtime_manager import _ssh_run  # noqa: SLF001
@@ -386,47 +381,20 @@ async def run_bootstrap(host_id: str, host: ResolvedHost) -> None:
 
 async def get_status(host_id: str) -> dict | None:
     """The status document, or None when no run was ever started (or it aged out)."""
-    redis = await get_redis()
-    raw = await redis.get(status_key(str(host_id)))
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return None
+    return await _job(str(host_id)).get_status()
 
 
 async def read_log(host_id: str, cursor: int = 0) -> dict:
     """Log lines from ``cursor`` on, plus the current status.
 
-    One response for the poller: status and lines come from the same read, so
-    the UI can never show "done" while still missing the last lines (or the
-    reverse). ``cursor`` is a plain index into the append-only list — the
-    caller sends back what it got and gets exactly the new lines.
+    ``host_id`` and ``actions`` ride along in the status document, so the
+    generic reader hands them back without knowing what they mean.
     """
-    redis = await get_redis()
     hid = str(host_id)
-    cursor = max(0, int(cursor))
-    raw_lines = await redis.lrange(log_key(hid), cursor, -1)
-    lines = []
-    for raw in raw_lines:
-        try:
-            lines.append(json.loads(raw))
-        except json.JSONDecodeError:
-            lines.append({"ts": None, "level": "info", "text": str(raw)})
-
-    status_doc = await get_status(hid)
-    status = (status_doc or {}).get("status") or "idle"
-    return {
-        "host_id": hid,
-        "status": status,
-        "phase": (status_doc or {}).get("phase"),
-        "message": (status_doc or {}).get("message"),
-        "actions": (status_doc or {}).get("actions") or [],
-        "running": status == STATUS_RUNNING,
-        "lines": lines,
-        "cursor": cursor + len(lines),
-    }
+    result = await _job(hid).read(cursor)
+    result.setdefault("host_id", hid)
+    result.setdefault("actions", [])
+    return result
 
 
 async def start_bootstrap(host_id: str, host: ResolvedHost) -> None:
@@ -435,9 +403,8 @@ async def start_bootstrap(host_id: str, host: ResolvedHost) -> None:
     The caller (the router) is responsible for rejecting a start while another
     run is still ``running`` — see ``BootstrapAlreadyRunning`` there.
     """
-    redis = await get_redis()
     hid = str(host_id)
-    await redis.delete(log_key(hid))
+    await _job(hid).reset()
     run = _Run(hid, host)
     await run.set_status(STATUS_RUNNING, phase="starting")
     asyncio.create_task(run_bootstrap(hid, host))

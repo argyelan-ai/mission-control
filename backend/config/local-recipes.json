@@ -11,9 +11,15 @@
     "context_len": 262144,
     "arch": "arm64",
     "gb10_validated": true,
+    "author": "Alibaba Qwen Team",
+    "author_url": "https://qwenlm.github.io",
     "recipe_ref": "@official/qwen3.6",
     "source_registry": "builtin",
-    "tags": ["general", "tools", "long-context"],
+    "tags": [
+      "general",
+      "tools",
+      "long-context"
+    ],
     "notes": "Fills most of a 128 GB GB10 box — plan for solo operation, nothing else fits alongside. model_identifier is the served name from the recipe, not a Hugging Face repo; confirm with GET /v1/models after the first start."
   },
   {
@@ -28,9 +34,15 @@
     "context_len": 262144,
     "arch": "arm64",
     "gb10_validated": true,
+    "author": "poolside",
+    "author_url": "https://poolside.ai",
     "recipe_ref": "@mark/laguna-s21-nvfp4-vllm",
     "source_registry": "builtin",
-    "tags": ["coding", "agentic", "long-context"],
+    "tags": [
+      "coding",
+      "agentic",
+      "long-context"
+    ],
     "notes": "Weights ~71 GB; the min_vram figure adds KV-cache headroom for the full 256k context — shorter contexts need less. model_identifier is the served name from the recipe."
   },
   {
@@ -45,9 +57,14 @@
     "context_len": 262144,
     "arch": "arm64",
     "gb10_validated": false,
+    "author": "saricles (quant) · Alibaba Qwen Team (model)",
+    "author_url": "https://huggingface.co/saricles/Qwen3-Coder-Next-NVFP4-GB10",
     "source_url": "https://huggingface.co/saricles/Qwen3-Coder-Next-NVFP4-GB10",
     "source_registry": "builtin",
-    "tags": ["coding", "moe"],
+    "tags": [
+      "coding",
+      "moe"
+    ],
     "notes": "Community quant — verify quality and stability before production use. Not yet validated on a GB10 by us; the size estimate comes from the repo, not from a measured run."
   },
   {
@@ -62,8 +79,14 @@
     "context_len": 131072,
     "arch": "arm64",
     "gb10_validated": true,
+    "author": "DeepSeek",
+    "author_url": "https://www.deepseek.com",
     "source_registry": "builtin",
-    "tags": ["general", "reasoning", "solo"],
+    "tags": [
+      "general",
+      "reasoning",
+      "solo"
+    ],
     "notes": "Solo only — nothing else fits on the box next to it. model_identifier is the served name from the recipe, not a Hugging Face repo."
   },
   {
@@ -78,8 +101,13 @@
     "context_len": 131072,
     "arch": "any",
     "gb10_validated": false,
+    "author": "Google DeepMind",
+    "author_url": "https://deepmind.google/technologies/gemma/",
     "source_registry": "builtin",
-    "tags": ["general", "mid-size"],
+    "tags": [
+      "general",
+      "mid-size"
+    ],
     "notes": "NVFP4 needs a Blackwell-class GPU; on older cards use an AWQ/GPTQ build of the same model instead. Size estimated from the parameter count at 4 bit, not measured."
   },
   {
@@ -94,9 +122,14 @@
     "context_len": 262144,
     "arch": "any",
     "gb10_validated": false,
+    "author": "Unsloth (quant) · Alibaba Qwen Team (model)",
+    "author_url": "https://huggingface.co/unsloth/Qwen3.6-27B-NVFP4",
     "source_url": "https://huggingface.co/unsloth/Qwen3.6-27B-NVFP4",
     "source_registry": "builtin",
-    "tags": ["general", "mid-size"],
+    "tags": [
+      "general",
+      "mid-size"
+    ],
     "notes": "NVFP4 needs a Blackwell-class GPU. Full 256k context costs far more than the 24 GB minimum — that figure assumes a short context."
   },
   {
@@ -111,9 +144,15 @@
     "context_len": 32768,
     "arch": "any",
     "gb10_validated": false,
+    "author": "Alibaba Qwen Team",
+    "author_url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF",
     "source_url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF",
     "source_registry": "builtin",
-    "tags": ["embeddings", "small", "cpu-ok"],
+    "tags": [
+      "embeddings",
+      "small",
+      "cpu-ok"
+    ],
     "notes": "Embedding models are not chat models — this serves /v1/embeddings, not /v1/chat/completions."
   },
   {
@@ -128,9 +167,44 @@
     "context_len": 32768,
     "arch": "any",
     "gb10_validated": false,
+    "author": "Alibaba Qwen Team",
+    "author_url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
     "source_url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
     "source_registry": "builtin",
-    "tags": ["small", "fast", "cpu-ok"],
+    "tags": [
+      "small",
+      "fast",
+      "cpu-ok"
+    ],
     "notes": "Q4 quantisation trades accuracy for size — fine for routing and drafts, not for the final answer in a coding loop."
+  },
+  {
+    "slug": "deepseek-v4-flash-ds4",
+    "display_name": "DeepSeek V4 Flash (ds4-server, Spark)",
+    "description": "DeepSeek V4 Flash on the DwarfStar 4 engine (ds4-server, C/CUDA) instead of vLLM. Installs itself on a DGX Spark and serves the usual OpenAI /v1 API on port 8888.",
+    "engine": "ssh_process",
+    "model_identifier": "DeepSeek-V4-Flash",
+    "quant": "gguf-asymmetric",
+    "est_weights_gb": 110.0,
+    "min_vram_gb": 120.0,
+    "context_len": 262144,
+    "arch": "arm64",
+    "gb10_validated": false,
+    "author": "MiaAI-Lab (engine: DwarfStar 4 by Salvatore Sanfilippo)",
+    "author_url": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-One-DGX-Spark",
+    "process_name": "ds4-server",
+    "install_template": "mkdir -p {src_dir} && if [ -d {src_dir}/DeepSeek-v4-Flash-One-DGX-Spark/.git ]; then git -C {src_dir}/DeepSeek-v4-Flash-One-DGX-Spark pull --ff-only; else git clone https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-One-DGX-Spark {src_dir}/DeepSeek-v4-Flash-One-DGX-Spark; fi && cd {src_dir}/DeepSeek-v4-Flash-One-DGX-Spark && chmod +x start.sh stop.sh && PORT={port} CTX={ctx} DS4_GGUF_DIR={gguf_dir} ./start.sh",
+    "launch_template": "cd {src_dir}/DeepSeek-v4-Flash-One-DGX-Spark && PORT={port} CTX={ctx} DS4_GGUF_DIR={gguf_dir} ./start.sh",
+    "stop_template": "cd {src_dir}/DeepSeek-v4-Flash-One-DGX-Spark && PORT={port} ./stop.sh",
+    "source_url": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-One-DGX-Spark",
+    "source_registry": "builtin",
+    "tags": [
+      "general",
+      "reasoning",
+      "solo",
+      "ssh-process",
+      "community"
+    ],
+    "notes": "NOT validated on a GB10 by us — gb10_validated stays false until we have watched it run. The GGUF is asymmetric: ONLY ds4-server can read these weights, vLLM cannot, which is why this ships its own server instead of a recipe. The first install pulls ~110 GiB and builds a pinned CUDA fork; that takes hours and occupies the box alone. Start is idempotent — if something already answers on the port, start.sh does nothing. Port 8888, health GET /v1/models, engine log ~/ds4-server.log. start.sh defaults CTX to 1000000 (~1M tokens); MC passes 262144 deliberately, as KV cache costs ~9.5 KiB/token. Where the weights come from is decided by the upstream installer (Entrpi/ds4-on-spark), not by MC."
   }
 ]

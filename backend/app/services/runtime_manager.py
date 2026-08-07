@@ -58,6 +58,16 @@ RuntimeState = str  # "stopped" | "starting" | "warming" | "ready" | "failed" | 
 # healthcheck path differ per engine.
 DOCKER_ENGINE_TYPES = ("vllm_docker", "llamacpp_docker")
 
+# A plain host process behind an OpenAI-compatible port, managed over SSH
+# (PR 6). Not every engine is a container: ds4-server (DwarfStar 4, C/CUDA)
+# ships start.sh/stop.sh and reads an asymmetric GGUF that vLLM cannot load at
+# all. Kept generic instead of hardcoding that one engine — the next community
+# server that installs itself and serves /v1 is the same shape.
+#
+# The handle is ``process_name`` (pgrep/pkill) the way ``container_name`` is
+# the handle for the docker types.
+SSH_PROCESS_TYPE = "ssh_process"
+
 # Probe path used when a runtime row leaves healthcheck_path unset. vLLM and
 # LM Studio answer /v1/models; llama-server has a dedicated /health that is 200
 # only once the model is actually loaded (503 "Loading model" before that), so
@@ -746,6 +756,187 @@ async def stop_llamacpp_containers_by_label(
     }
 
 
+# ── ssh_process: host processes instead of containers ────────────────────────
+#
+# The docker types can ask the daemon what exists. Here there is no daemon —
+# the only observable is the process table, so every lifecycle op is built on
+# ``pgrep -x <process_name>``:
+#
+#   process + HTTP  → ready        the engine serves
+#   process, no HTTP→ warming      loading weights (110 GiB takes a while)
+#   no process      → stopped
+#   SSH broken      → unknown      we genuinely do not know
+#
+# ``-x`` (exact name match) rather than a pattern: a pattern would match the
+# `bash -lc "… start.sh"` wrapper, the SSH command itself, and any editor with
+# the name in its window title — and ``pkill`` on that set is how you kill a
+# colleague's shell.
+
+
+def _process_name(runtime: dict) -> str:
+    return (runtime.get("process_name") or "").strip()
+
+
+def _ssh_probe_path(endpoint: str, healthcheck_path: str | None) -> str:
+    """Health path that doesn't double the ``/v1`` segment.
+
+    Endpoints for these engines are written as ``http://box:8888/v1`` while the
+    default health path is ``/v1/models`` — concatenated naively that probes
+    ``/v1/v1/models`` and every healthy engine reads as down. Same
+    normalization as the unsloth_porsche arm and probe_runtime_model.
+    """
+    path = healthcheck_path or _FALLBACK_HEALTHCHECK_PATH
+    if endpoint.rstrip("/").endswith("/v1") and path.startswith("/v1"):
+        return path[len("/v1"):] or "/models"
+    return path
+
+
+async def _ssh_process_running(
+    process_name: str, *, host: ResolvedHost | None = None
+) -> bool:
+    """True when ``pgrep -x <name>`` finds a process. Raises on SSH failure.
+
+    Raising (instead of returning False) is deliberate: "SSH is broken" and
+    "the engine is not running" are different answers, and the callers that
+    care — state detection, stop verification — must not confuse the two.
+    """
+    _, _, exit_code = await _ssh_run(
+        f"pgrep -x {shlex_quote(process_name)} > /dev/null 2>&1", host=host, timeout=20
+    )
+    # pgrep: 0 = found, 1 = nothing matched, >1 = usage/error.
+    if exit_code > 1:
+        raise RuntimeError(f"pgrep schlug fehl (exit {exit_code})")
+    return exit_code == 0
+
+
+# Module-level so tests can shrink them (mirrors _verify_poll_interval).
+_ssh_process_start_timeout = 25.0
+_ssh_process_stop_timeout = 20.0
+
+
+async def verify_ssh_process_started(
+    process_name: str,
+    *,
+    host: ResolvedHost | None = None,
+    timeout: float | None = None,
+) -> bool:
+    """Poll until the process appears. The ssh_process counterpart to
+    ``verify_llamacpp_process_started``.
+
+    ``nohup … &`` returns exit 0 the instant the shell forks, whether or not
+    the engine survived its first second (missing weights, wrong CUDA, a typo
+    in the launch command). Without this poll a start reports success for a
+    process that never existed — the exact ADR-059 failure mode, one layer
+    down. Weight loading is NOT waited for; that is what the ``warming`` state
+    and the switch-grace window are for.
+    """
+    import asyncio
+
+    deadline = asyncio.get_running_loop().time() + (
+        _ssh_process_start_timeout if timeout is None else timeout
+    )
+    while True:
+        try:
+            if await _ssh_process_running(process_name, host=host):
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verify-ssh-process: pgrep raised for %s: %s", process_name, exc)
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        if _verify_poll_interval:
+            await asyncio.sleep(_verify_poll_interval)
+
+
+async def verify_ssh_process_stopped(
+    process_name: str,
+    *,
+    host: ResolvedHost | None = None,
+    timeout: float | None = None,
+) -> bool:
+    """Poll until no such process is left.
+
+    A stop that reports success while 110 GiB are still resident is worse than
+    a stop that fails: the next model is launched onto a full box and OOMs —
+    the documented vLLM incident, in host-process form.
+    """
+    import asyncio
+
+    deadline = asyncio.get_running_loop().time() + (
+        _ssh_process_stop_timeout if timeout is None else timeout
+    )
+    while True:
+        try:
+            still_running = await _ssh_process_running(process_name, host=host)
+        except Exception as exc:  # noqa: BLE001 — unknown counts as still busy
+            logger.warning("verify-ssh-stopped: pgrep raised for %s: %s", process_name, exc)
+            still_running = True
+        if not still_running:
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        if _verify_poll_interval:
+            await asyncio.sleep(_verify_poll_interval)
+
+
+async def stop_ssh_process(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+    """Stop an ssh_process runtime: its own ``stop_command``, else ``pkill -x``.
+
+    The engine's script wins when it exists because it usually knows more than
+    we do (ds4's stop.sh waits for the port to be released, which pkill does
+    not). Either way the result is verified against the process table — a
+    stop_command that exits 0 without stopping anything is a lie we can catch.
+    """
+    process_name = _process_name(runtime)
+    stop_command = (runtime.get("stop_command") or "").strip()
+    if not process_name and not stop_command:
+        return {
+            "ok": False,
+            "message": (
+                "ssh_process-Runtime ohne process_name und ohne stop_command — "
+                "MC hat keinen Weg, den Prozess zu beenden."
+            ),
+        }
+
+    if stop_command:
+        command = f"bash -lc {shlex_quote(stop_command)}"
+    else:
+        # pkill exits 1 when nothing matched — already stopped, not an error.
+        command = f"pkill -x {shlex_quote(process_name)} || true"
+    try:
+        _, stderr, exit_code = await _ssh_run(command, host=host, timeout=180)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("ssh_process stop raised for %s: %s", runtime.get("id"), exc)
+        return {"ok": False, "message": f"SSH-Fehler beim Stoppen: {exc}"}
+
+    if exit_code != 0 and stop_command:
+        return {
+            "ok": False,
+            "message": stderr or f"stop_command schlug fehl (exit {exit_code})",
+        }
+
+    if not process_name:
+        # Nothing to verify against — the stop_command is all we have.
+        return {
+            "ok": True,
+            "message": f"{runtime.get('display_name') or runtime.get('id')}: stop_command ausgeführt.",
+        }
+
+    gone = await verify_ssh_process_stopped(process_name, host=host)
+    if not gone:
+        return {
+            "ok": False,
+            "message": (
+                f"Prozess '{process_name}' läuft nach dem Stop-Befehl weiter — "
+                f"Speicher ist nicht frei. Auf der Box prüfen: pgrep -x {process_name}"
+            ),
+        }
+    await runtime_grace.clear_switching(_grace_slug(runtime))
+    return {
+        "ok": True,
+        "message": f"{runtime.get('display_name') or runtime.get('id')} gestoppt (Prozess '{process_name}' beendet).",
+    }
+
+
 # ── PORSCHE control plane (unsloth_porsche) ──────────────────────────────────
 # The PORSCHE Windows box is NOT reachable via SSH/tmux like the DGX. It runs a
 # Flask control server on :5555 (POST /powershell, GET /health) and sleeps when
@@ -884,6 +1075,31 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
         # created, paused, dead, etc.
         return {"state": "stopped", "http_reachable": False, "container_status": container_status}
 
+    if runtime_type == SSH_PROCESS_TYPE:
+        process_name = _process_name(runtime)
+        if not process_name:
+            # Without a process name there is nothing to observe. "unknown" is
+            # the honest answer — "stopped" would invite a start that then
+            # cannot be stopped again.
+            return {"state": "unknown", "http_reachable": False, "container_status": "no_process_name"}
+        try:
+            running = await _ssh_process_running(process_name, host=host)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("SSH fehlgeschlagen für %s: %s", runtime["id"], e)
+            return {"state": "unknown", "http_reachable": False, "container_status": "ssh_error"}
+
+        if not running:
+            return {"state": "stopped", "http_reachable": False, "container_status": "no_process"}
+
+        reachable = await _probe_http(endpoint, _ssh_probe_path(endpoint, healthcheck_path))
+        return {
+            # Process up but the port silent means the engine is still reading
+            # weights — for a 110 GiB GGUF that window is minutes, not seconds.
+            "state": "ready" if reachable else "warming",
+            "http_reachable": reachable,
+            "container_status": "process_running",
+        }
+
     if runtime_type == "unsloth":
         tmux_session = runtime.get("tmux_session") or "unsloth-studio"
         try:
@@ -953,6 +1169,141 @@ def _grace_slug(runtime: dict) -> str | None:
     return str(value) if value else None
 
 
+# ── Memory exclusivity across engines ────────────────────────────────────────
+
+
+async def ensure_exclusive_host(
+    runtime: dict,
+    *,
+    host: ResolvedHost | None = None,
+    session: AsyncSession | None = None,
+) -> dict:
+    """Free the box before an ``exclusive_memory`` runtime starts.
+
+    A GB10 box holds ONE ~110 GB model. Two of them do not coexist, and the
+    failure is not a clean error — it is the second engine OOMing minutes into
+    a load while the first one silently keeps serving. The vLLM side of this
+    was learned the hard way (``evict_spark_runtime_containers``); this is the
+    same rule one level up, across engine types: before an exclusive runtime
+    starts, every OTHER enabled exclusive runtime on the SAME host is stopped,
+    each through its own stop path (docker → eviction sweep, ssh_process →
+    stop_command/pkill).
+
+    Returns ``{"ok", "message", "stopped": [slugs]}``. ``ok=False`` must abort
+    the start: launching onto a box that is not actually free is the exact
+    situation this exists to prevent.
+
+    ``session`` may be passed by a caller that already holds one; otherwise a
+    short-lived one is opened. The lifecycle API speaks registry dicts, not
+    rows, and the host binding lives in the DB — so this has to look.
+    """
+    if not runtime.get("exclusive_memory"):
+        return {"ok": True, "message": "Runtime beansprucht die Box nicht exklusiv.", "stopped": []}
+
+    slug = _grace_slug(runtime)
+    if session is not None:
+        return await _ensure_exclusive_host(session, runtime, slug, host=host)
+
+    from app.services.runtime_model_resolver import session_scope
+
+    async with session_scope() as own_session:
+        return await _ensure_exclusive_host(own_session, runtime, slug, host=host)
+
+
+async def _ensure_exclusive_host(
+    session: AsyncSession,
+    runtime: dict,
+    slug: str | None,
+    *,
+    host: ResolvedHost | None = None,
+) -> dict:
+    from app.services.host_resolver import resolve_host_for_runtime
+
+    row = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first() if slug else None
+
+    statement = select(Runtime).where(
+        Runtime.enabled == True,  # noqa: E712
+        Runtime.exclusive_memory == True,  # noqa: E712
+    )
+    # Same host only. A NULL host_id means "the settings fallback box" — two
+    # NULLs are the same box, which is why this is an explicit IS NULL rather
+    # than an equality that would never match.
+    host_id = row.host_id if row is not None else None
+    statement = (
+        statement.where(Runtime.host_id.is_(None))
+        if host_id is None
+        else statement.where(Runtime.host_id == host_id)
+    )
+    others = [rt for rt in (await session.exec(statement)).all() if rt.slug != slug]
+
+    stopped: list[str] = []
+    for other in others:
+        other_dict = other.to_registry_dict()
+        try:
+            other_host = await resolve_host_for_runtime(session, other) or host
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("exclusive: host resolution failed for %s: %s", other.slug, exc)
+            other_host = host
+
+        try:
+            state = await get_runtime_state(other_dict, host=other_host)
+        except Exception as exc:  # noqa: BLE001
+            state = {"state": "unknown", "reason": str(exc)}
+        if state.get("state") == "stopped":
+            logger.info("exclusive: %s already stopped", other.slug)
+            continue
+
+        logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
+        if other.runtime_type in DOCKER_ENGINE_TYPES:
+            result = await evict_spark_runtime_containers(other.slug, host=other_host)
+        elif other.runtime_type == SSH_PROCESS_TYPE:
+            result = await stop_ssh_process(other_dict, host=other_host)
+        else:
+            result = await stop_runtime(other_dict, host=other_host)
+
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "message": (
+                    f"'{other.display_name}' ({other.slug}) läuft noch und konnte nicht "
+                    f"gestoppt werden: {result.get('message')}. Start abgebrochen — "
+                    f"zwei grosse Modelle passen nicht gleichzeitig auf die Box."
+                ),
+                "stopped": stopped,
+            }
+        stopped.append(other.slug)
+        await runtime_grace.clear_switching(other.slug)
+
+    return {
+        "ok": True,
+        "message": (
+            f"Box freigegeben (gestoppt: {', '.join(stopped)})."
+            if stopped
+            else "Box war bereits frei."
+        ),
+        "stopped": stopped,
+    }
+
+
+async def _emit_exclusive_event(slug: str | None, result: dict) -> None:
+    """Record an exclusivity decision in the activity feed. Best-effort — a
+    failing event must never be the reason a start does not happen."""
+    try:
+        from app.services.activity import emit_event
+        from app.services.runtime_model_resolver import session_scope
+
+        async with session_scope() as session:
+            await emit_event(
+                session,
+                "runtime.exclusive_evicted" if result.get("ok") else "runtime.exclusive_blocked",
+                f"{slug}: {result.get('message')}",
+                severity="info" if result.get("ok") else "warning",
+                detail={"slug": slug, "stopped": result.get("stopped") or []},
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("exclusive: event emit failed for %s: %s", slug, exc)
+
+
 async def start_runtime(
     runtime: dict,
     *,
@@ -961,25 +1312,46 @@ async def start_runtime(
 ) -> dict:
     """Starts a runtime (see :func:`_start_runtime_impl`).
 
-    Wraps the actual start with the switch-grace marker (PR5) for docker
-    engine types: those take 2–15 minutes to serve, and without the marker the
-    watcher reports the warmup as an outage. Non-docker types start fast
-    enough that they never needed it. ``grace_source`` records who asked —
-    ``switch_recipe`` and the watcher's auto-recovery pass their own value.
+    Two things wrap the actual start:
+
+    * **Exclusivity** (PR6) — an ``exclusive_memory`` runtime frees its box
+      first (:func:`ensure_exclusive_host`) and refuses to start if it can't.
+      Runtimes without the flag are untouched, so vLLM behaves exactly as
+      before.
+    * **Switch-grace** (PR5) — docker engines and ssh_process take 2–15
+      minutes to serve; without the marker the watcher reports that warmup as
+      an outage. ``grace_source`` records who asked — ``switch_recipe`` and
+      the watcher's auto-recovery pass their own value.
 
     The marker is cleared here only when the start call itself fails; a
     successful start stays "in flight" until a probe confirms the engine
     serves (runtime_watcher), which is the only honest end of the window.
+    ssh_process additionally moves ``launching`` → ``loading`` once the
+    process is confirmed alive: from there on it is weights, not launching.
     """
     slug = _grace_slug(runtime)
-    is_docker = runtime.get("runtime_type") in DOCKER_ENGINE_TYPES
-    if is_docker:
+    runtime_type = runtime.get("runtime_type")
+    is_docker = runtime_type in DOCKER_ENGINE_TYPES
+    is_ssh_process = runtime_type == SSH_PROCESS_TYPE
+
+    if (is_docker or is_ssh_process) and runtime.get("exclusive_memory"):
+        exclusive = await ensure_exclusive_host(runtime, host=host)
+        await _emit_exclusive_event(slug, exclusive)
+        if not exclusive.get("ok"):
+            return {"ok": False, "message": exclusive["message"]}
+
+    if is_docker or is_ssh_process:
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
     result = await _start_runtime_impl(runtime, host=host)
-    if is_docker and not result.get("ok"):
+    if (is_docker or is_ssh_process) and not result.get("ok"):
         await runtime_grace.clear_switching(slug)
+    elif is_ssh_process:
+        # Process confirmed alive — the rest of the window is weight loading.
+        await runtime_grace.mark_switching(
+            slug, runtime_grace.PHASE_LOADING, grace_source
+        )
     return result
 
 
@@ -1153,6 +1525,82 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
             logger.error("Start fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
+    if runtime_type == SSH_PROCESS_TYPE:
+        process_name = _process_name(runtime)
+        launch_command = (runtime.get("launch_command") or "").strip()
+        if not launch_command:
+            return {"ok": False, "message": "Keine launch_command konfiguriert."}
+        if not process_name:
+            return {
+                "ok": False,
+                "message": (
+                    "Kein process_name konfiguriert — MC könnte den Prozess starten, "
+                    "danach aber weder sehen noch stoppen."
+                ),
+            }
+        try:
+            # Idempotent: the engines this serves ship idempotent start scripts
+            # (ds4's start.sh exits early when the port already answers), but
+            # re-running a 110 GiB installer because MC didn't look first is
+            # not something to leave to the script.
+            state = await get_runtime_state(runtime, host=host)
+            if state.get("state") == "ready":
+                return {
+                    "ok": True,
+                    "message": f"{runtime['display_name']} läuft bereits — nichts zu tun.",
+                }
+            if state.get("state") == "warming":
+                return {
+                    "ok": True,
+                    "message": (
+                        f"{runtime['display_name']} startet bereits (Prozess läuft, "
+                        f"Endpunkt antwortet noch nicht) — nichts zu tun."
+                    ),
+                }
+
+            slug_safe = _sanitize_slug(runtime.get("id") or runtime.get("slug") or "unknown")
+            log_path = f"~/.cache/mc/runtime-launch-{slug_safe}.log"
+            detach_cmd = (
+                f"mkdir -p ~/.cache/mc && "
+                f"nohup bash -lc {shlex_quote(launch_command)} "
+                f"> {log_path} 2>&1 &"
+            )
+            _, stderr, exit_code = await _ssh_run(detach_cmd, host=host)
+            if exit_code != 0:
+                return {
+                    "ok": False,
+                    "message": stderr or f"launch_command schlug fehl (exit {exit_code}). Logs: {log_path}",
+                }
+
+            appeared = await verify_ssh_process_started(process_name, host=host)
+            if not appeared:
+                logger.error(
+                    "Runtime %s: launch exited 0 but no '%s' process appeared. Log: %s",
+                    runtime["id"], process_name, log_path,
+                )
+                return {
+                    "ok": False,
+                    "message": (
+                        f"{runtime['display_name']} gestartet, aber kein Prozess "
+                        f"'{process_name}' erschienen (wahrscheinlich Crash beim Start "
+                        f"oder Engine nicht installiert). Logs auf der Box: {log_path}"
+                    ),
+                }
+            logger.info(
+                "ssh_process gestartet: %s (Prozess %s, log %s)",
+                runtime["id"], process_name, log_path,
+            )
+            return {
+                "ok": True,
+                "message": (
+                    f"{runtime['display_name']} gestartet (Prozess '{process_name}' läuft). "
+                    f"Gewichte laden dauert je nach Grösse mehrere Minuten. Logs: {log_path}"
+                ),
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.error("ssh_process Start fehlgeschlagen für %s: %s", runtime["id"], e)
+            return {"ok": False, "message": f"SSH-Fehler: {e}"}
+
     if runtime_type == "unsloth":
         tmux_session = runtime.get("tmux_session") or "unsloth-studio"
         launch_cmd = runtime.get("launch_command") or (
@@ -1266,6 +1714,9 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
             logger.error("Stop fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
+    if runtime_type == SSH_PROCESS_TYPE:
+        return await stop_ssh_process(runtime, host=host)
+
     if runtime_type == "unsloth":
         tmux_session = runtime.get("tmux_session") or "unsloth-studio"
         try:
@@ -1320,6 +1771,10 @@ async def restart_runtime(
 
     A `docker restart` drops the engine into the identical multi-minute reload
     window, so it needs the same protection from false unreachable alarms.
+
+    ssh_process is absent here on purpose: its restart is stop + ``start_runtime``,
+    and that call already sets the marker (and runs the exclusivity check).
+    Marking here too would just overwrite it with the same value.
     """
     slug = _grace_slug(runtime)
     is_docker = runtime.get("runtime_type") in DOCKER_ENGINE_TYPES
@@ -1421,6 +1876,15 @@ async def _restart_runtime_impl(runtime: dict, *, host: ResolvedHost | None = No
         except Exception as e:
             logger.error("Restart fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
+
+    if runtime_type == SSH_PROCESS_TYPE:
+        # No `docker restart` equivalent for a bare process: stop, verify it is
+        # gone, then start. Going through the public helpers keeps the
+        # exclusivity check and the grace marker on the start half.
+        stop_result = await stop_runtime(runtime, host=host)
+        if not stop_result["ok"]:
+            return stop_result
+        return await start_runtime(runtime, host=host)
 
     if runtime_type == "unsloth":
         # Unsloth restart: stop + start via the same tmux-session helpers above.

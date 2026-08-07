@@ -100,6 +100,11 @@ class RecipeSpec(BaseModel):
     gb10_validated: bool = False
     recipe_ref: str | None = PydanticField(default=None, max_length=256)
     launch_template: str | None = None
+    install_template: str | None = None
+    stop_template: str | None = None
+    process_name: str | None = PydanticField(default=None, max_length=64)
+    author: str | None = PydanticField(default=None, max_length=128)
+    author_url: str | None = PydanticField(default=None, max_length=512)
     source_registry: str = PydanticField(default="builtin", max_length=64)
     source_url: str | None = PydanticField(default=None, max_length=512)
     tags: list[str] = PydanticField(default_factory=list)
@@ -207,6 +212,11 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         gb10_validated=spec.gb10_validated,
         recipe_ref=spec.recipe_ref,
         launch_template=spec.launch_template,
+        install_template=spec.install_template,
+        stop_template=spec.stop_template,
+        process_name=spec.process_name,
+        author=spec.author,
+        author_url=spec.author_url,
         source_registry=spec.source_registry,
         source_url=spec.source_url,
         tags=list(spec.tags or []),
@@ -238,6 +248,11 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("gb10_validated", spec.gb10_validated),
         ("recipe_ref", spec.recipe_ref),
         ("launch_template", spec.launch_template),
+        ("install_template", spec.install_template),
+        ("stop_template", spec.stop_template),
+        ("process_name", spec.process_name),
+        ("author", spec.author),
+        ("author_url", spec.author_url),
         ("source_registry", spec.source_registry),
         ("source_url", spec.source_url),
         ("tags", list(spec.tags or [])),

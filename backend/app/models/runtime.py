@@ -18,7 +18,8 @@ class Runtime(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     slug: str = Field(index=True, unique=True, max_length=64)
     display_name: str = Field(max_length=128)
-    # lmstudio | vllm_docker | llamacpp_docker | unsloth | openai_compatible | cloud
+    # lmstudio | vllm_docker | llamacpp_docker | ssh_process | unsloth |
+    # openai_compatible | cloud
     runtime_type: str = Field(max_length=32)
     endpoint: str = Field(max_length=512)
     healthcheck_path: str | None = Field(default=None, max_length=128)
@@ -111,6 +112,29 @@ class Runtime(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # PR 6 (ssh_process): a host process instead of a container.
+    #
+    # process_name is to ssh_process what container_name is to the docker
+    # engines — the handle every lifecycle op needs (`pgrep -x`, `pkill -x`).
+    # stop_command is optional: engines that ship their own stop script (ds4's
+    # stop.sh waits for the port to be freed) get to use it, everything else
+    # falls back to pkill.
+    stop_command: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    process_name: str | None = Field(default=None, max_length=64)
+
+    # "Starting this runtime requires the whole box." Enforced in
+    # runtime_manager.ensure_exclusive_host: every OTHER exclusive runtime on
+    # the same host is stopped first, and a failed stop aborts the start.
+    #
+    # Deliberately separate from single_instance above: that one restricts how
+    # many AGENTS may bind a runtime (Phase 24 / HERM-04) and blocks the switch
+    # UI entirely. Memory exclusivity is a property of the box, not of the
+    # agent binding, and a 110 GiB model must stay switchable.
+    exclusive_memory: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+
     api_key_secret_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(
@@ -165,4 +189,7 @@ class Runtime(SQLModel, table=True):
             "ui_order": self.ui_order,
             "enabled": self.enabled,
             "single_instance": self.single_instance,
+            "stop_command": self.stop_command,
+            "process_name": self.process_name,
+            "exclusive_memory": self.exclusive_memory,
         }

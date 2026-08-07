@@ -2062,7 +2062,21 @@
       "deployEvictHint": "Die Runtime wirft das aktuell geladene Modell raus und lädt dieses. Das dauert mehrere Minuten; laufende Anfragen brechen ab.",
       "deployConfirm": "Deployen",
       "deployStarted": "{name} wird auf {runtime} geladen — das dauert einige Minuten.",
-      "deployFailed": "Deploy fehlgeschlagen: {message}"
+      "deployFailed": "Deploy fehlgeschlagen: {message}",
+      "byAuthor": "von",
+      "installKicker": "Auf einer Box installieren",
+      "installDialogTitle": "{name} installieren und starten",
+      "installHostLabel": "Box",
+      "installNoHosts": "Keine SSH-Box angebunden — zuerst über „Box anbinden“ eine anlegen.",
+      "installSlugLabel": "Runtime-Slug",
+      "installPortLabel": "Port",
+      "installExclusiveWarning": "Der Start stoppt auf dieser Box: {names}. Zwei grosse Modelle passen nicht gleichzeitig hinein.",
+      "installStart": "Installieren",
+      "installRunning": "Installation läuft…",
+      "installDone": "Installation abgeschlossen.",
+      "installCreateAndStart": "Runtime anlegen & starten",
+      "installRuntimeCreated": "Runtime angelegt und gestartet — Gewichte laden noch.",
+      "close": "Schliessen"
     },
     "bindAgentModal": {
       "title": "Agent binden",

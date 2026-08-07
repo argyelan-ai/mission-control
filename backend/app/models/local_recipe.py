@@ -32,9 +32,9 @@ from sqlmodel import Column, Field, SQLModel
 from app.utils import utcnow
 
 #: How the model is served. Mirrors the runtime_type vocabulary where they
-#: overlap (``vllm_docker``), plus ``sparkrun`` for recipe-based launches on a
-#: DGX Spark and ``llamacpp_docker`` for GGUF models.
-ENGINES = ("sparkrun", "vllm_docker", "llamacpp_docker")
+#: overlap (``vllm_docker``, ``llamacpp_docker``, ``ssh_process``), plus
+#: ``sparkrun`` for recipe-based launches on a DGX Spark.
+ENGINES = ("sparkrun", "vllm_docker", "llamacpp_docker", "ssh_process")
 
 #: CPU architecture of the target box. ``any`` = runs on both; used as the
 #: default so a new entry without an explicit claim is never over-promised as
@@ -77,6 +77,24 @@ class LocalRecipe(SQLModel, table=True):
     # switch_recipe path — nothing here executes anything by itself.
     recipe_ref: str | None = Field(default=None, max_length=256)
     launch_template: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
+    # One-click installation (PR 6). The command that puts the engine ON the
+    # box — cloning a repo, building it, fetching weights. Runs once, as a
+    # background job with a live log (services/recipe_install), never as part
+    # of a start. Engines that need no installation leave it NULL.
+    install_template: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
+    # ssh_process only: what a runtime built from this recipe gets as
+    # stop_command / process_name. Templated like the launch command, because
+    # a stop script usually needs the same port.
+    stop_template: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    process_name: str | None = Field(default=None, max_length=64)
+
+    # Attribution. Community engines and quants are somebody's work; the card
+    # shows "von {author}" with a link. Nullable because an honest blank beats
+    # a guessed credit.
+    author: str | None = Field(default=None, max_length=128)
+    author_url: str | None = Field(default=None, max_length=512)
 
     # Provenance: "builtin" for the seed file, otherwise the registry name a
     # refresh pulled it from. Indexed because "show me everything from source

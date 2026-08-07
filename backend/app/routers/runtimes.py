@@ -130,6 +130,12 @@ class RuntimeCreate(BaseModel):
     lms_identifier: str | None = None
     lms_cli_path: str | None = None
     launch_command: str | None = None
+    # ssh_process (PR 6): the process handle and its own stop script.
+    stop_command: str | None = None
+    process_name: str | None = None
+    # "needs the whole box" — see models/runtime.exclusive_memory. NOT the same
+    # flag as single_instance (that one limits agent bindings).
+    exclusive_memory: bool = False
     host: str | None = None  # DEPRECATED legacy string — registry binding via host_id
     host_id: uuid.UUID | None = None  # Host registry binding (ADR-048)
     api_key_secret_id: uuid.UUID | None = None  # ADR-056: openai-protocol runtime API key
@@ -173,6 +179,9 @@ class RuntimeUpdate(BaseModel):
     lms_identifier: str | None = None
     lms_cli_path: str | None = None
     launch_command: str | None = None
+    stop_command: str | None = None
+    process_name: str | None = None
+    exclusive_memory: bool | None = None
     host: str | None = None  # DEPRECATED legacy string — registry binding via host_id
     # Host registry binding (ADR-048). PATCH uses exclude_none, so host_id
     # is handled separately in the endpoint via model_fields_set: only this

@@ -221,6 +221,13 @@ class LaunchCommandBody(BaseModel):
     launch_template: str | None = None
     container_name: str | None = None
     image: str | None = None
+    # ssh_process (PR 6): a host engine has a checkout and a weight directory
+    # instead of an image, its own stop script instead of `docker stop`, and a
+    # context budget that has to be passed at launch.
+    stop_template: str | None = None
+    src_dir: str | None = Field(default=None, max_length=512)
+    gguf_dir: str | None = Field(default=None, max_length=512)
+    ctx: int | None = Field(default=None, ge=0)
 
 
 @router.post("/launch-command")
@@ -238,6 +245,11 @@ async def preview_launch_command(
 
     A bad template is a 400 with the reason (unknown placeholder, missing
     ``mc.runtime.slug`` label, unsupported engine) — all operator-fixable.
+
+    ``stop_command`` comes back rendered too when the entry ships a
+    ``stop_template`` (ssh_process). It is stored on the runtime row, so it
+    must go through the same renderer as the launch command rather than being
+    assembled in the browser.
     """
     try:
         command = launch_template.build_launch_command(
@@ -248,10 +260,30 @@ async def preview_launch_command(
             launch_template=body.launch_template,
             container_name=body.container_name,
             image=body.image,
+            src_dir=body.src_dir,
+            gguf_dir=body.gguf_dir,
+            ctx=body.ctx,
+        )
+        stop_command = (
+            launch_template.render_launch_template(
+                body.stop_template,
+                {
+                    "port": body.port,
+                    "model": body.model_identifier,
+                    "slug": body.slug,
+                    "container_name": body.container_name or f"mc-{body.slug}",
+                    "image": body.image or "-",
+                    "src_dir": body.src_dir or launch_template.DEFAULT_SRC_DIR,
+                    "gguf_dir": body.gguf_dir or launch_template.DEFAULT_GGUF_DIR,
+                    "ctx": body.ctx or 0,
+                },
+            )
+            if body.stop_template
+            else None
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"launch_command": command}
+    return {"launch_command": command, "stop_command": stop_command}
 
 
 @router.post("/{host_id}/bootstrap", status_code=202)

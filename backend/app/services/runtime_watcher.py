@@ -274,6 +274,13 @@ class RuntimeWatcher:
             return
         if fails < UNREACHABLE_EVENT_THRESHOLD:
             return
+        # DOCKER_ENGINE_TYPES only — ssh_process is deliberately NOT recovered
+        # automatically (PR6). A docker start is verifiable against a label the
+        # daemon owns; a host process is verifiable only against the process
+        # table, and the engines behind ssh_process today can spend an hour
+        # loading 110 GiB. Auto-restarting one of those on a probe timeout could
+        # relaunch a model that was mid-load, i.e. make the outage worse. Manual
+        # start stays one click away; a verified auto-recovery is a follow-up.
         if not runtime.enabled or runtime.runtime_type not in DOCKER_ENGINE_TYPES:
             return
         try:

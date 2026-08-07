@@ -2062,7 +2062,21 @@
       "deployEvictHint": "The runtime evicts the model it is currently serving and loads this one. That takes several minutes; requests in flight will fail.",
       "deployConfirm": "Deploy",
       "deployStarted": "{name} is loading on {runtime} — this takes a few minutes.",
-      "deployFailed": "Deploy failed: {message}"
+      "deployFailed": "Deploy failed: {message}",
+      "byAuthor": "by",
+      "installKicker": "Install on a box",
+      "installDialogTitle": "Install and start {name}",
+      "installHostLabel": "Box",
+      "installNoHosts": "No SSH box connected yet — add one via “Connect a box” first.",
+      "installSlugLabel": "Runtime slug",
+      "installPortLabel": "Port",
+      "installExclusiveWarning": "Starting this stops on that box: {names}. Two large models do not fit at the same time.",
+      "installStart": "Install",
+      "installRunning": "Installing…",
+      "installDone": "Installation finished.",
+      "installCreateAndStart": "Create runtime & start",
+      "installRuntimeCreated": "Runtime created and started — weights are still loading.",
+      "close": "Close"
     },
     "bindAgentModal": {
       "title": "Bind agent",

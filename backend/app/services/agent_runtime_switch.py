@@ -65,6 +65,9 @@ HEALTH_TIMEOUT_RESTART = 30
 _PROBEABLE_RUNTIME_TYPES = {
     "vllm_docker",
     "llamacpp_docker",
+    # ssh_process serves the same OpenAI /v1 as the docker engines — only the
+    # thing behind the port is a host process instead of a container.
+    "ssh_process",
     "lmstudio",
     "openai_compatible",
     "unsloth",
