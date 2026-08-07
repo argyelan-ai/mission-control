@@ -20,6 +20,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LocalModelBrowser } from "../LocalModelBrowser";
 import {
   SshProcessDeployDialog,
+  defaultPortFor,
   exclusiveNeighbours,
   slugify,
 } from "../SshProcessDeployDialog";
@@ -384,5 +385,146 @@ describe("ssh_process deploy", () => {
     await screen.findByTestId("ssh-deploy-no-hosts");
     await waitFor(() => expect(screen.getByTestId("ssh-deploy-install")).toBeDisabled());
     expect(screen.getByTestId("ssh-deploy-create")).toBeDisabled();
+  });
+});
+
+/**
+ * Compose-basierte Rezepte (PR 7) — derselbe Dialog, andere Engine.
+ *
+ * Der sparkinfer-Stack ist `vllm_docker`, kommt aber wie ds4 über den
+ * Install-Dialog: er bringt install_template UND launch_template mit. Was hier
+ * abgesichert wird, ist genau das, was auf einer echten Box schiefgehen würde:
+ *   1. die Karte ist überhaupt deploybar und landet im richtigen Dialog
+ *   2. der Port steht auf 8000 — der Stack kann wegen `network_mode: host`
+ *      nirgendwo anders hören, und ein falscher Port ergibt einen Endpoint,
+ *      der nie antwortet
+ *   3. die Runtime bekommt container_name UND exclusive_memory — ohne den
+ *      Namen liest get_runtime_state dauerhaft „unknown", ohne das Flag
+ *      startet der 107-GB-Stack neben einem anderen Modell
+ */
+const mkComposeRecipe = (overrides: Partial<LocalRecipe> = {}): LocalRecipe =>
+  mkRecipe({
+    slug: "deepseek-v4-flash-sparkinfer",
+    display_name: "DeepSeek V4 Flash (SparkInfer, Spark)",
+    engine: "vllm_docker",
+    model_identifier: "0xSero/deepseek-v4-flash-0731-spark",
+    quant: "exl3",
+    est_weights_gb: 107,
+    min_vram_gb: 115,
+    process_name: null,
+    recipe_ref: null,
+    install_template:
+      "git clone REPO {src_dir}/repo && cd {src_dir}/repo && printf 'labels: mc.runtime.slug={slug}' > compose.override.yaml && docker compose up -d",
+    launch_template:
+      "cd {src_dir}/repo && printf 'labels: mc.runtime.slug={slug}' > compose.override.yaml && docker compose up -d",
+    stop_template: "cd {src_dir}/repo && docker compose stop",
+    author: "0xSero + Local Inference Lab (SparkInfer)",
+    author_url: "https://github.com/0xSero/deepseek-v4-flash-0731-spark-sparkinfer",
+    ...overrides,
+  });
+
+describe("compose-based deploy", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("defaults to 8000 for container engines and 8888 for host processes", () => {
+    expect(defaultPortFor(mkComposeRecipe())).toBe(8000);
+    expect(defaultPortFor(mkRecipe())).toBe(8888);
+  });
+
+  it("makes a self-installing vllm_docker entry deployable", async () => {
+    vi.spyOn(api.localRegistry, "list").mockResolvedValue(mkList([mkComposeRecipe()]));
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    renderBrowser();
+
+    expect(await screen.findByTestId("local-registry-deploy")).toBeEnabled();
+  });
+
+  it("routes it to the install dialog, not the sparkrun recipe switch", async () => {
+    vi.spyOn(api.localRegistry, "list").mockResolvedValue(mkList([mkComposeRecipe()]));
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
+    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    renderBrowser();
+
+    await userEvent.click(await screen.findByTestId("local-registry-deploy"));
+
+    await screen.findByTestId("ssh-deploy-install");
+    expect(switchRecipe).not.toHaveBeenCalled();
+  });
+
+  it("keeps a vllm_docker entry without templates on the wizard path", async () => {
+    vi.spyOn(api.localRegistry, "list").mockResolvedValue(
+      mkList([mkComposeRecipe({ install_template: null, launch_template: null })]),
+    );
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    renderBrowser();
+
+    expect(await screen.findByTestId("local-registry-deploy")).toBeDisabled();
+  });
+
+  it("creates the runtime with a container name and exclusive memory", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog({ status: "done" }));
+    const render_ = vi.spyOn(api.hosts, "launchCommand").mockResolvedValue({
+      launch_command:
+        "cd ~/code/mc-engines/repo && printf '...' > compose.override.yaml && docker compose up -d",
+      stop_command: "cd ~/code/mc-engines/repo && docker compose stop",
+    });
+    const create = vi
+      .spyOn(api.runtimes, "create")
+      .mockResolvedValue({ id: "rt-new" } as Runtime);
+    const start = vi
+      .spyOn(api.runtimes, "start")
+      .mockResolvedValue({ ok: true, message: "started" });
+
+    renderDialog(mkComposeRecipe());
+    const button = await screen.findByTestId("ssh-deploy-create");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(render_).toHaveBeenCalledWith(
+      expect.objectContaining({ engine: "vllm_docker", port: 8000 }),
+    );
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime_type: "vllm_docker",
+        // Muss exakt dem container_name im compose.override.yaml entsprechen.
+        container_name: "mc-deepseek-v4-flash-sparkinfer",
+        exclusive_memory: true,
+        stop_command: "cd ~/code/mc-engines/repo && docker compose stop",
+        endpoint: "http://192.0.2.10:8000/v1",
+        host_id: "host-1",
+      }),
+    );
+    // Ein Host-Prozess-Feld hat hier nichts verloren.
+    expect(create.mock.calls[0][0].process_name).toBeNull();
+    expect(start).toHaveBeenCalledWith("rt-new");
+  });
+
+  it("sends no container name for a host-process engine", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog({ status: "done" }));
+    vi.spyOn(api.hosts, "launchCommand").mockResolvedValue({
+      launch_command: "cd x && ./start.sh",
+      stop_command: null,
+    });
+    const create = vi
+      .spyOn(api.runtimes, "create")
+      .mockResolvedValue({ id: "rt-new" } as Runtime);
+    vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
+
+    renderDialog(mkRecipe());
+    const button = await screen.findByTestId("ssh-deploy-create");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0].container_name).toBeUndefined();
   });
 });

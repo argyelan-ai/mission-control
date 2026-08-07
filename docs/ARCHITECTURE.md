@@ -427,6 +427,21 @@ statt `stopped`.
   110 GiB laedt, koennte durch einen Neustart auf Probe-Timeout schlimmer
   dastehen als vorher. Manueller Start bleibt ein Klick entfernt.
 
+##### Compose-Stacks ohne neuen Runtime-Typ (NEU 2026-08-07)
+
+Manche Rezepte sind kein `docker run`, sondern ein gepinnter
+`docker-compose`-Stack (z. B. DeepSeek V4 Flash via SparkInfer). Sie bekommen
+**keinen** eigenen Runtime-Typ: Install- und Launch-Template schreiben neben die
+`compose.yaml` des Projekts eine `compose.override.yaml`, die dem serving-Service
+`container_name: mc-<slug>` und das Label `mc.runtime.slug=<slug>` verpasst.
+Damit greifen Stop, Restart, `verify_spark_container_started`, die
+Exklusivitaets-Sweeps und die Auto-Recovery unveraendert — sie filtern auf genau
+dieses Label bzw. adressieren genau diesen Namen. Der Override wird bei **jedem**
+Launch neu geschrieben, damit ein Re-Clone die Runtime nicht verwaist
+zuruecklaesst; gestoppt wird mit `docker compose stop` (nicht `down`), weil
+`docker stop` das manuelle-Stop-Flag setzt und `restart: unless-stopped` den
+Container dann nicht wiederbelebt.
+
 ##### Speicher-Exklusivitaet (`exclusive_memory`)
 
 Eine GB10-Box haelt **ein** ~110-GB-Modell. Zwei koexistieren nicht, und der

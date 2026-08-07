@@ -2064,7 +2064,7 @@
       "emptyFiltered": "Kein Eintrag passt zu diesem Filter.",
       "deploy": "Deployen",
       "deployTitle": "{name} auf eine vLLM-Runtime deployen",
-      "deployUnavailableTitle": "Direkt-Deploy für diese Engine kommt mit PR 3/4 — heute lassen sich nur sparkrun-Rezepte umschalten.",
+      "deployUnavailableTitle": "Kein Direkt-Deploy für diesen Eintrag — er bringt weder ein Install- noch ein Launch-Template mit. Die Einrichtung läuft über den Box-Wizard.",
       "deployKicker": "Deploy",
       "deployBody": "Die Ziel-Runtime wird auf dieses sparkrun-Rezept umgeschaltet:",
       "deployTargetLabel": "Ziel-Runtime",

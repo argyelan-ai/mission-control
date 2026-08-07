@@ -704,3 +704,195 @@ def test_migration_chain_has_a_single_head():
     assert chain["0177_ssh_process_runtime"] == ("0176_local_recipes",)
     for rev in ("0176_local_recipes", "0177_ssh_process_runtime"):
         assert len(rev) <= 32  # alembic_version.version_num is varchar(32)
+
+
+# ── The compose-based recipe (sparkinfer, PR 7) ──────────────────────────────
+#
+# DeepSeek V4 Flash via SparkInfer is not a `docker run` — it is a pinned
+# docker-compose stack. It still rides the ordinary `vllm_docker` lifecycle,
+# because install and launch write a `compose.override.yaml` that adds
+# `container_name: mc-<slug>` and the `mc.runtime.slug=<slug>` label. Those two
+# strings are what stop, restart, the start verification and the exclusivity
+# sweep search for. If a refactor ever drops them from the rendered command,
+# MC can start this stack and never stop it again — hence these tests.
+
+SPARKINFER_SLUG = "deepseek-v4-flash-sparkinfer"
+SPARKINFER_DIR = "deepseek-v4-flash-0731-spark-sparkinfer"
+
+
+def _sparkinfer_seed_entry() -> dict:
+    entries = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    match = [e for e in entries if e["slug"] == SPARKINFER_SLUG]
+    assert match, f"{SPARKINFER_SLUG} missing from the seed file"
+    return match[0]
+
+
+def test_sparkinfer_entry_is_a_vllm_docker_recipe_with_all_three_templates():
+    entry = _sparkinfer_seed_entry()
+
+    # No new engine type: the whole point is that a compose stack reuses the
+    # existing docker lifecycle instead of growing a fourth runtime kind.
+    assert entry["engine"] == "vllm_docker"
+    assert entry["arch"] == "arm64"          # GB10-only, upstream exits elsewhere
+    assert entry["gb10_validated"] is False  # nobody has watched it run yet
+    assert entry["context_len"] == 262144
+    assert entry["est_weights_gb"] == 107.0
+    assert entry.get("process_name") is None  # a container, not a host process
+    for field in ("install_template", "launch_template", "stop_template"):
+        assert entry.get(field), f"{field} missing"
+
+
+def test_sparkinfer_launch_command_carries_the_label_and_container_name():
+    """The label is how MC finds the container again; the container_name is how
+    `get_runtime_state` and `docker start` address it."""
+    from app.services import launch_template as lt
+
+    entry = _sparkinfer_seed_entry()
+    command = lt.build_launch_command(
+        engine=entry["engine"],
+        model_identifier=entry["model_identifier"],
+        slug=entry["slug"],
+        port=8000,
+        launch_template=entry["launch_template"],
+    )
+
+    assert f"mc.runtime.slug={SPARKINFER_SLUG}" in command
+    assert f"container_name: mc-{SPARKINFER_SLUG}" in command
+    assert "compose.override.yaml" in command
+    # Both files explicitly: relying on compose's auto-discovery of an override
+    # would make the label depend on the base file's name.
+    assert "-f compose.yaml -f compose.override.yaml" in command
+    assert "{" not in command and "}" not in command  # fully rendered
+
+
+def test_sparkinfer_install_command_writes_the_same_override():
+    """Install and launch must agree on label, name and path — a mismatch means
+    the runtime MC creates is not the container the install produced."""
+    from app.services import launch_template as lt
+
+    entry = _sparkinfer_seed_entry()
+    command = lt.build_install_command(
+        slug=entry["slug"],
+        install_template=entry["install_template"],
+        port=8000,
+        model_identifier=entry["model_identifier"],
+        ctx=entry["context_len"],
+    )
+
+    assert f"mc.runtime.slug={SPARKINFER_SLUG}" in command
+    assert f"container_name: mc-{SPARKINFER_SLUG}" in command
+    assert f"{lt.DEFAULT_SRC_DIR}/{SPARKINFER_DIR}" in command
+    assert "git clone https://github.com/0xSero/" in command
+    assert "docker compose -f compose.yaml -f compose.override.yaml pull" in command
+    assert "{" not in command and "}" not in command
+
+
+def test_sparkinfer_install_command_never_exits_the_wrapper_shell():
+    """recipe_install appends `; echo "MC_EXIT:$?"` to the command. A bare
+    `exit` in the template would kill the shell before that marker is written,
+    and MC would watch the job forever instead of reporting a result."""
+    from app.services import launch_template as lt
+
+    entry = _sparkinfer_seed_entry()
+    command = lt.build_install_command(
+        slug=entry["slug"],
+        install_template=entry["install_template"],
+        port=8000,
+        model_identifier=entry["model_identifier"],
+    )
+
+    assert "exit " not in command
+    assert not command.rstrip().endswith("exit")
+
+
+def test_sparkinfer_stop_command_renders_to_a_compose_stop():
+    from app.services import launch_template as lt
+
+    entry = _sparkinfer_seed_entry()
+    command = lt.render_launch_template(
+        entry["stop_template"],
+        {
+            "port": 8000,
+            "model": entry["model_identifier"],
+            "slug": entry["slug"],
+            "container_name": f"mc-{entry['slug']}",
+            "image": "-",
+            "src_dir": lt.DEFAULT_SRC_DIR,
+            "gguf_dir": lt.DEFAULT_GGUF_DIR,
+            "ctx": entry["context_len"],
+        },
+    )
+
+    # `stop`, not `down`: down deletes the container, and the next start would
+    # re-download nothing but would lose the `docker start` fast path.
+    assert command.endswith("docker compose -f compose.yaml -f compose.override.yaml stop")
+    assert " down" not in command
+
+
+def test_a_compose_launch_template_without_the_label_is_rejected():
+    """Sabotage: strip the label from the template and the renderer must refuse
+    — this guard is the only thing standing between MC and an unstoppable
+    container."""
+    from app.services import launch_template as lt
+
+    entry = _sparkinfer_seed_entry()
+    sabotaged = entry["launch_template"].replace("mc.runtime.slug={slug}", "role=serving")
+
+    with pytest.raises(ValueError, match="mc.runtime.slug"):
+        lt.build_launch_command(
+            engine=entry["engine"],
+            model_identifier=entry["model_identifier"],
+            slug=entry["slug"],
+            port=8000,
+            launch_template=sabotaged,
+        )
+
+
+@pytest.mark.asyncio
+async def test_sparkinfer_is_seeded_into_a_fresh_db(session):
+    await seed_local_recipes(session)
+
+    row = await get_recipe(session, SPARKINFER_SLUG)
+    assert row is not None
+    assert row.engine == "vllm_docker"
+    assert row.install_template and row.launch_template and row.stop_template
+    assert row.source_registry == "builtin"
+
+
+@pytest.mark.asyncio
+async def test_seed_pulls_in_a_slug_added_after_the_first_seed(session, monkeypatch):
+    """The upgrade path for an existing installation.
+
+    The seeder is insert-only *per slug*, not "run once": a slug that appears in
+    the file later is inserted on the next startup, while every row already in
+    the table stays untouched. That is why PR 7 needs no backfill migration —
+    but it is a property of the code, not a coincidence, so it is asserted here.
+    """
+    from app.services import local_registry as lr
+
+    full = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    without_new = [e for e in full if e["slug"] != SPARKINFER_SLUG]
+    assert len(without_new) == len(full) - 1
+
+    # 1) Seed the state an existing DB is in: everything except the new entry.
+    monkeypatch.setattr(lr, "_load_seed", lambda: lr._parse_entries(without_new, "test", []))
+    inserted_before, _ = await seed_local_recipes(session)
+    assert await get_recipe(session, SPARKINFER_SLUG) is None
+
+    # An operator edit that must survive the next seed.
+    edited = await get_recipe(session, "deepseek-v4-flash-ds4")
+    edited.display_name = "Hand-edited"
+    edited.enabled = False
+    session.add(edited)
+    await session.commit()
+
+    # 2) Deploy PR 7 — the file now has the new slug.
+    monkeypatch.setattr(lr, "_load_seed", lambda: lr._parse_entries(full, "test", []))
+    inserted_after, skipped_after = await seed_local_recipes(session)
+
+    assert inserted_after == 1, "exactly the new slug, nothing else"
+    assert skipped_after == inserted_before
+    assert (await get_recipe(session, SPARKINFER_SLUG)) is not None
+    survived = await get_recipe(session, "deepseek-v4-flash-ds4")
+    assert survived.display_name == "Hand-edited"
+    assert survived.enabled is False

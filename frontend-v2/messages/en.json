@@ -2064,7 +2064,7 @@
       "emptyFiltered": "No entry matches this filter.",
       "deploy": "Deploy",
       "deployTitle": "Deploy {name} to a vLLM runtime",
-      "deployUnavailableTitle": "Direct deploy for this engine arrives with PR 3/4 — only sparkrun recipes can be switched today.",
+      "deployUnavailableTitle": "No direct deploy for this entry — it ships neither an install nor a launch template. Set it up through the box wizard.",
       "deployKicker": "Deploy",
       "deployBody": "The target runtime will be switched to the sparkrun recipe",
       "deployTargetLabel": "Target runtime",
