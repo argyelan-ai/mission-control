@@ -30,6 +30,8 @@ import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { Section, SectionOrFragment } from "@/components/shared/Section";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 
 // ── Phase model ───────────────────────────────────────────────────────────────
 // The build pipeline moves manifest → build → recreate → done|failed. "idle"
@@ -67,19 +69,14 @@ function AgentPills({ agents }: { agents: CliToolStatus["agents_affected"] }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {agents.map((a) => (
-        <span
+        <MetaChip
           key={a.id}
+          tone="accent"
           title={a.busy ? t("agentBusyTitle") : a.name}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px]"
-          style={{
-            backgroundColor: C.accentSubtle,
-            border: `1px solid ${C.borderAccent}`,
-            color: C.textSecondary,
-            opacity: a.busy ? 0.45 : 1,
-          }}
+          dimmed={a.busy}
         >
-          🤖 {a.name}
-        </span>
+          {a.name}
+        </MetaChip>
       ))}
     </div>
   );
@@ -98,76 +95,61 @@ function CliToolCard({
   const running = isRunning(tool.build_state as CliUpdateProgress["phase"]);
 
   return (
-    <div
-      className="flex flex-col gap-3 p-3.5"
-      style={{
-        background: C.borderSubtle,
-        border: `1px solid ${C.borderSubtle}`,
-        borderRadius: "10px",
-      }}
-    >
-      {/* Head: tool + image */}
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-sm truncate" style={{ color: C.textPrimary }}>
-            {tool.tool}
-          </span>
-          {tool.update_available && !running && (
-            <button
-              onClick={() => onUpdate(tool)}
-              title={t("updateToTitle", { version: tool.latest ?? "" })}
-              className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer transition-colors"
-              style={{
-                color: STATUS_TEXT.warning,
-                border: `1px solid ${STATUS.warning}`,
-                background: `${STATUS.warning}14`,
-              }}
-            >
-              <ArrowUpCircle size={10} />
-              {t("updateButton", { version: tool.latest ?? "" })}
-            </button>
-          )}
+    <ListRow
+      testId="cli-tool-row"
+      dataAttrs={{ "data-tool": tool.tool }}
+      tone={running ? "warn" : tool.update_available ? "warn" : "ok"}
+      name={tool.tool}
+      summary={[
+        tool.installed ?? "—",
+        tool.update_available && tool.latest ? `→ ${tool.latest}` : null,
+        tool.image ?? t("hostCliBrew"),
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      chips={
+        <>
           {running && (
-            <span
-              className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ color: C.accent, border: `1px solid ${C.borderAccent}`, background: C.accentSubtle }}
-            >
-              <Loader2 size={10} className="animate-spin" />
+            <MetaChip tone="accent" icon={<Loader2 size={10} className="animate-spin" />}>
               {t("updating")}
-            </span>
+            </MetaChip>
           )}
-        </div>
-        <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }} title={tool.image ?? t("hostCliBrewTitle")}>
-          {tool.image ?? t("hostCliBrew")}
-        </div>
-      </div>
-
-      {/* Version row */}
-      <div className="flex items-baseline gap-2">
-        <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textDim, letterSpacing: "0.06em" }}>
-          {t("installed")}
-        </span>
-        <span className="text-xs font-mono tabular-nums" style={{ color: C.textPrimary }}>
-          {tool.installed ?? "—"}
-        </span>
-        {tool.update_available && tool.latest && (
-          <>
-            <span className="text-xs" style={{ color: C.textDim }}>→</span>
-            <span className="text-xs font-mono tabular-nums" style={{ color: STATUS_TEXT.warning }}>
-              {tool.latest}
+          <MetaChip tone="idle" className="tabular-nums">
+            {tool.installed ?? "—"}
+          </MetaChip>
+          {tool.update_available && tool.latest && (
+            <MetaChip tone="warn" className="tabular-nums">
+              → {tool.latest}
+            </MetaChip>
+          )}
+        </>
+      }
+      meta={
+        <>
+          <MetaText mono title={tool.image ?? t("hostCliBrewTitle")}>
+            {tool.image ?? t("hostCliBrew")}
+          </MetaText>
+          <span className="flex items-center gap-1 shrink-0">
+            <span className="label-sys" style={{ color: C.textDim }}>
+              {t("affected")}
             </span>
-          </>
-        )}
-      </div>
-
-      {/* Affected agents */}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textDim, letterSpacing: "0.06em" }}>
-          {t("affected")}
-        </span>
-        <AgentPills agents={tool.agents_affected} />
-      </div>
-    </div>
+            <AgentPills agents={tool.agents_affected} />
+          </span>
+        </>
+      }
+      action={
+        tool.update_available && !running ? (
+          <RowAction
+            tone="warn"
+            icon={<ArrowUpCircle size={10} />}
+            onClick={() => onUpdate(tool)}
+            title={t("updateToTitle", { version: tool.latest ?? "" })}
+          >
+            {t("updateButton", { version: tool.latest ?? "" })}
+          </RowAction>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -450,7 +432,7 @@ function UpdateModal({
 
 // ── Section ───────────────────────────────────────────────────────────────────
 
-export function CliToolsSection() {
+export function CliToolsSection({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useTranslations("runtimes.cliTools");
   const locale = useLocale();
   const queryClient = useQueryClient();
@@ -498,43 +480,24 @@ export function CliToolsSection() {
   const openTool = modalTool ? tools.find((tool) => tool.tool === modalTool) ?? null : null;
 
   return (
-    <div className="mt-8">
-      {/* Section header — mirrors the vLLM/LM Studio headers on this page */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          className="w-px"
-          style={{
-            alignSelf: "stretch",
-            background: `linear-gradient(to bottom, ${C.accent} 0%, transparent 100%)`,
-            minHeight: "36px",
-          }}
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-              {t("title")}
-            </h2>
-            <span
-              className="text-xs px-1.5 py-px rounded"
-              style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}
-            >
-              {t("fleetBadge")}
-            </span>
-          </div>
-          <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            {t("subtitle", { time: timeAgo(checkedAt, locale) })}
-          </p>
-        </div>
+    <SectionOrFragment
+      embedded={embedded}
+      id="cli-tools"
+      title={t("title")}
+      hint={t("subtitle", { time: timeAgo(checkedAt, locale) })}
+      count={tools.length}
+      actions={
         <button
           onClick={() => checkMutation.mutate()}
           disabled={checkMutation.isPending}
-          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
         >
           {checkMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
           {t("checkNow")}
         </button>
-      </div>
+      }
+    >
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
@@ -560,7 +523,7 @@ export function CliToolsSection() {
       )}
 
       {tools.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="flex flex-col gap-1.5">
           {tools.map((tool) => (
             <CliToolCard key={tool.tool} tool={tool} onUpdate={(tl) => setModalTool(tl.tool)} />
           ))}
@@ -574,6 +537,6 @@ export function CliToolsSection() {
           onClose={() => setModalTool(null)}
         />
       )}
-    </div>
+    </SectionOrFragment>
   );
 }

@@ -197,8 +197,9 @@ describe("HostsSection", () => {
 
     expect(await screen.findByRole("button", { name: "Host" })).toBeInTheDocument();
 
-    const deleteBtn = await screen.findByLabelText("Delete host GPU Box 1");
-    await userEvent.click(deleteBtn);
+    // Delete is destructive and now sits in the row overflow menu.
+    await userEvent.click(await screen.findByTestId("host-more-gpu-box-1"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
 
     expect(
       await screen.findByText("Host hat 2 gebundene Runtimes — erst umbinden.")

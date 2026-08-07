@@ -994,7 +994,7 @@
     },
     "autonomy": {
       "title": "Autonomie-Stufen",
-      "description": "Lege pro Aktion fest, ob Agenten autonom handeln (L1), dich benachrichtigen (L2) oder auf Freigabe warten (L3).",
+      "description": "Lege pro Aktion fest, ob Agenten selbst handeln, dich melden oder auf deine Freigabe warten.",
       "action": "Aktion",
       "custom": "custom",
       "legend": "L1 = Auto | L2 = Melden | L3 = Freigabe",
@@ -1392,6 +1392,13 @@
       "settingSaved": "Gespeichert — sofort wirksam",
       "settingSaveFailed": "Speichern fehlgeschlagen",
       "docsNote": "Vollständige Anleitung: docs/setup/telegram.md im Repository. Der Health-Wächter liest seine Telegram-Zugangsdaten bewusst aus .env (er muss auch bei liegendem MC funktionieren) — diese Einstellungen betreffen ihn nicht."
+    },
+    "groups": {
+      "account": "Konto",
+      "fleet": "Flotte",
+      "connections": "Anschlüsse",
+      "secrets": "Geheimnisse",
+      "system": "System"
     }
   },
   "skills": {
@@ -1789,7 +1796,9 @@
       "filesCount": "{name} · {count} Dateien",
       "loadArrow": "↓ Laden",
       "loadingVariants": "Lade Varianten...",
-      "noVariants": "Keine GGUF-Varianten gefunden"
+      "noVariants": "Keine GGUF-Varianten gefunden",
+      "download": "Herunterladen",
+      "load": "Laden"
     },
     "modelEditor": {
       "model": "Modell:",
@@ -1876,7 +1885,8 @@
       "deleteHostAria": "Host {name} löschen",
       "runtimeSingular": "Runtime",
       "runtimePlural": "Runtimes",
-      "addBoxButton": "Box hinzufügen"
+      "addBoxButton": "Box hinzufügen",
+      "rowActions": "Weitere Aktionen für {name}"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint nicht erkannt",
@@ -2076,7 +2086,8 @@
       "installDone": "Installation abgeschlossen.",
       "installCreateAndStart": "Runtime anlegen & starten",
       "installRuntimeCreated": "Runtime angelegt und gestartet — Gewichte laden noch.",
-      "close": "Schliessen"
+      "close": "Schliessen",
+      "rowActions": "Weitere Aktionen für {name}"
     },
     "bindAgentModal": {
       "title": "Agent binden",
@@ -2159,6 +2170,19 @@
       "resultTitle": "Runtime angelegt und gestartet",
       "resultState": "Status: {state}",
       "resultHint": "Beim ersten Start dauert das Laden der Gewichte einige Minuten. Die Runtime-Karte zeigt den Live-Status."
+    },
+    "moreActions": "Weitere Aktionen für {name}",
+    "models": {
+      "title": "Modelle",
+      "subtitle": "Was Anbieter anbieten, was auf eigenen Boxen läuft, und was sich herunterladen lässt",
+      "tabProviders": "Anbieter",
+      "tabLocal": "Eigene Hardware",
+      "tabDownload": "Herunterladen"
+    },
+    "downloadMoved": "Modelle herunterladen → Sektion Modelle",
+    "infrastructure": {
+      "title": "Infrastruktur",
+      "subtitle": "Die Boxen und die festgebackenen Agent-Werkzeuge darunter"
     }
   },
   "bench": {
@@ -2322,5 +2346,20 @@
     "x_api_secret": "Consumer Secret aus dem X-Developer-Portal — für den X-Post-Publisher (ADR-065)",
     "x_access_token": "OAuth-1.0a-Access-Token des postenden Accounts — für den X-Post-Publisher (ADR-065)",
     "x_access_token_secret": "OAuth-1.0a-Access-Token-Secret des postenden Accounts — für den X-Post-Publisher (ADR-065)"
+  },
+  "common": {
+    "section": {
+      "collapse": "{name} einklappen",
+      "expand": "{name} ausklappen",
+      "jumpTo": "Zu Abschnitt springen"
+    },
+    "cappedList": {
+      "showAll": "{n} weitere anzeigen",
+      "showFewer": "Weniger anzeigen"
+    },
+    "listRow": {
+      "expand": "Details anzeigen",
+      "collapse": "Details ausblenden"
+    }
   }
 }

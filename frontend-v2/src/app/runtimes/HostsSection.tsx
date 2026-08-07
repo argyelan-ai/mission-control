@@ -21,6 +21,9 @@ import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
+import { Section, SectionOrFragment } from "@/components/shared/Section";
+import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
+import { OverflowMenu } from "@/components/shared/OverflowMenu";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -62,10 +65,13 @@ function SingleHostMetricsBar({ host }: { host: Host }) {
     refetchInterval: 5_000,
   });
 
+  // scaleX, not width: animating width relayouts the bar every frame.
   const barStyle = (pct: number) => ({
-    width: `${Math.min(pct, 100)}%`,
+    width: "100%",
     background: barColor(pct),
-    transition: "width 0.6s cubic-bezier(0.16,1,0.3,1)",
+    transform: `scaleX(${Math.min(pct, 100) / 100})`,
+    transformOrigin: "left" as const,
+    transition: "transform 0.6s cubic-bezier(0.16,1,0.3,1)",
   });
 
   // flask_wol hosts report awake/health instead of GPU metrics — checked
@@ -518,112 +524,91 @@ function HostCard({
 }) {
   const t = useTranslations("runtimes.hosts");
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -4 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-      className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3"
-      style={{
-        background: C.borderSubtle,
-        border: `1px solid ${C.borderSubtle}`,
-        borderRadius: "10px",
-      }}
-    >
-      <div className="flex items-center gap-3 min-w-0 sm:flex-1">
-        {/* Status dot — enabled/disabled */}
-        <div
-          className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{ background: host.enabled ? C.online : STATUS.offline }}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-sm truncate" style={{ color: C.textPrimary }}>
-              {host.display_name}
-            </span>
-            <span
-              className="shrink-0 uppercase"
-              style={{
-                background: C.border,
-                color: C.textMuted,
-                fontSize: "9px",
-                padding: "1px 5px",
-                borderRadius: "4px",
-                letterSpacing: "0.06em",
-              }}
-            >
-              {t(KIND_LABEL_KEY[host.kind])}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-            <span className="text-xs font-mono" style={{ color: C.textMuted }}>
-              {host.slug}
-            </span>
-            <span style={{ color: C.borderSubtle }}>·</span>
-            <span className="text-xs" style={{ color: host.enabled ? C.textMuted : C.textDim }}>
-              {host.enabled ? t("active") : t("disabled")}
-            </span>
-            <span style={{ color: C.borderSubtle }}>·</span>
-            <span className="text-xs tabular-nums" style={{ color: boundCount > 0 ? C.textSecondary : C.textMuted }}>
-              {boundCount} {boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}
-            </span>
-            {host.kind === "ssh" && host.ssh_host && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs font-mono truncate" style={{ color: C.textDim }}>
-                  {host.ssh_host}
-                </span>
-              </>
-            )}
-            {host.kind === "flask_wol" && host.control_url && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs font-mono truncate" style={{ color: C.textDim }}>
-                  {host.control_url}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {isAdmin && (
-        <div className="flex items-center gap-1 shrink-0 self-end sm:self-auto">
+    <ListRow
+      testId="host-row"
+      dataAttrs={{ "data-slug": host.slug }}
+      tone={host.enabled ? "ok" : "idle"}
+      muted={!host.enabled}
+      name={host.display_name}
+      summary={[
+        host.enabled ? t("active") : t("disabled"),
+        t(KIND_LABEL_KEY[host.kind]),
+        `${boundCount} ${boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}`,
+      ].join(" · ")}
+      chips={
+        <>
+          <MetaChip tone={host.enabled ? "ok" : "idle"}>
+            {host.enabled ? t("active") : t("disabled")}
+          </MetaChip>
+          <MetaChip tone="idle">{t(KIND_LABEL_KEY[host.kind])}</MetaChip>
+          <MetaChip tone="idle" className="tabular-nums">
+            {boundCount} {boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}
+          </MetaChip>
+        </>
+      }
+      meta={
+        <>
+          <MetaText mono>{host.slug}</MetaText>
+          {host.kind === "ssh" && host.ssh_host && (
+            <MetaText mono title={host.ssh_host}>
+              {host.ssh_host}
+            </MetaText>
+          )}
+          {host.kind === "flask_wol" && host.control_url && (
+            <MetaText mono title={host.control_url}>
+              {host.control_url}
+            </MetaText>
+          )}
+        </>
+      }
+      action={
+        isAdmin ? (
           <button
             onClick={onEdit}
             title={t("edit")}
             aria-label={t("editHostAria", { name: host.display_name })}
-            className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer"
-            style={{
-              background: C.borderSubtle,
-              border: `1px solid ${C.borderSubtle}`,
-              color: C.textMuted,
-            }}
+            className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer"
           >
-            <Pencil size={12} />
+            <span
+              aria-hidden
+              className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+              style={{
+                background: "transparent",
+                border: `1px solid ${C.borderActive}`,
+                color: C.textMuted,
+                ["--action-hover" as string]: C.bgHover,
+              }}
+            >
+              <Pencil size={12} />
+            </span>
           </button>
-          <button
-            onClick={onDelete}
-            disabled={deletePending}
-            title={t("delete")}
-            aria-label={t("deleteHostAria", { name: host.display_name })}
-            className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
-            style={{
-              background: `${C.error}14`,
-              border: `1px solid ${C.error}33`,
-              color: STATUS_TEXT.error,
-            }}
-          >
-            {deletePending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-          </button>
-        </div>
-      )}
-    </motion.div>
+        ) : undefined
+      }
+      overflow={
+        isAdmin ? (
+          <OverflowMenu
+            label={t("rowActions", { name: host.display_name })}
+            testId={`host-more-${host.slug}`}
+            actions={[
+              {
+                id: "delete",
+                label: t("delete"),
+                icon: Trash2,
+                destructive: true,
+                loading: deletePending,
+                onClick: onDelete,
+              },
+            ]}
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
 // ── Hosts Section ─────────────────────────────────────────────────────────────
 
-export function HostsSection() {
+export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useTranslations("runtimes.hosts");
   const queryClient = useQueryClient();
   const currentUser = useAppStore((s) => s.currentUser);
@@ -661,33 +646,15 @@ export function HostsSection() {
   });
 
   return (
-    <div className="mt-8">
-      {/* Section header — matches vLLM/LM Studio section style */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          className="w-px"
-          style={{
-            alignSelf: "stretch",
-            background: `linear-gradient(to bottom, ${C.textDim} 0%, transparent 100%)`,
-            minHeight: "36px",
-          }}
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>{t("title")}</h2>
-            <span
-              className="text-xs px-1.5 py-px rounded"
-              style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}
-            >
-              {t("registryBadge")}
-            </span>
-          </div>
-          <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            {t("subtitle")}
-          </p>
-        </div>
-        {isAdmin && (
-          <div className="flex items-center gap-1.5 shrink-0">
+    <SectionOrFragment
+      embedded={embedded}
+      id="hosts"
+      title={t("title")}
+      hint={t("subtitle")}
+      count={(hosts ?? []).length}
+      actions={
+        isAdmin ? (
+          <>
             {/* Wizard = der geführte Weg (testen → Basis → Modell → läuft).
                 „Host" bleibt daneben als Direkteingabe für alle, die genau
                 wissen was sie eintragen — und für flask_wol/local, die der
@@ -695,7 +662,7 @@ export function HostsSection() {
             <button
               data-testid="hosts-add-box"
               onClick={() => setWizardOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 background: C.accentSubtle,
                 border: `1px solid ${C.borderAccent}`,
@@ -707,7 +674,7 @@ export function HostsSection() {
             </button>
             <button
               onClick={() => setModalHost(null)}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 background: C.borderSubtle,
                 border: `1px solid ${C.border}`,
@@ -717,9 +684,10 @@ export function HostsSection() {
               <Plus size={11} />
               {t("addHostButton")}
             </button>
-          </div>
-        )}
-      </div>
+          </>
+        ) : undefined
+      }
+    >
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
@@ -775,6 +743,6 @@ export function HostsSection() {
       )}
 
       {wizardOpen && <BoxWizard onClose={() => setWizardOpen(false)} />}
-    </div>
+    </SectionOrFragment>
   );
 }

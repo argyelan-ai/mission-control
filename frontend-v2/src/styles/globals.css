@@ -797,3 +797,10 @@ option {
     height: 100lvh;
   }
 }
+
+/* ── Icon action buttons (runtime/host rows) ────────────────────────────────
+   Outlined by default so a row of them stays quiet; the semantic hue fills in
+   only on hover. --action-hover is set per button by the component. */
+.action-btn:hover:not(:disabled) {
+  background-color: var(--action-hover);
+}

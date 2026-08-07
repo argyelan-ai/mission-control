@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDownToLine,
+  ExternalLink,
   Play,
   Power,
   Square,
@@ -43,6 +45,9 @@ import Link from "next/link";
 import { Plug } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { OverflowMenu } from "@/components/shared/OverflowMenu";
+import { Section, SectionNav, requestSectionOpen } from "@/components/shared/Section";
+import { ListRow, MetaChip, MetaText, RowAction, type Tone } from "@/components/shared/ListRow";
 
 // ── State Configuration ───────────────────────────────────────────────────────
 
@@ -89,6 +94,31 @@ const STATE_CONFIG: Record<
   },
 };
 
+const STATE_TONE: Record<RuntimeState, Tone> = {
+  ready: "ok",
+  warming: "warn",
+  starting: "warn",
+  stopped: "idle",
+  failed: "error",
+  unknown: "idle",
+};
+
+/** The one note style under a row (action feedback). */
+function RowNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="text-[11px] px-2.5 py-1.5 rounded-md"
+      style={{
+        background: C.accentSubtle,
+        border: `1px solid ${C.borderAccent}`,
+        color: C.textSecondary,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 // ── Action Button ─────────────────────────────────────────────────────────────
 
 function ActionButton({
@@ -106,10 +136,14 @@ function ActionButton({
   loading: boolean;
   variant: "success" | "danger" | "default";
 }) {
+  // Outlined, not filled. A filled error-red Stop button on every running
+  // runtime made red the loudest colour on a page where nothing is wrong —
+  // and red already means "failed" elsewhere. The hue still carries the
+  // action; the fill only appears on hover.
   const colors = {
-    success: { bg: `${C.online}14`, border: `${C.online}33`, text: C.online },
-    danger:  { bg: `${C.error}14`, border: `${C.error}33`, text: C.error },
-    default: { bg: C.borderSubtle, border: C.borderSubtle, text: C.textMuted },
+    success: { border: `${C.online}40`, text: C.online, hover: `${C.online}1A` },
+    danger:  { border: `${C.error}33`, text: STATUS_TEXT.error, hover: `${C.error}1A` },
+    default: { border: C.borderActive, text: C.textMuted, hover: C.bgHover },
   };
   const c = colors[variant];
 
@@ -118,14 +152,27 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       title={label}
-      className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
-      style={{
-        background: disabled ? "transparent" : c.bg,
-        border: `1px solid ${disabled ? "transparent" : c.border}`,
-        color: disabled ? C.borderActive : c.text,
-      }}
+      aria-label={label}
+      // The hit area is 44px on a thumb, but the drawn control stays 28px:
+      // stretching the border to the full target turned Stop into a big empty
+      // red box. Touch target and visual weight are two different things.
+      className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer disabled:cursor-not-allowed"
     >
-      {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+      <span
+        aria-hidden
+        className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+        style={{
+          background: "transparent",
+          // Disabled used to render at rgba(168,168,168,0.16) — about 1.1:1, so
+          // the operator could not tell "disabled" from "not there". textDim
+          // clears the 3:1 floor for UI components (WCAG 1.4.11).
+          border: `1px solid ${disabled ? C.borderSubtle : c.border}`,
+          color: disabled ? C.textDim : c.text,
+          ["--action-hover" as string]: c.hover,
+        }}
+      >
+        {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+      </span>
     </button>
   );
 }
@@ -197,17 +244,23 @@ function ActiveDownloads() {
                   disabled={cancelMutation.isPending && cancelMutation.variables === dl.name}
                   title={t("cancel")}
                   aria-label={t("cancelDownloadAria")}
-                  className="flex items-center justify-center w-6 h-6 rounded-md transition-all cursor-pointer disabled:opacity-40"
-                  style={{
-                    background: `${C.error}14`,
-                    border: `1px solid ${C.error}33`,
-                    color: STATUS_TEXT.error,
-                  }}
+                  className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer disabled:opacity-40"
                 >
+                  <span
+                    aria-hidden
+                    className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${C.error}33`,
+                      color: STATUS_TEXT.error,
+                      ["--action-hover" as string]: `${C.error}1A`,
+                    }}
+                  >
                   {cancelMutation.isPending && cancelMutation.variables === dl.name
                     ? <Loader2 size={10} className="animate-spin" />
-                    : <span style={{ fontSize: "12px", lineHeight: 1 }}>✕</span>
+                    : <X size={12} />
                   }
+                  </span>
                 </button>
               </div>
             </div>
@@ -460,106 +513,74 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
   const accentColor = model.is_loaded ? C.online : C.borderActive;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -4 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-      style={{
-        background: C.borderSubtle,
-        border: `1px solid ${C.borderSubtle}`,
-        borderRadius: "10px",
-        overflow: "hidden",
-        borderLeft: `1px solid ${C.borderSubtle}`,
-      }}
-    >
-      {/* Main row */}
-      <div className="flex items-center gap-3 px-3 py-2.5">
-        {/* Status dot */}
-        <div
-          className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{
-            background: accentColor,
-          }}
-        />
-
-        {/* Name + meta */}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-sm truncate" style={{ color: C.textPrimary }}>
-              {model.display_name}
-            </span>
-            {model.is_embedding && (
-              <span
-                className="shrink-0"
-                style={{
-                  background: C.accentSubtle,
-                  border: `1px solid ${C.borderAccent}`,
-                  color: C.textSecondary,
-                  fontSize: "9px",
-                  padding: "1px 5px",
-                  borderRadius: "4px",
-                  letterSpacing: "0.04em",
-                }}
-              >
-                EMBED
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
-              {model.size_gb > 0 ? `${model.size_gb.toFixed(1)} GB` : "—"}
-            </span>
-            <span style={{ color: C.borderSubtle }}>·</span>
-            <span className="text-xs" style={{ color: C.textMuted }}>LM Studio</span>
+    <div className="flex flex-col gap-1.5">
+      <ListRow
+        testId="lms-model-row"
+        dataAttrs={{ "data-model": model.id }}
+        tone={model.is_loaded ? "ok" : "idle"}
+        name={model.display_name}
+        summary={[
+          model.is_loaded ? t("states.ready") : t("states.stopped"),
+          "LM Studio",
+          model.size_gb > 0 ? `${model.size_gb.toFixed(1)} GB` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        chips={
+          <>
+            {model.is_embedding && <MetaChip tone="idle">EMBED</MetaChip>}
+            <MetaChip tone="idle">LM Studio</MetaChip>
             {storedCtx && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs tabular-nums" style={{ color: `${C.accent}99` }}>
-                  {fmtCtx(storedCtx)} ctx
-                </span>
-              </>
+              <MetaChip tone="idle" className="tabular-nums">
+                {fmtCtx(storedCtx)} ctx
+              </MetaChip>
             )}
-          </div>
-        </div>
+          </>
+        }
+        meta={
+          model.size_gb > 0 ? (
+            <MetaText className="tabular-nums shrink-0">{model.size_gb.toFixed(1)} GB</MetaText>
+          ) : undefined
+        }
+        action={
+          model.is_loaded ? (
+            <ActionButton
+              icon={Square}
+              label={t("unload")}
+              disabled={isMutating}
+              onClick={() => unloadMutation.mutate()}
+              loading={unloadMutation.isPending}
+              variant="danger"
+            />
+          ) : (
+            <ActionButton
+              icon={Play}
+              label={t("load")}
+              disabled={isMutating}
+              onClick={() => loadMutation.mutate()}
+              loading={loadMutation.isPending}
+              variant="success"
+            />
+          )
+        }
+        overflow={
+          !model.is_embedding ? (
+            <OverflowMenu
+              label={t("moreActions", { name: model.display_name })}
+              testId={`lms-more-${model.id}`}
+              actions={[
+                {
+                  id: "ctx",
+                  label: t("ctxSettings"),
+                  icon: Settings2,
+                  onClick: () => setSettingsOpen((o) => !o),
+                },
+              ]}
+            />
+          ) : undefined
+        }
+      />
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0">
-          {/* Gear settings button */}
-          {!model.is_embedding && (
-            <button
-              onClick={() => setSettingsOpen((o) => !o)}
-              title={t("ctxSettings")}
-              aria-label={t("ctxSettings")}
-              className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer"
-              style={{
-                background: settingsOpen ? C.border : "transparent",
-                border: `1px solid ${settingsOpen ? C.borderActive : "transparent"}`,
-                color: settingsOpen ? C.textSecondary : C.borderActive,
-              }}
-            >
-              <Settings2 size={12} />
-            </button>
-          )}
-          <ActionButton
-            icon={Play}
-            label={t("load")}
-            disabled={model.is_loaded || isMutating}
-            onClick={() => loadMutation.mutate()}
-            loading={loadMutation.isPending}
-            variant="success"
-          />
-          <ActionButton
-            icon={Square}
-            label={t("unload")}
-            disabled={!model.is_loaded || isMutating}
-            onClick={() => unloadMutation.mutate()}
-            loading={unloadMutation.isPending}
-            variant="danger"
-          />
-        </div>
-      </div>
-
-      {/* Settings panel */}
       {settingsOpen && !model.is_embedding && (
         <ContextSettingsPanel
           modelId={model.id}
@@ -568,20 +589,8 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
         />
       )}
 
-      {/* Feedback message */}
-      {actionMsg && (
-        <div
-          className="text-xs mx-4 mb-3 px-3 py-2 rounded-lg"
-          style={{
-            background: C.accentSubtle,
-            border: `1px solid ${C.borderAccent}`,
-            color: C.textSecondary,
-          }}
-        >
-          {actionMsg}
-        </div>
-      )}
-    </motion.div>
+      {actionMsg && <RowNote>{actionMsg}</RowNote>}
+    </div>
   );
 }
 
@@ -634,10 +643,17 @@ function QuantPicker({ modelId, onDownload, isPending }: {
               <button
                 onClick={() => onDownload(quant)}
                 disabled={isPending}
-                className="text-xs px-2 py-0.5 rounded cursor-pointer disabled:opacity-40"
-                style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
+                aria-label={t("download")}
+                title={t("download")}
+                className="flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 min-w-11 sm:min-w-[28px] cursor-pointer disabled:opacity-40"
               >
-                ↓
+                <span
+                  aria-hidden
+                  className="flex items-center justify-center w-7 h-7 rounded-md"
+                  style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
+                >
+                  <ArrowDownToLine size={12} />
+                </span>
               </button>
             </div>
           );
@@ -717,30 +733,16 @@ function ModelCatalog() {
   const isLms = tab === "lms";
   const isMutating = downloadLmsMutation.isPending || downloadHfMutation.isPending;
 
-  // Tab-specific colors: LMS = online-green, HF = warning-orange
-  const lmsColor = C.online;
-  const hfColor = C.warning;
+  // The download source is a choice, not a state. Green/orange here meant
+  // nothing — the selected tab carries the accent, the other stays neutral.
 
+  // Inside the Models tab strip this panel is already the selected surface — a
+  // second "Download model" collapse head on top of it was one disclosure
+  // nested in another, each with its own chrome.
   return (
-    <div
-      className="mb-6 rounded-xl overflow-hidden"
-      style={{ border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
-    >
-      {/* Header */}
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-4 py-3 cursor-pointer"
-        style={{ color: C.textSecondary }}
-      >
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Download size={14} />
-          {t("downloadModel")}
-        </div>
-        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>
-
-      {open && (
-        <div className="px-4 pb-4">
+    <div>
+      {(
+        <div>
           {/* Tab Toggle */}
           <div
             className="flex gap-1 mb-4 p-1 rounded-lg"
@@ -754,15 +756,10 @@ function ModelCatalog() {
                   setSubmitted("");
                   setMessage(null);
                 }}
-                className="flex-1 text-xs py-1.5 rounded-md transition-colors cursor-pointer"
+                className="flex-1 text-xs py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors cursor-pointer"
                 style={{
                   background: tab === t ? C.borderActive : "transparent",
-                  color:
-                    tab === t
-                      ? t === "lms"
-                        ? lmsColor
-                        : hfColor
-                      : C.textMuted,
+                  color: tab === t ? C.accent : C.textMuted,
                   fontWeight: tab === t ? 500 : 400,
                 }}
               >
@@ -777,10 +774,10 @@ function ModelCatalog() {
               href="https://lmstudio.ai/models"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs mb-3 w-fit"
+              className="flex items-center gap-1.5 text-xs mb-3 w-fit min-h-11 sm:min-h-0"
               style={{ color: C.textMuted }}
             >
-              <span>↗</span>
+              <ExternalLink size={11} />
               {t("openLmsSite")}
             </a>
           )}
@@ -794,7 +791,7 @@ function ModelCatalog() {
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               placeholder={isLms ? t("lmsPlaceholder") : t("hfPlaceholder")}
               aria-label={isLms ? t("searchLmsAria") : t("hfRepoAria")}
-              className="flex-1 text-sm px-3 py-2 rounded-lg outline-none"
+              className="flex-1 text-sm px-3 py-2.5 sm:py-2 min-h-11 sm:min-h-0 rounded-md outline-none"
               style={{
                 background: C.border,
                 border: `1px solid ${C.borderSubtle}`,
@@ -804,13 +801,11 @@ function ModelCatalog() {
             <button
               onClick={handleSearch}
               disabled={!query.trim()}
-              className="text-xs px-3 py-2 rounded-lg disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+              className="text-xs px-3 py-2.5 sm:py-2 min-h-11 sm:min-h-0 rounded-md disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
               style={{
-                background: isLms ? `${lmsColor}1F` : `${hfColor}1F`,
-                border: isLms
-                  ? `1px solid ${lmsColor}40`
-                  : `1px solid ${hfColor}40`,
-                color: isLms ? lmsColor : hfColor,
+                background: C.accentSubtle,
+                border: `1px solid ${C.borderAccent}`,
+                color: C.accent,
               }}
             >
               {t("search")}
@@ -842,52 +837,44 @@ function ModelCatalog() {
                 {t("noResults", { query: submitted })}
               </div>
             ) : (
-              <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.borderSubtle}` }}>
-                {catalogData.models.map((m, i) => {
+              <div className="flex flex-col gap-1.5">
+                {catalogData.models.map((m) => {
                   const baseName = m.model_id.split("/").pop()?.replace(/-gguf$/i, "").toLowerCase() ?? "";
                   const installed = baseName.length > 0 && installedIds.some((id) => id.toLowerCase().includes(baseName));
                   return (
                     <div key={m.model_id}>
-                      <div
-                        className="flex items-center justify-between px-3 py-2.5"
-                        style={{
-                          borderBottom:
-                            i < catalogData.models.length - 1 && pickingModel !== m.model_id
-                              ? `1px solid ${C.borderSubtle}`
-                              : undefined,
-                        }}
-                      >
-                        <div>
-                          <div className="text-sm" style={{ color: C.textPrimary }}>
-                            {m.name}
-                          </div>
-                          <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
+                      <ListRow
+                        testId="lms-search-row"
+                        tone={installed ? "ok" : "idle"}
+                        name={m.name}
+                        summary={[m.params, m.size_gb != null ? `${m.size_gb} GB` : null]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        chips={
+                          installed ? (
+                            <MetaChip tone="ok" icon={<Check size={10} />}>
+                              {t("installed")}
+                            </MetaChip>
+                          ) : undefined
+                        }
+                        meta={
+                          <MetaText className="tabular-nums shrink-0">
                             {[m.params, m.size_gb != null ? `${m.size_gb} GB` : null]
                               .filter(Boolean)
                               .join(" · ")}
-                          </div>
-                        </div>
-                        {installed ? (
-                          <div
-                            className="text-xs px-2 py-1 rounded"
-                            style={{ background: `${C.online}1A`, color: C.online }}
-                          >
-                            ✓
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setPickingModel(pickingModel === m.model_id ? null : m.model_id)}
-                            className="text-xs px-2.5 py-1 rounded cursor-pointer"
-                            style={{
-                              background: C.accentSubtle,
-                              border: `1px solid ${C.borderAccent}`,
-                              color: C.accent,
-                            }}
-                          >
-                            {pickingModel === m.model_id ? "✕" : t("loadArrow")}
-                          </button>
-                        )}
-                      </div>
+                          </MetaText>
+                        }
+                        action={
+                          installed ? undefined : (
+                            <RowAction
+                              icon={pickingModel === m.model_id ? <X size={10} /> : <ArrowDownToLine size={10} />}
+                              onClick={() => setPickingModel(pickingModel === m.model_id ? null : m.model_id)}
+                            >
+                              {pickingModel === m.model_id ? t("cancel") : t("load")}
+                            </RowAction>
+                          )
+                        }
+                      />
                       {pickingModel === m.model_id && (
                         <QuantPicker
                           modelId={m.model_id}
@@ -927,45 +914,29 @@ function ModelCatalog() {
                 <div className="text-xs mb-2 px-1" style={{ color: C.textMuted }}>
                   {t("filesCount", { name: hfData.name, count: hfData.files.length })}
                 </div>
-                <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.borderSubtle}` }}>
-                  {hfData.files.map((f, i) => (
-                    <div
+                <div className="flex flex-col gap-1.5">
+                  {hfData.files.map((f) => (
+                    <ListRow
                       key={f.filename}
-                      className="flex items-center justify-between px-3 py-2.5"
-                      style={{
-                        borderBottom:
-                          i < hfData.files.length - 1
-                            ? `1px solid ${C.borderSubtle}`
-                            : undefined,
-                      }}
-                    >
-                      <div>
-                        <div className="text-sm" style={{ color: C.textPrimary }}>
-                          {f.filename}
-                        </div>
-                        <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-                          {f.size_gb} GB
-                        </div>
-                      </div>
-                      <button
-                        onClick={() =>
-                          downloadHfMutation.mutate({ repoId: submitted, filename: f.filename })
-                        }
-                        disabled={isMutating}
-                        className="text-xs px-2.5 py-1 rounded disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
-                        style={{
-                          background: `${hfColor}1F`,
-                          border: `1px solid ${hfColor}40`,
-                          color: hfColor,
-                        }}
-                      >
-                        {downloadHfMutation.isPending ? (
-                          <Loader2 size={11} className="animate-spin" />
-                        ) : (
-                          t("loadArrow")
-                        )}
-                      </button>
-                    </div>
+                      testId="hf-file-row"
+                      tone="idle"
+                      name={f.filename}
+                      summary={`${f.size_gb} GB`}
+                      meta={<MetaText className="tabular-nums shrink-0">{f.size_gb} GB</MetaText>}
+                      action={
+                        <RowAction
+                          icon={downloadHfMutation.isPending
+                            ? <Loader2 size={10} className="animate-spin" />
+                            : <ArrowDownToLine size={10} />}
+                          onClick={() =>
+                            downloadHfMutation.mutate({ repoId: submitted, filename: f.filename })
+                          }
+                          disabled={isMutating}
+                        >
+                          {t("load")}
+                        </RowAction>
+                      }
+                    />
                   ))}
                 </div>
               </div>
@@ -979,12 +950,12 @@ function ModelCatalog() {
 
 // ── Runtime Row ───────────────────────────────────────────────────────────────
 
-// ── Bound Agents Footer (Phase 15 T3.3) ─────────────────────────────────
+// ── Bound Agents (Phase 15 T3.3) ────────────────────────────────────────
 // Shows the agents currently using this runtime + a "Bind Agent" button
 // that opens BindAgentModal. Only visible for runtimes that have a slug
 // (DB-managed); legacy JSON runtimes are skipped.
 
-function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
+function BoundAgents({ runtime }: { runtime: Runtime }) {
   const t = useTranslations("runtimes");
   const [bindOpen, setBindOpen] = useState(false);
   const slug = runtime.slug ?? runtime.id;
@@ -1009,21 +980,18 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
     },
   });
 
+  // Inline chips in the meta line, not a bordered footer bar. The old footer
+  // cost a full row plus a divider on every card, and stacked five identical
+  // "Bind agent" buttons down the page.
   return (
     <>
-      <div
-        className="px-3 py-2 border-t flex items-center gap-2 flex-wrap"
-        style={{ borderColor: C.borderSubtle }}
-      >
-        <span
-          className="text-[10px] font-mono uppercase tracking-wider"
-          style={{ color: C.textMuted }}
-        >
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        <span className="label-sys" style={{ color: C.textDim }}>
           {t("agentsLabel")}
         </span>
         {isLoading && <Loader2 size={11} className="animate-spin" style={{ color: C.textMuted }} />}
         {!isLoading && bound.length === 0 && (
-          <span className="text-[11px]" style={{ color: C.textMuted }}>
+          <span className="text-xs" style={{ color: C.textMuted }}>
             {t("noneUnbound")}
           </span>
         )}
@@ -1031,7 +999,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
           <span key={a.id} className="inline-flex items-center gap-1">
             <Link
               href={`/agents/${a.id}`}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
               style={{
                 backgroundColor: C.accentSubtle,
                 color: C.textSecondary,
@@ -1042,45 +1010,35 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
               <EntityIcon value="🤖" size={13} className="inline-block align-[-2px] mr-1" />{a.name}
             </Link>
             {a.pending_runtime_sync && (
-              <span
-                className="rounded px-1 text-[10px]"
-                style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
-                title={t("pendingSyncTitle")}
-              >
+              <MetaChip tone="warn" title={t("pendingSyncTitle")}>
                 {t("pendingSync")}
-              </span>
+              </MetaChip>
             )}
           </span>
         ))}
         <button
           onClick={() => setBindOpen(true)}
-          className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+          title={t("bindAgent")}
+          className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
           style={{
-            color: C.accent,
-            border: `1px dashed ${C.borderAccent}`,
+            color: C.textSecondary,
+            border: `1px dashed ${C.borderActive}`,
           }}
         >
           <Plug size={10} />
           {t("bindAgent")}
         </button>
-      </div>
-
-      {anyPending && (
-        <div
-          className="px-3 pb-2 flex items-center gap-2 text-[11px]"
-          style={{ color: C.textSecondary }}
-        >
-          <span>{t("syncPendingHint")}</span>
+        {anyPending && (
           <button
             onClick={() => syncNowMutation.mutate()}
-            className="underline cursor-pointer"
+            className="underline cursor-pointer text-xs"
             style={{ color: STATUS_TEXT.warning }}
             title={t("syncNowTitle")}
           >
             {t("syncNow")}
           </button>
-        </div>
-      )}
+        )}
+      </span>
 
       <BindAgentModal
         open={bindOpen}
@@ -1133,15 +1091,13 @@ function RuntimeModelEditor({
     setEditing(false);
   };
 
+  // 20px hit areas missed WCAG 2.2 SC 2.5.8 (24x24); comfortable on a thumb.
+  const iconBtnClass =
+    "flex items-center justify-center w-11 h-11 sm:w-6 sm:h-6 min-w-11 sm:min-w-6 rounded-md cursor-pointer";
   const iconBtn = (color: string) => ({
-    padding: "3px",
-    borderRadius: "5px",
     background: "transparent" as const,
     border: "1px solid transparent",
     color,
-    cursor: "pointer" as const,
-    display: "flex" as const,
-    alignItems: "center" as const,
   });
 
   if (editing) {
@@ -1172,6 +1128,7 @@ function RuntimeModelEditor({
           disabled={mutation.isPending}
           title={t("save")}
           aria-label={t("save")}
+          className={iconBtnClass}
           style={iconBtn(C.accent)}
         >
           {mutation.isPending ? (
@@ -1185,6 +1142,7 @@ function RuntimeModelEditor({
           disabled={mutation.isPending}
           title={t("cancel")}
           aria-label={t("cancel")}
+          className={iconBtnClass}
           style={iconBtn(C.textMuted)}
         >
           <X size={13} />
@@ -1212,6 +1170,7 @@ function RuntimeModelEditor({
         }}
         title={t("editModel")}
         aria-label={t("editModel")}
+        className={iconBtnClass}
         style={iconBtn(C.textMuted)}
       >
         <Pencil size={12} />
@@ -1309,239 +1268,168 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
 
   const accentColor = stateConfig.dot;
 
+  // PR #285's map, not a ternary: a missing entry used to print "vLLM Docker"
+  // for every engine it did not know, ssh_process included.
+  const engineLabel = RUNTIME_TYPE_LABELS[runtime.runtime_type] ?? "vLLM Docker";
+
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -4 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-      style={{
-        background: C.borderSubtle,
-        border: `1px solid ${C.borderSubtle}`,
-        borderRadius: "10px",
-        overflow: "hidden",
-      }}
-    >
-      {/* Main row — mobile 2-line layout: name/meta on top, actions below right
-          (a single row squeezed the name against 5 buttons at 390px) */}
-      <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3">
-        <div className="flex items-center gap-3 min-w-0 sm:flex-1">
-        {/* Status dot */}
-        <div
-          className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{
-            background: accentColor,
-          }}
-        />
-        {/* Name + meta */}
-        <div className="min-w-0 flex-1">
-          <div className="font-medium text-sm truncate flex items-center gap-1.5" style={{ color: C.textPrimary }}>
-            <span className="truncate">{runtime.display_name}</span>
-            {runtime.api_key_secret_id && (
-              <span title={t("apiKeyStored")} className="shrink-0 leading-none">
-                <EntityIcon value="🔑" size={12} />
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            {sizeGb != null && sizeGb > 0 && (
-              <>
-                <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
-                  {sizeGb.toFixed(1)} GB
-                </span>
-                <span style={{ color: C.borderSubtle }}>·</span>
-              </>
-            )}
-            <span className="text-xs" style={{ color: C.textMuted }}>
-              {RUNTIME_TYPE_LABELS[runtime.runtime_type] ?? "vLLM Docker"}
+    <div className="flex flex-col gap-1.5">
+      <ListRow
+        testId="runtime-row"
+        dataAttrs={{ "data-slug": runtime.slug ?? runtime.id, "data-state": effectiveState }}
+        tone={
+          effectiveState === "ready"
+            ? "ok"
+            : effectiveState === "failed"
+              ? "error"
+              : isLoading || isBootedNoModel
+                ? "warn"
+                : "idle"
+        }
+        name={runtime.display_name}
+        // At 390px: state, engine, host. Everything else is one tap away.
+        summary={[t(stateConfig.labelKey), engineLabel, runtime.host?.slug]
+          .filter(Boolean)
+          .join(" · ")}
+        nameSuffix={
+          runtime.api_key_secret_id ? (
+            <span title={t("apiKeyStored")} className="shrink-0 leading-none">
+              <EntityIcon value="🔑" size={12} />
             </span>
-            {/* Host chip (ADR-048) — only when the runtime is bound to a host */}
+          ) : undefined
+        }
+        chips={
+          <>
+            {/* state → type → size/detail, the page-wide chip order */}
+            <MetaChip tone={STATE_TONE[effectiveState]}>{t(stateConfig.labelKey)}</MetaChip>
+            {isAsleep && <MetaChip tone="idle">{t("sleeping")}</MetaChip>}
+            {isBootedNoModel && <MetaChip tone="warn">{t("awakeNoModel")}</MetaChip>}
+            <MetaChip tone="idle">{engineLabel}</MetaChip>
             {runtime.host && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span
-                  className="text-[10px] font-mono px-1.5 py-px rounded shrink-0"
-                  style={{
-                    background: C.accentSubtle,
-                    border: `1px solid ${C.borderAccent}`,
-                    color: C.textSecondary,
-                  }}
-                  title={t("hostTitle", { name: runtime.host.display_name })}
-                >
-                  {runtime.host.slug}
-                </span>
-              </>
-            )}
-            {/* Power-managed honest status: distinguishes "asleep" from
-                "awake but model not loaded" — the bare STATE_CONFIG label
-                ("Gestoppt") would hide that difference. */}
-            {isAsleep && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs" style={{ color: C.textDim }}>
-                  {t("sleeping")}
-                </span>
-              </>
-            )}
-            {isBootedNoModel && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs" style={{ color: STATUS_TEXT.warning }}>
-                  {t("awakeNoModel")}
-                </span>
-              </>
+              <MetaChip tone="idle" title={t("hostTitle", { name: runtime.host.display_name })}>
+                {runtime.host.slug}
+              </MetaChip>
             )}
             {runtime.runtime_type === "vllm_docker" && runtime.max_context_len > 0 && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
-                  {(runtime.max_context_len / 1000).toFixed(0)}K ctx
-                </span>
-              </>
+              <MetaChip tone="idle" className="tabular-nums">
+                {(runtime.max_context_len / 1000).toFixed(0)}K ctx
+              </MetaChip>
             )}
             {isLmStudio && storedCtx && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <span className="text-xs tabular-nums" style={{ color: C.online }}>
-                  {fmtCtx(storedCtx)} ctx
-                </span>
-              </>
+              <MetaChip tone="idle" className="tabular-nums">
+                {fmtCtx(storedCtx)} ctx
+              </MetaChip>
             )}
-            {runtime.autostart_supported && (
-              <>
-                <span style={{ color: C.borderSubtle }}>·</span>
-                <AutostartToggle slug={runtime.slug ?? runtime.id} />
-              </>
-            )}
-          </div>
-          {!isProbeable && (
-            <RuntimeModelEditor runtime={runtime} onMessage={setActionMsg} />
-          )}
-          {live && (
-            <div className="flex items-center gap-2 text-xs mt-0.5" style={{ color: C.textSecondary }}>
-              <span
-                className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
-                style={{
-                  background: live.reachable
-                    ? STATUS.online
-                    : live.status === "switching"
-                      ? STATUS.warning
-                      : STATUS.error,
-                }}
-              />
-              {/* Planned downtime (recipe switch / start / cold load) reads as
-                  a warning chip, not the red "unreachable" line — the engine is
-                  down on purpose and comes back in 2-15 minutes. */}
-              {!live.reachable && live.status === "switching" ? (
-                <span
-                  className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
-                  style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
-                  title={t("switchingTitle")}
-                >
-                  {live.phase === "evicting" ? t("switchingEvicting") : t("switchingLoading")}
-                </span>
-              ) : live.reachable ? (
-                <>
-                  <span className="truncate" title={live.served_model ?? undefined}>
-                    {t("engineServes", { model: live.served_model ?? "—" })}
-                  </span>
-                  {live.drift && (
-                    <span
-                      className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
-                      style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
-                      title={t("driftTitle", { model: runtime.model_identifier ?? "—" })}
-                    >
-                      {t("drift")}
+            {runtime.autostart_supported && <AutostartToggle slug={runtime.slug ?? runtime.id} />}
+          </>
+        }
+        meta={
+          sizeGb != null && sizeGb > 0 ? (
+            <MetaText className="tabular-nums shrink-0">{sizeGb.toFixed(1)} GB</MetaText>
+          ) : undefined
+        }
+        detail={
+          <>
+            {live && (
+              <span className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textSecondary }}>
+                {!live.reachable && live.status === "switching" ? (
+                  <MetaChip tone="warn" title={t("switchingTitle")}>
+                    {live.phase === "evicting" ? t("switchingEvicting") : t("switchingLoading")}
+                  </MetaChip>
+                ) : live.reachable ? (
+                  <>
+                    <span className="truncate" title={live.served_model ?? undefined}>
+                      {t("engineServes", { model: live.served_model ?? "—" })}
                     </span>
-                  )}
-                </>
-              ) : (
-                <span style={{ color: STATUS_TEXT.error }}>
-                  {t("engineUnreachable", { count: live.consecutive_failures })}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
-          {isLmStudio && (
-            <button
-              onClick={() => setSettingsOpen(v => !v)}
-              title={t("ctxSettings")}
-              aria-label={t("ctxSettings")}
-              style={{
-                padding: "4px",
-                borderRadius: "6px",
-                background: settingsOpen ? C.accentSubtle : "transparent",
-                border: `1px solid ${settingsOpen ? C.borderAccent : "transparent"}`,
-                color: settingsOpen ? C.accent : C.textMuted,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                transition: "all 0.15s",
-              }}
-            >
-              <Settings2 size={13} />
-            </button>
-          )}
-          {isPowerManaged && (
+                    {live.drift && (
+                      <MetaChip tone="warn" title={t("driftTitle", { model: runtime.model_identifier ?? "—" })}>
+                        {t("drift")}
+                      </MetaChip>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ color: STATUS_TEXT.error }}>
+                    {t("engineUnreachable", { count: live.consecutive_failures })}
+                  </span>
+                )}
+              </span>
+            )}
+            <BoundAgents runtime={runtime} />
+            {!isProbeable && <RuntimeModelEditor runtime={runtime} onMessage={setActionMsg} />}
+          </>
+        }
+        action={
+          canStart ? (
             <ActionButton
-              icon={Power}
-              label={t("wake")}
-              // Enabled when the box is asleep, or generally whenever it is not
-              // yet serving (state !== "ready"); WoL is cheap and idempotent.
-              disabled={(!isAsleep && effectiveState === "ready") || isMutating}
-              onClick={() => wakeMutation.mutate()}
-              loading={wakeMutation.isPending}
+              icon={Play}
+              label={t("start")}
+              disabled={isMutating}
+              onClick={() => startMutation.mutate()}
+              loading={startMutation.isPending}
               variant="success"
             />
-          )}
-          <ActionButton
-            icon={Play}
-            label={t("start")}
-            disabled={!canStart || isMutating}
-            onClick={() => startMutation.mutate()}
-            loading={startMutation.isPending}
-            variant="success"
-          />
-          <ActionButton
-            icon={Square}
-            label={t("stop")}
-            disabled={!canStop || isMutating}
-            onClick={() => stopMutation.mutate()}
-            loading={stopMutation.isPending}
-            variant="danger"
-          />
-          {runtime.runtime_type !== "lmstudio" && (
+          ) : (
             <ActionButton
-              icon={RotateCcw}
-              label={t("restart")}
+              icon={Square}
+              label={t("stop")}
               disabled={!canStop || isMutating}
-              onClick={() => restartMutation.mutate()}
-              loading={restartMutation.isPending}
-              variant="default"
+              onClick={() => stopMutation.mutate()}
+              loading={stopMutation.isPending}
+              variant="danger"
             />
-          )}
-          {isProbeable && (
-            <ActionButton
-              icon={RefreshCw}
-              label={t("reprobe")}
-              disabled={isMutating}
-              onClick={() => probeMutation.mutate()}
-              loading={probeMutation.isPending}
-              variant="default"
+          )
+        }
+        overflow={
+          <>
+            <OverflowMenu
+              label={t("moreActions", { name: runtime.display_name })}
+              testId={`runtime-more-${runtime.slug ?? runtime.id}`}
+              actions={[
+                ...(isPowerManaged
+                  ? [{
+                      id: "wake",
+                      label: t("wake"),
+                      icon: Power,
+                      disabled: (!isAsleep && effectiveState === "ready") || isMutating,
+                      loading: wakeMutation.isPending,
+                      onClick: () => wakeMutation.mutate(),
+                    }]
+                  : []),
+                ...(runtime.runtime_type !== "lmstudio"
+                  ? [{
+                      id: "restart",
+                      label: t("restart"),
+                      icon: RotateCcw,
+                      disabled: !canStop || isMutating,
+                      loading: restartMutation.isPending,
+                      onClick: () => restartMutation.mutate(),
+                    }]
+                  : []),
+                ...(isProbeable
+                  ? [{
+                      id: "reprobe",
+                      label: t("reprobe"),
+                      icon: RefreshCw,
+                      disabled: isMutating,
+                      loading: probeMutation.isPending,
+                      onClick: () => probeMutation.mutate(),
+                    }]
+                  : []),
+                ...(isLmStudio
+                  ? [{
+                      id: "ctx",
+                      label: t("ctxSettings"),
+                      icon: Settings2,
+                      onClick: () => setSettingsOpen((v) => !v),
+                    }]
+                  : []),
+              ]}
             />
-          )}
-          {runtime.runtime_type === "vllm_docker" && (
-            <SparkRecipeSwitcher runtimeId={runtime.id} />
-          )}
-        </div>
-      </div>
+            {runtime.runtime_type === "vllm_docker" && <SparkRecipeSwitcher runtimeId={runtime.id} />}
+          </>
+        }
+      />
 
-      {/* Context Settings Panel */}
       {settingsOpen && isLmStudio && (
         <ContextSettingsPanel
           modelId={lmsKey}
@@ -1553,24 +1441,8 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
         />
       )}
 
-      {/* Feedback message */}
-      {actionMsg && (
-        <div
-          className="text-xs mx-4 mb-3 px-3 py-2 rounded-lg"
-          style={{
-            background: C.accentSubtle,
-            border: `1px solid ${C.borderAccent}`,
-            color: C.textSecondary,
-          }}
-        >
-          {actionMsg}
-        </div>
-      )}
-
-      {/* Bound Agents Footer (Phase 15 T3.3) */}
-      <BoundAgentsFooter runtime={runtime} />
-
-    </motion.div>
+      {actionMsg && <RowNote>{actionMsg}</RowNote>}
+    </div>
   );
 }
 
@@ -1603,7 +1475,7 @@ function KvResetScheduleToggle() {
     <div className="shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+        className="flex items-center gap-1.5 text-xs px-2.5 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
         style={{
           background: open ? `${C.warning}1A` : C.borderSubtle,
           border: open ? `1px solid ${C.warning}4D` : `1px solid ${C.borderSubtle}`,
@@ -1611,14 +1483,12 @@ function KvResetScheduleToggle() {
         }}
         title={t("scheduleTitle")}
       >
-        ⏱ {t("toggle")}
+        <Clock size={11} />
+        {t("toggle")}
         {activeSchedule && (
-          <span
-            className="text-xs px-1 rounded"
-            style={{ background: `${C.online}1F`, color: C.online, fontSize: "9px" }}
-          >
+          <MetaChip tone="ok" className="tabular-nums">
             {activeSchedule.time_of_day}
-          </span>
+          </MetaChip>
         )}
       </button>
 
@@ -1679,10 +1549,106 @@ function KvResetScheduleToggle() {
 }
 
 
+// ── Models section (provider catalog · local recipes · download) ──────────────
+
+type ModelsTab = "providers" | "local" | "download";
+
+const MODELS_TAB_EVENT = "mc:models-tab";
+
+/** Jump to the Models section and select a tab (used by the LM Studio pointer). */
+function openModelsTab(tab: ModelsTab) {
+  requestSectionOpen("models");
+  window.dispatchEvent(new CustomEvent(MODELS_TAB_EVENT, { detail: tab }));
+  requestAnimationFrame(() => {
+    document.getElementById("models")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+function ModelsSection() {
+  const t = useTranslations("runtimes.models");
+  const [tab, setTab] = useState<ModelsTab>("providers");
+
+  useEffect(() => {
+    const onTab = (e: Event) => setTab((e as CustomEvent<ModelsTab>).detail);
+    window.addEventListener(MODELS_TAB_EVENT, onTab);
+    return () => window.removeEventListener(MODELS_TAB_EVENT, onTab);
+  }, []);
+
+  // Same query keys the child components use, so TanStack serves these from
+  // cache — the counts cost no extra request.
+  const { data: catalog } = useQuery({
+    queryKey: ["model-catalog"],
+    queryFn: () => api.modelCatalog.list(),
+  });
+  const { data: local } = useQuery({
+    queryKey: ["local-registry", false],
+    queryFn: () => api.localRegistry.list({ enabled: true }),
+    retry: false,
+  });
+
+  const providerCount = catalog?.providers?.length ?? 0;
+  const recipeCount = local?.recipes?.length ?? 0;
+
+  const tabs: { id: ModelsTab; label: string; count?: number }[] = [
+    { id: "providers", label: t("tabProviders"), count: providerCount },
+    { id: "local", label: t("tabLocal"), count: recipeCount },
+    { id: "download", label: t("tabDownload") },
+  ];
+
+  return (
+    <Section
+      id="models"
+      title={t("title")}
+      hint={t("subtitle")}
+      // No count on the header: providers and recipes are different things and
+      // their sum ("11") would read as a model count. Each tab counts itself.
+    >
+      <div
+        role="tablist"
+        aria-label={t("title")}
+        className="flex items-center gap-1 mb-3 flex-wrap"
+      >
+        {tabs.map((item) => {
+          const active = tab === item.id;
+          return (
+            <button
+              key={item.id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(item.id)}
+              data-testid={`models-tab-${item.id}`}
+              className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 min-h-11 sm:min-h-0 sm:px-2.5 sm:py-1.5 text-xs cursor-pointer transition-colors"
+              style={{
+                background: active ? C.accentSubtle : "transparent",
+                border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
+                color: active ? C.textPrimary : C.textMuted,
+              }}
+            >
+              {item.label}
+              {item.count != null && (
+                <span className="label-sys tabular-nums" style={{ color: C.textDim }}>
+                  {item.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "providers" && <ModelCatalogSection embedded />}
+      {tab === "local" && <LocalModelBrowser embedded />}
+      {tab === "download" && <ModelCatalog />}
+    </Section>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function RuntimesPage() {
   const t = useTranslations("runtimes");
+  const tHosts = useTranslations("runtimes.hosts");
+  const tModels = useTranslations("runtimes.models");
+  const tInfra = useTranslations("runtimes.infrastructure");
   const queryClient = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
 
@@ -1704,6 +1670,7 @@ export default function RuntimesPage() {
     refetchInterval: 30_000,
   });
 
+  const allRuntimes = data?.runtimes ?? [];
   const lmsRuntimes = data?.runtimes.filter((rt) => rt.runtime_type === "lmstudio") ?? [];
   const vllmRuntimes = data?.runtimes.filter((rt) => rt.runtime_type === "vllm_docker") ?? [];
 
@@ -1743,7 +1710,7 @@ export default function RuntimesPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setAddOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 color: C.accent,
                 border: `1px solid ${C.borderAccent}`,
@@ -1755,7 +1722,7 @@ export default function RuntimesPage() {
             </button>
             <button
               onClick={() => refetch()}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
               style={{
                 color: C.textMuted,
                 border: `1px solid ${C.borderSubtle}`,
@@ -1771,19 +1738,24 @@ export default function RuntimesPage() {
         {/* Host metrics — one bar per enabled host (ADR-048) */}
         <HostMetricsBar />
 
-        {/* vLLM Docker section */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-px" style={{ alignSelf: "stretch", background: `linear-gradient(to bottom, ${C.info} 0%, transparent 100%)`, minHeight: "36px" }} />
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>vLLM Docker</h2>
-                <span className="text-xs px-1.5 py-px rounded" style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}>Container</span>
-              </div>
-              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>{t("vllmHint")}</p>
-            </div>
-          </div>
+        {/* Three stations, top to bottom: what is running → where models come
+            from → the boxes underneath. The jump bar mirrors exactly these. */}
+        <SectionNav
+          items={[
+            { id: "runtimes", label: t("title"), count: allRuntimes.length + unattachedModels.length },
+            { id: "models", label: tModels("title") },
+            { id: "infrastructure", label: tInfra("title") },
+          ]}
+        />
 
+        {/* ── A · What is running right now ───────────────────────────────── */}
+        <Section
+          id="runtimes"
+          title={t("title")}
+          hint={t("subtitle")}
+          count={allRuntimes.length + unattachedModels.length}
+          actions={<KvResetScheduleToggle />}
+        >
           {isLoading && (
             <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
               <Loader2 size={13} className="animate-spin" />
@@ -1792,106 +1764,85 @@ export default function RuntimesPage() {
           )}
 
           {error && (
-            <div className="flex items-center gap-2 text-xs px-4 py-3 rounded-xl" style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}>
+            <div
+              className="flex items-center gap-2 text-xs px-2.5 py-2 rounded-md"
+              style={{ color: STATUS_TEXT.error, background: "transparent", border: `1px solid ${C.error}40` }}
+            >
               <AlertCircle size={13} />
               {t("loadError")}
             </div>
           )}
 
           <VllmContainerCatalog />
-
-          {data && (
-            <div className="flex flex-col gap-2">
-              {vllmRuntimes.map((rt) => (
-                <RuntimeCard key={rt.id} runtime={rt} live={liveData?.live?.[rt.slug ?? rt.id]} />
-              ))}
-              {vllmRuntimes.length === 0 && (
-                <div className="text-xs text-center py-10" style={{ color: C.textMuted }}>
-                  {t("noVllm")}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* LM Studio section */}
-        <div>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-px" style={{ alignSelf: "stretch", background: `linear-gradient(to bottom, ${C.accent} 0%, transparent 100%)`, minHeight: "36px" }} />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>LM Studio</h2>
-                <span className="text-xs px-1.5 py-px rounded" style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}>LLM</span>
-              </div>
-              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>{t("lmsHint")}</p>
-            </div>
-            <KvResetScheduleToggle />
-          </div>
-
-          <ModelCatalog />
-
           <ActiveDownloads />
 
-          {!lmsData && lmsRuntimes.length === 0 && (
-            <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
-              <Loader2 size={13} className="animate-spin" />
-              <span className="text-xs">{t("connecting")}</span>
-            </div>
-          )}
-
-          {/* Active / Inactive sections */}
+          {/* The engine is a chip on the row now, so vLLM and LM Studio no
+              longer need to be two sections with two different headers. */}
           {(() => {
             const lmsSizeMap = new Map((lmsData?.models ?? []).map((m) => [m.id, m.size_gb]));
             const getSizeGb = (rt: Runtime) => lmsSizeMap.get(rt.lms_identifier ?? "") ?? undefined;
-            const activeRuntimes = lmsRuntimes.filter((rt) => rt.state !== "stopped");
-            const inactiveRuntimes = lmsRuntimes.filter((rt) => rt.state === "stopped");
+            const activeRuntimes = allRuntimes.filter((rt) => rt.state !== "stopped");
+            const inactiveRuntimes = allRuntimes.filter((rt) => rt.state === "stopped");
             const activeModels = unattachedModels.filter((m) => m.is_loaded);
             const inactiveModels = unattachedModels.filter((m) => !m.is_loaded);
-            const hasActive = activeRuntimes.length > 0 || activeModels.length > 0;
-            const hasInactive = inactiveRuntimes.length > 0 || inactiveModels.length > 0;
-
+            const groups: [string, Runtime[], typeof activeModels][] = [
+              [t("active"), activeRuntimes, activeModels],
+              [t("inactive"), inactiveRuntimes, inactiveModels],
+            ];
             return (
               <>
-                {hasActive && (
-                  <div className="mb-3">
-                    <div className="flex items-center gap-2 mb-2 px-0.5">
-                      <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.online, letterSpacing: "0.07em", fontSize: "10px" }}>{t("active")}</span>
-                      <div className="flex-1 h-px" style={{ background: `${C.online}26` }} />
+                {groups.map(([label, runtimes, models]) =>
+                  runtimes.length + models.length === 0 ? null : (
+                    <div key={label} className="mb-3 last:mb-0">
+                      <div className="label-sys mb-1.5">{label}</div>
+                      <div className="flex flex-col gap-1.5">
+                        {runtimes.map((rt) => (
+                          <RuntimeCard
+                            key={rt.id}
+                            runtime={rt}
+                            sizeGb={getSizeGb(rt)}
+                            live={liveData?.live?.[rt.slug ?? rt.id]}
+                          />
+                        ))}
+                        {models.map((m) => (
+                          <LMStudioModelCard key={m.id} model={m} />
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-2">
-                      {activeRuntimes.map((rt) => <RuntimeCard key={rt.id} runtime={rt} sizeGb={getSizeGb(rt)} live={liveData?.live?.[rt.slug ?? rt.id]} />)}
-                      {activeModels.map((model) => <LMStudioModelCard key={model.id} model={model} />)}
-                    </div>
-                  </div>
+                  ),
                 )}
-                {hasInactive && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2 px-0.5">
-                      <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.textMuted, letterSpacing: "0.07em", fontSize: "10px" }}>{t("inactive")}</span>
-                      <div className="flex-1 h-px" style={{ background: C.border }} />
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {inactiveRuntimes.map((rt) => <RuntimeCard key={rt.id} runtime={rt} sizeGb={getSizeGb(rt)} live={liveData?.live?.[rt.slug ?? rt.id]} />)}
-                      {inactiveModels.map((model) => <LMStudioModelCard key={model.id} model={model} />)}
-                    </div>
+                {data && allRuntimes.length + unattachedModels.length === 0 && (
+                  <div className="text-xs text-center py-8" style={{ color: C.textMuted }}>
+                    {t("noVllm")}
                   </div>
                 )}
               </>
             );
           })()}
-        </div>
 
-        {/* Hosts Registry (ADR-048) */}
-        <HostsSection />
+          {/* The download panel lives in the Models section now. */}
+          <button
+            type="button"
+            onClick={() => openModelsTab("download")}
+            data-testid="lms-download-pointer"
+            className="inline-flex items-center gap-1.5 mt-2 rounded-md px-2 py-2 sm:py-1 min-h-11 sm:min-h-0 text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-surface)]"
+            style={{ color: C.textMuted }}
+          >
+            <Download size={11} />
+            {t("downloadMoved")}
+          </button>
+        </Section>
 
-        {/* Modell-Katalog (was es bei den Anbietern gibt) */}
-        <ModelCatalogSection />
+        {/* ── B · Where models come from ──────────────────────────────────── */}
+        <ModelsSection />
 
-        {/* Lokale Modelle (was auf eigener Hardware läuft) */}
-        <LocalModelBrowser />
-
-        {/* CLI-Tools (festgebackene Agent-Werkzeuge) */}
-        <CliToolsSection />
+        {/* ── C · The boxes underneath — quieter, both lists in one place ─── */}
+        <Section id="infrastructure" title={tInfra("title")} hint={tInfra("subtitle")}>
+          <div className="flex flex-col gap-5">
+            <HostsSection embedded />
+            <CliToolsSection embedded />
+          </div>
+        </Section>
       </div>
 
       <AddRuntimeModal open={addOpen} onClose={() => setAddOpen(false)} />

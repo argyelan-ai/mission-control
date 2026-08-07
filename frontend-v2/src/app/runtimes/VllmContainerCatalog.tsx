@@ -8,40 +8,38 @@ import { api } from "@/lib/api";
 import type { VllmContainer } from "@/lib/types";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { C, STATUS_TEXT } from "@/lib/colors";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 
 function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onAdd: () => void }) {
   const t = useTranslations("runtimes.vllmCatalog");
+  // A discovered container is a list row like every other list row on this
+  // page — it just happens to be rare, because it only appears while something
+  // is running that Mission Control does not know about yet.
+  const running = container.state === "running";
   return (
-    <div
-      className="flex items-center gap-3 px-4 py-3 rounded-xl"
-      style={{ border: `1px solid ${C.borderSubtle}`, background: "var(--color-bg-surface)" }}
-    >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium" style={{ color: C.textPrimary }}>
-            {container.container_name}
-          </span>
-          <span className="text-xs truncate" style={{ color: C.textMuted }}>
+    <ListRow
+      testId="vllm-container-row"
+      dataAttrs={{ "data-container": container.container_name }}
+      tone={running ? "ok" : "idle"}
+      name={container.container_name}
+      summary={[container.state, container.image].filter(Boolean).join(" · ")}
+      chips={<MetaChip tone={running ? "ok" : "idle"}>{container.state}</MetaChip>}
+      meta={
+        <>
+          <MetaText mono title={container.image}>
             {container.image}
-          </span>
-        </div>
-        <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-          {container.endpoint || t("endpointNotDetected")}
-        </div>
-      </div>
-      <button
-        onClick={onAdd}
-        className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
-        style={{
-          color: C.info,
-          border: `1px solid ${C.info}4D`,
-          background: `${C.info}0F`,
-        }}
-      >
-        <Plus size={11} />
-        {t("add")}
-      </button>
-    </div>
+          </MetaText>
+          <MetaText mono title={container.endpoint || undefined}>
+            {container.endpoint || t("endpointNotDetected")}
+          </MetaText>
+        </>
+      }
+      action={
+        <RowAction icon={<Plus size={10} />} onClick={onAdd}>
+          {t("add")}
+        </RowAction>
+      }
+    />
   );
 }
 
@@ -230,16 +228,8 @@ export function VllmContainerCatalog() {
 
   return (
     <>
-      <div className="flex items-center gap-2 mb-2 px-0.5">
-        <span
-          className="text-xs font-medium tracking-wider uppercase"
-          style={{ color: C.textMuted, letterSpacing: "0.07em", fontSize: "10px" }}
-        >
-          {t("discovered")}
-        </span>
-        <div className="flex-1 h-px" style={{ background: C.border }} />
-      </div>
-      <div className="flex flex-col gap-2 mb-3">
+      <div className="label-sys mb-1.5">{t("discovered")}</div>
+      <div className="flex flex-col gap-1.5 mb-3">
         {unregistered.map((c) => (
           <VllmContainerCard key={c.container_name} container={c} onAdd={() => setOpen(c)} />
         ))}

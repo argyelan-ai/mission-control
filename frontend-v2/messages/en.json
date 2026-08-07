@@ -994,7 +994,7 @@
     },
     "autonomy": {
       "title": "Autonomy Levels",
-      "description": "Decide for each action whether agents act autonomously (L1), notify you (L2), or wait for approval (L3).",
+      "description": "Decide for each action whether agents act on their own, notify you, or wait for your approval.",
       "action": "Action",
       "custom": "custom",
       "legend": "L1 = Auto | L2 = Notify | L3 = Approve",
@@ -1392,6 +1392,13 @@
       "settingSaved": "Saved — applied immediately",
       "settingSaveFailed": "Saving failed",
       "docsNote": "Full setup guide: docs/setup/telegram.md in the repository. The health watchdog reads its Telegram credentials from .env on purpose (it must work when MC is down) — it is not affected by these settings."
+    },
+    "groups": {
+      "account": "Account",
+      "fleet": "Fleet",
+      "connections": "Connections",
+      "secrets": "Secrets",
+      "system": "System"
     }
   },
   "skills": {
@@ -1789,7 +1796,9 @@
       "filesCount": "{name} · {count} files",
       "loadArrow": "↓ Load",
       "loadingVariants": "Loading variants...",
-      "noVariants": "No GGUF variants found"
+      "noVariants": "No GGUF variants found",
+      "download": "Download",
+      "load": "Load"
     },
     "modelEditor": {
       "model": "Model:",
@@ -1876,7 +1885,8 @@
       "deleteHostAria": "Delete host {name}",
       "runtimeSingular": "Runtime",
       "runtimePlural": "Runtimes",
-      "addBoxButton": "Add box"
+      "addBoxButton": "Add box",
+      "rowActions": "More actions for {name}"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint not detected",
@@ -2076,7 +2086,8 @@
       "installDone": "Installation finished.",
       "installCreateAndStart": "Create runtime & start",
       "installRuntimeCreated": "Runtime created and started — weights are still loading.",
-      "close": "Close"
+      "close": "Close",
+      "rowActions": "More actions for {name}"
     },
     "bindAgentModal": {
       "title": "Bind agent",
@@ -2159,6 +2170,19 @@
       "resultTitle": "Runtime created and started",
       "resultState": "Status: {state}",
       "resultHint": "Loading the weights takes a few minutes on the first start. The runtime card shows the live status."
+    },
+    "moreActions": "More actions for {name}",
+    "models": {
+      "title": "Models",
+      "subtitle": "What providers offer, what runs on your own boxes, and what to download",
+      "tabProviders": "Providers",
+      "tabLocal": "Own hardware",
+      "tabDownload": "Download"
+    },
+    "downloadMoved": "Download models → Models section",
+    "infrastructure": {
+      "title": "Infrastructure",
+      "subtitle": "The boxes and the pinned agent tools underneath"
     }
   },
   "bench": {
@@ -2322,5 +2346,20 @@
     "x_api_secret": "Consumer secret from the X developer portal — for the X post publisher (ADR-065)",
     "x_access_token": "OAuth 1.0a access token of the posting account — for the X post publisher (ADR-065)",
     "x_access_token_secret": "OAuth 1.0a access token secret of the posting account — for the X post publisher (ADR-065)"
+  },
+  "common": {
+    "section": {
+      "collapse": "Collapse {name}",
+      "expand": "Expand {name}",
+      "jumpTo": "Jump to section"
+    },
+    "cappedList": {
+      "showAll": "Show {n} more",
+      "showFewer": "Show fewer"
+    },
+    "listRow": {
+      "expand": "Show details",
+      "collapse": "Hide details"
+    }
   }
 }

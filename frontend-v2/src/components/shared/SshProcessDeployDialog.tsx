@@ -235,13 +235,13 @@ export function SshProcessDeployDialog({
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/60" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={t("installDialogTitle", { name: recipe.display_name })}
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-xl rounded-t-2xl sm:rounded-2xl border border-subtle bg-elevated overflow-hidden max-h-[92dvh] flex flex-col"
+        className="relative w-full max-w-xl rounded-t-md sm:rounded-md border border-subtle bg-elevated overflow-hidden max-h-[92dvh] flex flex-col"
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-subtle">
           <div className="min-w-0">
@@ -272,7 +272,7 @@ export function SshProcessDeployDialog({
                 value={hostId}
                 onChange={(e) => setHostId(e.target.value)}
                 aria-label={t("installHostLabel")}
-                className="rounded-md border border-subtle bg-surface px-2 py-1.5 text-xs text-primary cursor-pointer"
+                className="rounded-md border border-subtle bg-surface px-2 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 text-xs text-primary cursor-pointer"
               >
                 {sshHosts.map((h) => (
                   <option key={h.id} value={h.id}>
@@ -295,7 +295,7 @@ export function SshProcessDeployDialog({
                 value={runtimeSlug}
                 onChange={(e) => setRuntimeSlug(slugify(e.target.value))}
                 aria-label={t("installSlugLabel")}
-                className="rounded-md border border-subtle bg-surface px-2 py-1.5 font-mono text-xs text-primary outline-none"
+                className="rounded-md border border-subtle bg-surface px-2 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 font-mono text-xs text-primary outline-none"
               />
             </label>
             <label className="flex flex-col gap-1">
@@ -305,7 +305,7 @@ export function SshProcessDeployDialog({
                 value={port}
                 onChange={(e) => setPort(Number(e.target.value))}
                 aria-label={t("installPortLabel")}
-                className="rounded-md border border-subtle bg-surface px-2 py-1.5 font-mono text-xs text-primary outline-none"
+                className="rounded-md border border-subtle bg-surface px-2 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 font-mono text-xs text-primary outline-none"
               />
             </label>
           </div>
@@ -383,7 +383,7 @@ export function SshProcessDeployDialog({
             data-testid="ssh-deploy-install"
             onClick={startInstall}
             disabled={busy || polling || !hostId}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-subtle bg-surface px-3 py-1.5 text-xs text-muted cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 rounded-md border border-subtle bg-surface px-3 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 text-xs text-muted cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {polling ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
             {polling ? t("installRunning") : t("installStart")}
@@ -393,7 +393,7 @@ export function SshProcessDeployDialog({
             data-testid="ssh-deploy-create"
             onClick={createAndStart}
             disabled={busy || polling || !hostId || !runtimeSlug || created}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent-subtle px-3 py-1.5 text-xs text-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-subtle px-3 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 text-xs text-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {busy ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
             {t("installCreateAndStart")}

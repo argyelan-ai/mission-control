@@ -45,6 +45,9 @@ import type {
 } from "@/lib/types";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
+import { SectionOrFragment } from "@/components/shared/Section";
+import { CappedList } from "@/components/shared/CappedList";
+import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
@@ -127,74 +130,75 @@ function ModelRow({
   const isNew = model.bound === false && !isCliOnly;
 
   return (
-    <li
-      data-testid="catalog-model-row"
-      data-bound={model.bound ? "true" : "false"}
-      data-cli-only={isCliOnly ? "true" : "false"}
-      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md border ${
-        isNew ? "bg-surface border-subtle" : "border-transparent"
-      }`}
-    >
-      <div className="min-w-0 flex-1">
-        <div
-          className={`font-mono text-[11px] truncate ${
-            isNew ? "text-primary" : "text-muted"
-          }`}
-          title={model.id}
+    <ListRow
+      testId="catalog-model-row"
+      dataAttrs={{
+        role: "listitem",
+        "data-bound": model.bound ? "true" : "false",
+        "data-cli-only": isCliOnly ? "true" : "false",
+      }}
+      tone={isNew ? "accent" : "idle"}
+      name={
+        <span
+          className="font-mono text-[11px]"
+          title={
+            model.display_name && model.display_name !== model.id
+              ? `${model.id} · ${model.display_name}`
+              : model.id
+          }
         >
           {model.id}
-        </div>
-        {(model.display_name || model.context_window) && (
-          <div className="text-[10px] truncate text-dim">
-            {model.display_name !== model.id ? model.display_name : null}
-            {model.display_name && model.display_name !== model.id && model.context_window
-              ? " · "
-              : null}
-            {model.context_window
-              ? t("contextK", { n: Math.round(model.context_window / 1024) })
-              : null}
-          </div>
-        )}
-      </div>
-
-      {isCliOnly ? (
-        <span
-          data-testid="catalog-cli-only-badge"
-          title={model.note ?? t("cliOnlyTitle")}
-          className="shrink-0 inline-flex items-center gap-1 label-sys text-dim border border-subtle rounded-sm px-1.5 py-px"
-        >
-          <Terminal size={10} />
-          {t("cliOnlyBadge")}
         </span>
-      ) : isNew ? (
+      }
+      summary={
+        model.context_window != null
+          ? t("contextK", { n: Math.round(model.context_window / 1024) })
+          : undefined
+      }
+      chips={
         <>
-          <span
-            data-testid="catalog-new-badge"
-            className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-          >
-            {t("newBadge")}
-          </span>
-          <button
-            type="button"
+          {isCliOnly && (
+            <MetaChip
+              tone="idle"
+              icon={<Terminal size={10} />}
+              title={model.note ?? t("cliOnlyTitle")}
+              testId="catalog-cli-only-badge"
+            >
+              {t("cliOnlyBadge")}
+            </MetaChip>
+          )}
+          {isNew && (
+            <MetaChip tone="accent" testId="catalog-new-badge">
+              {t("newBadge")}
+            </MetaChip>
+          )}
+          {!isNew && !isCliOnly && (
+            <MetaChip tone="idle" title={t("boundTitle")}>
+              {t("boundBadge")}
+            </MetaChip>
+          )}
+        </>
+      }
+      meta={
+        model.context_window != null ? (
+          <MetaText className="tabular-nums shrink-0">
+            {t("contextK", { n: Math.round(model.context_window / 1024) })}
+          </MetaText>
+        ) : undefined
+      }
+      action={
+        isNew ? (
+          <RowAction
+            icon={binding ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
             onClick={() => onBind(model)}
             disabled={binding}
             title={t("createRuntimeRowTitle", { id: model.id })}
-            className="shrink-0 inline-flex items-center gap-1 rounded-sm px-2 py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {binding ? (
-              <Loader2 size={10} className="animate-spin" />
-            ) : (
-              <Plus size={10} />
-            )}
             {t("createAsRuntime")}
-          </button>
-        </>
-      ) : (
-        <span className="shrink-0 label-sys" title={t("boundTitle")}>
-          {t("boundBadge")}
-        </span>
-      )}
-    </li>
+          </RowAction>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -230,51 +234,46 @@ function ProviderGroup({
       data-status={provider.status}
       className="rounded-lg border border-subtle bg-elevated overflow-hidden"
     >
-      {/* Kopfzeile */}
-      <div className="flex items-center gap-2 px-3 py-2.5">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left cursor-pointer"
-        >
+      {/* Kopfzeile — eine Zeile: Status, Name, Protokoll, Anzahl, Prüfzeit. */}
+      <ListRow
+        testId="catalog-provider-row"
+        tone={chrome.tone === "ok" ? "ok" : chrome.tone === "warn" ? "warn" : "error"}
+        className="!border-transparent !bg-transparent"
+        onClick={() => setOpen((v) => !v)}
+        leading={
           <ChevronRight
             size={13}
             className={`shrink-0 text-dim transition-transform ${open ? "rotate-90" : ""}`}
           />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-primary truncate">
-                {provider.display_name || provider.key}
-              </span>
-              <span className="label-sys shrink-0">{provider.protocol}</span>
-              {newCount > 0 && (
-                <span
-                  data-testid="catalog-new-count"
-                  className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-                >
-                  {newCount} {t("newLabel")}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px]">
-              <chrome.Icon size={11} className={`shrink-0 ${TONE_TEXT[chrome.tone]}`} />
-              <span className={TONE_TEXT[chrome.tone]}>{t(chrome.labelKey)}</span>
-              <span className="text-dim">·</span>
-              <span className="text-muted">{t("checked", { time: timeAgo(provider.cached_at, locale) })}</span>
-            </div>
-          </div>
-        </button>
-
-        {provider.endpoint && (
-          <span
-            className="hidden sm:block shrink-0 max-w-[220px] truncate font-mono text-[10px] text-dim"
-            title={provider.endpoint}
-          >
-            {provider.endpoint}
-          </span>
-        )}
-      </div>
+        }
+        name={provider.display_name || provider.key}
+        summary={[provider.protocol, `${models.length}`, t(chrome.labelKey)].join(" · ")}
+        chips={
+          <>
+            <MetaChip tone="idle">{provider.protocol}</MetaChip>
+            <MetaChip tone="idle" className="tabular-nums">
+              {models.length}
+            </MetaChip>
+            {newCount > 0 && (
+              <MetaChip tone="accent" testId="catalog-new-count">
+                {newCount} {t("newLabel")}
+              </MetaChip>
+            )}
+          </>
+        }
+        meta={
+          <>
+            <MetaText className="hidden sm:inline shrink-0" title={t(chrome.labelKey)}>
+              {t("checked", { time: timeAgo(provider.cached_at, locale) })}
+            </MetaText>
+            {provider.endpoint && (
+              <MetaText mono className="hidden sm:inline max-w-[220px]" title={provider.endpoint}>
+                {provider.endpoint}
+              </MetaText>
+            )}
+          </>
+        }
+      />
 
       {/* Ehrliches Status-Band — nennt Zustand UND Grund */}
       {chrome.headlineKey && (
@@ -301,7 +300,17 @@ function ProviderGroup({
       {open && (
         <div className="px-3 pb-3">
           {models.length > 0 ? (
-            <ul className="flex flex-col gap-1">
+            // Anthropic alone lists eleven models; showing every one of them
+            // by default made an expanded provider taller than the rest of the
+            // page put together.
+            <CappedList
+              maxRows={6}
+              role="list"
+              // This list sits on the provider card, not on the page canvas.
+              fadeTo="var(--color-bg-elevated)"
+              className="gap-1"
+              testId={`catalog-models-${provider.key}`}
+            >
               {models.map((m) => (
                 <ModelRow
                   key={m.id}
@@ -310,7 +319,7 @@ function ProviderGroup({
                   onBind={(model) => onBind(provider, model)}
                 />
               ))}
-            </ul>
+            </CappedList>
           ) : probeSucceeded ? (
             <div className="py-3 text-center text-[11px] text-muted">
               {t("providerReachableNoModels")}
@@ -333,7 +342,7 @@ interface PendingBind {
   model: ModelCatalogModel;
 }
 
-export function ModelCatalogSection() {
+export function ModelCatalogSection({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useTranslations("runtimes.modelCatalog");
   const locale = useLocale();
   const queryClient = useQueryClient();
@@ -410,35 +419,30 @@ export function ModelCatalogSection() {
     : null;
 
   return (
-    <div className="mt-8">
-      {/* Sektions-Kopf — spiegelt die CLI-Tools-/vLLM-Header dieser Seite */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          aria-hidden
-          className="w-px self-stretch min-h-[36px] bg-gradient-to-b from-[var(--color-accent)] to-transparent"
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-primary">{t("title")}</h2>
-            <span className="label-sys rounded-sm bg-surface px-1.5 py-px">{t("providersBadge")}</span>
-            {totalNew > 0 && (
-              <span
-                data-testid="catalog-total-new"
-                className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-              >
-                {totalNew} {t("newLabel")}
-              </span>
-            )}
-          </div>
-          <p className="text-xs mt-0.5 text-muted">
-            {t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
-          </p>
-        </div>
+    <SectionOrFragment
+      embedded={embedded}
+      // The Models tab strip already names and counts this surface.
+      embeddedTitle={false}
+      id="model-catalog"
+      title={t("title")}
+      hint={t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
+      count={providers.length}
+      badge={
+        totalNew > 0 ? (
+          <span
+            data-testid="catalog-total-new"
+            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-0.5"
+          >
+            {totalNew} {t("newLabel")}
+          </span>
+        ) : undefined
+      }
+      actions={
         <button
           type="button"
           onClick={() => refreshMutation.mutate()}
           disabled={refreshMutation.isPending}
-          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-subtle bg-surface text-muted transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md border border-subtle bg-surface text-muted transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {refreshMutation.isPending ? (
             <Loader2 size={11} className="animate-spin" />
@@ -447,7 +451,8 @@ export function ModelCatalogSection() {
           )}
           {t("refreshNow")}
         </button>
-      </div>
+      }
+    >
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2 text-muted">
@@ -470,7 +475,7 @@ export function ModelCatalogSection() {
       )}
 
       {providers.length > 0 && (
-        <div className="flex flex-col gap-2">
+        <CappedList testId="catalog-list" maxRows={2}>
           {providers.map((p) => (
             <ProviderGroup
               key={p.key}
@@ -479,7 +484,7 @@ export function ModelCatalogSection() {
               onBind={(provider, model) => setPending({ provider, model })}
             />
           ))}
-        </div>
+        </CappedList>
       )}
 
       <ConfirmDialog
@@ -506,6 +511,6 @@ export function ModelCatalogSection() {
         onConfirm={() => pending && bindMutation.mutate(pending)}
         onCancel={() => setPending(null)}
       />
-    </div>
+    </SectionOrFragment>
   );
 }
