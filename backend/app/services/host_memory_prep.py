@@ -480,7 +480,7 @@ async def finish_for_runtime(
     result = await finish(handle, host=host, success=success)
     await _emit(
         "runtime.memory_prep_finished",
-        f"{handle.slug}: Box-Speicher zurückgesetzt "
+        f"{handle.slug or handle.host_key}: Box-Speicher zurückgesetzt "
         f"(Watermark {'wiederhergestellt' if result.get('restored') else 'unverändert'}, "
         f"Dropper {'entfernt' if result.get('dropper_removed') else 'nicht aktiv'})",
         severity="info",
