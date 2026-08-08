@@ -186,6 +186,9 @@ export function SshProcessDeployDialog({
   }, [log.length]);
 
   const neighbours = exclusiveNeighbours(runtimesQuery.data?.runtimes ?? [], hostId || null);
+  // Sortiert, damit die Vorschau in derselben Reihenfolge steht wie der Block,
+  // den das Backend spaeter in die compose.override.yaml schreibt.
+  const envEntries = Object.entries(recipe.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
 
   async function startInstall() {
     if (!hostId) return;
@@ -220,6 +223,10 @@ export function SshProcessDeployDialog({
         launch_template: recipe.launch_template,
         stop_template: recipe.stop_template,
         ctx: recipe.context_len,
+        // Das Tuning gehoert zum Rezept. Es hier mitzugeben ist der Unterschied
+        // zwischen „die Werte stehen in der DB" und „die Werte stehen in der
+        // compose.override.yaml auf der Box".
+        env: recipe.env,
       });
       const runtime = await api.runtimes.create({
         slug: runtimeSlug,
@@ -330,6 +337,23 @@ export function SshProcessDeployDialog({
               />
             </label>
           </div>
+
+          {envEntries.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="label-sys label-sys--dim">{t("installEnvLabel")}</span>
+              <div
+                data-testid="ssh-deploy-env"
+                className="rounded-md border border-subtle bg-surface px-2.5 py-2 font-mono text-[10px] text-muted flex flex-col gap-0.5"
+              >
+                {envEntries.map(([key, value]) => (
+                  <div key={key} className="break-all">
+                    {key}={value}
+                  </div>
+                ))}
+              </div>
+              <span className="text-[10px] text-muted">{t("installEnvHint")}</span>
+            </div>
+          )}
 
           {neighbours.length > 0 && (
             <div

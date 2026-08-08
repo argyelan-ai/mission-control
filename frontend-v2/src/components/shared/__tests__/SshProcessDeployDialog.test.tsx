@@ -55,6 +55,7 @@ const mkRecipe = (overrides: Partial<LocalRecipe> = {}): LocalRecipe => ({
   author_url: "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-One-DGX-Spark",
   source_registry: "builtin",
   source_url: null,
+  env: null,
   tags: ["solo"],
   notes: null,
   enabled: true,
@@ -351,6 +352,55 @@ describe("ssh_process deploy", () => {
     // Bestehender Start-Endpoint — kein zweiter Lifecycle-Pfad.
     expect(start).toHaveBeenCalledWith("rt-new");
     await screen.findByTestId("ssh-deploy-created");
+  });
+
+  // ── Engine-Tuning (PR 8) ──────────────────────────────────────────────────
+
+  it("shows the recipe env before anything is deployed", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
+    renderDialog(
+      mkRecipe({ env: { GPU_MEMORY_UTILIZATION: "0.895", MAX_NUM_SEQS: "2" } }),
+    );
+
+    const block = await screen.findByTestId("ssh-deploy-env");
+    // Genau die Werte, die auf der Box landen — sortiert wie im Override.
+    expect(block.textContent).toContain("GPU_MEMORY_UTILIZATION=0.895");
+    expect(block.textContent).toContain("MAX_NUM_SEQS=2");
+  });
+
+  it("hides the tuning block for a recipe without env", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
+    renderDialog(mkRecipe({ env: null }));
+
+    await screen.findByTestId("ssh-deploy-install");
+    expect(screen.queryByTestId("ssh-deploy-env")).toBeNull();
+  });
+
+  it("passes the env to the backend renderer", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog({ status: "done" }));
+    const render_ = vi.spyOn(api.hosts, "launchCommand").mockResolvedValue({
+      launch_command: "cd repo && docker compose $ARGS up -d",
+      stop_command: null,
+    });
+    vi.spyOn(api.runtimes, "create").mockResolvedValue({ id: "rt-new" } as Runtime);
+    vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
+
+    const env = { MODE: "mtp0" };
+    renderDialog(mkRecipe({ env }));
+    const button = await screen.findByTestId("ssh-deploy-create");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    // Ohne diese Zeile stünde das Tuning in der DB und nicht auf der Box.
+    await waitFor(() =>
+      expect(render_).toHaveBeenCalledWith(expect.objectContaining({ env })),
+    );
   });
 
   it("reports a failed start instead of claiming success", async () => {

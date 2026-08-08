@@ -25,12 +25,20 @@ from __future__ import annotations
 
 import re
 
-# The only placeholders a template may use. The last three exist for
+# The only placeholders a template may use. The middle three exist for
 # ssh_process (PR 6): a host engine has no image and no container, it has a
-# source checkout, a weight directory and a context budget.
+# source checkout, a weight directory and a context budget. ``env_yaml`` (PR 8)
+# is the recipe's ``env`` map rendered as a compose ``environment:`` block.
 KNOWN_PLACEHOLDERS = (
     "port", "model", "slug", "container_name", "image", "src_dir", "gguf_dir", "ctx",
+    "env_yaml",
 )
+
+# Placeholders that may legitimately render to nothing. Every other one is
+# required: a half-rendered docker command is not something to discover on the
+# remote box. A recipe with no tuning simply has no environment block, and
+# demanding a value there would make ``env`` mandatory for every compose entry.
+OPTIONAL_PLACEHOLDERS = ("env_yaml",)
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 
@@ -96,6 +104,8 @@ def render_launch_template(template: str, values: dict[str, object]) -> str:
             return match.group(0)
         value = values.get(name)
         if value is None or str(value) == "":
+            if name in OPTIONAL_PLACEHOLDERS:
+                return ""
             missing.append(name)
             return match.group(0)
         return str(value)
@@ -114,6 +124,56 @@ def render_launch_template(template: str, values: dict[str, object]) -> str:
     return rendered
 
 
+#: Indentation of the compose ``environment:`` block. The recipes write a
+#: two-space service key, so its children sit at four and the list items at six.
+_ENV_INDENT = "    "
+_ENV_ITEM_INDENT = "      "
+
+_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: Characters that would break out of the `printf '<format>'` the compose
+#: recipes wrap this in, or corrupt it: a quote ends the string, a percent is a
+#: printf directive, a backslash is an escape, a newline is not expressible.
+_ENV_FORBIDDEN = ("'", '"', "%", "\\", "\n", "\r")
+
+
+def render_compose_env(env: dict[str, str] | None) -> str:
+    """A recipe's ``env`` map as a compose ``environment:`` block.
+
+    Returns printf-ready text: the newlines are the two-character sequence
+    ``\\n``, because the compose recipes write their override with
+    ``printf 'services:\\n …' > compose.override.yaml`` and this is spliced
+    into that format string. An empty/absent map renders to ``""``, which is
+    how a recipe without tuning produces an override with no environment block
+    at all rather than an empty one.
+
+    Values are validated rather than escaped. Anything that could terminate the
+    printf format string or act as a directive inside it is rejected with a
+    readable error — a quoting bug here would be discovered as a mangled YAML
+    file on the box, hours into a weight download.
+    """
+    items = {str(k): str(v) for k, v in (env or {}).items()}
+    if not items:
+        return ""
+
+    lines = [f"{_ENV_INDENT}environment:"]
+    for key in sorted(items):
+        value = items[key]
+        if not _ENV_KEY_RE.fullmatch(key):
+            raise ValueError(
+                f"Ungültiger env-Schlüssel {key!r} — erlaubt sind Buchstaben, "
+                f"Ziffern und _ (nicht mit einer Ziffer beginnend)."
+            )
+        bad = [c for c in _ENV_FORBIDDEN if c in value]
+        if bad:
+            raise ValueError(
+                f"env-Wert für {key!r} enthält unzulässige Zeichen "
+                f"({', '.join(repr(c) for c in bad)}) — der Wert wird in eine "
+                f"compose.override.yaml geschrieben, die per printf entsteht."
+            )
+        lines.append(f"{_ENV_ITEM_INDENT}- {key}={value}")
+    return "\\n".join(lines) + "\\n"
+
+
 def build_launch_command(
     *,
     engine: str,
@@ -126,6 +186,7 @@ def build_launch_command(
     src_dir: str | None = None,
     gguf_dir: str | None = None,
     ctx: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     """The launch command for a new runtime from a registry entry.
 
@@ -134,6 +195,11 @@ def build_launch_command(
     ``--label mc.runtime.slug=<slug>`` — without it the lifecycle ops can't
     find the container again. ssh_process engines are exempt: there is no
     container to label, and their handle is ``process_name`` instead.
+
+    ``env`` (PR 8) is the recipe's tuning map. It reaches the template through
+    the ``{env_yaml}`` placeholder, which only the compose recipes use — for a
+    plain ``docker run`` template it simply never appears, and the map is
+    ignored rather than silently dropped into an unrelated command line.
     """
     if not _SLUG_RE.fullmatch(slug or ""):
         raise ValueError(f"slug muss alphanumerisch / _ / - sein: {slug!r}")
@@ -167,6 +233,7 @@ def build_launch_command(
             "src_dir": src_dir or DEFAULT_SRC_DIR,
             "gguf_dir": gguf_dir or DEFAULT_GGUF_DIR,
             "ctx": ctx if ctx else 0,
+            "env_yaml": render_compose_env(env),
         },
     )
 
@@ -187,12 +254,17 @@ def build_install_command(
     src_dir: str | None = None,
     gguf_dir: str | None = None,
     ctx: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     """Render a recipe's ``install_template`` — same renderer, same placeholders.
 
     Separate from :func:`build_launch_command` only because an install has no
     container name, no image and no per-engine default: an entry that does not
     ship an install_template simply has nothing to install.
+
+    ``env`` matters here too: the compose recipes write their override file in
+    the install step as well, and an install that came up with different tuning
+    than the launch would be a stack that only works until it is restarted.
     """
     if not _SLUG_RE.fullmatch(slug or ""):
         raise ValueError(f"slug muss alphanumerisch / _ / - sein: {slug!r}")
@@ -209,5 +281,6 @@ def build_install_command(
             "src_dir": src_dir or DEFAULT_SRC_DIR,
             "gguf_dir": gguf_dir or DEFAULT_GGUF_DIR,
             "ctx": ctx if ctx else 0,
+            "env_yaml": render_compose_env(env),
         },
     )

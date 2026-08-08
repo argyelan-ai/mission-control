@@ -1924,6 +1924,13 @@ export interface LocalRecipe {
   author_url: string | null;
   source_registry: string;
   source_url: string | null;
+  /**
+   * Engine-Tuning als Daten. Die compose-Rezepte rendern diese Werte in den
+   * `environment:`-Block ihrer compose.override.yaml — damit ueberlebt das
+   * Tuning einen Re-Deploy, statt als handgeschriebene Datei auf der Box zu
+   * liegen. null = kein Tuning.
+   */
+  env: Record<string, string> | null;
   tags: string[];
   notes: string | null;
   enabled: boolean;

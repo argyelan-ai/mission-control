@@ -82,6 +82,7 @@ const mkRecipe = (overrides: Partial<LocalRecipe> = {}): LocalRecipe => ({
   author_url: null,
   source_registry: "builtin",
   source_url: null,
+  env: null,
   tags: [],
   notes: null,
   enabled: true,

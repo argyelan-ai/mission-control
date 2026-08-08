@@ -1998,6 +1998,9 @@ export const api = {
       src_dir?: string | null;
       gguf_dir?: string | null;
       ctx?: number | null;
+      // Rezept-Tuning: nur die compose-Templates lesen es (via {env_yaml}),
+      // fuer jedes andere Template ist es wirkungslos.
+      env?: Record<string, string> | null;
     }): Promise<{ launch_command: string; stop_command: string | null }> =>
       request("/api/v1/hosts/launch-command", { method: "POST", body: JSON.stringify(data) }),
   },

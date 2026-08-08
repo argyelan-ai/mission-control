@@ -228,6 +228,9 @@ class LaunchCommandBody(BaseModel):
     src_dir: str | None = Field(default=None, max_length=512)
     gguf_dir: str | None = Field(default=None, max_length=512)
     ctx: int | None = Field(default=None, ge=0)
+    # Recipe tuning (PR 8). Only the compose templates consume it (via
+    # ``{env_yaml}``); for every other template it is inert.
+    env: dict[str, str] | None = None
 
 
 @router.post("/launch-command")
@@ -263,6 +266,7 @@ async def preview_launch_command(
             src_dir=body.src_dir,
             gguf_dir=body.gguf_dir,
             ctx=body.ctx,
+            env=body.env,
         )
         stop_command = (
             launch_template.render_launch_template(
@@ -276,6 +280,7 @@ async def preview_launch_command(
                     "src_dir": body.src_dir or launch_template.DEFAULT_SRC_DIR,
                     "gguf_dir": body.gguf_dir or launch_template.DEFAULT_GGUF_DIR,
                     "ctx": body.ctx or 0,
+                    "env_yaml": launch_template.render_compose_env(body.env),
                 },
             )
             if body.stop_template

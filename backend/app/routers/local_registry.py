@@ -61,6 +61,7 @@ class LocalRecipeOut(BaseModel):
     author_url: str | None
     source_registry: str
     source_url: str | None
+    env: dict[str, str] | None
     tags: list[str]
     notes: str | None
     enabled: bool
@@ -127,6 +128,7 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
         author_url=recipe.author_url,
         source_registry=recipe.source_registry,
         source_url=recipe.source_url,
+        env=dict(recipe.env) if recipe.env else None,
         tags=list(recipe.tags or []),
         notes=recipe.notes,
         enabled=recipe.enabled,
@@ -263,6 +265,11 @@ async def install_recipe(
             src_dir=body.src_dir,
             gguf_dir=body.gguf_dir,
             ctx=body.ctx or recipe.context_len,
+            # The install writes the same compose.override.yaml the launch does.
+            # Taken from the row, never from the request: the tuning is a
+            # property of the recipe, and a client that could override it here
+            # would be a second place deciding how the engine is configured.
+            env=recipe.env,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
