@@ -1733,6 +1733,7 @@ export default function AgentDetailPage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [confirmRecreate, setConfirmRecreate] = useState(false);
+  const [confirmRestartProcess, setConfirmRestartProcess] = useState(false);
 
   // SSE updates
   const handleAgentEvent = useCallback(
@@ -1784,6 +1785,19 @@ export default function AgentDetailPage() {
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
     onError: () => notify.error(t("detail.workerRestartFailed")),
+  });
+
+  // Task #19 (2026-08-08): host-only "Prozess neu starten" — full launchd
+  // process restart with an orphan sweep first (13 orphaned host processes
+  // were found live before this existed, one serving weeks of stale ENV).
+  const restartHostProcessMutation = useMutation({
+    mutationFn: () => api.agents.restartHostProcess(id),
+    onSuccess: (result) => {
+      notify.success(t("detail.restartProcessSucceeded", { killed: result.orphans_killed.length }));
+      qc.invalidateQueries({ queryKey: ["agent", id] });
+    },
+    onError: (e: Error) => notify.error(t("detail.restartProcessFailed", { msg: e.message })),
+    onSettled: () => setConfirmRestartProcess(false),
   });
 
   const forceRecreateMutation = useMutation({
@@ -2003,6 +2017,17 @@ export default function AgentDetailPage() {
                 />
               )}
 
+              {agent.agent_runtime === "host" && (
+                <ActionButton
+                  icon={RefreshCw}
+                  label={t("detail.restartProcess")}
+                  color={C.error}
+                  onClick={() => setConfirmRestartProcess(true)}
+                  loading={restartHostProcessMutation.isPending}
+                  title={t("detail.restartProcessTitle")}
+                />
+              )}
+
               {isCliBridge && (
                 <ActionButton
                   icon={RefreshCw}
@@ -2161,6 +2186,17 @@ export default function AgentDetailPage() {
           loading={forceRecreateMutation.isPending}
           onConfirm={() => forceRecreateMutation.mutate({ force: !!agent.current_task_id })}
           onCancel={() => setConfirmRecreate(false)}
+        />
+
+        <ConfirmDialog
+          open={confirmRestartProcess}
+          kicker={t("detail.restartProcess")}
+          title={t("detail.restartProcessConfirmTitle", { name: agent.name })}
+          body={<p>{t("detail.restartProcessConfirmBody")}</p>}
+          confirmLabel={t("detail.restartProcess")}
+          loading={restartHostProcessMutation.isPending}
+          onConfirm={() => restartHostProcessMutation.mutate()}
+          onCancel={() => setConfirmRestartProcess(false)}
         />
       </div>
     </AppShell>
