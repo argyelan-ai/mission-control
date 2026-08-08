@@ -52,6 +52,17 @@ PROVIDER_TEMPLATES = [
         "placeholder": "oll-...",
     },
     {
+        "provider": "huggingface",
+        "key": "hf_token",
+        "label": "HuggingFace Access Token",
+        "description": (
+            "Lets MC read gated repos in the model browser and download them "
+            "onto your GPU box. Without it MC stays anonymous and only sees "
+            "public repos. From huggingface.co/settings/tokens (read scope)."
+        ),
+        "placeholder": "hf_...",
+    },
+    {
         "provider": "openrouter",
         "key": "openrouter_api_key",
         "label": "OpenRouter API Key",
