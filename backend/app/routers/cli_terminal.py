@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -1193,6 +1194,186 @@ async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
     raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
 
+# ── Host Agent Process Restart + Orphan Sweep (Task #19, 2026-08-08) ────────
+#
+# Different from _host_agent_lifecycle("restart") above (a plain `launchctl
+# kickstart`): this is the "Prozess neu starten" button for the agent-detail
+# UI. It exists because a plain plist reload was found to leave the OLD
+# process tree running — 13 orphaned host processes were found live on
+# 2026-08-08 (oldest since 20.07), one of which kept serving real dispatches
+# with stale ENV for weeks while MC believed the fleet was healthy. So every
+# process-restart here (a) sweeps orphans of THIS agent first, (b) restarts,
+# then (c) verifies via pgrep instead of trusting launchctl's own exit code
+# (`launchctl load`/`kickstart` can report "Input/output error" / exit 5 while
+# the service is in fact running fine — also observed live 2026-08-08).
+
+# launchd label → distinctive substring of the ProgramArguments script path
+# launchd invokes for that agent (verified against the actual plists/entrypoints
+# in this repo, not guessed):
+#   docker/boss-host/com.openclaw.boss.plist        -> .../boss-host/entrypoint.sh
+#   docker/hermes/com.mc.hermes-bridge.plist         -> scripts/hermes-bridge.py
+#   docker/grok/com.mc.grok-bridge.plist             -> scripts/grok-bridge.py
+#   docker/kimi-host/com.mc.kimi-host.plist          -> docker/kimi-host/entrypoint.sh
+# These are the singleton host bridges (one instance ever) — any other host
+# agent (claude/openclaude/omp created via the agent wizard) is generically
+# staged by host_provisioning.stage_host_agent_files: label
+# f"com.mc.agent.{slug}", launcher f"~/.mc/agents/{slug}/run.sh" — the
+# fallback branch in _resolve_host_agent_restart_target below.
+_HOST_AGENT_LAUNCHD_LABEL = {
+    "boss": "com.openclaw.boss",
+    "hermes": "com.mc.hermes-bridge",
+    "grok": "com.mc.grok-bridge",
+    "kimi": "com.mc.kimi-host",
+}
+_HOST_AGENT_PROCESS_MATCH = {
+    "boss": "agents/boss-host/entrypoint.sh",
+    "hermes": "scripts/hermes-bridge.py",
+    "grok": "scripts/grok-bridge.py",
+    "kimi": "docker/kimi-host/entrypoint.sh",
+}
+
+# HARD RULE: ai.hermes.gateway is the RETIRED direct-launchd Hermes gateway
+# (ADR-039, replaced by com.mc.hermes-bridge — see
+# docker_agent_sync.py:render_host_launcher_script docstring for the historical
+# reference). It must never be started, stopped, kickstarted, or swept by MC
+# again, under any label-resolution path — hence a static denylist checked
+# unconditionally before any launchctl/pgrep/pkill call, independent of how
+# `label` was derived above.
+_DENYLIST_HOST_LAUNCHD_LABELS = frozenset({"ai.hermes.gateway"})
+
+
+def _resolve_host_agent_restart_target(agent: Agent) -> tuple[str, str]:
+    """Returns (launchd_label, pgrep_pattern) for this agent's process restart."""
+    slug = agent.slug or agent.name.lower().replace(" ", "-")
+    label = _HOST_AGENT_LAUNCHD_LABEL.get(slug, f"com.mc.agent.{slug}")
+    pattern = _HOST_AGENT_PROCESS_MATCH.get(slug, f".mc/agents/{slug}/run.sh")
+    return label, pattern
+
+
+def _host_agent_plist_path(label: str) -> str:
+    return str(_HOST_LAUNCH_AGENTS / f"{label}.plist")
+
+
+def _bracket_self_exclude(pattern: str) -> str:
+    """Rewrites `pattern`'s first character into a bracket expression so a
+    pgrep/pkill invocation that embeds this exact literal string in its own
+    argv does not match itself.
+
+    Classic `ps aux | grep '[f]oo'` trick: the running grep/pgrep/pkill
+    process's own cmdline contains the literal text ``[f]oo``, but the
+    *regex* ``[f]oo`` requires a bare ``f`` at that position — ``[`` is not
+    ``f`` — so the invoking process's own line never matches its own pattern,
+    while every real ``foo`` process still does. Required here because every
+    pgrep/pkill call below is built as one inline SSH command string that
+    necessarily contains the pattern text in its own argv.
+    """
+    if not pattern:
+        return pattern
+    return f"[{pattern[0]}]{pattern[1:]}"
+
+
+def _pgrep_command(pattern: str) -> str:
+    safe = _bracket_self_exclude(pattern)
+    escaped = safe.replace("'", "'\"'\"'")
+    return f"pgrep -f '{escaped}' || true"
+
+
+def _parse_pids(output: str) -> list[str]:
+    return [line.strip() for line in output.strip().splitlines() if line.strip().isdigit()]
+
+
+async def _sweep_orphan_host_processes(pattern: str) -> list[str]:
+    """TERM then KILL every process tree matching `pattern`, returns killed PIDs.
+
+    Runs before every process-restart so a stale orphan from an earlier plist
+    reload never coexists with the freshly kickstarted process (2026-08-08:
+    13 such orphans found live, oldest since 20.07). Self-excluding (see
+    _bracket_self_exclude) — never matches its own ssh/pgrep/pkill cmdline, so
+    it can only ever kill this agent's own launcher process tree.
+    """
+    pids = _parse_pids(await _ssh_host(_pgrep_command(pattern)))
+    if not pids:
+        return []
+    safe = _bracket_self_exclude(pattern)
+    escaped = safe.replace("'", "'\"'\"'")
+    await _ssh_host(f"pkill -TERM -f '{escaped}' || true")
+    await asyncio.sleep(1.0)
+    still_alive = _parse_pids(await _ssh_host(_pgrep_command(pattern)))
+    if still_alive:
+        await _ssh_host(f"pkill -KILL -f '{escaped}' || true")
+    return pids
+
+
+def _launchctl_exit_ok(output: str) -> bool:
+    """launchctl's own exit code is not the success signal here — it can report
+    exit 5 ("Input/output error") for a target that is in fact running fine,
+    seen live 2026-08-08. This only screens out a genuine SSH/shell failure;
+    the caller decides real success via a post-restart pgrep check.
+    """
+    match = re.search(r"EXIT:(\d+)", output)
+    if not match:
+        return False
+    code = int(match.group(1))
+    return code == 0 or code == 5
+
+
+async def _host_agent_process_restart(agent: Agent) -> dict:
+    """Full process-level restart for a host (launchd) agent: orphan sweep +
+    atomic kickstart (unload/load fallback) + pgrep-verified success.
+
+    Distinct from _host_agent_lifecycle("restart"), which only kickstarts the
+    plist and trusts launchctl's exit code — that path is what let 13 orphaned
+    processes accumulate across reloads (2026-08-08 finding) and would report
+    "success" on a kickstart that returned I/O error 5 while nothing restarted.
+    """
+    slug = agent.slug or agent.name.lower().replace(" ", "-")
+    label, pattern = _resolve_host_agent_restart_target(agent)
+
+    if label in _DENYLIST_HOST_LAUNCHD_LABELS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"refusing to restart launchd label {label!r} — retired gateway "
+                f"(ADR-039), never managed by Mission Control"
+            ),
+        )
+
+    orphans_killed = await _sweep_orphan_host_processes(pattern)
+
+    uid_label = f"gui/$(id -u {effective_host_ssh_user()})/{label}"
+    kickstart_out = await _ssh_host(f"launchctl kickstart -k {uid_label} 2>&1; echo EXIT:$?")
+    kickstart_ok = _launchctl_exit_ok(kickstart_out)
+
+    fallback_out: str | None = None
+    if not kickstart_ok:
+        plist_path = _host_agent_plist_path(label)
+        fallback_out = await _ssh_host(
+            f"launchctl unload {plist_path} 2>&1; echo UNLOAD:$?; "
+            f"launchctl load -w {plist_path} 2>&1; echo LOAD:$?"
+        )
+
+    # Give the fresh process a moment to spawn before verifying.
+    await asyncio.sleep(1.0)
+    running_pids = _parse_pids(await _ssh_host(_pgrep_command(pattern)))
+
+    if not running_pids:
+        detail = f"restart-process for {slug}: no matching process after kickstart ({kickstart_out.strip()[:200]!r})"
+        if fallback_out is not None:
+            detail += f" and unload/load fallback ({fallback_out.strip()[:200]!r})"
+        raise HTTPException(status_code=502, detail=detail)
+
+    return {
+        "ok": True,
+        "agent": slug,
+        "label": label,
+        "orphans_killed": orphans_killed,
+        "kickstart_output": kickstart_out.strip(),
+        "fallback_used": fallback_out is not None,
+        "process_running": True,
+        "running_pids": running_pids,
+    }
+
+
 async def _resolve_host_agent(agent_id: str, session: AsyncSession) -> Agent:
     try:
         agent_uuid = uuid.UUID(agent_id)
@@ -1237,6 +1418,24 @@ async def stop_host_agent(
     agent = await _resolve_host_agent(agent_id, session)
     result = await _host_agent_lifecycle(agent, "stop")
     logger.info("Host-agent stop: %s", agent.name)
+    return result
+
+
+@router.post("/host-agents/{agent_id}/restart-process")
+async def restart_host_agent_process(
+    agent_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """"Prozess neu starten" — orphan sweep + full launchd process restart.
+
+    See _host_agent_process_restart docstring: this is stronger than
+    /restart above (plain kickstart). Denies the retired ai.hermes.gateway
+    label unconditionally; returns 502 if no process is running afterward.
+    """
+    agent = await _resolve_host_agent(agent_id, session)
+    result = await _host_agent_process_restart(agent)
+    logger.info("Host-agent process restart: %s (orphans killed: %s)", agent.name, result["orphans_killed"])
     return result
 
 
