@@ -2185,7 +2185,10 @@
     "infrastructure": {
       "title": "Infrastruktur",
       "subtitle": "Die Boxen und die festgebackenen Agent-Werkzeuge darunter"
-    }
+    },
+    "contextDriftTitle": "Die Engine serviert dieses Fenster; die Registry sagt noch {stored} — synct bei der nächsten Watcher-Bestätigung",
+    "nameDrift": "Name",
+    "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell."
   },
   "bench": {
     "common": {

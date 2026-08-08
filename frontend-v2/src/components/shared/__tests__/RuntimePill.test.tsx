@@ -127,4 +127,53 @@ describe("RuntimePill", () => {
     await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
     expect(screen.queryByTestId("runtime-lock-icon")).toBeNull();
   });
+
+  // ── PR9: the live model leads, the box name follows ──────────────────────
+  //
+  // Before 08.08. the default pill read "<display_name> · <model>". Mark saw
+  // "Spark vLLM (Laguna/Qwen — switchable)" on an agent whose engine had long
+  // since been switched to DeepSeek, because the box name is what the eye
+  // reaches first and it says nothing about what is running.
+
+  const SPARK_RT = {
+    id: "rt-spark",
+    slug: "qwen-general",
+    display_name: "Spark vLLM (switchbar)",
+    runtime_type: "vllm_docker",
+    endpoint: "http://192.0.2.10:8000/v1",
+    model_identifier: "deepseek-v4-flash-0731-spark",
+    max_context_len: 262144,
+    enabled: true,
+  };
+
+  it("puts the served model before the box name and shows the window", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+      runtimes: [SPARK_RT as never],
+    } as never);
+    renderWithQuery(<RuntimePill agent={mkAgent({ runtime_id: "rt-spark" })} />);
+
+    const model = await screen.findByText("deepseek-v4-flash-0731-spark");
+    const box = screen.getByText(/Spark vLLM \(switchbar\)/);
+    expect(screen.getByText(/262k/)).toBeInTheDocument();
+    // Document order, not just presence — which one is read first is the point.
+    expect(model.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+  });
+
+  it("omits the window when the runtime has none", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+      runtimes: [{ ...SPARK_RT, max_context_len: 0 } as never],
+    } as never);
+    renderWithQuery(<RuntimePill agent={mkAgent({ runtime_id: "rt-spark" })} />);
+    await screen.findByText("deepseek-v4-flash-0731-spark");
+    expect(screen.queryByText(/ctx|262k|0k/)).toBeNull();
+  });
+
+  it("still names the box when no model is bound yet", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+      runtimes: [{ ...SPARK_RT, model_identifier: null } as never],
+    } as never);
+    renderWithQuery(<RuntimePill agent={mkAgent({ runtime_id: "rt-spark" })} />);
+    expect(await screen.findByText(/Spark vLLM \(switchbar\)/)).toBeInTheDocument();
+  });
 });

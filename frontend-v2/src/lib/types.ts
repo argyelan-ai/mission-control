@@ -1703,7 +1703,15 @@ export type RuntimeType =
   | "unsloth_porsche"
   | "openai_compatible"
   | "cloud"
-  | "hermes";
+  | "hermes"
+  /** Harness-shaped runtime types that exist in the fleet but were never added
+   *  to this union — `omp` (headless omp against an OpenAI-compatible endpoint,
+   *  in _PROBEABLE_RUNTIME_TYPES since ADR-056), plus the two managed-CLI rows.
+   *  Their absence made every runtime row of these types silently `never`-ish
+   *  at the type level while rendering fine at runtime. */
+  | "omp"
+  | "grok"
+  | "kimi";
 
 export interface Runtime {
   // On the GET /runtimes (legacy JSON) response `id` is the slug.
@@ -1734,6 +1742,13 @@ export interface Runtime {
   container_name: string | null;
   lms_identifier?: string;
   model_identifier?: string | null;
+  /** Version numbers in `display_name` that `model_identifier` does not back,
+   *  computed server-side (runtime_naming.display_name_drift). Empty = the name
+   *  is honest. `display_name` is the box/purpose name; the live model is
+   *  `model_identifier`, so a name that claims a version can go stale on the
+   *  next engine switch — this is how the UI says so. Never re-derive
+   *  client-side. */
+  display_name_drift?: string[];
   role_tags: string[];
   supports_tools: boolean;
   supports_reasoning: boolean;
@@ -1983,10 +1998,19 @@ export interface RuntimeSwitchPreview {
 export interface RuntimeLiveStatus {
   reachable: boolean;
   served_model: string | null;
+  /** The served model's own context window (`max_model_len` from the same
+   *  /v1/models entry), or null when the endpoint does not report one — never
+   *  "no window". Lets the cockpit show what the engine serves before the
+   *  two-probe confirmation has written it to the runtime row. */
+  served_context_len?: number | null;
   latency_ms: number | null;
   last_probe_at: string;
   consecutive_failures: number;
   drift: boolean;
+  /** The served context window differs from `runtime.max_context_len` — the
+   *  stale-window half of the same problem `drift` describes for the model id.
+   *  It matters because that column is rendered into the agents' env. */
+  context_drift?: boolean;
   /** "switching" = planned downtime (recipe switch / start / cold load), not an outage. */
   status?: string;
   phase?: "evicting" | "launching" | "loading" | string | null;

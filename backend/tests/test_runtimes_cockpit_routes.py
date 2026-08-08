@@ -40,6 +40,60 @@ async def test_live_status_merges_redis_and_flags_drift(async_session, auth_clie
 
 
 @pytest.mark.asyncio
+async def test_live_status_flags_a_context_window_the_row_has_not_caught_up_to(
+    async_session, auth_client
+):
+    """The stale-window half of `drift` (PR9). The engine serves 262144 while
+    the row still says 98304 — which is the number rendered into the agents'
+    env, so the cockpit has to show the disagreement rather than the row."""
+    rt = await _mk_rt(async_session, slug="ctx-drifty", model="engine-model")
+    rt.max_context_len = 98304
+    async_session.add(rt)
+    await async_session.commit()
+    redis = await get_redis()
+    await redis.setex(
+        RedisKeys.runtime_live("ctx-drifty"), 300,
+        json.dumps({
+            "reachable": True, "served_model": "engine-model",
+            "served_context_len": 262144,
+            "latency_ms": 12, "last_probe_at": "2026-08-08T00:00:00+00:00",
+            "consecutive_failures": 0,
+        }),
+    )
+
+    body = (await auth_client.get("/api/v1/runtimes/live-status")).json()
+    assert body["live"]["ctx-drifty"]["context_drift"] is True
+    assert body["live"]["ctx-drifty"]["served_context_len"] == 262144
+    # The MODEL matches — the two flags must be independent, or a window change
+    # would masquerade as a model change and vice versa.
+    assert body["live"]["ctx-drifty"]["drift"] is False
+
+
+@pytest.mark.asyncio
+async def test_live_status_does_not_invent_context_drift_without_a_probe_value(
+    async_session, auth_client
+):
+    """A snapshot with no served window (endpoint does not report one, or the
+    runtime is mid-switch) must not read as a disagreement."""
+    rt = await _mk_rt(async_session, slug="ctx-quiet", model="engine-model")
+    rt.max_context_len = 98304
+    async_session.add(rt)
+    await async_session.commit()
+    redis = await get_redis()
+    await redis.setex(
+        RedisKeys.runtime_live("ctx-quiet"), 300,
+        json.dumps({
+            "reachable": True, "served_model": "engine-model",
+            "latency_ms": 12, "last_probe_at": "2026-08-08T00:00:00+00:00",
+            "consecutive_failures": 0,
+        }),
+    )
+
+    body = (await auth_client.get("/api/v1/runtimes/live-status")).json()
+    assert body["live"]["ctx-quiet"]["context_drift"] is False
+
+
+@pytest.mark.asyncio
 async def test_probe_endpoint_returns_detection(auth_client):
     with patch(
         "app.routers.runtimes.probe_endpoint_url",

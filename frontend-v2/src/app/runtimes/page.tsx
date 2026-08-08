@@ -30,7 +30,7 @@ import {
 import { api } from "@/lib/api";
 import type { Runtime, RuntimeState, RuntimeLiveStatus, LMStudioModel, LMSCatalogModel, HFRepoInfo, LMStudioModelsResponse, LMSActiveDownload, VllmContainer } from "@/lib/types";
 import AppShell from "@/components/layout/AppShell";
-import { cn } from "@/lib/utils";
+import { cn, fmtCtx } from "@/lib/utils";
 import { RuntimeScheduleTab } from "./RuntimeScheduleTab";
 import { VllmContainerCatalog } from "./VllmContainerCatalog";
 import { AddRuntimeModal } from "./AddRuntimeModal";
@@ -285,17 +285,6 @@ function ActiveDownloads() {
 // ── Context Presets ───────────────────────────────────────────────────────────
 
 const CTX_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072, 200000, 262144];
-
-function fmtCtx(n: number): string {
-  if (n >= 262144) return "262k";
-  if (n >= 200000) return "200k";
-  if (n >= 131072) return "131k";
-  if (n >= 65536) return "65k";
-  if (n >= 32768) return "32k";
-  if (n >= 16384) return "16k";
-  if (n >= 8192) return "8k";
-  return "4k";
-}
 
 const CTX_STORAGE_KEY = (modelId: string) => `lms-ctx-${modelId}`;
 
@@ -1310,9 +1299,34 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
                 {runtime.host.slug}
               </MetaChip>
             )}
-            {runtime.runtime_type === "vllm_docker" && runtime.max_context_len > 0 && (
-              <MetaChip tone="idle" className="tabular-nums">
-                {(runtime.max_context_len / 1000).toFixed(0)}K ctx
+            {/* The context window is shown for EVERY runtime that has one, not
+                just vllm_docker: it is rendered into the agents' env
+                (OMP_CONTEXT_WINDOW), so a wrong value misconfigures turns
+                whatever the engine type. When the live probe disagrees with
+                the row, the engine wins the display and the chip says so —
+                the row catches up on the watcher's next confirmation. */}
+            {runtime.max_context_len > 0 && (
+              <MetaChip
+                tone={live?.context_drift ? "warn" : "idle"}
+                className="tabular-nums"
+                title={
+                  live?.context_drift
+                    ? t("contextDriftTitle", { stored: fmtCtx(runtime.max_context_len) })
+                    : undefined
+                }
+              >
+                {fmtCtx(live?.served_context_len ?? runtime.max_context_len)} ctx
+              </MetaChip>
+            )}
+            {runtime.display_name_drift && runtime.display_name_drift.length > 0 && (
+              <MetaChip
+                tone="warn"
+                title={t("nameDriftTitle", {
+                  versions: runtime.display_name_drift.join(", "),
+                  model: runtime.model_identifier ?? "—",
+                })}
+              >
+                {t("nameDrift")}
               </MetaChip>
             )}
             {isLmStudio && storedCtx && (

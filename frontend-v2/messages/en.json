@@ -2185,7 +2185,10 @@
     "infrastructure": {
       "title": "Infrastructure",
       "subtitle": "The boxes and the pinned agent tools underneath"
-    }
+    },
+    "contextDriftTitle": "The engine serves this window; the registry still says {stored} — it syncs on the next watcher confirmation",
+    "nameDrift": "Name",
+    "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model."
   },
   "bench": {
     "common": {
