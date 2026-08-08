@@ -37,7 +37,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.runtime import Runtime
-from app.services import runtime_grace
+from app.services import host_memory_prep, runtime_grace
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -1312,12 +1312,18 @@ async def start_runtime(
 ) -> dict:
     """Starts a runtime (see :func:`_start_runtime_impl`).
 
-    Two things wrap the actual start:
+    Three things wrap the actual start:
 
     * **Exclusivity** (PR6) — an ``exclusive_memory`` runtime frees its box
       first (:func:`ensure_exclusive_host`) and refuses to start if it can't.
       Runtimes without the flag are untouched, so vLLM behaves exactly as
       before.
+    * **Memory prep** (PR8) — on a GB10 the same exclusive runtime additionally
+      gets its box's page cache dropped and (when configured) the free-memory
+      watermark temporarily lowered, because the engine sizes its KV cache
+      against host MemFree. The undo runs in a ``finally``: a start that raised
+      must not leave a lowered watermark behind
+      (:mod:`app.services.host_memory_prep`).
     * **Switch-grace** (PR5) — docker engines and ssh_process take 2–15
       minutes to serve; without the marker the watcher reports that warmup as
       an outage. ``grace_source`` records who asked — ``switch_recipe`` and
@@ -1344,7 +1350,28 @@ async def start_runtime(
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
-    result = await _start_runtime_impl(runtime, host=host)
+
+    # Memory prep spans the LOAD window, not just this call: `docker compose up`
+    # returns in seconds while the engine spends minutes pulling weights and
+    # only then decides how large a KV cache it may allocate. Removing the
+    # cache dropper here would take it away exactly before the measurement it
+    # exists for. So the prep is ended where the window honestly ends — the
+    # watcher probe that sees the engine serving (or the crash-loop stop, or
+    # the 30-minute orphan sweep). Here we only undo it when the start itself
+    # never got off the ground.
+    resolved = host or resolve_host_from_runtime_fields(runtime)
+    prep = None
+    if is_docker or is_ssh_process:
+        prep = await host_memory_prep.prepare_for_runtime(runtime, host=resolved)
+    try:
+        result = await _start_runtime_impl(runtime, host=host)
+    except Exception:
+        await host_memory_prep.finish_for_runtime(prep, host=resolved, success=False)
+        await runtime_grace.clear_switching(slug)
+        raise
+    if not result.get("ok"):
+        await host_memory_prep.finish_for_runtime(prep, host=resolved, success=False)
+
     if (is_docker or is_ssh_process) and not result.get("ok"):
         await runtime_grace.clear_switching(slug)
     elif is_ssh_process:

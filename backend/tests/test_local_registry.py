@@ -698,12 +698,39 @@ def test_migration_chain_has_a_single_head():
     heads = sorted(revs - referenced)
 
     assert "0176_local_recipes" in revs
-    assert heads == ["0177_ssh_process_runtime"], f"expected one head, got {heads}"
+    # One head, whichever it is. Pinning the name here made every later
+    # migration fail this test for the wrong reason; what matters is that the
+    # chain does not fork, and that OUR revisions sit where we put them.
+    assert len(heads) == 1, f"expected one head, got {heads}"
     chain = dict(entries)
     assert chain["0176_local_recipes"] == ("0175_app_settings",)
     assert chain["0177_ssh_process_runtime"] == ("0176_local_recipes",)
-    for rev in ("0176_local_recipes", "0177_ssh_process_runtime"):
+    assert chain["0178_prestart_memory_prep"] == ("0177_ssh_process_runtime",)
+    for rev in (
+        "0176_local_recipes",
+        "0177_ssh_process_runtime",
+        "0178_prestart_memory_prep",
+    ):
         assert len(rev) <= 32  # alembic_version.version_num is varchar(32)
+
+
+def test_migration_0178_adds_both_columns_and_takes_them_back():
+    """The columns PR 8 needs, and a downgrade that actually undoes them.
+
+    Read from source rather than executed: the test DB is SQLite via
+    ``SQLModel.metadata.create_all``, so an Alembic run here would prove
+    nothing about the Postgres deploy. What can be checked is that both
+    columns are added, that both are nullable (every existing row must survive
+    the migration untouched), and that downgrade names the same two.
+    """
+    source = (MIGRATIONS / "0178_prestart_memory_prep.py").read_text(encoding="utf-8")
+
+    assert 'op.add_column(\n        "runtimes", sa.Column("prestart_watermark_kb"' in source
+    assert 'op.add_column("local_recipes", sa.Column("env", sa.JSON(), nullable=True))' in source
+    assert "nullable=True" in source
+    assert "server_default" not in source  # NULL is the correct value everywhere
+    assert 'op.drop_column("local_recipes", "env")' in source
+    assert 'op.drop_column("runtimes", "prestart_watermark_kb")' in source
 
 
 # ── The compose-based recipe (sparkinfer, PR 7) ──────────────────────────────
@@ -733,8 +760,11 @@ def test_sparkinfer_entry_is_a_vllm_docker_recipe_with_all_three_templates():
     # No new engine type: the whole point is that a compose stack reuses the
     # existing docker lifecycle instead of growing a fourth runtime kind.
     assert entry["engine"] == "vllm_docker"
-    assert entry["arch"] == "arm64"          # GB10-only, upstream exits elsewhere
-    assert entry["gb10_validated"] is False  # nobody has watched it run yet
+    assert entry["arch"] == "arm64"         # GB10-only, upstream exits elsewhere
+    # Flipped by PR 8: the stack was watched serving on the Spark on 08.08.2026
+    # at 18.7 tok/s decode median. This flag is the difference between "should
+    # work" and "we watched it work", so it only ever moves after a live run.
+    assert entry["gb10_validated"] is True
     assert entry["context_len"] == 262144
     assert entry["est_weights_gb"] == 107.0
     assert entry.get("process_name") is None  # a container, not a host process
@@ -760,9 +790,12 @@ def test_sparkinfer_launch_command_carries_the_label_and_container_name():
     assert f"container_name: mc-{SPARKINFER_SLUG}" in command
     assert "compose.override.yaml" in command
     # Both files explicitly: relying on compose's auto-discovery of an override
-    # would make the label depend on the base file's name.
-    assert "-f compose.yaml -f compose.override.yaml" in command
-    assert "{" not in command and "}" not in command  # fully rendered
+    # would make the label depend on the base file's name. Since PR 8 an
+    # optional compose.tuning.yaml slots in between, so the base and the
+    # override are asserted around it rather than as one literal.
+    assert 'ARGS="-f compose.yaml $TUNING -f compose.override.yaml"' in command
+    assert "docker compose $ARGS up -d" in command
+    assert "{src_dir}" not in command and "{slug}" not in command  # fully rendered
 
 
 def test_sparkinfer_install_command_writes_the_same_override():
@@ -783,8 +816,9 @@ def test_sparkinfer_install_command_writes_the_same_override():
     assert f"container_name: mc-{SPARKINFER_SLUG}" in command
     assert f"{lt.DEFAULT_SRC_DIR}/{SPARKINFER_DIR}" in command
     assert "git clone https://github.com/0xSero/" in command
-    assert "docker compose -f compose.yaml -f compose.override.yaml pull" in command
-    assert "{" not in command and "}" not in command
+    assert "docker compose $ARGS pull" in command
+    assert 'ARGS="-f compose.yaml $TUNING -f compose.override.yaml"' in command
+    assert "{src_dir}" not in command and "{slug}" not in command
 
 
 def test_sparkinfer_install_command_never_exits_the_wrapper_shell():
@@ -820,12 +854,13 @@ def test_sparkinfer_stop_command_renders_to_a_compose_stop():
             "src_dir": lt.DEFAULT_SRC_DIR,
             "gguf_dir": lt.DEFAULT_GGUF_DIR,
             "ctx": entry["context_len"],
+            "env_yaml": "",
         },
     )
 
     # `stop`, not `down`: down deletes the container, and the next start would
     # re-download nothing but would lose the `docker start` fast path.
-    assert command.endswith("docker compose -f compose.yaml -f compose.override.yaml stop")
+    assert "docker compose $ARGS stop" in command
     assert " down" not in command
 
 

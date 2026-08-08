@@ -107,9 +107,19 @@ class RecipeSpec(BaseModel):
     author_url: str | None = PydanticField(default=None, max_length=512)
     source_registry: str = PydanticField(default="builtin", max_length=64)
     source_url: str | None = PydanticField(default=None, max_length=512)
+    # Engine tuning the compose recipes render into their override file.
+    # Strings only, and a registry serving `0.895` unquoted has its entry
+    # skipped with a reason rather than silently deployed: how a float is
+    # spelled on the way into an environment variable is a decision, and it
+    # belongs to whoever wrote the recipe, not to a JSON parser.
+    env: dict[str, str] | None = None
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
     enabled: bool = True
+
+    @property
+    def env_map(self) -> dict[str, str]:
+        return {str(k): str(v) for k, v in (self.env or {}).items()}
 
     def validate_vocabulary(self) -> str | None:
         """Return a reason string when engine/arch are outside the vocabulary.
@@ -219,6 +229,7 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         author_url=spec.author_url,
         source_registry=spec.source_registry,
         source_url=spec.source_url,
+        env=spec.env_map or None,
         tags=list(spec.tags or []),
         notes=spec.notes,
         enabled=spec.enabled,
@@ -255,6 +266,7 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("author_url", spec.author_url),
         ("source_registry", spec.source_registry),
         ("source_url", spec.source_url),
+        ("env", spec.env_map or None),
         ("tags", list(spec.tags or [])),
         ("notes", spec.notes),
     ):

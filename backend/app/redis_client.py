@@ -392,6 +392,28 @@ class RedisKeys:
     def runtime_recovery_failures(slug: str) -> str:
         return f"mc:runtime-recovery:failures:{slug}"
 
+    # ── Pre-start memory prep (PR8, services/host_memory_prep.py) ────────
+    # host_mem_prep: "this host currently has a lowered vm.min_free_kbytes and
+    # a cache-dropper container running, and here is the value to put back".
+    # It outlives the request on purpose: a backend restart mid-start must not
+    # leave a 2 GiB watermark on the box, so the watcher repairs orphans.
+    @staticmethod
+    def host_mem_prep(host_key: str) -> str:
+        return f"mc:host-memprep:{host_key}"
+
+    # uname -m per host, cached — the arch decides whether the GB10 memory
+    # dance applies at all, and it cannot change without a reboot.
+    @staticmethod
+    def host_arch(host_key: str) -> str:
+        return f"mc:host-arch:{host_key}"
+
+    # First RestartCount seen for a container while it was NOT serving. The
+    # delta against it is what turns `restart: unless-stopped` from invisible
+    # into a detectable crash loop (runtime_watcher).
+    @staticmethod
+    def runtime_restart_baseline(slug: str) -> str:
+        return f"mc:runtime-restarts:{slug}"
+
     @staticmethod
     def agent_switch_progress(agent_id: str) -> str:
         return f"mc:agent:{agent_id}:runtime-switch-progress"

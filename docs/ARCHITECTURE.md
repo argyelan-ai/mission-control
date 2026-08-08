@@ -458,6 +458,76 @@ Ein 110-GB-Modell, auf das kein Agent umschalten darf, waere das Gegenteil des
 Ziels. Bestehende Runtimes sind unberuehrt: das Feld ist per Default `false`,
 und ohne Flag ist der Hook ein No-op.
 
+##### Speicher-Vorbereitung vor dem Start (NEU 2026-08-08)
+
+Die Box freizuraeumen reicht auf einem GB10 nicht — sie muss auch *messbar*
+frei sein. vLLM bestimmt beim Start die KV-Cache-Groesse aus MemFree in
+CUDA-Sicht, und davon gehen ab: der Page-Cache (nach einem ~100-GB-Download
+randvoll), `vm.min_free_kbytes` (auf der Spark ein 5-GiB-Watermark aus dem Juli)
+und die Desktop-Baseline. Zurueckgefordert wird davon nichts; die Engine liest
+die Zahl, findet zu wenig und stirbt. Genau daran scheiterte DeepSeek V4 Flash
+bis zum 08.08.2026.
+
+`services/host_memory_prep.py` macht daraus fuenf Befehle, die MC selbst
+ausfuehrt — ueber wegwerfbare `--privileged`-Container, denn der SSH-User ist in
+der `docker`-Gruppe, ein `sudo` ist aber nicht vorausgesetzt:
+
+1. aktuellen Watermark-Wert **lesen** und den Handle nach Redis schreiben,
+   *bevor* irgendetwas veraendert wird,
+2. Watermark auf `runtimes.prestart_watermark_kb` senken (NULL = gar nicht
+   anfassen, der Default fuer jede bestehende Zeile),
+3. Page-Cache einmal leeren,
+4. einen Dauer-Dropper-Container (`mc-cache-dropper`) fuer die Ladephase
+   starten — die Coalesce-Phase fuellt den Cache waehrend des Ladens nach,
+5. nach **Ready** beides zurueck: Dropper entfernt, Watermark auf **exakt den
+   vorgefundenen Wert** (nie auf einen hartkodierten Default).
+
+„Ready" ist der Watcher-Probe, der die Engine erstmals antworten sieht — nicht
+die Rueckkehr von `docker compose up`, die nach Sekunden erfolgt, waehrend die
+Messung Minuten spaeter stattfindet. `start_runtime` raeumt nur auf, wenn der
+Start gar nicht erst zustande kam (Fehler oder Exception). Stirbt das Backend
+mitten im Start, bliebe ein gesenktes Watermark ohne Wissen um den Originalwert
+zurueck — deshalb liegt der Handle in Redis (`mc:host-memprep:{host}`) und der
+Watcher repariert alles, was aelter als 30 Minuten ist.
+
+Der Eingriff gilt nur fuer `exclusive_memory` auf einem SSH-Host mit aarch64
+(uname-Probe, pro Host einen Tag gecached): auf einer x86-Box mit dedizierter
+VRAM misst die Engine nicht gegen Host-MemFree.
+
+##### Crash-Loop-Erkennung (NEU 2026-08-08)
+
+Ein Compose-Stack mit `restart: unless-stopped`, dessen Engine bei jedem Boot
+stirbt, sieht von aussen **identisch** aus wie ein langsamer Cold Load: der
+Endpunkt ist beide Male unten, und die Switch-Grace (PR5) unterdrueckt jeden
+Alarm. Docker kennt den Unterschied, also fragt der Watcher ihn: `RestartCount`
+gegen den Stand beim *ersten* unerreichbaren Probe dieses Ausfalls (ein
+absoluter Zaehler sagt nichts — ein wochenlang laufender Container hat legitim
+ein paar Restarts). Drei Restarts im Grace-Fenster **oder** „Engine core
+initialization failed" in den letzten 200 Log-Zeilen = Schleife.
+
+Dann wird die Schleife **zuerst angehalten** (`docker update --restart=no` +
+`docker stop`) und danach gemeldet (`runtime.crash_loop_stopped`, severity
+`warning`, mit der letzten `ValueError`-Zeile als Grund). Nur melden hiesse, die
+Box bootet weiter eine Engine pro paar Sekunden, bis jemand den Feed liest.
+Eine lange Ladephase ohne Restarts wird nicht angefasst — nicht einmal ihre Logs
+werden gelesen.
+
+##### Engine-Tuning im Rezept (`local_recipes.env`, NEU 2026-08-08)
+
+Die Werte, mit denen ein Stack auf eine Box passt, gehoeren ins Rezept, nicht in
+eine handgeschriebene Datei auf der Box (dort ueberlebt sie kein `git clone` und
+sieht sie niemand ohne SSH). `env` ist eine flache `{"KEY": "value"}`-Map, die
+die Compose-Templates ueber den optionalen Platzhalter `{env_yaml}` in den
+`environment:`-Block **derselben** `compose.override.yaml` rendern, die schon
+`container_name` und das `mc.runtime.slug`-Label traegt.
+
+Werte werden **validiert statt escaped**: die Datei entsteht per `printf`
+innerhalb eines Shell-Kommandos, und ein Anfuehrungszeichen, ein Prozent oder
+ein Backslash faellt sonst erst Stunden spaeter als kaputtes YAML auf der Box
+auf. Eine bereits vorhandene `compose.tuning.yaml` wird weiterhin geladen —
+**vor** dem Override, damit MCs Name/Label/env gewinnen und alles andere
+erhalten bleibt.
+
 ##### One-Click-Installation von Recipes
 
 `local_recipes.install_template` + `POST /api/v1/local-registry/{slug}/install`

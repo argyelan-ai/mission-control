@@ -135,6 +135,22 @@ class Runtime(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # Pre-start memory prep (PR 8), exclusive_memory runtimes on a GB10 only.
+    #
+    # vLLM sizes its KV cache against MemFree as CUDA sees it, and on this box
+    # `vm.min_free_kbytes` (a 5 GiB crash-protection watermark configured in
+    # July) is subtracted from exactly that number — together with a page cache
+    # that a 100 GB weight download has just filled. Both were freed by hand in
+    # the live session that got DeepSeek V4 Flash running; this column is the
+    # declarative half of automating it: the value the watermark is lowered TO
+    # for the duration of the start.
+    #
+    # NULL — the default and what every pre-PR8 row keeps — means "drop the page
+    # cache, but leave the watermark alone". The ORIGINAL watermark is always
+    # read before lowering and restored afterwards, so this is never a record of
+    # what the box was configured with (services/host_memory_prep.py).
+    prestart_watermark_kb: int | None = None
+
     api_key_secret_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(
@@ -192,4 +208,5 @@ class Runtime(SQLModel, table=True):
             "stop_command": self.stop_command,
             "process_name": self.process_name,
             "exclusive_memory": self.exclusive_memory,
+            "prestart_watermark_kb": self.prestart_watermark_kb,
         }
