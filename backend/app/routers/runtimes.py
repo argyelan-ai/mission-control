@@ -3,6 +3,7 @@ Runtimes API — start/stop/restart/status for local model runtimes.
 """
 
 import json as _json
+import logging
 import re as _re
 import uuid
 from datetime import datetime
@@ -52,6 +53,8 @@ def _validate_autostart_flag_path(v: str | None) -> str | None:
             "(nur Buchstaben, Ziffern, '.', '_', '-', '/')"
         )
     return v
+
+logger = logging.getLogger("mc.runtimes")
 
 router = APIRouter(prefix="/api/v1/runtimes", tags=["runtimes"])
 
@@ -510,6 +513,12 @@ async def list_runtimes(
             # frontend and backend disagree about switchability before.
             # None = no recognised vendor (local vLLM, LM Studio, unsloth).
             "provider_label": provider.label if provider else None,
+            # Version numbers in the display name that the served model does
+            # NOT back — empty list means the name is honest. See
+            # _display_name_drift below for why this ships on every row.
+            "display_name_drift": runtime_naming.display_name_drift(
+                rt.display_name, rt.model_identifier
+            ),
         })
     result.sort(key=_grouped_sort_key)
     return {"runtimes": result}
@@ -533,6 +542,12 @@ async def runtimes_live_status(
         data = _json.loads(raw)
         served = data.get("served_model")
         data["drift"] = bool(served) and served != (rt.model_identifier or "")
+        # Same statement for the context window: what the engine serves vs what
+        # the row (and therefore the rendered agent env) still says. Both flags
+        # describe the window BEFORE the watcher's two-probe confirmation, so
+        # the cockpit can show a pending change the DB does not know about yet.
+        served_ctx = data.get("served_context_len")
+        data["context_drift"] = bool(served_ctx) and served_ctx != rt.max_context_len
         live[rt.slug] = data
     return {
         "live": live,
@@ -911,9 +926,19 @@ async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
     """CRUD response with the same host shape as GET /runtimes (HostRef|null).
 
     Without this, POST/PATCH would return the DEPRECATED legacy string field
-    `host`, while GET returns an object — one field name, two shapes."""
+    `host`, while GET returns an object — one field name, two shapes.
+
+    Also carries ``display_name_drift`` so a write that leaves a lying name
+    behind says so in its own response — see the note on that field below.
+    """
     host = await resolve_host_for_runtime(session, rt)
-    return {**rt.model_dump(), "host": _host_ref(host)}
+    return {
+        **rt.model_dump(),
+        "host": _host_ref(host),
+        "display_name_drift": runtime_naming.display_name_drift(
+            rt.display_name, rt.model_identifier
+        ),
+    }
 
 
 @router.post("/db")
@@ -972,6 +997,27 @@ async def update_runtime_db(
     session.add(rt)
     await session.commit()
     await session.refresh(rt)
+
+    # Name-vs-model honesty (the display_name_drift helper from #183, until now
+    # only exercised by the migration that introduced it). `qwen-general` was
+    # called "Spark vLLM (Laguna/Qwen — switchable)" while it served
+    # deepseek-v4-flash-0731-spark; the row was correct and the label was a
+    # lie, which is worse than an obviously empty field because nobody
+    # double-checks a name that looks specific.
+    #
+    # Deliberately a WARNING and not a 4xx: the operator may be renaming and
+    # repointing in two steps, and a hard block would make the intermediate
+    # state unreachable. The response carries the finding (see
+    # _runtime_row_response) so the UI can say it out loud; this log line is
+    # for the case where the write came from somewhere without a UI.
+    if {"display_name", "model_identifier"} & set(changes):
+        drift = runtime_naming.display_name_drift(rt.display_name, rt.model_identifier)
+        if drift:
+            logger.warning(
+                "runtime %s: display_name %r claims version(s) %s that "
+                "model_identifier %r does not back",
+                rt.slug, rt.display_name, ", ".join(drift), rt.model_identifier,
+            )
 
     model_changed = "model_identifier" in changes and rt.model_identifier != old_model
     if model_changed:

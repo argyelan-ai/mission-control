@@ -4,10 +4,16 @@
  * RuntimePill — compact runtime indicator (Phase 15 T3.4).
  *
  * Two variants:
- *   - "default": full pill with display_name + model_identifier (used in
- *     AgentDetailPage header / overview).
+ *   - "default": the live model first, then the box name and context window
+ *     (used in AgentDetailPage header / overview).
  *   - "compact": just the type-color dot + display_name (used in AgentCard
- *     mini grid on /agents to keep the card under 200px tall).
+ *     mini grid on /agents to keep the card under 200px tall). The model and
+ *     window are in its title attribute — there is no room for them at 10px.
+ *
+ * What leads is deliberate. `display_name` names the BOX ("Spark vLLM
+ * (switchbar)"); `model_identifier` is what the runtime watcher keeps in step
+ * with the engine. Showing the box name first is how "Laguna" stayed on screen
+ * after the Spark had been switched to DeepSeek (08.08.).
  *
  * Host (Boss) and openclaw (Henry) agents fall back to a muted scope chip.
  */
@@ -17,6 +23,7 @@ import { Lock } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C } from "@/lib/colors";
+import { fmtCtx } from "@/lib/utils";
 
 export const RUNTIME_TYPE_COLOR: Record<string, string> = {
   lmstudio: C.info,          // #5890CA — local API, info-blue
@@ -52,6 +59,11 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
     const color = RUNTIME_TYPE_COLOR[rt.runtime_type] ?? C.textDim;
     const isLocked = rt.single_instance === true;
     const lockTitle = isLocked ? " · single-instance (locked)" : "";
+    // The window the agent is actually sized against — the same column the
+    // backend renders into its env. Shown next to the model because the two
+    // change together on an engine switch, and a stale window is as wrong as
+    // a stale model name.
+    const ctxLabel = rt.max_context_len > 0 ? fmtCtx(rt.max_context_len) : null;
     if (isCompact) {
       return (
         <span
@@ -61,7 +73,7 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
             color: "var(--color-text-secondary)",
             border: `1px solid ${color}33`,
           }}
-          title={`${rt.display_name} · ${rt.endpoint}${rt.model_identifier ? ` · ${rt.model_identifier}` : ""}${lockTitle}`}
+          title={`${rt.display_name} · ${rt.endpoint}${rt.model_identifier ? ` · ${rt.model_identifier}` : ""}${ctxLabel ? ` · ${ctxLabel} ctx` : ""}${lockTitle}`}
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
           <span className="truncate max-w-[120px]">{rt.display_name}</span>
@@ -87,14 +99,23 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
         title={`Runtime: ${rt.display_name} · Endpoint: ${rt.endpoint}${lockTitle}`}
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-        <span className="max-sm:break-words">{rt.display_name}</span>
+        {/* The MODEL leads, the box name follows. display_name is the
+            box/purpose label ("Spark vLLM (switchbar)") and says nothing about
+            what is running right now; model_identifier is what the watcher
+            keeps in step with the engine. Reading the box name first is how
+            "Laguna" stayed on screen for a runtime serving DeepSeek. */}
         {rt.model_identifier ? (
-          <span
-            className="text-[var(--color-text-muted)]"
-            style={{ overflowWrap: "anywhere" }}
-          >
-            · {rt.model_identifier}
+          <span className="max-sm:break-words" style={{ overflowWrap: "anywhere" }}>
+            {rt.model_identifier}
           </span>
+        ) : null}
+        <span
+          className={rt.model_identifier ? "text-[var(--color-text-muted)]" : "max-sm:break-words"}
+        >
+          {rt.model_identifier ? "· " : ""}{rt.display_name}
+        </span>
+        {ctxLabel ? (
+          <span className="text-[var(--color-text-muted)] tabular-nums">· {ctxLabel}</span>
         ) : null}
         {isLocked && (
           <Lock

@@ -19,6 +19,7 @@ from app.models.activity import ActivityEvent
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys
 from app.services import runtime_grace, sparkrun_manager
+from app.services.agent_runtime_switch import ProbedModel
 from app.services.host_resolver import ResolvedHost
 from app.services.runtime_watcher import (
     AUTO_RECOVERY_COOLDOWN,
@@ -125,8 +126,8 @@ async def test_grace_suppresses_failure_count_and_unreachable_event(
     watcher = RuntimeWatcher(interval=90)
 
     with (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value=None)),
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel(None, None))),
         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
     ):
         for _ in range(UNREACHABLE_EVENT_THRESHOLD + 2):
@@ -149,8 +150,8 @@ async def test_probe_success_during_grace_clears_the_marker(
     watcher = RuntimeWatcher(interval=90)
 
     with (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value="some-model")),
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("some-model", None))),
         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
     ):
         await watcher.tick(session=async_session)
@@ -173,8 +174,8 @@ async def test_expired_marker_restores_normal_alerting(
     watcher = RuntimeWatcher(interval=90)
 
     with (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value=None)),
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel(None, None))),
         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
         patch.object(RuntimeWatcher, "_maybe_auto_recover", new=AsyncMock()),
     ):
@@ -334,8 +335,8 @@ async def _run_until_recovery(
     ssh = AsyncMock(return_value=("", "", 0 if ssh_ok else 1))
     watcher = RuntimeWatcher(interval=90)
     with (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value=None)),
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel(None, None))),
         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
         patch("app.services.runtime_watcher.resolve_host_for_runtime",
               new=AsyncMock(return_value=host)),
@@ -437,8 +438,8 @@ async def test_engine_returning_on_its_own_resets_the_give_up_counter(
     watcher = RuntimeWatcher(interval=90)
 
     with (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value="m")),
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("m", None))),
         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
     ):
         await watcher.tick(session=async_session)
@@ -511,8 +512,8 @@ async def test_watcher_survives_redis_without_the_grace_keys(
     watcher = RuntimeWatcher(interval=90)
 
     with (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value=None)),
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel(None, None))),
         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
         patch("app.services.runtime_grace.get_redis",
               AsyncMock(side_effect=RuntimeError("redis down"))),

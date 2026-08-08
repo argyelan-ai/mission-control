@@ -8,6 +8,7 @@ from app.config import settings
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys
 from app.services import sse as sse_mod
+from app.services.agent_runtime_switch import ProbedModel
 from app.services.runtime_watcher import RuntimeWatcher
 
 
@@ -44,8 +45,8 @@ async def test_tick_writes_live_status_no_drift(async_session, fake_redis):
     watcher = RuntimeWatcher(interval=90)
 
     with patch(
-        "app.services.runtime_watcher.probe_runtime_model",
-        new=AsyncMock(return_value="old-model"),
+        "app.services.runtime_watcher.probe_runtime_model_info",
+        new=AsyncMock(return_value=ProbedModel("old-model", None)),
     ), patch(
         "app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis),
     ):
@@ -65,8 +66,8 @@ async def test_drift_requires_two_consecutive_probes(async_session, fake_redis):
     watcher = RuntimeWatcher(interval=90)
 
     with patch(
-        "app.services.runtime_watcher.probe_runtime_model",
-        new=AsyncMock(return_value="new-model"),
+        "app.services.runtime_watcher.probe_runtime_model_info",
+        new=AsyncMock(return_value=ProbedModel("new-model", None)),
     ), patch(
         "app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis),
     ), patch.object(
@@ -91,8 +92,8 @@ async def test_unreachable_engine_never_touches_row(async_session, fake_redis):
     watcher = RuntimeWatcher(interval=90)
 
     with patch(
-        "app.services.runtime_watcher.probe_runtime_model",
-        new=AsyncMock(return_value=None),
+        "app.services.runtime_watcher.probe_runtime_model_info",
+        new=AsyncMock(return_value=ProbedModel(None, None)),
     ), patch(
         "app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis),
     ), patch.object(
@@ -124,8 +125,8 @@ async def test_omp_runtime_is_probed_for_drift(async_session, fake_redis):
     import app.services.sse as sse_mod
 
     with patch(
-        "app.services.runtime_watcher.probe_runtime_model",
-        new=AsyncMock(return_value="new-model"),
+        "app.services.runtime_watcher.probe_runtime_model_info",
+        new=AsyncMock(return_value=ProbedModel("new-model", None)),
     ), patch(
         "app.services.runtime_watcher.mark_agents_for_sync",
         new=AsyncMock(return_value=0),

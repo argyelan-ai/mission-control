@@ -12,6 +12,20 @@ export function contextPercent(tokens: number, max: number): number {
   return Math.round((tokens / max) * 100);
 }
 
+/** Context window as a compact "128k" / "1M" label.
+ *
+ *  Computed, not table-driven: an earlier version was a ladder of the eight
+ *  CTX_PRESETS and reported every window above 262144 as "262k" — which would
+ *  have shown the 500k Grok and 1M Claude rows as a quarter of their real
+ *  size, and any future preset as the nearest one below it. */
+export function fmtCtx(n: number): string {
+  if (n >= 1_000_000) {
+    const millions = n / 1_000_000;
+    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+  }
+  return `${Math.round(n / 1000)}k`;
+}
+
 export function contextColor(pct: number): string {
   if (pct >= 90) return "var(--color-status-error)";
   if (pct >= 70) return "var(--color-status-warning)";

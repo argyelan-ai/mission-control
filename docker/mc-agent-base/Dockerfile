@@ -65,17 +65,26 @@ RUN mkdir -p /home/agent/.ssh \
     && chmod 700 /home/agent/.ssh \
     && chmod 600 /home/agent/.ssh/config /home/agent/.ssh/known_hosts
 
-# OpenAI-Routing zu Ollama Cloud. Bewusst KEIN image-gebackener Modell-Default
-# (OPENAI_MODEL) mehr — ein fest ins Image gebackenes Modell driftet still
-# gegen den tatsaechlichen Runtime-Endpoint (siehe agent_runtime_switch.py:455,
-# beobachtet: Image stand auf glm-5.1:cloud waehrend die Runtime laengst
-# umgeswitcht war). Das Modell kommt ausschliesslich aus dem Bootstrap
-# (runtime.model_identifier, ueber /api/v1/internal/bootstrap) bzw. aus
-# agent.env; entrypoint.sh faellt fail-fast, wenn beides fehlt.
+# OpenAI-Routing: bewusst WEDER ein image-gebackener Modell-Default
+# (OPENAI_MODEL) NOCH ein Endpoint-Default (OPENAI_BASE_URL). Beides driftet
+# still gegen den tatsaechlichen Runtime-Endpoint (siehe
+# agent_runtime_switch.py, beobachtet: Image stand auf glm-5.1:cloud waehrend
+# die Runtime laengst umgeswitcht war). Modell UND Endpoint kommen
+# ausschliesslich aus dem Bootstrap (runtime.model_identifier /
+# runtime.endpoint, ueber /api/v1/internal/bootstrap) bzw. aus der von
+# docker_agent_sync gerenderten .claude/.env; entrypoint.sh faellt fail-fast,
+# wenn eines von beiden fehlt.
+#
+# Der frueher hier stehende `ENV OPENAI_BASE_URL=https://ollama.com/v1` war
+# der Rest der Modell-Sanierung, die nur OPENAI_MODEL entfernt hat. Er war
+# zweifach schaedlich: er hat jedes `docker exec <agent> env` mit einem
+# ollama.com-Wert beantwortet, obwohl der laufende claude-Prozess laengst
+# korrekt gegen die Spark zeigte (Fehldiagnose 08.08.), und er waere im
+# Fehlerfall ein STILLER Fallback auf einen fremden Anbieter gewesen statt
+# eines lauten Starts-Verweigerns.
 # Runtime declaration for ui-detect.sh (see mc-claude-agent Dockerfile note).
 ENV PANE_UI_OVERRIDE=openclaude
 ENV CLAUDE_CODE_USE_OPENAI=1
-ENV OPENAI_BASE_URL=https://ollama.com/v1
 
 # poll.sh + entrypoint.sh + start-claude.sh + recycler.sh + recycler-lib.sh + lib/ kopieren
 COPY --chown=agent:agent poll.sh /home/agent/poll.sh
