@@ -6,64 +6,22 @@ import type { Agent } from "@/lib/types";
 
 // Task #20: the Sessions page restores the last-viewed agent from
 // localStorage, with ?agent=<id> (from the Agents list "open session"
-// button) taking precedence. Same nav/store mock convention as
-// TasksPage.test.tsx — AppShell (Sidebar/TopBar/…) needs useRouter +
-// useAppStore too, not just useSearchParams.
-const nav = vi.hoisted(() => ({
-  replace: vi.fn(),
-  push: vi.fn(),
-  searchParamsString: "",
-}));
+// button) taking precedence.
+const nav = vi.hoisted(() => ({ searchParamsString: "" }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: nav.replace, push: nav.push }),
-  usePathname: () => "/sessions",
   useSearchParams: () => new URLSearchParams(nav.searchParamsString),
 }));
 
-const mockAppState = vi.hoisted(() => ({
-  state: {
-    activeBoardId: "board-1" as string | null,
-    sidebarCollapsed: false,
-    commandPaletteOpen: false,
-    boards: [] as unknown[],
-    boardGroups: [] as unknown[],
-    currentUser: { id: "user-1", email: "mark@example.com", name: "Mark", role: "admin" } as {
-      id: string;
-      email: string;
-      name: string;
-      role: string;
-    } | null,
-    setActiveBoardId: (id: string | null) => {
-      mockAppState.state.activeBoardId = id;
-    },
-    toggleSidebar: () => {},
-    setCommandPaletteOpen: (open: boolean) => {
-      mockAppState.state.commandPaletteOpen = open;
-    },
-    setBoards: (boards: unknown[]) => {
-      mockAppState.state.boards = boards;
-    },
-    setBoardGroups: (boardGroups: unknown[]) => {
-      mockAppState.state.boardGroups = boardGroups;
-    },
-    setCurrentUser: (user: typeof mockAppState.state.currentUser) => {
-      mockAppState.state.currentUser = user;
-    },
-  },
-}));
-vi.mock("@/lib/store", () => ({
-  useNotificationStore: (selector?: (s: { notifications: never[] }) => unknown) =>
-    selector ? selector({ notifications: [] }) : { notifications: [] },
-  useAppStore: Object.assign(
-    (selector?: (s: typeof mockAppState.state) => unknown) =>
-      selector ? selector(mockAppState.state) : mockAppState.state,
-    { setState: (partial: Partial<typeof mockAppState.state>) => Object.assign(mockAppState.state, partial) }
-  ),
+// AppShell (auth guard, Sidebar, TopBar, CommandPalette, VoiceProvider, …)
+// is unrelated to the restore/persist behavior under test — mocking it out
+// keeps this test focused on SessionsPage's own logic instead of AppShell's
+// auth/localStorage/SSE dependency chain.
+vi.mock("@/components/layout/AppShell", () => ({
+  default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // useTerminalRemountSignal opens a real EventSource per selected agent —
-// irrelevant to the restore/persist behavior under test here, and jsdom has
-// no EventSource implementation, so stub the hook out entirely.
+// irrelevant here, and jsdom has no EventSource implementation.
 vi.mock("@/hooks/useTerminalRemountSignal", () => ({
   useTerminalRemountSignal: () => {},
 }));
@@ -141,15 +99,15 @@ function renderPage() {
 }
 
 describe("SessionsPage — last-selected-agent restore", () => {
+  // jsdom in this environment has no working localStorage (every other
+  // *.test.tsx in the repo hits the same gap and stubs its own — see
+  // TasksPage.test.tsx) — a plain in-memory Storage shim, reset per test.
   let store: Record<string, string>;
 
   beforeEach(() => {
     nav.searchParamsString = "";
-    nav.replace.mockClear();
-    nav.push.mockClear();
-    mockAppState.state.activeBoardId = "board-1";
 
-    store = { mc_auth_token: "tok" };
+    store = {};
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: {
@@ -162,10 +120,6 @@ describe("SessionsPage — last-selected-agent restore", () => {
       },
     });
 
-    // Generic fetch stub for AppShell chrome (Sidebar badges, TopBar, etc.).
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })
-    );
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
       mkAgent({ id: "agent-1", name: "Agent One" }),
       mkAgent({ id: "agent-2", name: "Agent Two" }),
@@ -178,7 +132,7 @@ describe("SessionsPage — last-selected-agent restore", () => {
   });
 
   it("restores the agent stored under mc-sessions-last-agent when no query param is present", async () => {
-    store["mc-sessions-last-agent"] = "agent-2";
+    localStorage.setItem("mc-sessions-last-agent", "agent-2");
     renderPage();
 
     // Selected row's name renders in the primary text color; unselected rows
@@ -193,7 +147,7 @@ describe("SessionsPage — last-selected-agent restore", () => {
     // agent-1 is both the stored value AND the plain fallback (agents[0]) —
     // using it here wouldn't prove the query param path fired at all.
     // agent-2 has neither in its favor, so only the param can select it.
-    store["mc-sessions-last-agent"] = "agent-1";
+    localStorage.setItem("mc-sessions-last-agent", "agent-1");
     nav.searchParamsString = "agent=agent-2";
     renderPage();
 
@@ -208,6 +162,6 @@ describe("SessionsPage — last-selected-agent restore", () => {
     const row = await screen.findByText("Agent Two");
     fireEvent.click(row);
 
-    await waitFor(() => expect(store["mc-sessions-last-agent"]).toBe("agent-2"));
+    await waitFor(() => expect(localStorage.getItem("mc-sessions-last-agent")).toBe("agent-2"));
   });
 });
