@@ -9,6 +9,10 @@ Every tick it probes all enabled probeable runtimes via ``/v1/models``:
      against flapping during engine warm-up), then persists the new
      ``model_identifier``, invalidates the resolver cache, emits
      ``runtime.model_changed`` and flags bound cli-bridge agents,
+  2b. confirms a changed served context window (``max_model_len`` from the
+     same probe) the same way and persists it to ``max_context_len`` /
+     ``preferred_context_len`` — the window is rendered into agent env just
+     like the model id, so a stale one misconfigures turns just as badly,
   3. runs the propagation sync pass for flagged agents that are now idle.
 
 PR5 adds two operational behaviours on top:
@@ -53,7 +57,7 @@ from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
-    probe_runtime_model,
+    probe_runtime_model_info,
 )
 from app.services import host_memory_prep
 from app.services.host_resolver import resolve_host_for_runtime
@@ -222,7 +226,8 @@ class RuntimeWatcher:
 
     async def _probe_one(self, session: AsyncSession, runtime: Runtime) -> None:
         started = time.monotonic()
-        served = await probe_runtime_model(runtime)
+        probed = await probe_runtime_model_info(runtime)
+        served, served_ctx = probed.model_id, probed.context_len
         latency_ms = int((time.monotonic() - started) * 1000)
         redis = await get_redis()
         switching = await get_switching(runtime.slug, redis)
@@ -290,10 +295,18 @@ class RuntimeWatcher:
         await self._write_live(
             redis, runtime.slug,
             reachable=True, served_model=served, latency_ms=latency_ms,
+            served_context_len=served_ctx,
             consecutive_failures=0,
         )
         if served != (runtime.model_identifier or ""):
             await self._handle_drift(session, redis, runtime, served)
+        # Context drift is checked independently of model drift: an engine can
+        # be restarted with a different --max-model-len while serving the same
+        # model id, and a model change that keeps the window must not re-run
+        # this. Both paths converge on mark_agents_for_sync, and _handle_drift
+        # refreshed the row above, so the comparison here sees current values.
+        if served_ctx is not None:
+            await self._handle_context_drift(session, redis, runtime, served_ctx)
 
     async def _handle_drift(
         self, session: AsyncSession, redis, runtime: Runtime, served: str
@@ -486,6 +499,73 @@ class RuntimeWatcher:
             await host_memory_prep.finish_for_host(host, success=success)
         except Exception:  # noqa: BLE001 — never at the cost of the tick
             logger.exception("memory prep cleanup failed for %s", runtime.slug)
+
+    async def _handle_context_drift(
+        self, session: AsyncSession, redis, runtime: Runtime, served_ctx: int
+    ) -> None:
+        """Persist a changed served context window — same two-probe contract.
+
+        "Engine leads, MC follows" applies to the WINDOW too, not just the
+        model id. When the Spark was switched to a 262k engine, drift detection
+        moved ``model_identifier`` but left ``max_context_len`` at the 98304 of
+        a previous profile. That number is not cosmetic: build_runtime_env
+        renders it as omp's ``OMP_CONTEXT_WINDOW`` / ``OMP_MAX_TOKENS``
+        (routers/internal.py:122), so a stale window sizes every turn against a
+        model that no longer has it.
+
+        ``preferred_context_len`` follows only where it was expressing "use the
+        whole window" (it equalled the old max) or where it would now exceed
+        the new max and has to be clamped. A deliberately smaller preferred
+        value is left alone — the engine owns the ceiling, the operator owns
+        the working size below it.
+        """
+        old_max = runtime.max_context_len
+        old_preferred = runtime.preferred_context_len
+        if old_max == served_ctx and (
+            old_preferred is None or old_preferred <= served_ctx
+        ):
+            return
+
+        key = RedisKeys.runtime_context_drift_candidate(runtime.slug)
+        candidate = await redis.get(key)
+        if isinstance(candidate, bytes):
+            candidate = candidate.decode()
+        if candidate != str(served_ctx):
+            await redis.setex(key, self._interval * 3, str(served_ctx))
+            return
+
+        await redis.delete(key)
+        runtime.max_context_len = served_ctx
+        if old_preferred is None or old_preferred == old_max or old_preferred > served_ctx:
+            runtime.preferred_context_len = served_ctx
+        session.add(runtime)
+        await session.commit()
+        await session.refresh(runtime)
+        logger.info(
+            "runtime %s context drift confirmed: max %r → %r (preferred %r → %r)",
+            runtime.slug, old_max, served_ctx,
+            old_preferred, runtime.preferred_context_len,
+        )
+        await emit_event(
+            session,
+            "runtime.context_changed",
+            f"{runtime.slug}: context window {old_max or 'n/a'} → {served_ctx}",
+            severity="info",
+            detail={
+                "slug": runtime.slug,
+                "old_max_context_len": old_max,
+                "new_max_context_len": served_ctx,
+                "old_preferred_context_len": old_preferred,
+                "new_preferred_context_len": runtime.preferred_context_len,
+                "model": runtime.model_identifier,
+            },
+        )
+        # Same propagation as a model change: the rendered env carries the
+        # window, so agents on this runtime need the identical
+        # render-then-restart pass. Flagging twice in one tick is harmless —
+        # pending_runtime_sync is a boolean, and _tick_inner's single
+        # sync_pending_agents pass runs after every runtime has been probed.
+        await mark_agents_for_sync(session, runtime)
 
     # ── Auto-recovery ────────────────────────────────────────────────────
 

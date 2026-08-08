@@ -372,6 +372,16 @@ class RedisKeys:
     def runtime_drift_candidate(slug: str) -> str:
         return f"mc:runtime-drift:{slug}"
 
+    @staticmethod
+    def runtime_context_drift_candidate(slug: str) -> str:
+        """Two-probe confirmation for a changed served context window.
+
+        Separate from runtime_drift_candidate: an engine restarted with a new
+        --max-model-len keeps its model id, so the two candidates must be able
+        to be pending independently.
+        """
+        return f"mc:runtime-ctx-drift:{slug}"
+
     # ── Switch Grace + Auto-Recovery (PR5, services/runtime_grace.py) ────
     # runtime_switching: "this runtime is expected to be unreachable right
     # now" — set by switch_recipe/start_runtime, cleared by the watcher once a

@@ -34,7 +34,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -134,15 +134,61 @@ def select_probed_model(model_ids: list[str], current: str | None) -> str | None
     return chat_candidates[0]
 
 
+class ProbedModel(NamedTuple):
+    """What ``/v1/models`` says the engine is serving right now.
+
+    ``context_len`` is the served model's ``max_model_len`` when the engine
+    reports one (vLLM does, on every entry). ``None`` means "the endpoint did
+    not say" — never "no context window": callers must leave the stored value
+    alone rather than write a guess.
+    """
+
+    model_id: str | None
+    context_len: int | None
+
+
+def _served_context_len(entry: object) -> int | None:
+    """Read the served context window off one ``/v1/models`` entry.
+
+    vLLM reports ``max_model_len``; LM Studio and several OpenAI-compatible
+    shims use ``context_length`` / ``max_context_length`` for the same number.
+    Anything non-positive or non-integral is treated as "not reported" — a
+    zero or a string here is a shim quirk, not a real 0-token window.
+    """
+    if not isinstance(entry, dict):
+        return None
+    for key in ("max_model_len", "context_length", "max_context_length"):
+        value = entry.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
 async def probe_runtime_model(runtime: Runtime) -> str | None:
     """Best-effort probe of an OpenAI-compatible `/models` endpoint.
 
     Returns the model id the endpoint is serving for this runtime, or None on
     failure or when nothing chat-capable is on offer. Selection rules live in
     `select_probed_model`. Caller is responsible for persisting the value.
+
+    Thin wrapper over :func:`probe_runtime_model_info` — every caller that only
+    cares about identity keeps its old signature.
+    """
+    return (await probe_runtime_model_info(runtime)).model_id
+
+
+async def probe_runtime_model_info(runtime: Runtime) -> ProbedModel:
+    """:func:`probe_runtime_model` plus the served model's context window.
+
+    The context window comes from the SAME ``/v1/models`` response and the SAME
+    entry as the picked model id — probing them separately could pair a model
+    with another model's window across a switch. ``ProbedModel(None, None)`` on
+    any failure.
     """
     if not runtime.endpoint:
-        return None
+        return ProbedModel(None, None)
     base = runtime.endpoint.rstrip("/")
     # Normalise: vLLM/LM Studio typically have `/v1` baked into the endpoint;
     # bare base URLs are also valid. Both `/v1/models` and `/models` paths are
@@ -157,7 +203,7 @@ async def probe_runtime_model(runtime: Runtime) -> str | None:
         import httpx  # local import — already a project dep
     except ImportError:
         logger.warning("probe_runtime_model: httpx unavailable")
-        return None
+        return ProbedModel(None, None)
     async with httpx.AsyncClient(timeout=5.0) as client:
         for url in candidates:
             try:
@@ -167,14 +213,18 @@ async def probe_runtime_model(runtime: Runtime) -> str | None:
                 data = resp.json()
                 items = data.get("data") if isinstance(data, dict) else None
                 if isinstance(items, list) and items:
+                    entries = [it for it in items if isinstance(it, dict)]
                     ids = [
                         it.get("id")
-                        for it in items
-                        if isinstance(it, dict) and isinstance(it.get("id"), str)
+                        for it in entries
+                        if isinstance(it.get("id"), str)
                     ]
                     picked = select_probed_model(ids, runtime.model_identifier)
                     if picked:
-                        return picked
+                        entry = next(
+                            (it for it in entries if it.get("id") == picked), None
+                        )
+                        return ProbedModel(picked, _served_context_len(entry))
                     # Endpoint answered, but served nothing chat-capable. Do not
                     # fall through to the next candidate URL with a different
                     # shape — report "unknown" so the caller leaves the binding
@@ -185,11 +235,11 @@ async def probe_runtime_model(runtime: Runtime) -> str | None:
                         runtime.slug,
                         ids,
                     )
-                    return None
+                    return ProbedModel(None, None)
             except Exception as e:
                 logger.debug("probe_runtime_model %s failed: %s", url, e)
                 continue
-    return None
+    return ProbedModel(None, None)
 
 
 async def ensure_runtime_model_identifier(

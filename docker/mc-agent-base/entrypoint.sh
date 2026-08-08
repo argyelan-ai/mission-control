@@ -147,6 +147,14 @@ if [ -z "${OPENAI_MODEL:-}" ]; then
     echo "[entrypoint] FATAL: OPENAI_MODEL not set (bootstrap failed and no env fallback) — refusing to boot with an unknown model" >&2
     exit 1
 fi
+# Gleiche Symmetrie fuer den Endpoint. Bis 08.08. backte das Image einen
+# ollama.com-Default ein, der bei fehlendem Bootstrap still eingesprungen
+# waere — ein Agent, der unbemerkt bei einem fremden Anbieter landet, ist
+# schlimmer als ein Agent, der nicht startet.
+if [ -z "${OPENAI_BASE_URL:-}" ]; then
+    echo "[entrypoint] FATAL: OPENAI_BASE_URL not set (bootstrap failed and no env fallback) — refusing to boot against an unknown endpoint" >&2
+    exit 1
+fi
 
 # Trust-Dialog pre-akzeptieren für /home/agent + /workspace.
 # Ohne das zeigt claude-code beim ersten Start einen interaktiven Trust-Prompt
