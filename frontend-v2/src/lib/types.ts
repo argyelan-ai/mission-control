@@ -1042,6 +1042,60 @@ export interface Credential {
   updated_at: string;
 }
 
+// ── AI providers (Settings -> AI providers) ─────────────────────────────────
+
+/** One embedding backend from the registry. Only the ACTIVE entry reports a
+ *  concrete url/model — for the others it would be a guess about a config
+ *  that is not in effect. */
+export interface EmbeddingProviderEntry {
+  key: string;
+  label: string;
+  active: boolean;
+  url: string | null;
+  model: string | null;
+}
+
+/** GET /api/v1/ai-providers/settings — effective provider routing. */
+export interface AiProviderSettingsResponse {
+  values: Record<string, string | null>;
+  /** Keys the operator pinned via the settings page (rest = env default). */
+  overridden: string[];
+  choices: {
+    ai_embeddings_provider: string[];
+    ai_insights_provider: string[];
+  };
+  embedding_providers: EmbeddingProviderEntry[];
+  state: {
+    hf_token_set: boolean;
+    ollama_api_key_set: boolean;
+    /** A cloud provider is selected — without a key those calls get a 401. */
+    ollama_key_required: boolean;
+  };
+}
+
+/** POST /api/v1/ai-providers/huggingface/test-connection — never carries token
+ *  material. No token stored is an OK state: MC works anonymously. */
+export interface HfConnectionResult {
+  token_set: boolean;
+  connected: boolean;
+  username: string | null;
+  error: string | null;
+  anonymous_ok: boolean;
+}
+
+/** POST /api/v1/ai-providers/embeddings/test-connection — one real embed
+ *  through the active provider, reporting the vector dimension it got back. */
+export interface EmbeddingsConnectionResult {
+  provider: string;
+  label: string;
+  url: string;
+  model: string;
+  connected: boolean;
+  dimension: number | null;
+  expected_dimension: number;
+  error: string | null;
+}
+
 /** GET /api/v1/channels/settings — effective runtime channel config. */
 export interface ChannelSettingsResponse {
   values: Record<string, string | boolean | null>;
