@@ -102,6 +102,17 @@ class LocalRecipe(SQLModel, table=True):
     source_registry: str = Field(default="builtin", index=True, max_length=64)
     source_url: str | None = Field(default=None, max_length=512)
 
+    # Engine tuning as data (PR 8). A flat ``{"KEY": "value"}`` map that the
+    # compose recipes render into the ``environment:`` block of the
+    # ``compose.override.yaml`` they already write for the container name and
+    # the mc.runtime.slug label. The four values that made DeepSeek V4 Flash fit
+    # on the Spark lived in a hand-written compose.tuning.yaml on the box — one
+    # re-clone away from being lost. Declared here they survive re-deploys and
+    # are visible in the deploy dialog before anything runs.
+    #
+    # NULL means "no tuning", which is what every non-compose recipe wants.
+    env: dict[str, str] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     notes: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
