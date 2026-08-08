@@ -13,6 +13,15 @@ break — is left completely alone.
 """
 import json
 from contextlib import ExitStack
+
+from app.services.agent_runtime_switch import ProbedModel
+
+
+def _probed(model_id):
+    """served-model → ProbedModel, wie probe_runtime_model_info es liefert."""
+    return ProbedModel(model_id=model_id, context_len=None)
+
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -93,8 +102,10 @@ def _watcher_stack(docker, fake_redis, *, served=None, extra=()):
 
     stack = ExitStack()
     for ctx in (
-        patch("app.services.runtime_watcher.probe_runtime_model",
-              new=AsyncMock(return_value=served)),
+        # PR9 renamed the watcher's probe to probe_runtime_model_info (it now
+        # carries the context window as well) — same served-model semantics.
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=_probed(served))),
         patch("app.services.runtime_watcher.get_redis", _get_redis),
         patch("app.services.runtime_grace.get_redis", _get_redis),
         patch.object(sse_mod, "get_redis", _get_redis),
