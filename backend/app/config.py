@@ -204,6 +204,23 @@ class Settings(BaseSettings):
     # Callers (spark_client, news_ai_worker) auto-detect recipe swaps via
     # the resolver and fall back to this value only if the resolver fails.
     spark_llm_model: str = "Qwen/Qwen3.6-35B-A3B-FP8"
+    # ── MC's own AI functions: which provider serves them ────────────────
+    # Three layers, in override order: these env defaults -> app_settings rows
+    # (Settings -> AI providers) -> secrets for the auth material. See
+    # services/ai_provider_config.py; the allowlist there is the security
+    # boundary. Empty string = "inherit the function's legacy source", so a
+    # plain .env install behaves exactly as before this was configurable.
+    ai_embeddings_provider: str = "spark"
+    ai_embeddings_url: str = ""      # "" -> spark_embedding_url / provider default
+    ai_embeddings_model: str = ""    # "" -> spark_embedding_model / provider default
+    ai_insights_provider: str = "spark"
+    ai_insights_model: str = ""      # "" -> runtime resolver (spark) / provider default
+    # Ollama Cloud (ollama.com) — the ONLY Ollama MC talks to by default. Local
+    # Ollama on a Mac is deliberately not a provider option here.
+    ollama_cloud_url: str = "https://ollama.com"
+    ollama_cloud_embedding_model: str = "nomic-embed-text"
+    ollama_cloud_insights_model: str = "qwen3-coder:480b-cloud"
+
     # Qdrant: service name on the Docker network
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333
