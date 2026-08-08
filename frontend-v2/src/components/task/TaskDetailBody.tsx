@@ -480,7 +480,7 @@ export function TaskDetailBody({
   const t = useTranslations("tasks");
   const locale = useLocale();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"thread" | "comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("thread");
+  const [activeTab, setActiveTab] = useState<"thread" | "comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("comments");
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
 
