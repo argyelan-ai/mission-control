@@ -209,6 +209,7 @@
     "provError": "Fehler",
     "contextPct": "Kontext {pct}%",
     "openAgent": "Agent öffnen: {name}",
+    "openSession": "Session öffnen: {name}",
     "noBoard": "Kein Board",
     "tasksCompleted": "{count} Aufgaben erledigt",
     "actionsFor": "Aktionen: {name}",
