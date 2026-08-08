@@ -1363,12 +1363,31 @@ async def start_runtime(
     prep = None
     if is_docker or is_ssh_process:
         prep = await host_memory_prep.prepare_for_runtime(runtime, host=resolved)
-    try:
-        result = await _start_runtime_impl(runtime, host=host)
-    except Exception:
-        await host_memory_prep.finish_for_runtime(prep, host=resolved, success=False)
-        await runtime_grace.clear_switching(slug)
-        raise
+
+    if prep is not None and prep.mem_wait_timed_out:
+        # PR 10: the box reported the prep as done (cache dropped, watermark
+        # lowered) but MemAvailable never cleared the threshold — the exact
+        # shape of the reboot-test failure, where a crash-looped engine's
+        # allocations had not actually drained. Attempting the start anyway
+        # is the blind retry that produced the original OOM, so it never
+        # happens: `_start_runtime_impl` is not called, and the prep's own
+        # changes (dropper, watermark) are undone below like any failed start.
+        result = {
+            "ok": False,
+            "message": (
+                f"Box-Speicher nicht rechtzeitig frei — nur "
+                f"{(prep.mem_available_after_wait_kb or 0) // 1024} MiB verfügbar, "
+                f"benötigt {(prep.mem_wait_threshold_kb or 0) // 1024} MiB. "
+                f"Start abgebrochen statt blind zu versuchen."
+            ),
+        }
+    else:
+        try:
+            result = await _start_runtime_impl(runtime, host=host)
+        except Exception:
+            await host_memory_prep.finish_for_runtime(prep, host=resolved, success=False)
+            await runtime_grace.clear_switching(slug)
+            raise
     if not result.get("ok"):
         await host_memory_prep.finish_for_runtime(prep, host=resolved, success=False)
 

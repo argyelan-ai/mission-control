@@ -24,17 +24,30 @@ SPARK = ResolvedHost(ssh_host="192.0.2.10", ssh_user="mc", kind="ssh", source="r
 CONFIGURED_WATERMARK = 5242880  # 5 GiB — what Mark's Spark carries
 LOWERED_WATERMARK = 2097152     # 2 GiB — what the start lowers it to
 
+# Captured before the autouse fixture below ever patches the module attribute
+# — the PR 10 tests that exercise the wait loop ITSELF call this reference
+# directly, so they reach the real function no matter what
+# `memprep._wait_for_available_memory` currently points to.
+_REAL_WAIT_FOR_AVAILABLE_MEMORY = memprep._wait_for_available_memory
+
 
 class FakeBox:
     """A box with a watermark, a MemFree value and a container list."""
 
-    def __init__(self, *, watermark=CONFIGURED_WATERMARK, arch="aarch64", mem_free=8_000_000):
+    def __init__(
+        self, *, watermark=CONFIGURED_WATERMARK, arch="aarch64", mem_free=8_000_000,
+        mem_available_sequence=None,
+    ):
         self.watermark = watermark
         self.arch = arch
         self.mem_free = mem_free
         self.commands: list[str] = []
         self.containers: set[str] = set()
         self.fail_on: str | None = None
+        # PR 10: successive `awk MemAvailable` reads pop through this list —
+        # the shape of a box whose reclaim genuinely takes a few polls, or (a
+        # single-element / empty list) one that never budges.
+        self.mem_available_sequence = list(mem_available_sequence or [mem_free])
 
     async def run(self, command, *, host=None, timeout=None):
         self.commands.append(command)
@@ -43,6 +56,11 @@ class FakeBox:
 
         if "min_free_kbytes" in command and command.startswith("cat"):
             return (str(self.watermark), "", 0)
+        if "MemAvailable" in command:
+            value = self.mem_available_sequence[0]
+            if len(self.mem_available_sequence) > 1:
+                self.mem_available_sequence.pop(0)
+            return (str(value), "", 0)
         if "MemFree" in command:
             return (str(self.mem_free), "", 0)
         if command.strip() == "uname -m":
@@ -78,6 +96,27 @@ def _no_events():
     """The activity feed needs a real session_scope; the prep only ever emits
     best-effort, so silence it rather than stand up a DB for every case."""
     with patch.object(memprep, "_emit", new=AsyncMock()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _instant_mem_wait():
+    """PR 10's MemAvailable wait defaults to reaching instantly.
+
+    Every pre-existing test in this file exercises prepare_host_memory /
+    prepare_for_runtime / start_runtime WITHOUT caring about the wait — and
+    since DEFAULT_MIN_AVAILABLE_KB now applies to every exclusive_memory
+    runtime whether or not it configures its own threshold, an unpatched
+    wait would poll FakeBox's default ~7.6 GiB MemFree against a 20 GiB
+    floor for real, in real asyncio.sleep(10) increments, for the real
+    3-minute timeout — turning every one of those tests into a multi-minute
+    hang. The PR 10 section below re-patches this per test to exercise the
+    wait itself; this fixture is what every OTHER test gets for free.
+    """
+    with patch.object(
+        memprep, "_wait_for_available_memory",
+        new=AsyncMock(return_value=(True, memprep.DEFAULT_MIN_AVAILABLE_KB)),
+    ):
         yield
 
 
@@ -409,3 +448,221 @@ async def test_a_non_exclusive_runtime_start_touches_nothing(box, fake_redis):
 
     assert box.watermark == CONFIGURED_WATERMARK
     assert not box.ran("drop_caches")
+
+
+# ── PR 10: MemAvailable wait ─────────────────────────────────────────────────
+#
+# The gap live in the reboot test: a crash-looped engine's ~100 GB of NVRM
+# allocations had not actually drained three minutes after prepare_host_memory
+# reported success (cache dropped, watermark lowered). vLLM saw 11.58 GiB free
+# out of 121.69 GiB. The fix is a poll loop with a hard timeout; the tests
+# below cover the loop itself (deterministic clock, no real sleeping), the
+# handle it leaves behind, and the abort it forces on the start path.
+
+THRESHOLD = 40_000_000  # 40 GiB in kB, arbitrary for these tests
+
+
+class _FakeClock:
+    """A controllable ``now()``/``sleep()`` pair — advances only when the
+    wait loop itself calls ``sleep``, so the test asserts real elapsed
+    *ticks*, not wall-clock time."""
+
+    def __init__(self):
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+@pytest.mark.asyncio
+async def test_wait_for_available_memory_reaches_the_threshold(box, fake_redis):
+    """The box reclaims memory over a few polls — the loop must return as
+    soon as it does, not spin until the timeout."""
+    box.mem_available_sequence = [10_000_000, 25_000_000, THRESHOLD, THRESHOLD]
+    clock = _FakeClock()
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        reached, last = await _REAL_WAIT_FOR_AVAILABLE_MEMORY(
+            SPARK, min_available_kb=THRESHOLD, timeout_seconds=180,
+            sleep=clock.sleep, now=clock.now,
+        )
+
+    assert reached is True
+    assert last == THRESHOLD
+    # Stopped polling the moment the threshold was crossed — two reads short
+    # of the box's fourth, unread value.
+    assert len(clock.sleeps) == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_for_available_memory_times_out_on_a_box_that_never_frees(box, fake_redis):
+    """Sabotage: the box's MemAvailable never moves. The loop must give up at
+    the timeout rather than spin forever."""
+    box.mem_available_sequence = [5_000_000]  # constant, never reaches THRESHOLD
+    clock = _FakeClock()
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        reached, last = await _REAL_WAIT_FOR_AVAILABLE_MEMORY(
+            SPARK, min_available_kb=THRESHOLD, timeout_seconds=30, poll_interval=10,
+            sleep=clock.sleep, now=clock.now,
+        )
+
+    assert reached is False
+    assert last == 5_000_000
+    assert clock.t >= 30  # the fake clock actually ran out the budget
+
+
+@pytest.mark.asyncio
+async def test_wait_for_available_memory_survives_an_unreadable_box(fake_redis):
+    """Sabotage: MemAvailable can never be read. Not-reached, not a crash —
+    and it still consumes the timeout budget instead of returning instantly
+    (an unreadable box is not evidence the box is fine)."""
+    box = FakeBox()
+    box.fail_on = "MemAvailable"
+    clock = _FakeClock()
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        reached, last = await _REAL_WAIT_FOR_AVAILABLE_MEMORY(
+            SPARK, min_available_kb=THRESHOLD, timeout_seconds=20, poll_interval=10,
+            sleep=clock.sleep, now=clock.now,
+        )
+
+    assert reached is False
+    assert last is None
+    assert clock.t >= 20
+
+
+@pytest.mark.asyncio
+async def test_prepare_records_a_successful_wait_on_the_handle(box, fake_redis):
+    box.mem_available_sequence = [THRESHOLD]
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis, patch.object(
+        memprep, "_wait_for_available_memory",
+        new=AsyncMock(return_value=(True, THRESHOLD)),
+    ):
+        handle = await memprep.prepare_host_memory(
+            SPARK, min_available_kb=THRESHOLD, slug="ds4-sparkinfer",
+        )
+
+    assert handle.mem_wait_timed_out is False
+    assert handle.mem_wait_threshold_kb == THRESHOLD
+    assert handle.mem_available_after_wait_kb == THRESHOLD
+    # The wait is additive — the existing dropper/watermark mechanics still ran.
+    assert memprep.DROPPER_CONTAINER in box.containers
+
+
+@pytest.mark.asyncio
+async def test_prepare_records_a_timed_out_wait_on_the_handle(box, fake_redis):
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis, patch.object(
+        memprep, "_wait_for_available_memory",
+        new=AsyncMock(return_value=(False, 11_000_000)),
+    ):
+        handle = await memprep.prepare_host_memory(
+            SPARK, min_available_kb=THRESHOLD, slug="ds4-sparkinfer",
+        )
+
+    assert handle.mem_wait_timed_out is True
+    assert handle.mem_wait_threshold_kb == THRESHOLD
+    assert handle.mem_available_after_wait_kb == 11_000_000
+    # A timed-out wait still leaves the dropper/watermark changes in place —
+    # they are undone by finish(), same as any other aborted start.
+    assert memprep.DROPPER_CONTAINER in box.containers
+
+
+@pytest.mark.asyncio
+async def test_no_threshold_means_no_wait_at_all(box, fake_redis):
+    """Existing callers that never pass min_available_kb (or a runtime that
+    is not GB10-applicable) must see byte-for-byte the same behaviour as
+    before PR 10 — no MemAvailable read, handle fields all None/False."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        handle = await memprep.prepare_host_memory(SPARK, watermark_kb=None)
+
+    assert handle.mem_wait_timed_out is False
+    assert handle.mem_wait_threshold_kb is None
+    assert not box.ran("MemAvailable")
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_runtime_falls_back_to_the_conservative_default(box, fake_redis):
+    """A runtime without prestart_min_available_kb still gets a wait — the
+    whole point of PR 10 is that every exclusive_memory GB10 runtime is
+    covered, tuned or not."""
+    ssh, redis = _patched(box, fake_redis)
+    wait = AsyncMock(return_value=(True, memprep.DEFAULT_MIN_AVAILABLE_KB))
+    with ssh, redis, patch.object(memprep, "_wait_for_available_memory", new=wait):
+        await memprep.prepare_for_runtime(SPARKINFER, host=SPARK)
+
+    assert wait.await_args.kwargs["min_available_kb"] == memprep.DEFAULT_MIN_AVAILABLE_KB
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_runtime_respects_a_configured_threshold(box, fake_redis):
+    configured = {**SPARKINFER, "prestart_min_available_kb": 90_000_000}
+    ssh, redis = _patched(box, fake_redis)
+    wait = AsyncMock(return_value=(True, 90_000_000))
+    with ssh, redis, patch.object(memprep, "_wait_for_available_memory", new=wait):
+        await memprep.prepare_for_runtime(configured, host=SPARK)
+
+    assert wait.await_args.kwargs["min_available_kb"] == 90_000_000
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_runtime_emits_a_timeout_event(box, fake_redis):
+    ssh, redis = _patched(box, fake_redis)
+    wait = AsyncMock(return_value=(False, 12_000_000))
+    with (
+        ssh, redis,
+        patch.object(memprep, "_wait_for_available_memory", new=wait),
+        patch.object(memprep, "_emit", new=AsyncMock()) as emit,
+    ):
+        await memprep.prepare_for_runtime(SPARKINFER, host=SPARK)
+
+    events = [call.args[0] for call in emit.await_args_list]
+    assert "runtime.memory_prep_started" in events  # the prep itself still happened
+    assert "runtime.memory_prep_timeout" in events  # …but the caller must abort
+
+
+@pytest.mark.asyncio
+async def test_start_runtime_aborts_without_calling_impl_when_the_wait_times_out(
+    box, fake_redis
+):
+    """The whole point: a timed-out wait must never reach the actual launch
+    command — that is the blind retry the reboot test failed on."""
+    from app.services.runtime_manager import start_runtime
+
+    impl = AsyncMock(return_value={"ok": True, "message": "läuft"})
+    timed_out_handle = memprep.PrepHandle(
+        host_key="192.0.2.10",
+        original_watermark_kb=CONFIGURED_WATERMARK,
+        lowered_to_kb=LOWERED_WATERMARK,
+        dropper_started=True,
+        mem_wait_threshold_kb=THRESHOLD,
+        mem_available_after_wait_kb=11_000_000,
+        mem_wait_timed_out=True,
+    )
+    box.containers.add(memprep.DROPPER_CONTAINER)
+    box.watermark = LOWERED_WATERMARK
+
+    with_ = _start_patches(box, fake_redis, impl)
+    with (
+        with_[0], with_[1], with_[2], with_[3],
+        patch.object(memprep, "prepare_for_runtime",
+                     new=AsyncMock(return_value=timed_out_handle)),
+        with_[4], with_[5],
+    ):
+        result = await start_runtime(SPARKINFER, host=SPARK)
+
+    impl.assert_not_awaited()
+    assert result["ok"] is False
+    assert "nicht rechtzeitig frei" in result["message"]
+    # Cleanup still ran — the dropper/watermark the prep changed are undone,
+    # same as any other start that never got off the ground.
+    assert box.watermark == CONFIGURED_WATERMARK
+    assert memprep.DROPPER_CONTAINER not in box.containers
