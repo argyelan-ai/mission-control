@@ -1677,7 +1677,10 @@ export const api = {
       process_name?: string | null;
       exclusive_memory?: boolean;
     }): Promise<Runtime> =>
-      request("/api/v1/runtimes", { method: "POST", body: JSON.stringify(data) }),
+      // /runtimes/db, NOT /runtimes: the bare POST is the legacy LM-Studio
+      // endpoint whose body REQUIRES lms_identifier — this typed body matches
+      // RuntimeCreate, which only /runtimes/db accepts. (Live 422, 08.08.)
+      request("/api/v1/runtimes/db", { method: "POST", body: JSON.stringify(data) }),
     vllm: {
       discover: (): Promise<import("@/lib/types").VllmDiscoverResponse> =>
         request("/api/v1/runtimes/vllm/discover"),
