@@ -8,6 +8,7 @@ Two operational problems, one shared Redis marker:
 from __future__ import annotations
 
 import json
+import uuid
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
@@ -18,7 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.activity import ActivityEvent
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys
-from app.services import runtime_grace, sparkrun_manager
+from app.services import host_memory_prep, runtime_grace, sparkrun_manager
 from app.services.agent_runtime_switch import ProbedModel
 from app.services.host_resolver import ResolvedHost
 from app.services.runtime_watcher import (
@@ -524,3 +525,209 @@ async def test_watcher_survives_redis_without_the_grace_keys(
             await watcher.tick(session=async_session)
 
     assert "runtime.unreachable" in await _event_types(async_session)
+
+
+# ── (c) PR 10: auto-recovery respects an active exclusive sibling ────────
+#
+# The live reboot-test failure: qwen-general (a deliberately parked solo
+# partner) got auto-recovered while its exclusive sibling
+# deepseek-v4-flash-sparkinfer was loading on the same box — a successful
+# recovery would have evicted the loading engine via
+# runtime_manager.ensure_exclusive_host's exclusivity sweep. These tests
+# cover the three signals that must each be enough to block recovery on
+# their own (a sibling switching, already serving, or mid memory-prep) and
+# the two that must NOT (a non-exclusive sibling, a sibling on another box).
+
+
+def _fake_get_redis_for(redis):
+    async def _get():
+        return redis
+    return _get
+
+
+@pytest.fixture
+def memprep_redis(fake_redis):
+    """Route host_memory_prep at the same fake Redis the test inspects — the
+    module binds its own `get_redis` name at import time, same reason
+    `grace_redis` exists for runtime_grace."""
+    with patch.object(host_memory_prep, "get_redis", _fake_get_redis_for(fake_redis)):
+        yield fake_redis
+
+
+async def _mk_exclusive_pair(
+    async_session: AsyncSession, *, same_host: bool = True, sibling_runtime_type: str = "vllm_docker",
+):
+    """A parked runtime and its exclusive_memory sibling on the same box
+    (or, when ``same_host=False``, deliberately on different boxes).
+
+    ``sibling_runtime_type`` defaults to a docker engine (realistic — most
+    exclusive_memory runtimes are). Tests that give the sibling its own
+    active state (switching/live/memprep) pass "lmstudio" instead: outside
+    DOCKER_ENGINE_TYPES, so the sibling itself never reaches its OWN
+    auto-recovery start call and the test can assert cleanly on whether the
+    SUBJECT was recovered, without the symmetric case (both runtimes
+    unreachable, each looking at the other and finding nothing to block
+    itself) also firing.
+    """
+    host_id = uuid.uuid4()
+    other_host_id = host_id if same_host else uuid.uuid4()
+    subject = await _mk_runtime(
+        async_session, slug="qwen-general", exclusive_memory=True, host_id=host_id,
+    )
+    sibling = await _mk_runtime(
+        async_session, slug="ds4-sparkinfer", exclusive_memory=True,
+        host_id=other_host_id, runtime_type=sibling_runtime_type,
+    )
+    return subject, sibling
+
+
+@pytest.mark.asyncio
+async def test_recovery_is_skipped_while_an_exclusive_sibling_is_loading(
+    async_session: AsyncSession, fake_redis, grace_redis
+):
+    subject, sibling = await _mk_exclusive_pair(async_session)
+    await runtime_grace.mark_switching(sibling.slug, "loading", "manual_start")
+
+    start_mock = await _run_until_recovery(
+        async_session, fake_redis,
+        start_result={"ok": True, "message": "starting"},
+        ticks=UNREACHABLE_EVENT_THRESHOLD + 1,
+    )
+
+    start_mock.assert_not_awaited()
+    assert "runtime.auto_recovery_started" not in await _event_types(async_session)
+
+
+@pytest.mark.asyncio
+async def test_recovery_is_skipped_while_an_exclusive_sibling_is_already_serving(
+    async_session: AsyncSession, fake_redis, grace_redis
+):
+    """Even with no switching marker (the sibling's start already finished),
+    recovering the parked partner would just evict a healthy engine a moment
+    later — auto-recovery does not get to make that call unattended.
+
+    ``_run_until_recovery``'s probe mock is uniform across every probeable
+    runtime in the tick, which would overwrite a manually-seeded
+    runtime_live snapshot for the sibling the moment ITS OWN probe runs. So
+    this test drives the tick loop itself with a per-runtime probe: the
+    sibling genuinely reports served every tick (a real "already running"),
+    while the subject stays unreachable throughout.
+    """
+    subject, sibling = await _mk_exclusive_pair(async_session)
+
+    async def _probe(runtime):
+        if runtime.slug == sibling.slug:
+            return ProbedModel(model_id="sibling-model", context_len=None)
+        return ProbedModel(None, None)
+
+    start_mock = AsyncMock(return_value={"ok": True, "message": "starting"})
+    ssh = AsyncMock(return_value=("", "", 0))
+    watcher = RuntimeWatcher(interval=90)
+    with (
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(side_effect=_probe)),
+        patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
+        patch("app.services.runtime_watcher.resolve_host_for_runtime",
+              new=AsyncMock(return_value=SSH_HOST)),
+        patch("app.services.runtime_manager._ssh_run", ssh),
+        patch("app.services.runtime_manager.start_runtime", start_mock),
+    ):
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+
+    start_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovery_is_skipped_while_an_exclusive_sibling_has_an_outstanding_memprep(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """The scenario the switching marker alone would miss: the sibling's
+    start marker already cleared (or was never set — a host-boot autostart
+    outside MC) but its memory prep is still mid-flight."""
+    subject, sibling = await _mk_exclusive_pair(async_session, sibling_runtime_type="lmstudio")
+    # A LIVE timestamp, not a fixed past date: the watcher's own tick also
+    # runs host_memory_prep.recover_orphaned_preps() every pass, and a
+    # handle older than ORPHAN_MAX_AGE (30 min) would be swept as orphaned
+    # before this guard ever gets to see it — which would make the test
+    # pass for the wrong reason (no handle left to find) once run long
+    # enough after whatever date got hardcoded here.
+    from datetime import datetime, timezone
+
+    handle = host_memory_prep.PrepHandle(
+        host_key=host_memory_prep.host_key(SSH_HOST),
+        slug=sibling.slug,
+        dropper_started=True,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await memprep_redis.set(RedisKeys.host_mem_prep(handle.host_key), handle.to_json())
+
+    start_mock = await _run_until_recovery(
+        async_session, fake_redis,
+        start_result={"ok": True, "message": "starting"},
+        ticks=UNREACHABLE_EVENT_THRESHOLD + 1,
+    )
+
+    start_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovery_proceeds_when_the_sibling_is_on_a_different_host(
+    async_session: AsyncSession, fake_redis, grace_redis
+):
+    """Sabotage-adjacent control: the guard must be scoped to the SAME box,
+    not to "any exclusive_memory runtime exists somewhere"."""
+    subject, sibling = await _mk_exclusive_pair(async_session, same_host=False)
+    await runtime_grace.mark_switching(sibling.slug, "loading", "manual_start")
+
+    start_mock = await _run_until_recovery(
+        async_session, fake_redis,
+        start_result={"ok": True, "message": "starting"},
+        ticks=UNREACHABLE_EVENT_THRESHOLD + 1,
+    )
+
+    start_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recovery_proceeds_when_the_sibling_is_not_exclusive(
+    async_session: AsyncSession, fake_redis, grace_redis
+):
+    """A non-exclusive_memory runtime never claims the whole box, so it must
+    never block a recovery either way."""
+    host_id = uuid.uuid4()
+    subject = await _mk_runtime(
+        async_session, slug="qwen-general", exclusive_memory=True, host_id=host_id,
+    )
+    sibling = await _mk_runtime(
+        async_session, slug="small-model", exclusive_memory=False, host_id=host_id,
+    )
+    await runtime_grace.mark_switching(sibling.slug, "loading", "manual_start")
+
+    start_mock = await _run_until_recovery(
+        async_session, fake_redis,
+        start_result={"ok": True, "message": "starting"},
+        ticks=UNREACHABLE_EVENT_THRESHOLD + 1,
+    )
+
+    start_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recovery_proceeds_with_no_exclusive_siblings_at_all(
+    async_session: AsyncSession, fake_redis, grace_redis
+):
+    """Regression guard: a lone exclusive_memory runtime (nothing to share
+    the box with) must recover exactly as it did before PR 10."""
+    await _mk_runtime(
+        async_session, slug="lone-exclusive", exclusive_memory=True,
+        host_id=uuid.uuid4(),
+    )
+
+    start_mock = await _run_until_recovery(
+        async_session, fake_redis,
+        start_result={"ok": True, "message": "starting"},
+        ticks=UNREACHABLE_EVENT_THRESHOLD + 1,
+    )
+
+    start_mock.assert_awaited_once()
