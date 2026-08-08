@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useLocale, useTranslations } from "next-intl";
 import {
   Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
-  Layout, ChevronDown, Archive, MoreVertical,
+  Layout, ChevronDown, Archive, MoreVertical, Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
@@ -422,6 +422,15 @@ function AgentRosterRow({
       </span>
 
       {/* Actions — above the row overlay */}
+      <Link
+        href={`/sessions?agent=${agent.id}`}
+        aria-label={t("openSession", { name: agent.name })}
+        title={t("openSession", { name: agent.name })}
+        className="relative z-[1] flex items-center justify-center w-9 h-9 min-h-touch rounded-lg shrink-0 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        style={{ color: C.textMuted }}
+      >
+        <Terminal size={15} />
+      </Link>
       <button
         onClick={() => onMenu(agent)}
         aria-label={t("actionsFor", { name: agent.name })}
