@@ -19,6 +19,18 @@ PR5 adds two operational behaviours on top:
     again gets exactly ONE start attempt per cooldown window, giving up after
     two consecutive attempts (see :meth:`RuntimeWatcher._maybe_auto_recover`).
 
+PR8 adds two more, both from the sparkinfer live session:
+  - crash-loop detection: a compose stack with ``restart: unless-stopped``
+    that dies on every boot looks IDENTICAL to a slow cold load from the
+    outside — the endpoint is down either way, and grace suppresses the alarm.
+    Docker knows the difference (``RestartCount``), so the watcher asks it
+    (see :meth:`RuntimeWatcher._check_crash_loop`).
+  - it closes the memory-prep window: the probe that first sees an engine
+    serving is the honest end of a start, so that is where the page-cache
+    dropper is removed and the free-memory watermark restored
+    (``services/host_memory_prep``), plus a sweep for preps whose backend died
+    mid-start.
+
 Supersedes decision D-22 (periodic probing rejected) — see ADR-054.
 Same lifecycle pattern as IntelligenceService: singleton, asyncio loop,
 Redis lock for multi-worker dedup.
@@ -43,9 +55,11 @@ from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
 )
+from app.services import host_memory_prep
 from app.services.host_resolver import resolve_host_for_runtime
 from app.services.runtime_grace import (
     SOURCE_AUTO_RECOVERY,
+    SWITCHING_TTL,
     clear_switching,
     get_switching,
 )
@@ -74,9 +88,57 @@ AUTO_RECOVERY_COOLDOWN = 900  # 15 min — longer than a normal warmup
 AUTO_RECOVERY_MAX_ATTEMPTS = 2
 AUTO_RECOVERY_FAILURE_TTL = 6 * 3600  # attempts "age out" after 6h of quiet
 
+# Crash-loop detection (PR8). `restart: unless-stopped` in a compose stack means
+# a container that dies on boot is restarted forever, and from outside that is
+# indistinguishable from a model still loading. These are the two signals that
+# tell them apart.
+#
+# THREE restarts, not one: a single restart happens for benign reasons (a
+# manual `docker restart`, a host reboot, an OOM the box recovered from). Three
+# inside one grace window is a loop.
+CRASH_LOOP_RESTART_THRESHOLD = 3
+# vLLM's own words when the engine process could not initialise — the line that
+# was scrolling past on the Spark while MC reported a healthy "switching".
+CRASH_LOOP_LOG_PATTERNS = ("Engine core initialization failed",)
+# How much log to read for the pattern and for the reason line. 200 lines is
+# roughly one crashed vLLM boot including its traceback.
+_CRASH_LOG_LINES = 200
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_inspect(stdout: str) -> tuple[int | None, str | None]:
+    """``"7 2026-08-08T00:12:03Z"`` → ``(7, "2026-08-08T00:12:03Z")``.
+
+    A shape we cannot read yields ``(None, None)`` and the check stands down —
+    guessing a restart count is how a healthy engine gets stopped.
+    """
+    parts = (stdout or "").strip().split(None, 1)
+    if not parts:
+        return (None, None)
+    try:
+        count = int(parts[0])
+    except ValueError:
+        return (None, None)
+    return (count, parts[1].strip() if len(parts) > 1 else None)
+
+
+def _last_error_line(logs: str) -> str | None:
+    """The most useful single line out of a crashed boot.
+
+    ``ValueError`` first because that is what vLLM raises when the KV cache
+    does not fit — the exact failure from the live session, and the one an
+    operator can act on ("lower gpu_memory_utilization"). Any other Error/
+    Traceback line is the fallback so a different crash still says something.
+    """
+    lines = [ln.strip() for ln in (logs or "").splitlines() if ln.strip()]
+    for needle in ("ValueError", "Error:", "Exception"):
+        hit = next((ln for ln in reversed(lines) if needle in ln), None)
+        if hit:
+            return hit[:500]
+    return None
 
 
 class RuntimeWatcher:
@@ -145,6 +207,13 @@ class RuntimeWatcher:
         )
         for runtime in result.all():
             await self._probe_one(session, runtime)
+        # A prep whose backend died mid-start leaves a lowered watermark and a
+        # cache-dropper container on the box, with nobody left holding the
+        # original value. This is the only place that ever notices (PR8).
+        try:
+            await host_memory_prep.recover_orphaned_preps()
+        except Exception:  # noqa: BLE001
+            logger.exception("orphaned memory-prep sweep failed")
         await sync_pending_agents(session)
         # CLI-Tool-Updates: recreate agents flagged by the CLI update check.
         # Runs after the model-sync pass so a same-tick model change is applied
@@ -159,6 +228,16 @@ class RuntimeWatcher:
         switching = await get_switching(runtime.slug, redis)
 
         if served is None:
+            # Before deciding whether this silence is planned: is the container
+            # actually loading, or is it dying and being restarted? Runs inside
+            # the grace window too — that is precisely where the crash loop was
+            # invisible, because grace suppresses every other signal.
+            try:
+                if await self._check_crash_loop(session, redis, runtime, switching):
+                    return
+            except Exception:  # noqa: BLE001 — an add-on may not cost the tick
+                logger.exception("crash-loop check failed for %s", runtime.slug)
+
             if switching is not None:
                 # Planned downtime (recipe switch, cold load, recovery start).
                 # No failure counting, no event — that combination is what
@@ -201,6 +280,11 @@ class RuntimeWatcher:
             # finished. This is the single place a switch window ends, so no
             # caller has to poll for readiness itself.
             await clear_switching(runtime.slug)
+            # …and therefore also the honest end of the memory prep: the KV
+            # cache is allocated, the box may have its page cache and its
+            # watermark back (PR8).
+            await self._finish_memory_prep(session, runtime, success=True)
+        await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
         await redis.delete(self._fail_key(runtime.slug))
         await redis.delete(RedisKeys.runtime_recovery_failures(runtime.slug))
         await self._write_live(
@@ -241,6 +325,167 @@ class RuntimeWatcher:
             detail={"slug": runtime.slug, "old_model": old, "new_model": served},
         )
         await mark_agents_for_sync(session, runtime)
+
+    # ── Crash-loop detection (PR8) ───────────────────────────────────────
+
+    async def _check_crash_loop(
+        self, session: AsyncSession, redis, runtime: Runtime, switching: dict | None
+    ) -> bool:
+        """Is this container dying and being restarted rather than loading?
+
+        The gap this closes was live on the Spark: the sparkinfer compose stack
+        ships ``restart: unless-stopped``. When the engine could not allocate
+        its KV cache it exited, docker restarted it, it exited again — for
+        hours. Every signal MC had said the same thing a healthy cold load
+        says ("endpoint down, we are in grace"), so nothing was ever raised.
+
+        Docker is the one party that knows: ``RestartCount`` counts exactly
+        this. We remember the count at the first unreachable probe and look at
+        the DELTA, because an absolute count is meaningless (a container that
+        has been up for weeks legitimately carries a few restarts).
+
+        When a loop is confirmed the loop is BROKEN first
+        (``docker update --restart=no`` + ``docker stop``): leaving it spinning
+        while telling the operator about it would mean the box keeps burning
+        an engine boot every few seconds for as long as nobody reads the feed.
+
+        Returns True when it acted — the caller then skips the normal
+        unreachable/grace handling, because "failed, and here is why" is a
+        better statement than either.
+        """
+        if runtime.runtime_type not in DOCKER_ENGINE_TYPES:
+            return False
+        container = (runtime.container_name or "").strip()
+        if not container:
+            # No name, no `docker inspect`. Recipe-switched runtimes are in
+            # this state; they are covered by the existing start verification.
+            return False
+
+        host = await resolve_host_for_runtime(session, runtime)
+        if host is None or host.kind != "ssh":
+            return False
+
+        from app.services.runtime_manager import _ssh_run  # noqa: SLF001
+
+        stdout, _, exit_code = await _ssh_run(
+            f'docker inspect --format "{{{{.RestartCount}}}} {{{{.State.StartedAt}}}}" {container}',
+            host=host,
+            timeout=20,
+        )
+        if exit_code != 0:
+            # Container gone — that is the auto-recovery case, not this one.
+            await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
+            return False
+
+        restart_count, started_at = _parse_inspect(stdout)
+        if restart_count is None:
+            return False
+
+        baseline = await self._restart_baseline(redis, runtime.slug, restart_count)
+        delta = restart_count - baseline
+
+        reason: str | None = None
+        logs = ""
+        # Read logs only when something already looks wrong: a container that
+        # has not restarted once during a long load is the normal case, and it
+        # must not pay for 200 lines of log on every tick.
+        if delta > 0 or (switching is None and await self._read_failures(redis, runtime.slug) >= UNREACHABLE_EVENT_THRESHOLD):
+            logs = await self._read_container_logs(container, host)
+
+        pattern_hit = next(
+            (p for p in CRASH_LOOP_LOG_PATTERNS if p in logs), None
+        )
+        if delta < CRASH_LOOP_RESTART_THRESHOLD and pattern_hit is None:
+            return False
+
+        reason = _last_error_line(logs) or pattern_hit or (
+            f"{delta} Neustarts im Startfenster"
+        )
+
+        await _ssh_run(f"docker update --restart=no {container}", host=host, timeout=20)
+        _, stop_err, stop_code = await _ssh_run(
+            f"docker stop {container}", host=host, timeout=60
+        )
+        stopped = stop_code == 0
+
+        logger.error(
+            "runtime %s: crash loop detected (restarts %s→%s, pattern=%r) — "
+            "container %s stopped=%s",
+            runtime.slug, baseline, restart_count, pattern_hit, container, stopped,
+        )
+
+        await clear_switching(runtime.slug)
+        await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
+        await self._finish_memory_prep(session, runtime, success=False)
+        await self._write_live(
+            redis, runtime.slug,
+            reachable=False, served_model=None, latency_ms=None,
+            consecutive_failures=await self._read_failures(redis, runtime.slug),
+            status="failed",
+            reason=reason,
+            restart_count=restart_count,
+            container_stopped=stopped,
+        )
+        await emit_event(
+            session,
+            "runtime.crash_loop_stopped",
+            f"{runtime.slug}: Container startet in Endlosschleife neu "
+            f"({delta} Neustarts) — angehalten. Grund: {reason}",
+            severity="warning",
+            detail={
+                "slug": runtime.slug,
+                "container": container,
+                "restart_count": restart_count,
+                "restart_baseline": baseline,
+                "restarts_observed": delta,
+                "log_pattern": pattern_hit,
+                "reason": reason,
+                "started_at": started_at,
+                "container_stopped": stopped,
+                "stop_error": None if stopped else (stop_err or None),
+            },
+        )
+        return True
+
+    async def _restart_baseline(self, redis, slug: str, current: int) -> int:
+        """RestartCount at the first unreachable probe of this outage.
+
+        ``SET nx`` so the first tick of an outage records it and every later
+        one reads it back. The TTL matches the grace window: an outage that
+        outlives it starts counting fresh rather than accumulating a delta
+        across unrelated incidents.
+        """
+        key = RedisKeys.runtime_restart_baseline(slug)
+        try:
+            await redis.set(key, str(current), nx=True, ex=SWITCHING_TTL)
+            raw = await redis.get(key)
+            return int(raw) if raw is not None else current
+        except (TypeError, ValueError):
+            return current
+
+    async def _read_container_logs(self, container: str, host) -> str:
+        from app.services.runtime_manager import _ssh_run  # noqa: SLF001
+
+        try:
+            stdout, stderr, _ = await _ssh_run(
+                f"docker logs --tail {_CRASH_LOG_LINES} {container} 2>&1",
+                host=host,
+                timeout=30,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("crash-loop: logs unreadable for %s: %s", container, exc)
+            return ""
+        return stdout or stderr or ""
+
+    async def _finish_memory_prep(
+        self, session: AsyncSession, runtime: Runtime, *, success: bool
+    ) -> None:
+        """Close the pre-start memory prep for this runtime's box (PR8)."""
+        try:
+            host = await resolve_host_for_runtime(session, runtime)
+            await host_memory_prep.finish_for_host(host, success=success)
+        except Exception:  # noqa: BLE001 — never at the cost of the tick
+            logger.exception("memory prep cleanup failed for %s", runtime.slug)
 
     # ── Auto-recovery ────────────────────────────────────────────────────
 
