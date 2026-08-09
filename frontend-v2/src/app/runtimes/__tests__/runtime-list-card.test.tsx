@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RuntimeListCard } from "../RuntimeListCard";
 import { api } from "@/lib/api";
+import { C } from "@/lib/colors";
 import type { Runtime } from "@/lib/types";
 
 function renderWithQuery(ui: React.ReactElement) {
@@ -68,6 +69,31 @@ describe("RuntimeListCard", () => {
       />
     );
     expect(screen.getByText(/unreachable \(3/i)).toBeInTheDocument();
+  });
+
+  it("failed card without a live prop still shows a probes suffix", () => {
+    renderWithQuery(
+      <RuntimeListCard runtime={makeRuntime({ state: "failed" })} onOpen={() => {}} />
+    );
+    expect(screen.getByText(/unreachable \(\? probes\)/i)).toBeInTheDocument();
+  });
+
+  it("shows a red dot when state says ready but live reports unreachable (state/live divergence)", () => {
+    const { container } = renderWithQuery(
+      <RuntimeListCard
+        runtime={makeRuntime({ state: "ready" })}
+        live={{ reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 5, drift: false }}
+        onOpen={() => {}}
+      />
+    );
+    // The row must render as failed (red dot + reason), never a green "ready" dot.
+    expect(screen.getByText(/unreachable \(5/i)).toBeInTheDocument();
+    const dot = container.querySelector('[data-testid="state-dot"]') as HTMLElement;
+    expect(dot).not.toBeNull();
+    // jsdom normalizes hex → rgb() on read, so normalize the expected token the same way.
+    const probe = document.createElement("div");
+    probe.style.background = C.error;
+    expect(dot.style.background).toBe(probe.style.background);
   });
 
   it("clicking the card calls onOpen", async () => {

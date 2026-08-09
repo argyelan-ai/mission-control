@@ -89,9 +89,7 @@ export function RuntimeListCard({ runtime, live, sizeGb, onOpen }: {
   };
 
   if (failed) {
-    const reason = live
-      ? `Engine unreachable (${live.consecutive_failures ?? "?"} probes)`
-      : "Engine unreachable";
+    const reason = `Engine unreachable (${live?.consecutive_failures ?? "?"} probes)`;
     return (
       <div
         {...sharedProps}
@@ -102,7 +100,7 @@ export function RuntimeListCard({ runtime, live, sizeGb, onOpen }: {
           borderLeft: `2px solid ${C.error}`,
         }}
       >
-        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor(state) }} />
+        <span data-testid="state-dot" className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor("failed") }} />
         <span className="text-sm font-medium truncate" style={{ color: C.textPrimary }}>
           {runtime.display_name}
         </span>
@@ -146,7 +144,7 @@ export function RuntimeListCard({ runtime, live, sizeGb, onOpen }: {
       style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
     >
       <div className="flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor(state) }} />
+        <span data-testid="state-dot" className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor(state) }} />
         <span className="text-sm font-medium truncate" style={{ color: C.textPrimary }}>
           {runtime.display_name}
         </span>
