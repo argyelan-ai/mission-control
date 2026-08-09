@@ -93,7 +93,10 @@ export function summarizeStates(
     const unreachable = liveStatus != null && liveStatus.reachable === false;
     if (s === "failed" || (unreachable && ACTIVE_STATES.has(s))) failed += 1;
     else if (ACTIVE_STATES.has(s)) active += 1;
-    else stopped += 1;
+    // "Stopped" only makes sense for runtimes the operator can start/stop.
+    // Hosted APIs (cloud/grok/kimi) idle in state stopped/unknown by design —
+    // counting them would inflate the number into a phantom fleet problem.
+    else if (LIFECYCLE_TYPES.has(rt.runtime_type)) stopped += 1;
   }
   return { active, stopped, failed };
 }

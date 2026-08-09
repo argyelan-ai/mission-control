@@ -76,8 +76,9 @@ export function OverviewTab() {
 
   return (
     <div>
-      {/* Summary line */}
-      {!isEmpty && (
+      {/* Summary line — hidden while loading: a "0 active · 0 stopped" line
+          over empty sections reads as a fleet outage, not a pending fetch. */}
+      {!isLoading && !isEmpty && (
         <div className="flex items-center gap-1.5 text-xs mb-5" style={{ color: C.textMuted }}>
           <span style={{ color: C.online }}>●</span>
           <span>{counts.active} active</span>
@@ -114,7 +115,7 @@ export function OverviewTab() {
         </div>
       )}
 
-      {!isEmpty && (
+      {!isLoading && !isEmpty && (
         <>
           {/* Host groups (ADR-048) — always rendered for enabled hosts, even with no runtimes */}
           {groups.hosts.map((group) => {

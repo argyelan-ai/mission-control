@@ -81,6 +81,16 @@ describe("summarizeStates", () => {
     expect(summarizeStates(rts)).toEqual({ active: 2, stopped: 2, failed: 1 });
   });
 
+  it("does not count idle hosted-API runtimes as stopped (no lifecycle to stop)", () => {
+    const rts = [
+      makeRuntime({ slug: "cloud-idle", runtime_type: "cloud", state: "stopped" }),
+      makeRuntime({ slug: "grok-idle", runtime_type: "grok", state: "unknown" }),
+      makeRuntime({ slug: "cloud-live", runtime_type: "cloud", state: "ready" }),
+      makeRuntime({ slug: "vllm-off", runtime_type: "vllm_docker", state: "stopped" }),
+    ];
+    expect(summarizeStates(rts)).toEqual({ active: 1, stopped: 1, failed: 0 });
+  });
+
   it("counts an active-state runtime as failed when its live status reports reachable=false", () => {
     const rts = [
       makeRuntime({ slug: "up", id: "up", state: "ready" }),

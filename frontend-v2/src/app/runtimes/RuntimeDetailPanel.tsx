@@ -73,7 +73,7 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       title={label}
-      className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
+      className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-xs transition-all cursor-pointer disabled:cursor-not-allowed"
       style={{
         background: disabled ? "transparent" : c.bg,
         border: `1px solid ${disabled ? "transparent" : c.border}`,
@@ -81,6 +81,7 @@ function ActionButton({
       }}
     >
       {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+      <span>{label}</span>
     </button>
   );
 }
@@ -417,16 +418,22 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
 
   return (
     <div className="flex flex-col">
-      {/* Header meta line */}
+      {/* Header meta line. Hosted APIs without lifecycle idle in state
+          stopped/unknown by design — labeling them "Stopped" reads as an
+          outage, so the state chip is shown only where it means something. */}
       <div className="px-4 pt-4 pb-1 flex items-center gap-2">
-        <span
-          className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{ background: dotColor(effectiveState) }}
-        />
-        <span className="text-xs" style={{ color: C.textSecondary }}>
-          {STATE_LABELS[effectiveState] ?? "Unknown"}
-        </span>
-        <span style={{ color: C.borderSubtle }}>·</span>
+        {(caps.lifecycle || !["stopped", "unknown"].includes(effectiveState)) && (
+          <>
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ background: dotColor(effectiveState) }}
+            />
+            <span className="text-xs" style={{ color: C.textSecondary }}>
+              {STATE_LABELS[effectiveState] ?? "Unknown"}
+            </span>
+            <span style={{ color: C.borderSubtle }}>·</span>
+          </>
+        )}
         <span className="text-xs truncate" style={{ color: C.textMuted }}>
           {typeLabel(runtime.runtime_type)}
           {runtime.host && ` · ${runtime.host.display_name}`}

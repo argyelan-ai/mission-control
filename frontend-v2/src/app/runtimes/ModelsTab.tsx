@@ -247,8 +247,11 @@ function ModelCatalog() {
   const isMutating = downloadLmsMutation.isPending || downloadHfMutation.isPending;
 
   // Tab-specific colors: LMS = online-green, HF = warning-orange
-  const lmsColor = C.online;
-  const hfColor = C.warning;
+  // One-voice rule (DESIGN.md): cyan is the only deliberate signal — the
+  // source toggle is a selection, not a status, so it speaks accent, not
+  // online-green/warning-orange.
+  const lmsColor = C.accent;
+  const hfColor = C.accent;
 
   return (
     <div
@@ -561,8 +564,10 @@ function UnattachedModelsSection() {
   const configuredLmsIds = new Set(
     lmsRuntimes.map((r) => r.lms_identifier).filter(Boolean)
   );
+  // Embedding models are managed inside LM Studio itself — "Add as runtime"
+  // (an LLM affordance) would create a runtime no agent can talk to.
   const unattachedModels = (lmsData?.models ?? []).filter(
-    (m) => !configuredLmsIds.has(m.id)
+    (m) => !configuredLmsIds.has(m.id) && !m.is_embedding
   );
 
   if (unattachedModels.length === 0) return null;
