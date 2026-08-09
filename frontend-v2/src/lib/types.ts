@@ -1641,7 +1641,11 @@ export type RuntimeType =
   | "unsloth_porsche"
   | "openai_compatible"
   | "cloud"
-  | "hermes";
+  | "hermes"
+  | "grok"
+  | "kimi"
+  | "omp"
+  | "llamacpp_docker";
 
 export interface Runtime {
   // On the GET /runtimes (legacy JSON) response `id` is the slug.
