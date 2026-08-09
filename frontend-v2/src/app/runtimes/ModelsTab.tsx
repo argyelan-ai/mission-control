@@ -589,8 +589,8 @@ function UnattachedModelsSection() {
 export function ModelsTab() {
   return (
     <div>
-      <ModelCatalog />
       <ActiveDownloads />
+      <ModelCatalog />
       <UnattachedModelsSection />
 
       <div className="mb-3">

@@ -43,7 +43,7 @@ function KvResetSchedule() {
     mutationFn: () => api.lmstudio.kvReset(),
     onSuccess: (data) => {
       setResetMsg(data.message);
-      queryClient.invalidateQueries({ queryKey: ["lmstudio-models"] });
+      queryClient.invalidateQueries({ queryKey: ["lms-models"] });
     },
     onError: () => setResetMsg("KV Reset failed."),
   });

@@ -3,9 +3,10 @@
 /**
  * Host Registry UI (ADR-048) — generische Multi-Host Control-Plane.
  *
- * - HostMetricsBar: eine Metrics-Bar pro enabled Host (ersetzt die alte,
- *   hart verdrahtete SparkMetricsBar). 0 Hosts → rendert nichts — ein
- *   Fresh-Install ohne GPU-Box zeigt kein Empty-Gerippe.
+ * - SingleHostMetricsBar: eine Metrics-Bar für einen Host (ersetzt die alte,
+ *   hart verdrahtete SparkMetricsBar). OverviewTab rendert sie pro
+ *   Host-Section (enabled + kind !== "local" — local hosts liefern keine
+ *   Metrics-Felder).
  * - HostsSection: Cards (Name, Kind-Badge, Status, gebundene Runtimes) +
  *   Add/Edit-Modal (admin-only) + Delete mit 409-Guard-Feedback.
  */
@@ -161,26 +162,6 @@ export function SingleHostMetricsBar({ host }: { host: Host }) {
         <div className="h-0.5 rounded-full" style={{ background: C.border }} />
       </div>
       </div>
-    </div>
-  );
-}
-
-export function HostMetricsBar() {
-  const { data: hosts } = useQuery<Host[]>({
-    queryKey: ["hosts"],
-    queryFn: api.hosts.list,
-  });
-
-  // local hosts have no live metrics (spec: metrics endpoint returns empty) —
-  // rendering an empty skeleton for them would be noise.
-  const metricHosts = (hosts ?? []).filter((h) => h.enabled && h.kind !== "local");
-  if (metricHosts.length === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-2 mb-6">
-      {metricHosts.map((h) => (
-        <SingleHostMetricsBar key={h.id} host={h} />
-      ))}
     </div>
   );
 }

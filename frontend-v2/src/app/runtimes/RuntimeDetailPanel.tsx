@@ -343,7 +343,7 @@ export function RuntimeDetailPanel({
 }) {
   return (
     <SlideOverPanel open={open && runtime != null} onClose={onClose} title={runtime?.display_name} desktopWidth="440px">
-      {runtime && <RuntimeDetailBody runtime={runtime} live={live} />}
+      {runtime && <RuntimeDetailBody key={runtime.id} runtime={runtime} live={live} />}
     </SlideOverPanel>
   );
 }

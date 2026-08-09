@@ -23,7 +23,12 @@ import { RuntimeListCard } from "./RuntimeListCard";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 
 export function OverviewTab() {
-  const [selected, setSelected] = useState<Runtime | null>(null);
+  // Store the id, not the object — the runtimes list refetches on its own
+  // interval (and after every Start/Stop/model-edit mutation), so a snapshot
+  // object goes stale the moment the underlying state changes. Deriving the
+  // selected runtime fresh from the latest query data every render keeps the
+  // detail panel in sync with reality.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["runtimes"],
@@ -43,14 +48,16 @@ export function OverviewTab() {
   });
 
   const { data: lmsData } = useQuery({
-    queryKey: ["lmstudio-models"],
+    queryKey: ["lms-models"],
     queryFn: () => api.lmstudio.list(),
     refetchInterval: 15_000,
   });
 
   const runtimes = data?.runtimes ?? [];
+  const selected = runtimes.find((r) => r.id === selectedId) ?? null;
   const groups = groupRuntimes(runtimes, hosts ?? []);
-  const counts = summarizeStates(runtimes);
+  const counts = summarizeStates(runtimes, liveData?.live);
+  const isEmpty = !isLoading && !error && runtimes.length === 0;
 
   const sizeGbMap = new Map((lmsData?.models ?? []).map((m) => [m.id, m.size_gb]));
   const getSizeGb = (rt: Runtime) =>
@@ -63,23 +70,25 @@ export function OverviewTab() {
       runtime={rt}
       live={getLive(rt)}
       sizeGb={getSizeGb(rt)}
-      onOpen={setSelected}
+      onOpen={(r) => setSelectedId(r.id)}
     />
   );
 
   return (
     <div>
       {/* Summary line */}
-      <div className="flex items-center gap-1.5 text-xs mb-5" style={{ color: C.textMuted }}>
-        <span style={{ color: C.online }}>●</span>
-        <span>{counts.active} active</span>
-        <span style={{ color: C.borderSubtle }}>·</span>
-        <span>{counts.stopped} stopped</span>
-        <span style={{ color: C.borderSubtle }}>·</span>
-        <span style={{ color: counts.failed > 0 ? STATUS_TEXT.error : undefined }}>
-          {counts.failed} failed
-        </span>
-      </div>
+      {!isEmpty && (
+        <div className="flex items-center gap-1.5 text-xs mb-5" style={{ color: C.textMuted }}>
+          <span style={{ color: C.online }}>●</span>
+          <span>{counts.active} active</span>
+          <span style={{ color: C.borderSubtle }}>·</span>
+          <span>{counts.stopped} stopped</span>
+          <span style={{ color: C.borderSubtle }}>·</span>
+          <span style={{ color: counts.failed > 0 ? STATUS_TEXT.error : undefined }}>
+            {counts.failed} failed
+          </span>
+        </div>
+      )}
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
@@ -98,47 +107,68 @@ export function OverviewTab() {
         </div>
       )}
 
-      {/* Host groups (ADR-048) — always rendered, even with no runtimes */}
-      {groups.hosts.map((group) => {
-        const dimmed =
-          group.host.power_managed === true &&
-          group.runtimes.every((r) => (r.state ?? "unknown") !== "ready");
-        return (
-          <HostSection key={group.host.id} title={group.host.display_name} metricsHost={group.host} dimmed={dimmed}>
-            {group.runtimes.length === 0 ? (
+      {isEmpty && (
+        <div className="text-xs py-8 text-center" style={{ color: C.textMuted }}>
+          <div style={{ color: C.textSecondary }}>No runtimes configured.</div>
+          <div className="mt-1">Add a runtime above, or check the Models tab for installed models.</div>
+        </div>
+      )}
+
+      {!isEmpty && (
+        <>
+          {/* Host groups (ADR-048) — always rendered for enabled hosts, even with no runtimes */}
+          {groups.hosts.map((group) => {
+            if (!group.host.enabled) return null;
+            const dimmed =
+              group.host.power_managed === true &&
+              group.runtimes.length > 0 &&
+              group.runtimes.every((r) => (r.state ?? "unknown") !== "ready");
+            // local hosts return no metrics fields — a "GPU 0%" bar there is
+            // meaningless (parity with the old HostMetricsBar filter).
+            const showMetrics = group.host.kind !== "local";
+            return (
+              <HostSection
+                key={group.host.id}
+                title={group.host.display_name}
+                metricsHost={showMetrics ? group.host : undefined}
+                dimmed={dimmed}
+              >
+                {group.runtimes.length === 0 ? (
+                  <div className="text-xs py-2" style={{ color: C.textMuted }}>
+                    No runtimes on this host.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">{group.runtimes.map(renderCard)}</div>
+                )}
+              </HostSection>
+            );
+          })}
+
+          {/* Cloud — hosted APIs, no host binding */}
+          <HostSection title="Cloud" subtitle="Hosted APIs — no local hardware">
+            {groups.cloud.length === 0 ? (
               <div className="text-xs py-2" style={{ color: C.textMuted }}>
-                No runtimes on this host.
+                No cloud runtimes configured.
               </div>
             ) : (
-              <div className="flex flex-col gap-2">{group.runtimes.map(renderCard)}</div>
+              <div className="flex flex-col gap-2">{groups.cloud.map(renderCard)}</div>
             )}
           </HostSection>
-        );
-      })}
 
-      {/* Cloud — hosted APIs, no host binding */}
-      <HostSection title="Cloud" subtitle="Hosted APIs — no local hardware">
-        {groups.cloud.length === 0 ? (
-          <div className="text-xs py-2" style={{ color: C.textMuted }}>
-            No cloud runtimes configured.
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">{groups.cloud.map(renderCard)}</div>
-        )}
-      </HostSection>
-
-      {/* Unassigned — only shown when non-empty */}
-      {groups.unassigned.length > 0 && (
-        <HostSection title="Unassigned" subtitle="No host bound — bind one in Administration">
-          <div className="flex flex-col gap-2">{groups.unassigned.map(renderCard)}</div>
-        </HostSection>
+          {/* Unassigned — only shown when non-empty */}
+          {groups.unassigned.length > 0 && (
+            <HostSection title="Unassigned" subtitle="No host bound — bind one in Administration">
+              <div className="flex flex-col gap-2">{groups.unassigned.map(renderCard)}</div>
+            </HostSection>
+          )}
+        </>
       )}
 
       <RuntimeDetailPanel
         runtime={selected}
         live={selected ? getLive(selected) : undefined}
-        open={selected != null}
-        onClose={() => setSelected(null)}
+        open={selectedId != null}
+        onClose={() => setSelectedId(null)}
       />
     </div>
   );

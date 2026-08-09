@@ -1,4 +1,4 @@
-import type { Host, Runtime } from "@/lib/types";
+import type { Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 
 export const CLOUD_TYPES = new Set<string>(["cloud", "grok", "kimi"]);
 
@@ -55,33 +55,55 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
     (a, b) => a.ui_order - b.ui_order || a.slug.localeCompare(b.slug)
   );
 
+  const claimedKeys = new Set<string>();
+  const hostGroups = orderedHosts.map((host) => {
+    // Runtime.host carries the host UUID in `id`; legacy rows may only match by slug.
+    const byId = byHost.get(host.id);
+    const bySlug = byHost.get(host.slug);
+    if (byId) claimedKeys.add(host.id);
+    if (bySlug) claimedKeys.add(host.slug);
+    return { runtimes: sortGroup(byId ?? bySlug ?? []), host };
+  });
+
+  // Host-bound runtimes whose host_id doesn't resolve against `hosts` (still
+  // loading, hosts fetch failed, or an orphaned host_id) must not silently
+  // vanish — bucket the leftovers into unassigned instead of dropping them.
+  for (const [key, rts] of byHost) {
+    if (!claimedKeys.has(key)) unassigned.push(...rts);
+  }
+
   return {
-    hosts: orderedHosts.map((host) => ({
-      // Runtime.host carries the host UUID in `id`; legacy rows may only match by slug.
-      runtimes: sortGroup(byHost.get(host.id) ?? byHost.get(host.slug) ?? []),
-      host,
-    })),
+    hosts: hostGroups,
     cloud: sortGroup(cloud),
     unassigned: sortGroup(unassigned),
   };
 }
 
-export function summarizeStates(runtimes: Runtime[]): StateSummary {
+export function summarizeStates(
+  runtimes: Runtime[],
+  live?: Record<string, RuntimeLiveStatus>
+): StateSummary {
   let active = 0, stopped = 0, failed = 0;
   for (const rt of runtimes) {
     const s = rt.state ?? "unknown";
-    if (ACTIVE_STATES.has(s)) active += 1;
-    else if (s === "failed") failed += 1;
+    // Mirrors RuntimeListCard: an active-state runtime whose watcher reports
+    // reachable===false counts as failed, not active — otherwise the summary
+    // line and the cards disagree about what "failed" means.
+    const liveStatus = live?.[rt.slug ?? rt.id];
+    const unreachable = liveStatus != null && liveStatus.reachable === false;
+    if (s === "failed" || (unreachable && ACTIVE_STATES.has(s))) failed += 1;
+    else if (ACTIVE_STATES.has(s)) active += 1;
     else stopped += 1;
   }
   return { active, stopped, failed };
 }
 
 // Lifecycle = types the backend start/stop/restart endpoints manage.
-// Mirrors the old page: it only ever rendered vllm_docker + lmstudio cards;
-// unsloth/omp/llamacpp go through the same runtime_manager paths.
+// omp + llamacpp_docker are intentionally excluded: runtime_manager's
+// start/stop/restart paths don't recognize them yet and return
+// "Unbekannter runtime_type" (HTTP 400) — no backend lifecycle support exists.
 const LIFECYCLE_TYPES = new Set<string>([
-  "vllm_docker", "lmstudio", "unsloth", "unsloth_porsche", "omp", "llamacpp_docker",
+  "vllm_docker", "lmstudio", "unsloth", "unsloth_porsche",
 ]);
 
 // Copied from the old page.tsx `isProbeable` list — do not widen without backend support.
