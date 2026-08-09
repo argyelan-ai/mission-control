@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RuntimeCard } from "../page";
+import { RuntimeListCard } from "../RuntimeListCard";
 import { api } from "@/lib/api";
-import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Runtime } from "@/lib/types";
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({
@@ -36,7 +36,12 @@ const RUNTIME: Runtime = {
   state: "ready",
 };
 
-describe("RuntimeCard live status", () => {
+// Drift-badge rendering and unreachable-reason rendering (reachable/drifted,
+// reachable=false with consecutive_failures) are already covered by
+// runtime-list-card.test.tsx ("shows drift badge only when live reports
+// drift" / "shows a red dot when state says ready but live reports
+// unreachable"). Only the no-live-prop case remains here.
+describe("RuntimeListCard live status", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
@@ -46,37 +51,9 @@ describe("RuntimeCard live status", () => {
     });
   });
 
-  it("renders served model + Drift badge when reachable and drifted", async () => {
-    const live: RuntimeLiveStatus = {
-      reachable: true,
-      served_model: "engine-x",
-      latency_ms: 12,
-      last_probe_at: "2026-07-04T00:00:00Z",
-      consecutive_failures: 0,
-      drift: true,
-    };
-    renderWithQuery(<RuntimeCard runtime={RUNTIME} live={live} />);
-    expect(await screen.findByText(/engine-x/)).toBeInTheDocument();
-    expect(screen.getByText("Drift")).toBeInTheDocument();
-  });
-
-  it("renders unreachable message when live status reports unreachable", async () => {
-    const live: RuntimeLiveStatus = {
-      reachable: false,
-      served_model: null,
-      latency_ms: null,
-      last_probe_at: "2026-07-04T00:00:00Z",
-      consecutive_failures: 3,
-      drift: false,
-    };
-    renderWithQuery(<RuntimeCard runtime={RUNTIME} live={live} />);
-    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
-  });
-
-  it("renders neither served-model nor drift/unreachable text without a live prop", async () => {
-    renderWithQuery(<RuntimeCard runtime={RUNTIME} />);
+  it("renders neither drift nor unreachable text without a live prop", async () => {
+    renderWithQuery(<RuntimeListCard runtime={RUNTIME} onOpen={() => {}} />);
     await waitFor(() => expect(api.runtimes.db.agents).toHaveBeenCalled());
-    expect(screen.queryByText(/Engine serves:/)).toBeNull();
     expect(screen.queryByText("Drift")).toBeNull();
     expect(screen.queryByText(/unreachable/i)).toBeNull();
   });
