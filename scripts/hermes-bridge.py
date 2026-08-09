@@ -37,6 +37,13 @@ ENV_FILE = WORKSPACE / "agent.env"
 SESSION = "hermes-worker"
 ENTRYPOINT = WORKSPACE / "entrypoint.sh"
 TMUX_BIN = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
+# entrypoint.sh's own stdout/stderr — including the hermes-config-patch.py
+# WARN line on a failed config.yaml sync — used to be sent to DEVNULL, so a
+# silently-failing sync was invisible until someone stumbled on the stale
+# model live (Task #25, 2026-08-08/09). Append into the SAME file launchd
+# already points the bridge's own StandardErrorPath at (see
+# com.mc.hermes-bridge.plist), so there is exactly one place to check.
+ENTRYPOINT_LOG = WORKSPACE / "logs" / "launchd.err"
 
 # Phase 25-06: Dispatch poll loop — pulls active tasks from MC backend and
 # delivers them as prompts into the Hermes tmux session. See plan 25-06.
@@ -192,13 +199,20 @@ def start_hermes_session() -> dict:
     # script dies via SIGHUP before the new session is spawned (race).
     # Detaching with start_new_session keeps it alive after bridge HTTP returns.
     if ENTRYPOINT.exists():
+        # Append (not truncate) — this Popen call fires on every bridge boot
+        # AND every /restart, and must never erase prior diagnostics.
+        ENTRYPOINT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint_log_fh = ENTRYPOINT_LOG.open("a")
         _sp.Popen(
             [str(ENTRYPOINT)],
             env=env,
-            stdout=_sp.DEVNULL,
-            stderr=_sp.DEVNULL,
+            stdout=entrypoint_log_fh,
+            stderr=entrypoint_log_fh,
             start_new_session=True,
         )
+        # The child inherits its own dup'd fd at spawn time, so closing our
+        # copy here does not affect its writes.
+        entrypoint_log_fh.close()
         # Wait briefly for entrypoint to spawn the tmux session before returning,
         # so the immediate /health check after /start sees tmux_running=true.
         import time as _t

@@ -1317,6 +1317,50 @@ def _launchctl_exit_ok(output: str) -> bool:
     return code == 0 or code == 5
 
 
+_HERMES_BRIDGE_RESTART_CURL = (
+    "curl -sS -X POST --max-time 20 http://127.0.0.1:18794/restart "
+    "-H 'Content-Type: application/json' -d '{}' || echo BRIDGE_UNREACHABLE"
+)
+_HERMES_WORKER_RESTART_ATTEMPTS = 5
+_HERMES_WORKER_RESTART_RETRY_DELAY = 1.0
+
+
+async def _restart_hermes_worker_session() -> str:
+    """Ask the (freshly kickstarted) hermes-bridge to kill + respawn its tmux
+    'hermes-worker' session, via the bridge's own POST /restart.
+
+    Why this exists: launchd only supervises com.mc.hermes-bridge, the HTTP
+    server — the actual Hermes TUI runs in a separate tmux session that a
+    bridge-process restart leaves completely untouched (tmux server outlives
+    the bridge). hermes-bridge.py's start_hermes_session() is a no-op when
+    the tmux session is already running, so a launchd-only kickstart never
+    reaches entrypoint.sh — and therefore never reruns
+    scripts/hermes-config-patch.py, which is what syncs ~/.hermes/config.yaml
+    (model.default/base_url) from the current agent.env (ADR-064). Live bug
+    2026-08-08/09 (Task #25): "Prozess neu starten" reported success while
+    the Hermes TUI kept running the stale model.
+
+    The bridge process was just kickstarted by the caller, so its HTTP
+    server may not be listening yet — retry with a short delay instead of
+    failing on the first miss.
+    """
+    out = ""
+    for attempt in range(_HERMES_WORKER_RESTART_ATTEMPTS):
+        out = await _ssh_host(_HERMES_BRIDGE_RESTART_CURL)
+        if "BRIDGE_UNREACHABLE" not in out and out.strip():
+            return out.strip()
+        if attempt < _HERMES_WORKER_RESTART_ATTEMPTS - 1:
+            await asyncio.sleep(_HERMES_WORKER_RESTART_RETRY_DELAY)
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            "hermes-bridge process restarted but the worker-session restart "
+            f"(POST /restart) never became reachable after "
+            f"{_HERMES_WORKER_RESTART_ATTEMPTS} attempts"
+        ),
+    )
+
+
 async def _host_agent_process_restart(agent: Agent) -> dict:
     """Full process-level restart for a host (launchd) agent: orphan sweep +
     atomic kickstart (unload/load fallback) + pgrep-verified success.
@@ -1325,6 +1369,12 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
     plist and trusts launchctl's exit code — that path is what let 13 orphaned
     processes accumulate across reloads (2026-08-08 finding) and would report
     "success" on a kickstart that returned I/O error 5 while nothing restarted.
+
+    Hermes special case: the launchd label only covers the hermes-bridge HTTP
+    server, not the tmux 'hermes-worker' session the Hermes TUI actually runs
+    in (see _restart_hermes_worker_session). Without the extra step below,
+    this endpoint would report a clean restart while the TUI silently kept
+    running the pre-switch model/runtime.
     """
     slug = agent.slug or agent.name.lower().replace(" ", "-")
     label, pattern = _resolve_host_agent_restart_target(agent)
@@ -1362,7 +1412,11 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
             detail += f" and unload/load fallback ({fallback_out.strip()[:200]!r})"
         raise HTTPException(status_code=502, detail=detail)
 
-    return {
+    worker_restart_output: str | None = None
+    if slug == "hermes":
+        worker_restart_output = await _restart_hermes_worker_session()
+
+    result = {
         "ok": True,
         "agent": slug,
         "label": label,
@@ -1372,6 +1426,9 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
         "process_running": True,
         "running_pids": running_pids,
     }
+    if worker_restart_output is not None:
+        result["worker_restart_output"] = worker_restart_output
+    return result
 
 
 async def _resolve_host_agent(agent_id: str, session: AsyncSession) -> Agent:
