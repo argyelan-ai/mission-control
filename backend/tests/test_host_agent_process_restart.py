@@ -192,12 +192,15 @@ async def test_restart_process_endpoint_success(auth_client: AsyncClient, make_a
     )
 
     pgrep_outputs = iter(["", "4242"])  # sweep: none (1 pgrep call); post-restart verify: running
+    curl_calls = []
 
     async def fake_ssh(command, timeout=30):
         if command.startswith("pgrep"):
             return next(pgrep_outputs)
         if command.startswith("launchctl kickstart"):
             return "EXIT:0"
+        if "curl" in command:
+            curl_calls.append(command)
         return ""
 
     with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
@@ -211,6 +214,116 @@ async def test_restart_process_endpoint_success(auth_client: AsyncClient, make_a
     assert body["label"] == "com.openclaw.boss"
     assert body["process_running"] is True
     assert body["fallback_used"] is False
+    # Non-Hermes agents have no separate worker-session layer — the extra
+    # bridge /restart call (and the resulting response key) must not appear.
+    assert "worker_restart_output" not in body
+    assert curl_calls == []
+
+
+# ── Hermes worker-session restart (Task #25 fix) ─────────────────────────────
+
+@pytest.mark.anyio
+async def test_restart_process_endpoint_hermes_restarts_worker_session(
+    auth_client: AsyncClient, make_agent,
+):
+    """Hermes: after a clean launchd kickstart, the endpoint must ALSO hit the
+    bridge's own POST /restart so the tmux 'hermes-worker' session (and thus
+    entrypoint.sh's hermes-config-patch.py sync) actually reruns. This is the
+    fix for the live bug: restart-process previously only recycled the bridge
+    HTTP server, leaving the Hermes TUI on its stale model indefinitely."""
+    agent = await make_agent(
+        name="Hermes", slug="hermes", agent_runtime="host", harness="hermes",
+    )
+
+    pgrep_outputs = iter(["", "777"])  # sweep clean; post-kickstart verify: running
+    curl_calls = []
+
+    async def fake_ssh(command, timeout=30):
+        if command.startswith("pgrep"):
+            return next(pgrep_outputs)
+        if command.startswith("launchctl kickstart"):
+            return "EXIT:0"
+        if "curl" in command:
+            curl_calls.append(command)
+            return '{"ok": true, "restart": {"status": "started"}}'
+        return ""
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart-process")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert "started" in body["worker_restart_output"]
+    assert len(curl_calls) == 1
+    assert ":18794/restart" in curl_calls[0]
+
+
+@pytest.mark.anyio
+async def test_restart_hermes_worker_session_retries_until_bridge_answers(
+    auth_client: AsyncClient, make_agent,
+):
+    """The bridge process was just kickstarted by this same endpoint — its
+    HTTP server may not be listening yet. The worker-restart call must retry
+    (not fail on the first BRIDGE_UNREACHABLE) instead of reporting a
+    misleading success/failure on a simple startup race."""
+    agent = await make_agent(
+        name="Hermes", slug="hermes", agent_runtime="host", harness="hermes",
+    )
+
+    pgrep_outputs = iter(["", "777"])
+    curl_attempts = {"n": 0}
+
+    async def fake_ssh(command, timeout=30):
+        if command.startswith("pgrep"):
+            return next(pgrep_outputs)
+        if command.startswith("launchctl kickstart"):
+            return "EXIT:0"
+        if "curl" in command:
+            curl_attempts["n"] += 1
+            if curl_attempts["n"] < 3:
+                return "BRIDGE_UNREACHABLE"
+            return '{"ok": true, "restart": {"status": "started"}}'
+        return ""
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()) as sleep_mock:
+            resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart-process")
+
+    assert resp.status_code == 200, resp.text
+    assert curl_attempts["n"] == 3
+    assert sleep_mock.await_count >= 2  # at least 2 retry delays before success
+
+
+@pytest.mark.anyio
+async def test_restart_hermes_worker_session_502_when_bridge_never_comes_up(
+    auth_client: AsyncClient, make_agent,
+):
+    """If the bridge HTTP server never comes back after the launchd kickstart,
+    the endpoint must surface a 502 — silently reporting success while the
+    TUI is provably unreachable would recreate exactly the "reported clean,
+    nothing happened" failure mode this endpoint exists to prevent."""
+    agent = await make_agent(
+        name="Hermes", slug="hermes", agent_runtime="host", harness="hermes",
+    )
+
+    pgrep_outputs = iter(["", "777"])
+
+    async def fake_ssh(command, timeout=30):
+        if command.startswith("pgrep"):
+            return next(pgrep_outputs)
+        if command.startswith("launchctl kickstart"):
+            return "EXIT:0"
+        if "curl" in command:
+            return "BRIDGE_UNREACHABLE"
+        return ""
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart-process")
+
+    assert resp.status_code == 502, resp.text
 
 
 @pytest.mark.anyio
@@ -230,6 +343,8 @@ async def test_restart_process_endpoint_falls_back_when_kickstart_fails_hard(
             return "some error\nEXIT:3"  # not 0, not 5 -> not ok
         if command.startswith("launchctl unload"):
             return "UNLOAD:0\nLOAD:0"
+        if "curl" in command and ":18794/restart" in command:
+            return '{"ok": true, "restart": {"status": "started", "session": "hermes-worker"}}'
         return ""
 
     with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
@@ -240,6 +355,10 @@ async def test_restart_process_endpoint_falls_back_when_kickstart_fails_hard(
     body = resp.json()
     assert body["fallback_used"] is True
     assert body["process_running"] is True
+    # Hermes-only: the tmux worker session must also have been recycled so
+    # entrypoint.sh (and thus hermes-config-patch.py) actually reran —
+    # otherwise the TUI keeps its pre-switch model (Task #25 live bug).
+    assert "started" in body["worker_restart_output"]
 
 
 @pytest.mark.anyio
