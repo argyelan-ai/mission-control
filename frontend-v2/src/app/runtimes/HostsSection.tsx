@@ -51,7 +51,7 @@ const KIND_LABEL: Record<HostKind, string> = {
 
 // ── Host Metrics Bar ──────────────────────────────────────────────────────────
 
-function SingleHostMetricsBar({ host }: { host: Host }) {
+export function SingleHostMetricsBar({ host }: { host: Host }) {
   const { data } = useQuery<HostMetrics>({
     queryKey: ["host-metrics", host.id],
     queryFn: () => api.hosts.metrics(host.id),
