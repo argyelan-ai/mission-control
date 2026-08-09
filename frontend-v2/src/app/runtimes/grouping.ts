@@ -76,3 +76,40 @@ export function summarizeStates(runtimes: Runtime[]): StateSummary {
   }
   return { active, stopped, failed };
 }
+
+// Lifecycle = types the backend start/stop/restart endpoints manage.
+// Mirrors the old page: it only ever rendered vllm_docker + lmstudio cards;
+// unsloth/omp/llamacpp go through the same runtime_manager paths.
+const LIFECYCLE_TYPES = new Set<string>([
+  "vllm_docker", "lmstudio", "unsloth", "unsloth_porsche", "omp", "llamacpp_docker",
+]);
+
+// Copied from the old page.tsx `isProbeable` list — do not widen without backend support.
+const PROBEABLE_TYPES = new Set<string>([
+  "vllm_docker", "lmstudio", "openai_compatible", "unsloth", "unsloth_porsche",
+]);
+
+export interface PanelCapabilities {
+  lifecycle: boolean;
+  wake: boolean;
+  probe: boolean;
+  modelEditor: boolean;
+  recipeSwitcher: boolean;
+  contextSettings: boolean;
+  autostart: boolean;
+}
+
+export function panelCapabilities(rt: Runtime): PanelCapabilities {
+  const probe = PROBEABLE_TYPES.has(rt.runtime_type);
+  return {
+    lifecycle: LIFECYCLE_TYPES.has(rt.runtime_type),
+    wake: rt.power_managed === true,
+    probe,
+    // Non-probeable runtimes have no watcher-driven live model; their static
+    // DB value is the only source of truth and needs the manual editor.
+    modelEditor: !probe,
+    recipeSwitcher: rt.runtime_type === "vllm_docker",
+    contextSettings: rt.runtime_type === "lmstudio",
+    autostart: rt.autostart_supported === true,
+  };
+}

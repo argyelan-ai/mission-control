@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupRuntimes, summarizeStates, CLOUD_TYPES } from "../grouping";
+import { groupRuntimes, summarizeStates, CLOUD_TYPES, panelCapabilities } from "../grouping";
 import type { Runtime, Host } from "@/lib/types";
 
 function makeRuntime(over: Partial<Runtime>): Runtime {
@@ -77,5 +77,34 @@ describe("summarizeStates", () => {
 describe("CLOUD_TYPES", () => {
   it("contains exactly the hosted-API kinds", () => {
     expect([...CLOUD_TYPES].sort()).toEqual(["cloud", "grok", "kimi"]);
+  });
+});
+
+describe("panelCapabilities", () => {
+  it("vllm_docker: lifecycle+probe+recipe, no editor/context/wake", () => {
+    expect(panelCapabilities(makeRuntime({ runtime_type: "vllm_docker" }))).toEqual({
+      lifecycle: true, wake: false, probe: true,
+      modelEditor: false, recipeSwitcher: true, contextSettings: false, autostart: false,
+    });
+  });
+
+  it("lmstudio: lifecycle+probe+contextSettings", () => {
+    const c = panelCapabilities(makeRuntime({ runtime_type: "lmstudio" }));
+    expect(c.contextSettings).toBe(true);
+    expect(c.lifecycle).toBe(true);
+    expect(c.recipeSwitcher).toBe(false);
+  });
+
+  it("cloud: only the model editor", () => {
+    expect(panelCapabilities(makeRuntime({ runtime_type: "cloud" }))).toEqual({
+      lifecycle: false, wake: false, probe: false,
+      modelEditor: true, recipeSwitcher: false, contextSettings: false, autostart: false,
+    });
+  });
+
+  it("power-managed runtime gets wake; autostart follows autostart_supported", () => {
+    const c = panelCapabilities(makeRuntime({ runtime_type: "unsloth_porsche", power_managed: true, autostart_supported: true }));
+    expect(c.wake).toBe(true);
+    expect(c.autostart).toBe(true);
   });
 });
