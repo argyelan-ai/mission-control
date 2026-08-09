@@ -63,7 +63,6 @@ from app.services import host_memory_prep
 from app.services.host_resolver import resolve_host_for_runtime
 from app.services.runtime_grace import (
     SOURCE_AUTO_RECOVERY,
-    SWITCHING_TTL,
     clear_switching,
     get_switching,
 )
@@ -92,17 +91,35 @@ AUTO_RECOVERY_COOLDOWN = 900  # 15 min — longer than a normal warmup
 AUTO_RECOVERY_MAX_ATTEMPTS = 2
 AUTO_RECOVERY_FAILURE_TTL = 6 * 3600  # attempts "age out" after 6h of quiet
 
-# Crash-loop detection (PR8). `restart: unless-stopped` in a compose stack means
-# a container that dies on boot is restarted forever, and from outside that is
-# indistinguishable from a model still loading. These are the two signals that
-# tell them apart.
+# Crash-loop detection (PR8, hardened by Task #24). `restart: unless-stopped`
+# in a compose stack means a container that dies on boot is restarted
+# forever, and from outside that is indistinguishable from a model still
+# loading. These are the two signals that tell them apart.
 #
 # THREE restarts, not one: a single restart happens for benign reasons (a
-# manual `docker restart`, a host reboot, an OOM the box recovered from). Three
-# inside one grace window is a loop.
+# manual `docker restart`, a host reboot, an OOM the box recovered from) —
+# and, live on the Spark (09.08.26), a single failed *first* attempt followed
+# by a clean retry, which the crash-loop check killed mid-load because a log
+# pattern from that one failed attempt was treated as sufficient on its own.
+# 3 is not arbitrary: it is Local Studio's own published budget
+# (`LAUNCH_FAILURE_LIMIT = 3`, see EVAL-LOCAL-STUDIO.md §9.2a) for exactly
+# this class of problem, and it is comfortably above 2 — leaving room for one
+# benign restart plus one unlucky-but-real retry before anything is stopped.
 CRASH_LOOP_RESTART_THRESHOLD = 3
+# The restart count is only meaningful within a bounded lookback: a Spark box
+# that has been up for weeks legitimately carries restarts from unrelated,
+# long-resolved incidents, and those must not silently contribute to today's
+# delta forever. 10 minutes mirrors Local Studio's own window
+# (`LAUNCH_FAILURE_WINDOW_MS = 10 * 60 * 1000`, same file) — long enough to
+# span a real boot-crash-reboot cycle (vLLM's own retries are on the order of
+# seconds to low minutes), short enough that an old, already-resolved restart
+# has aged out by the time a genuinely new incident starts.
+CRASH_LOOP_WINDOW_SECONDS = 10 * 60
 # vLLM's own words when the engine process could not initialise — the line that
 # was scrolling past on the Spark while MC reported a healthy "switching".
+# NOTE: this is reason text only (see `_check_crash_loop`), never a trigger —
+# a pattern match with a restart delta under threshold means "one failed
+# attempt with visible symptoms", not "a loop", and must not stop anything.
 CRASH_LOOP_LOG_PATTERNS = ("Engine core initialization failed",)
 # How much log to read for the pattern and for the reason line. 200 lines is
 # roughly one crashed vLLM boot including its traceback.
@@ -238,7 +255,7 @@ class RuntimeWatcher:
             # the grace window too — that is precisely where the crash loop was
             # invisible, because grace suppresses every other signal.
             try:
-                if await self._check_crash_loop(session, redis, runtime, switching):
+                if await self._check_crash_loop(session, redis, runtime):
                     return
             except Exception:  # noqa: BLE001 — an add-on may not cost the tick
                 logger.exception("crash-loop check failed for %s", runtime.slug)
@@ -342,7 +359,7 @@ class RuntimeWatcher:
     # ── Crash-loop detection (PR8) ───────────────────────────────────────
 
     async def _check_crash_loop(
-        self, session: AsyncSession, redis, runtime: Runtime, switching: dict | None
+        self, session: AsyncSession, redis, runtime: Runtime
     ) -> bool:
         """Is this container dying and being restarted rather than loading?
 
@@ -355,7 +372,26 @@ class RuntimeWatcher:
         Docker is the one party that knows: ``RestartCount`` counts exactly
         this. We remember the count at the first unreachable probe and look at
         the DELTA, because an absolute count is meaningless (a container that
-        has been up for weeks legitimately carries a few restarts).
+        has been up for weeks legitimately carries a few restarts). That
+        baseline lives for ``CRASH_LOOP_WINDOW_SECONDS`` (see module constant)
+        and is then allowed to reset — an old, already-resolved restart from
+        outside the window must not keep contributing to today's delta.
+
+        Task #24 (live-belegt 09.08.26): the delta alone decides whether this
+        is a loop (``>= CRASH_LOOP_RESTART_THRESHOLD``). Log content is read
+        ONLY after that decision is already "yes" — as a reason string for the
+        operator, never as an alternate trigger. The previous version let a
+        log-pattern match stop the container on its own, even at delta 0 or 1;
+        that is exactly what killed a successful retry mid-load on the Spark
+        (restarts 0→1, a single failed first attempt). It also read whatever
+        ``docker logs --tail N`` returned without ``--since``, which — for a
+        container restarted in place rather than recreated — is the
+        concatenation of ALL previous boots, so a resolved failure from hours
+        ago could still surface as "the" reason. Logs are now scoped to the
+        CURRENT boot via ``--since {{.State.StartedAt}}`` (from the same
+        ``docker inspect`` already run below, no extra round trip). Both
+        changes are Local Studio's pattern (EVAL-LOCAL-STUDIO.md §9.2a/b):
+        count failures, don't parse them; read logs to explain, not to decide.
 
         When a loop is confirmed the loop is BROKEN first
         (``docker update --restart=no`` + ``docker stop``): leaving it spinning
@@ -397,20 +433,18 @@ class RuntimeWatcher:
         baseline = await self._restart_baseline(redis, runtime.slug, restart_count)
         delta = restart_count - baseline
 
-        reason: str | None = None
-        logs = ""
-        # Read logs only when something already looks wrong: a container that
-        # has not restarted once during a long load is the normal case, and it
-        # must not pay for 200 lines of log on every tick.
-        if delta > 0 or (switching is None and await self._read_failures(redis, runtime.slug) >= UNREACHABLE_EVENT_THRESHOLD):
-            logs = await self._read_container_logs(container, host)
+        # The decision is delta-only. A pattern match with too few restarts
+        # is "one attempt had a visible symptom", not a loop — see docstring.
+        if delta < CRASH_LOOP_RESTART_THRESHOLD:
+            return False
 
+        # Only now — loop already confirmed — do we pay for reading logs, and
+        # only to explain the stop, scoped to the CURRENT boot so a resolved
+        # failure from an earlier restart cannot be reported as "the" cause.
+        logs = await self._read_container_logs(container, host, since=started_at)
         pattern_hit = next(
             (p for p in CRASH_LOOP_LOG_PATTERNS if p in logs), None
         )
-        if delta < CRASH_LOOP_RESTART_THRESHOLD and pattern_hit is None:
-            return False
-
         reason = _last_error_line(logs) or pattern_hit or (
             f"{delta} Neustarts im Startfenster"
         )
@@ -464,24 +498,40 @@ class RuntimeWatcher:
         """RestartCount at the first unreachable probe of this outage.
 
         ``SET nx`` so the first tick of an outage records it and every later
-        one reads it back. The TTL matches the grace window: an outage that
-        outlives it starts counting fresh rather than accumulating a delta
-        across unrelated incidents.
+        one reads it back. The TTL is ``CRASH_LOOP_WINDOW_SECONDS`` (Task
+        #24) — deliberately its own constant, not the switch-grace TTL: a
+        baseline that outlives the crash-loop window starts counting fresh,
+        so a restart from an unrelated, long-resolved incident cannot keep
+        contributing to today's delta forever. This is the rolling-window
+        half of the fix; the other half is that the trigger is ``delta >=
+        CRASH_LOOP_RESTART_THRESHOLD`` alone (see ``_check_crash_loop``).
         """
         key = RedisKeys.runtime_restart_baseline(slug)
         try:
-            await redis.set(key, str(current), nx=True, ex=SWITCHING_TTL)
+            await redis.set(key, str(current), nx=True, ex=CRASH_LOOP_WINDOW_SECONDS)
             raw = await redis.get(key)
             return int(raw) if raw is not None else current
         except (TypeError, ValueError):
             return current
 
-    async def _read_container_logs(self, container: str, host) -> str:
+    async def _read_container_logs(
+        self, container: str, host, *, since: str | None = None
+    ) -> str:
+        """Task #24: scoped to the CURRENT boot when ``since`` is known.
+
+        For a container restarted in place (not recreated), ``docker logs``
+        returns the concatenation of every boot the container has ever had —
+        without ``--since {{.State.StartedAt}}`` a resolved failure from
+        hours or days ago reads exactly like today's cause. ``since`` is
+        untrusted-shape but not untrusted-source: it always comes straight
+        from the same ``docker inspect`` call this check already made.
+        """
         from app.services.runtime_manager import _ssh_run  # noqa: SLF001
 
+        since_flag = f"--since {since} " if since else ""
         try:
             stdout, stderr, _ = await _ssh_run(
-                f"docker logs --tail {_CRASH_LOG_LINES} {container} 2>&1",
+                f"docker logs {since_flag}--tail {_CRASH_LOG_LINES} {container} 2>&1",
                 host=host,
                 timeout=30,
             )
