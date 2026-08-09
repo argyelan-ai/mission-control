@@ -54,4 +54,32 @@ describe("RuntimeDetailPanel", () => {
     const { container } = renderWithQuery(<RuntimeDetailPanel open runtime={null} onClose={() => {}} />);
     expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
+
+  it("resets internal state (mutation feedback) when the panel switches to a different runtime", async () => {
+    vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "Started ok" });
+    const rtA = makeRuntime({ slug: "rt-a", display_name: "Runtime A", runtime_type: "vllm_docker", state: "stopped" });
+    const rtB = makeRuntime({ slug: "rt-b", display_name: "Runtime B", runtime_type: "vllm_docker", state: "stopped" });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <RuntimeDetailPanel open runtime={rtA} onClose={() => {}} />
+      </QueryClientProvider>
+    );
+
+    screen.getByTitle("Start").click();
+    await waitFor(() => expect(screen.getByText("Started ok")).toBeInTheDocument());
+
+    // Same panel instance, different runtime — without `key={runtime.id}` the
+    // body would keep its old actionMsg/settingsOpen/storedCtx state.
+    rerender(
+      <QueryClientProvider client={qc}>
+        <RuntimeDetailPanel open runtime={rtB} onClose={() => {}} />
+      </QueryClientProvider>
+    );
+
+    expect(screen.queryByText("Started ok")).not.toBeInTheDocument();
+  });
 });

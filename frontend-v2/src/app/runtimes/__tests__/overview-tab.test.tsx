@@ -71,4 +71,84 @@ describe("OverviewTab", () => {
     screen.getByRole("button", { name: /Qwen General/ }).click();
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
   });
+
+  it("keeps the detail panel in sync after the runtimes list refetches (no frozen snapshot)", async () => {
+    const stopped = makeRuntime({
+      slug: "qwen-general", display_name: "Qwen General",
+      host: { id: "spark", slug: "spark", display_name: "Spark" }, state: "stopped",
+    });
+    const nowReady: Runtime = { ...stopped, state: "ready" };
+
+    vi.spyOn(api.runtimes, "list")
+      .mockResolvedValueOnce({ runtimes: [stopped] })
+      .mockResolvedValue({ runtimes: [nowReady] });
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <OverviewTab />
+      </QueryClientProvider>
+    );
+
+    await waitFor(() => expect(screen.getByText(/Qwen General/)).toBeInTheDocument());
+    screen.getByRole("button", { name: /Qwen General/ }).click();
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
+
+    // Simulate the 15s refetch (or a post-mutation invalidate) picking up the
+    // new state — the panel must re-derive from the fresh list, not show the
+    // stale snapshot captured at open time.
+    await qc.refetchQueries({ queryKey: ["runtimes"] });
+
+    await waitFor(() => expect(screen.getByText("Ready")).toBeInTheDocument());
+    expect(screen.queryByText("Stopped")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty state instead of the summary line when there are 0 runtimes", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([]);
+
+    renderWithQuery(<OverviewTab />);
+
+    expect(await screen.findByText("No runtimes configured.")).toBeInTheDocument();
+    expect(screen.queryByText(/active/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Cloud")).not.toBeInTheDocument();
+  });
+
+  it("skips the metrics bar for local hosts and skips the whole section for disabled hosts", async () => {
+    // A single unrelated cloud runtime keeps the list non-empty (finding 7's
+    // global empty state must not swallow this scenario) without binding to
+    // either host under test.
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [
+      makeRuntime({ slug: "anthropic-claude-opus", display_name: "Anthropic Opus", runtime_type: "cloud", host: null, state: "ready" }),
+    ]});
+    vi.spyOn(api.hosts, "list").mockResolvedValue([
+      makeHost({ slug: "mc-local", display_name: "MC Local", kind: "local", ui_order: 1 }),
+      makeHost({ slug: "off-box", display_name: "Off Box", enabled: false, ui_order: 2 }),
+    ]);
+    const metricsSpy = vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 10 });
+
+    renderWithQuery(<OverviewTab />);
+
+    expect(await screen.findByText("MC Local")).toBeInTheDocument();
+    expect(screen.queryByText("Off Box")).not.toBeInTheDocument();
+    expect(metricsSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not dim an empty host section (only dims when the host has runtimes, all non-ready)", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [
+      makeRuntime({ slug: "anthropic-claude-opus", display_name: "Anthropic Opus", runtime_type: "cloud", host: null, state: "ready" }),
+    ]});
+    vi.spyOn(api.hosts, "list").mockResolvedValue([
+      makeHost({ slug: "porsche", display_name: "PORSCHE", power_managed: true }),
+    ]);
+
+    renderWithQuery(<OverviewTab />);
+
+    const emptyLine = await screen.findByText("No runtimes on this host.");
+    // Walk up to the HostSection's dimmable wrapper and confirm it's not dimmed.
+    expect(emptyLine.parentElement?.className ?? "").not.toContain("opacity-60");
+  });
 });

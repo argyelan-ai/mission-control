@@ -74,4 +74,22 @@ describe("ModelsTab", () => {
     expect(screen.getByText("Spark recipes")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("vllm-container-catalog-stub")).toBeInTheDocument());
   });
+
+  it("renders active downloads above the download-model catalog (spec ordering)", async () => {
+    vi.spyOn(api.lmstudio, "list").mockResolvedValue({ models: [], reachable: true });
+    vi.spyOn(api.lmstudio, "downloads").mockResolvedValue({ downloads: [
+      { id: "dl-1", name: "Some Model", type: "lmstudio", progress_pct: 40, progress_text: "" },
+    ] });
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] });
+
+    renderWithQuery(<ModelsTab />);
+
+    const downloadsHeading = await screen.findByText("Downloads");
+    const catalogHeading = await screen.findByText("Download model");
+    // DOCUMENT_POSITION_FOLLOWING on catalog (relative to downloads) means
+    // downloads comes first in document order.
+    expect(
+      downloadsHeading.compareDocumentPosition(catalogHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HostMetricsBar, HostsSection } from "../HostsSection";
+import { SingleHostMetricsBar, HostsSection } from "../HostsSection";
 import { api } from "@/lib/api";
 import type { Host, HostMetrics } from "@/lib/types";
 
@@ -52,58 +52,25 @@ const SSH_METRICS: HostMetrics = {
   ram_total_mb: 65536,
 };
 
-describe("HostMetricsBar", () => {
+describe("SingleHostMetricsBar", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("renders nothing when there are 0 hosts", async () => {
-    const listSpy = vi.spyOn(api.hosts, "list").mockResolvedValue([]);
-    const metricsSpy = vi.spyOn(api.hosts, "metrics").mockResolvedValue(SSH_METRICS);
-
-    const { container } = renderWithQuery(<HostMetricsBar />);
-    await waitFor(() => expect(listSpy).toHaveBeenCalled());
-
-    expect(container.firstChild).toBeNull();
-    expect(metricsSpy).not.toHaveBeenCalled();
-  });
-
-  it("renders one bar with metrics for a single enabled ssh host", async () => {
-    vi.spyOn(api.hosts, "list").mockResolvedValue([makeHost()]);
+  it("renders metrics for an enabled ssh host", async () => {
     vi.spyOn(api.hosts, "metrics").mockResolvedValue(SSH_METRICS);
 
-    renderWithQuery(<HostMetricsBar />);
+    renderWithQuery(<SingleHostMetricsBar host={makeHost()} />);
 
     expect(await screen.findByText("GPU Box 1")).toBeInTheDocument();
     expect(await screen.findByText("42%")).toBeInTheDocument();
     expect(screen.getByText("61°C")).toBeInTheDocument();
   });
 
-  it("renders one bar per enabled host with metrics — disabled and local hosts are skipped", async () => {
-    vi.spyOn(api.hosts, "list").mockResolvedValue([
-      makeHost(),
-      makeHost({ id: "host-2", slug: "gpu-box-2", display_name: "GPU Box 2" }),
-      makeHost({ id: "host-3", slug: "off-box", display_name: "Off Box", enabled: false }),
-      makeHost({ id: "host-4", slug: "mc-local", display_name: "MC Local", kind: "local" }),
-    ]);
-    const metricsSpy = vi.spyOn(api.hosts, "metrics").mockResolvedValue(SSH_METRICS);
-
-    renderWithQuery(<HostMetricsBar />);
-
-    expect(await screen.findByText("GPU Box 1")).toBeInTheDocument();
-    expect(await screen.findByText("GPU Box 2")).toBeInTheDocument();
-    expect(screen.queryByText("Off Box")).toBeNull();
-    expect(screen.queryByText("MC Local")).toBeNull();
-    await waitFor(() => expect(metricsSpy).toHaveBeenCalledTimes(2));
-    expect(metricsSpy).toHaveBeenCalledWith("host-1");
-    expect(metricsSpy).toHaveBeenCalledWith("host-2");
-  });
-
   it("shows an unreachable row when host metrics report reachable=false", async () => {
-    vi.spyOn(api.hosts, "list").mockResolvedValue([makeHost()]);
     vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: false });
 
-    renderWithQuery(<HostMetricsBar />);
+    renderWithQuery(<SingleHostMetricsBar host={makeHost()} />);
 
     expect(await screen.findByText(/GPU Box 1 unreachable/)).toBeInTheDocument();
   });
@@ -111,32 +78,34 @@ describe("HostMetricsBar", () => {
   // flask_wol: backend sets reachable = awake — a sleeping power-managed
   // box (ADR-042) is a NORMAL state and must not render as a failure.
   it("renders a sleeping flask_wol host as 'Sleeping', not as unreachable", async () => {
-    vi.spyOn(api.hosts, "list").mockResolvedValue([
-      makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true }),
-    ]);
     vi.spyOn(api.hosts, "metrics").mockResolvedValue({
       reachable: false,
       awake: false,
       status: "asleep",
     } as HostMetrics);
 
-    renderWithQuery(<HostMetricsBar />);
+    renderWithQuery(
+      <SingleHostMetricsBar
+        host={makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true })}
+      />
+    );
 
     expect(await screen.findByText("Sleeping")).toBeInTheDocument();
     expect(screen.queryByText(/unreachable/)).toBeNull();
   });
 
   it("renders an awake flask_wol host with the 'Awake' label", async () => {
-    vi.spyOn(api.hosts, "list").mockResolvedValue([
-      makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true }),
-    ]);
     vi.spyOn(api.hosts, "metrics").mockResolvedValue({
       reachable: true,
       awake: true,
       status: "awake",
     } as HostMetrics);
 
-    renderWithQuery(<HostMetricsBar />);
+    renderWithQuery(
+      <SingleHostMetricsBar
+        host={makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true })}
+      />
+    );
 
     expect(await screen.findByText("Awake")).toBeInTheDocument();
     // raw backend status ("awake") must not leak through

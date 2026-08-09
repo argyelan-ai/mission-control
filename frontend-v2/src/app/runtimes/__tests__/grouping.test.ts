@@ -59,6 +59,14 @@ describe("groupRuntimes", () => {
     const g = groupRuntimes([stopped, ready], [spark]);
     expect(g.hosts[0].runtimes.map((r) => r.slug)).toEqual(["r", "s"]);
   });
+
+  it("buckets host-bound runtimes into unassigned when their host isn't in hosts[] (loading/error/orphaned host_id)", () => {
+    const orphan = makeRuntime({ slug: "orphan", host: { id: "missing-host", slug: "missing-host", display_name: "Ghost" } });
+    const g = groupRuntimes([orphan], []);
+    expect(g.hosts).toEqual([]);
+    expect(g.unassigned.map((r) => r.slug)).toEqual(["orphan"]);
+    expect(g.cloud).toEqual([]);
+  });
 });
 
 describe("summarizeStates", () => {
@@ -71,6 +79,17 @@ describe("summarizeStates", () => {
       makeRuntime({ slug: "5", state: "unknown" }),
     ];
     expect(summarizeStates(rts)).toEqual({ active: 2, stopped: 2, failed: 1 });
+  });
+
+  it("counts an active-state runtime as failed when its live status reports reachable=false", () => {
+    const rts = [
+      makeRuntime({ slug: "up", id: "up", state: "ready" }),
+      makeRuntime({ slug: "down", id: "down", state: "ready" }),
+    ];
+    const live = {
+      down: { reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 3, drift: false },
+    };
+    expect(summarizeStates(rts, live)).toEqual({ active: 1, stopped: 0, failed: 1 });
   });
 });
 
@@ -106,5 +125,10 @@ describe("panelCapabilities", () => {
     const c = panelCapabilities(makeRuntime({ runtime_type: "unsloth_porsche", power_managed: true, autostart_supported: true }));
     expect(c.wake).toBe(true);
     expect(c.autostart).toBe(true);
+  });
+
+  it("omp and llamacpp_docker have no lifecycle support (backend returns 400 on start/stop/restart)", () => {
+    expect(panelCapabilities(makeRuntime({ runtime_type: "omp" })).lifecycle).toBe(false);
+    expect(panelCapabilities(makeRuntime({ runtime_type: "llamacpp_docker" })).lifecycle).toBe(false);
   });
 });
