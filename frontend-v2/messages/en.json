@@ -209,6 +209,7 @@
     "provError": "Error",
     "contextPct": "Context {pct}%",
     "openAgent": "Open agent: {name}",
+    "openSession": "Open session: {name}",
     "noBoard": "No board",
     "tasksCompleted": "{count} tasks completed",
     "actionsFor": "Actions: {name}",
