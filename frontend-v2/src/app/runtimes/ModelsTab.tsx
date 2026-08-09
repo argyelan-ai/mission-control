@@ -553,8 +553,13 @@ function UnattachedModelsSection() {
     queryFn: () => api.runtimes.list(),
   });
 
+  // Only lmstudio runtimes carry a meaningful lms_identifier — matches the old
+  // page.tsx (lines 1671-1678), which pre-filtered to `lmsRuntimes` before
+  // building this Set. Without the filter, a stray lms_identifier on a
+  // non-lmstudio runtime would silently hide an installed model here.
+  const lmsRuntimes = (runtimesData?.runtimes ?? []).filter((r) => r.runtime_type === "lmstudio");
   const configuredLmsIds = new Set(
-    (runtimesData?.runtimes ?? []).map((r) => r.lms_identifier).filter(Boolean)
+    lmsRuntimes.map((r) => r.lms_identifier).filter(Boolean)
   );
   const unattachedModels = (lmsData?.models ?? []).filter(
     (m) => !configuredLmsIds.has(m.id)

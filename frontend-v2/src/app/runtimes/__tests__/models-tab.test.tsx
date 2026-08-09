@@ -48,6 +48,23 @@ describe("ModelsTab", () => {
     expect(screen.queryByText("Qwen3 8B")).not.toBeInTheDocument();
   });
 
+  it("does not hide a model because of a stray lms_identifier on a non-lmstudio runtime", async () => {
+    vi.spyOn(api.lmstudio, "list").mockResolvedValue({ models: [
+      { id: "qwen3-8b", display_name: "Qwen3 8B", size_gb: 4.2, is_loaded: false, is_embedding: false },
+    ], reachable: true });
+    vi.spyOn(api.lmstudio, "downloads").mockResolvedValue({ downloads: [] });
+    // A vllm_docker runtime that happens to carry the same lms_identifier must
+    // NOT count as "this model already has a runtime" — only lmstudio-typed
+    // runtimes do (matches the old page.tsx pre-filter).
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [
+      { id: "rt", slug: "rt", display_name: "Some vLLM Runtime", runtime_type: "vllm_docker", lms_identifier: "qwen3-8b" } as never,
+    ] });
+
+    renderWithQuery(<ModelsTab />);
+    await waitFor(() => expect(screen.getByText("Qwen3 8B")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /add as runtime/i })).toBeInTheDocument();
+  });
+
   it("renders the Spark recipes section with the vLLM container catalog", async () => {
     vi.spyOn(api.lmstudio, "list").mockResolvedValue({ models: [], reachable: true });
     vi.spyOn(api.lmstudio, "downloads").mockResolvedValue({ downloads: [] });
