@@ -301,6 +301,15 @@ class Settings(BaseSettings):
     # live reboot test that motivated it.
     memory_prep_wait_timeout_seconds: int = 180
 
+    # Pre-start memory prep wait, stability window (PR 10 follow-up): how
+    # many CONSECUTIVE polls must clear the (watermark-adjusted) MemAvailable
+    # threshold before the wait declares the box ready. A single crossing
+    # was the original PR 10 behaviour; requiring a streak protects against
+    # a reading that clears the bar once and then drops back (a container
+    # mid-teardown, the dropper's own sync still catching up) — the same
+    # premature-success shape as the bug this wait exists to prevent.
+    memory_prep_stable_readings: int = 2
+
     # CLI Tool Updates — periodic check of installed vs. pinned vs. latest
     # upstream CLI tool versions (openclaude/claude/omp). 0 = disabled.
     cli_update_check_interval: int = 21600  # 6 hours
