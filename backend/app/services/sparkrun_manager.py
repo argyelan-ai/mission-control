@@ -36,6 +36,7 @@ from typing import Any
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.runtime import Runtime
+from app.services import runtime_ownership
 from app.services.host_resolver import ResolvedHost, resolve_host_for_runtime
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ def build_launch_command(
     slug: str,
     flags: str = "--solo --no-rm --ensure --no-follow",
     tp_override: int | None = None,
+    nonce: str | None = None,
 ) -> str:
     """Assemble a sparkrun launch command for a given recipe.
 
@@ -90,6 +92,17 @@ def build_launch_command(
             sparkrun's ray/node bootstrap, never the tp value baked into the
             recipe (this was the root cause of the original solo-launch bug:
             see ADR-059).
+        nonce: when set, stamps a second label — ``mc.runtime.nonce=<nonce>``
+            — onto the container sparkrun creates, appended after the slug
+            label. This is the ownership proof ``runtime_manager.
+            evict_spark_runtime_containers`` checks before stopping a
+            container that carries this slug (Task #22, ``runtime_ownership``
+            module docstring): a hand-recreated container under the same
+            name/label won't carry a matching nonce and is left alone
+            instead of force-stopped. Callers that create a fresh nonce
+            (:func:`switch_recipe`) must also persist it via
+            ``runtime_ownership.set_nonce`` — building the command alone
+            does not record the expectation.
     """
     # Validate slug is shell-safe (alnum + - + _ only). Defensive — slugs
     # already pass DB constraints but this prevents accidental injection if
@@ -99,9 +112,10 @@ def build_launch_command(
     if not re.fullmatch(r"[@\w./-]+", recipe):
         raise ValueError(f"recipe contains invalid characters: {recipe!r}")
     tp_flag = f" --tensor-parallel {int(tp_override)}" if tp_override else ""
+    nonce_flag = f" --label mc.runtime.nonce={nonce}" if nonce else ""
     return (
         f"uvx sparkrun run {recipe} {flags}{tp_flag} "
-        f"--label mc.runtime.slug={slug}"
+        f"--label mc.runtime.slug={slug}{nonce_flag}"
     )
 
 
@@ -360,8 +374,13 @@ async def switch_recipe(
             "new_recipe": new_recipe,
         }
 
+    # Ownership nonce (Task #22) — generated here, not persisted yet: the
+    # eviction of the OLD container below must not be gated by a nonce that
+    # describes the NEW one. It only becomes MC's recorded expectation once
+    # the switch has actually committed to launching this command (step 2).
+    new_nonce = runtime_ownership.new_nonce()
     new_command = build_launch_command(
-        new_recipe, slug=runtime.slug, tp_override=tp_override
+        new_recipe, slug=runtime.slug, tp_override=tp_override, nonce=new_nonce
     )
 
     # Switch-grace (PR5): from here on the engine is deliberately down. The
@@ -397,7 +416,11 @@ async def switch_recipe(
         }
 
     # 2. Persist new launch_command + clear stale model_identifier so the
-    # resolver re-probes against the freshly-launched recipe.
+    # resolver re-probes against the freshly-launched recipe. The nonce is
+    # recorded in the same step: from here on MC expects the container it is
+    # about to launch to carry it, and any future stop against this slug
+    # verifies against exactly this value (runtime_ownership).
+    await runtime_ownership.set_nonce(runtime.slug, new_nonce)
     runtime.launch_command = new_command
     runtime.model_identifier = None
     runtime.container_name = None  # sparkrun assigns a fresh ID on each run

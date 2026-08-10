@@ -37,7 +37,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.runtime import Runtime
-from app.services import host_memory_prep, runtime_grace
+from app.services import host_memory_prep, runtime_grace, runtime_ownership
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -386,6 +386,29 @@ async def _probe_http(endpoint: str, healthcheck_path: str) -> bool:
 # never came up). container_name is unreliable here — it's None right after a
 # switch and CLI/externally-started containers carry a different name/label, so
 # we evict by label AND by a full solo-container sweep.
+#
+# Task #22 (live 08./09.08.2026): a qwen sparkrun wrapper kept running,
+# invisible to every matcher above, while DeepSeek started — "box already
+# free" was a false all-clear. Root cause: a compose service with no
+# `container_name:` gets a docker-generated name that matches neither the
+# label nor either name filter. Two independent hardenings close this:
+#   - discovery additionally sweeps by `com.docker.compose.project` (every
+#     compose-managed container carries this regardless of container_name —
+#     see `runtime_ownership.COMPOSE_PROJECT_NAME_PATTERN` for the exact,
+#     necessarily heuristic, project-name match and why it can't be
+#     precise — sparkrun's internal compose invocation is not something MC's
+#     registry knows the project name of).
+#   - before any of the found containers are actually stopped, ownership is
+#     verified via `runtime_ownership.partition_by_ownership` (the
+#     mc.runtime.nonce label, stamped at launch — see that module's
+#     docstring). A container that claims MC's slug label but doesn't carry
+#     (or doesn't match) the nonce MC expects for that slug was not created
+#     by this MC instance — most likely hand-recreated by an operator under
+#     the same name/label — and is left running with a warning event instead
+#     of being force-stopped.
+#   - every eviction call now logs which matcher found what, and how many
+#     containers were running on the box in total, so a false "box already
+#     free" is diagnosable from the logs alone (P3/visibility).
 
 # Module-level so tests can monkeypatch them to 0 for fast polling.
 _evict_poll_interval = 1.0   # seconds between "is it free yet?" polls
@@ -399,6 +422,9 @@ _SOLO_NAME_FILTER = "name=sparkrun_.*_solo"
 # the engine was started by hand (live failure 2026-07-05: manual PrismaQuant
 # survived both the stop button and a recipe switch to DeepSeek).
 _MANUAL_NAME_FILTER = "name=vllm_node"
+# Every container docker compose creates carries this label, independent of
+# whether the service set `container_name:` — the discovery net for Task #22.
+_COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 
 
 def _sanitize_slug(slug: str) -> str:
@@ -479,62 +505,272 @@ async def _labelled_containers(
     return sorted({x for x in out.splitlines() if x.strip()})
 
 
+def _eviction_discovery_script(slug: str | None) -> str:
+    """One remote script reporting, in marked sections: how many containers
+    are running on the box in total, and the ids each matcher found — label,
+    solo-name, manual-name, compose-project. One SSH round trip for all four,
+    so the P3 diagnostics (which matcher ran, how many it found) cost nothing
+    extra over the discovery itself.
+
+    The compose-project section prints ``id|project`` pairs (not just ids):
+    the project-name pattern match happens client-side in
+    ``_parse_eviction_discovery`` (see ``runtime_ownership.
+    COMPOSE_PROJECT_NAME_PATTERN`` for why an unscoped
+    ``--filter label=com.docker.compose.project`` would be too broad — it
+    would match every compose stack on the box, not just Spark model ones).
+    """
+    label_cmd = (
+        f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(_sanitize_slug(slug))}"
+        if slug
+        else "true"
+    )
+    project_fmt = '{{.ID}}|{{.Label "' + _COMPOSE_PROJECT_LABEL + '"}}'
+    script = (
+        "echo __TOTAL__; docker ps -q | wc -l; "
+        f"echo __LABEL__; {label_cmd}; "
+        f"echo __SOLO__; docker ps -q --filter {shlex_quote(_SOLO_NAME_FILTER)}; "
+        f"echo __MANUAL__; docker ps -q --filter {shlex_quote(_MANUAL_NAME_FILTER)}; "
+        f"echo __PROJECT__; docker ps --filter label={_COMPOSE_PROJECT_LABEL} "
+        f"--format {shlex_quote(project_fmt)}"
+    )
+    return f"bash -o pipefail -c {shlex_quote(script)}"
+
+
+def _parse_eviction_discovery(out: str) -> dict:
+    """Parses ``_eviction_discovery_script`` output into per-matcher id lists
+    plus the box-wide total — the raw material for both the stop decision and
+    the P3 diagnostics logging."""
+    markers = ("__TOTAL__", "__LABEL__", "__SOLO__", "__MANUAL__", "__PROJECT__")
+    sections: dict[str, list[str]] = {m: [] for m in markers}
+    current: str | None = None
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line in sections:
+            current = line
+            continue
+        if current is not None:
+            sections[current].append(line)
+
+    total = 0
+    if sections["__TOTAL__"]:
+        try:
+            total = int(sections["__TOTAL__"][0])
+        except ValueError:
+            total = 0
+
+    project_ids: list[str] = []
+    for entry in sections["__PROJECT__"]:
+        cid, _, project = entry.partition("|")
+        cid = cid.strip()
+        if cid and runtime_ownership.COMPOSE_PROJECT_NAME_PATTERN.search(project):
+            project_ids.append(cid)
+
+    label_ids = sorted({x for x in sections["__LABEL__"] if x})
+    solo_ids = sorted({x for x in sections["__SOLO__"] if x})
+    manual_ids = sorted({x for x in sections["__MANUAL__"] if x})
+    project_ids = sorted(set(project_ids))
+
+    return {
+        "total": total,
+        "label": label_ids,
+        "solo": solo_ids,
+        "manual": manual_ids,
+        "project": project_ids,
+        "all": sorted(set(label_ids) | set(solo_ids) | set(manual_ids) | set(project_ids)),
+    }
+
+
+async def _still_running(container_ids: list[str], *, host: ResolvedHost | None = None) -> list[str]:
+    """Which of ``container_ids`` are still running — used to poll the
+    specific containers eviction told docker to stop, not the whole box (a
+    container eviction deliberately left alone, see ownership below, must
+    not make the poll spin to a false timeout)."""
+    ids = [c for c in container_ids if c and c.strip()]
+    if not ids:
+        return []
+    filters = " ".join(f"--filter id={shlex_quote(c)}" for c in ids)
+    out, err, ec = await _ssh_run(f"docker ps -q {filters}", host=host, timeout=20)
+    if ec != 0:
+        raise RuntimeError(err or f"docker ps query failed (exit {ec})")
+    return sorted({x for x in out.splitlines() if x.strip()})
+
+
+async def _emit_ownership_blocked_event(slug: str | None, blocked: list[dict]) -> None:
+    """Records that eviction found containers it refused to stop. Best-effort
+    — a failing event must never hide the (already-returned) block itself."""
+    try:
+        from app.services.activity import emit_event
+        from app.services.runtime_model_resolver import session_scope
+
+        async with session_scope() as session:
+            await emit_event(
+                session,
+                "runtime.eviction_ownership_blocked",
+                f"{slug}: {len(blocked)} Container nicht gestoppt (Besitz nicht bewiesen) — "
+                + "; ".join(f"{b['container_id'][:12]} ({b['reason']})" for b in blocked),
+                severity="warning",
+                detail={"slug": slug, "blocked": blocked},
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ownership-blocked event emit failed for %s: %s", slug, exc)
+
+
 async def evict_spark_runtime_containers(
     slug: str | None,
     *,
     host: ResolvedHost | None = None,
     timeout: float = 30.0,
 ) -> dict:
-    """Stop ALL running Spark model containers, then wait until they're gone.
+    """Stop every running Spark model container MC can prove is its own,
+    then wait until those are gone.
 
     Host-scoped (ADR-048): all docker commands run on ``host`` — the resolved
     host of the *starting* runtime — so an eviction for box A never stops
     models on box B. ``host=None`` keeps the classic settings.dgx_ssh_* box.
 
-    P0: stops by label (``mc.runtime.slug=<slug>``) AND sweeps every
-    ``sparkrun_*_solo`` container, so CLI- or externally-started models that MC
-    never tracked are evicted too. Replaces the old ``docker stop {name}`` that
-    ran ``docker stop`` with an empty arg whenever ``container_name`` was None.
+    Three phases (Task #22 hardening on top of the original P0/P1):
 
-    P1: after issuing the stop, polls until no Spark model container is left
-    running (bounded by ``timeout``). Returns ``ok=False`` with an honest
-    message if something is still running when the deadline passes — the caller
-    must NOT launch a second model on top of an occupied GPU/RAM.
+    1. **Discovery** (``_eviction_discovery_script``) — every matcher in one
+       SSH round trip: label (``mc.runtime.slug=<slug>``), the
+       ``sparkrun_*_solo`` name sweep, the manual ``vllm_node`` name, and now
+       a ``com.docker.compose.project`` sweep so a compose service with no
+       ``container_name:`` (previously invisible — the live incident) is
+       found too. The matcher breakdown and the box-wide container total are
+       always logged, so a "nothing found" result is diagnosable from the
+       logs alone instead of just trusted.
+    2. **Ownership** (``runtime_ownership.partition_by_ownership``) — a
+       container that carries MC's own ``mc.runtime.slug`` label is only
+       stopped if its ``mc.runtime.nonce`` label matches what MC recorded at
+       launch time. A mismatch means the container was not created by this
+       MC instance (most likely hand-recreated under the same name/label)
+       and is left running with a ``runtime.eviction_ownership_blocked``
+       event instead of being force-stopped — "never stop what we cannot
+       prove is ours". Containers with NO slug label at all (the whole
+       reason the solo/manual/project sweeps exist) carry no ownership claim
+       to disprove and are always eligible to stop.
+    3. **Stop + poll** — only the containers cleared in step 2 are stopped;
+       the poll then waits for exactly those ids to disappear (bounded by
+       ``timeout``), not the whole box, so a container eviction deliberately
+       left alone doesn't spin the poll to a false timeout.
 
-    Returns ``{"ok": bool, "message": str, "stopped": [ids]}``.
+    A non-empty ``blocked`` list makes the overall result ``ok=False`` — an
+    unresolved, still-running container means the box is not actually free,
+    and the caller (``ensure_exclusive_host`` / ``switch_recipe``) must not
+    launch a second model on top of it.
+
+    Returns ``{"ok": bool, "message": str, "stopped": [ids], "blocked": [...]}``.
     """
     import asyncio
 
     safe = _sanitize_slug(slug) if slug else None
-    # Single command stops label-matched + solo-name-matched containers. `xargs
-    # -r` is the fix for the empty-arg bug: with no matches it runs nothing
-    # instead of `docker stop ` (which errored and was silently swallowed).
-    stop_cmd = f"{_running_solo_query(safe)} | xargs -r docker stop"
+
     try:
-        stopped_out, stop_err, _ = await _ssh_run(stop_cmd, host=host, timeout=max(timeout, 30))
-    except Exception as exc:  # noqa: BLE001 — surface as a clean failure
-        logger.warning("evict: stop command raised for %s: %s", slug, exc)
-        return {"ok": False, "message": f"Eviction-Stop fehlgeschlagen: {exc}", "stopped": []}
+        discovery_out, discovery_err, discovery_ec = await _ssh_run(
+            _eviction_discovery_script(safe), host=host, timeout=20
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("evict: discovery raised for %s: %s", slug, exc)
+        return {"ok": False, "message": f"Eviction-Discovery fehlgeschlagen: {exc}", "stopped": []}
+    if discovery_ec != 0:
+        logger.warning("evict: discovery exited %s for %s: %s", discovery_ec, slug, discovery_err)
+        return {
+            "ok": False,
+            "message": f"Eviction-Discovery fehlgeschlagen (exit {discovery_ec}): {discovery_err}",
+            "stopped": [],
+        }
 
-    stopped = [x for x in stopped_out.splitlines() if x.strip()]
-    if stop_err:
-        logger.info("evict: docker stop stderr for %s: %s", slug, stop_err)
+    found = _parse_eviction_discovery(discovery_out)
+    logger.info(
+        "evict: discovery for %s — total_on_box=%s label=%s solo=%s manual=%s compose_project=%s",
+        slug, found["total"], found["label"], found["solo"], found["manual"], found["project"],
+    )
 
-    # P1 — poll until the box is actually free.
+    if not found["all"]:
+        message = (
+            f"Spark freigegeben (nichts lief; {found['total']} Container insgesamt auf der Box, "
+            f"keiner passte zu Label/Solo-Sweep/Manual-Sweep/Compose-Projekt)."
+        )
+        logger.info("evict: nothing found for %s (%s)", slug, message)
+        return {"ok": True, "message": message, "stopped": [], "blocked": []}
+
+    safe_to_stop, blocked = await runtime_ownership.partition_by_ownership(
+        found["all"], host=host, ssh_run=_ssh_run
+    )
+    if blocked:
+        for b in blocked:
+            logger.warning(
+                "evict: NOT stopping %s (slug=%s) for %s — %s",
+                b["container_id"], b["slug"], slug, b["reason"],
+            )
+        await _emit_ownership_blocked_event(slug, blocked)
+
+    stopped: list[str] = []
+    if safe_to_stop:
+        # `xargs -r`-equivalent via an explicit id list: empty is impossible
+        # here (safe_to_stop is non-empty in this branch), but the ids are
+        # still individually quoted — same injection posture as before.
+        stop_cmd = "docker stop " + " ".join(shlex_quote(c) for c in safe_to_stop)
+        try:
+            stopped_out, stop_err, _ = await _ssh_run(stop_cmd, host=host, timeout=max(timeout, 30))
+        except Exception as exc:  # noqa: BLE001 — surface as a clean failure
+            logger.warning("evict: stop command raised for %s: %s", slug, exc)
+            return {
+                "ok": False,
+                "message": f"Eviction-Stop fehlgeschlagen: {exc}",
+                "stopped": [],
+                "blocked": blocked,
+            }
+        stopped = [x for x in stopped_out.splitlines() if x.strip()]
+        if stop_err:
+            logger.info("evict: docker stop stderr for %s: %s", slug, stop_err)
+
+    if blocked and not stopped:
+        return {
+            "ok": False,
+            "message": (
+                f"{len(blocked)} Container gefunden, aber keiner konnte als eigener bewiesen "
+                f"werden (Nonce fehlt/stimmt nicht) — Stop verweigert, Box gilt als NICHT frei. "
+                f"Details im Event-Feed (runtime.eviction_ownership_blocked)."
+            ),
+            "stopped": [],
+            "blocked": blocked,
+        }
+
+    # P1 — poll until the containers we told docker to stop are actually gone.
+    # Scoped to `safe_to_stop`, not the whole box: a blocked container stays
+    # running on purpose and must not make this loop spin to a false timeout.
     deadline = asyncio.get_running_loop().time() + timeout
     remaining: list[str] = []
     while True:
         try:
-            remaining = await _running_solo_containers(safe, host=host)
+            remaining = await _still_running(safe_to_stop, host=host)
         except Exception as exc:  # noqa: BLE001
             logger.warning("evict: poll raised for %s: %s — treating as still busy", slug, exc)
             remaining = ["<poll-error>"]
         if not remaining:
+            if blocked:
+                logger.error(
+                    "evict: %s stopped, but %s container(s) blocked by ownership check for %s",
+                    stopped, len(blocked), slug,
+                )
+                return {
+                    "ok": False,
+                    "message": (
+                        f"Gestoppt: {stopped or 'nichts lief'}. Aber {len(blocked)} Container "
+                        f"konnten nicht als eigener bewiesen werden und laufen weiter — Box gilt "
+                        f"als NICHT frei. Details im Event-Feed."
+                    ),
+                    "stopped": stopped,
+                    "blocked": blocked,
+                }
             logger.info("evict: Spark free for %s (stopped=%s)", slug, stopped)
             return {
                 "ok": True,
                 "message": f"Spark freigegeben (gestoppt: {stopped or 'nichts lief'}).",
                 "stopped": stopped,
+                "blocked": [],
             }
         if asyncio.get_running_loop().time() >= deadline:
             break
@@ -552,6 +788,7 @@ async def evict_spark_runtime_containers(
             f"{remaining}. GPU/RAM evtl. nicht frei — Start abgebrochen."
         ),
         "stopped": stopped,
+        "blocked": blocked,
     }
 
 
@@ -2302,10 +2539,14 @@ async def search_lmstudio_catalog(query: str) -> list[dict]:
     if not query.strip():
         return []
     try:
+        from app.services.ai_provider_config import hf_auth_headers
+
+        headers = await hf_auth_headers()
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 "https://huggingface.co/api/models",
                 params={"search": query, "filter": "gguf", "author": "lmstudio-community", "limit": 20, "blobs": "true"},
+                headers=headers,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -2333,8 +2574,14 @@ async def search_lmstudio_catalog(query: str) -> list[dict]:
 async def get_hf_repo_files(repo_id: str) -> dict:
     """Fetches all GGUF files of a HuggingFace repo."""
     try:
+        from app.services.ai_provider_config import hf_auth_headers
+
+        headers = await hf_auth_headers()
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"https://huggingface.co/api/models/{repo_id}?blobs=true")
+            resp = await client.get(
+                f"https://huggingface.co/api/models/{repo_id}?blobs=true",
+                headers=headers,
+            )
             if resp.status_code == 404:
                 return {"error": "Repo nicht gefunden"}
             resp.raise_for_status()
@@ -2356,14 +2603,29 @@ async def get_hf_repo_files(repo_id: str) -> dict:
 async def download_hf_file(
     repo_id: str, filename: str, host: ResolvedHost | None = None
 ) -> dict:
-    """Downloads a GGUF file from HuggingFace directly into the LM Studio models directory."""
+    """Downloads a GGUF file from HuggingFace directly into the LM Studio models directory.
+
+    With an ``hf_token`` secret stored, the curl carries an Authorization
+    header so gated repos work. Without one the command is byte-identical to
+    the pre-token version — anonymous, public repos only, exactly today's
+    behaviour. The header is only added when a token exists so an install that
+    never set one gains no new failure mode.
+    """
+    from app.services.ai_provider_config import get_hf_token
+
     author, _, model_name = repo_id.partition("/")
     dest_dir = f"~/.lmstudio/models/{author}/{model_name}"
     safe_name = (repo_id + "_" + filename).replace("/", "_").replace(" ", "_")
     log_path = f"/tmp/hf-download-{safe_name}.log"
+    token = await get_hf_token()
+    # NOTE: the header lands in the remote shell's argv, so the token is
+    # visible in `ps` to anyone with a shell on the GPU box. That box is
+    # single-operator by construction (the same person owns the token); a
+    # netrc/--config file would hide it from ps but leave it on disk instead.
+    auth_arg = f"-H 'Authorization: Bearer {token}' " if token else ""
     command = (
         f"mkdir -p {dest_dir} && "
-        f"nohup curl -L 'https://huggingface.co/{repo_id}/resolve/main/{filename}' "
+        f"nohup curl -L {auth_arg}'https://huggingface.co/{repo_id}/resolve/main/{filename}' "
         f"-o '{dest_dir}/{filename}' "
         f"> {log_path} 2>&1 &"
     )

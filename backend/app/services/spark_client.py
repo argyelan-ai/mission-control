@@ -28,7 +28,24 @@ class SparkUnreachableError(RuntimeError):
 
 
 class SparkClient:
-    EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5"
+    """LLM completions + embeddings against the GPU box.
+
+    Satisfies ``services.embedding_provider.EmbeddingProvider`` (key/label/
+    embed/embed_batch/is_available) so the vault backfills and the memory
+    pipeline speak ONE contract. The embedding model is no longer a constant
+    here: it comes from ``ai_provider_config.embeddings_model()``, the same
+    single source ``embedding_service`` reads — the previous second copy of
+    the name was one edit away from two vector shapes in one collection.
+    """
+
+    key = "spark"
+    label = "GPU-Box (OpenAI-kompatibel)"
+
+    @property
+    def embedding_model(self) -> str:
+        from app.services import ai_provider_config
+
+        return ai_provider_config.embeddings_model()
 
     def __init__(
         self,
@@ -80,7 +97,7 @@ class SparkClient:
             try:
                 emb_resp = await cli.post(
                     f"{self.embedding_url}/embeddings",
-                    json={"model": self.EMBEDDING_MODEL, "input": "ping"},
+                    json={"model": self.embedding_model, "input": "ping"},
                 )
                 emb_ready = emb_resp.status_code == 200 and len(
                     emb_resp.json()["data"][0]["embedding"]
@@ -92,7 +109,7 @@ class SparkClient:
             "llm_model": llm_model,
             "llm_url": self.llm_url,
             "llm_ready": llm_ready,
-            "embedding_model": self.EMBEDDING_MODEL,
+            "embedding_model": self.embedding_model,
             "embedding_url": self.embedding_url,
             "embedding_ready": emb_ready,
         }
@@ -104,7 +121,10 @@ class SparkClient:
         max_tokens: int = 256,
         temperature: float = 0.2,
         system: str | None = None,
+        model: str | None = None,
     ) -> str:
+        """``model`` pins one specific identifier; None (the default) keeps the
+        DB-driven resolver, which is what every existing caller wants."""
         from app.services.runtime_model_resolver import (
             get_spark_vllm_runtime,
             invalidate_and_reprobe,
@@ -116,7 +136,7 @@ class SparkClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        llm_model = await self._resolve_llm_model()
+        llm_model = model or await self._resolve_llm_model()
 
         async def _post(model_name: str) -> httpx.Response:
             async with httpx.AsyncClient(timeout=self.timeout) as cli:
@@ -164,7 +184,7 @@ class SparkClient:
             try:
                 resp = await cli.post(
                     f"{self.embedding_url}/embeddings",
-                    json={"model": self.EMBEDDING_MODEL, "input": text},
+                    json={"model": self.embedding_model, "input": text},
                 )
                 resp.raise_for_status()
                 return resp.json()["data"][0]["embedding"]
@@ -172,6 +192,16 @@ class SparkClient:
                 raise SparkUnreachableError(
                     f"Spark embeddings at {self.embedding_url} not reachable: {e}"
                 ) from e
+
+    async def is_available(self) -> bool:
+        """Bounded probe, part of the EmbeddingProvider contract. Never raises."""
+        import asyncio
+
+        try:
+            await asyncio.wait_for(self.embed("ping"), timeout=2.0)
+            return True
+        except Exception:  # noqa: BLE001 — a probe reports, it does not raise
+            return False
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Single batched call for better throughput."""
@@ -181,7 +211,7 @@ class SparkClient:
             try:
                 resp = await cli.post(
                     f"{self.embedding_url}/embeddings",
-                    json={"model": self.EMBEDDING_MODEL, "input": texts},
+                    json={"model": self.embedding_model, "input": texts},
                 )
                 resp.raise_for_status()
                 return [d["embedding"] for d in resp.json()["data"]]
