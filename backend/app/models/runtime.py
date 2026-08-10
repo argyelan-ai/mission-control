@@ -151,6 +151,17 @@ class Runtime(SQLModel, table=True):
     # what the box was configured with (services/host_memory_prep.py).
     prestart_watermark_kb: int | None = None
 
+    # PR 10 — the MemAvailable floor (kB) a start waits for after the prep
+    # above, up to `settings.memory_prep_wait_timeout_seconds`. NULL means
+    # "use the conservative default" (services/host_memory_prep.py,
+    # DEFAULT_MIN_AVAILABLE_KB) — every existing exclusive_memory runtime
+    # still gets a wait, just an untuned one, until an operator sets this to
+    # that runtime's actual footprint. A start that never clears the
+    # threshold is aborted rather than attempted blind (the reboot-test
+    # failure this closes: a crash-looped engine's allocations had not
+    # actually drained three minutes after the prep reported success).
+    prestart_min_available_kb: int | None = None
+
     api_key_secret_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(
@@ -209,4 +220,5 @@ class Runtime(SQLModel, table=True):
             "process_name": self.process_name,
             "exclusive_memory": self.exclusive_memory,
             "prestart_watermark_kb": self.prestart_watermark_kb,
+            "prestart_min_available_kb": self.prestart_min_available_kb,
         }
