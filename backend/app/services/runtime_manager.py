@@ -37,7 +37,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.runtime import Runtime
-from app.services import host_memory_prep, runtime_grace, runtime_ownership
+from app.services import address_classify, host_memory_prep, runtime_grace, runtime_ownership
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -193,9 +193,19 @@ def add_vllm_runtime(
 
 def _host_ip(host: ResolvedHost | None) -> str:
     """IP/hostname for endpoint construction — the runtime's host or the
-    classic settings fallback (ADR-048)."""
-    if host is not None and host.ssh_host:
-        return host.ssh_host
+    classic settings fallback (ADR-048).
+
+    Prefers the host's Tailscale address over ``ssh_host`` when one is on
+    file (address_classify.preferred_endpoint_host) — the live incident this
+    guards against: an endpoint built from a box's LAN IP answers SSH from
+    the backend container fine but silently fails HTTP calls from a host
+    agent when a Tailscale route hijacks that LAN IP on the Mac
+    (spark-tailscale-route-hijack-host-agents).
+    """
+    if host is not None and (host.ssh_host or host.tailscale_host):
+        return address_classify.preferred_endpoint_host(
+            host.ssh_host, host.tailscale_host
+        ) or ""
     return settings.dgx_ssh_host
 
 

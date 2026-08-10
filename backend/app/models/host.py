@@ -35,6 +35,15 @@ class Host(SQLModel, table=True):
     ssh_user: str | None = Field(default=None, max_length=64)
     ssh_key_path: str | None = Field(default=None, max_length=512)  # path inside backend container/host
 
+    # Tailscale address for this box, when it has one (100.64.0.0/10 or a
+    # *.ts.net MagicDNS name — see services/address_classify). Optional and
+    # separate from ssh_host on purpose: SSH from the backend container often
+    # tolerates the LAN IP just fine, but a runtime endpoint consumed by a
+    # HOST agent (launchd/tmux on the Mac) can silently fail against the same
+    # LAN IP when a Tailscale route hijacks it there. When set, endpoint
+    # construction (runtime_manager._host_ip) prefers this over ssh_host.
+    tailscale_host: str | None = Field(default=None, max_length=128)
+
     # flask_wol kind (nullable for ssh/local)
     control_url: str | None = Field(default=None, max_length=512)  # e.g. http://192.0.2.1:5555
     wol_mac_address: str | None = Field(default=None, max_length=32)

@@ -45,6 +45,7 @@ class ResolvedHost:
     ssh_host: str | None = None
     ssh_user: str | None = None
     ssh_key_path: str | None = None
+    tailscale_host: str | None = None
     control_url: str | None = None
     wol_mac_address: str | None = None
     power_managed: bool = False
@@ -69,6 +70,7 @@ def _from_host_row(host: Host) -> ResolvedHost:
         ssh_host=host.ssh_host,
         ssh_user=host.ssh_user,
         ssh_key_path=host.ssh_key_path,
+        tailscale_host=host.tailscale_host,
         control_url=host.control_url,
         wol_mac_address=host.wol_mac_address,
         power_managed=host.power_managed,
