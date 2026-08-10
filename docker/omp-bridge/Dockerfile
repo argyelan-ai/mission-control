@@ -76,7 +76,13 @@ RUN chmod +x /home/agent/.mc-cli/mc \
     && ln -sf /home/agent/.mc-cli/mc /usr/local/bin/mc
 
 # The bridge driver + native-TUI hook + launcher + forked recycler + entrypoint.
+# context_detect.py (CTX-01 Nachzug Teil 2): harness-aware context%-Scraper,
+# hand-maintained duplicate of scripts/context_detect.py (byte-identity
+# geprueft von backend/tests/test_context_detect_equivalence.py) — muss NEBEN
+# bridge.py liegen, damit `import context_detect` (kein Package, kein Pfad-
+# Setup) das ausfuehrende Skriptverzeichnis findet.
 COPY bridge.py            /opt/omp-bridge/bridge.py
+COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
 COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
 COPY entrypoint.sh        /usr/local/bin/entrypoint.sh
