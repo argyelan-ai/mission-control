@@ -350,7 +350,7 @@ def test_env_value_roundtrip_is_idempotent():
         "2e3f61e44cb83a5e4e38dc04509e6ce9cd8bcf0c46788d494dbaa4f3bec1017f",  # clean hex
         "has'quote",
         "many''quotes''here",
-        "http://100.67.20.66:8000/v1",
+        "http://100.100.200.50:8000/v1",
         "",
     ]:
         line = _format_env_file({"K": val})

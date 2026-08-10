@@ -62,6 +62,10 @@ class HostCreate(BaseModel):
     ssh_host: str | None = Field(default=None, max_length=128)
     ssh_user: str | None = Field(default=None, max_length=64)
     ssh_key_path: str | None = Field(default=None, max_length=512)
+    # Tailscale address for this box (100.64.0.0/10 or a *.ts.net name) —
+    # optional. When set, runtime endpoints prefer it over ssh_host; see
+    # services/address_classify and models/host.Host.tailscale_host.
+    tailscale_host: str | None = Field(default=None, max_length=128)
     control_url: str | None = Field(default=None, max_length=512)
     wol_mac_address: str | None = Field(default=None, max_length=32)
     power_managed: bool = False
@@ -87,6 +91,7 @@ class HostUpdate(BaseModel):
     ssh_host: str | None = Field(default=None, max_length=128)
     ssh_user: str | None = Field(default=None, max_length=64)
     ssh_key_path: str | None = Field(default=None, max_length=512)
+    tailscale_host: str | None = Field(default=None, max_length=128)
     control_url: str | None = Field(default=None, max_length=512)
     wol_mac_address: str | None = Field(default=None, max_length=32)
     power_managed: bool | None = None

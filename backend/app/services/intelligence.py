@@ -2,7 +2,8 @@
 Intelligence Service — MC thinks along.
 
 Periodic analysis of task data, agent performance, and failure patterns.
-Rule-based analysis (no LLM needed) + optional daily LLM distillation via Ollama.
+Rule-based analysis (no LLM needed) + optional daily LLM distillation whose
+provider is operator-selectable (services/ai_provider_config: spark | ollama_cloud | off).
 Feeds insights back into the system (dispatch messages, ActivityEvents, AgentMetrics).
 
 Same pattern as WatchdogService: singleton, asyncio loop, Redis lock.
@@ -27,8 +28,13 @@ from app.utils import ensure_aware, utcnow
 from app.models.task import Task, TaskComment
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
+from app.services import ai_provider_config
 
 logger = logging.getLogger("mc.intelligence")
+
+# The model the retired local-Ollama path hardcoded. Kept only to recognise an
+# untouched legacy IntelligenceConfig row (see _call_ollama_cloud).
+_LEGACY_INSIGHTS_MODEL = "qwen2.5-coder:14b"
 
 # Known failure patterns for keyword matching
 FAILURE_KEYWORDS: dict[str, list[str]] = {
@@ -604,7 +610,9 @@ class IntelligenceService:
                 return
 
             # Call Ollama
-            response = await self._call_ollama(self._build_destillation_prompt(insights, config), config)
+            response = await self._call_insights_llm(
+                self._build_destillation_prompt(insights, config), config
+            )
             if not response:
                 return
 
@@ -645,7 +653,7 @@ class IntelligenceService:
             logger.warning("Daily destillation failed (non-critical): %s", e)
 
     def _build_destillation_prompt(self, insights: dict, config=None) -> str:
-        """Build the Ollama prompt from the current insights."""
+        """Build the distillation prompt from the current insights."""
         td = insights.get("task_durations", {})
         ap = insights.get("agent_performance", [])
         fp = insights.get("failure_patterns", {})
@@ -697,15 +705,81 @@ Analysiere die Daten der letzten 7 Tage und erstelle 3-5 Erkenntnisse.
 Jede Erkenntnis: **Titel** + kurze Erklaerung + Empfehlung.
 Schreibe auf Deutsch, maximal 500 Woerter. Sei konkret und praxisnah."""
 
-    async def _call_ollama(self, prompt: str, config=None) -> str | None:
-        """HTTP POST to local Ollama. Graceful degradation on error."""
-        model = config.ollama_model if config else "qwen2.5-coder:14b"
+    # ── LLM routing (ai_insights_provider) ────────────────────────────
+
+    async def _call_insights_llm(self, prompt: str, config=None) -> str | None:
+        """Route the distillation to the provider the operator selected.
+
+        Default is ``spark``: the GPU box over the OpenAI-compatible
+        ``SparkClient.complete``, whose model comes from the DB-driven runtime
+        resolver. Before this PR the only path was Ollama-native against
+        ``settings.ollama_url`` — host.docker.internal, i.e. a LOCAL Ollama on
+        the Mac, which MC must never run (kernel panic on this hardware). So
+        the default moved to the box that actually serves MC's models, and
+        ``ollama_cloud`` (ollama.com, not localhost) is the opt-in cloud arm.
+
+        Every arm degrades to ``None`` — a failed distillation skips the daily
+        report, it never fails a task.
+        """
+        provider = ai_provider_config.insights_provider_key()
+        if provider == "off":
+            logger.info("Insights-Provider steht auf 'off' — Destillation uebersprungen")
+            return None
+        if provider == "ollama_cloud":
+            return await self._call_ollama_cloud(prompt, config)
+        return await self._call_spark(prompt, config)
+
+    async def _call_spark(self, prompt: str, config=None) -> str | None:
+        """OpenAI-compatible completion on the GPU box. Graceful degradation."""
+        from app.services.spark_client import SparkClient
+
         temperature = config.temperature if config else 0.3
         max_tokens = config.max_tokens if config else 1024
         try:
+            answer = await SparkClient().complete(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                model=ai_provider_config.insights_model_override() or None,
+            )
+            return (answer or "").strip() or None
+        except Exception as e:  # noqa: BLE001 — distillation is best-effort
+            logger.warning("Insights via Spark fehlgeschlagen: %s", e)
+            return None
+
+    async def _call_ollama_cloud(self, prompt: str, config=None) -> str | None:
+        """Ollama-native ``/api/generate`` against ollama.com.
+
+        The explicit ``ollama_api_key`` consumer (ADR-056 Finding 5 removed the
+        GLOBAL fallback and left room for named ones): this function asks for
+        the key by name, and no agent runtime ever sees it. Without a key the
+        call still goes out and ollama.com answers 401 — reported, not raised.
+        """
+        model = (
+            ai_provider_config.insights_model_override()
+            # The Redis-stored IntelligenceConfig field steered the retired
+            # local-Ollama path; honour it only when it was actually changed
+            # away from that legacy default (migration is a follow-up task).
+            or (config.ollama_model if config and config.ollama_model != _LEGACY_INSIGHTS_MODEL else "")
+            or settings.ollama_cloud_insights_model
+        )
+        temperature = config.temperature if config else 0.3
+        max_tokens = config.max_tokens if config else 1024
+        base = settings.ollama_cloud_url.rstrip("/")
+        headers = {}
+        api_key = await ai_provider_config.get_ollama_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            logger.warning(
+                "Insights-Provider 'ollama_cloud' ohne ollama_api_key — "
+                "ollama.com wird den Aufruf ablehnen"
+            )
+        try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
-                    f"{settings.ollama_url}/api/generate",
+                    f"{base}/api/generate",
+                    headers=headers,
                     json={
                         "model": model,
                         "prompt": prompt,
@@ -717,15 +791,17 @@ Schreibe auf Deutsch, maximal 500 Woerter. Sei konkret und praxisnah."""
                     },
                 )
                 if resp.status_code != 200:
-                    logger.warning("Ollama returned %d: %s", resp.status_code, resp.text[:200])
+                    logger.warning(
+                        "Ollama Cloud returned %d: %s", resp.status_code, resp.text[:200]
+                    )
                     return None
                 data = resp.json()
                 return data.get("response", "").strip() or None
         except httpx.ConnectError:
-            logger.info("Ollama not reachable at %s — skipping destillation", settings.ollama_url)
+            logger.info("Ollama Cloud nicht erreichbar (%s) — Destillation uebersprungen", base)
             return None
-        except Exception as e:
-            logger.warning("Ollama call failed: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Ollama Cloud call failed: %s", e)
             return None
 
 

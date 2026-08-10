@@ -31,6 +31,7 @@ import {
   DollarSign,
   MessageSquare,
   Send,
+  BrainCircuit,
   type LucideIcon,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
@@ -48,6 +49,7 @@ import { CredentialsTab } from "@/components/settings/CredentialsTab";
 import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { SlackTab } from "@/components/settings/SlackTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
+import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -82,6 +84,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "github", labelKey: "sections.github", icon: Github, group: "connections", adminOnly: true },
   { id: "slack", labelKey: "sections.slack", icon: MessageSquare, group: "connections", adminOnly: true },
   { id: "telegram", labelKey: "sections.telegram", icon: Send, group: "connections", adminOnly: true },
+  { id: "ai-providers", labelKey: "sections.aiProviders", icon: BrainCircuit, group: "connections", adminOnly: true },
   { id: "apikeys", labelKey: "sections.apikeys", icon: Key, group: "secrets", adminOnly: true },
   { id: "credentials", labelKey: "sections.credentials", icon: KeyRound, group: "secrets", adminOnly: true },
   { id: "users", labelKey: "sections.users", icon: Users, group: "system", adminOnly: true },
@@ -2302,6 +2305,7 @@ function SettingsContent() {
               {activeSection === "github" && isAdmin && <GithubSection />}
               {activeSection === "slack" && isAdmin && <SlackTab />}
               {activeSection === "telegram" && isAdmin && <TelegramTab />}
+              {activeSection === "ai-providers" && isAdmin && <AiProvidersTab />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
