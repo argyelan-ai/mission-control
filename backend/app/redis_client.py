@@ -424,6 +424,19 @@ class RedisKeys:
     def runtime_restart_baseline(slug: str) -> str:
         return f"mc:runtime-restarts:{slug}"
 
+    # ── Runtime Ownership Nonce (Task #22, services/runtime_ownership.py) ─
+    # "This is the value MC stamped onto the container it most recently
+    # created for this slug." No TTL — it must outlive the whole runtime
+    # lifetime, not just a switch window. Overwritten on every fresh
+    # container creation (switch_recipe / a new docker run), read back
+    # before any docker stop MC issues against a container it believes is
+    # its own, so a container someone hand-recreated under the same name
+    # or label is never silently killed (Local Studio's "never stop what
+    # we cannot prove is ours").
+    @staticmethod
+    def runtime_nonce(slug: str) -> str:
+        return f"mc:runtime-nonce:{slug}"
+
     @staticmethod
     def agent_switch_progress(agent_id: str) -> str:
         return f"mc:agent:{agent_id}:runtime-switch-progress"
