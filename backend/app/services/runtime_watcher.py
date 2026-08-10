@@ -398,6 +398,15 @@ class RuntimeWatcher:
         while telling the operator about it would mean the box keeps burning
         an engine boot every few seconds for as long as nobody reads the feed.
 
+        ``--restart=no`` is never put back to ``unless-stopped`` — that is
+        deliberate, not an oversight. Every future start of this container
+        goes through MC (manual start, switch-recipe, or PR10's exclusivity-
+        aware auto-recovery), each of which runs the memory prep from PR8
+        first. Restoring the compose autostart would let Docker itself
+        relaunch the container straight past that prep on the very next host
+        boot, which is exactly the blind boot-autostart that crash-loops
+        today.
+
         Returns True when it acted — the caller then skips the normal
         unreachable/grace handling, because "failed, and here is why" is a
         better statement than either.
@@ -477,7 +486,9 @@ class RuntimeWatcher:
             session,
             "runtime.crash_loop_stopped",
             f"{runtime.slug}: Container startet in Endlosschleife neu "
-            f"({delta} Neustarts) — angehalten. Grund: {reason}",
+            f"({delta} Neustarts) — angehalten. Grund: {reason}. "
+            f"restart-Policy bleibt auf 'no' — künftige Starts laufen über MC "
+            f"(mit Memory-Prep), nicht mehr über Dockers Boot-Autostart.",
             severity="warning",
             detail={
                 "slug": runtime.slug,
@@ -490,6 +501,7 @@ class RuntimeWatcher:
                 "started_at": started_at,
                 "container_stopped": stopped,
                 "stop_error": None if stopped else (stop_err or None),
+                "restart_policy": "no — not restored; future starts go through MC",
             },
         )
         return True
@@ -667,6 +679,22 @@ class RuntimeWatcher:
         if host is None or host.kind != "ssh":
             return
 
+        sibling = await self._active_exclusive_sibling(session, redis, runtime)
+        if sibling is not None:
+            # The live reboot-test failure: qwen-general (a deliberately
+            # parked solo resident) got auto-recovered while its exclusive
+            # sibling deepseek-v4-flash-sparkinfer was loading on the same
+            # box. A successful recovery here would evict exactly that
+            # engine via ensure_exclusive_host's exclusivity sweep — the
+            # single box is spoken for by whichever exclusive_memory runtime
+            # is already running, loading, or mid memory-prep, and
+            # auto-recovery must not overrule that automatically.
+            logger.debug(
+                "auto-recovery: skipping %s — exclusive sibling %s is active "
+                "on the same host", runtime.slug, sibling,
+            )
+            return
+
         failures = await self._read_recovery_failures(redis, runtime.slug)
         if failures >= AUTO_RECOVERY_MAX_ATTEMPTS:
             return  # given up already — the event was emitted at the transition
@@ -729,6 +757,86 @@ class RuntimeWatcher:
                 severity="warning",
                 detail={"slug": runtime.slug, "attempts": attempt},
             )
+
+    async def _active_exclusive_sibling(
+        self, session: AsyncSession, redis, runtime: Runtime
+    ) -> str | None:
+        """Slug of an ``exclusive_memory`` sibling on the same box that is
+        running, loading, or mid memory-prep — or ``None`` if the box has no
+        such claim on it (PR 10).
+
+        Deliberately reads the SAME truth the rest of the system already
+        keeps rather than inventing new bookkeeping of "who was last
+        started":
+
+        - ``runtime_grace.get_switching`` — a sibling launching or loading
+          right now, the exact state DeepSeek was in during the live
+          incident,
+        - ``runtime_live`` — a sibling already confirmed serving. Recovering
+          a second exclusive resident onto a box with one already running
+          would just evict it a moment later via
+          ``runtime_manager.ensure_exclusive_host``, which is not a decision
+          auto-recovery gets to make unattended,
+        - an outstanding ``host_memory_prep`` handle for the box, in case a
+          start's switching marker already cleared (start failed) or was
+          never set (a host-boot autostart outside MC) but the prep is still
+          mid-flight.
+
+        Same host scoping as ``runtime_manager._ensure_exclusive_host``: NULL
+        ``host_id`` means the settings-fallback box, so two NULLs are the
+        same box.
+        """
+        if not runtime.exclusive_memory:
+            return None
+
+        statement = select(Runtime).where(
+            Runtime.enabled == True,  # noqa: E712
+            Runtime.exclusive_memory == True,  # noqa: E712
+        )
+        statement = (
+            statement.where(Runtime.host_id.is_(None))
+            if runtime.host_id is None
+            else statement.where(Runtime.host_id == runtime.host_id)
+        )
+        siblings = [
+            rt for rt in (await session.exec(statement)).all() if rt.slug != runtime.slug
+        ]
+        if not siblings:
+            return None
+
+        for sibling in siblings:
+            if await get_switching(sibling.slug, redis) is not None:
+                return sibling.slug
+            if await self._read_live_reachable(redis, sibling.slug):
+                return sibling.slug
+
+        try:
+            host = await resolve_host_for_runtime(session, runtime)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("auto-recovery: sibling host resolution failed for %s: %s",
+                         runtime.slug, exc)
+            return None
+        if host is not None:
+            handle = await host_memory_prep.load_handle(host_memory_prep.host_key(host))
+            if handle is not None and handle.slug and handle.slug != runtime.slug:
+                return handle.slug
+        return None
+
+    async def _read_live_reachable(self, redis, slug: str) -> bool:
+        try:
+            raw = await redis.get(RedisKeys.runtime_live(slug))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("auto-recovery: live snapshot unreadable for %s: %s", slug, exc)
+            return False
+        if not raw:
+            return False
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        try:
+            doc = json.loads(raw)
+        except ValueError:
+            return False
+        return bool(doc.get("reachable"))
 
     async def _host_answers(self, runtime: Runtime, host) -> bool:
         """Is the box itself up (container missing) or the whole box down?
