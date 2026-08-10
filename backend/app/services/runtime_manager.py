@@ -376,9 +376,30 @@ async def _ssh_run(
         )
 
 
+def join_probe_url(endpoint: str, healthcheck_path: str) -> str:
+    """Joins runtime endpoint + healthcheck path without duplicating "/v1".
+
+    Registry endpoints are OpenAI-compatible base URLs and are conventionally
+    stored *with* the version segment (".../v1"), while the default healthcheck
+    path is "/v1/models". Concatenating them yields ".../v1/v1/models" — a 404
+    that makes a perfectly healthy runtime report as stopped. Observed live on
+    the Spark runtime, whose engine logged a steady stream of
+    `GET /v1/v1/models 404` while serving fine.
+
+    Mirrors the normalization in agent_runtime_switch.probe_runtime_model.
+    """
+    base = endpoint.rstrip("/")
+    path = healthcheck_path or "/v1/models"
+    if not path.startswith("/"):
+        path = "/" + path
+    if base.endswith("/v1") and (path == "/v1" or path.startswith("/v1/")):
+        path = path[len("/v1"):] or "/models"
+    return base + path
+
+
 async def _probe_http(endpoint: str, healthcheck_path: str) -> bool:
     """Checks whether the runtime's HTTP endpoint responds."""
-    url = endpoint.rstrip("/") + healthcheck_path
+    url = join_probe_url(endpoint, healthcheck_path)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url)
@@ -1384,13 +1405,9 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
         )
         if not await _porsche_reachable(control_url):
             return {"state": "stopped", "http_reachable": False, "container_status": "asleep"}
-        # Defensive: avoid a double "/v1" — endpoint ".../v1" + healthcheck
-        # "/v1/models" would probe ".../v1/v1/models" (404). Mirror the
-        # normalization in agent_runtime_switch.probe_runtime_model.
-        hp = healthcheck_path or "/v1/models"
-        if endpoint.rstrip("/").endswith("/v1") and hp.startswith("/v1"):
-            hp = hp[len("/v1"):] or "/models"
-        reachable = await _probe_http(endpoint, hp)
+        # The double-"/v1" guard now lives in join_probe_url(), applied by
+        # _probe_http() for every runtime type — not just this branch.
+        reachable = await _probe_http(endpoint, healthcheck_path)
         return {
             "state": "ready" if reachable else "stopped",
             "http_reachable": reachable,
