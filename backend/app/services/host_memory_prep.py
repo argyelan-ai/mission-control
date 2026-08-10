@@ -115,6 +115,15 @@ _MEM_WAIT_POLL_INTERVAL = 10
 #: should configure its own value rather than lean on this default.
 DEFAULT_MIN_AVAILABLE_KB = 20 * 1024 * 1024  # 20 GiB
 
+#: How many CONSECUTIVE polls must clear the threshold before the wait
+#: declares victory (PR 10 follow-up). A single crossing is not enough: the
+#: reboot test's failure mode was a number that looked fine for one reading
+#: and then kept draining (a container mid-teardown, or the dropper's own
+#: ``sync`` still catching up) — starting on that first good reading is the
+#: same blind bet the wait exists to avoid, just moved one poll later.
+#: Overridable via ``settings.memory_prep_stable_readings``.
+DEFAULT_STABLE_READINGS = 2
+
 #: Architectures the GB10 memory equation applies to. An x86 box with discrete
 #: VRAM does not size its KV cache against host MemFree, so touching its page
 #: cache and watermark would be cost without benefit.
@@ -348,27 +357,66 @@ async def _wait_for_available_memory(
     min_available_kb: int,
     timeout_seconds: int,
     poll_interval: int = _MEM_WAIT_POLL_INTERVAL,
+    watermark_kb: int = 0,
+    stable_readings: int = DEFAULT_STABLE_READINGS,
     sleep=asyncio.sleep,
     now=time.monotonic,
 ) -> tuple[bool, int | None]:
-    """Poll MemAvailable until it clears ``min_available_kb`` or time runs out.
+    """Poll MemAvailable until it clears ``min_available_kb`` (adjusted for the
+    watermark reserve) for ``stable_readings`` polls in a row, or time runs out.
 
-    Returns ``(reached, last_reading)``. A read that fails counts as "not
-    reached yet" rather than raising or aborting early — SSH can be flaky for
-    a beat right after a container was force-stopped — but it still consumes
-    the timeout budget: a box that never answers at all times out exactly
-    like a box that never frees memory, which is the correct outcome (no
-    signal is not permission to start blind).
+    Two refinements on top of "poll MemAvailable once":
+
+    **GPU-visible approximation, not raw MemAvailable.** ``nvidia-smi
+    --query-gpu=memory.used`` returns ``[N/A]`` on the GB10 — verified live,
+    there is no direct per-process GPU-memory number to read on this box, so
+    there is no way to ask the driver "how much is free" the way an x86 box
+    with discrete VRAM could. What IS known: ``vm.min_free_kbytes`` (the
+    watermark this module lowers and restores) is memory the kernel never
+    hands to *any* allocation, engine included, regardless of what
+    MemAvailable estimates. Subtracting the currently-active watermark from
+    the MemAvailable reading before comparing it to ``min_available_kb`` is
+    therefore a closer stand-in for "what the engine can actually get" than
+    the raw kernel figure — but it IS an approximation, not a measurement of
+    the engine's own view. It has not been validated against an actual vLLM
+    "Free memory on device cuda:0" reading; that comparison is a live-test
+    task, not something provable from here.
+
+    **Stability window, not a single crossing.** A reading that clears the
+    threshold once and then drops back (a container mid-teardown still
+    releasing, the dropper's own ``sync`` catching up) is not evidence the
+    box is actually ready — it is the same kind of premature-success signal
+    that caused the original bug (prep reported success, start went ahead,
+    OOM three minutes later). ``stable_readings`` consecutive polls must
+    each clear the (watermark-adjusted) threshold before the wait returns
+    success; any poll that falls back below it resets the streak to zero.
+
+    Returns ``(reached, last_reading)`` — ``last_reading`` is the raw
+    MemAvailable value (not watermark-adjusted), which is what
+    :class:`PrepHandle` records for operators to read directly against
+    ``/proc/meminfo``. A read that fails counts as "streak broken, not
+    reached yet" rather than raising or aborting early — SSH can be flaky
+    for a beat right after a container was force-stopped — but it still
+    consumes the timeout budget: a box that never answers at all times out
+    exactly like a box that never frees memory, which is the correct outcome
+    (no signal is not permission to start blind).
 
     ``sleep`` and ``now`` are injectable so tests can drive the timeout
     deterministically without a real wall-clock wait.
     """
     deadline = now() + timeout_seconds
     last: int | None = None
+    consecutive = 0
+    stable_readings = max(1, stable_readings)
     while True:
         last = await read_mem_available_kb(host)
-        if last is not None and last >= min_available_kb:
-            return True, last
+        effective = (last - watermark_kb) if last is not None else None
+        if effective is not None and effective >= min_available_kb:
+            consecutive += 1
+            if consecutive >= stable_readings:
+                return True, last
+        else:
+            consecutive = 0
         if now() >= deadline:
             return False, last
         await sleep(poll_interval)
@@ -495,10 +543,22 @@ async def prepare_host_memory(
         await _store_handle(handle)
 
         if min_available_kb:
+            # The watermark actually in effect on the box right now — lowered
+            # if step 3 above succeeded, otherwise whatever was read as the
+            # original. Either way it is memory the kernel will not hand to
+            # the engine, so it belongs in the GPU-visible approximation
+            # (see _wait_for_available_memory's docstring).
+            active_watermark_kb = (
+                handle.lowered_to_kb
+                if handle.lowered_to_kb is not None
+                else (handle.original_watermark_kb or 0)
+            )
             reached, last = await _wait_for_available_memory(
                 host,
                 min_available_kb=int(min_available_kb),
                 timeout_seconds=wait_timeout_seconds,
+                watermark_kb=active_watermark_kb,
+                stable_readings=_wait_stable_readings(),
             )
             handle.mem_wait_threshold_kb = int(min_available_kb)
             handle.mem_available_after_wait_kb = last
@@ -638,6 +698,19 @@ def _wait_timeout_seconds() -> int:
         return int(settings.memory_prep_wait_timeout_seconds)
     except Exception:  # noqa: BLE001 — a bad/missing setting must not block a start
         return DEFAULT_MEM_WAIT_TIMEOUT
+
+
+def _wait_stable_readings() -> int:
+    """``settings.memory_prep_stable_readings`` when set, else the module
+    default. Same pattern as :func:`_wait_timeout_seconds` — a function so
+    tests can monkeypatch ``settings`` without reimporting this module, and
+    a bad/missing value falls back rather than blocking a start."""
+    try:
+        from app.config import settings
+
+        return int(settings.memory_prep_stable_readings)
+    except Exception:  # noqa: BLE001 — a bad/missing setting must not block a start
+        return DEFAULT_STABLE_READINGS
 
 
 async def finish_for_runtime(

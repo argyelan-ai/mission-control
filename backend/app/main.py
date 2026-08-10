@@ -59,6 +59,7 @@ from app.routers import (
     agent_task_status,
     agent_templates,
     agents,
+    ai_providers,
     automations,
     approvals,
     auth,
@@ -220,6 +221,17 @@ async def lifespan(app: FastAPI):
             await apply_channel_overrides(_cc_session)
     except Exception as e:
         logger.warning("channel overrides at startup failed (env defaults stay): %s", e)
+    # AI provider routing (embeddings / insights) — same three-layer contract
+    # as the channels above; without this the settings page would need a
+    # restart to take effect.
+    try:
+        from app.database import async_session_maker
+        from app.services.ai_provider_config import apply_ai_provider_overrides
+
+        async with async_session_maker() as _ai_session:
+            await apply_ai_provider_overrides(_ai_session)
+    except Exception as e:
+        logger.warning("ai provider overrides at startup failed (env defaults stay): %s", e)
     # Local Model Registry — refresh the curated local-model catalogue from the
     # configured registries. Inert unless settings.local_registry_sources is set.
     await local_registry_checker.start()
@@ -868,6 +880,7 @@ app.include_router(tags.router)
 app.include_router(secrets.router)
 app.include_router(slack.router)  # /api/v1/slack — Slack channel setup + connection test
 app.include_router(channels.router)  # /api/v1/channels — channel settings page + Telegram connection test
+app.include_router(ai_providers.router)  # /api/v1/ai-providers — provider routing for MC's own AI functions
 app.include_router(credentials.router)
 app.include_router(skills.router)
 app.include_router(clawhub.router)
