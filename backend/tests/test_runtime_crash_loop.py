@@ -1,4 +1,4 @@
-"""Crash-loop detection in the runtime watcher (PR 8).
+"""Crash-loop detection in the runtime watcher (PR 8, hardened by Task #24).
 
 The gap, live on the Spark: the sparkinfer compose stack ships
 ``restart: unless-stopped``. When the engine could not allocate its KV cache it
@@ -7,10 +7,22 @@ looks EXACTLY like a slow cold load: the endpoint is down, and the switch-grace
 marker deliberately suppresses the alarm. Docker knows the difference
 (``RestartCount``), so the watcher asks it.
 
-The two tests that matter are the pair: a real crash loop is stopped and
-reported, and a legitimately long load — the thing this could most easily
-break — is left completely alone.
+Task #24 (09.08.26): the ORIGINAL version of this feature let a log-pattern
+match stop the container on its own, and read raw ``docker logs --tail 200``
+without scoping it to the current boot. Both were live bugs — a container
+whose first attempt failed and then loaded cleanly on retry was killed mid-
+load (restarts 0→1, one log line was "enough"). This file's tests were
+extended for the fix: the decision is delta-only now (log content is
+reason-text, never a trigger), and logs are read scoped to the CURRENT boot
+via ``--since {{.State.StartedAt}}``, so a resolved failure from an earlier
+restart cannot be reported as today's cause.
+
+The tests that matter are the pairs: a real crash loop is stopped and
+reported, a legitimately long load is left completely alone, a log pattern
+below the restart threshold changes nothing, and a restart from outside the
+crash-loop window does not silently count towards today's delta.
 """
+import asyncio
 import json
 from contextlib import ExitStack
 
@@ -47,11 +59,21 @@ ERROR 08-08 00:12:41 [core_client.py:512] Engine core initialization failed. See
 
 
 class FakeDocker:
-    """A box whose `docker inspect` answers with a configurable RestartCount."""
+    """A box whose `docker inspect` answers with a configurable RestartCount.
 
-    def __init__(self, *, restart_count=0, logs=""):
+    ``stale_logs`` simulates the content of a PREVIOUS boot of the SAME
+    container (the in-place-restart concatenation problem, Task #24): it is
+    only visible in the reply when the command has no ``--since`` — exactly
+    how real ``docker logs`` behaves. ``logs`` is the CURRENT boot's content
+    and is always visible.
+    """
+
+    def __init__(self, *, restart_count=0, logs="", stale_logs="",
+                 started_at="2026-08-08T00:12:41Z"):
         self.restart_count = restart_count
         self.logs = logs
+        self.stale_logs = stale_logs
+        self.started_at = started_at
         self.commands: list[str] = []
         self.restart_policy = "unless-stopped"
         self.running = True
@@ -61,9 +83,11 @@ class FakeDocker:
         if "docker inspect" in command:
             if not self.running and "RestartCount" in command:
                 return ("", "No such container", 1)
-            return (f"{self.restart_count} 2026-08-08T00:12:41Z", "", 0)
+            return (f"{self.restart_count} {self.started_at}", "", 0)
         if "docker logs" in command:
-            return (self.logs, "", 0)
+            if "--since" in command:
+                return (self.logs, "", 0)
+            return (self.stale_logs + self.logs, "", 0)
         if command.startswith("docker update --restart=no"):
             self.restart_policy = "no"
             return ("", "", 0)
@@ -199,10 +223,12 @@ async def test_a_long_cold_load_is_never_touched(async_session, fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_the_log_pattern_alone_is_enough(async_session, fake_redis):
-    """A stack whose restart policy somebody already set to `no` crashes ONCE
-    and stays down. RestartCount barely moves, but the engine said in plain
-    text that it could not initialise — that is a failure, not a load."""
+async def test_a_pattern_match_below_the_restart_threshold_does_not_stop(async_session, fake_redis):
+    """This is the exact live incident (09.08.26, Task #24): restarts 0→1, one
+    failed first attempt, then a clean retry loading 92 GiB of weights. The
+    OLD code let the log pattern alone stop it. The decision must be
+    delta-only now — a single restart is normal, and logs must not even be
+    read for it (they are read only once the delta already says "loop")."""
     rt = await _mk_runtime(async_session, slug="one-shot", container="mc-one-shot")
     docker = FakeDocker(restart_count=0, logs=VLLM_OOM_LOG)
     watcher = RuntimeWatcher(interval=90)
@@ -210,12 +236,79 @@ async def test_the_log_pattern_alone_is_enough(async_session, fake_redis):
     with _watcher_stack(docker, fake_redis):
         await mark_switching(rt.slug, "loading", "manual_start")
         await watcher.tick(session=async_session)   # baseline 0
-        docker.restart_count = 1                    # one restart → look at logs
+        docker.restart_count = 1                    # one restart, below threshold
         await watcher.tick(session=async_session)
 
+    assert not docker.ran("docker stop")
+    assert not docker.ran("docker logs")  # never even read below threshold
+    assert await _events(async_session, "runtime.crash_loop_stopped") == []
+
+
+@pytest.mark.asyncio
+async def test_since_scopes_the_reason_to_the_current_boot(async_session, fake_redis):
+    """A real, threshold-crossing loop (Docker's RestartCount does not lie) —
+    but the container was restarted IN PLACE, so its cumulative log carries a
+    stale, already-irrelevant error from a much earlier, unrelated boot
+    (before `.State.StartedAt` of the run being inspected now). Without
+    `--since` that stale line would be reported as "the" reason for today's
+    stop, which is misleading for whoever reads the event. With `--since` the
+    reason reflects only the current boot (falls back to the generic restart
+    count, since the current boot's own log has nothing alarming yet)."""
+    rt = await _mk_runtime(async_session, slug="restarted-in-place", container="mc-rip")
+    docker = FakeDocker(
+        restart_count=0,
+        logs="INFO 08-09 loading weights 12%",  # current boot: nothing alarming yet
+        stale_logs=VLLM_OOM_LOG + "\n",           # an old, resolved failure
+    )
+    watcher = RuntimeWatcher(interval=90)
+
+    with _watcher_stack(docker, fake_redis):
+        await mark_switching(rt.slug, "loading", "manual_start")
+        await watcher.tick(session=async_session)   # baseline 0
+        docker.restart_count = CRASH_LOOP_RESTART_THRESHOLD
+        await watcher.tick(session=async_session)
+
+    # The delta alone made this a real loop — it IS stopped, correctly.
+    assert docker.ran("docker stop mc-rip")
     events = await _events(async_session, "runtime.crash_loop_stopped")
     assert len(events) == 1
-    assert events[0].detail["log_pattern"] == "Engine core initialization failed"
+    # But the reason must not be the stale, unrelated error from before
+    # StartedAt — --since kept it out of the read entirely.
+    assert events[0].detail["log_pattern"] is None
+    assert "KV cache" not in events[0].detail["reason"]
+    assert events[0].detail["reason"] == f"{CRASH_LOOP_RESTART_THRESHOLD} Neustarts im Startfenster"
+    # Command-string proof that --since was actually used, keyed off the
+    # StartedAt this check itself read via `docker inspect`.
+    assert docker.ran(f"--since {docker.started_at}")
+
+
+@pytest.mark.asyncio
+async def test_restarts_outside_the_crash_loop_window_do_not_accumulate(async_session, fake_redis):
+    """A restart baseline that has aged out of CRASH_LOOP_WINDOW_SECONDS must
+    reset rather than keep contributing to today's delta — otherwise a box
+    that restarted once, weeks ago, for an unrelated and long-resolved
+    reason would need only ONE more restart today to look like a loop."""
+    rt = await _mk_runtime(async_session, slug="old-restart", container="mc-old-restart")
+    docker = FakeDocker(restart_count=1)
+    watcher = RuntimeWatcher(interval=90)
+
+    with _watcher_stack(
+        docker, fake_redis,
+        extra=[patch("app.services.runtime_watcher.CRASH_LOOP_WINDOW_SECONDS", 1)],
+    ):
+        await mark_switching(rt.slug, "loading", "manual_start")
+        await watcher.tick(session=async_session)  # baseline=1, TTL=1s
+
+        await asyncio.sleep(1.2)  # let the window expire
+
+        # If the old baseline (1) still applied, this delta would already be
+        # at threshold. Because the window expired, a fresh baseline (4) is
+        # captured on this tick instead, so the delta is 0.
+        docker.restart_count = 1 + CRASH_LOOP_RESTART_THRESHOLD
+        await watcher.tick(session=async_session)
+
+    assert not docker.ran("docker stop")
+    assert await _events(async_session, "runtime.crash_loop_stopped") == []
 
 
 @pytest.mark.asyncio

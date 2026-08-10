@@ -19,6 +19,23 @@ dies — or worse, comes up with a KV cache so small the model is useless. The
 manual fix was three commands before the start and two after. This module is
 those five commands, in a shape that cannot forget the "after" half.
 
+Why prepare also WAITS (PR 10)
+-------------------------------
+The five commands are not always enough by themselves. The live reboot test
+that motivated this: a crash-looped engine was stopped, but the crashed
+process still held ~100 GB of NVRM allocations three minutes later when MC's
+next start ran. The prep itself reported success — cache dropped, watermark
+lowered — and the start went ahead anyway, straight into the same failure:
+vLLM saw 11.58 GiB free out of 121.69 GiB total. Page cache and the watermark
+were never the problem that time; a slow OS-level reclaim after the kill was.
+So prepare additionally *waits*, up to a timeout, for ``MemAvailable`` (not
+MemFree — the dropper is still running and inflating MemFree with page cache
+that has not actually been reclaimed yet; MemAvailable already discounts
+that) to clear a threshold before it hands control back. A start that goes
+ahead anyway despite the timeout is the exact blind retry that produced the
+original failure, so the caller (``runtime_manager.start_runtime``) aborts
+instead — see :attr:`PrepHandle.mem_wait_timed_out`.
+
 How, without sudo
 -----------------
 MC's SSH user is in the ``docker`` group, which is root-equivalent on that box.
@@ -51,8 +68,10 @@ restore path itself runs in every exit path — success, failure and exception.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -78,6 +97,23 @@ _SHORT_TIMEOUT = 30
 #: A start window that has not finished after this long is not a start window
 #: any more — it is a crashed backend. The orphan sweep restores it.
 ORPHAN_MAX_AGE = timedelta(minutes=30)
+
+#: How long ``prepare_host_memory`` waits for MemAvailable to clear the
+#: threshold before giving up (PR 10). ``~3 min`` per the live reboot test:
+#: long enough for a killed engine's allocations to actually drain, short
+#: enough that a genuinely stuck box does not hold a start hostage forever.
+#: Overridable via ``settings.memory_prep_wait_timeout_seconds``.
+DEFAULT_MEM_WAIT_TIMEOUT = 180
+_MEM_WAIT_POLL_INTERVAL = 10
+
+#: Conservative floor when a runtime does not configure
+#: ``prestart_min_available_kb`` (PR 10). The schema has no
+#: gpu_memory_utilization/model-size column to derive a precise figure from,
+#: so this is deliberately generic: bigger than the smallest KV-cache-only
+#: failure observed in practice (~12 GiB, see test fixtures), small enough
+#: not to block a legitimately tight box. A runtime with a known footprint
+#: should configure its own value rather than lean on this default.
+DEFAULT_MIN_AVAILABLE_KB = 20 * 1024 * 1024  # 20 GiB
 
 #: Architectures the GB10 memory equation applies to. An x86 box with discrete
 #: VRAM does not size its KV cache against host MemFree, so touching its page
@@ -112,6 +148,16 @@ class PrepHandle:
     ssh_host: str | None = None
     ssh_user: str | None = None
     ssh_key_path: str | None = None
+    #: PR 10 — the MemAvailable floor this start waited for, or ``None`` when
+    #: no wait was requested (e.g. the runtime is not GB10-applicable).
+    mem_wait_threshold_kb: int | None = None
+    #: The last MemAvailable reading when the wait ended, whichever way.
+    mem_available_after_wait_kb: int | None = None
+    #: True when the wait timed out without reaching the threshold. The
+    #: caller (runtime_manager.start_runtime) must treat this as "abort the
+    #: start" — the whole point is no blind attempt on a box that never
+    #: actually freed up.
+    mem_wait_timed_out: bool = False
 
     @property
     def changed_anything(self) -> bool:
@@ -176,6 +222,33 @@ async def read_mem_free_kb(host: ResolvedHost | None) -> int | None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("memprep: MemFree unreadable: %s", exc)
+        return None
+    if exit_code != 0:
+        return None
+    try:
+        return int(stdout.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+async def read_mem_available_kb(host: ResolvedHost | None) -> int | None:
+    """MemAvailable in kB, or ``None`` when it could not be read.
+
+    MemAvailable, not MemFree, deliberately here — the opposite choice from
+    :func:`read_mem_free_kb`. That function reads what the ENGINE reads at
+    start time (pessimistic on purpose). This one is used only to decide
+    whether it is worth attempting a start at all, while the continuous
+    cache dropper is still running and inflating MemFree with page cache that
+    has not actually drained yet. MemAvailable already discounts that, which
+    is exactly the more honest number while waiting for a killed process's
+    allocations to clear.
+    """
+    try:
+        stdout, _, exit_code = await _ssh(
+            "awk '/^MemAvailable:/ {print $2}' /proc/meminfo", host=host, timeout=_SHORT_TIMEOUT
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memprep: MemAvailable unreadable: %s", exc)
         return None
     if exit_code != 0:
         return None
@@ -269,6 +342,38 @@ async def _stop_dropper(host: ResolvedHost | None) -> bool:
     return exit_code == 0
 
 
+async def _wait_for_available_memory(
+    host: ResolvedHost | None,
+    *,
+    min_available_kb: int,
+    timeout_seconds: int,
+    poll_interval: int = _MEM_WAIT_POLL_INTERVAL,
+    sleep=asyncio.sleep,
+    now=time.monotonic,
+) -> tuple[bool, int | None]:
+    """Poll MemAvailable until it clears ``min_available_kb`` or time runs out.
+
+    Returns ``(reached, last_reading)``. A read that fails counts as "not
+    reached yet" rather than raising or aborting early — SSH can be flaky for
+    a beat right after a container was force-stopped — but it still consumes
+    the timeout budget: a box that never answers at all times out exactly
+    like a box that never frees memory, which is the correct outcome (no
+    signal is not permission to start blind).
+
+    ``sleep`` and ``now`` are injectable so tests can drive the timeout
+    deterministically without a real wall-clock wait.
+    """
+    deadline = now() + timeout_seconds
+    last: int | None = None
+    while True:
+        last = await read_mem_available_kb(host)
+        if last is not None and last >= min_available_kb:
+            return True, last
+        if now() >= deadline:
+            return False, last
+        await sleep(poll_interval)
+
+
 # ── Applicability ────────────────────────────────────────────────────────────
 
 
@@ -331,6 +436,8 @@ async def prepare_host_memory(
     *,
     watermark_kb: int | None = None,
     slug: str | None = None,
+    min_available_kb: int | None = None,
+    wait_timeout_seconds: int = DEFAULT_MEM_WAIT_TIMEOUT,
 ) -> PrepHandle:
     """Free the box's memory for an imminent start. Never raises.
 
@@ -343,10 +450,16 @@ async def prepare_host_memory(
     3. lower the watermark (only when a target is configured AND it is actually
        lower — "lowering" to a higher value would be a silent config change),
     4. drop the page cache once,
-    5. start the continuous dropper for the load window.
+    5. start the continuous dropper for the load window,
+    6. (PR 10) when ``min_available_kb`` is given, wait for MemAvailable to
+       clear it — see :attr:`PrepHandle.mem_wait_timed_out` for what a
+       timeout means to the caller.
 
     A failure in any of 3–5 is logged and the start continues: this is an
-    optimisation of the conditions, not a precondition.
+    optimisation of the conditions, not a precondition. Step 6 is different —
+    a timeout is recorded on the handle precisely so the caller CAN turn it
+    into a precondition, because "the box reported free but was not" is the
+    live failure this exists to prevent.
     """
     handle = PrepHandle(
         host_key=host_key(host),
@@ -380,6 +493,24 @@ async def prepare_host_memory(
         await _drop_caches_once(host)
         handle.dropper_started = await _start_dropper(host)
         await _store_handle(handle)
+
+        if min_available_kb:
+            reached, last = await _wait_for_available_memory(
+                host,
+                min_available_kb=int(min_available_kb),
+                timeout_seconds=wait_timeout_seconds,
+            )
+            handle.mem_wait_threshold_kb = int(min_available_kb)
+            handle.mem_available_after_wait_kb = last
+            handle.mem_wait_timed_out = not reached
+            if not reached:
+                logger.warning(
+                    "memprep: %s on %s never reached %s kB available "
+                    "(last reading %s kB after %ss) — start must abort",
+                    slug or "runtime", handle.host_key, min_available_kb,
+                    last, wait_timeout_seconds,
+                )
+            await _store_handle(handle)
     except Exception:  # noqa: BLE001 — preparation is best-effort, the start is not
         logger.exception("memprep: preparation failed on %s", handle.host_key)
 
@@ -445,10 +576,16 @@ async def prepare_for_runtime(
         return None
 
     slug = runtime.get("slug") or runtime.get("id")
+    # PR 10: a runtime with a known footprint configures its own floor;
+    # everything else falls back to the conservative default rather than
+    # skipping the wait entirely (see DEFAULT_MIN_AVAILABLE_KB).
+    min_available_kb = runtime.get("prestart_min_available_kb") or DEFAULT_MIN_AVAILABLE_KB
     handle = await prepare_host_memory(
         host,
         watermark_kb=runtime.get("prestart_watermark_kb"),
         slug=str(slug) if slug else None,
+        min_available_kb=min_available_kb,
+        wait_timeout_seconds=_wait_timeout_seconds(),
     )
     await _emit(
         "runtime.memory_prep_started",
@@ -466,9 +603,41 @@ async def prepare_for_runtime(
             "watermark_original_kb": handle.original_watermark_kb,
             "watermark_lowered_to_kb": handle.lowered_to_kb,
             "dropper_started": handle.dropper_started,
+            "mem_available_after_wait_kb": handle.mem_available_after_wait_kb,
+            "mem_wait_threshold_kb": handle.mem_wait_threshold_kb,
         },
     )
+    if handle.mem_wait_timed_out:
+        # A separate, unambiguous event: "memory_prep_started" above is
+        # accurate (cache and watermark WERE touched) but does not by itself
+        # say the start is about to be aborted — this one does.
+        await _emit(
+            "runtime.memory_prep_timeout",
+            f"{slug}: Box-Speicher nach {_wait_timeout_seconds()}s immer noch nicht "
+            f"frei ({(handle.mem_available_after_wait_kb or 0) // 1024} MiB verfügbar, "
+            f"benötigt {(handle.mem_wait_threshold_kb or 0) // 1024} MiB) — Start wird "
+            f"abgebrochen statt blind zu versuchen",
+            severity="warning",
+            detail={
+                "slug": slug,
+                "host": handle.host_key,
+                "mem_available_after_wait_kb": handle.mem_available_after_wait_kb,
+                "mem_wait_threshold_kb": handle.mem_wait_threshold_kb,
+            },
+        )
     return handle
+
+
+def _wait_timeout_seconds() -> int:
+    """``settings.memory_prep_wait_timeout_seconds`` when set, else the
+    module default. A function, not a module-level constant, so tests can
+    monkeypatch ``settings`` without reimporting this module."""
+    try:
+        from app.config import settings
+
+        return int(settings.memory_prep_wait_timeout_seconds)
+    except Exception:  # noqa: BLE001 — a bad/missing setting must not block a start
+        return DEFAULT_MEM_WAIT_TIMEOUT
 
 
 async def finish_for_runtime(
