@@ -37,7 +37,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.runtime import Runtime
-from app.services import host_memory_prep, runtime_grace, runtime_ownership
+from app.services import address_classify, host_memory_prep, runtime_grace, runtime_ownership
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -193,9 +193,19 @@ def add_vllm_runtime(
 
 def _host_ip(host: ResolvedHost | None) -> str:
     """IP/hostname for endpoint construction — the runtime's host or the
-    classic settings fallback (ADR-048)."""
-    if host is not None and host.ssh_host:
-        return host.ssh_host
+    classic settings fallback (ADR-048).
+
+    Prefers the host's Tailscale address over ``ssh_host`` when one is on
+    file (address_classify.preferred_endpoint_host) — the live incident this
+    guards against: an endpoint built from a box's LAN IP answers SSH from
+    the backend container fine but silently fails HTTP calls from a host
+    agent when a Tailscale route hijacks that LAN IP on the Mac
+    (spark-tailscale-route-hijack-host-agents).
+    """
+    if host is not None and (host.ssh_host or host.tailscale_host):
+        return address_classify.preferred_endpoint_host(
+            host.ssh_host, host.tailscale_host
+        ) or ""
     return settings.dgx_ssh_host
 
 
@@ -2539,10 +2549,14 @@ async def search_lmstudio_catalog(query: str) -> list[dict]:
     if not query.strip():
         return []
     try:
+        from app.services.ai_provider_config import hf_auth_headers
+
+        headers = await hf_auth_headers()
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 "https://huggingface.co/api/models",
                 params={"search": query, "filter": "gguf", "author": "lmstudio-community", "limit": 20, "blobs": "true"},
+                headers=headers,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -2570,8 +2584,14 @@ async def search_lmstudio_catalog(query: str) -> list[dict]:
 async def get_hf_repo_files(repo_id: str) -> dict:
     """Fetches all GGUF files of a HuggingFace repo."""
     try:
+        from app.services.ai_provider_config import hf_auth_headers
+
+        headers = await hf_auth_headers()
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"https://huggingface.co/api/models/{repo_id}?blobs=true")
+            resp = await client.get(
+                f"https://huggingface.co/api/models/{repo_id}?blobs=true",
+                headers=headers,
+            )
             if resp.status_code == 404:
                 return {"error": "Repo nicht gefunden"}
             resp.raise_for_status()
@@ -2593,14 +2613,29 @@ async def get_hf_repo_files(repo_id: str) -> dict:
 async def download_hf_file(
     repo_id: str, filename: str, host: ResolvedHost | None = None
 ) -> dict:
-    """Downloads a GGUF file from HuggingFace directly into the LM Studio models directory."""
+    """Downloads a GGUF file from HuggingFace directly into the LM Studio models directory.
+
+    With an ``hf_token`` secret stored, the curl carries an Authorization
+    header so gated repos work. Without one the command is byte-identical to
+    the pre-token version — anonymous, public repos only, exactly today's
+    behaviour. The header is only added when a token exists so an install that
+    never set one gains no new failure mode.
+    """
+    from app.services.ai_provider_config import get_hf_token
+
     author, _, model_name = repo_id.partition("/")
     dest_dir = f"~/.lmstudio/models/{author}/{model_name}"
     safe_name = (repo_id + "_" + filename).replace("/", "_").replace(" ", "_")
     log_path = f"/tmp/hf-download-{safe_name}.log"
+    token = await get_hf_token()
+    # NOTE: the header lands in the remote shell's argv, so the token is
+    # visible in `ps` to anyone with a shell on the GPU box. That box is
+    # single-operator by construction (the same person owns the token); a
+    # netrc/--config file would hide it from ps but leave it on disk instead.
+    auth_arg = f"-H 'Authorization: Bearer {token}' " if token else ""
     command = (
         f"mkdir -p {dest_dir} && "
-        f"nohup curl -L 'https://huggingface.co/{repo_id}/resolve/main/{filename}' "
+        f"nohup curl -L {auth_arg}'https://huggingface.co/{repo_id}/resolve/main/{filename}' "
         f"-o '{dest_dir}/{filename}' "
         f"> {log_path} 2>&1 &"
     )

@@ -53,6 +53,9 @@ import type {
   SlackConnectionResult,
   ChannelSettingsResponse,
   TelegramConnectionResult,
+  AiProviderSettingsResponse,
+  HfConnectionResult,
+  EmbeddingsConnectionResult,
   SystemMetrics,
   SystemStatus,
   Automation,
@@ -1557,6 +1560,26 @@ export const api = {
       request<TelegramConnectionResult>("/api/v1/channels/telegram/test-connection", {
         method: "POST",
       }),
+  },
+
+  // ── AI providers — routing for MC's own AI functions ────────────────────────
+  aiProviders: {
+    getSettings: () =>
+      request<AiProviderSettingsResponse>("/api/v1/ai-providers/settings"),
+    updateSettings: (settings: Record<string, string>) =>
+      request<{ ok: boolean; applied: string[] }>("/api/v1/ai-providers/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settings }),
+      }),
+    huggingfaceTestConnection: () =>
+      request<HfConnectionResult>("/api/v1/ai-providers/huggingface/test-connection", {
+        method: "POST",
+      }),
+    embeddingsTestConnection: () =>
+      request<EmbeddingsConnectionResult>(
+        "/api/v1/ai-providers/embeddings/test-connection",
+        { method: "POST" },
+      ),
   },
 
   // ── Discord (Phase 29-01 router; singleton guild) ───────────────────────────
