@@ -99,6 +99,72 @@ def test_start_hermes_session_invokes_tmux_new_session(bridge, tmp_path, monkeyp
     assert call["kwargs"].get("start_new_session") is True
 
 
+def test_start_hermes_session_does_not_swallow_entrypoint_output(bridge, tmp_path, monkeypatch):
+    """Task #25 follow-up: entrypoint.sh's stdout/stderr (including the WARN
+    line hermes-config-patch.py failures land on) used to go to DEVNULL —
+    a silently-failing config.yaml sync was invisible until Mark stumbled on
+    the stale model live. Popen must instead append to ENTRYPOINT_LOG."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_AGENT_TOKEN=abc123\n")
+    fake_entrypoint = tmp_path / "entrypoint.sh"
+    fake_entrypoint.write_text("#!/bin/bash\nexit 0\n")
+    fake_entrypoint.chmod(0o755)
+    fake_log = tmp_path / "logs" / "launchd.err"
+
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "ENTRYPOINT", fake_entrypoint)
+    monkeypatch.setattr(bridge, "ENTRYPOINT_LOG", fake_log)
+
+    session_states = iter([False, True])
+    monkeypatch.setattr(bridge, "is_session_running", lambda: next(session_states, True))
+
+    popen_calls = []
+
+    def fake_popen(cmd, *args, **kwargs):
+        popen_calls.append({"cmd": cmd, "kwargs": kwargs})
+        return MagicMock()
+
+    monkeypatch.setattr(bridge._sp, "Popen", fake_popen)
+
+    bridge.start_hermes_session()
+
+    assert len(popen_calls) == 1
+    kwargs = popen_calls[0]["kwargs"]
+    assert kwargs.get("stdout") != bridge._sp.DEVNULL
+    assert kwargs.get("stderr") != bridge._sp.DEVNULL
+    # Must be a real, writable file handle pointed at ENTRYPOINT_LOG.
+    assert kwargs["stdout"].name == str(fake_log)
+    assert kwargs["stdout"] is kwargs["stderr"]
+    # The log directory must exist and be append-mode (not truncated).
+    assert fake_log.parent.is_dir()
+    assert "a" in kwargs["stdout"].mode
+
+
+def test_start_hermes_session_entrypoint_log_appends_across_restarts(bridge, tmp_path, monkeypatch):
+    """A second /start (or /restart) must not erase diagnostics from the
+    previous run — that would defeat the whole point of logging a failed
+    sync (the operator checks the log AFTER noticing the stale model)."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_AGENT_TOKEN=abc123\n")
+    fake_entrypoint = tmp_path / "entrypoint.sh"
+    fake_entrypoint.write_text("#!/bin/bash\nexit 0\n")
+    fake_entrypoint.chmod(0o755)
+    fake_log = tmp_path / "logs" / "launchd.err"
+    fake_log.parent.mkdir(parents=True)
+    fake_log.write_text("[entrypoint] WARN: hermes-config-patch rc=1 (prior run)\n")
+
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "ENTRYPOINT", fake_entrypoint)
+    monkeypatch.setattr(bridge, "ENTRYPOINT_LOG", fake_log)
+    session_states = iter([False, True])
+    monkeypatch.setattr(bridge, "is_session_running", lambda: next(session_states, True))
+    monkeypatch.setattr(bridge._sp, "Popen", lambda *a, **kw: MagicMock())
+
+    bridge.start_hermes_session()
+
+    assert "prior run" in fake_log.read_text()
+
+
 def test_start_hermes_session_raises_when_env_missing(bridge, tmp_path, monkeypatch):
     nonexistent = tmp_path / "definitely-not-here.env"
     monkeypatch.setattr(bridge, "ENV_FILE", nonexistent)
