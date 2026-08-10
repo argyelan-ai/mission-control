@@ -130,6 +130,12 @@ class AgentUpdate(BaseModel):
     # Allow switching while the agent has `current_task_id` set. Default False
     # — caller must explicitly opt in via UI confirm modal.
     force_when_in_progress: bool | None = None
+    # Task #26 — the runtime/harness switch now auto-triggers the matching
+    # agent restart (container recreate / host process restart) instead of
+    # requiring a separate manual click. Default True keeps that automatic;
+    # set False to explicitly opt out (e.g. a caller that wants to batch
+    # several config changes before bouncing the agent once).
+    restart_after_switch: bool = True
     # ADR-056: the harness axis. When present in the PATCH body, it is passed to
     # the switch service as `new_harness`. A harness-only change (without
     # runtime_id) re-switches the agent onto its CURRENT runtime with the new
@@ -885,6 +891,9 @@ async def update_agent(
     # Remove runtime_id from changes so the generic setattr loop doesn't touch it.
     changes.pop("runtime_id", None)
     force_when_in_progress = bool(changes.pop("force_when_in_progress", False))
+    # Task #26 — popped like force_when_in_progress: it steers the switch
+    # service, it is not an Agent column.
+    restart_after_switch = bool(changes.pop("restart_after_switch", True))
 
     for k, v in changes.items():
         setattr(agent, k, v)
@@ -938,6 +947,7 @@ async def update_agent(
                 target_id,
                 new_harness=new_harness,
                 force_when_in_progress=force_when_in_progress,
+                restart_after_switch=restart_after_switch,
             )
             switch_summary = result_obj.to_dict()
         except RuntimeNotFoundError as e:

@@ -320,6 +320,21 @@ class SwitchResult:
     # can render the harness change alongside the runtime change.
     harness: str | None = None
     old_harness: str | None = None
+    # Task #26 — the switch now auto-triggers the agent restart/recreate that
+    # used to require a manual click. `restart_skipped` is True exactly when
+    # that restart was deliberately NOT run even though the switch itself
+    # succeeded (busy agent or `restart_after_switch=False`) — the DB/config
+    # side of the switch is still committed either way. The UI surfaces this
+    # so "switch succeeded" is never mistaken for "agent is already running
+    # the new model".
+    restart_skipped: bool = False
+    restart_skip_reason: str | None = None
+    # Distinct from restart_skipped: the restart was ATTEMPTED (not
+    # deliberately withheld) and the attempt itself errored. Per Task #26
+    # design, a restart failure is a "the agent still needs a manual bump"
+    # problem, not a "the switch was bad" problem — the switch stays
+    # committed and this is reported instead of rolling everything back.
+    restart_failed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -332,6 +347,9 @@ class SwitchResult:
             "health": self.health or None,
             "harness": self.harness,
             "old_harness": self.old_harness,
+            "restart_skipped": self.restart_skipped,
+            "restart_skip_reason": self.restart_skip_reason,
+            "restart_failed": self.restart_failed,
         }
 
 
@@ -354,6 +372,21 @@ def _runtime_summary(rt: Runtime | None) -> dict[str, Any] | None:
 def is_agent_busy(agent: Agent) -> bool:
     """Truthy when the agent has an active task assignment."""
     return getattr(agent, "current_task_id", None) is not None
+
+
+def _restart_skip_reason(agent: Agent, *, restart_after_switch: bool) -> str | None:
+    """None when the post-switch restart should run; else the user-facing
+    reason it was skipped. Busy takes precedence over the flag in the message
+    (it is the more actionable fact), but either alone is sufficient to skip.
+    """
+    if is_agent_busy(agent):
+        return (
+            f"Task {agent.current_task_id} läuft noch — Neustart übersprungen. "
+            f"Modell wechselt erst beim nächsten manuellen oder automatischen Neustart."
+        )
+    if not restart_after_switch:
+        return "restart_after_switch=false — Neustart bewusst übersprungen."
+    return None
 
 
 # Plugins that imply tool-use → if the runtime can't do tool-calls, warn.
@@ -525,8 +558,25 @@ async def switch_agent_runtime(
     force_when_in_progress: bool = False,
     new_harness: str | None = None,
     dry_run: bool = False,
+    restart_after_switch: bool = True,
 ) -> SwitchResult:
     """Atomically switch ``agent`` to ``new_runtime_id``.
+
+    Task #26: the restart/recreate that makes the switch actually take effect
+    (container respawn/recreate, or the host process restart) now happens
+    automatically as part of this call — callers no longer have to find a
+    separate restart button. Two things can still suppress it, in which case
+    the DB/config side of the switch is committed exactly as before but the
+    restart step is skipped and the reason is surfaced on the result /
+    activity event instead of being silently lost:
+
+      * ``restart_after_switch=False`` — explicit opt-out.
+      * the agent is busy (``current_task_id`` set). This only matters when
+        ``force_when_in_progress=True`` let the switch past the busy guard
+        below — restarting a busy agent's process/container would kill its
+        running task, so the safer default is to persist the new binding and
+        let a human (or a future automatic retry) trigger the restart once
+        the task is done.
 
     Raises:
         AgentNotSwitchableError: agent is host/openclaw.
@@ -668,12 +718,18 @@ async def switch_agent_runtime(
             session.add(agent)
             await session.commit()
             await session.refresh(agent)
+            # Task #26 — decide up front whether the restart step runs. A busy
+            # agent only reaches this point because force_when_in_progress
+            # let it past the guard above; restarting its process now would
+            # kill the running task, so the binding is saved but the restart
+            # is deferred and clearly flagged instead.
+            skip_reason = _restart_skip_reason(agent, restart_after_switch=restart_after_switch)
+
+            # Config render (agent.env) failing means the switch itself did
+            # NOT take effect — roll back exactly as before #26.
             try:
                 await sync_host_agent_model(agent, new_runtime, session=session)
-                await adapter.reload(agent)
             except Exception as e:
-                # Rollback the DB binding; agent.env keeps the last successful
-                # render (the failed reload never took effect).
                 agent.runtime_id = prev_runtime_id
                 agent.model = prev_model
                 agent.updated_at = utcnow()
@@ -682,24 +738,54 @@ async def switch_agent_runtime(
                 await session.refresh(agent)
                 await _emit_failure_event(
                     session, agent, old_runtime, new_runtime,
-                    reason=f"host reload failed: {e}",
+                    reason=f"host config render failed: {e}",
                     elapsed_ms=int((time.monotonic() - started_at) * 1000),
                 )
                 await publish_switch_progress(
-                    agent.id, "rolled_back", error=f"host reload failed: {e}"
+                    agent.id, "rolled_back", error=f"host config render failed: {e}"
                 )
                 raise
 
-            await _publish_terminal_remount(agent.id, image_changed=False)
-            await publish_switch_progress(agent.id, "done")
+            # Restart failing is different: agent.env already has the new
+            # binding rendered — the switch is real, only the process bounce
+            # itself needs a retry. Report it instead of undoing the switch
+            # (Task #26, item e).
+            restart_failed = False
+            restart_error: str | None = None
+            if skip_reason is None:
+                try:
+                    await adapter.reload(agent)
+                except Exception as e:
+                    restart_failed = True
+                    restart_error = str(e)
+                    logger.warning(
+                        "host restart after runtime switch failed for %s: %s",
+                        agent.name, e,
+                    )
+
+            if skip_reason is None and not restart_failed:
+                await _publish_terminal_remount(agent.id, image_changed=False)
+            if skip_reason:
+                progress_step = "restart_skipped"
+            elif restart_failed:
+                progress_step = "restart_failed"
+            else:
+                progress_step = "done"
+            await publish_switch_progress(agent.id, progress_step, error=restart_error)
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            if skip_reason:
+                note = f" — Neustart übersprungen: {skip_reason}"
+            elif restart_failed:
+                note = f" — Neustart fehlgeschlagen (Switch bleibt gespeichert): {restart_error}"
+            else:
+                note = ""
             await emit_event(
                 session,
                 "agent.runtime_switched",
                 f"{agent.name}: "
                 f"{old_runtime.slug if old_runtime else 'n/a'} → {new_runtime.slug} "
-                f"(host in-place)",
-                severity="info",
+                f"(host in-place){note}",
+                severity="warning" if restart_failed else "info",
                 agent_id=agent.id,
                 board_id=agent.board_id,
                 detail={
@@ -709,6 +795,10 @@ async def switch_agent_runtime(
                     "duration_ms": elapsed_ms,
                     "warnings": warnings,
                     "mode": "host_inplace",
+                    "restart_skipped": skip_reason is not None,
+                    "restart_skip_reason": skip_reason,
+                    "restart_failed": restart_failed,
+                    "restart_error": restart_error,
                 },
             )
             return SwitchResult(
@@ -718,9 +808,12 @@ async def switch_agent_runtime(
                 duration_ms=elapsed_ms,
                 warnings=warnings,
                 dry_run=False,
-                health={"healthy": True, "mode": "host_inplace"},
+                health={"healthy": skip_reason is None and not restart_failed, "mode": "host_inplace"},
                 harness=effective_new_harness,
                 old_harness=effective_old_harness,
+                restart_skipped=skip_reason is not None,
+                restart_skip_reason=skip_reason,
+                restart_failed=restart_failed,
             )
 
         # Step 5 — render new compose overlay BEFORE touching the container.
@@ -788,77 +881,106 @@ async def switch_agent_runtime(
         # respawn) whenever the effective target harness is omp — the
         # entrypoint then re-runs bootstrap and emits a fresh models.yml,
         # mirroring the ADR-054 watcher's docker-restart mechanism.
-        await publish_switch_progress(agent.id, "restarting")
-        restart_result = restart_docker_agent_container(
-            agent,
-            force_recreate=image_change,
-            respawn_window_only=(not image_change and effective_new_harness != "omp"),
-        )
-        status = restart_result.get("status", "")
-        if status.startswith("error"):
-            await _rollback(session, agent, snapshot_old_runtime_id, image_change, old_harness=snapshot_old_harness)
-            await _emit_failure_event(
-                session, agent, old_runtime, new_runtime,
-                reason=f"container restart failed: {status}", elapsed_ms=int((time.monotonic() - started_at) * 1000),
+        #
+        # Task #26 — a busy agent only reaches this point because
+        # force_when_in_progress let it past the earlier guard. Recreating
+        # its container now would kill the running task, so the restart is
+        # deferred (DB/config stay switched) instead of forced through.
+        skip_reason = _restart_skip_reason(agent, restart_after_switch=restart_after_switch)
+        health: dict[str, Any] = {}
+        restart_failed = False
+        restart_error: str | None = None
+        if skip_reason is None:
+            await publish_switch_progress(agent.id, "restarting")
+            restart_result = restart_docker_agent_container(
+                agent,
+                force_recreate=image_change,
+                respawn_window_only=(not image_change and effective_new_harness != "omp"),
             )
-            await publish_switch_progress(
-                agent.id, "rolled_back", error=f"container restart failed: {status}"
-            )
-            raise SwitchHealthCheckFailed(
-                f"Container-Neustart fehlgeschlagen ({status}) — Rollback ausgefuehrt."
-            )
+            status = restart_result.get("status", "")
+            if status.startswith("error"):
+                # Task #26 (e) — the restart COMMAND itself failing does not
+                # invalidate the switch: the DB/config already point at the
+                # new runtime, only the container bounce needs a retry.
+                # Report it instead of rolling back and skip the (pointless)
+                # health probe of a container we never restarted.
+                restart_failed = True
+                restart_error = f"container restart failed: {status}"
+                logger.warning(
+                    "container restart after runtime switch failed for %s: %s",
+                    agent.name, status,
+                )
+            else:
+                # Step 9 — wait for container to be reachable.
+                # D-12: respawn_mode delegates to tmux capture-pane polling instead of
+                # docker inspect, matching the respawn restart path above.
+                timeout = HEALTH_TIMEOUT_RECREATE if image_change else HEALTH_TIMEOUT_RESTART
+                # ADR-049: the omp runtime now runs omp's native TUI in Window 0 (not the
+                # headless bridge print). Anchor readiness on the TUI's prompt glyphs via
+                # pane scrape regardless of image_change — the initial openclaude→omp
+                # switch is cross-image (respawn_mode=False), whose docker-inspect check
+                # would report healthy before the TUI is up. The glyphs match the omp
+                # chat prompt box ("╭─" frame + "❯" input) shown after setup-wizard skip.
+                is_omp = (
+                    effective_new_harness == "omp"
+                    if effective_new_harness
+                    else new_runtime.runtime_type == "omp"
+                )
+                await publish_switch_progress(agent.id, "waiting_healthy")
+                health = await wait_for_agent_healthy(
+                    agent,
+                    timeout=timeout,
+                    respawn_mode=(not image_change),
+                    ready_signals=("╭─", "❯") if is_omp else None,
+                )
+                if not health.get("healthy"):
+                    # Unlike the restart-command failure above, this is the
+                    # existing (pre-#26) safety net: the container DID
+                    # restart but never came up healthy on the new runtime —
+                    # that is evidence the new runtime itself is broken, so
+                    # rolling back to the last known-good binding stays the
+                    # right call. Behaviour intentionally unchanged.
+                    await _rollback(session, agent, snapshot_old_runtime_id, image_change, old_harness=snapshot_old_harness)
+                    await _emit_failure_event(
+                        session, agent, old_runtime, new_runtime,
+                        reason=f"health check failed: {health.get('reason')}",
+                        elapsed_ms=int((time.monotonic() - started_at) * 1000),
+                    )
+                    await publish_switch_progress(
+                        agent.id,
+                        "rolled_back",
+                        error=f"health check failed: {health.get('reason')}",
+                    )
+                    raise SwitchHealthCheckFailed(
+                        f"Health-Check nach Restart fehlgeschlagen "
+                        f"({health.get('reason')}) — Rollback ausgefuehrt."
+                    )
 
-        # Step 9 — wait for container to be reachable.
-        # D-12: respawn_mode delegates to tmux capture-pane polling instead of
-        # docker inspect, matching the respawn restart path above.
-        timeout = HEALTH_TIMEOUT_RECREATE if image_change else HEALTH_TIMEOUT_RESTART
-        # ADR-049: the omp runtime now runs omp's native TUI in Window 0 (not the
-        # headless bridge print). Anchor readiness on the TUI's prompt glyphs via
-        # pane scrape regardless of image_change — the initial openclaude→omp
-        # switch is cross-image (respawn_mode=False), whose docker-inspect check
-        # would report healthy before the TUI is up. The glyphs match the omp
-        # chat prompt box ("╭─" frame + "❯" input) shown after setup-wizard skip.
-        is_omp = (
-            effective_new_harness == "omp"
-            if effective_new_harness
-            else new_runtime.runtime_type == "omp"
-        )
-        await publish_switch_progress(agent.id, "waiting_healthy")
-        health = await wait_for_agent_healthy(
-            agent,
-            timeout=timeout,
-            respawn_mode=(not image_change),
-            ready_signals=("╭─", "❯") if is_omp else None,
-        )
-        if not health.get("healthy"):
-            await _rollback(session, agent, snapshot_old_runtime_id, image_change, old_harness=snapshot_old_harness)
-            await _emit_failure_event(
-                session, agent, old_runtime, new_runtime,
-                reason=f"health check failed: {health.get('reason')}",
-                elapsed_ms=int((time.monotonic() - started_at) * 1000),
-            )
-            await publish_switch_progress(
-                agent.id,
-                "rolled_back",
-                error=f"health check failed: {health.get('reason')}",
-            )
-            raise SwitchHealthCheckFailed(
-                f"Health-Check nach Restart fehlgeschlagen "
-                f"({health.get('reason')}) — Rollback ausgefuehrt."
-            )
+                # Step 11 — broadcast for Sessions auto-remount BEFORE the activity event.
+                await _publish_terminal_remount(agent.id, image_changed=image_change)
 
-        # Step 11 — broadcast for Sessions auto-remount BEFORE the activity event.
-        await _publish_terminal_remount(agent.id, image_changed=image_change)
-        await publish_switch_progress(agent.id, "done")
+        if skip_reason:
+            progress_step = "restart_skipped"
+        elif restart_failed:
+            progress_step = "restart_failed"
+        else:
+            progress_step = "done"
+        await publish_switch_progress(agent.id, progress_step, error=restart_error)
 
         # Step 12 — success event.
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        if skip_reason:
+            note = f" — Neustart übersprungen: {skip_reason}"
+        elif restart_failed:
+            note = f" — Neustart fehlgeschlagen (Switch bleibt gespeichert): {restart_error}"
+        else:
+            note = ""
         await emit_event(
             session,
             "agent.runtime_switched",
             f"{agent.name}: "
-            f"{old_runtime.slug if old_runtime else 'n/a'} → {new_runtime.slug}",
-            severity="info",
+            f"{old_runtime.slug if old_runtime else 'n/a'} → {new_runtime.slug}{note}",
+            severity="warning" if restart_failed else "info",
             agent_id=agent.id,
             board_id=agent.board_id,
             detail={
@@ -867,6 +989,10 @@ async def switch_agent_runtime(
                 "image_switched": image_change,
                 "duration_ms": elapsed_ms,
                 "warnings": warnings,
+                "restart_skipped": skip_reason is not None,
+                "restart_skip_reason": skip_reason,
+                "restart_failed": restart_failed,
+                "restart_error": restart_error,
             },
         )
 
@@ -879,6 +1005,9 @@ async def switch_agent_runtime(
             dry_run=False,
             health=dict(health),
             harness=effective_new_harness,
+            restart_skipped=skip_reason is not None,
+            restart_skip_reason=skip_reason,
+            restart_failed=restart_failed,
             old_harness=effective_old_harness,
         )
 
