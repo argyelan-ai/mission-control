@@ -311,6 +311,13 @@ class Settings(BaseSettings):
     # switch-grace state — planned switches stay silent either way.
     runtime_auto_recovery_enabled: bool = True
 
+    # Pre-start memory prep wait (PR 10): after dropping the page cache and
+    # lowering the watermark, prepare_for_runtime additionally waits up to
+    # this long for MemAvailable to clear its threshold before handing
+    # control back — see app/services/host_memory_prep.py. ~3 min matches the
+    # live reboot test that motivated it.
+    memory_prep_wait_timeout_seconds: int = 180
+
     # CLI Tool Updates — periodic check of installed vs. pinned vs. latest
     # upstream CLI tool versions (openclaude/claude/omp). 0 = disabled.
     cli_update_check_interval: int = 21600  # 6 hours

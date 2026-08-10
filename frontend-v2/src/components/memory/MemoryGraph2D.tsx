@@ -36,6 +36,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -58,6 +59,7 @@ import {
   nodeRadiusFromLinkCount,
 } from "./graphConfig";
 import { computeCommunities } from "@/lib/graphLouvain";
+import { useContainerSize } from "@/hooks/useContainerSize";
 import { C } from "@/lib/colors";
 
 // ── Public imperative handle ──────────────────────────────────────────────────
@@ -138,9 +140,21 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
       traversalEdge,
       matchingNodeIds,
       colorMode = "type",
+      className,
     },
     ref,
   ) {
+    // Task #13: react-force-graph-2d/force-graph defaults canvas width/height
+    // to window.innerWidth/innerHeight when no explicit props are given, and
+    // never re-measures on resize (verified in node_modules/force-graph/src/
+    // force-graph.js — no `resize` listener at all). In iOS PWA standalone
+    // mode window.innerHeight lies (reports ~793px vs the real 852px — see
+    // the ios-pwa-lvh-viewport finding), so the canvas would freeze at the
+    // wrong size forever. Fix: measure OUR OWN wrapper div (which lives
+    // under the app-shell's already-correct height chain) via ResizeObserver
+    // and push explicit width/height into ForceGraph2D instead.
+    const { ref: containerRef, size } = useContainerSize<HTMLDivElement>();
+
     // M13: Cap devicePixelRatio to 2 so the canvas never exceeds iOS's 16M px
     // limit. force-graph reads window.devicePixelRatio directly on each render;
     // we shadow it once on mount and restore on unmount to avoid affecting other
@@ -538,33 +552,45 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     // on drag-end), so we don't need any custom mousemove logic.
 
     return (
-      <ForceGraph2D
-        ref={fgRef}
-        graphData={graphData}
-        // ── Presentation ──────────────────────────────────────────────────────
-        backgroundColor="rgba(0,0,0,0)"
-        nodeRelSize={1} // ignored — we draw our own discs via nodeCanvasObject
-        nodeLabel={nodeLabel}
-        nodeCanvasObject={drawNode}
-        nodeCanvasObjectMode={() => "replace"}
-        nodePointerAreaPaint={nodePointerAreaPaint}
-        // ── Edges ─────────────────────────────────────────────────────────────
-        linkColor={linkColor}
-        linkWidth={linkWidth}
-        linkDirectionalParticles={0}
-        // ── Interaction ───────────────────────────────────────────────────────
-        onNodeClick={handleNodeClick}
-        onNodeHover={handleNodeHover}
-        enableNodeDrag={true}
-        enablePanInteraction={true}
-        enableZoomInteraction={true}
-        // Predictable sim termination so onEngineStop fires within ~2.5s.
-        // Library defaults are cooldownTicks=Infinity + cooldownTime=15000,
-        // which delays the auto-fit too long (the operator gave up waiting).
-        cooldownTicks={120}
-        cooldownTime={2500}
-        onEngineStop={handleEngineStop}
-      />
+      <div
+        ref={containerRef}
+        className={className ? `w-full h-full ${className}` : "w-full h-full"}
+      >
+        {/* Only mount ForceGraph2D once we have a real, container-derived
+            size — never let it fall through to its own window.innerWidth/
+            innerHeight default (see useContainerSize doc comment). */}
+        {size && size.width > 0 && size.height > 0 && (
+          <ForceGraph2D
+            ref={fgRef}
+            width={size.width}
+            height={size.height}
+            graphData={graphData}
+            // ── Presentation ────────────────────────────────────────────────────
+            backgroundColor="rgba(0,0,0,0)"
+            nodeRelSize={1} // ignored — we draw our own discs via nodeCanvasObject
+            nodeLabel={nodeLabel}
+            nodeCanvasObject={drawNode}
+            nodeCanvasObjectMode={() => "replace"}
+            nodePointerAreaPaint={nodePointerAreaPaint}
+            // ── Edges ───────────────────────────────────────────────────────────
+            linkColor={linkColor}
+            linkWidth={linkWidth}
+            linkDirectionalParticles={0}
+            // ── Interaction ─────────────────────────────────────────────────────
+            onNodeClick={handleNodeClick}
+            onNodeHover={handleNodeHover}
+            enableNodeDrag={true}
+            enablePanInteraction={true}
+            enableZoomInteraction={true}
+            // Predictable sim termination so onEngineStop fires within ~2.5s.
+            // Library defaults are cooldownTicks=Infinity + cooldownTime=15000,
+            // which delays the auto-fit too long (the operator gave up waiting).
+            cooldownTicks={120}
+            cooldownTime={2500}
+            onEngineStop={handleEngineStop}
+          />
+        )}
+      </div>
     );
   },
 );

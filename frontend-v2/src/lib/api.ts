@@ -1053,6 +1053,21 @@ export const api = {
       request<{ ok: boolean; action: string; agent: string }>(`/api/v1/host-agents/${id}/restart`, {
         method: "POST",
       }),
+    // Task #19 (2026-08-08): full process-level restart (orphan sweep +
+    // launchctl kickstart/unload-load fallback + pgrep-verified success) —
+    // stronger than restartHost above, which only kickstarts the plist and
+    // trusts launchctl's own exit code.
+    restartHostProcess: (id: string) =>
+      request<{
+        ok: boolean;
+        agent: string;
+        label: string;
+        orphans_killed: string[];
+        kickstart_output: string;
+        fallback_used: boolean;
+        process_running: boolean;
+        running_pids: string[];
+      }>(`/api/v1/host-agents/${id}/restart-process`, { method: "POST" }),
     startHost: (id: string) =>
       request<{ ok: boolean; action: string; agent: string }>(`/api/v1/host-agents/${id}/start`, {
         method: "POST",
