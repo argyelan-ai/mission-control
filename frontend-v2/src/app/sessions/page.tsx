@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -30,6 +31,24 @@ type AgentWithState = Agent & {
 function agentIsRunning(a: AgentWithState): boolean {
   if (a.agent_runtime === "host") return a.session_running === true;
   return a.container_state === "running";
+}
+
+// ── Last-selected-agent persistence ─────────────────────────────────────────
+// Same try/catch-wrapped localStorage pattern as runtimes/page.tsx's
+// CTX_STORAGE_KEY. ?agent=<id> (from the Agents list "open session" button)
+// takes precedence over the stored value — see the restore effect below.
+const LAST_AGENT_STORAGE_KEY = "mc-sessions-last-agent";
+
+function loadLastAgentId(): string | null {
+  try {
+    return localStorage.getItem(LAST_AGENT_STORAGE_KEY);
+  } catch { return null; }
+}
+
+function saveLastAgentId(id: string) {
+  try {
+    localStorage.setItem(LAST_AGENT_STORAGE_KEY, id);
+  } catch {}
 }
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
@@ -476,9 +495,10 @@ function AgentList({
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-export default function SessionsPage() {
+function SessionsPageContent() {
   const t = useTranslations("sessions");
   const qc = useQueryClient();
+  const searchParams = useSearchParams();
   const [selected, setSelected] = useState<AgentWithState | null>(null);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so the
@@ -553,13 +573,27 @@ export default function SessionsPage() {
     onSettled: () => setPendingId(null),
   });
 
-  // Auto-select the first running agent
+  // Restore the last-viewed agent on load: ?agent=<id> (Agents list "open
+  // session" button) wins over the localStorage memory, which wins over the
+  // previous fallback (first running agent, else the first in the list).
   useEffect(() => {
-    if (agents.length > 0 && !selected) {
-      const running = agents.find((a) => agentIsRunning(a));
-      setSelected(running ?? agents[0]);
-    }
-  }, [agents, selected]);
+    if (agents.length === 0 || selected) return;
+    const paramId = searchParams.get("agent");
+    const paramAgent = paramId ? agents.find((a) => a.id === paramId) : undefined;
+    if (paramAgent) { setSelected(paramAgent); return; }
+
+    const storedId = loadLastAgentId();
+    const storedAgent = storedId ? agents.find((a) => a.id === storedId) : undefined;
+    if (storedAgent) { setSelected(storedAgent); return; }
+
+    const running = agents.find((a) => agentIsRunning(a));
+    setSelected(running ?? agents[0]);
+  }, [agents, selected, searchParams]);
+
+  // Remember the selection for the next visit.
+  useEffect(() => {
+    if (selected) saveLastAgentId(selected.id);
+  }, [selected]);
 
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
@@ -676,5 +710,15 @@ export default function SessionsPage() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// useSearchParams requires a Suspense boundary in the app router (same
+// wrapping as /tasks's ?taskId= deep link).
+export default function SessionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SessionsPageContent />
+    </Suspense>
   );
 }
