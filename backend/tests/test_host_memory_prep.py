@@ -482,7 +482,8 @@ class _FakeClock:
 @pytest.mark.asyncio
 async def test_wait_for_available_memory_reaches_the_threshold(box, fake_redis):
     """The box reclaims memory over a few polls — the loop must return as
-    soon as it does, not spin until the timeout."""
+    soon as the (default) 2-reading stability streak is complete, not spin
+    until the timeout, and not stop on the FIRST crossing either."""
     box.mem_available_sequence = [10_000_000, 25_000_000, THRESHOLD, THRESHOLD]
     clock = _FakeClock()
     ssh, redis = _patched(box, fake_redis)
@@ -494,8 +495,64 @@ async def test_wait_for_available_memory_reaches_the_threshold(box, fake_redis):
 
     assert reached is True
     assert last == THRESHOLD
-    # Stopped polling the moment the threshold was crossed — two reads short
-    # of the box's fourth, unread value.
+    # Reads: 10M (streak 0), 25M (streak 0), THRESHOLD (streak 1 — not
+    # enough on its own), THRESHOLD (streak 2 — done). Three sleeps, not
+    # one: the default stability window (2) means the first crossing alone
+    # is not sufficient.
+    assert len(clock.sleeps) == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_available_memory_resets_the_streak_on_a_dip(box, fake_redis):
+    """Sabotage-relevant: a single reading above the threshold, immediately
+    followed by one back below it, must NOT count toward the stability
+    streak — this is the exact scenario the stability window exists for
+    (a reading that looked fine once and then kept draining)."""
+    box.mem_available_sequence = [
+        THRESHOLD,       # streak 1
+        10_000_000,      # dip — streak resets to 0
+        THRESHOLD,       # streak 1 again
+        THRESHOLD,       # streak 2 — done
+    ]
+    clock = _FakeClock()
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        reached, last = await _REAL_WAIT_FOR_AVAILABLE_MEMORY(
+            SPARK, min_available_kb=THRESHOLD, timeout_seconds=180,
+            stable_readings=2, sleep=clock.sleep, now=clock.now,
+        )
+
+    assert reached is True
+    assert last == THRESHOLD
+    # Four reads were needed, not two — the dip cost the streak everything
+    # it had built up, proving a lone good reading cannot short-circuit it.
+    assert len(clock.sleeps) == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_available_memory_subtracts_the_active_watermark(box, fake_redis):
+    """GPU-visible approximation: vm.min_free_kbytes is memory the kernel
+    never hands to any allocation, so a reading of raw MemAvailable that
+    LOOKS like it clears the threshold must still fail if watermark_kb
+    eats the margin — and pass again once MemAvailable actually clears
+    threshold + watermark."""
+    watermark = 5_000_000
+    box.mem_available_sequence = [
+        THRESHOLD,               # raw crosses, but effective = THRESHOLD - 5M < THRESHOLD
+        THRESHOLD + watermark,   # effective now exactly THRESHOLD — streak 1
+        THRESHOLD + watermark,   # streak 2 — done
+    ]
+    clock = _FakeClock()
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        reached, last = await _REAL_WAIT_FOR_AVAILABLE_MEMORY(
+            SPARK, min_available_kb=THRESHOLD, timeout_seconds=180,
+            watermark_kb=watermark, stable_readings=2,
+            sleep=clock.sleep, now=clock.now,
+        )
+
+    assert reached is True
+    assert last == THRESHOLD + watermark
     assert len(clock.sleeps) == 2
 
 
@@ -554,6 +611,43 @@ async def test_prepare_records_a_successful_wait_on_the_handle(box, fake_redis):
     assert handle.mem_available_after_wait_kb == THRESHOLD
     # The wait is additive — the existing dropper/watermark mechanics still ran.
     assert memprep.DROPPER_CONTAINER in box.containers
+
+
+@pytest.mark.asyncio
+async def test_prepare_threads_the_lowered_watermark_into_the_wait(box, fake_redis):
+    """prepare_host_memory must hand _wait_for_available_memory the watermark
+    that is ACTUALLY active on the box after step 3 — the lowered value, not
+    the pre-lowering original — since that is what the kernel is holding back
+    from the engine during the wait."""
+    box.mem_available_sequence = [THRESHOLD]
+    ssh, redis = _patched(box, fake_redis)
+    wait = AsyncMock(return_value=(True, THRESHOLD))
+    with ssh, redis, patch.object(memprep, "_wait_for_available_memory", new=wait):
+        await memprep.prepare_host_memory(
+            SPARK, watermark_kb=LOWERED_WATERMARK, min_available_kb=THRESHOLD,
+            slug="ds4-sparkinfer",
+        )
+
+    assert wait.await_args.kwargs["watermark_kb"] == LOWERED_WATERMARK
+    assert wait.await_args.kwargs["stable_readings"] == memprep.DEFAULT_STABLE_READINGS
+
+
+@pytest.mark.asyncio
+async def test_prepare_falls_back_to_the_original_watermark_when_lowering_did_not_happen(
+    box, fake_redis
+):
+    """No watermark_kb configured (or the write failed) → nothing was
+    lowered. The wait must still account for the ORIGINAL watermark — the
+    kernel reserves it either way — not treat it as zero."""
+    box.mem_available_sequence = [THRESHOLD]
+    ssh, redis = _patched(box, fake_redis)
+    wait = AsyncMock(return_value=(True, THRESHOLD))
+    with ssh, redis, patch.object(memprep, "_wait_for_available_memory", new=wait):
+        await memprep.prepare_host_memory(
+            SPARK, min_available_kb=THRESHOLD, slug="ds4-sparkinfer",
+        )
+
+    assert wait.await_args.kwargs["watermark_kb"] == CONFIGURED_WATERMARK
 
 
 @pytest.mark.asyncio
