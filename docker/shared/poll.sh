@@ -32,6 +32,11 @@ source "$POLL_LIB_DIR/turn-state.sh"
 # Bug 14: openclaude bricht bei bracketed-paste-end-marker, claude-cli braucht ihn.
 # shellcheck source=lib/ui-detect.sh
 source "$POLL_LIB_DIR/ui-detect.sh"
+# Harness-aware Kontext-Prozent-Scraper (siehe docker/mc-agent-base/lib/context-detect.sh)
+# — CTX-01 Nachzug: heartbeat() suchte frueher NUR Claudes `ctx: NN`-Format,
+# alle anderen Harnesses blieben dauerhaft bei 0%.
+# shellcheck source=lib/context-detect.sh
+source "$POLL_LIB_DIR/context-detect.sh"
 # Cached runtime-UI of tmux Window 0. Set by wait_for_clean_prompt() on every
 # successful detect, used by paste_and_submit() to decide whether to send the
 # `\e[201~` end-marker. Empty until first detection — paste_and_submit treats
@@ -318,22 +323,19 @@ paste_and_submit() {
 
 heartbeat() {
     local status="${1:-idle}"
-    # CTX-01 (Phase 6): scrape ctx% from claude statusline in tmux Window 0.
+    # CTX-01 (Phase 6) + CTX-01-Nachzug (2026-08-09): scrape ctx% from the
+    # harness's statusline in tmux Window 0 via scrape_context_pct()
+    # (docker/mc-agent-base/lib/context-detect.sh) — harness-aware, mit
+    # Fallback ueber alle bekannten Muster.
     # Strategy 1: pane_title (claude writes status-right here in newer versions).
-    # Strategy 2: capture-pane tail (older versions write to bottom status bar).
+    # Strategy 2: capture-pane tail (older versions / andere Harnesses schreiben
+    # in die untere Statuszeile).
     # On scrape failure: omit context_pct entirely — backend handler treats None
     # as "not reported this cycle" and preserves previous context_tokens value.
     local ctx_pct=""
-    ctx_pct=$(tmux display-message -t "${SESSION_NAME}:0" -p "#{pane_title}" 2>/dev/null \
-        | grep -oE 'ctx[: ]*[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+    ctx_pct=$(scrape_context_pct "$(tmux display-message -t "${SESSION_NAME}:0" -p "#{pane_title}" 2>/dev/null || true)")
     if [ -z "$ctx_pct" ]; then
-        ctx_pct=$(tmux capture-pane -t "${SESSION_NAME}:0" -p 2>/dev/null \
-            | tail -10 | grep -oE 'ctx[: ]*[0-9]+%?' | grep -oE '[0-9]+' | tail -1 || true)
-    fi
-    # Sanitize: must be 0-100 integer (defense-in-depth even though backend
-    # validates with Field(ge=0, le=100); avoid sending garbage).
-    if ! [[ "$ctx_pct" =~ ^[0-9]+$ ]] || [ "$ctx_pct" -gt 100 ] 2>/dev/null; then
-        ctx_pct=""
+        ctx_pct=$(scrape_context_pct "$(tmux capture-pane -t "${SESSION_NAME}:0" -p 2>/dev/null | tail -10 || true)")
     fi
     # Pass scraped value via env-var (CTX_PCT) instead of f-string interpolation
     # — defense against shell-metachar injection if pane_title is ever attacker-

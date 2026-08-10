@@ -33,12 +33,24 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, Iterator, Optional, TextIO
+
+# CTX-01 Nachzug Teil 2 (2026-08-10): context_detect.py liegt neben bridge.py
+# im selben Verzeichnis (docker/omp-bridge/context_detect.py, Docker-Image
+# kopiert beide nach /opt/omp-bridge/ — siehe Dockerfile). Python haengt das
+# ausfuehrende Skriptverzeichnis nur automatisch an sys.path an, wenn dieses
+# Skript direkt als __main__ laeuft — NICHT wenn Tests es per
+# sys.path.insert(0, BRIDGE_DIR) + `import bridge` laden (docker/omp-bridge/
+# tests/*.py). Explizites Voranstellen macht den Import in BEIDEN Faellen
+# robust.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import context_detect  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Completion contract (mirrors docs/omp-bridge-design.md §3.4)
@@ -1418,6 +1430,32 @@ def drive_live_run(
         return action
 
 
+def _build_heartbeat_payload(
+    status: str, capture_pane: Optional[Callable[[], str]]
+) -> dict:
+    """CTX-01 Nachzug Teil 2 (2026-08-10): mergt einen best-effort
+    Kontext-Prozentwert (aus der omp/openclaude-TUI-Statuszeile gescrapt) in
+    den Heartbeat-Body. Eigene Funktion (statt inline in `_default_send`),
+    damit sie OHNE Threading/urllib-Mocking direkt testbar ist.
+
+    `capture_pane` ist None solange der Aufrufer keinen Pane-Zugriff hat
+    (z.B. reine Status-Tests) — dann bleibt der Body wie vorher nur
+    `{"status": ...}`. Ein Scrape-Fehler (Pane-Capture wirft, Regex-Edge-Case)
+    darf den Heartbeat NIE reissen — geschluckt, Body faellt auf status-only
+    zurueck. `context_pct` wird WEGGELASSEN (nicht als 0 gesendet), wenn
+    scrape_context_pct() keinen Wert findet (z.B. frisch gestartete Session).
+    """
+    payload: dict = {"status": status}
+    if capture_pane is not None:
+        try:
+            pct = context_detect.scrape_context_pct(capture_pane(), harness="openclaude")
+            if pct is not None:
+                payload["context_pct"] = float(pct)
+        except Exception:  # noqa: BLE001 — scrape darf heartbeat nie reissen
+            pass
+    return payload
+
+
 def start_heartbeater(
     api_url: str,
     token: str,
@@ -1426,6 +1464,7 @@ def start_heartbeater(
     _task_active: Optional[Callable[[], bool]] = None,
     _send: Optional[Callable[[str], None]] = None,
     _stop_event: Optional["threading.Event"] = None,
+    _capture_pane: Optional[Callable[[], str]] = None,
 ) -> "threading.Event":
     """Daemon-Thread: POST /me/heartbeat wie poll.sh es tut (working/idle).
 
@@ -1435,6 +1474,10 @@ def start_heartbeater(
     (ADR-046) verliert seine Liveness-Basis. Status-Quelle ist der
     Task-Lock (gleiche Semantik wie der omp-recycler). Fehler werden
     geschluckt — Heartbeat darf nie den Driver reissen.
+
+    `_capture_pane` (CTX-01 Nachzug Teil 2): optionaler Pane-Text-Lieferant
+    (z.B. `NativeTuiController.capture_pane`) fuer den best-effort
+    Kontext-Prozent-Scrape, siehe `_build_heartbeat_payload`.
     Returns das Stop-Event (fuer Tests/Shutdown).
     """
     import threading
@@ -1448,7 +1491,7 @@ def start_heartbeater(
     def _default_send(status: str) -> None:
         req = urllib.request.Request(
             f"{api_url}/api/v1/agent/me/heartbeat",
-            data=json.dumps({"status": status}).encode(),
+            data=json.dumps(_build_heartbeat_payload(status, _capture_pane)).encode(),
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -2057,7 +2100,7 @@ def serve_loop(
     if _poll_fn is None:
         # Nur im echten Betrieb (Tests injizieren poll_fn und brauchen
         # keinen Netzwerk-Thread).
-        start_heartbeater(api_url, token)
+        start_heartbeater(api_url, token, _capture_pane=tui.capture_pane)
     last_attempt_id: Optional[str] = None
     ready_printed = False
     iterations = 0
@@ -2322,6 +2365,17 @@ class NativeTuiController:
         except Exception as e:  # noqa: BLE001 — a tmux hiccup must not crash the loop
             sys.stderr.write(f"[native] tmux {args[:2]} failed: {type(e).__name__}: {e}\n")
             return 1, ""
+
+    def capture_pane(self) -> str:
+        """Return the visible pane text of Window 0 (empty on failure).
+
+        CTX-01 Nachzug Teil 2: reuses the SAME `_run` channel (and therefore
+        the same timeout/error handling) as the paste-verify capture calls —
+        no new tmux invocation shape. Used by the heartbeat loop's
+        best-effort context-percent scrape.
+        """
+        rc, captured = self._run(["capture-pane", "-t", self.target, "-p"])
+        return captured if rc == 0 else ""
 
     # -- drive ---------------------------------------------------------------
 

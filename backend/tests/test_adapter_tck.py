@@ -45,7 +45,13 @@ _UI_LIB = _LIB_DIR / "ui-detect.sh"
 # Files that exist byte-identical in both lib copies (hand-maintained — no
 # build-time sync). A drift here is exactly how a fix lands in one image and
 # silently not the other.
-_DUPLICATED_LIB_FILES = ["turn-state.sh", "ui-detect.sh", "paste-verify.sh", "mc-pre-push.sh"]
+_DUPLICATED_LIB_FILES = [
+    "turn-state.sh",
+    "ui-detect.sh",
+    "paste-verify.sh",
+    "mc-pre-push.sh",
+    "context-detect.sh",
+]
 
 # Known scraping misclassifications: (cli, state) -> reason. These are real
 # heuristic gaps the TCK surfaces but does NOT paper over — the test asserts the

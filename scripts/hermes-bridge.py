@@ -27,6 +27,16 @@ import threading
 import time
 from pathlib import Path
 
+# CTX-01 Nachzug Teil 2 (2026-08-10): scripts/context_detect.py liegt im
+# selben Verzeichnis wie dieses Skript. Python haengt das ausfuehrende
+# Skriptverzeichnis nur automatisch an sys.path an, wenn dieses Skript direkt
+# als __main__ laeuft (launchd, siehe docker/hermes/com.mc.hermes-bridge.plist)
+# — NICHT wenn es via importlib.util.spec_from_file_location geladen wird
+# (backend/tests/test_hermes_bridge*.py tun genau das). Explizites Voranstellen
+# macht den Import in BEIDEN Faellen robust.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import context_detect  # noqa: E402
+
 # Ports: 18792 = free-code-bridge, 18793 = bridge-WS, 18794 = hermes-bridge
 PORT = 18794
 HOST = "127.0.0.1"  # L-C: localhost only, no public bind
@@ -976,6 +986,28 @@ def dispatch_poll_loop() -> None:
 HEARTBEAT_INTERVAL = int(os.environ.get("HERMES_HEARTBEAT_INTERVAL", "30"))
 
 
+def _heartbeat_body() -> bytes:
+    """CTX-01 Nachzug Teil 2 (2026-08-10): best-effort context_pct-Body fuer
+    den Hermes-Heartbeat, gescrapt aus der Hermes-Statuszeile
+    (`docker/mc-agent-base/lib/context-detect.sh`-Python-Zwilling, siehe
+    scripts/context_detect.py). Eigene Funktion (statt inline im Loop), damit
+    sie OHNE Threading/urllib-Mocking direkt testbar ist — analog zum
+    capture_pane-Monkeypatch-Muster, das die restlichen Tests dieser Datei
+    schon nutzen.
+
+    Ein Scrape-Fehler darf den Heartbeat NIE reissen — geschluckt, faellt auf
+    den alten leeren Body zurueck. `context_pct` wird WEGGELASSEN (nicht als
+    0 gesendet), wenn scrape_context_pct() keinen Wert findet.
+    """
+    try:
+        pct = context_detect.scrape_context_pct(capture_pane(), harness="hermes")
+        if pct is not None:
+            return json.dumps({"context_pct": float(pct)}).encode()
+    except Exception:  # noqa: BLE001 — scrape darf heartbeat nie reissen
+        pass
+    return b"{}"
+
+
 def heartbeat_loop() -> None:
     """Keep Hermes' last_seen_at fresh so it stays visible on the Sessions page.
 
@@ -1004,7 +1036,7 @@ def heartbeat_loop() -> None:
             try:
                 if is_session_running():
                     req = urllib.request.Request(
-                        url, data=b"{}", headers=headers, method="POST"
+                        url, data=_heartbeat_body(), headers=headers, method="POST"
                     )
                     with urllib.request.urlopen(req, timeout=10):
                         pass
