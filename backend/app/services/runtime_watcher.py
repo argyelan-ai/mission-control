@@ -54,6 +54,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
+from app.services import address_classify
 from app.services.activity import emit_event
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
@@ -282,13 +283,36 @@ class RuntimeWatcher:
                 consecutive_failures=fails,
             )
             if fails == UNREACHABLE_EVENT_THRESHOLD:
+                message = (
+                    f"{runtime.slug}: endpoint unreachable "
+                    f"({fails} consecutive probes)"
+                )
+                detail: dict = {"slug": runtime.slug, "endpoint": runtime.endpoint}
+                # Live incident this closes: an endpoint pointing at a box's
+                # LAN IP can fail from a host agent while the box itself is
+                # fine — a Tailscale route on the Mac hijacks that LAN IP
+                # (spark-tailscale-route-hijack-host-agents). If the host has
+                # a Tailscale address on file, say so with the exact fix
+                # instead of leaving the operator to rediscover it by hand.
+                try:
+                    host = await resolve_host_for_runtime(session, runtime)
+                except Exception:  # noqa: BLE001 — the alert must fire either way
+                    host = None
+                suggestion = address_classify.suggest_endpoint_fix(
+                    runtime.endpoint, getattr(host, "tailscale_host", None)
+                )
+                if suggestion:
+                    detail["suggested_endpoint"] = suggestion
+                    message += (
+                        f" — Endpoint ist eine LAN-Adresse, Host hat eine "
+                        f"Tailscale-Adresse: '{suggestion}' probieren"
+                    )
                 await emit_event(
                     session,
                     "runtime.unreachable",
-                    f"{runtime.slug}: endpoint unreachable "
-                    f"({fails} consecutive probes)",
+                    message,
                     severity="warning",
-                    detail={"slug": runtime.slug, "endpoint": runtime.endpoint},
+                    detail=detail,
                 )
             try:
                 await self._maybe_auto_recover(session, redis, runtime, fails)
