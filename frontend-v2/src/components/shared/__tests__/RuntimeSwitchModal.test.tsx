@@ -162,6 +162,75 @@ describe("RuntimeSwitchModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // Task #26 — the switch now auto-triggers the agent restart; the success
+  // panel must say plainly whether that restart ran, was skipped (busy
+  // agent / opt-out), or was attempted and failed.
+  it("shows a restart-pending note when the switch result reports restart_skipped", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "restart_skipped" });
+    const onConfirm = vi.fn().mockResolvedValue(
+      mkPreview({
+        dry_run: false,
+        restart_skipped: true,
+        restart_skip_reason: "Task abc123 läuft noch — Neustart übersprungen.",
+      }),
+    );
+    renderWithQuery(
+      <RuntimeSwitchModal
+        open
+        onClose={() => {}}
+        agent={mkAgent()}
+        targetRuntimeId="rt-new"
+        onConfirm={onConfirm}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByTestId("restart-skipped-note")).toBeInTheDocument());
+    expect(screen.getByText(/Neustart übersprungen/)).toBeInTheDocument();
+    expect(screen.queryByTestId("restart-done-note")).not.toBeInTheDocument();
+  });
+
+  it("shows a restart-failed note when the switch result reports restart_failed", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "restart_failed" });
+    const onConfirm = vi.fn().mockResolvedValue(
+      mkPreview({ dry_run: false, restart_failed: true }),
+    );
+    renderWithQuery(
+      <RuntimeSwitchModal
+        open
+        onClose={() => {}}
+        agent={mkAgent()}
+        targetRuntimeId="rt-new"
+        onConfirm={onConfirm}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByTestId("restart-failed-note")).toBeInTheDocument());
+    expect(screen.getByText(/Retry the restart manually/)).toBeInTheDocument();
+  });
+
+  it("shows the auto-restarted confirmation when neither skipped nor failed", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "done" });
+    const onConfirm = vi.fn().mockResolvedValue(mkPreview({ dry_run: false }));
+    renderWithQuery(
+      <RuntimeSwitchModal
+        open
+        onClose={() => {}}
+        agent={mkAgent()}
+        targetRuntimeId="rt-new"
+        onConfirm={onConfirm}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByTestId("restart-done-note")).toBeInTheDocument());
+    expect(screen.getByText(/Agent restarted automatically/)).toBeInTheDocument();
+  });
+
   it("polls runtimeSwitchProgress while submitting and highlights the active step", async () => {
     vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
     vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "restarting" });

@@ -295,6 +295,8 @@
       "switchButton": "Switch…",
       "switchedRebuilt": "Runtime switched — image rebuilt ({s}s)",
       "switched": "Runtime switched",
+      "switchedRestartPending": "Model switched — restart pending because a task is running",
+      "switchedRestartFailed": "Model switched, but the automatic restart failed — restart it manually",
       "apiKeySaved": "API key saved",
       "saveFailedMsg": "Failed to save: {msg}",
       "noRestart": "no restart",

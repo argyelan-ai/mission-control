@@ -265,6 +265,58 @@ export function RuntimeSwitchModal({
                     {completed.new_runtime.model_identifier ?? completed.new_runtime.display_name} on{" "}
                     {completed.new_runtime.display_name}
                   </span>
+                  {/* Task #26 — the switch DB/config change and the agent
+                      restart that makes it actually take effect are no
+                      longer implicitly the same thing to the operator: say
+                      out loud whether the restart ran. */}
+                  {completed.restart_failed ? (
+                    <div
+                      className="flex items-start gap-2 mt-1 p-2.5 rounded-lg text-[12px] text-left max-w-sm"
+                      style={{
+                        backgroundColor: "rgba(255,178,36,0.08)",
+                        border: "1px solid rgba(255,178,36,0.25)",
+                        color: STATUS_TEXT.warning,
+                      }}
+                      data-testid="restart-failed-note"
+                    >
+                      <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                      <div>
+                        <div className="font-medium">Restart failed</div>
+                        <div className="opacity-80">
+                          The switch is saved, but the automatic restart didn&apos;t go through
+                          {completed.restart_skip_reason ? ` (${completed.restart_skip_reason})` : ""}.
+                          Retry the restart manually.
+                        </div>
+                      </div>
+                    </div>
+                  ) : completed.restart_skipped ? (
+                    <div
+                      className="flex items-start gap-2 mt-1 p-2.5 rounded-lg text-[12px] text-left max-w-sm"
+                      style={{
+                        backgroundColor: "rgba(255,178,36,0.08)",
+                        border: "1px solid rgba(255,178,36,0.25)",
+                        color: STATUS_TEXT.warning,
+                      }}
+                      data-testid="restart-skipped-note"
+                    >
+                      <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                      <div>
+                        <div className="font-medium">Restart pending</div>
+                        <div className="opacity-80">
+                          {completed.restart_skip_reason ?? "The automatic restart was skipped."}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="flex items-center gap-1.5 mt-1 text-[12px]"
+                      style={{ color: STATUS_TEXT.online }}
+                      data-testid="restart-done-note"
+                    >
+                      <Check size={12} />
+                      Agent restarted automatically
+                    </div>
+                  )}
                   <button
                     onClick={() => {
                       setCompleted(null);

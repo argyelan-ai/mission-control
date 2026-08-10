@@ -791,11 +791,20 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
           qc.invalidateQueries({ queryKey: ["agents"] });
           qc.invalidateQueries({ queryKey: ["runtimes"] });
           qc.invalidateQueries({ queryKey: ["runtime-switch-preview", agentId] });
-          notify.success(
-            res._switch?.image_switched
-              ? t("switchedRebuilt", { s: Math.round((res._switch?.duration_ms ?? 0) / 1000) })
-              : t("switched"),
-          );
+          // Task #26 — the switch now auto-triggers the agent restart; make
+          // sure "switched" is never mistaken for "already running the new
+          // model" when that restart was skipped or failed.
+          if (res._switch?.restart_failed) {
+            notify.error(t("switchedRestartFailed"));
+          } else if (res._switch?.restart_skipped) {
+            notify.success(t("switchedRestartPending"));
+          } else {
+            notify.success(
+              res._switch?.image_switched
+                ? t("switchedRebuilt", { s: Math.round((res._switch?.duration_ms ?? 0) / 1000) })
+                : t("switched"),
+            );
+          }
           return res._switch ?? null;
         }}
       />
