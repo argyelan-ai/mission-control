@@ -84,13 +84,16 @@ class HermesAdapter(_SingletonEnvDirMixin):
         return await bootstrap_hermes_agent(session, agent, runtime)
 
     async def reload(self, agent):
-        # Reuse the host lifecycle path (SSH -> hermes-bridge /restart).
-        # NOTE: `_host_agent_lifecycle` takes the Agent object itself (not a
-        # slug string) — it derives the slug internally via
-        # `agent.name.lower().replace(" ", "-")`. Brief assumed `(slug, action)`;
-        # adapted here to match the real signature found in cli_terminal.py.
-        from app.routers.cli_terminal import _host_agent_lifecycle
-        return await _host_agent_lifecycle(agent, "restart")
+        # Full process-level restart (orphan sweep + kickstart/fallback +
+        # pgrep-verified success + Hermes worker-session respawn), NOT the
+        # plain launchd kickstart of _host_agent_lifecycle("restart"). That
+        # weaker path only bounces the hermes-bridge HTTP server — the tmux
+        # 'hermes-worker' session (where the actual model lives) survives
+        # untouched, so a runtime switch reported success while the TUI kept
+        # running the stale model (live bug 2026-08-08/09, Task #25/#26). See
+        # _host_agent_process_restart's docstring in cli_terminal.py.
+        from app.routers.cli_terminal import _host_agent_process_restart
+        return await _host_agent_process_restart(agent)
 
 
 class GrokAdapter(_SingletonEnvDirMixin):
@@ -125,8 +128,11 @@ class GrokAdapter(_SingletonEnvDirMixin):
         return await bootstrap_grok_agent(session, agent, runtime)
 
     async def reload(self, agent):
-        from app.routers.cli_terminal import _host_agent_lifecycle
-        return await _host_agent_lifecycle(agent, "restart")
+        # Full process-level restart (see HermesAdapter.reload for why the
+        # plain launchd kickstart is not enough) — harmless no-op extra work
+        # for grok (no worker-session split), same strong guarantee for free.
+        from app.routers.cli_terminal import _host_agent_process_restart
+        return await _host_agent_process_restart(agent)
 
 
 class KimiHostAdapter(_SingletonEnvDirMixin):
@@ -163,8 +169,9 @@ class KimiHostAdapter(_SingletonEnvDirMixin):
         return await bootstrap_kimi_agent(session, agent, runtime)
 
     async def reload(self, agent):
-        from app.routers.cli_terminal import _host_agent_lifecycle
-        return await _host_agent_lifecycle(agent, "restart")
+        # Full process-level restart — see HermesAdapter.reload.
+        from app.routers.cli_terminal import _host_agent_process_restart
+        return await _host_agent_process_restart(agent)
 
 
 class ClaudeHostAdapter:
@@ -245,8 +252,9 @@ class ClaudeHostAdapter:
         )
 
     async def reload(self, agent):
-        from app.routers.cli_terminal import _host_agent_lifecycle
-        return await _host_agent_lifecycle(agent, "restart")
+        # Full process-level restart — see HermesAdapter.reload.
+        from app.routers.cli_terminal import _host_agent_process_restart
+        return await _host_agent_process_restart(agent)
 
 
 class _GenericStagedHostAdapter:
@@ -307,8 +315,9 @@ class _GenericStagedHostAdapter:
         )
 
     async def reload(self, agent):
-        from app.routers.cli_terminal import _host_agent_lifecycle
-        return await _host_agent_lifecycle(agent, "restart")
+        # Full process-level restart — see HermesAdapter.reload.
+        from app.routers.cli_terminal import _host_agent_process_restart
+        return await _host_agent_process_restart(agent)
 
 
 class OpenClaudeHostAdapter(_GenericStagedHostAdapter):

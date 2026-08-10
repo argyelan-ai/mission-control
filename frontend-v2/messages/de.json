@@ -295,6 +295,8 @@
       "switchButton": "Wechseln…",
       "switchedRebuilt": "Runtime gewechselt — Image neu gebaut ({s}s)",
       "switched": "Runtime gewechselt",
+      "switchedRestartPending": "Modell umgestellt — Neustart steht aus, weil eine Task läuft",
+      "switchedRestartFailed": "Modell umgestellt, aber der automatische Neustart ist fehlgeschlagen — bitte manuell neu starten",
       "apiKeySaved": "API-Key gespeichert",
       "saveFailedMsg": "Speichern fehlgeschlagen: {msg}",
       "noRestart": "kein Neustart",

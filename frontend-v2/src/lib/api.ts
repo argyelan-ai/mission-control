@@ -950,7 +950,13 @@ export const api = {
     switchRuntime: (
       id: string,
       runtime_id: string | null,
-      opts?: { force_when_in_progress?: boolean; harness?: import("@/lib/types").Harness },
+      opts?: {
+        force_when_in_progress?: boolean;
+        harness?: import("@/lib/types").Harness;
+        /** Task #26 — default True (backend default). Pass False to opt
+         *  out of the automatic post-switch restart. */
+        restart_after_switch?: boolean;
+      },
     ) =>
       request<Agent & { _switch?: import("@/lib/types").RuntimeSwitchPreview }>(
         `/api/v1/agents/${id}`,
@@ -960,6 +966,9 @@ export const api = {
             runtime_id,
             force_when_in_progress: opts?.force_when_in_progress ?? false,
             ...(opts?.harness ? { harness: opts.harness } : {}),
+            ...(opts?.restart_after_switch === undefined
+              ? {}
+              : { restart_after_switch: opts.restart_after_switch }),
           }),
         },
       ),

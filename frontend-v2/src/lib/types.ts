@@ -2047,6 +2047,16 @@ export interface RuntimeSwitchPreview {
   warnings: string[];
   dry_run: boolean;
   health: { healthy?: boolean; reason?: string } | null;
+  /** Task #26 — the switch auto-triggers the matching agent restart. True
+   *  when that restart was deliberately NOT run (busy agent, or the caller
+   *  passed `restart_after_switch: false`) even though the switch itself
+   *  succeeded — the DB/config binding changed, the running process/
+   *  container has not (yet). */
+  restart_skipped?: boolean;
+  restart_skip_reason?: string | null;
+  /** Distinct from restart_skipped: the restart was attempted and errored.
+   *  The switch is still committed — only the restart needs a retry. */
+  restart_failed?: boolean;
 }
 
 export interface RuntimeLiveStatus {
@@ -2086,7 +2096,18 @@ export interface ProbeEndpointResult {
 }
 
 export interface RuntimeSwitchProgress {
-  step: "rendering" | "restarting" | "waiting_healthy" | "done" | "rolled_back" | null;
+  // Task #26 — "restart_skipped" (deliberately withheld, busy agent or
+  // restart_after_switch=false) and "restart_failed" (attempted, errored;
+  // switch itself stays committed) are new terminal states alongside "done".
+  step:
+    | "rendering"
+    | "restarting"
+    | "waiting_healthy"
+    | "done"
+    | "rolled_back"
+    | "restart_skipped"
+    | "restart_failed"
+    | null;
   error?: string | null;
   ts?: number;
 }
