@@ -62,7 +62,7 @@ def _make_workspace(tmp_path: Path) -> Path:
     work = tmp_path / "work"
     (work / "lib").mkdir(parents=True)
     (work / "bin").mkdir()
-    for lib in ("turn-state", "ui-detect", "paste-verify"):
+    for lib in ("turn-state", "ui-detect", "paste-verify", "context-detect"):
         (work / "lib" / f"{lib}.sh").write_text(": # stub\n")
     shim = work / "bin" / "tmux"
     shim.write_text(TMUX_SHIM)
