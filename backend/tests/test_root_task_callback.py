@@ -5,10 +5,17 @@ vanish into silence on completion: `_handle_callback_resume` only knows how
 to resume a *parent*, and `_notify_lead_on_completion` only ever ran from
 the review-approve path. Covers:
 
-- `_handle_callback_resume` delivers a callback (TaskComment + event) for a
-  genuinely root task instead of silently returning.
+- `_handle_callback_resume` genuinely delivers a callback to the
+  callback_agent_id via that agent's DM thread — verified end-to-end through
+  the SAME poll helpers `/agent/me/poll` uses, not just "a comment exists
+  somewhere". A first version of this fix wrote a deliverable TaskComment on
+  the finished task itself; that never reaches the callback agent because
+  `/me/poll` scopes comment delivery to `Task.assigned_agent_id`, which on a
+  root task is the WORKER — caught in review, see `_deliver_root_callback`'s
+  docstring in agent_task_status.py.
 - A direct in_progress -> done PATCH (no review involved) triggers
-  `_notify_lead_on_completion` when callback_agent_id is set explicitly.
+  `_notify_lead_on_completion` when callback_agent_id is set explicitly, and
+  that function's message genuinely reaches the lead's DM thread too.
 - `mc delegate` with no active parent task (root delegation) no longer 500s
   with a foreign-key violation on activity_events.
 """
@@ -29,16 +36,34 @@ from app.models.task import Task, TaskComment
 from .conftest import test_engine
 
 
+async def _poll_deliverable_comments(session: AsyncSession, agent: Agent) -> list[dict]:
+    """Exercise the real `/agent/me/poll` comment-delivery path for `agent`."""
+    from app.routers.agents import _collect_and_ack_new_comments
+    return await _collect_and_ack_new_comments(agent, session)
+
+
+async def _poll_new_messages(session: AsyncSession, agent: Agent) -> list[dict]:
+    """Exercise the real `/agent/me/poll` message-delivery path (DM threads
+    included) for `agent` — the same helper `_collect_new_messages` that
+    backs `/agent/me/poll` and `/agent/me/inbox`.
+    """
+    from app.routers.agents import _collect_new_messages
+    return await _collect_new_messages(session, agent, acked={})
+
+
 @pytest.mark.asyncio
 async def test_handle_callback_resume_delivers_root_callback_with_no_parent():
     """Root task (no parent_task_id) with callback_agent_id, going `done` →
-    _handle_callback_resume must deliver a callback instead of no-op'ing on
-    `if not parents: return`.
+    _handle_callback_resume must deliver a callback that the callback agent's
+    OWN poll actually surfaces — and must NOT surface anything new on the
+    finished worker's poll (that would re-wake an agent whose task is done
+    with a message addressed to someone else).
     """
     from app.routers.agent_scoped import _handle_callback_resume
 
     board_id = uuid.uuid4()
     lead_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
     root_task_id = uuid.uuid4()
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -48,12 +73,20 @@ async def test_handle_callback_resume_delivers_root_callback_with_no_parent():
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
             is_board_lead=True, scopes=["tasks:read"],
         ))
+        s.add(Agent(
+            id=worker_id, name="Worker", role="developer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        ))
         # Genuinely root: no parent_task_id at all. Created e.g. via
         # POST /boards/{board_id}/tasks (not `mc delegate`), callback_agent_id
-        # set explicitly by the caller — repro from #312.
+        # set explicitly by the caller — repro from #312. assigned_agent_id
+        # is the WORKER who did the work; callback_agent_id is the LEAD who
+        # must be told.
         s.add(Task(
             id=root_task_id, board_id=board_id, title="Root task",
             status="done", parent_task_id=None,
+            assigned_agent_id=worker_id,
             callback_agent_id=lead_id,
         ))
         await s.commit()
@@ -62,16 +95,17 @@ async def test_handle_callback_resume_delivers_root_callback_with_no_parent():
         with patch("app.routers.agent_task_status.emit_event", new_callable=AsyncMock) as mock_emit:
             await _handle_callback_resume(s, root_task)
 
-        # A deliverable TaskComment was written on the task itself.
+        # Audit-trail TaskComment exists on the task, but is deliberately
+        # NOT a deliverable type — it must not auto-push to anyone's poll.
         comment_result = await s.exec(
             select(TaskComment).where(TaskComment.task_id == root_task_id)
         )
         comments = list(comment_result.all())
-        assert len(comments) == 1, "Genau ein Callback-Kommentar erwartet"
-        assert comments[0].comment_type in DELIVERABLE_SYSTEM_TYPES, (
-            "comment_type muss deliverable sein, sonst kommt /me/poll nicht dran"
+        assert len(comments) == 1, "Genau ein Audit-Kommentar erwartet"
+        assert comments[0].comment_type not in DELIVERABLE_SYSTEM_TYPES, (
+            "Audit-Kommentar auf dem Task selbst darf NICHT deliverable sein — "
+            "sonst sieht der (fertige) Worker eine an den Lead adressierte Nachricht"
         )
-        assert "Root-Task" in comments[0].content
 
         # task.callback_received fired, addressed to the callback_agent_id.
         mock_emit.assert_awaited_once()
@@ -79,6 +113,22 @@ async def test_handle_callback_resume_delivers_root_callback_with_no_parent():
         assert kwargs["event_type"] == "task.callback_received"
         assert kwargs["agent_id"] == lead_id
         assert kwargs["task_id"] == root_task_id
+
+        # Real delivery check, same helpers /agent/me/poll uses:
+        lead = await s.get(Agent, lead_id)
+        worker = await s.get(Agent, worker_id)
+        lead_messages = await _poll_new_messages(s, lead)
+        worker_comments = await _poll_deliverable_comments(s, worker)
+
+        assert len(lead_messages) == 1, (
+            "Der Lead (callback_agent_id) muss die Meldung ueber seinen "
+            "eigenen DM-Thread bekommen"
+        )
+        assert "Root-Task" in lead_messages[0]["body"]
+        assert worker_comments == [], (
+            "Der Worker (assigned_agent_id, Task bereits done) darf KEINE "
+            "neue deliverable Nachricht bekommen, die eigentlich an den Lead ging"
+        )
 
 
 @pytest.mark.asyncio
@@ -180,6 +230,54 @@ async def test_direct_done_patch_notifies_lead_when_callback_agent_set(client):
     # (session, task, board_id, actor_name)
     assert args[1].id == task_id
     assert args[2] == board_id
+
+
+@pytest.mark.asyncio
+async def test_notify_lead_on_completion_reaches_lead_dm_thread():
+    """`_notify_lead_on_completion` itself (not mocked) must land a message
+    in the lead's DM thread — its TaskComment (comment_type="system_notify")
+    is deliberately not a deliverable type (same reasoning as
+    _deliver_root_callback: task.id's assigned_agent_id is the worker, not
+    the lead), so the DM-thread post is what actually closes the loop.
+    """
+    from app.services.task_lifecycle import _notify_lead_on_completion
+
+    board_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="Notify-Lead", slug=f"nl-{uuid.uuid4().hex[:6]}"))
+        s.add(Agent(
+            id=lead_id, name="Lead", role="orchestrator",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            is_board_lead=True, scopes=["tasks:read"],
+        ))
+        s.add(Agent(
+            id=worker_id, name="Worker", role="developer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        ))
+        s.add(Task(
+            id=task_id, board_id=board_id, title="Directly-done task",
+            status="done", assigned_agent_id=worker_id,
+            callback_agent_id=lead_id,
+        ))
+        await s.commit()
+
+        task = await s.get(Task, task_id)
+        # _notify_lead_on_completion opens its OWN session via
+        # `from app.database import engine` (fire-and-forget background task
+        # in production) — point that at the sqlite test engine, same
+        # precedent as test_mc_henry_sunset_script.py.
+        with patch("app.database.engine", test_engine):
+            await _notify_lead_on_completion(s, task, board_id, "Worker")
+
+        lead = await s.get(Agent, lead_id)
+        lead_messages = await _poll_new_messages(s, lead)
+        assert len(lead_messages) == 1
+        assert "TASK ERLEDIGT" in lead_messages[0]["body"]
 
 
 @pytest.mark.asyncio

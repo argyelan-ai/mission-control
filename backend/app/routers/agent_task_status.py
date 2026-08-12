@@ -229,25 +229,64 @@ async def _deliver_root_callback(session: AsyncSession, subtask) -> None:
     `_handle_callback_resume`'s primary job is resuming a blocked parent —
     but a root task has none, so a `callback_agent_id` on it (e.g. set via
     `POST /boards/{board_id}/tasks` instead of `mc delegate`) previously went
-    nowhere. There is no parent to reactivate, so this only does the other
-    half of the callback contract: a deliverable TaskComment on the finished
-    task itself, plus the same `task.callback_received` event the
-    parent-resume path fires. Same primitives as dispatch_callback_to_parent
-    — no new transport.
+    nowhere.
+
+    A `TaskComment` on `subtask.id` looked like the obvious "deliverable
+    comment" fix, but it isn't one: `/me/poll` scopes comment delivery to
+    `Task.assigned_agent_id == agent.id` (agents.py `_collect_and_ack_new_comments`)
+    — the finished task's assigned agent is the WORKER, not the
+    callback_agent_id. That comment would never reach the callback agent, and
+    would instead land on the (already-done) worker's own poll, re-surfacing
+    a message meant for someone else on a task they already closed. Caught in
+    review (Issue #312 follow-up) — empirically verified with 0 comments
+    reaching the callback agent and 1 misdirected comment reaching the worker.
+
+    Real fix: the callback agent's own DM thread (`ensure_dm_thread` +
+    `post_message`, Interaction Model 2.0) — genuinely scoped to that one
+    agent regardless of any task assignment, and already the mechanism `mc
+    msg`/`mc ask` deliver through. Same existing transport as the
+    parent-resume path's `dispatch_callback_to_parent` (a system-authored
+    message to the target agent), just addressed directly instead of via a
+    parent task. The TaskComment stays as a non-deliverable audit trail
+    entry on the task itself (comment_type="message" — visible in the task's
+    history, never auto-pushed to anyone's poll).
     """
+    from app.models.agent import Agent
     from app.models.task import TaskComment
+    from app.services.messaging import ensure_dm_thread, post_message
 
     session.add(TaskComment(
         task_id=subtask.id,
         author_type="system",
         content=(
             f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
-            f"Dieser Task hat keinen Parent-Task — die Zustellung geht direkt an dich "
-            f"als callback_agent_id."
+            f"Kein Parent-Task — Zustellung ging direkt an den callback_agent_id "
+            f"per DM-Thread."
         ),
-        comment_type="system",
+        comment_type="message",
     ))
     await session.commit()
+
+    callback_agent = await session.get(Agent, subtask.callback_agent_id)
+    if callback_agent is not None:
+        thread = await ensure_dm_thread(session, callback_agent)
+        await post_message(
+            session,
+            thread_id=thread.id,
+            sender_type="system",
+            message_type="system",
+            body=(
+                f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
+                f"Dieser Task hatte keinen Parent — du bekommst die Meldung direkt, "
+                f"weil du als callback_agent_id gesetzt bist.\n\n"
+                f"Task-ID: {subtask.id}"
+            ),
+        )
+    else:
+        logger.warning(
+            "Root-Callback: callback_agent_id %s existiert nicht mehr (task %s)",
+            subtask.callback_agent_id, subtask.id,
+        )
 
     await emit_event(
         session,
@@ -264,7 +303,7 @@ async def _deliver_root_callback(session: AsyncSession, subtask) -> None:
         },
     )
     logger.info(
-        "Root-Callback: task %s (kein Parent) → TaskComment + Event fuer callback_agent_id %s",
+        "Root-Callback: task %s (kein Parent) → DM-Thread + Event fuer callback_agent_id %s",
         subtask.id, subtask.callback_agent_id,
     )
 
