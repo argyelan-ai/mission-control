@@ -126,6 +126,10 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
     Fallback: if the agent uses `mc blocked` without blocked_by_task_id but
     the subtask has a parent_task_id link and a callback_agent_id, we find
     the parent via parent_task_id — a safety net against a forgotten link.
+    Root fallback (#312): a task with no parent_task_id at all has nothing to
+    resume, but if it still carries a callback_agent_id (e.g. created via
+    `POST /boards/{board_id}/tasks` instead of `mc delegate`), that value
+    must not be silently dropped — see _deliver_root_callback below.
     """
     from app.models.task import Task
     from sqlmodel import select
@@ -175,6 +179,11 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
                 parents = [candidate]
 
     if not parents:
+        # Genuinely root (no parent_task_id at all): nothing to resume, but
+        # an explicit callback_agent_id still means something (#312) — the
+        # delegating agent asked to be told, not just the parent's watcher.
+        if subtask.parent_task_id is None and subtask.callback_agent_id:
+            await _deliver_root_callback(session, subtask)
         return
 
     for parent in parents:
@@ -212,6 +221,52 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
             _aio.create_task(dispatch_callback_to_parent(parent.id, subtask.id))
         except Exception as e:
             logger.warning("dispatch_callback_to_parent failed: %s", e)
+
+
+async def _deliver_root_callback(session: AsyncSession, subtask) -> None:
+    """Callback delivery for a task with NO parent (#312).
+
+    `_handle_callback_resume`'s primary job is resuming a blocked parent —
+    but a root task has none, so a `callback_agent_id` on it (e.g. set via
+    `POST /boards/{board_id}/tasks` instead of `mc delegate`) previously went
+    nowhere. There is no parent to reactivate, so this only does the other
+    half of the callback contract: a deliverable TaskComment on the finished
+    task itself, plus the same `task.callback_received` event the
+    parent-resume path fires. Same primitives as dispatch_callback_to_parent
+    — no new transport.
+    """
+    from app.models.task import TaskComment
+
+    session.add(TaskComment(
+        task_id=subtask.id,
+        author_type="system",
+        content=(
+            f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
+            f"Dieser Task hat keinen Parent-Task — die Zustellung geht direkt an dich "
+            f"als callback_agent_id."
+        ),
+        comment_type="system",
+    ))
+    await session.commit()
+
+    await emit_event(
+        session,
+        event_type="task.callback_received",
+        title=f"Callback: Root-Task {subtask.title} abgeschlossen",
+        severity="info" if subtask.status == "done" else "warning",
+        board_id=subtask.board_id,
+        task_id=subtask.id,
+        agent_id=subtask.callback_agent_id,
+        detail={
+            "subtask_id": str(subtask.id),
+            "subtask_status": subtask.status,
+            "root_task": True,
+        },
+    )
+    logger.info(
+        "Root-Callback: task %s (kein Parent) → TaskComment + Event fuer callback_agent_id %s",
+        subtask.id, subtask.callback_agent_id,
+    )
 
 
 async def _handle_phase_completion_push(session: AsyncSession, completed_subtask) -> None:
@@ -1176,8 +1231,15 @@ async def agent_create_task(
         )).first()
         if board_lead:
             task.callback_agent_id = board_lead.id
-    # Board Lead creates a task → callback_agent_id stays null
-    # (owner_agent_id = Board Lead → bestehender Fallback greift korrekt)
+    # Board Lead creates a task → callback_agent_id stays null. This relies
+    # on the owner-based fallback inside _notify_lead_on_completion
+    # (owner_agent_id → Board Lead), but that function only runs on the
+    # review-approve path (execute_review_decision / system_finalize_task_done)
+    # plus, since #312, a direct in_progress→done PATCH when callback_agent_id
+    # is explicitly set. A Board Lead's own task with no explicit callback on
+    # a trust-by-default board (require_review_before_done=False) still
+    # bypasses both — the owner-fallback stays unreached there. Not fixed
+    # here; #312 only closes the explicit-callback gap.
 
     # Pre-Dispatch Gating: Agent-Bypass schliessen
     # Ausfuehrbare Work Items → erzwungen "planning", sonst kein Gating (null).
@@ -1347,7 +1409,14 @@ async def agent_create_task(
                 logger.warning("CLI bridge dispatch failed for '%s': %s", task.title, e)
                 dispatch_info = {"status": "not_dispatched", "reason": "cli_bridge_error", "target_agent": target_agent.name}
         elif target_agent:
-            dispatch_info = {"status": "not_dispatched", "reason": "agent_not_provisioned", "target_agent": target_agent.name}
+            # Not a provisioning problem — the agent can be fully provisioned
+            # and running. This branch just means "not cli-bridge", so this
+            # inline dispatch skips it; the watchdog sweep dispatches it
+            # through its own runtime shortly after (#312: the old
+            # "agent_not_provisioned" label sent debugging in the wrong
+            # direction for a live case where the agent was provisioned and
+            # dispatched seconds later).
+            dispatch_info = {"status": "not_dispatched", "reason": "runtime_not_inline_dispatchable", "target_agent": target_agent.name}
         else:
             dispatch_info = {"status": "not_dispatched", "reason": "agent_not_found"}
 
@@ -2020,6 +2089,26 @@ async def agent_update_task(
     # to in_progress (Boss callback pattern for research waits)
     if updates.get("status") in ("done", "failed") and not task.help_request_from:
         await _handle_callback_resume(session, task)
+
+    # ── Lead-Completion-Notice for explicit callbacks (#312) ────────
+    # _notify_lead_on_completion previously only ran from the review-approve
+    # path (execute_review_decision / system_finalize_task_done). A board
+    # with require_review_before_done=False lets an agent PATCH straight
+    # in_progress → done, which never touches that path — the Board Lead
+    # never learned the task was done. Ungated here for at least the
+    # explicit case: callback_agent_id was set on purpose, so the requester
+    # asked to be told. old_status != "done" keeps a done → done re-PATCH
+    # (idempotent replay) from re-sending the notice.
+    if (
+        new_status_for_hook == "done"
+        and old_status != "done"
+        and task.callback_agent_id is not None
+    ):
+        from app.services.task_lifecycle import _notify_lead_on_completion
+        from app.utils import create_tracked_task
+        create_tracked_task(
+            _notify_lead_on_completion(session, task, board_id, agent.name)
+        )
 
     # ── Phase-Completion Push ───────────────────────────────
     # As soon as a subtask is done/failed and all siblings are also done,

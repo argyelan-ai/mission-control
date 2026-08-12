@@ -1169,16 +1169,21 @@ async def agent_delegate_task(
 
     session.add(subtask)
 
+    # Explicit flush before anything downstream references subtask.id as a
+    # foreign key. Without it, SQLAlchemy can order operations wrong:
+    # - callback branch: the current_task UPDATE (blocked_by_task_id) can run
+    #   before the subtask INSERT and the non-deferrable FK
+    #   fk_tasks_blocked_by_task_id blows up. Reflexive FKs (tasks → tasks)
+    #   confuse SQLAlchemy's topological sort.
+    #   Live bug Boss 2026-04-25: HTTP 500 on mc delegate --callback.
+    # - root branch (current_task is None): emit_event() below inserts an
+    #   ActivityEvent row with task_id=subtask.id and commits internally
+    #   (activity.py:41) — without a flush first, that FK insert hits the
+    #   same unflushed-subtask problem. Missed the first time round (#312):
+    #   HTTP 500 on `mc delegate` with no active parent task.
+    await session.flush()
+
     if with_callback and current_task is not None:
-        # Explicit flush before the current_task UPDATE. Without a flush,
-        # SQLAlchemy could order the operations wrong in the following
-        # emit_event() call (which internally does session.commit(),
-        # activity.py:41) — the current_task UPDATE with blocked_by_task_id
-        # runs before the subtask INSERT and the non-deferrable FK
-        # fk_tasks_blocked_by_task_id blows up.
-        # Reflexive FKs (tasks → tasks) confuse SQLAlchemy's topological sort.
-        # Live bug Boss 2026-04-25: HTTP 500 on mc delegate --callback.
-        await session.flush()
         current_task.status = "blocked"
         current_task.blocked_by_task_id = subtask.id
         current_task.callback_agent_id = agent.id
