@@ -1729,6 +1729,8 @@ async def _notify_lead_on_completion(
     task: Task,
     board_id: uuid.UUID,
     reviewer_name: str,
+    *,
+    reviewed: bool = True,
 ) -> None:
     """Completion callback: Henry gets a mandatory report-back obligation.
 
@@ -1738,6 +1740,13 @@ async def _notify_lead_on_completion(
     Stage 2 (fallback, 5 min): system safety net
       → ONLY if report_back_status is still "pending"
       → a terse system message to the operator via Telegram
+
+    `reviewed` distinguishes a genuine review approval (execute_review_decision,
+    system_finalize_task_done — the default, `reviewer_name` names the actual
+    approver) from #312's direct in_progress -> done PATCH, where there was no
+    review at all and `reviewer_name` is just the agent who closed their own
+    task — claiming an "Approved von {reviewer_name}" there would assert a
+    sign-off that never happened (flagged in review).
     """
     from app.database import engine
 
@@ -1821,12 +1830,18 @@ async def _notify_lead_on_completion(
                             f"**Rueckmeldung geht an:** {task.requester_channel} ({task.requester_id})\n"
                         )
 
+                    completion_line = (
+                        f"**Review:** Approved von {reviewer_name}\n"
+                        if reviewed
+                        else f"**Abschluss:** direkt von {reviewer_name} auf done gesetzt "
+                             f"(kein Review-Gate auf diesem Board)\n"
+                    )
                     notify_message = (
                         f"# ✅ TASK ERLEDIGT: {task.title}\n\n"
                         f"**Task-ID:** {task.id}\n"
                         f"{project_info}"
                         f"{requester_block}"
-                        f"**Review:** Approved von {reviewer_name}\n"
+                        f"{completion_line}"
                         f"{contract_block}\n"
                         f"## Evidence / Ergebnisse\n{evidence_text}\n"
                     )

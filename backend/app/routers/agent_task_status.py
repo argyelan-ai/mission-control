@@ -250,6 +250,18 @@ async def _deliver_root_callback(session: AsyncSession, subtask) -> None:
     parent task. The TaskComment stays as a non-deliverable audit trail
     entry on the task itself (comment_type="message" — visible in the task's
     history, never auto-pushed to anyone's poll).
+
+    Double-delivery guard: `agent_task_status.agent_update_task` also wires
+    `_notify_lead_on_completion` into the direct in_progress -> done PATCH
+    whenever callback_agent_id is set (#312 fix 2) — the SAME PATCH request
+    that gets here via `_handle_callback_resume`. For status=="done" that
+    fires unconditionally right alongside this function, so sending our own
+    DM here too means the callback agent gets two messages for one
+    completion (caught in review, empirically verified: 2 DM messages, and
+    each post_message() call also mirrors into every active chat channel by
+    default — the operator would see it doubled too). `_notify_lead_on_completion`
+    only ever runs on "done" though, never on "failed" — so this function
+    stays the sole DM sender for the failed case.
     """
     from app.models.agent import Agent
     from app.models.task import TaskComment
@@ -267,26 +279,30 @@ async def _deliver_root_callback(session: AsyncSession, subtask) -> None:
     ))
     await session.commit()
 
-    callback_agent = await session.get(Agent, subtask.callback_agent_id)
-    if callback_agent is not None:
-        thread = await ensure_dm_thread(session, callback_agent)
-        await post_message(
-            session,
-            thread_id=thread.id,
-            sender_type="system",
-            message_type="system",
-            body=(
-                f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
-                f"Dieser Task hatte keinen Parent — du bekommst die Meldung direkt, "
-                f"weil du als callback_agent_id gesetzt bist.\n\n"
-                f"Task-ID: {subtask.id}"
-            ),
-        )
+    if subtask.status == "done":
+        # _notify_lead_on_completion already delivers a DM for this case.
+        pass
     else:
-        logger.warning(
-            "Root-Callback: callback_agent_id %s existiert nicht mehr (task %s)",
-            subtask.callback_agent_id, subtask.id,
-        )
+        callback_agent = await session.get(Agent, subtask.callback_agent_id)
+        if callback_agent is not None:
+            thread = await ensure_dm_thread(session, callback_agent)
+            await post_message(
+                session,
+                thread_id=thread.id,
+                sender_type="system",
+                message_type="system",
+                body=(
+                    f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
+                    f"Dieser Task hatte keinen Parent — du bekommst die Meldung direkt, "
+                    f"weil du als callback_agent_id gesetzt bist.\n\n"
+                    f"Task-ID: {subtask.id}"
+                ),
+            )
+        else:
+            logger.warning(
+                "Root-Callback: callback_agent_id %s existiert nicht mehr (task %s)",
+                subtask.callback_agent_id, subtask.id,
+            )
 
     await emit_event(
         session,
@@ -2146,7 +2162,7 @@ async def agent_update_task(
         from app.services.task_lifecycle import _notify_lead_on_completion
         from app.utils import create_tracked_task
         create_tracked_task(
-            _notify_lead_on_completion(session, task, board_id, agent.name)
+            _notify_lead_on_completion(session, task, board_id, agent.name, reviewed=False)
         )
 
     # ── Phase-Completion Push ───────────────────────────────
