@@ -1,0 +1,522 @@
+"use client";
+
+/**
+ * SlotStage — one GPU slot's "stage" (mockup M1, m1-slot-buehne.html).
+ *
+ * Renders a single host's occupancy: what's currently serving (or OFF),
+ * live GPU/VRAM/temp telemetry, a way to switch to another sparkrun recipe
+ * or start another lifecycle-capable runtime on the box, and a quiet ready
+ * list of everything else that could take the slot.
+ *
+ * HONESTY RULE (hard, per task brief): only real fields are rendered —
+ * no tok/s, no uptime, no ETA. The mockup shows all three; this component
+ * deliberately does not reproduce them.
+ */
+
+import { useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
+import Link from "next/link";
+import { api } from "@/lib/api";
+import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import { pickServing, panelCapabilities, type HostGroup } from "./grouping";
+import { useGpuSparkline } from "./useGpuSparkline";
+import { fmtCtx } from "@/lib/utils";
+import { openModelsTab } from "./page";
+import { EntityIcon } from "@/components/shared/EntityIcon";
+
+// typeLabel copied from RuntimeDetailPanel.tsx (same list, same reasoning —
+// no shared export exists yet, and this label text must not drift between
+// the two runtime surfaces).
+const TYPE_LABELS: Record<string, string> = {
+  vllm_docker: "vLLM Docker", lmstudio: "LM Studio", unsloth: "Unsloth",
+  unsloth_porsche: "Unsloth · PORSCHE", openai_compatible: "OpenAI-compatible",
+  cloud: "Cloud API", hermes: "Hermes", grok: "Grok", kimi: "Kimi",
+  omp: "OMP", llamacpp_docker: "llama.cpp",
+};
+const typeLabel = (t: string) => TYPE_LABELS[t] ?? t;
+
+const liveFor = (rt: Runtime, live?: Record<string, RuntimeLiveStatus>) => live?.[rt.slug ?? rt.id];
+
+type SlotState = "serving" | "warmup" | "switching" | "off" | "failed";
+
+const ACTIVE_DB_STATES = new Set(["ready", "warming", "starting"]);
+
+function slotState(rt: Runtime | null, l?: RuntimeLiveStatus): SlotState {
+  if (!rt) return "off";
+  if (l?.status === "switching") return "switching";
+  const state = rt.state ?? "unknown";
+  if (state === "failed") return "failed";
+  if (ACTIVE_DB_STATES.has(state) && l?.reachable === false) return "failed";
+  if (state === "ready") return "serving";
+  if (state === "warming" || state === "starting") return "warmup";
+  return "off";
+}
+
+function StateChip({ state, phase }: { state: SlotState; phase?: string | null }) {
+  const t = useTranslations("runtimes.slotStage");
+  const config: Record<SlotState, { color: string; label: string }> = {
+    serving: { color: STATUS.online, label: t("stateServing") },
+    warmup: { color: STATUS_TEXT.warning, label: t("stateWarmup") },
+    switching: { color: STATUS_TEXT.warning, label: t("stateSwitching", { phase: phase ?? "—" }) },
+    off: { color: C.textDim, label: t("stateOff") },
+    failed: { color: STATUS_TEXT.error, label: t("stateFailed") },
+  };
+  const c = config[state];
+  return (
+    <div className="flex items-center gap-2 text-[11px]" style={{ color: c.color }}>
+      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color }} />
+      {c.label}
+    </div>
+  );
+}
+
+// ── Telemetry meters ──────────────────────────────────────────────────────
+
+function Meter({ label, value, pct }: { label: string; value: string; pct: number }) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1" style={{ fontSize: "11px", color: C.textMuted }}>
+        <span>{label}</span>
+        <span className="font-semibold tabular-nums" style={{ color: C.textPrimary }}>{value}</span>
+      </div>
+      <div className="rounded-full overflow-hidden" style={{ height: "2px", background: C.bgElevated }}>
+        <div
+          style={{
+            height: "100%",
+            background: C.accent,
+            width: `${Math.min(Math.max(pct, 0), 100)}%`,
+            transition: "width 0.6s cubic-bezier(0.16,1,0.3,1)",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TelemetryColumn({ hostId }: { hostId: string }) {
+  const t = useTranslations("runtimes.slotStage");
+  const { data } = useQuery({
+    queryKey: ["hosts", hostId, "metrics"],
+    queryFn: () => api.hosts.metrics(hostId),
+    refetchInterval: 5_000,
+  });
+
+  const sparkline = useGpuSparkline(hostId, data?.gpu_util_pct ?? null);
+
+  if (!data || !data.reachable) {
+    return (
+      <div
+        className="flex items-center px-4 py-4 text-xs shrink-0"
+        style={{ color: C.textMuted, background: C.bgBase, borderLeft: `1px solid ${C.borderSubtle}`, width: "300px" }}
+      >
+        {t("hostUnreachable")}
+      </div>
+    );
+  }
+
+  const gpuPct = data.gpu_util_pct ?? 0;
+  const vramPct = data.vram_total_mb && data.vram_used_mb != null
+    ? (data.vram_used_mb / data.vram_total_mb) * 100 : 0;
+  const vramUsedGb = data.vram_used_mb != null ? (data.vram_used_mb / 1024).toFixed(0) : "—";
+  const vramTotalGb = data.vram_total_mb != null ? (data.vram_total_mb / 1024).toFixed(0) : "—";
+  // Temp has no natural 0-100 scale — 100C is a conservative thermal ceiling
+  // used purely to size the bar; the printed value is always the real reading.
+  const tempPct = data.gpu_temp_c != null ? Math.min((data.gpu_temp_c / 100) * 100, 100) : 0;
+
+  const maxSample = Math.max(1, ...sparkline);
+
+  return (
+    <div
+      className="flex flex-col gap-3.5 px-4 py-4 shrink-0"
+      style={{ background: C.bgBase, borderLeft: `1px solid ${C.borderSubtle}`, width: "300px" }}
+    >
+      <Meter label="GPU" value={data.gpu_util_pct != null ? `${data.gpu_util_pct} %` : "—"} pct={gpuPct} />
+      <Meter label="VRAM" value={`${vramUsedGb} / ${vramTotalGb} GB`} pct={vramPct} />
+      <Meter label="Temp" value={data.gpu_temp_c != null ? `${data.gpu_temp_c} °C` : "—"} pct={tempPct} />
+      {sparkline.length > 0 && (
+        <div className="flex items-end gap-0.5" style={{ height: "26px" }}>
+          {sparkline.map((v, i) => (
+            <div
+              key={i}
+              style={{
+                width: "5px",
+                borderRadius: "1px",
+                height: `${Math.max(4, Math.min((v / maxSample) * 100, 100))}%`,
+                background: i === sparkline.length - 1 ? C.accent : C.bgHover,
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Agent chips ────────────────────────────────────────────────────────────
+
+function AgentChipsRow({ runtime }: { runtime: Runtime }) {
+  const t = useTranslations("runtimes.slotStage");
+  const slug = runtime.slug ?? runtime.id;
+  const { data } = useQuery({
+    queryKey: ["runtimes", slug, "agents"],
+    queryFn: () => api.runtimes.db.agents(slug),
+    enabled: !!slug,
+    staleTime: 15_000,
+    retry: false,
+  });
+  const bound = data?.agents ?? [];
+  if (bound.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap mt-4">
+      <span className="text-[11px]" style={{ color: C.textDim }}>{t("runsLabel")}</span>
+      {bound.map((a) => (
+        <Link
+          key={a.id}
+          href={`/agents/${a.id}`}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 font-mono text-[11px] leading-none hover:bg-[var(--color-bg-hover)] transition-colors"
+          style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
+        >
+          <EntityIcon value="🤖" size={12} className="inline-block align-[-2px] mr-1" />{a.name}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+// ── Switch row ─────────────────────────────────────────────────────────────
+
+const PHASES: Array<NonNullable<RuntimeLiveStatus["phase"]>> = ["evicting", "launching", "loading"];
+
+function PhaseIndicator({ phase, message }: { phase?: string | null; message?: string | null }) {
+  return (
+    <div className="flex-1 flex items-center gap-2" data-testid="phase-indicator">
+      <div className="flex items-center gap-1.5 text-xs font-mono">
+        {PHASES.map((p, i) => (
+          <span key={p} className="flex items-center gap-1.5">
+            <span style={{ color: p === phase ? C.accent : C.textDim, fontWeight: p === phase ? 600 : 400 }}>
+              {p}
+            </span>
+            {i < PHASES.length - 1 && <span style={{ color: C.textDim }}>→</span>}
+          </span>
+        ))}
+      </div>
+      {message && <span className="text-xs truncate" style={{ color: C.textMuted }}>{message}</span>}
+    </div>
+  );
+}
+
+function SwitchRow({
+  group,
+  serving,
+  readyRuntimes,
+  live,
+}: {
+  group: HostGroup;
+  serving: Runtime | null;
+  readyRuntimes: Runtime[];
+  live?: Record<string, RuntimeLiveStatus>;
+}) {
+  const t = useTranslations("runtimes.slotStage");
+  const queryClient = useQueryClient();
+
+  const vllmRuntime = group.runtimes.find((rt) => rt.runtime_type === "vllm_docker") ?? null;
+  const recipeCapable = vllmRuntime != null;
+
+  const currentRecipeQuery = useQuery({
+    queryKey: ["runtime-current-recipe", vllmRuntime?.id],
+    queryFn: () => api.runtimes.sparkrun.currentRecipe(vllmRuntime!.id),
+    enabled: recipeCapable,
+  });
+  const recipesQuery = useQuery({
+    queryKey: ["sparkrun-recipes"],
+    queryFn: () => api.runtimes.sparkrun.listRecipes(),
+    enabled: recipeCapable,
+  });
+
+  const switchMutation = useMutation({
+    mutationFn: (recipe: string) => api.runtimes.sparkrun.switchRecipe(vllmRuntime!.id, recipe),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runtime-current-recipe", vllmRuntime?.id] });
+      queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+    },
+  });
+
+  const startMutation = useMutation({
+    mutationFn: (runtimeId: string) => api.runtimes.start(runtimeId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+  });
+
+  const servingLive = serving ? liveFor(serving, live) : undefined;
+  const isSwitching = servingLive?.status === "switching";
+  const isMutating = switchMutation.isPending || startMutation.isPending || isSwitching;
+
+  if (isMutating) {
+    const message =
+      switchMutation.data?.message ?? startMutation.data?.message ?? null;
+    return (
+      <div
+        className="flex items-center gap-3 px-4 py-3"
+        style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+      >
+        <PhaseIndicator phase={servingLive?.phase ?? undefined} message={message} />
+      </div>
+    );
+  }
+
+  const errorMessage =
+    (switchMutation.isError && t("switchFailed", { message: switchMutation.error.message })) ||
+    (startMutation.isError && t("startFailed", { message: startMutation.error.message })) ||
+    null;
+
+  return (
+    <div
+      className="flex items-center gap-2 px-4 py-3 flex-wrap"
+      style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+    >
+      <span
+        className="text-[10px] font-medium uppercase shrink-0"
+        style={{ color: C.textMuted, letterSpacing: "0.08em" }}
+      >
+        {t("switchLabel")}
+      </span>
+
+      {recipeCapable && recipesQuery.data?.recipes.map((r) => {
+        const isActive = r.name === currentRecipeQuery.data?.current_recipe;
+        return (
+          <button
+            key={r.name}
+            onClick={() => switchMutation.mutate(r.name)}
+            disabled={isActive || !r.solo_capable}
+            title={!r.solo_capable ? `${r.name}: needs more GPUs/nodes than this host has` : undefined}
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: C.bgSurface, border: `1px solid ${isActive ? C.borderAccent : C.border}`, color: isActive ? C.accent : C.textPrimary }}
+          >
+            {r.name}
+          </button>
+        );
+      })}
+
+      {readyRuntimes.map((rt) => (
+        <button
+          key={rt.id}
+          onClick={() => startMutation.mutate(rt.id)}
+          disabled={startMutation.isPending}
+          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ background: C.bgSurface, border: `1px solid ${C.border}`, color: C.textPrimary }}
+        >
+          {rt.display_name}
+        </button>
+      ))}
+
+      <button
+        onClick={() => openModelsTab("download")}
+        className="flex items-center gap-1.5 rounded-md px-3 py-2 text-xs cursor-pointer border-dashed"
+        style={{ borderWidth: "1px", borderStyle: "dashed", borderColor: C.borderActive, color: C.textMuted }}
+      >
+        {t("addModel")}
+      </button>
+
+      {errorMessage && (
+        <span className="text-xs w-full" style={{ color: STATUS_TEXT.error }}>{errorMessage}</span>
+      )}
+    </div>
+  );
+}
+
+// ── Ready list ─────────────────────────────────────────────────────────────
+
+function ReadyList({ readyRuntimes, sizeGb, onOpen }: { readyRuntimes: Runtime[]; sizeGb: (rt: Runtime) => number | undefined; onOpen: (rt: Runtime) => void }) {
+  if (readyRuntimes.length === 0) return null;
+  return (
+    <div className="flex flex-col" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
+      {readyRuntimes.map((rt) => {
+        const gb = sizeGb(rt);
+        return (
+          <button
+            key={rt.id}
+            data-testid={`ready-row-${rt.slug ?? rt.id}`}
+            onClick={() => onOpen(rt)}
+            className="flex items-center gap-2 px-4 py-2 text-xs text-left cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
+            style={{ color: C.textDim }}
+          >
+            <span>○</span>
+            <span style={{ color: C.textMuted }}>{rt.display_name}</span>
+            <span>· {typeLabel(rt.runtime_type)}{gb != null ? ` · ${Math.round(gb)} GB` : ""}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Now block ──────────────────────────────────────────────────────────────
+
+function NowBlock({ serving, live, sizeGb }: { serving: Runtime | null; live?: Record<string, RuntimeLiveStatus>; sizeGb: (rt: Runtime) => number | undefined }) {
+  const t = useTranslations("runtimes.slotStage");
+  const tr = useTranslations("runtimes");
+
+  if (!serving) {
+    return (
+      <div className="px-4 pt-5 pb-4">
+        <StateChip state="off" />
+      </div>
+    );
+  }
+
+  const l = liveFor(serving, live);
+  const state = slotState(serving, l);
+  const ctxNum = l?.served_context_len ?? serving.max_context_len;
+  const gb = sizeGb(serving);
+  const modelText = l?.served_model ?? serving.model_identifier ?? "—";
+  const isReachable = l?.reachable === true;
+  const hasDrift = Boolean(l?.drift || l?.context_drift);
+
+  return (
+    <div className="px-4 pt-5 pb-4">
+      <StateChip state={state} phase={l?.phase} />
+      <div className="mt-1.5" style={{ fontSize: "26px", fontWeight: 600, letterSpacing: "-0.02em", color: C.textPrimary }}>
+        {serving.display_name}
+      </div>
+      <div className="font-mono text-xs mt-0.5" style={{ color: C.textMuted }}>
+        {modelText} · {typeLabel(serving.runtime_type)}{gb != null ? ` · ${Math.round(gb)} GB` : ""}
+      </div>
+      <div className="flex items-center gap-6 mt-4">
+        <div>
+          <div className="text-[17px] font-semibold tabular-nums" style={{ color: C.textPrimary }}>{fmtCtx(ctxNum)}</div>
+          <div className="text-[10px] uppercase mt-0.5" style={{ color: C.textMuted, letterSpacing: "0.1em" }}>{t("ctxLabel")}</div>
+        </div>
+        {isReachable && l?.latency_ms != null && (
+          <div>
+            <div className="text-[17px] font-semibold tabular-nums" style={{ color: C.textPrimary }}>{l.latency_ms} ms</div>
+            <div className="text-[10px] uppercase mt-0.5" style={{ color: C.textMuted, letterSpacing: "0.1em" }}>{t("latencyLabel")}</div>
+          </div>
+        )}
+        {hasDrift && (
+          <div className="flex items-end pb-0.5">
+            <span
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+              style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}` }}
+              title={tr("driftTitle", { model: serving.model_identifier ?? "—" })}
+            >
+              {tr("drift")}
+            </span>
+          </div>
+        )}
+      </div>
+      <AgentChipsRow runtime={serving} />
+    </div>
+  );
+}
+
+// ── Header ─────────────────────────────────────────────────────────────────
+
+function StageHeader({ group, serving, live, hostReachable }: { group: HostGroup; serving: Runtime | null; live?: Record<string, RuntimeLiveStatus>; hostReachable?: boolean }) {
+  const t = useTranslations("runtimes.slotStage");
+  const servingLive = serving ? liveFor(serving, live) : undefined;
+
+  let status: React.ReactNode = null;
+  if (servingLive?.status === "switching") {
+    status = servingLive.phase ?? "—";
+  } else if (serving && servingLive?.reachable === true) {
+    status = t("engineReachable", { ms: servingLive.latency_ms ?? "—" });
+  } else if (hostReachable === false) {
+    status = t("hostUnreachable");
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between px-4 py-2.5"
+      style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+    >
+      <span
+        className="text-[10px] font-medium uppercase"
+        style={{ color: C.textSecondary, letterSpacing: "0.08em" }}
+      >
+        {group.host.display_name}
+      </span>
+      {status && (
+        <span className="font-mono text-xs" style={{ color: C.textMuted }}>{status}</span>
+      )}
+    </div>
+  );
+}
+
+// ── Placeholder ────────────────────────────────────────────────────────────
+
+function StagePlaceholder({ group }: { group: HostGroup }) {
+  const t = useTranslations("runtimes.slotStage");
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+      >
+        <span className="text-[10px] font-medium uppercase" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
+          {group.host.display_name}
+        </span>
+      </div>
+      <div className="flex items-center justify-between px-4 py-6">
+        <span className="text-sm" style={{ color: C.textMuted }}>{t("placeholderTitle")}</span>
+        <button
+          onClick={() => openModelsTab("download")}
+          className="flex items-center gap-1.5 rounded-md px-3 py-2 text-xs cursor-pointer"
+          style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
+        >
+          {t("addModel")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Root ───────────────────────────────────────────────────────────────────
+
+export function SlotStage({
+  group,
+  live,
+  sizeGb,
+  onOpen,
+}: {
+  group: HostGroup;
+  live?: Record<string, RuntimeLiveStatus>;
+  sizeGb: (rt: Runtime) => number | undefined;
+  onOpen: (rt: Runtime) => void;
+}) {
+  const serving = useMemo(() => pickServing(group, live), [group, live]);
+  const readyRuntimes = useMemo(
+    () => group.runtimes.filter((rt) => rt.id !== serving?.id && panelCapabilities(rt).lifecycle),
+    [group, serving]
+  );
+
+  // Own host-reachability signal for the header — cheap re-query, TanStack
+  // dedupes against TelemetryColumn's identical key.
+  const { data: hostMetrics } = useQuery({
+    queryKey: ["hosts", group.host.id, "metrics"],
+    queryFn: () => api.hosts.metrics(group.host.id),
+    refetchInterval: 5_000,
+  });
+
+  if (!serving && readyRuntimes.length === 0) {
+    return <StagePlaceholder group={group} />;
+  }
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
+      <StageHeader group={group} serving={serving} live={live} hostReachable={hostMetrics?.reachable} />
+      <div className="flex">
+        <div className="flex-1 min-w-0">
+          <NowBlock serving={serving} live={live} sizeGb={sizeGb} />
+        </div>
+        <TelemetryColumn hostId={group.host.id} />
+      </div>
+      <SwitchRow group={group} serving={serving} readyRuntimes={readyRuntimes} live={live} />
+      <ReadyList readyRuntimes={readyRuntimes} sizeGb={sizeGb} onOpen={onOpen} />
+    </div>
+  );
+}

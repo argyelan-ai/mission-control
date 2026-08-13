@@ -1569,8 +1569,10 @@ type ModelsTab = "providers" | "local" | "download";
 
 const MODELS_TAB_EVENT = "mc:models-tab";
 
-/** Jump to the Models section and select a tab (used by the LM Studio pointer). */
-function openModelsTab(tab: ModelsTab) {
+/** Jump to the Models section and select a tab (used by the LM Studio pointer,
+ *  and by SlotStage's "+ Modell" — exported so that leaf component can reuse
+ *  the same section-scroll + tab-select mechanics instead of duplicating them). */
+export function openModelsTab(tab: ModelsTab) {
   requestSectionOpen("models");
   window.dispatchEvent(new CustomEvent(MODELS_TAB_EVENT, { detail: tab }));
   requestAnimationFrame(() => {

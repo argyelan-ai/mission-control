@@ -2249,7 +2249,24 @@
     },
     "contextDriftTitle": "The engine serves this window; the registry still says {stored} — it syncs on the next watcher confirmation",
     "nameDrift": "Name",
-    "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model."
+    "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model.",
+    "slotStage": {
+      "engineReachable": "engine reachable · {ms} ms",
+      "hostUnreachable": "Host unreachable",
+      "stateServing": "SERVING",
+      "stateWarmup": "WARMUP…",
+      "stateSwitching": "SWITCHING · {phase}",
+      "stateOff": "OFF",
+      "stateFailed": "FAILED",
+      "ctxLabel": "Context",
+      "latencyLabel": "Latency",
+      "runsLabel": "runs:",
+      "switchLabel": "Switch",
+      "addModel": "+ Model",
+      "placeholderTitle": "No model set up",
+      "startFailed": "Start failed: {message}",
+      "switchFailed": "Switch failed: {message}"
+    }
   },
   "bench": {
     "common": {
