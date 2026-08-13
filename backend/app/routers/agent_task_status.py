@@ -285,19 +285,28 @@ async def _deliver_root_callback(session: AsyncSession, subtask) -> None:
     else:
         callback_agent = await session.get(Agent, subtask.callback_agent_id)
         if callback_agent is not None:
-            thread = await ensure_dm_thread(session, callback_agent)
-            await post_message(
-                session,
-                thread_id=thread.id,
-                sender_type="system",
-                message_type="system",
-                body=(
-                    f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
-                    f"Dieser Task hatte keinen Parent — du bekommst die Meldung direkt, "
-                    f"weil du als callback_agent_id gesetzt bist.\n\n"
-                    f"Task-ID: {subtask.id}"
-                ),
-            )
+            # Best-effort like dispatch_callback_to_parent below: the status
+            # transition is already committed at this point — a delivery
+            # hiccup must not turn the worker's PATCH into a 500.
+            try:
+                thread = await ensure_dm_thread(session, callback_agent)
+                await post_message(
+                    session,
+                    thread_id=thread.id,
+                    sender_type="system",
+                    message_type="system",
+                    body=(
+                        f"## Callback: Root-Task '{subtask.title}' abgeschlossen ({subtask.status})\n\n"
+                        f"Dieser Task hatte keinen Parent — du bekommst die Meldung direkt, "
+                        f"weil du als callback_agent_id gesetzt bist.\n\n"
+                        f"Task-ID: {subtask.id}"
+                    ),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Root-Callback: DM-Zustellung an %s fehlgeschlagen: %s",
+                    subtask.callback_agent_id, e,
+                )
         else:
             logger.warning(
                 "Root-Callback: callback_agent_id %s existiert nicht mehr (task %s)",
@@ -2154,15 +2163,28 @@ async def agent_update_task(
     # explicit case: callback_agent_id was set on purpose, so the requester
     # asked to be told. old_status != "done" keeps a done → done re-PATCH
     # (idempotent replay) from re-sending the notice.
+    # parent_task_id is None: for delegated subtasks (mc delegate --callback
+    # sets parent_task_id AND callback_agent_id together) the delegating
+    # agent already gets the dispatch_callback_to_parent resume-nudge from
+    # _handle_callback_resume above — firing here too would double-message
+    # them on every completed callback subtask.
+    # reviewed: a PATCH review → done is the legitimate reviewer-approve
+    # shortcut (review_decision was auto-set to "approved" earlier in this
+    # request) — claiming "kein Review-Gate" there would misreport a real
+    # approval.
     if (
         new_status_for_hook == "done"
         and old_status != "done"
         and task.callback_agent_id is not None
+        and task.parent_task_id is None
     ):
         from app.services.task_lifecycle import _notify_lead_on_completion
         from app.utils import create_tracked_task
         create_tracked_task(
-            _notify_lead_on_completion(session, task, board_id, agent.name, reviewed=False)
+            _notify_lead_on_completion(
+                session, task, board_id, agent.name,
+                reviewed=(old_status == "review"),
+            )
         )
 
     # ── Phase-Completion Push ───────────────────────────────

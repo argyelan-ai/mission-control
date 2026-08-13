@@ -590,3 +590,137 @@ async def test_root_delegation_via_delegate_endpoint_no_500(client, fake_redis):
         assert subtask is not None
         assert subtask.parent_task_id is None
         assert subtask.assigned_agent_id == worker_id
+
+
+@pytest.mark.asyncio
+async def test_direct_done_patch_skips_lead_notice_for_delegated_subtask(client):
+    """Review-Fix #313: der Lead-Completion-Hook darf fuer delegierte
+    Subtasks NICHT feuern. `mc delegate --callback` setzt parent_task_id UND
+    callback_agent_id zusammen — der Delegierende bekommt beim Abschluss
+    bereits den dispatch_callback_to_parent-Resume-Nudge aus
+    _handle_callback_resume. Ohne das parent_task_id-Gate wuerde er pro
+    fertigem Subtask ZWEI Nachrichten bekommen (Nudge + TASK-ERLEDIGT-DM).
+    """
+    board_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+    parent_id = uuid.uuid4()
+    subtask_id = uuid.uuid4()
+
+    raw_token, token_hash = generate_agent_token()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="Subtask-No-Notice", slug=f"snn-{uuid.uuid4().hex[:6]}"))
+        s.add(Agent(
+            id=lead_id, name="Lead", role="orchestrator",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            is_board_lead=True, scopes=["tasks:read"],
+        ))
+        s.add(Agent(
+            id=worker_id, name="Worker", role="developer",
+            board_id=board_id, agent_token_hash=token_hash,
+            scopes=["tasks:read", "tasks:write"],
+            current_task_id=subtask_id,
+        ))
+        # Delegate-Form: Parent blockiert auf den Subtask, Subtask traegt
+        # parent_task_id UND callback_agent_id (wie agent_delegate_task).
+        s.add(Task(
+            id=parent_id, board_id=board_id, title="Parent (wartet)",
+            status="blocked", assigned_agent_id=lead_id,
+            blocked_by_task_id=subtask_id, callback_agent_id=lead_id,
+        ))
+        s.add(Task(
+            id=subtask_id, board_id=board_id, title="Delegierter Subtask",
+            status="in_progress", parent_task_id=parent_id,
+            assigned_agent_id=worker_id, callback_agent_id=lead_id,
+        ))
+        s.add(TaskComment(
+            task_id=subtask_id, author_type="agent", author_agent_id=worker_id,
+            comment_type="reflection",
+            content=(
+                "## Was wurde gemacht\n"
+                "Delegierten Subtask fuer den Regressionstest abgeschlossen und verifiziert.\n\n"
+                "## Was hat funktioniert\n"
+                "Der PATCH auf done lief durch, der Resume-Nudge an den Parent reicht aus.\n\n"
+                "## Was war unklar\n"
+                "Nichts, der Ablauf war fuer diesen Testfall eindeutig dokumentiert.\n\n"
+                "## Lesson für Agent-Memory\n"
+                "Subtasks brauchen keine zweite Erledigt-DM an den Delegierenden."
+            ),
+        ))
+        await s.commit()
+
+    notify_mock = AsyncMock()
+    with patch("app.services.task_lifecycle._notify_lead_on_completion", notify_mock), \
+         patch("app.utils.create_tracked_task", side_effect=lambda coro, name=None: coro.close()), \
+         patch("app.routers.agent_task_status.emit_event", new_callable=AsyncMock), \
+         patch("app.services.auto_memory.create_tracked_task", create=True):
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board_id}/tasks/{subtask_id}",
+            json={"status": "done"},
+            headers={"Authorization": f"Bearer {raw_token}"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    notify_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_review_done_patch_notifies_lead_as_reviewed(client):
+    """Review-Fix #313: PATCH review → done ist der legitime
+    Reviewer-Approve-Shortcut (review_decision wird im selben Request auf
+    'approved' gesetzt). Der Hook muss dann reviewed=True uebergeben — sonst
+    behauptet die DM 'kein Review-Gate', obwohl eine echte Freigabe stattfand.
+    """
+    board_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+    reviewer_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    raw_token, token_hash = generate_agent_token()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="Review-Done", slug=f"rvd-{uuid.uuid4().hex[:6]}"))
+        s.add(Agent(
+            id=lead_id, name="Lead", role="orchestrator",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            is_board_lead=True, scopes=["tasks:read"],
+        ))
+        s.add(Agent(
+            id=worker_id, name="Worker", role="developer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        ))
+        s.add(Agent(
+            id=reviewer_id, name="Reviewer", role="reviewer",
+            board_id=board_id, agent_token_hash=token_hash,
+            scopes=["tasks:read", "tasks:write"],
+        ))
+        # Root-Task in review; Worker hat gearbeitet, Reviewer approved per PATCH.
+        s.add(Task(
+            id=task_id, board_id=board_id, title="Review-approve task",
+            status="review", parent_task_id=None,
+            assigned_agent_id=worker_id,
+            callback_agent_id=lead_id,
+        ))
+        await s.commit()
+
+    notify_mock = AsyncMock()
+    with patch("app.services.task_lifecycle._notify_lead_on_completion", notify_mock), \
+         patch("app.utils.create_tracked_task", side_effect=lambda coro, name=None: coro.close()), \
+         patch("app.routers.agent_task_status.emit_event", new_callable=AsyncMock), \
+         patch("app.services.auto_memory.create_tracked_task", create=True):
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
+            json={"status": "done"},
+            headers={"Authorization": f"Bearer {raw_token}"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    notify_mock.assert_called_once()
+    _, kwargs = notify_mock.call_args
+    assert kwargs.get("reviewed") is True, (
+        "PATCH review → done ist eine echte Freigabe (review_decision=approved "
+        "im selben Request) — der Hook darf sie nicht als reviewed=False melden"
+    )
