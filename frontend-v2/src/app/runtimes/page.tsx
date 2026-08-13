@@ -37,10 +37,11 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section, requestSectionOpen } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
-import { groupRuntimes, panelCapabilities, pickServing, type HostGroup } from "./grouping";
+import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
 import { SlotStage } from "./SlotStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
+import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
 
 // ── Active Downloads Panel ────────────────────────────────────────────────────
 
@@ -492,28 +493,24 @@ function ModelCatalog() {
 
 // ── Models section (provider catalog · local recipes · download) ──────────────
 
-type ModelsTab = "providers" | "local" | "download";
-
-const MODELS_TAB_EVENT = "mc:models-tab";
-
-/** Jump to the Models section and select a tab (used by the LM Studio pointer,
- *  and by SlotStage's "+ Modell" — exported so that leaf component can reuse
- *  the same section-scroll + tab-select mechanics instead of duplicating them). */
-export function openModelsTab(tab: ModelsTab) {
-  requestSectionOpen("models");
-  window.dispatchEvent(new CustomEvent(MODELS_TAB_EVENT, { detail: tab }));
-  requestAnimationFrame(() => {
-    document.getElementById("models")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-}
-
 /** Jump to the Infrastructure section (hosts CRUD, KV reset schedule, vLLM
- *  container catalog, CLI tools) — shared target for both "Hosts & Zeitpläne"
- *  and "CLI-Tools" footer links, mirroring openModelsTab's mechanics. */
+ *  container catalog, CLI tools) — shared target for "Hosts & Zeitpläne",
+ *  mirroring openModelsTab's mechanics. */
 function openInfraSection() {
   requestSectionOpen("infrastructure");
   requestAnimationFrame(() => {
     document.getElementById("infrastructure")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+/** Jump to the Infrastructure section AND scroll straight to the CLI-Tools
+ *  anchor within it — the footer's "CLI-Tools" link used to share
+ *  openInfraSection with "Hosts & Zeitpläne" and land in the same place as
+ *  that link, which defeated the point of having two links. */
+function openCliToolsSection() {
+  requestSectionOpen("infrastructure");
+  requestAnimationFrame(() => {
+    document.getElementById("cli-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 }
 
@@ -829,18 +826,33 @@ export default function RuntimesPage() {
 
   const groups = groupRuntimes(allRuntimes, hosts);
 
-  // Power-managed hosts with nothing currently serving render as a sleeping
-  // line instead of a stage (mockup M1). Everything else that's enabled and
-  // has at least one lifecycle-capable runtime gets the full stage.
-  const stageGroups = groups.hosts.filter(
+  // Power-managed hosts render as a quiet sleeping line instead of a full
+  // stage ONLY when nothing is serving AND the group actually carries the
+  // power-managed runtime (the thing SleepingHostLine's "Wecken" button
+  // targets) — a power-managed host whose runtimes happen to lack that flag
+  // must still render as a stage, never vanish.
+  const sleepingGroups = groups.hosts.filter(
     (g) =>
       g.host.enabled &&
-      g.runtimes.some((rt) => panelCapabilities(rt).lifecycle) &&
-      !(g.host.power_managed && pickServing(g, live) === null)
+      g.host.power_managed &&
+      pickServing(g, live) === null &&
+      g.runtimes.some((rt) => rt.power_managed === true)
   );
-  const sleepingGroups = groups.hosts.filter(
-    (g) => g.host.enabled && g.host.power_managed && pickServing(g, live) === null
+  const sleepingHostIds = new Set(sleepingGroups.map((g) => g.host.id));
+  // Every other enabled host gets a stage — with runtimes (serving, ready
+  // list, or both) or without (StagePlaceholder). Lifecycle-capability is a
+  // per-runtime detail SlotStage/ReadyList handle themselves; it must not
+  // decide whether the host is visible at all.
+  const stageGroups = groups.hosts.filter(
+    (g) => g.host.enabled && !sleepingHostIds.has(g.host.id)
   );
+  // Disabled hosts have no stage/sleeping-line — their runtimes still exist
+  // and must not silently vanish, so they join the Unassigned section (whose
+  // hint text already points at Infrastructure to fix the binding).
+  const disabledHostRuntimes = groups.hosts
+    .filter((g) => !g.host.enabled)
+    .flatMap((g) => g.runtimes);
+  const unassignedRuntimes = [...groups.unassigned, ...disabledHostRuntimes];
 
   const selectedRuntime = allRuntimes.find((rt) => rt.id === selectedId) ?? null;
   const selectedLive = selectedRuntime ? live?.[selectedRuntime.slug ?? selectedRuntime.id] : undefined;
@@ -931,7 +943,7 @@ export default function RuntimesPage() {
 
             <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
 
-            {groups.unassigned.length > 0 && (
+            {unassignedRuntimes.length > 0 && (
               <section>
                 <div className="flex items-center gap-2.5 mb-3">
                   <span
@@ -943,7 +955,7 @@ export default function RuntimesPage() {
                   <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {groups.unassigned.map((rt) => (
+                  {unassignedRuntimes.map((rt) => (
                     <UnassignedRow key={rt.id} runtime={rt} onOpen={openPanel} />
                   ))}
                 </div>
@@ -977,7 +989,7 @@ export default function RuntimesPage() {
           </button>
           <button
             type="button"
-            onClick={openInfraSection}
+            onClick={openCliToolsSection}
             data-testid="footer-cli"
             className="text-xs cursor-pointer transition-colors hover:underline"
             style={{ color: C.textMuted }}

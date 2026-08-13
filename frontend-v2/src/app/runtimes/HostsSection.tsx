@@ -167,7 +167,6 @@ function HostFormModal({
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["hosts"] });
-    queryClient.invalidateQueries({ queryKey: ["host-metrics"] });
     queryClient.invalidateQueries({ queryKey: ["runtimes"] });
   };
 
@@ -492,7 +491,6 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
     onSuccess: () => {
       setFeedback(null);
       queryClient.invalidateQueries({ queryKey: ["hosts"] });
-      queryClient.invalidateQueries({ queryKey: ["host-metrics"] });
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
     },
     // 409 = runtimes still bound (guard) — show the backend message instead

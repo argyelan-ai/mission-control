@@ -13,17 +13,17 @@
  * deliberately does not reproduce them.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
-import { pickServing, panelCapabilities, type HostGroup } from "./grouping";
+import { pickServing, type HostGroup } from "./grouping";
 import { useGpuSparkline } from "./useGpuSparkline";
 import { fmtCtx } from "@/lib/utils";
-import { openModelsTab } from "./page";
+import { openModelsTab } from "./modelsTab";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // typeLabel copied from RuntimeDetailPanel.tsx (same list, same reasoning —
@@ -43,12 +43,26 @@ type SlotState = "serving" | "warmup" | "switching" | "off" | "failed";
 
 const ACTIVE_DB_STATES = new Set(["ready", "warming", "starting"]);
 
+// consecutive_failures below this threshold during an active DB state (ready/
+// warming/starting) is just the watcher catching an engine that hasn't come
+// up yet — not a failure. A normal warmup is unreachable by definition until
+// the model finishes loading; flagging it FAILED on probe #1 was the bug.
+const FAILURE_THRESHOLD = 3;
+
 function slotState(rt: Runtime | null, l?: RuntimeLiveStatus): SlotState {
   if (!rt) return "off";
+  // The backend only ever sets live.status="switching" (+ .phase) inside an
+  // active recipe-switch/eviction grace window (runtime_watcher.py
+  // _probe_one, the `switching is not None` branch) — a normal warmup never
+  // reaches this. Kept wired up so it activates automatically if/when the
+  // backend starts emitting it more broadly; currently a dead-but-harmless
+  // path outside that window.
   if (l?.status === "switching") return "switching";
   const state = rt.state ?? "unknown";
   if (state === "failed") return "failed";
-  if (ACTIVE_DB_STATES.has(state) && l?.reachable === false) return "failed";
+  if (ACTIVE_DB_STATES.has(state) && l?.reachable === false && (l?.consecutive_failures ?? 0) >= FAILURE_THRESHOLD) {
+    return "failed";
+  }
   if (state === "ready") return "serving";
   if (state === "warming" || state === "starting") return "warmup";
   return "off";
@@ -97,19 +111,19 @@ function Meter({ label, value, pct }: { label: string; value: string; pct: numbe
 
 function TelemetryColumn({ hostId }: { hostId: string }) {
   const t = useTranslations("runtimes.slotStage");
-  const { data } = useQuery({
+  const { data, dataUpdatedAt } = useQuery({
     queryKey: ["hosts", hostId, "metrics"],
     queryFn: () => api.hosts.metrics(hostId),
     refetchInterval: 5_000,
   });
 
-  const sparkline = useGpuSparkline(hostId, data?.gpu_util_pct ?? null);
+  const sparkline = useGpuSparkline(hostId, data?.gpu_util_pct ?? null, dataUpdatedAt);
 
   if (!data || !data.reachable) {
     return (
       <div
-        className="flex items-center px-4 py-4 text-xs shrink-0"
-        style={{ color: C.textMuted, background: C.bgBase, borderLeft: `1px solid ${C.borderSubtle}`, width: "300px" }}
+        className="flex items-center px-4 py-4 text-xs shrink-0 w-full md:w-[300px] border-t md:border-t-0 md:border-l border-subtle"
+        style={{ color: C.textMuted, background: C.bgBase }}
       >
         {t("hostUnreachable")}
       </div>
@@ -129,8 +143,8 @@ function TelemetryColumn({ hostId }: { hostId: string }) {
 
   return (
     <div
-      className="flex flex-col gap-3.5 px-4 py-4 shrink-0"
-      style={{ background: C.bgBase, borderLeft: `1px solid ${C.borderSubtle}`, width: "300px" }}
+      className="flex flex-col gap-3.5 px-4 py-4 shrink-0 w-full md:w-[300px] border-t md:border-t-0 md:border-l border-subtle"
+      style={{ background: C.bgBase }}
     >
       <Meter label="GPU" value={data.gpu_util_pct != null ? `${data.gpu_util_pct} %` : "—"} pct={gpuPct} />
       <Meter label="VRAM" value={`${vramUsedGb} / ${vramTotalGb} GB`} pct={vramPct} />
@@ -160,7 +174,7 @@ function AgentChipsRow({ runtime }: { runtime: Runtime }) {
   const t = useTranslations("runtimes.slotStage");
   const slug = runtime.slug ?? runtime.id;
   const { data } = useQuery({
-    queryKey: ["runtimes", slug, "agents"],
+    queryKey: ["runtime-agents", slug],
     queryFn: () => api.runtimes.db.agents(slug),
     enabled: !!slug,
     staleTime: 15_000,
@@ -222,29 +236,67 @@ function SwitchRow({
   live?: Record<string, RuntimeLiveStatus>;
 }) {
   const t = useTranslations("runtimes.slotStage");
+  const tRecipe = useTranslations("runtimes.recipe");
   const queryClient = useQueryClient();
+  // Two-step confirm before an eviction — restores the old SparkRecipeSwitcher's
+  // arm/confirm behavior (a recipe switch evicts whatever the GPU is currently
+  // serving; that must never be one click away).
+  const [confirmRecipe, setConfirmRecipe] = useState<string | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
 
-  const vllmRuntime = group.runtimes.find((rt) => rt.runtime_type === "vllm_docker") ?? null;
+  // The vllm_docker runtime actually holding the slot wins over "the first
+  // vllm_docker row in the group" — a host can carry more than one
+  // vllm_docker runtime (e.g. mid box-migration), and the switch must target
+  // whichever one is really serving right now.
+  const vllmRuntime =
+    serving?.runtime_type === "vllm_docker"
+      ? serving
+      : group.runtimes.find((rt) => rt.runtime_type === "vllm_docker") ?? null;
   const recipeCapable = vllmRuntime != null;
 
   const currentRecipeQuery = useQuery({
     queryKey: ["runtime-current-recipe", vllmRuntime?.id],
     queryFn: () => api.runtimes.sparkrun.currentRecipe(vllmRuntime!.id),
     enabled: recipeCapable,
+    staleTime: 300_000,
+    refetchOnWindowFocus: false,
   });
   const recipesQuery = useQuery({
     queryKey: ["sparkrun-recipes"],
     queryFn: () => api.runtimes.sparkrun.listRecipes(),
     enabled: recipeCapable,
+    staleTime: 300_000,
+    refetchOnWindowFocus: false,
   });
+
+  // sparkrun_managed: false means this is a plain vllm_docker container the
+  // operator runs by hand — there is nothing honest to switch (mirrors the
+  // old SparkRecipeSwitcher's `isSparkrun` gate). Undefined (still loading)
+  // keeps the row rendered so it doesn't flash in and out while the probe is
+  // in flight.
+  const isSparkrunManaged = currentRecipeQuery.data?.sparkrun_managed !== false;
 
   const switchMutation = useMutation({
     mutationFn: (recipe: string) => api.runtimes.sparkrun.switchRecipe(vllmRuntime!.id, recipe),
     onSuccess: () => {
+      setConfirmRecipe(null);
       queryClient.invalidateQueries({ queryKey: ["runtime-current-recipe", vllmRuntime?.id] });
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
     },
+    onError: () => setConfirmRecipe(null),
   });
+
+  // Clicking outside the row disarms an armed confirm — same "click elsewhere
+  // closes it" behavior the old dropdown had via its document mousedown listener.
+  useEffect(() => {
+    if (confirmRecipe === null) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (rowRef.current?.contains(e.target as Node)) return;
+      setConfirmRecipe(null);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [confirmRecipe]);
 
   const servingLive = serving ? liveFor(serving, live) : undefined;
   const isSwitching = servingLive?.status === "switching";
@@ -268,6 +320,7 @@ function SwitchRow({
 
   return (
     <div
+      ref={rowRef}
       className="flex items-center gap-2 px-4 py-3 flex-wrap"
       style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
     >
@@ -278,14 +331,50 @@ function SwitchRow({
         {t("switchLabel")}
       </span>
 
-      {recipeCapable && recipesQuery.data?.recipes.map((r) => {
+      {recipeCapable && isSparkrunManaged && recipesQuery.data?.recipes.map((r) => {
         const isActive = r.name === currentRecipeQuery.data?.current_recipe;
+        const isDisabled = !r.solo_capable;
+        const gpuHint =
+          r.tp != null || r.nodes != null
+            ? `tp=${r.tp ?? 1}${r.nodes != null ? `, nodes=${r.nodes}` : ""}`
+            : null;
+
+        if (confirmRecipe === r.name) {
+          return (
+            <div
+              key={r.name}
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-xs flex-wrap"
+              style={{ background: C.bgSurface, border: `1px solid ${C.borderAccent}` }}
+            >
+              <span className="font-mono" style={{ color: C.textPrimary }}>{r.name}</span>
+              <button
+                onClick={() => switchMutation.mutate(r.name)}
+                className="rounded px-2 py-1 text-[10px] font-semibold cursor-pointer"
+                style={{ background: C.accent, color: C.bgDeep }}
+              >
+                {tRecipe("confirmSwitch")}
+              </button>
+              <button
+                onClick={() => setConfirmRecipe(null)}
+                className="rounded px-2 py-1 text-[10px] cursor-pointer"
+                style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
+              >
+                {tRecipe("cancel")}
+              </button>
+              <span className="text-[10px]" style={{ color: C.textMuted }}>{tRecipe("warmupNotice")}</span>
+            </div>
+          );
+        }
+
         return (
           <button
             key={r.name}
-            onClick={() => switchMutation.mutate(r.name)}
-            disabled={isActive || !r.solo_capable}
-            title={!r.solo_capable ? `${r.name}: needs more GPUs/nodes than this host has` : undefined}
+            onClick={() => {
+              if (isActive || isDisabled) return;
+              setConfirmRecipe(r.name);
+            }}
+            disabled={isActive || isDisabled}
+            title={isDisabled ? tRecipe("needsMoreTitle", { gpuHint: gpuHint ?? tRecipe("moreGpusNodes") }) : undefined}
             className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: C.bgSurface, border: `1px solid ${isActive ? C.borderAccent : C.border}`, color: isActive ? C.accent : C.textPrimary }}
           >
@@ -293,6 +382,10 @@ function SwitchRow({
           </button>
         );
       })}
+
+      {recipeCapable && isSparkrunManaged && recipesQuery.isError && (
+        <span className="text-xs" style={{ color: STATUS_TEXT.error }}>{tRecipe("unreachable")}</span>
+      )}
 
       <button
         onClick={() => openModelsTab("download")}
@@ -472,8 +565,13 @@ export function SlotStage({
   onOpen: (rt: Runtime) => void;
 }) {
   const serving = useMemo(() => pickServing(group, live), [group, live]);
+  // Every non-serving host runtime belongs here, not just lifecycle-capable
+  // ones — a host-bound omp/openai_compatible/llamacpp_docker runtime has no
+  // start/stop path, but it is still real inventory on this box and must not
+  // silently disappear. The detail panel opened from a row gates Control
+  // correctly on its own (panelCapabilities(rt).lifecycle).
   const readyRuntimes = useMemo(
-    () => group.runtimes.filter((rt) => rt.id !== serving?.id && panelCapabilities(rt).lifecycle),
+    () => group.runtimes.filter((rt) => rt.id !== serving?.id),
     [group, serving]
   );
 
@@ -492,7 +590,7 @@ export function SlotStage({
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
       <StageHeader group={group} serving={serving} live={live} hostReachable={hostMetrics?.reachable} />
-      <div className="flex">
+      <div className="flex flex-col md:flex-row">
         <div className="flex-1 min-w-0">
           <NowBlock serving={serving} live={live} sizeGb={sizeGb} />
         </div>

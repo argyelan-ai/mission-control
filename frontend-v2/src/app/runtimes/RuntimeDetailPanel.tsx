@@ -238,7 +238,7 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
-    queryKey: ["runtimes", slug, "agents"],
+    queryKey: ["runtime-agents", slug],
     queryFn: () => api.runtimes.db.agents(slug),
     enabled: !!slug,
     staleTime: 15_000,
@@ -251,7 +251,7 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
   const syncNowMutation = useMutation({
     mutationFn: () => api.runtimes.db.syncAgents(slug),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runtimes", slug, "agents"] });
+      queryClient.invalidateQueries({ queryKey: ["runtime-agents", slug] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
   });
@@ -323,9 +323,10 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
 }
 
 function AgentsSection({ runtime }: { runtime: Runtime }) {
+  const t = useTranslations("runtimes");
   return (
     <>
-      <SectionDivider label="Agents" />
+      <SectionDivider label={t("sectionAgents")} />
       <div className="px-4 pb-3">
         <BoundAgents runtime={runtime} />
       </div>
@@ -342,15 +343,6 @@ function dotColor(state: string): string {
   if (state === "failed") return C.error;
   return STATUS.offline;
 }
-
-const STATE_LABELS: Record<string, string> = {
-  ready: "Ready",
-  warming: "Warmup…",
-  starting: "Starting…",
-  stopped: "Stopped",
-  failed: "Error",
-  unknown: "Unknown",
-};
 
 // ── Panel ──────────────────────────────────────────────────────────────────
 
@@ -456,7 +448,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
               style={{ background: dotColor(effectiveState) }}
             />
             <span className="text-xs" style={{ color: C.textSecondary }}>
-              {STATE_LABELS[effectiveState] ?? "Unknown"}
+              {t(`states.${effectiveState}`)}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
           </>
@@ -469,24 +461,24 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
 
       {isAsleep && (
         <div className="px-4 pb-1 text-xs" style={{ color: C.textDim }}>
-          Sleeping
+          {t("sleeping")}
         </div>
       )}
       {isBootedNoModel && (
         <div className="px-4 pb-1 text-xs" style={{ color: STATUS_TEXT.warning }}>
-          Awake — model not loaded (Start)
+          {t("awakeNoModel")}
         </div>
       )}
 
       {/* Control section */}
       {caps.lifecycle && (
         <>
-          <SectionDivider label="Control" />
+          <SectionDivider label={t("sectionControl")} />
           <div className="px-4 pb-2 flex items-center gap-1.5">
             {caps.wake && (
               <ActionButton
                 icon={Power}
-                label="Wake"
+                label={t("wake")}
                 disabled={(!isAsleep && effectiveState === "ready") || isMutating}
                 onClick={() => wakeMutation.mutate()}
                 loading={wakeMutation.isPending}
@@ -495,7 +487,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
             )}
             <ActionButton
               icon={Play}
-              label="Start"
+              label={t("start")}
               disabled={!canStart || isMutating}
               onClick={() => startMutation.mutate()}
               loading={startMutation.isPending}
@@ -503,7 +495,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
             />
             <ActionButton
               icon={Square}
-              label="Stop"
+              label={t("stop")}
               disabled={!canStop || isMutating}
               onClick={() => stopMutation.mutate()}
               loading={stopMutation.isPending}
@@ -512,7 +504,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
             {runtime.runtime_type !== "lmstudio" && (
               <ActionButton
                 icon={RotateCcw}
-                label="Restart"
+                label={t("restart")}
                 disabled={!canStop || isMutating}
                 onClick={() => restartMutation.mutate()}
                 loading={restartMutation.isPending}
@@ -524,7 +516,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
       )}
 
       {/* Model section */}
-      <SectionDivider label="Model" />
+      <SectionDivider label={t("sectionModel")} />
       <div className="px-4 pb-3 flex flex-col gap-2">
         {caps.modelEditor && (
           <RuntimeModelEditor runtime={runtime} onMessage={setActionMsg} />
@@ -532,7 +524,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
         {!caps.modelEditor && (
           <div className="flex items-center gap-1.5">
             <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
-              Model:
+              {t("modelEditor.model")}
             </span>
             <span className="font-mono text-xs truncate" style={{ color: C.textSecondary }}>
               {runtime.model_identifier ?? "—"}
@@ -551,21 +543,21 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
                 {live.reachable ? (
                   <>
                     <span className="truncate" title={live.served_model ?? undefined}>
-                      Engine serves: {live.served_model ?? "—"}
+                      {t("engineServes", { model: live.served_model ?? "—" })}
                     </span>
                     {live.drift && (
                       <span
                         className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
                         style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
-                        title={`Registry says ${runtime.model_identifier ?? "—"} — will sync on the next watcher tick`}
+                        title={t("driftTitle", { model: runtime.model_identifier ?? "—" })}
                       >
-                        Drift
+                        {t("drift")}
                       </span>
                     )}
                   </>
                 ) : (
                   <span style={{ color: STATUS_TEXT.error }}>
-                    Engine unreachable ({live.consecutive_failures} probes)
+                    {t("engineUnreachable", { count: live.consecutive_failures })}
                   </span>
                 )}
               </>
@@ -596,7 +588,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           {caps.probe && (
             <ActionButton
               icon={RefreshCw}
-              label="Re-probe model"
+              label={t("reprobe")}
               disabled={isMutating}
               onClick={() => probeMutation.mutate()}
               loading={probeMutation.isPending}
@@ -607,8 +599,8 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           {caps.contextSettings && (
             <button
               onClick={() => setSettingsOpen((v) => !v)}
-              title="Context settings"
-              aria-label="Context settings"
+              title={t("ctxSettings")}
+              aria-label={t("ctxSettings")}
               style={{
                 padding: "4px",
                 borderRadius: "6px",
@@ -646,7 +638,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
       {/* Automation section */}
       {caps.autostart && (
         <>
-          <SectionDivider label="Automation" />
+          <SectionDivider label={t("sectionAutomation")} />
           <div className="px-4 pb-3">
             <AutostartToggle slug={runtime.slug ?? runtime.id} />
           </div>

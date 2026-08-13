@@ -30,13 +30,12 @@ function readStored(id: string): boolean | null {
   }
 }
 
-/** Open a section from outside (used by SectionNav before scrolling to it). */
+/** Open a section from outside (used by SectionNav before scrolling to it).
+ *  Transient only — it does NOT persist to localStorage. A footer link
+ *  jumping into a section that defaults to collapsed (Models, Infrastructure)
+ *  must not silently flip the operator's remembered preference for next
+ *  visit; only the section's own collapse/expand toggle does that. */
 export function requestSectionOpen(id: string) {
-  try {
-    localStorage.setItem(storageKey(id), "1");
-  } catch {
-    /* private mode — the event below still opens it for this render */
-  }
   window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: id }));
 }
 

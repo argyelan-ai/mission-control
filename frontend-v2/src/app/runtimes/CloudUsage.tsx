@@ -130,7 +130,7 @@ export function CloudUsage({
     queries: runtimes.map((rt) => {
       const slug = rt.slug ?? rt.id;
       return {
-        queryKey: ["runtimes", slug, "agents"],
+        queryKey: ["runtime-agents", slug],
         queryFn: () => api.runtimes.db.agents(slug),
         enabled: !!slug,
         staleTime: 15_000,
@@ -139,18 +139,30 @@ export function CloudUsage({
     }),
   });
 
+  // Every row starts pending with `agents: []` — indistinguishable from a
+  // genuinely unbound runtime until its own query settles. Without tracking
+  // that separately, a bound runtime flickers through the "no agent" collapse
+  // row (with a briefly-inflated count) before its chips appear. `settled`
+  // keeps unsettled rows out of both buckets until they're actually known.
   const rows = useMemo(
-    () => runtimes.map((rt, i) => ({ runtime: rt, agents: agentQueries[i]?.data?.agents ?? [] })),
+    () =>
+      runtimes.map((rt, i) => ({
+        runtime: rt,
+        agents: agentQueries[i]?.data?.agents ?? [],
+        settled: agentQueries[i]?.isPending !== true,
+      })),
     // agentQueries is a fresh array every render (per useQueries semantics) —
-    // its .data identities are what actually matter for memoization, but
-    // keying off the array itself is correct and cheap here (small lists).
+    // its .data/.isPending identities are what actually matter for
+    // memoization, but keying off the array itself is correct and cheap here
+    // (small lists).
     [runtimes, agentQueries]
   );
 
   if (runtimes.length === 0) return null;
 
-  const bound = rows.filter((r) => r.agents.length > 0);
-  const unbound = rows.filter((r) => r.agents.length === 0);
+  const anyPending = agentQueries.some((q) => q.isPending);
+  const bound = rows.filter((r) => r.settled && r.agents.length > 0);
+  const unbound = rows.filter((r) => r.settled && r.agents.length === 0);
 
   return (
     <section className="mt-8">
@@ -176,7 +188,7 @@ export function CloudUsage({
           />
         ))}
 
-        {unbound.length > 0 && (
+        {!anyPending && unbound.length > 0 && (
           <>
             <button
               type="button"

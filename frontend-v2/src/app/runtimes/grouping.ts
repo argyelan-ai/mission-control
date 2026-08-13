@@ -1,6 +1,10 @@
 import type { Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 
-export const CLOUD_TYPES = new Set<string>(["cloud", "grok", "kimi"]);
+// openai_compatible is hostless-cloud too (spec §3) — an OpenAI-compatible
+// endpoint with no bound host is a hosted API like Claude/Grok/Kimi, not an
+// orphaned box runtime. A host-bound openai_compatible runtime still routes
+// into its host group as normal (groupRuntimes checks rt.host first).
+export const CLOUD_TYPES = new Set<string>(["cloud", "grok", "kimi", "openai_compatible"]);
 
 const ACTIVE_STATES = new Set(["ready", "starting", "warming"]);
 
