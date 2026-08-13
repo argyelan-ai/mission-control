@@ -108,6 +108,7 @@ function RuntimeModelEditor({
   runtime: Runtime;
   onMessage?: (msg: string) => void;
 }) {
+  const t = useTranslations("runtimes.modelEditor");
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(runtime.model_identifier ?? "");
@@ -119,11 +120,9 @@ function RuntimeModelEditor({
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
-      onMessage?.(
-        `Model set to "${data.model_identifier ?? "—"}" — bound agents will be restarted on the next watcher tick.`
-      );
+      onMessage?.(t("modelSet", { model: data.model_identifier ?? "—" }));
     },
-    onError: () => onMessage?.("Model update failed."),
+    onError: () => onMessage?.(t("updateFailed")),
   });
 
   const save = () => {
@@ -155,11 +154,11 @@ function RuntimeModelEditor({
     return (
       <div className="flex items-center gap-1.5">
         <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
-          Model:
+          {t("model")}
         </span>
         <input
           autoFocus
-          aria-label="Model identifier"
+          aria-label={t("modelIdAria")}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
@@ -177,8 +176,8 @@ function RuntimeModelEditor({
         <button
           onClick={save}
           disabled={mutation.isPending}
-          title="Save"
-          aria-label="Save"
+          title={t("save")}
+          aria-label={t("save")}
           style={iconBtn(C.accent)}
         >
           {mutation.isPending ? (
@@ -190,8 +189,8 @@ function RuntimeModelEditor({
         <button
           onClick={cancel}
           disabled={mutation.isPending}
-          title="Cancel"
-          aria-label="Cancel"
+          title={t("cancel")}
+          aria-label={t("cancel")}
           style={iconBtn(C.textMuted)}
         >
           <X size={13} />
@@ -203,7 +202,7 @@ function RuntimeModelEditor({
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
-        Model:
+        {t("model")}
       </span>
       <span
         className="font-mono text-xs truncate"
@@ -217,8 +216,8 @@ function RuntimeModelEditor({
           setValue(runtime.model_identifier ?? "");
           setEditing(true);
         }}
-        title="Edit model"
-        aria-label="Edit model"
+        title={t("editModel")}
+        aria-label={t("editModel")}
         style={iconBtn(C.textMuted)}
       >
         <Pencil size={12} />
@@ -374,6 +373,7 @@ export function RuntimeDetailPanel({
 }
 
 function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: RuntimeLiveStatus }) {
+  const t = useTranslations("runtimes");
   const queryClient = useQueryClient();
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -400,44 +400,43 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["runtimes"] });
 
   // Mutations match THIS worktree's page.tsx RuntimeCard (~1216-1247) exactly:
-  // same api calls, onSuccess/onError messages, invalidations. Verified against
-  // main — no drift from the reference panel to adopt (main's t()-based fallback
-  // strings resolve to the same English text as these literals).
+  // same api calls, onSuccess/onError messages (via useTranslations("runtimes"),
+  // same keys as RuntimeCard), invalidations.
   const startMutation = useMutation({
     mutationFn: () => api.runtimes.start(runtime.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Start failed."),
+    onError: () => setActionMsg(t("startFailed")),
   });
 
   const stopMutation = useMutation({
     mutationFn: () => api.runtimes.stop(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Stop failed."),
+    onError: () => setActionMsg(t("stopFailed")),
   });
 
   const restartMutation = useMutation({
     mutationFn: () => api.runtimes.restart(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Restart failed."),
+    onError: () => setActionMsg(t("restartFailed")),
   });
 
   const wakeMutation = useMutation({
     mutationFn: () => api.runtimes.wake(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Wake failed."),
+    onError: () => setActionMsg(t("wakeFailed")),
   });
 
   const probeMutation = useMutation({
     mutationFn: () => api.runtimes.probeModel(runtime.id),
     onSuccess: (data) => {
       const msg = data.changed
-        ? `Model: ${data.old_model_identifier ?? "—"} → ${data.new_model_identifier}`
-        : `Model unchanged: ${data.new_model_identifier ?? "—"}`;
+        ? t("modelChanged", { old: data.old_model_identifier ?? "—", new: data.new_model_identifier ?? "—" })
+        : t("modelUnchanged", { model: data.new_model_identifier ?? "—" });
       setActionMsg(msg);
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: () => setActionMsg("Probe failed."),
+    onError: () => setActionMsg(t("probeFailed")),
   });
 
   const isMutating =
