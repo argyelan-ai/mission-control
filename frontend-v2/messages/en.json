@@ -2265,6 +2265,11 @@
       "addModel": "+ Model",
       "placeholderTitle": "No model set up",
       "switchFailed": "Switch failed: {message}"
+    },
+    "cloudUsage": {
+      "sectionTitle": "Cloud — who's using what",
+      "collapseRow": "{n} models without an agent — show all",
+      "bindCta": "bind ›"
     }
   },
   "bench": {

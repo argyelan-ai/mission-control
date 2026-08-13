@@ -2265,6 +2265,11 @@
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
       "switchFailed": "Umschalten fehlgeschlagen: {message}"
+    },
+    "cloudUsage": {
+      "sectionTitle": "Cloud — wer nutzt was",
+      "collapseRow": "{n} Modelle ohne Agent — alle zeigen",
+      "bindCta": "binden ›"
     }
   },
   "bench": {
