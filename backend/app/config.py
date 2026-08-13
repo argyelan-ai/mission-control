@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # true even before the .env is updated.
     discord_guild_id: str = ""
     discord_category_id: str = ""
+    # Alarm-Lautstaerke (services/discord_notify.py). An der echten 7-Tage-
+    # Historie gemessen: 27,7 Alarme/Tag ungefiltert, 7,0/Tag mit 30-Minuten-
+    # Sammelfenster, 5,7/Tag mit 60 Minuten. Ein laengeres Fenster hilft
+    # spuerbar, eine laengere Wiederholungssperre kaum — die Wiederholungen
+    # liegen ohnehin weit auseinander. Daher diese Defaults.
+    discord_digest_window_seconds: int = 1800
+    discord_dedup_ttl_seconds: int = 3600
 
     # Telegram Bot (direct API for approval buttons — operator command chat)
     telegram_bot_token: str = ""

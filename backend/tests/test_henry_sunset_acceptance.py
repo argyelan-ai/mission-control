@@ -23,6 +23,7 @@ Schema notes:
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
@@ -209,9 +210,13 @@ async def test_discord_ops_webhook_emit_works_post_henry_removal():
             "severity": severity, "fields": fields,
         })
 
-    # Patch at activity.py's import site - that's where emit_event resolves
-    # the symbol (per PATTERNS.md gotcha #3).
-    with patch("app.services.activity.send_discord_notification",
+    # Die Naht ist umgezogen: emit_event ruft den Discord-Sender nicht mehr
+    # direkt, sondern reicht den Alarm an discord_notify weiter, das ueber
+    # Wiederholungssperre und Sofort-vs-Sammelmeldung entscheidet. Gepatcht
+    # wird jetzt dessen _deliver — der eine Punkt, durch den jede
+    # Discord-Nachricht laeuft. Die Absicht des Tests bleibt: eine Warnung
+    # muss Discord erreichen. Neu ist nur, dass sie gebuendelt ankommt.
+    with patch("app.services.discord_notify._deliver",
                new=AsyncMock(side_effect=_capture)):
         with patch("app.services.activity.broadcast",
                    new_callable=AsyncMock):
@@ -222,11 +227,20 @@ async def test_discord_ops_webhook_emit_works_post_henry_removal():
                     title="Henry-Sunset acceptance smoke",
                     severity="warning",
                 )
+            from app.redis_client import get_redis
+            from app.services.discord_notify import DIGEST_KEY, flush_digest
+            redis = await get_redis()
+            raw = await redis.lindex(DIGEST_KEY, 0)
+            assert raw, "Die Warnung muss zumindest in der Sammlung liegen"
+            item = json.loads(raw)
+            item["ts"] = 0  # Fenster schliessen statt 30 Minuten warten
+            await redis.lset(DIGEST_KEY, 0, json.dumps(item))
+            await flush_digest()
 
     assert len(sent) == 1, (
-        "emit_event(severity='warning') must post to Discord OPS"
+        "emit_event(severity='warning') must still reach Discord (via digest)"
     )
-    assert "Henry-Sunset" in sent[0]["title"]
+    assert "Henry-Sunset" in sent[0]["description"]
     assert sent[0]["severity"] == "warning"
 
 
@@ -241,7 +255,7 @@ async def test_emit_event_info_severity_does_not_post():
     async def _capture(title, description, severity="warning", fields=None):
         sent.append({"title": title})
 
-    with patch("app.services.activity.send_discord_notification",
+    with patch("app.services.discord_notify._deliver",
                new=AsyncMock(side_effect=_capture)):
         with patch("app.services.activity.broadcast",
                    new_callable=AsyncMock):
@@ -250,6 +264,10 @@ async def test_emit_event_info_severity_does_not_post():
                     s, event_type="info.heartbeat",
                     title="just a heartbeat", severity="info",
                 )
+            # Auch nach einem Flush darf nichts kommen: info wird gar nicht
+            # erst gesammelt.
+            from app.services.discord_notify import flush_digest
+            await flush_digest()
 
     assert len(sent) == 0, (
         "severity='info' must NOT spam OPS channel"

@@ -108,6 +108,18 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
 
         system_mode = await get_system_mode()
 
+        # Gesammelte Discord-Warnungen zustellen, sobald ihr Fenster voll ist.
+        # Haengt hier statt an einem eigenen Timer: der Watchdog-Takt (30s) ist
+        # fein genug fuer ein 15-Minuten-Fenster, und der Redis-Lock oben sorgt
+        # dafuer, dass bei mehreren Workern nur einer sendet.
+        try:
+            from app.services.discord_notify import flush_digest
+            delivered = await flush_digest()
+            if delivered:
+                logger.info("[WATCHDOG] %d gesammelte Warnungen an Discord", delivered)
+        except Exception as e:  # noqa: BLE001 — darf den Watchdog nie kippen
+            logger.warning("Discord-Sammelmeldung fehlgeschlagen: %s", e)
+
         async with AsyncSession(engine, expire_on_commit=False) as session:
             # Health checks always run (even when HALTED)
             await self._check_agent_health(session)
