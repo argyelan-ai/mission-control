@@ -7,17 +7,19 @@ Normalized event shapes (plain dicts, JSON-serializable):
   {"kind":"message","uuid":str,"ts":str,"role":"user"|"assistant","text":str,
    "model":str|None,"sidechain":bool}
   {"kind":"tool","uuid":str,"ts":str,"name":str,"title":str,"detail":dict,
-   "result":str|None,"status":"done"|"error","stats":{"additions":int,"deletions":int}|None,
-   "sidechain":bool}
+   "toolUseId":str|None,"result":str|None,"status":"done"|"error",
+   "stats":{"additions":int,"deletions":int}|None,"sidechain":bool}
   {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
   {"kind":"command","uuid":str,"ts":str,"command":str}
   {"kind":"usage","uuid":str,"ts":str,"inputTokens":int,"outputTokens":int,
    "model":str|None,"effort":str|None}
 
 `parse_transcript_line` also emits an internal ``_tool_result`` event for
-``tool_result`` content blocks (type=="user" lines) — A3 merges these onto
-their matching ``tool`` event by ``tool_use_id``; they never reach the
-frontend on their own.
+``tool_result`` content blocks (type=="user" lines) — ``{"kind":"_tool_result",
+"tool_use_id":str,"content":Any,"is_error":bool}``. ``read_history`` merges
+these onto their matching ``tool`` event by ``tool_use_id`` == ``toolUseId``
+(needed to disambiguate parallel tool calls within one assistant turn);
+they never reach the frontend on their own.
 """
 from __future__ import annotations
 
@@ -123,6 +125,7 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                     "kind": "_tool_result",
                     "tool_use_id": block.get("tool_use_id"),
                     "content": block.get("content"),
+                    "is_error": bool(block.get("is_error", False)),
                 }
             )
 
@@ -190,6 +193,7 @@ def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                     "name": name,
                     "title": build_tool_title(name, tool_input),
                     "detail": _truncate_detail(tool_input),
+                    "toolUseId": block.get("id"),
                     "result": None,
                     "status": "done",
                     "stats": None,
@@ -410,3 +414,139 @@ def transcript_allowed(agent, path: Path) -> bool:
         return False
 
     return _should_attribute_boss_path(cwd, git_branch)
+
+
+# ── History reading (I/O — reads a transcript file, not pure) ───────────────
+
+_RESULT_TRUNCATE_LEN = 4000
+_STATS_TOOLS = ("Edit", "Write")
+
+
+def read_history(path: Path, limit: int = 200, before_uuid: str | None = None) -> dict[str, Any]:
+    """Reads a transcript file top-to-bottom and returns one page of chat
+    events plus session metadata.
+
+    Streams the file line-by-line (transcripts can grow large over a long
+    session). Dedups on the top-level entry ``uuid`` — Claude Code can repeat
+    a line verbatim across a resumed session, and re-parsing it would
+    duplicate every event derived from it. Internal ``_tool_result`` events
+    are merged onto the ``tool`` event with the matching ``toolUseId`` (never
+    appended to ``events`` on their own) — matching by id rather than
+    position is what lets a multi-tool assistant turn resolve correctly, see
+    the module docstring. ``sidechain`` events are left inline; the frontend
+    groups them.
+
+    Without ``before_uuid``, returns the newest ``limit`` events (initial
+    load). With ``before_uuid``, returns the ``limit`` events immediately
+    preceding the first occurrence of that uuid (backward paging) — all
+    events sharing one entry's uuid are contiguous, so "first occurrence" is
+    that entry's start and excludes the whole entry from the page, never
+    just part of it. An unknown ``before_uuid`` yields an empty page.
+    """
+    session_id = path.stem
+    try:
+        live = (time.time() - path.stat().st_mtime) < _LIVE_WINDOW_SECONDS
+    except OSError:
+        live = False
+
+    started_at: str | None = None
+    events: list[dict[str, Any]] = []
+    seen_uuids: set[str] = set()
+    tool_events_by_id: dict[str, dict[str, Any]] = {}
+
+    try:
+        lines_file = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        lines_file = None
+
+    if lines_file is not None:
+        with lines_file:
+            for raw_line in lines_file:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    d = json.loads(raw_line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(d, dict):
+                    continue
+
+                entry_uuid = d.get("uuid")
+                if entry_uuid is not None:
+                    if entry_uuid in seen_uuids:
+                        continue
+                    seen_uuids.add(entry_uuid)
+
+                if started_at is None and d.get("timestamp"):
+                    started_at = d["timestamp"]
+
+                for ev in parse_transcript_line(raw_line):
+                    if ev["kind"] == "_tool_result":
+                        tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
+                        if tool_ev is not None:
+                            _merge_tool_result(tool_ev, ev)
+                        continue
+
+                    if ev["kind"] == "tool":
+                        stats = _compute_edit_stats(ev["name"], ev["detail"])
+                        if stats is not None:
+                            ev["stats"] = stats
+                        tool_use_id = ev.get("toolUseId")
+                        if tool_use_id is not None:
+                            tool_events_by_id[tool_use_id] = ev
+
+                    events.append(ev)
+
+    total = len(events)
+    if before_uuid is not None:
+        cut = next((i for i, e in enumerate(events) if e.get("uuid") == before_uuid), None)
+        if cut is None:
+            page: list[dict[str, Any]] = []
+            has_more = False
+        else:
+            start = max(0, cut - limit)
+            page = events[start:cut]
+            has_more = start > 0
+    else:
+        start = max(0, total - limit)
+        page = events[start:]
+        has_more = start > 0
+
+    return {
+        "events": page,
+        "session": {"sessionId": session_id, "live": live, "startedAt": started_at},
+        "hasMore": has_more,
+    }
+
+
+def _merge_tool_result(tool_event: dict[str, Any], tool_result: dict[str, Any]) -> None:
+    """Merges an internal ``_tool_result`` event onto its matching ``tool``
+    event (already looked up by ``toolUseId`` before this is called)."""
+    content = tool_result.get("content")
+    tool_event["result"] = str(content)[:_RESULT_TRUNCATE_LEN]
+    if tool_result.get("is_error"):
+        tool_event["status"] = "error"
+
+
+def _compute_edit_stats(name: str, detail: dict[str, Any]) -> dict[str, int] | None:
+    """Edit tool_use inputs carry ``old_string``/``new_string`` — a naive
+    line count of each, not a real diff, but enough for a chat summary
+    badge. None when neither field is present (e.g. Write's ``content``, or
+    any non-Edit/Write tool)."""
+    if name not in _STATS_TOOLS:
+        return None
+    old_string = detail.get("old_string")
+    new_string = detail.get("new_string")
+    if old_string is None and new_string is None:
+        return None
+    return {
+        "additions": _count_lines(new_string),
+        "deletions": _count_lines(old_string),
+    }
+
+
+def _count_lines(value: Any) -> int:
+    if not value:
+        return 0
+    return str(value).count("\n") + 1

@@ -74,6 +74,27 @@ def test_tool_result_emits_internal_event():
             "kind": "_tool_result",
             "tool_use_id": "toolu_1",
             "content": "file contents here",
+            "is_error": False,
+        }
+    ]
+
+
+def test_tool_result_is_error_true():
+    # A3 carry-forward: is_error rides on the tool_result block (sibling of
+    # content/tool_use_id) so read_history can flip the merged tool event's
+    # status to "error".
+    line = (
+        '{"type":"user","uuid":"u6","timestamp":"2026-08-13T10:00:08Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"toolu_3","content":"boom","is_error":true}]}}'
+    )
+    evs = parse_transcript_line(line)
+    assert evs == [
+        {
+            "kind": "_tool_result",
+            "tool_use_id": "toolu_3",
+            "content": "boom",
+            "is_error": True,
         }
     ]
 
@@ -118,6 +139,9 @@ def test_assistant_tool_use_event_shape():
     assert tool["status"] == "done"
     assert tool["stats"] is None
     assert tool["sidechain"] is False
+    # A3 carry-forward: toolUseId disambiguates parallel tool calls in one
+    # assistant turn when merging later tool_result entries.
+    assert tool["toolUseId"] == "toolu_1"
 
 
 def test_assistant_text_event_shape():
