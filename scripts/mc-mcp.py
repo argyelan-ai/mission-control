@@ -643,6 +643,8 @@ def mc_inbox() -> str:
     dieses Tool aufrufen: es liefert alle ungelesenen Nachrichten aus den
     Task-Threads des Agenten und ackt sie danach server-seitig — erst der
     Ack konsumiert die Nachricht (at-least-once, wie `mc inbox` im Shell-CLI).
+    Danach IMMER mit mc_msg in den Thread aus dem [thread ... · seq ...]-Footer
+    antworten — sonst bleibt die Nachricht eine Einbahnstrasse.
     """
     resp = _api_agent("GET", "/agent/me/inbox")
     if resp is None:
@@ -681,6 +683,60 @@ def mc_inbox() -> str:
     if ack_errors:
         result += "\n\n" + "\n".join(ack_errors)
     return result
+
+
+@mcp.tool()
+def mc_msg(body: str, thread_id: str = "", message_type: str = "message") -> str:
+    """Nachricht in einen Chat-Thread posten — Rueckkanal fuer MCP-only-Agenten.
+
+    Das Gegenstueck zu mc_inbox: nach dem Abholen neuer Nachrichten IMMER in
+    den Thread aus dem [thread ... · seq ...]-Footer antworten. Ohne mc_msg
+    bleibt jede Chat-Nachricht eine Einbahnstrasse — gelesen, geackt,
+    verstummt (live gemessen 2026-07-29, siehe thread_scope).
+
+    Mit `thread_id` → POST /agent/threads/{thread_id}/messages (gezielte
+    Konversation, z.B. die Thread-ID aus dem mc_inbox-Footer).
+    Ohne `thread_id` → POST /agent/tasks/current/messages (Thread des aktiven
+    Tasks; ohne aktiven Task fallback auf den DM-Thread des Agenten).
+
+    Erlaubte Typen: message (Default), status, decision. `question` wird
+    abgelehnt — Fragen tragen Awaiting-Semantik und laufen ueber einen anderen
+    Weg (`mc ask` im Shell-CLI); beide Endpoints lehnen message_type
+    "question" ab.
+
+    Args:
+        body: Nachrichtentext
+        thread_id: Thread-ID (aus dem mc_inbox-Footer). Leer = aktueller Task.
+        message_type: message | status | decision
+    """
+    if message_type == "question":
+        return (
+            "Fehler: message_type='question' wird abgelehnt — Fragen tragen "
+            "Awaiting-Semantik und laufen ueber einen anderen Weg (mc ask). "
+            "Nutze message | status | decision."
+        )
+    if message_type not in ("message", "status", "decision"):
+        return (
+            f"Fehler: ungueltiger message_type '{message_type}' — erlaubt sind "
+            "message, status, decision."
+        )
+
+    path = (
+        f"/agent/threads/{thread_id}/messages"
+        if thread_id
+        else "/agent/tasks/current/messages"
+    )
+    resp = _api_agent("POST", path, json={"body": body, "message_type": message_type})
+    if resp is None:
+        return "Fehler: kein Agent-Token verfuegbar (MC_AGENT_TOKEN fehlt)."
+    if "error" in resp:
+        return f"Fehler: {resp['error']}"
+
+    message_id = resp.get("message_id") or resp.get("id") or "?"
+    return (
+        f"Nachricht gesendet: {message_id} "
+        f"(thread={resp.get('thread_id', '?')}, typ={message_type})"
+    )
 
 
 @mcp.tool()
