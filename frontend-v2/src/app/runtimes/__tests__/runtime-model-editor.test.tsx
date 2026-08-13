@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RuntimeCard } from "../page";
+import { RuntimeDetailPanel } from "../RuntimeDetailPanel";
 import { api } from "@/lib/api";
 import type { Runtime } from "@/lib/types";
 
@@ -38,7 +38,7 @@ const makeRuntime = (over: Partial<Runtime> = {}): Runtime => ({
   ...over,
 });
 
-describe("RuntimeCard model editor", () => {
+describe("RuntimeDetailPanel model editor", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
@@ -49,7 +49,7 @@ describe("RuntimeCard model editor", () => {
   });
 
   it("shows the pencil edit affordance for non-probeable (cloud) runtimes", async () => {
-    renderWithQuery(<RuntimeCard runtime={makeRuntime()} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime()} onClose={() => {}} />);
     expect(
       await screen.findByLabelText("Edit model")
     ).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe("RuntimeCard model editor", () => {
 
   it("does NOT show the edit affordance for probeable (vllm_docker) runtimes", async () => {
     renderWithQuery(
-      <RuntimeCard runtime={makeRuntime({ runtime_type: "vllm_docker" })} />
+      <RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "vllm_docker" })} onClose={() => {}} />
     );
     await waitFor(() => expect(api.runtimes.db.agents).toHaveBeenCalled());
     expect(screen.queryByLabelText("Edit model")).toBeNull();
@@ -70,7 +70,7 @@ describe("RuntimeCard model editor", () => {
       .mockResolvedValue(makeRuntime({ model_identifier: "claude-opus-4-8" }));
     const user = userEvent.setup();
 
-    renderWithQuery(<RuntimeCard runtime={makeRuntime()} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime()} onClose={() => {}} />);
     await user.click(await screen.findByLabelText("Edit model"));
 
     const input = screen.getByLabelText("Model identifier");
@@ -89,7 +89,7 @@ describe("RuntimeCard model editor", () => {
     const updateSpy = vi.spyOn(api.runtimes.db, "update");
     const user = userEvent.setup();
 
-    renderWithQuery(<RuntimeCard runtime={makeRuntime()} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime()} onClose={() => {}} />);
     await user.click(await screen.findByLabelText("Edit model"));
 
     const input = screen.getByLabelText("Model identifier");
