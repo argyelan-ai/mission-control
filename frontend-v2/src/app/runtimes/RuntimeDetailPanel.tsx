@@ -540,30 +540,53 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           </div>
         )}
 
-        {live && (
-          <div className="flex items-center gap-2 text-xs" style={{ color: C.textSecondary }}>
-            <span
-              className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
-              style={{ background: live.reachable ? STATUS.online : STATUS.error }}
-            />
-            {live.reachable ? (
+        {(live || (runtime.display_name_drift && runtime.display_name_drift.length > 0)) && (
+          <div className="flex items-center gap-2 text-xs flex-wrap" style={{ color: C.textSecondary }}>
+            {live && (
               <>
-                <span className="truncate" title={live.served_model ?? undefined}>
-                  Engine serves: {live.served_model ?? "—"}
-                </span>
-                {live.drift && (
-                  <span
-                    className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
-                    style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
-                    title={`Registry says ${runtime.model_identifier ?? "—"} — will sync on the next watcher tick`}
-                  >
-                    Drift
+                <span
+                  className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
+                  style={{ background: live.reachable ? STATUS.online : STATUS.error }}
+                />
+                {live.reachable ? (
+                  <>
+                    <span className="truncate" title={live.served_model ?? undefined}>
+                      Engine serves: {live.served_model ?? "—"}
+                    </span>
+                    {live.drift && (
+                      <span
+                        className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                        style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
+                        title={`Registry says ${runtime.model_identifier ?? "—"} — will sync on the next watcher tick`}
+                      >
+                        Drift
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ color: STATUS_TEXT.error }}>
+                    Engine unreachable ({live.consecutive_failures} probes)
                   </span>
                 )}
               </>
-            ) : (
-              <span style={{ color: STATUS_TEXT.error }}>
-                Engine unreachable ({live.consecutive_failures} probes)
+            )}
+            {/* display_name_drift: a name that claims a version the served
+                model does not back (e.g. "Laguna 2.1" while serving 2.0).
+                Same chip semantics as the pre-Task-5 page.tsx's runtime card —
+                shown next to the live "Engine serves" line, but not gated on
+                `live` being present: this is exactly the signal a
+                non-probeable cloud runtime (which never has `live`) needs
+                most, since its display_name is hand-typed. */}
+            {runtime.display_name_drift && runtime.display_name_drift.length > 0 && (
+              <span
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
+                title={t("nameDriftTitle", {
+                  versions: runtime.display_name_drift.join(", "),
+                  model: runtime.model_identifier ?? "—",
+                })}
+              >
+                {t("nameDrift")}
               </span>
             )}
           </div>

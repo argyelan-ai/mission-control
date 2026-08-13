@@ -2211,7 +2211,8 @@
       "subtitle": "What providers offer, what runs on your own boxes, and what to download",
       "tabProviders": "Providers",
       "tabLocal": "Own hardware",
-      "tabDownload": "Download"
+      "tabDownload": "Download",
+      "lmStudioLocalTitle": "LM Studio — installed models"
     },
     "infrastructure": {
       "title": "Infrastructure",
@@ -2248,7 +2249,22 @@
       "footerCli": "CLI tools",
       "emptyTitle": "No runtimes configured yet",
       "emptyHint": "Add a runtime, or download a model to get started."
-    }
+    },
+    "loadFailed": "Load failed.",
+    "unloadFailed": "Unload failed.",
+    "unload": "Unload",
+    "ctxSettings": "Context settings",
+    "moreActions": "More actions for {name}",
+    "states": {
+      "ready": "Ready",
+      "warming": "Warmup...",
+      "starting": "Starting...",
+      "stopped": "Stopped",
+      "failed": "Error",
+      "unknown": "Unknown"
+    },
+    "nameDrift": "Name",
+    "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model."
   },
   "bench": {
     "common": {

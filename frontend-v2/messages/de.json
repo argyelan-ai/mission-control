@@ -2211,7 +2211,8 @@
       "subtitle": "Was Anbieter anbieten, was auf eigenen Boxen läuft, und was sich herunterladen lässt",
       "tabProviders": "Anbieter",
       "tabLocal": "Eigene Hardware",
-      "tabDownload": "Herunterladen"
+      "tabDownload": "Herunterladen",
+      "lmStudioLocalTitle": "LM Studio — installierte Modelle"
     },
     "infrastructure": {
       "title": "Infrastruktur",
@@ -2248,7 +2249,22 @@
       "footerCli": "CLI-Tools",
       "emptyTitle": "Noch keine Runtimes eingerichtet",
       "emptyHint": "Runtime hinzufügen oder ein Modell herunterladen, um loszulegen."
-    }
+    },
+    "loadFailed": "Laden fehlgeschlagen.",
+    "unloadFailed": "Entladen fehlgeschlagen.",
+    "unload": "Entladen",
+    "ctxSettings": "Kontext-Einstellungen",
+    "moreActions": "Weitere Aktionen für {name}",
+    "states": {
+      "ready": "Bereit",
+      "warming": "Warmup...",
+      "starting": "Startet...",
+      "stopped": "Gestoppt",
+      "failed": "Fehler",
+      "unknown": "Unbekannt"
+    },
+    "nameDrift": "Name",
+    "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell."
   },
   "bench": {
     "common": {

@@ -32,6 +32,7 @@ import { HostsSection } from "./HostsSection";
 import { CliToolsSection } from "@/components/shared/CliToolsSection";
 import { ModelCatalogSection } from "@/components/shared/ModelCatalogSection";
 import { LocalModelBrowser } from "@/components/shared/LocalModelBrowser";
+import { LmStudioLocalModels } from "./LmStudioLocalModels";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section, requestSectionOpen } from "@/components/shared/Section";
@@ -589,7 +590,12 @@ function ModelsSection() {
       </div>
 
       {tab === "providers" && <ModelCatalogSection embedded />}
-      {tab === "local" && <LocalModelBrowser embedded />}
+      {tab === "local" && (
+        <>
+          <LocalModelBrowser embedded />
+          <LmStudioLocalModels />
+        </>
+      )}
       {tab === "download" && (
         <>
           <ActiveDownloads />

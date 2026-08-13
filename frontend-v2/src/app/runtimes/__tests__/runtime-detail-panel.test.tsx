@@ -82,4 +82,32 @@ describe("RuntimeDetailPanel", () => {
 
     expect(screen.queryByText("Started ok")).not.toBeInTheDocument();
   });
+
+  it("shows a Name-drift chip when display_name_drift is non-empty, even without a live prop", async () => {
+    renderWithQuery(
+      <RuntimeDetailPanel
+        open
+        runtime={makeRuntime({
+          runtime_type: "cloud",
+          model_identifier: "claude-opus-5",
+          display_name: "Claude Opus 4.7",
+          display_name_drift: ["4.7"],
+        })}
+        onClose={() => {}}
+      />
+    );
+    expect(await screen.findByText("Name")).toBeInTheDocument();
+  });
+
+  it("stays quiet when display_name_drift is empty", async () => {
+    renderWithQuery(
+      <RuntimeDetailPanel
+        open
+        runtime={makeRuntime({ runtime_type: "cloud", model_identifier: "claude-opus-5", display_name_drift: [] })}
+        onClose={() => {}}
+      />
+    );
+    await screen.findByText("claude-opus-5");
+    expect(screen.queryByText("Name")).not.toBeInTheDocument();
+  });
 });
