@@ -388,9 +388,21 @@ def transcript_allowed(agent, path: Path) -> bool:
     shared with his private/personal sessions — only lines that look like MC
     work (mission-control cwd or a task/ branch) are allowed through, via
     the same heuristic token_harvester uses for cost attribution. Any read
-    failure (missing/unreadable file) fails closed."""
-    if getattr(agent, "agent_runtime", None) == "cli-bridge":
+    failure (missing/unreadable file) fails closed.
+
+    Explicitly gated on ``slug in _BOSS_SLUGS`` (not just "any non-cli-bridge
+    agent") — resolve_transcript_dir() already returns None for every other
+    host agent (Hermes, Jarvis) so this branch should never be reached for
+    them in practice, but a caller passing one directly with an arbitrary
+    path must still fail closed rather than accidentally running the Boss
+    heuristic against it (review finding, fix-round 1)."""
+    runtime = getattr(agent, "agent_runtime", None)
+    slug = getattr(agent, "slug", None)
+
+    if runtime == "cli-bridge":
         return True
+    if not (runtime == "host" and slug in _BOSS_SLUGS):
+        return False
 
     try:
         cwd, git_branch = _extract_cwd_and_branch(path)

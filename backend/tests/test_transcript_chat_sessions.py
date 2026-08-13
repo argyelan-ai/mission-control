@@ -128,6 +128,30 @@ def test_find_active_session_live_flag_stale(tmp_path):
     assert meta["live"] is False
 
 
+def test_find_active_session_live_flag_boundary_true_at_59s(tmp_path, monkeypatch):
+    f = tmp_path / "session-boundary.jsonl"
+    f.write_text('{"type":"user"}\n')
+    fixed_mtime = 1_800_000_000.0
+    os.utime(f, (fixed_mtime, fixed_mtime))
+    monkeypatch.setattr(tc.time, "time", lambda: fixed_mtime + 59)
+
+    _, meta = tc.find_active_session(tmp_path)
+
+    assert meta["live"] is True
+
+
+def test_find_active_session_live_flag_boundary_false_at_61s(tmp_path, monkeypatch):
+    f = tmp_path / "session-boundary.jsonl"
+    f.write_text('{"type":"user"}\n')
+    fixed_mtime = 1_800_000_000.0
+    os.utime(f, (fixed_mtime, fixed_mtime))
+    monkeypatch.setattr(tc.time, "time", lambda: fixed_mtime + 61)
+
+    _, meta = tc.find_active_session(tmp_path)
+
+    assert meta["live"] is False
+
+
 def test_find_active_session_ignores_subdirectories(tmp_path):
     sub = tmp_path / "subdir"
     sub.mkdir()
@@ -226,3 +250,17 @@ def test_transcript_allowed_boss_unreadable_file_denied(tmp_path):
     agent = SimpleNamespace(slug="boss", agent_runtime="host")
 
     assert tc.transcript_allowed(agent, tmp_path / "does-not-exist.jsonl") is False
+
+
+def test_transcript_allowed_non_boss_host_agent_fails_closed(tmp_path):
+    # Fix-round 1 (review finding): a non-Boss host agent (e.g. Hermes) must
+    # NEVER fall through to the Boss cwd/branch heuristic, even against a
+    # readable transcript that would pass that heuristic.
+    f = tmp_path / "s.jsonl"
+    _write_jsonl(
+        f,
+        [{"type": "user", "cwd": "/Users/x/.mc/checkouts/mission-control", "gitBranch": "main"}],
+    )
+    agent = SimpleNamespace(slug="hermes", agent_runtime="host")
+
+    assert tc.transcript_allowed(agent, f) is False
