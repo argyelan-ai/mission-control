@@ -47,6 +47,13 @@ describe("groupRuntimes", () => {
     expect(g.unassigned.map((r) => r.slug)).toEqual(["hermes-vllm"]);
   });
 
+  it("routes a hostless openai_compatible runtime to cloud, not unassigned (spec §3)", () => {
+    const openaiCompat = makeRuntime({ slug: "openai-compat-api", runtime_type: "openai_compatible", host: null });
+    const g = groupRuntimes([openaiCompat], []);
+    expect(g.cloud.map((r) => r.slug)).toEqual(["openai-compat-api"]);
+    expect(g.unassigned).toEqual([]);
+  });
+
   it("keeps a host group even when the host has no runtimes", () => {
     const g = groupRuntimes([], [spark]);
     expect(g.hosts).toHaveLength(1);
@@ -71,7 +78,7 @@ describe("groupRuntimes", () => {
 
 describe("CLOUD_TYPES", () => {
   it("contains exactly the hosted-API kinds", () => {
-    expect([...CLOUD_TYPES].sort()).toEqual(["cloud", "grok", "kimi"]);
+    expect([...CLOUD_TYPES].sort()).toEqual(["cloud", "grok", "kimi", "openai_compatible"]);
   });
 });
 

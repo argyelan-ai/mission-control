@@ -142,4 +142,32 @@ describe("CloudUsage", () => {
     const { container } = renderWithQuery(<CloudUsage runtimes={[]} onOpen={() => {}} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("suppresses the collapse row while an agent query is still pending, instead of flashing an inflated count", async () => {
+    const bound = makeRuntime({ slug: "grok", display_name: "Grok", model_identifier: "grok-4.5" });
+    const pendingUnbound = makeRuntime({ slug: "kimi", display_name: "Kimi", model_identifier: "kimi-k3" });
+    let resolveKimi: (v: RuntimeAgentsResponse) => void = () => {};
+    vi.spyOn(api.runtimes.db, "agents").mockImplementation((slug) => {
+      if (slug === "grok") {
+        return Promise.resolve(
+          agentsResponse("grok", [{ id: "a1", name: "Grok", agent_runtime: "cli-bridge" }])
+        );
+      }
+      return new Promise((resolve) => {
+        resolveKimi = resolve;
+      });
+    });
+
+    renderWithQuery(<CloudUsage runtimes={[bound, pendingUnbound]} onOpen={() => {}} />);
+
+    await screen.findByTestId("cloud-usage-row-grok");
+    // kimi's query is still pending — the collapse row must not appear yet
+    // (not even with a wrong/inflated count), or it flickers 0 → 1 → shrinks.
+    expect(screen.queryByTestId("cloud-usage-collapse-toggle")).not.toBeInTheDocument();
+
+    resolveKimi(agentsResponse("kimi", []));
+
+    const toggle = await screen.findByTestId("cloud-usage-collapse-toggle");
+    expect(toggle).toHaveTextContent("1");
+  });
 });

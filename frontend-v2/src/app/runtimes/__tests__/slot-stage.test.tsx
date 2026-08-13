@@ -109,7 +109,7 @@ describe("SlotStage", () => {
     expect(indicator).toHaveTextContent("loading");
   });
 
-  it("recipe click calls switchRecipe with the runtime id and recipe name", async () => {
+  it("recipe click arms a confirm step; only the confirm click calls switchRecipe", async () => {
     const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe").mockResolvedValue({
       ok: true, message: "Switching…", old_recipe: "qwen-general", new_recipe: "laguna-s21", launch_command: "sparkrun run laguna-s21",
     });
@@ -121,6 +121,12 @@ describe("SlotStage", () => {
 
     const btn = await screen.findByText("laguna-s21");
     btn.click();
+
+    // First click only arms the confirm step — one click must never evict
+    // whatever the GPU is currently serving.
+    expect(switchRecipe).not.toHaveBeenCalled();
+    const confirmBtn = await screen.findByText("Confirm switch");
+    confirmBtn.click();
 
     await waitFor(() => expect(switchRecipe).toHaveBeenCalledWith("rt", "laguna-s21"));
   });
@@ -143,14 +149,26 @@ describe("SlotStage", () => {
     expect(screen.getAllByText("Qwen 3.6")).toHaveLength(1);
   });
 
-  it("renders a placeholder when nothing is serving and nothing is ready to start", async () => {
-    const cloud = makeRuntime({ slug: "claude", display_name: "Claude", runtime_type: "cloud", state: "stopped" });
+  it("renders a placeholder when the host has no runtimes at all", async () => {
     const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
-    const group: HostGroup = { host, runtimes: [cloud] };
+    const group: HostGroup = { host, runtimes: [] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
     expect(await screen.findByText("No model set up")).toBeInTheDocument();
+  });
+
+  it("a non-lifecycle host runtime (e.g. omp) is not serving and not placeholder-hidden — it shows as a dim ready row", async () => {
+    const omp = makeRuntime({ slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped" });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [omp] };
+    const onOpen = vi.fn();
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={onOpen} />);
+
+    const row = await screen.findByTestId("ready-row-omp1");
+    row.click();
+    expect(onOpen).toHaveBeenCalledWith(omp);
   });
 });
 
@@ -170,12 +188,14 @@ describe("SlotStage", () => {
 //     `serving.model_identifier`, live or not (unlike the old runtime
 //     card's detail line, which was entirely gated on `live`), so there is nothing
 //     live-shaped left to assert here.
-// Not migrated (flagged, not silently dropped — see task-5-report.md):
+// Not migrated into this file (flagged, not silently dropped — see
+// task-5-report.md):
 //   - "flags a display_name that claims a version the model does not back"
-//     / "stays quiet for an honest name" — `display_name_drift` (the "Name"
-//     drift chip) is not rendered anywhere in SlotStage or
-//     RuntimeDetailPanel in this redesign. Real feature gap, out of this
-//     task's scope (SlotStage/RuntimeDetailPanel are Task 3/2 surfaces).
+//     / "stays quiet for an honest name" — the "Name" drift chip
+//     (`display_name_drift`) is NOT rendered in SlotStage (scoped to this
+//     file's surface only) but IS rendered in RuntimeDetailPanel (see
+//     runtime-detail-panel.test.tsx) — the panel is the fix-up surface for
+//     this signal, the stage stays honesty-minimal per its own doc comment.
 describe("SlotStage — migrated live-status/identity assertions", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -283,5 +303,19 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
     expect(await screen.findByText("1M")).toBeInTheDocument();
+  });
+
+  it("never renders the Name-drift chip — that signal lives in RuntimeDetailPanel, not the stage", async () => {
+    const serving = makeRuntime({
+      slug: "rt", display_name: "Laguna 2.1", runtime_type: "vllm_docker",
+      state: "ready", model_identifier: "laguna-2.0", display_name_drift: ["2.1"],
+    });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    await screen.findByText("Laguna 2.1");
+    expect(screen.queryByText("Name")).not.toBeInTheDocument();
   });
 });
