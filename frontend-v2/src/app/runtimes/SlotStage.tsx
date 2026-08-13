@@ -208,15 +208,17 @@ function PhaseIndicator({ phase, message }: { phase?: string | null; message?: s
   );
 }
 
+// Switch row carries sparkrun recipes only (per the approved M1 mockup — the
+// switch targets are recipes, not sibling runtimes). Non-serving lifecycle
+// runtimes live exclusively in the ready list below; slot takeover for them
+// happens via Start inside the detail panel opened from that row.
 function SwitchRow({
   group,
   serving,
-  readyRuntimes,
   live,
 }: {
   group: HostGroup;
   serving: Runtime | null;
-  readyRuntimes: Runtime[];
   live?: Record<string, RuntimeLiveStatus>;
 }) {
   const t = useTranslations("runtimes.slotStage");
@@ -244,18 +246,12 @@ function SwitchRow({
     },
   });
 
-  const startMutation = useMutation({
-    mutationFn: (runtimeId: string) => api.runtimes.start(runtimeId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
-  });
-
   const servingLive = serving ? liveFor(serving, live) : undefined;
   const isSwitching = servingLive?.status === "switching";
-  const isMutating = switchMutation.isPending || startMutation.isPending || isSwitching;
+  const isMutating = switchMutation.isPending || isSwitching;
 
   if (isMutating) {
-    const message =
-      switchMutation.data?.message ?? startMutation.data?.message ?? null;
+    const message = switchMutation.data?.message ?? null;
     return (
       <div
         className="flex items-center gap-3 px-4 py-3"
@@ -266,10 +262,9 @@ function SwitchRow({
     );
   }
 
-  const errorMessage =
-    (switchMutation.isError && t("switchFailed", { message: switchMutation.error.message })) ||
-    (startMutation.isError && t("startFailed", { message: startMutation.error.message })) ||
-    null;
+  const errorMessage = switchMutation.isError
+    ? t("switchFailed", { message: switchMutation.error.message })
+    : null;
 
   return (
     <div
@@ -298,18 +293,6 @@ function SwitchRow({
           </button>
         );
       })}
-
-      {readyRuntimes.map((rt) => (
-        <button
-          key={rt.id}
-          onClick={() => startMutation.mutate(rt.id)}
-          disabled={startMutation.isPending}
-          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ background: C.bgSurface, border: `1px solid ${C.border}`, color: C.textPrimary }}
-        >
-          {rt.display_name}
-        </button>
-      ))}
 
       <button
         onClick={() => openModelsTab("download")}
@@ -515,7 +498,7 @@ export function SlotStage({
         </div>
         <TelemetryColumn hostId={group.host.id} />
       </div>
-      <SwitchRow group={group} serving={serving} readyRuntimes={readyRuntimes} live={live} />
+      <SwitchRow group={group} serving={serving} live={live} />
       <ReadyList readyRuntimes={readyRuntimes} sizeGb={sizeGb} onOpen={onOpen} />
     </div>
   );

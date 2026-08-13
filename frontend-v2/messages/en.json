@@ -2264,7 +2264,6 @@
       "switchLabel": "Switch",
       "addModel": "+ Model",
       "placeholderTitle": "No model set up",
-      "startFailed": "Start failed: {message}",
       "switchFailed": "Switch failed: {message}"
     }
   },

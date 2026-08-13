@@ -2264,7 +2264,6 @@
       "switchLabel": "Umschalten",
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
-      "startFailed": "Start fehlgeschlagen: {message}",
       "switchFailed": "Umschalten fehlgeschlagen: {message}"
     }
   },

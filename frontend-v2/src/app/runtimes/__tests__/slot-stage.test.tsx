@@ -138,6 +138,9 @@ describe("SlotStage", () => {
     row.click();
 
     expect(onOpen).toHaveBeenCalledWith(stopped);
+    // Switch row carries recipes only (M1 mockup) — the ready list is the
+    // sole home for sibling runtimes, so its display name must appear once.
+    expect(screen.getAllByText("Qwen 3.6")).toHaveLength(1);
   });
 
   it("renders a placeholder when nothing is serving and nothing is ready to start", async () => {
