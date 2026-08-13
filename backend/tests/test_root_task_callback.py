@@ -724,3 +724,71 @@ async def test_review_done_patch_notifies_lead_as_reviewed(client):
         "PATCH review → done ist eine echte Freigabe (review_decision=approved "
         "im selben Request) — der Hook darf sie nicht als reviewed=False melden"
     )
+
+
+@pytest.mark.asyncio
+async def test_root_delegation_sets_callback_agent_id(client, fake_redis):
+    """Der Kern von #312, live reproduziert: Ein Board Lead delegiert aus einem
+    Chat-Gespraech heraus — ohne aktiven Task. Der Root-Zweig setzte
+    `with_callback = False` ("nothing to resume") und liess damit
+    `callback_agent_id` leer. Die gesamte Zustell-Maschinerie aus #313 haengt
+    aber genau an diesem Feld: ohne es feuert weder der Completion-Hook noch
+    `_deliver_root_callback`. Der Delegierende erfuhr nie, dass seine Aufgabe
+    fertig war — und konnte es dem Operator nicht melden.
+
+    Einen Parent aufwecken und den Auftraggeber informieren sind zwei
+    verschiedene Dinge: Ersteres ist bei einem Root-Task sinnlos, Letzteres
+    ist genau der Zweck.
+    """
+    board_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+
+    raw_token, token_hash = generate_agent_token()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="Root-Delegate-Callback", slug=f"rdc-{uuid.uuid4().hex[:6]}"))
+        s.add(Agent(
+            id=lead_id, name="Lead", role="orchestrator",
+            board_id=board_id, agent_token_hash=token_hash,
+            is_board_lead=True, scopes=["tasks:read", "tasks:write", "tasks:create"],
+            current_task_id=None,   # im Chat, keine aktive Arbeit
+        ))
+        s.add(Agent(
+            id=worker_id, name="Worker", role="developer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read", "tasks:write"],
+            provision_status="provisioned",
+        ))
+        await s.commit()
+
+    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock), \
+         patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock), \
+         patch(
+             "app.services.operations.check_dispatch_allowed",
+             new_callable=AsyncMock, return_value=(True, None),
+         ):
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board_id}/delegate",
+            json={
+                "title": "Aus dem Chat delegiert",
+                "description": "Board Lead delegiert ohne aktiven Task und will informiert werden.",
+                "assigned_agent_id": str(worker_id),
+                "callback": True,
+            },
+            headers={"Authorization": f"Bearer {raw_token}"},
+        )
+
+    assert resp.status_code == 201, resp.text
+    subtask_id = uuid.UUID(resp.json()["subtask_id"])
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        subtask = await s.get(Task, subtask_id)
+        assert subtask.parent_task_id is None, "Root-Delegation: kein Parent"
+        assert subtask.callback_agent_id == lead_id, (
+            "Der delegierende Lead MUSS als callback_agent_id gesetzt sein — "
+            "sonst erreicht ihn die Fertigmeldung nie (#312)"
+        )
+        # Der Lead wird NICHT blockiert — es gibt keinen Parent zum Aufwecken.
+        lead = await s.get(Agent, lead_id)
+        assert lead.current_task_id is None

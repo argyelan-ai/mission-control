@@ -1122,8 +1122,19 @@ async def agent_delegate_task(
     elif current_task is not None:
         origin_thread_id = current_task.origin_thread_id
 
-    # Root mode: no parent to inherit from — board default project, explicit
-    # priority or medium, and callback is meaningless (nothing to resume).
+    # Root mode: no parent to inherit from — board default project and explicit
+    # priority or medium.
+    #
+    # Two things used to be conflated under one flag, and that is what left the
+    # circle open for a chat-ordered delegation (#312, live-reproduced): a
+    # blocked parent that must be RESUMED, and a requester that must be TOLD.
+    # A root delegation has no parent to resume — but the lead who ordered it
+    # from a chat is precisely the one waiting for the answer, and with
+    # callback_agent_id left null nothing downstream can ever reach them
+    # (agent_task_status's completion hook and _deliver_root_callback both key
+    # off exactly that field). So the resume half stays off for root, the
+    # notify half follows the caller's request.
+    notify_requester = payload.callback
     if current_task is None:
         project_id = None
         board_row = await session.get(Board, board_id)
@@ -1149,8 +1160,9 @@ async def agent_delegate_task(
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
         origin_thread_id=origin_thread_id,
-        # Callback pattern: subtask points back to the delegating agent
-        callback_agent_id=agent.id if with_callback else None,
+        # Callback pattern: subtask points back to the delegating agent — set
+        # for a root delegation too, so the completion actually reaches them.
+        callback_agent_id=agent.id if notify_requester else None,
         is_auto_created=True,
         auto_reason=f"delegation from {agent.name}"
         + ("" if current_task else " (root, no active task)"),
@@ -1220,6 +1232,7 @@ async def agent_delegate_task(
             "subtask_id": str(subtask.id),
             "target_agent": target_agent.name,
             "callback": with_callback,
+            "notify_requester": notify_requester,
             "root_delegation": current_task is None,
         },
     )
