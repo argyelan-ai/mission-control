@@ -23,12 +23,26 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+from app.services.token_harvester import _host_home, _should_attribute_boss_path
 
 logger = logging.getLogger("mc.transcript_chat")
 
 _DETAIL_TRUNCATE_LEN = 2000
 _TITLE_MAX_LEN = 80
+
+# Session-scan limits (find_active_session / transcript_allowed)
+_LIVE_WINDOW_SECONDS = 60
+_BOSS_SCAN_LINES = 20
+
+# Host-runtime slugs that resolve to the Boss's own ~/.claude session dir —
+# every other host agent (Hermes, Jarvis) has no transcript at all.
+_BOSS_SLUGS = ("boss", "boss-host")
 
 # Tools whose title is built from a file_path basename, prefixed "Read".
 _FILE_PATH_READ_TOOLS = {"Read", "NotebookEdit"}
@@ -260,3 +274,127 @@ def _truncate_title(title: str) -> str:
     if len(title) <= _TITLE_MAX_LEN:
         return title
     return title[: _TITLE_MAX_LEN - 1] + "…"
+
+
+# ── Session resolution (I/O — reads transcript dirs, not pure) ──────────────
+#
+# The functions below are the only I/O-touching code in this module (the
+# parser above stays pure). They locate an agent's live Claude Code session
+# on disk and gate Boss/host transcripts against Mark's private ~/.claude
+# sessions before anything from them reaches the frontend.
+
+
+def encode_cwd(cwd: str) -> str:
+    """Replicates Claude Code's own project-directory name encoding: every
+    non-alphanumeric character (including path separators and dots) becomes
+    a literal '-'. Verified against a real session dir name, see tests."""
+    return re.sub(r"[^a-zA-Z0-9]", "-", cwd)
+
+
+def resolve_transcript_dir(agent) -> Path | None:
+    """Maps an Agent to the on-disk directory holding its Claude Code JSONL
+    transcripts, or None if this agent/runtime has no transcript at all
+    (Hermes, Jarvis, manual agents — anything not driven by the claude CLI).
+
+    Duck-typed on ``agent.slug`` / ``agent.agent_runtime`` so tests can pass
+    a plain stub instead of a DB-backed Agent row.
+    """
+    slug = getattr(agent, "slug", None)
+    runtime = getattr(agent, "agent_runtime", None)
+    if not slug:
+        return None
+
+    if runtime == "cli-bridge":
+        return (
+            _host_home()
+            / ".mc"
+            / "agents"
+            / slug
+            / "claude-config"
+            / "projects"
+            / encode_cwd("/home/agent")
+        )
+
+    if runtime == "host" and slug in _BOSS_SLUGS:
+        checkout = str(_host_home() / ".mc" / "checkouts" / "mission-control")
+        return _host_home() / ".claude" / "projects" / encode_cwd(checkout)
+
+    return None
+
+
+def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Finds the newest ``*.jsonl`` transcript directly under ``tdir`` (does
+    NOT recurse into subdirectories — those hold sidechains/artifacts, not
+    top-level sessions).
+
+    Returns ``(path, meta)`` where ``meta`` is
+    ``{"sessionId": <filename stem>, "mtime": <iso8601>, "live": <bool>}``
+    — ``live`` is True when the file was written within the last
+    ``_LIVE_WINDOW_SECONDS``. Returns None if the directory doesn't exist or
+    has no top-level jsonl files.
+    """
+    if not tdir.is_dir():
+        return None
+
+    newest_path: Path | None = None
+    newest_mtime = -1.0
+    for candidate in tdir.glob("*.jsonl"):
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > newest_mtime:
+            newest_mtime = mtime
+            newest_path = candidate
+
+    if newest_path is None:
+        return None
+
+    meta = {
+        "sessionId": newest_path.stem,
+        "mtime": datetime.fromtimestamp(newest_mtime, tz=timezone.utc).isoformat(),
+        "live": (time.time() - newest_mtime) < _LIVE_WINDOW_SECONDS,
+    }
+    return newest_path, meta
+
+
+def _extract_cwd_and_branch(path: Path) -> tuple[str, str | None]:
+    """Scans the first ``_BOSS_SCAN_LINES`` lines of a transcript for the
+    first line carrying a top-level ``cwd`` — Claude Code stamps ``cwd`` /
+    ``gitBranch`` on every line, so line 1 normally suffices; the 20-line
+    cap is a safety margin against odd/legacy transcripts, not an expected
+    scan depth. Returns ("", None) if nothing usable was found."""
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if i >= _BOSS_SCAN_LINES:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(d, dict) or "cwd" not in d:
+                continue
+            return d.get("cwd") or "", d.get("gitBranch")
+    return "", None
+
+
+def transcript_allowed(agent, path: Path) -> bool:
+    """Privacy gate: cli-bridge agent transcripts are always MC's own
+    workspace (Docker containers have nothing else to write) — always
+    allowed. Host-runtime Boss transcripts live in Mark's own ~/.claude,
+    shared with his private/personal sessions — only lines that look like MC
+    work (mission-control cwd or a task/ branch) are allowed through, via
+    the same heuristic token_harvester uses for cost attribution. Any read
+    failure (missing/unreadable file) fails closed."""
+    if getattr(agent, "agent_runtime", None) == "cli-bridge":
+        return True
+
+    try:
+        cwd, git_branch = _extract_cwd_and_branch(path)
+    except OSError:
+        return False
+
+    return _should_attribute_boss_path(cwd, git_branch)
