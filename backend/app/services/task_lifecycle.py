@@ -1729,6 +1729,8 @@ async def _notify_lead_on_completion(
     task: Task,
     board_id: uuid.UUID,
     reviewer_name: str,
+    *,
+    reviewed: bool = True,
 ) -> None:
     """Completion callback: Henry gets a mandatory report-back obligation.
 
@@ -1738,6 +1740,13 @@ async def _notify_lead_on_completion(
     Stage 2 (fallback, 5 min): system safety net
       → ONLY if report_back_status is still "pending"
       → a terse system message to the operator via Telegram
+
+    `reviewed` distinguishes a genuine review approval (execute_review_decision,
+    system_finalize_task_done — the default, `reviewer_name` names the actual
+    approver) from #312's direct in_progress -> done PATCH, where there was no
+    review at all and `reviewer_name` is just the agent who closed their own
+    task — claiming an "Approved von {reviewer_name}" there would assert a
+    sign-off that never happened (flagged in review).
     """
     from app.database import engine
 
@@ -1821,19 +1830,29 @@ async def _notify_lead_on_completion(
                             f"**Rueckmeldung geht an:** {task.requester_channel} ({task.requester_id})\n"
                         )
 
+                    completion_line = (
+                        f"**Review:** Approved von {reviewer_name}\n"
+                        if reviewed
+                        else f"**Abschluss:** direkt von {reviewer_name} auf done gesetzt "
+                             f"(kein Review-Gate auf diesem Board)\n"
+                    )
                     notify_message = (
                         f"# ✅ TASK ERLEDIGT: {task.title}\n\n"
                         f"**Task-ID:** {task.id}\n"
                         f"{project_info}"
                         f"{requester_block}"
-                        f"**Review:** Approved von {reviewer_name}\n"
+                        f"{completion_line}"
                         f"{contract_block}\n"
                         f"## Evidence / Ergebnisse\n{evidence_text}\n"
                     )
 
-                    # TaskComment is the runtime-agnostic delivery channel —
-                    # the Board Lead's poll.sh / launchd host polls /agent/me/comments
-                    # and pastes the content into their session.
+                    # TaskComment: kept as a durable record on the task's own
+                    # history (comment_type="system_notify" is intentionally
+                    # NOT in DELIVERABLE_SYSTEM_TYPES — writing it on task.id
+                    # would otherwise also reach whoever is assigned_agent_id
+                    # on THIS task, i.e. the worker who just finished it, not
+                    # the lead being notified here; see agents.py
+                    # _collect_and_ack_new_comments scoping).
                     session.add(TaskComment(
                         task_id=task.id,
                         author_type="system",
@@ -1841,6 +1860,23 @@ async def _notify_lead_on_completion(
                         comment_type="system_notify",
                     ))
                     await session.commit()
+
+                    # Real delivery: the lead's own DM thread (#312) — scoped
+                    # to that one agent regardless of task assignment, same
+                    # transport `mc msg`/`mc ask` already use. Best-effort:
+                    # never let a delivery hiccup break the completion.
+                    try:
+                        from app.services.messaging import ensure_dm_thread, post_message
+                        lead_thread = await ensure_dm_thread(session, lead)
+                        await post_message(
+                            session,
+                            thread_id=lead_thread.id,
+                            sender_type="system",
+                            message_type="system",
+                            body=notify_message,
+                        )
+                    except Exception as e:
+                        logger.warning("Completion-Callback DM-Delivery fehlgeschlagen: %s", e)
 
                     # Direct Telegram notice to the operator (best-effort).
                     # Preferred channel from task context.
