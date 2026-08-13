@@ -2242,7 +2242,9 @@
       "switchLabel": "Umschalten",
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
-      "switchFailed": "Umschalten fehlgeschlagen: {message}"
+      "switchFailed": "Umschalten fehlgeschlagen: {message}",
+      "showAllRecipes": "Alle Rezepte ({n})",
+      "showFewerRecipes": "Weniger Rezepte"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",

@@ -58,6 +58,9 @@ function slotState(rt: Runtime | null, l?: RuntimeLiveStatus): SlotState {
   // backend starts emitting it more broadly; currently a dead-but-harmless
   // path outside that window.
   if (l?.status === "switching") return "switching";
+  // A reachable engine IS serving — the live probe outranks a stale registry
+  // state (e.g. state "unknown"/"stopped" while the engine answers in 14 ms).
+  if (l?.reachable === true) return "serving";
   const state = rt.state ?? "unknown";
   if (state === "failed") return "failed";
   if (ACTIVE_DB_STATES.has(state) && l?.reachable === false && (l?.consecutive_failures ?? 0) >= FAILURE_THRESHOLD) {
@@ -149,7 +152,7 @@ function TelemetryColumn({ hostId }: { hostId: string }) {
       <Meter label="GPU" value={data.gpu_util_pct != null ? `${data.gpu_util_pct} %` : "—"} pct={gpuPct} />
       <Meter label="VRAM" value={`${vramUsedGb} / ${vramTotalGb} GB`} pct={vramPct} />
       <Meter label="Temp" value={data.gpu_temp_c != null ? `${data.gpu_temp_c} °C` : "—"} pct={tempPct} />
-      {sparkline.length > 0 && (
+      {sparkline.length >= 2 && (
         <div className="flex items-end gap-0.5" style={{ height: "26px" }}>
           {sparkline.map((v, i) => (
             <div
@@ -242,6 +245,10 @@ function SwitchRow({
   // arm/confirm behavior (a recipe switch evicts whatever the GPU is currently
   // serving; that must never be one click away).
   const [confirmRecipe, setConfirmRecipe] = useState<string | null>(null);
+  // The sparkrun catalog is 20+ recipes — rendering all of them floods the
+  // stage (the approved mockup shows a curated handful). Default: up to four
+  // solo-capable recipes (current first); the full catalog sits behind a toggle.
+  const [showAllRecipes, setShowAllRecipes] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
   // The vllm_docker runtime actually holding the slot wins over "the first
@@ -318,6 +325,16 @@ function SwitchRow({
     ? t("switchFailed", { message: switchMutation.error.message })
     : null;
 
+  const allRecipes = recipesQuery.data?.recipes ?? [];
+  const currentName = currentRecipeQuery.data?.current_recipe ?? null;
+  const soloRecipes = allRecipes.filter((r) => r.solo_capable);
+  const curatedRecipes = [
+    ...soloRecipes.filter((r) => r.name === currentName),
+    ...soloRecipes.filter((r) => r.name !== currentName),
+  ].slice(0, 4);
+  const visibleRecipes = showAllRecipes ? allRecipes : curatedRecipes;
+  const hiddenRecipeCount = allRecipes.length - curatedRecipes.length;
+
   return (
     <div
       ref={rowRef}
@@ -331,7 +348,7 @@ function SwitchRow({
         {t("switchLabel")}
       </span>
 
-      {recipeCapable && isSparkrunManaged && recipesQuery.data?.recipes.map((r) => {
+      {recipeCapable && isSparkrunManaged && visibleRecipes.map((r) => {
         const isActive = r.name === currentRecipeQuery.data?.current_recipe;
         const isDisabled = !r.solo_capable;
         const gpuHint =
@@ -385,6 +402,16 @@ function SwitchRow({
 
       {recipeCapable && isSparkrunManaged && recipesQuery.isError && (
         <span className="text-xs" style={{ color: STATUS_TEXT.error }}>{tRecipe("unreachable")}</span>
+      )}
+
+      {recipeCapable && isSparkrunManaged && hiddenRecipeCount > 0 && (
+        <button
+          onClick={() => setShowAllRecipes((v) => !v)}
+          className="rounded-md px-2.5 py-2 text-xs cursor-pointer"
+          style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted, background: "transparent" }}
+        >
+          {showAllRecipes ? t("showFewerRecipes") : t("showAllRecipes", { n: allRecipes.length })}
+        </button>
       )}
 
       <button

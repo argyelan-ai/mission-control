@@ -2242,7 +2242,9 @@
       "switchLabel": "Switch",
       "addModel": "+ Model",
       "placeholderTitle": "No model set up",
-      "switchFailed": "Switch failed: {message}"
+      "switchFailed": "Switch failed: {message}",
+      "showAllRecipes": "All recipes ({n})",
+      "showFewerRecipes": "Fewer recipes"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
