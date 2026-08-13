@@ -1770,25 +1770,16 @@
   },
   "runtimes": {
     "title": "Runtimes",
-    "subtitle": "AI-Modell-Runtimes und ihre Hosts",
     "addRuntime": "Runtime hinzufügen",
-    "refresh": "Aktualisieren",
     "vllmHint": "Containerisierte Modelle auf GPU-Hosts",
     "lmsHint": "Lokal installierte Modelle auf dem DGX Spark",
     "loading": "Lade Runtimes...",
     "loadError": "Runtimes konnten nicht geladen werden.",
-    "noVllm": "Keine vLLM-Docker-Runtimes konfiguriert.",
     "connecting": "Verbinde mit DGX Spark...",
-    "active": "Aktiv",
-    "inactive": "Inaktiv",
     "downloads": "Downloads",
     "cancel": "Abbrechen",
     "cancelDownloadAria": "Download abbrechen",
-    "loadFailed": "Laden fehlgeschlagen.",
-    "unloadFailed": "Entladen fehlgeschlagen.",
-    "ctxSettings": "Kontext-Einstellungen",
     "load": "Laden",
-    "unload": "Entladen",
     "agentsLabel": "Agenten",
     "noneUnbound": "keine — ungebunden",
     "pendingSync": "Sync ausstehend",
@@ -1804,30 +1795,11 @@
     "probeFailed": "Probe fehlgeschlagen.",
     "modelChanged": "Modell: {old} → {new}",
     "modelUnchanged": "Modell unverändert: {model}",
-    "apiKeyStored": "API-Key hinterlegt",
-    "hostTitle": "Host: {name}",
     "sleeping": "Schläft",
     "awakeNoModel": "Wach — Modell nicht geladen (Start)",
-    "engineServes": "Engine serviert: {model}",
     "drift": "Drift",
     "driftTitle": "Registry sagt {model} — synct beim nächsten Watcher-Tick",
-    "engineUnreachable": "Engine nicht erreichbar ({count} Probes)",
-    "switchingEvicting": "Wechselt Modell…",
-    "switchingLoading": "Lädt…",
-    "switchingTitle": "Geplante Auszeit — die Engine wird gewechselt bzw. geladen und ist in wenigen Minuten zurück.",
     "wake": "Aufwecken",
-    "start": "Starten",
-    "stop": "Stoppen",
-    "restart": "Neustarten",
-    "reprobe": "Modell neu proben",
-    "states": {
-      "ready": "Bereit",
-      "warming": "Warmup...",
-      "starting": "Startet...",
-      "stopped": "Gestoppt",
-      "failed": "Fehler",
-      "unknown": "Unbekannt"
-    },
     "ctx": {
       "title": "Kontextfenster",
       "standardValue": "Standard (65k)",
@@ -2234,7 +2206,6 @@
       "resultState": "Status: {state}",
       "resultHint": "Beim ersten Start dauert das Laden der Gewichte einige Minuten. Die Runtime-Karte zeigt den Live-Status."
     },
-    "moreActions": "Weitere Aktionen für {name}",
     "models": {
       "title": "Modelle",
       "subtitle": "Was Anbieter anbieten, was auf eigenen Boxen läuft, und was sich herunterladen lässt",
@@ -2242,14 +2213,10 @@
       "tabLocal": "Eigene Hardware",
       "tabDownload": "Herunterladen"
     },
-    "downloadMoved": "Modelle herunterladen → Sektion Modelle",
     "infrastructure": {
       "title": "Infrastruktur",
       "subtitle": "Die Boxen und die festgebackenen Agent-Werkzeuge darunter"
     },
-    "contextDriftTitle": "Die Engine serviert dieses Fenster; die Registry sagt noch {stored} — synct bei der nächsten Watcher-Bestätigung",
-    "nameDrift": "Name",
-    "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell.",
     "slotStage": {
       "engineReachable": "engine erreichbar · {ms} ms",
       "hostUnreachable": "Host nicht erreichbar",
@@ -2270,6 +2237,17 @@
       "sectionTitle": "Cloud — wer nutzt was",
       "collapseRow": "{n} Modelle ohne Agent — alle zeigen",
       "bindCta": "binden ›"
+    },
+    "slotPage": {
+      "subtitle": "Was besetzt die GPU — und wer arbeitet womit",
+      "sleepingLine": "{host} — {status}",
+      "unassignedTitle": "Nicht zugeordnet",
+      "unassignedHint": "Kein Host — in Infrastruktur binden",
+      "footerModels": "Modell herunterladen",
+      "footerInfra": "Hosts & Zeitpläne",
+      "footerCli": "CLI-Tools",
+      "emptyTitle": "Noch keine Runtimes eingerichtet",
+      "emptyHint": "Runtime hinzufügen oder ein Modell herunterladen, um loszulegen."
     }
   },
   "bench": {

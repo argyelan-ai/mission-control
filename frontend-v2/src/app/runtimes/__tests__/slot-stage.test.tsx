@@ -153,3 +153,135 @@ describe("SlotStage", () => {
     expect(await screen.findByText("No model set up")).toBeInTheDocument();
   });
 });
+
+// Migrated from the deleted runtime-card's runtime-live-status.test.tsx and
+// runtime-identity-live.test.tsx (page.tsx dissolved into the stage — Task
+// 5). Assertion intent kept; wording adapted to SlotStage's actual UI text
+// (e.g. a stale/unreachable serving runtime now shows the "FAILED" state
+// chip, not a literal "unreachable" sentence — the old runtime card's own
+// unreachable message has no direct equivalent here).
+//
+// Dropped as duplicates of the "SlotStage" describe block above:
+//   - "shows a switching chip instead of the unreachable error during a
+//     recipe switch" — covered by "switching live status renders a phase
+//     indicator".
+//   - "renders neither served-model nor drift/unreachable text without a
+//     live prop" — SlotStage always renders a model line from
+//     `serving.model_identifier`, live or not (unlike the old runtime
+//     card's detail line, which was entirely gated on `live`), so there is nothing
+//     live-shaped left to assert here.
+// Not migrated (flagged, not silently dropped — see task-5-report.md):
+//   - "flags a display_name that claims a version the model does not back"
+//     / "stays quiet for an honest name" — `display_name_drift` (the "Name"
+//     drift chip) is not rendered anywhere in SlotStage or
+//     RuntimeDetailPanel in this redesign. Real feature gap, out of this
+//     task's scope (SlotStage/RuntimeDetailPanel are Task 3/2 surfaces).
+describe("SlotStage — migrated live-status/identity assertions", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({
+      reachable: true, gpu_util_pct: 42, vram_used_mb: 4096, vram_total_mb: 8192, gpu_temp_c: 55,
+    });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "rt", count: 0, agents: [],
+    });
+    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({ recipes: [] });
+    vi.spyOn(api.runtimes.sparkrun, "currentRecipe").mockResolvedValue({
+      slug: "rt", current_recipe: null, sparkrun_managed: false,
+    });
+  });
+
+  it("renders served model + Drift badge when reachable and drifted", async () => {
+    const serving = makeRuntime({
+      slug: "rt", display_name: "Engine X", runtime_type: "vllm_docker",
+      state: "ready", model_identifier: "engine-x",
+    });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+    const live: Record<string, RuntimeLiveStatus> = {
+      rt: {
+        reachable: true, served_model: "engine-x", latency_ms: 12,
+        last_probe_at: "2026-07-04T00:00:00Z", consecutive_failures: 0, drift: true,
+      },
+    };
+
+    renderWithQuery(<SlotStage group={group} live={live} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText(/engine-x/)).toBeInTheDocument();
+    expect(screen.getByText("Drift")).toBeInTheDocument();
+  });
+
+  it("shows the FAILED state when the DB state is active but the engine is unreachable", async () => {
+    const serving = makeRuntime({ slug: "rt", display_name: "Engine X", runtime_type: "vllm_docker", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+    const live: Record<string, RuntimeLiveStatus> = {
+      rt: {
+        reachable: false, served_model: null, latency_ms: null,
+        last_probe_at: "2026-07-04T00:00:00Z", consecutive_failures: 3, drift: false,
+      },
+    };
+
+    renderWithQuery(<SlotStage group={group} live={live} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("FAILED")).toBeInTheDocument();
+    expect(screen.queryByText(/\d+ ms/)).not.toBeInTheDocument();
+  });
+
+  it("shows the ENGINE's context window, not the stored one, when they disagree — with a Drift badge", async () => {
+    const serving = makeRuntime({
+      slug: "rt", display_name: "Spark vLLM", runtime_type: "vllm_docker",
+      state: "ready", max_context_len: 98304,
+    });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+    const live: Record<string, RuntimeLiveStatus> = {
+      rt: {
+        reachable: true, served_model: "deepseek-v4-flash-0731-spark", served_context_len: 262144,
+        context_drift: true, latency_ms: 12, last_probe_at: "2026-08-08T00:00:00Z",
+        consecutive_failures: 0, drift: false,
+      },
+    };
+
+    renderWithQuery(<SlotStage group={group} live={live} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("262k")).toBeInTheDocument();
+    expect(screen.queryByText("98k")).not.toBeInTheDocument();
+    expect(screen.getByText("Drift")).toBeInTheDocument();
+  });
+
+  it("falls back to the stored context window when the probe reports none", async () => {
+    const serving = makeRuntime({
+      slug: "rt", display_name: "Spark vLLM", runtime_type: "vllm_docker",
+      state: "ready", max_context_len: 98304,
+    });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+    const live: Record<string, RuntimeLiveStatus> = {
+      rt: {
+        reachable: true, served_model: "deepseek-v4-flash-0731-spark", latency_ms: 12,
+        last_probe_at: "2026-08-08T00:00:00Z", consecutive_failures: 0, drift: false,
+      },
+    };
+
+    renderWithQuery(<SlotStage group={group} live={live} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("98k")).toBeInTheDocument();
+  });
+
+  it("shows the context window for a non-vllm_docker runtime too, without shrinking a million-token window", async () => {
+    // The old chip was gated on runtime_type === "vllm_docker" and fmtCtx was
+    // capped at the largest CTX_PRESET — this pins both fixes: any runtime
+    // type shows its real window, at any size.
+    const serving = makeRuntime({
+      slug: "rt", display_name: "Claude Opus", runtime_type: "cloud",
+      state: "ready", model_identifier: "claude-opus-5", max_context_len: 1_000_000,
+    });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("1M")).toBeInTheDocument();
+  });
+});

@@ -399,9 +399,9 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["runtimes"] });
 
-  // Mutations match THIS worktree's page.tsx RuntimeCard (~1216-1247) exactly:
+  // Mutations match the pre-Task-5 page.tsx's runtime card exactly:
   // same api calls, onSuccess/onError messages (via useTranslations("runtimes"),
-  // same keys as RuntimeCard), invalidations.
+  // same keys), invalidations.
   const startMutation = useMutation({
     mutationFn: () => api.runtimes.start(runtime.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },

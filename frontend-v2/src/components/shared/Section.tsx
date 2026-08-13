@@ -53,6 +53,10 @@ export interface SectionProps {
   /** Buttons on the right of the header. Never collapse-toggles. */
   actions?: React.ReactNode;
   collapsible?: boolean;
+  /** Initial open state before any stored per-id preference is read. Sections
+   *  default to open; pass false for a demoted secondary section that should
+   *  start collapsed (e.g. Models/Infrastructure on the slot-stage redesign). */
+  defaultOpen?: boolean;
   children: React.ReactNode;
   className?: string;
 }
@@ -65,11 +69,12 @@ export function Section({
   badge,
   actions,
   collapsible = true,
+  defaultOpen = true,
   children,
   className,
 }: SectionProps) {
   const t = useTranslations("common.section");
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
 
   useEffect(() => {
     const stored = readStored(id);
