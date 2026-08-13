@@ -146,6 +146,69 @@ def test_mc_inbox_empty_and_no_token(mc_mcp_module):
         assert "kein Agent-Token" in _unwrap(mc_mcp_module.mc_inbox)()
 
 
+def test_mc_msg_hits_thread_endpoint_with_thread_id(mc_mcp_module):
+    """mc_msg with thread_id POSTs to /agent/threads/{thread_id}/messages."""
+    calls = []
+
+    def fake_api_agent(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("json")))
+        return {"message_id": "msg-1", "thread_id": "t1"}
+
+    with patch.object(mc_mcp_module, "_api_agent", side_effect=fake_api_agent):
+        result = _unwrap(mc_mcp_module.mc_msg)(
+            "Antwort", thread_id="t1", message_type="message"
+        )
+
+    assert ("POST", "/agent/threads/t1/messages",
+            {"body": "Antwort", "message_type": "message"}) in calls
+    assert "Nachricht gesendet" in result
+    assert "msg-1" in result
+
+
+def test_mc_msg_hits_current_task_endpoint_without_thread_id(mc_mcp_module):
+    """mc_msg without thread_id POSTs to /agent/tasks/current/messages."""
+    calls = []
+
+    def fake_api_agent(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("json")))
+        return {"message_id": "msg-2", "thread_id": "t2"}
+
+    with patch.object(mc_mcp_module, "_api_agent", side_effect=fake_api_agent):
+        result = _unwrap(mc_mcp_module.mc_msg)(
+            "Status-Notiz", message_type="status"
+        )
+
+    assert ("POST", "/agent/tasks/current/messages",
+            {"body": "Status-Notiz", "message_type": "status"}) in calls
+    assert "Nachricht gesendet" in result
+    assert "msg-2" in result
+
+
+def test_mc_msg_rejects_question_type(mc_mcp_module):
+    """message_type='question' carries awaiting-semantics → rejected."""
+    result = _unwrap(mc_mcp_module.mc_msg)(
+        "Frage", message_type="question"
+    )
+    assert "abgelehnt" in result
+    assert "mc ask" in result
+
+
+def test_mc_msg_rejects_unknown_type(mc_mcp_module):
+    result = _unwrap(mc_mcp_module.mc_msg)(
+        "x", message_type="bogus"
+    )
+    assert "ungueltiger message_type" in result
+    assert "bogus" in result
+
+
+def test_mc_msg_no_token_and_api_error(mc_mcp_module):
+    with patch.object(mc_mcp_module, "_api_agent", return_value=None):
+        assert "kein Agent-Token" in _unwrap(mc_mcp_module.mc_msg)("Hallo")
+    with patch.object(mc_mcp_module, "_api_agent",
+                      return_value={"error": "Kein aktiver Task"}):
+        assert "Kein aktiver Task" in _unwrap(mc_mcp_module.mc_msg)("Hallo")
+
+
 def test_mc_register_deliverable_hits_board_scoped_path_for_document(mc_mcp_module):
     """Document deliverable POSTs to admin board-scoped route with content payload."""
     fake_task_id = "11111111-2222-3333-4444-555555555555"
