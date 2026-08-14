@@ -134,10 +134,16 @@ function TelemetryColumn({ hostId }: { hostId: string }) {
   }
 
   const gpuPct = data.gpu_util_pct ?? 0;
-  const vramPct = data.vram_total_mb && data.vram_used_mb != null
-    ? (data.vram_used_mb / data.vram_total_mb) * 100 : 0;
-  const vramUsedGb = data.vram_used_mb != null ? (data.vram_used_mb / 1024).toFixed(0) : "—";
-  const vramTotalGb = data.vram_total_mb != null ? (data.vram_total_mb / 1024).toFixed(0) : "—";
+  // Unified-memory hosts (DGX Spark GB10): nvidia-smi reports no separate
+  // VRAM — the GPU shares system RAM, so the RAM reading IS the GPU memory.
+  // Fall back to the ram_* fields (and label the meter accordingly).
+  const hasVram = data.vram_total_mb != null;
+  const memLabel = hasVram ? "VRAM" : "RAM";
+  const memUsedMb = hasVram ? data.vram_used_mb : data.ram_used_mb;
+  const memTotalMb = hasVram ? data.vram_total_mb : data.ram_total_mb;
+  const vramPct = memTotalMb && memUsedMb != null ? (memUsedMb / memTotalMb) * 100 : 0;
+  const vramUsedGb = memUsedMb != null ? (memUsedMb / 1024).toFixed(0) : "—";
+  const vramTotalGb = memTotalMb != null ? (memTotalMb / 1024).toFixed(0) : "—";
   // Temp has no natural 0-100 scale — 100C is a conservative thermal ceiling
   // used purely to size the bar; the printed value is always the real reading.
   const tempPct = data.gpu_temp_c != null ? Math.min((data.gpu_temp_c / 100) * 100, 100) : 0;
@@ -150,7 +156,7 @@ function TelemetryColumn({ hostId }: { hostId: string }) {
       style={{ background: C.bgBase }}
     >
       <Meter label="GPU" value={data.gpu_util_pct != null ? `${data.gpu_util_pct} %` : "—"} pct={gpuPct} />
-      <Meter label="VRAM" value={`${vramUsedGb} / ${vramTotalGb} GB`} pct={vramPct} />
+      <Meter label={memLabel} value={`${vramUsedGb} / ${vramTotalGb} GB`} pct={vramPct} />
       <Meter label="Temp" value={data.gpu_temp_c != null ? `${data.gpu_temp_c} °C` : "—"} pct={tempPct} />
       {sparkline.length >= 2 && (
         <div className="flex items-end gap-0.5" style={{ height: "26px" }}>

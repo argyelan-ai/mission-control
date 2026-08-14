@@ -42,6 +42,7 @@ import { SlotStage } from "./SlotStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
+import { fetchWithCache, loadCached } from "./queryCache";
 
 // ── Active Downloads Panel ────────────────────────────────────────────────────
 
@@ -794,23 +795,30 @@ export default function RuntimesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data, isLoading, error } = useQuery({
+  // GET /runtimes live-enriches the whole fleet (~6 s cold) — placeholderData
+  // from the last visit paints the page instantly; the fresh fetch replaces it.
+  const { data, isLoading, error, isPlaceholderData } = useQuery({
     queryKey: ["runtimes"],
-    queryFn: () => api.runtimes.list(),
+    queryFn: () => fetchWithCache("runtimes", () => api.runtimes.list()),
+    placeholderData: () => loadCached<Awaited<ReturnType<typeof api.runtimes.list>>>("runtimes"),
     refetchInterval: 15_000,
   });
 
   const { data: hostsData } = useQuery<Host[]>({
     queryKey: ["hosts"],
-    queryFn: api.hosts.list,
+    queryFn: () => fetchWithCache("hosts", () => api.hosts.list()),
+    placeholderData: () => loadCached<Host[]>("hosts"),
   });
 
   const { data: lmsData } = useQuery({
     queryKey: ["lmstudio-models"],
-    queryFn: () => api.lmstudio.list(),
+    queryFn: () => fetchWithCache("lms-models", () => api.lmstudio.list()),
+    placeholderData: () => loadCached<Awaited<ReturnType<typeof api.lmstudio.list>>>("lms-models"),
     refetchInterval: 15_000,
   });
 
+  // Live status stays uncached on purpose: stale health/reachability claims
+  // are exactly what this redesign eliminates. 19 ms from the watcher cache.
   const { data: liveData } = useQuery({
     queryKey: ["runtimes", "live-status"],
     queryFn: () => api.runtimes.liveStatus(),
