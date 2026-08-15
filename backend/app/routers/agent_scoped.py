@@ -1122,8 +1122,19 @@ async def agent_delegate_task(
     elif current_task is not None:
         origin_thread_id = current_task.origin_thread_id
 
-    # Root mode: no parent to inherit from — board default project, explicit
-    # priority or medium, and callback is meaningless (nothing to resume).
+    # Root mode: no parent to inherit from — board default project and explicit
+    # priority or medium.
+    #
+    # Two things used to be conflated under one flag, and that is what left the
+    # circle open for a chat-ordered delegation (#312, live-reproduced): a
+    # blocked parent that must be RESUMED, and a requester that must be TOLD.
+    # A root delegation has no parent to resume — but the lead who ordered it
+    # from a chat is precisely the one waiting for the answer, and with
+    # callback_agent_id left null nothing downstream can ever reach them
+    # (agent_task_status's completion hook and _deliver_root_callback both key
+    # off exactly that field). So the resume half stays off for root, the
+    # notify half follows the caller's request.
+    notify_requester = payload.callback
     if current_task is None:
         project_id = None
         board_row = await session.get(Board, board_id)
@@ -1149,8 +1160,9 @@ async def agent_delegate_task(
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
         origin_thread_id=origin_thread_id,
-        # Callback pattern: subtask points back to the delegating agent
-        callback_agent_id=agent.id if with_callback else None,
+        # Callback pattern: subtask points back to the delegating agent — set
+        # for a root delegation too, so the completion actually reaches them.
+        callback_agent_id=agent.id if notify_requester else None,
         is_auto_created=True,
         auto_reason=f"delegation from {agent.name}"
         + ("" if current_task else " (root, no active task)"),
@@ -1169,16 +1181,21 @@ async def agent_delegate_task(
 
     session.add(subtask)
 
+    # Explicit flush before anything downstream references subtask.id as a
+    # foreign key. Without it, SQLAlchemy can order operations wrong:
+    # - callback branch: the current_task UPDATE (blocked_by_task_id) can run
+    #   before the subtask INSERT and the non-deferrable FK
+    #   fk_tasks_blocked_by_task_id blows up. Reflexive FKs (tasks → tasks)
+    #   confuse SQLAlchemy's topological sort.
+    #   Live bug Boss 2026-04-25: HTTP 500 on mc delegate --callback.
+    # - root branch (current_task is None): emit_event() below inserts an
+    #   ActivityEvent row with task_id=subtask.id and commits internally
+    #   (activity.py:41) — without a flush first, that FK insert hits the
+    #   same unflushed-subtask problem. Missed the first time round (#312):
+    #   HTTP 500 on `mc delegate` with no active parent task.
+    await session.flush()
+
     if with_callback and current_task is not None:
-        # Explicit flush before the current_task UPDATE. Without a flush,
-        # SQLAlchemy could order the operations wrong in the following
-        # emit_event() call (which internally does session.commit(),
-        # activity.py:41) — the current_task UPDATE with blocked_by_task_id
-        # runs before the subtask INSERT and the non-deferrable FK
-        # fk_tasks_blocked_by_task_id blows up.
-        # Reflexive FKs (tasks → tasks) confuse SQLAlchemy's topological sort.
-        # Live bug Boss 2026-04-25: HTTP 500 on mc delegate --callback.
-        await session.flush()
         current_task.status = "blocked"
         current_task.blocked_by_task_id = subtask.id
         current_task.callback_agent_id = agent.id
@@ -1215,6 +1232,7 @@ async def agent_delegate_task(
             "subtask_id": str(subtask.id),
             "target_agent": target_agent.name,
             "callback": with_callback,
+            "notify_requester": notify_requester,
             "root_delegation": current_task is None,
         },
     )

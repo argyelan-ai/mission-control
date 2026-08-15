@@ -169,9 +169,24 @@ async def test_board_lead_without_task_delegates_a_root_task(client: AsyncClient
             await s.exec(select(Task).where(Task.title == "Folgeauftrag Film X"))
         ).one()
         assert created.parent_task_id is None
-        assert created.callback_agent_id is None
+        # Superseded by #312: this used to assert `callback_agent_id is None`.
+        # #284 read "no parent to resume" as "no callback at all" — and that is
+        # what left the chat-ordered delegation mute. Resuming a blocked parent
+        # and telling the requester are different jobs: the first is genuinely
+        # meaningless without a parent, the second is the whole point of a
+        # follow-up order placed from a conversation. The lead is still NOT
+        # blocked (asserted below) — only reachable.
+        assert created.callback_agent_id == lead_id
         assert created.assigned_agent_id == worker_id
         assert created.owner_agent_id == lead_id
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.agent import Agent
+        lead = await s.get(Agent, lead_id)
+        assert lead.current_task_id is None, (
+            "Root-Delegation darf den Lead nicht blockieren — es gibt keinen "
+            "Parent-Task, auf den er warten koennte (#284-Garantie bleibt)"
+        )
 
 
 @pytest.mark.asyncio
