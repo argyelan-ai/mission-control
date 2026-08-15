@@ -2245,7 +2245,9 @@
       "switchFailed": "Switch failed: {message}",
       "selectRecipe": "Switch recipe…",
       "recipeCurrent": "current",
-      "readyListToggle": "{n} more models on this host — ready to take the slot"
+      "groupRecipes": "Recipes (sparkrun)",
+      "groupEngines": "Other engines on this host",
+      "engineNotStartable": "This engine cannot be started from here yet"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
@@ -2265,7 +2267,9 @@
       "tabFleet": "Fleet",
       "tabModels": "Models",
       "tabInfra": "Infrastructure",
-      "tabCloud": "Cloud"
+      "tabCloud": "Cloud",
+      "registerTitle": "Runtime register",
+      "registerHint": "Every configured runtime — click to open its settings panel (context, autostart, agent binding)."
     },
     "loadFailed": "Load failed.",
     "unloadFailed": "Unload failed.",

@@ -2245,7 +2245,9 @@
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
       "selectRecipe": "Rezept wählen…",
       "recipeCurrent": "aktiv",
-      "readyListToggle": "{n} weitere Modelle auf diesem Host — bereit für den Slot"
+      "groupRecipes": "Rezepte (sparkrun)",
+      "groupEngines": "Andere Engines auf diesem Host",
+      "engineNotStartable": "Diese Engine kann von hier aus noch nicht gestartet werden"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
@@ -2265,7 +2267,9 @@
       "tabFleet": "Flotte",
       "tabModels": "Modelle",
       "tabInfra": "Infrastruktur",
-      "tabCloud": "Cloud"
+      "tabCloud": "Cloud",
+      "registerTitle": "Runtime-Register",
+      "registerHint": "Alle eingerichteten Runtimes — Klick öffnet das Einstellungs-Panel (Context, Autostart, Agent-Bindung)."
     },
     "loadFailed": "Laden fehlgeschlagen.",
     "unloadFailed": "Entladen fehlgeschlagen.",

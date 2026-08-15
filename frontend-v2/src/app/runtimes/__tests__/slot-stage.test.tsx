@@ -138,23 +138,22 @@ describe("SlotStage", () => {
     await waitFor(() => expect(switchRecipe).toHaveBeenCalledWith("rt", "laguna-s21"));
   });
 
-  it("ready-row click calls onOpen with that runtime", async () => {
+  it("a sibling engine in the unified dropdown arms a confirm; confirm calls start (slot takeover)", async () => {
+    const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
     const stopped = makeRuntime({ slug: "other", display_name: "Qwen 3.6", runtime_type: "lmstudio", state: "stopped" });
     const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
     const group: HostGroup = { host, runtimes: [serving, stopped] };
-    const onOpen = vi.fn();
 
-    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={onOpen} />);
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
-    await act(async () => { (await screen.findByTestId("ready-list-toggle")).click(); });
-    const row = await screen.findByTestId("ready-row-other");
-    row.click();
+    await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
+    await act(async () => { (await screen.findByTestId("switch-engine-other")).click(); });
 
-    expect(onOpen).toHaveBeenCalledWith(stopped);
-    // Switch row carries recipes only (M1 mockup) — the ready list is the
-    // sole home for sibling runtimes, so its display name must appear once.
-    expect(screen.getAllByText("Qwen 3.6")).toHaveLength(1);
+    // Selecting only arms the confirm — one click must never evict the GPU.
+    expect(start).not.toHaveBeenCalled();
+    await act(async () => { (await screen.findByText("Confirm switch")).click(); });
+    await waitFor(() => expect(start).toHaveBeenCalledWith(stopped.id));
   });
 
   it("renders a placeholder when the host has no runtimes at all", async () => {
@@ -166,18 +165,19 @@ describe("SlotStage", () => {
     expect(await screen.findByText("No model set up")).toBeInTheDocument();
   });
 
-  it("a non-lifecycle host runtime (e.g. omp) is not serving and not placeholder-hidden — it shows as a dim ready row", async () => {
+  it("a non-startable host runtime (e.g. omp) stays visible in the dropdown but disabled", async () => {
+    const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const omp = makeRuntime({ slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped" });
     const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
     const group: HostGroup = { host, runtimes: [omp] };
-    const onOpen = vi.fn();
 
-    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={onOpen} />);
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
-    await act(async () => { (await screen.findByTestId("ready-list-toggle")).click(); });
-    const row = await screen.findByTestId("ready-row-omp1");
-    row.click();
-    expect(onOpen).toHaveBeenCalledWith(omp);
+    await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
+    const item = await screen.findByTestId("switch-engine-omp1");
+    expect(item).toBeDisabled();
+    item.click();
+    expect(start).not.toHaveBeenCalled();
   });
 });
 

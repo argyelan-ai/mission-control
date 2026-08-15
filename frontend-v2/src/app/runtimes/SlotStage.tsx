@@ -21,7 +21,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus, SparkrunRecipe } from "@/lib/types";
-import { pickServing, type HostGroup } from "./grouping";
+import { panelCapabilities, pickServing, type HostGroup } from "./grouping";
 import { useGpuSparkline } from "./useGpuSparkline";
 import { fmtCtx } from "@/lib/utils";
 import { openModelsTab } from "./modelsTab";
@@ -34,9 +34,10 @@ const TYPE_LABELS: Record<string, string> = {
   vllm_docker: "vLLM Docker", lmstudio: "LM Studio", unsloth: "Unsloth",
   unsloth_porsche: "Unsloth · PORSCHE", openai_compatible: "OpenAI-compatible",
   cloud: "Cloud API", hermes: "Hermes", grok: "Grok", kimi: "Kimi",
-  omp: "OMP", llamacpp_docker: "llama.cpp",
+  omp: "OMP", llamacpp_docker: "llama.cpp", ssh_process: "SSH process",
 };
 const typeLabel = (t: string) => TYPE_LABELS[t] ?? t;
+export { typeLabel };
 
 const liveFor = (rt: Runtime, live?: Record<string, RuntimeLiveStatus>) => live?.[rt.slug ?? rt.id];
 
@@ -236,22 +237,35 @@ function PhaseIndicator({ phase, message }: { phase?: string | null; message?: s
 // switch targets are recipes, not sibling runtimes). Non-serving lifecycle
 // runtimes live exclusively in the ready list below; slot takeover for them
 // happens via Start inside the detail panel opened from that row.
+/** One thing the operator can hand the GPU slot to — either a sparkrun
+ *  recipe (same engine, different model/config) or a sibling runtime on the
+ *  host (a different engine entirely). The UI deliberately unifies both:
+ *  to the operator they are the same question ("which model gets the GPU?"),
+ *  even though the backend paths differ (switch-recipe vs. start+eviction). */
+type SwitchChoice =
+  | { kind: "recipe"; name: string }
+  | { kind: "runtime"; rt: Runtime };
+
 function SwitchRow({
   group,
   serving,
   live,
+  siblings,
+  sizeGb,
 }: {
   group: HostGroup;
   serving: Runtime | null;
   live?: Record<string, RuntimeLiveStatus>;
+  siblings: Runtime[];
+  sizeGb: (rt: Runtime) => number | undefined;
 }) {
   const t = useTranslations("runtimes.slotStage");
   const tRecipe = useTranslations("runtimes.recipe");
   const queryClient = useQueryClient();
   // Two-step confirm before an eviction — restores the old SparkRecipeSwitcher's
-  // arm/confirm behavior (a recipe switch evicts whatever the GPU is currently
+  // arm/confirm behavior (a switch evicts whatever the GPU is currently
   // serving; that must never be one click away).
-  const [confirmRecipe, setConfirmRecipe] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<SwitchChoice | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
 
   // The vllm_docker runtime actually holding the slot wins over "the first
@@ -289,31 +303,42 @@ function SwitchRow({
   const switchMutation = useMutation({
     mutationFn: (recipe: string) => api.runtimes.sparkrun.switchRecipe(vllmRuntime!.id, recipe),
     onSuccess: () => {
-      setConfirmRecipe(null);
+      setConfirm(null);
       queryClient.invalidateQueries({ queryKey: ["runtime-current-recipe", vllmRuntime?.id] });
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
     },
-    onError: () => setConfirmRecipe(null),
+    onError: () => setConfirm(null),
+  });
+
+  // Slot takeover by a sibling engine: plain start — the backend evicts the
+  // current occupant itself (exclusive-memory handling in runtime_manager).
+  const startMutation = useMutation({
+    mutationFn: (rt: Runtime) => api.runtimes.start(rt.id),
+    onSuccess: () => {
+      setConfirm(null);
+      queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+    },
+    onError: () => setConfirm(null),
   });
 
   // Clicking outside the row disarms an armed confirm — same "click elsewhere
   // closes it" behavior the old dropdown had via its document mousedown listener.
   useEffect(() => {
-    if (confirmRecipe === null) return;
+    if (confirm === null) return;
     const onPointerDown = (e: MouseEvent) => {
       if (rowRef.current?.contains(e.target as Node)) return;
-      setConfirmRecipe(null);
+      setConfirm(null);
     };
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [confirmRecipe]);
+  }, [confirm]);
 
   const servingLive = serving ? liveFor(serving, live) : undefined;
   const isSwitching = servingLive?.status === "switching";
-  const isMutating = switchMutation.isPending || isSwitching;
+  const isMutating = switchMutation.isPending || startMutation.isPending || isSwitching;
 
   if (isMutating) {
-    const message = switchMutation.data?.message ?? null;
+    const message = switchMutation.data?.message ?? startMutation.data?.message ?? null;
     return (
       <div
         className="flex items-center gap-3 px-4 py-3"
@@ -326,8 +351,11 @@ function SwitchRow({
 
   const errorMessage = switchMutation.isError
     ? t("switchFailed", { message: switchMutation.error.message })
-    : null;
+    : startMutation.isError
+      ? t("switchFailed", { message: startMutation.error.message })
+      : null;
 
+  const showRecipes = recipeCapable && isSparkrunManaged;
   const allRecipes = recipesQuery.data?.recipes ?? [];
   const currentName = currentRecipeQuery.data?.current_recipe ?? null;
   // Dropdown order: current first, then runnable (solo-capable) recipes, then
@@ -351,29 +379,38 @@ function SwitchRow({
         {t("switchLabel")}
       </span>
 
-      {recipeCapable && isSparkrunManaged && confirmRecipe == null && (
-        <RecipeDropdown
-          recipes={sortedRecipes}
+      {confirm == null && (showRecipes || siblings.length > 0) && (
+        <UnifiedSwitchDropdown
+          recipes={showRecipes ? sortedRecipes : []}
           currentName={currentName}
-          onSelect={(name) => setConfirmRecipe(name)}
+          servingName={serving?.display_name ?? null}
+          siblings={siblings}
+          sizeGb={sizeGb}
+          onSelect={setConfirm}
         />
       )}
 
-      {recipeCapable && isSparkrunManaged && confirmRecipe != null && (
+      {confirm != null && (
         <div
           className="flex items-center gap-2 rounded-md px-3 py-2 text-xs flex-wrap"
           style={{ background: C.bgSurface, border: `1px solid ${C.borderAccent}` }}
         >
-          <span className="font-mono" style={{ color: C.textPrimary }}>{confirmRecipe}</span>
+          <span className="font-mono" style={{ color: C.textPrimary }}>
+            {confirm.kind === "recipe" ? confirm.name : confirm.rt.display_name}
+          </span>
           <button
-            onClick={() => switchMutation.mutate(confirmRecipe)}
+            onClick={() =>
+              confirm.kind === "recipe"
+                ? switchMutation.mutate(confirm.name)
+                : startMutation.mutate(confirm.rt)
+            }
             className="rounded px-2 py-1 text-[10px] font-semibold cursor-pointer"
             style={{ background: C.accent, color: C.bgDeep }}
           >
             {tRecipe("confirmSwitch")}
           </button>
           <button
-            onClick={() => setConfirmRecipe(null)}
+            onClick={() => setConfirm(null)}
             className="rounded px-2 py-1 text-[10px] cursor-pointer"
             style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
           >
@@ -383,7 +420,7 @@ function SwitchRow({
         </div>
       )}
 
-      {recipeCapable && isSparkrunManaged && recipesQuery.isError && (
+      {showRecipes && recipesQuery.isError && (
         <span className="text-xs" style={{ color: STATUS_TEXT.error }}>{tRecipe("unreachable")}</span>
       )}
 
@@ -398,48 +435,6 @@ function SwitchRow({
       {errorMessage && (
         <span className="text-xs w-full" style={{ color: STATUS_TEXT.error }}>{errorMessage}</span>
       )}
-    </div>
-  );
-}
-
-// ── Ready list ─────────────────────────────────────────────────────────────
-
-function ReadyList({ readyRuntimes, sizeGb, onOpen }: { readyRuntimes: Runtime[]; sizeGb: (rt: Runtime) => number | undefined; onOpen: (rt: Runtime) => void }) {
-  const t = useTranslations("runtimes.slotStage");
-  // Collapsed by default: bare rows under the switch area read as clutter
-  // ("why are these here?" — operator feedback). The toggle line names what
-  // they are: other installed models on this host that could take the slot.
-  const [open, setOpen] = useState(false);
-  if (readyRuntimes.length === 0) return null;
-  return (
-    <div className="flex flex-col" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        data-testid="ready-list-toggle"
-        className="flex items-center gap-2 px-4 py-2.5 text-xs text-left cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
-        style={{ color: C.textMuted }}
-      >
-        <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>{open ? "▾" : "▸"}</span>
-        {t("readyListToggle", { n: readyRuntimes.length })}
-      </button>
-      {open && readyRuntimes.map((rt) => {
-        const gb = sizeGb(rt);
-        return (
-          <button
-            key={rt.id}
-            data-testid={`ready-row-${rt.slug ?? rt.id}`}
-            onClick={() => onOpen(rt)}
-            className="flex items-center gap-2 px-4 py-2 text-xs text-left cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
-            style={{ color: C.textDim }}
-          >
-            <span>○</span>
-            <span style={{ color: C.textMuted }}>{rt.display_name}</span>
-            <span>· {typeLabel(rt.runtime_type)}{gb != null ? ` · ${Math.round(gb)} GB` : ""}</span>
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -612,8 +607,7 @@ export function SlotStage({
         </div>
         <TelemetryColumn hostId={group.host.id} />
       </div>
-      <SwitchRow group={group} serving={serving} live={live} />
-      <ReadyList readyRuntimes={readyRuntimes} sizeGb={sizeGb} onOpen={onOpen} />
+      <SwitchRow group={group} serving={serving} live={live} siblings={readyRuntimes} sizeGb={sizeGb} />
     </div>
   );
 }
@@ -623,14 +617,20 @@ export function SlotStage({
 // showing the current recipe; the list opens in a portal (the stage card
 // clips overflow) with runnable recipes first and non-solo ones disabled.
 
-function RecipeDropdown({
+function UnifiedSwitchDropdown({
   recipes,
   currentName,
+  servingName,
+  siblings,
+  sizeGb,
   onSelect,
 }: {
   recipes: SparkrunRecipe[];
   currentName: string | null;
-  onSelect: (name: string) => void;
+  servingName: string | null;
+  siblings: Runtime[];
+  sizeGb: (rt: Runtime) => number | undefined;
+  onSelect: (choice: SwitchChoice) => void;
 }) {
   const t = useTranslations("runtimes.slotStage");
   const tRecipe = useTranslations("runtimes.recipe");
@@ -678,7 +678,7 @@ function RecipeDropdown({
         style={{ background: C.bgSurface, border: `1px solid ${open ? C.borderAccent : C.border}`, color: C.textPrimary }}
       >
         <span className="font-mono truncate max-w-[340px]">
-          {currentName ?? t("selectRecipe")}
+          {currentName ?? servingName ?? t("selectRecipe")}
         </span>
         <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>▾</span>
       </button>
@@ -700,6 +700,14 @@ function RecipeDropdown({
               boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
             }}
           >
+            {recipes.length > 0 && (
+              <div
+                className="px-3 pt-2 pb-1 text-[9px] font-medium uppercase"
+                style={{ color: C.textDim, letterSpacing: "0.1em" }}
+              >
+                {t("groupRecipes")}
+              </div>
+            )}
             {recipes.map((r) => {
               const isActive = r.name === currentName;
               const isDisabled = !r.solo_capable;
@@ -716,7 +724,7 @@ function RecipeDropdown({
                   title={isDisabled ? tRecipe("needsMoreTitle", { gpuHint: gpuHint ?? tRecipe("moreGpusNodes") }) : undefined}
                   onClick={() => {
                     setOpen(false);
-                    onSelect(r.name);
+                    onSelect({ kind: "recipe", name: r.name });
                   }}
                   className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
                   style={{
@@ -726,6 +734,45 @@ function RecipeDropdown({
                 >
                   <span className="truncate">{r.name}</span>
                   {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
+                </button>
+              );
+            })}
+
+            {siblings.length > 0 && (
+              <div
+                className="px-3 pt-2 pb-1 text-[9px] font-medium uppercase"
+                style={{ color: C.textDim, letterSpacing: "0.1em" }}
+              >
+                {t("groupEngines")}
+              </div>
+            )}
+            {siblings.map((rt) => {
+              // Slot takeover = start this runtime; only backend-startable
+              // engines are selectable, the rest stay visible but disabled.
+              const startable = panelCapabilities(rt).lifecycle;
+              const gb = sizeGb(rt);
+              return (
+                <button
+                  key={rt.id}
+                  role="option"
+                  aria-selected={false}
+                  disabled={!startable}
+                  data-testid={`switch-engine-${rt.slug ?? rt.id}`}
+                  title={!startable ? t("engineNotStartable") : undefined}
+                  onClick={() => {
+                    setOpen(false);
+                    onSelect({ kind: "runtime", rt });
+                  }}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
+                  style={{
+                    color: startable ? C.textPrimary : C.textDim,
+                    borderBottom: `1px solid ${C.borderSubtle}`,
+                  }}
+                >
+                  <span className="truncate">{rt.display_name}</span>
+                  <span className="ml-auto shrink-0" style={{ color: C.textDim }}>
+                    {typeLabel(rt.runtime_type)}{gb != null ? ` · ${Math.round(gb)} GB` : ""}
+                  </span>
                 </button>
               );
             })}

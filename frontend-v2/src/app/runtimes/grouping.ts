@@ -83,6 +83,10 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
 // "Unbekannter runtime_type" (HTTP 400) — no backend lifecycle support exists.
 const LIFECYCLE_TYPES = new Set<string>([
   "vllm_docker", "lmstudio", "unsloth", "unsloth_porsche",
+  // ssh_process (PR #285, DwarfStar 4): start/stop go through the same
+  // runtime_manager paths incl. exclusive-memory eviction + grace phases —
+  // verified against backend start_runtime (SSH_PROCESS_TYPE branches).
+  "ssh_process",
 ]);
 
 // Copied from the old page.tsx `isProbeable` list — do not widen without backend support.
