@@ -86,7 +86,12 @@ describe("RuntimesPage", () => {
 
     renderPage();
 
-    expect(await screen.findByTestId("ready-row-omp1")).toBeInTheDocument();
+    // Visible twice by design: as a disabled engine in the stage's unified
+    // switch dropdown, and as a register row on the Infrastructure tab.
+    await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
+    expect(await screen.findByTestId("switch-engine-omp1")).toBeInTheDocument();
+    await act(async () => { screen.getByTestId("page-tab-infra").click(); });
+    expect(await screen.findByTestId("runtime-register-row-omp1")).toBeInTheDocument();
   });
 
   it("(b) a host with zero runtimes still renders a placeholder stage", async () => {

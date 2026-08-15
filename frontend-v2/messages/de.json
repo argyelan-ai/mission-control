@@ -2243,9 +2243,11 @@
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
-      "miniExpand": "Volle Bühne zeigen",
       "selectRecipe": "Rezept wählen…",
-      "recipeCurrent": "aktiv"
+      "recipeCurrent": "aktiv",
+      "groupRecipes": "Rezepte (sparkrun)",
+      "groupEngines": "Andere Engines auf diesem Host",
+      "engineNotStartable": "Diese Engine kann von hier aus noch nicht gestartet werden"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
@@ -2265,7 +2267,9 @@
       "tabFleet": "Flotte",
       "tabModels": "Modelle",
       "tabInfra": "Infrastruktur",
-      "tabCloud": "Cloud"
+      "tabCloud": "Cloud",
+      "registerTitle": "Runtime-Register",
+      "registerHint": "Alle eingerichteten Runtimes — Klick öffnet das Einstellungs-Panel (Context, Autostart, Agent-Bindung)."
     },
     "loadFailed": "Laden fehlgeschlagen.",
     "unloadFailed": "Entladen fehlgeschlagen.",

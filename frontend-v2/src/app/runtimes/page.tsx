@@ -38,7 +38,7 @@ import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
-import { MiniStageBar, SlotStage } from "./SlotStage";
+import { SlotStage, typeLabel } from "./SlotStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
@@ -756,6 +756,47 @@ function SleepingHostLine({ group }: { group: HostGroup }) {
 // Hostless, non-cloud runtimes (e.g. hermes) — never silently hidden, but
 // demoted to a one-line hint instead of a card.
 
+/** Flat register of every runtime entry — the configuration home (panel
+ *  access for context settings, autostart, binding …). Lives on the
+ *  Infrastructure tab: the stage's switch dropdown owns switching, this list
+ *  owns managing. */
+function RuntimeRegister({ runtimes, onOpen }: { runtimes: Runtime[]; onOpen: (rt: Runtime) => void }) {
+  const tSlot = useTranslations("runtimes.slotPage");
+  if (runtimes.length === 0) return null;
+  const sorted = [...runtimes].sort((a, b) => a.display_name.localeCompare(b.display_name));
+  return (
+    <section>
+      <div className="flex items-center gap-2.5 mb-1">
+        <span
+          className="text-[10px] font-medium uppercase shrink-0"
+          style={{ color: C.textMuted, letterSpacing: "0.08em" }}
+        >
+          {tSlot("registerTitle")}
+        </span>
+        <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
+      </div>
+      <p className="text-xs mb-3" style={{ color: C.textDim }}>{tSlot("registerHint")}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {sorted.map((rt) => (
+          <button
+            key={rt.id}
+            type="button"
+            data-testid={`runtime-register-row-${rt.slug ?? rt.id}`}
+            onClick={() => onOpen(rt)}
+            className="flex items-center gap-2 rounded-md px-3 py-2.5 text-xs text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
+          >
+            <span className="truncate" style={{ color: C.textSecondary }}>{rt.display_name}</span>
+            <span className="ml-auto shrink-0" style={{ color: C.textDim }}>
+              {typeLabel(rt.runtime_type)}{rt.host ? ` · ${rt.host.display_name}` : ""}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function UnassignedRow({ runtime, onOpen }: { runtime: Runtime; onOpen: (rt: Runtime) => void }) {
   const tSlot = useTranslations("runtimes.slotPage");
   return (
@@ -930,25 +971,14 @@ export default function RuntimesPage() {
         )}
 
 
-        {/* Tabs sit at the top (operator feedback: easier to reach). On the
-            Fleet tab the full stage renders; on the other tabs a slim
-            "now playing" MiniStageBar keeps the monitoring on screen. Tabs
-            render even for an empty fleet — the Models tab is how a fresh
-            install downloads its first model. */}
+        {/* Tabs sit at the top (operator feedback: easier to reach).
+            Monitoring lives ONLY on the Fleet tab (full stage) — a compact
+            monitoring strip on the other tabs was tried and removed on
+            operator feedback (read as misplaced tab content). Tabs render
+            even for an empty fleet — the Models tab is how a fresh install
+            downloads its first model. */}
         {!isLoading && !error && (
           <div className="flex flex-col gap-6">
-            {/* Page-level "now playing" strip — ABOVE the tab bar on purpose:
-                it is global GPU monitoring, not tab content (rendering it
-                below the tabs made the Spark read as part of the Cloud tab).
-                Hidden on Fleet, where the full stage is visible anyway. */}
-            {pageTab !== "fleet" && !isEmpty && stageGroups.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {stageGroups.map((g) => (
-                  <MiniStageBar key={g.host.id} group={g} live={live} onExpand={() => setPageTab("fleet")} />
-                ))}
-              </div>
-            )}
-
             <div
               role="tablist"
               aria-label={t("title")}
@@ -1028,6 +1058,7 @@ export default function RuntimesPage() {
 
             {pageTab === "infra" && (
               <div className="flex flex-col gap-5">
+                <RuntimeRegister runtimes={allRuntimes} onOpen={openPanel} />
                 <HostsSection embedded />
                 <KvResetScheduleToggle />
                 <VllmContainerCatalog />
