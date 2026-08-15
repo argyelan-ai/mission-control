@@ -23,6 +23,8 @@ they never reach the frontend on their own.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -31,6 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.services import sse
+from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
 
 logger = logging.getLogger("mc.transcript_chat")
@@ -550,3 +554,125 @@ def _count_lines(value: Any) -> int:
     if not value:
         return 0
     return str(value).count("\n") + 1
+
+
+# ── Live tailing (I/O — background polling task, not pure) ──────────────────
+
+
+class ChatTailerManager:
+    """Refcounted, per-agent background poller that follows a live Claude
+    Code transcript and republishes each new line as a ``chat_event`` SSE
+    frame on ``RedisKeys.agent_chat_channel(agent_id)``.
+
+    One asyncio task per agent, shared across every connected SSE client for
+    that agent (``acquire``/``release`` refcount it) — N browser tabs on the
+    same agent's chat never spawn N pollers. The task is cancelled the moment
+    the last client disconnects, so an agent nobody is watching costs nothing.
+
+    Applies the same merge/skip semantics as ``read_history``: an internal
+    ``_tool_result`` event is never published on its own — instead, when it
+    arrives, the already-published ``tool`` event (matched by ``toolUseId``)
+    is mutated in place and *republished* under the same ``uuid``/
+    ``toolUseId``, so the frontend reducer replaces its existing tool card
+    instead of appending a second one.
+    """
+
+    POLL_INTERVAL = 1.0
+
+    def __init__(self) -> None:
+        self._refcounts: dict[str, int] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    async def acquire(self, agent_id: str, path: Path) -> None:
+        """Registers one more client for ``agent_id``. Starts the poll task
+        if this is the first client; otherwise just bumps the refcount — the
+        already-running task keeps tailing from wherever it is."""
+        count = self._refcounts.get(agent_id, 0)
+        self._refcounts[agent_id] = count + 1
+        if count == 0:
+            self._tasks[agent_id] = asyncio.create_task(self._run(agent_id, path))
+
+    async def release(self, agent_id: str) -> None:
+        """Drops one client for ``agent_id``. Cancels and awaits the poll
+        task once the last client releases."""
+        count = self._refcounts.get(agent_id, 0)
+        if count <= 1:
+            self._refcounts.pop(agent_id, None)
+            task = self._tasks.pop(agent_id, None)
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        else:
+            self._refcounts[agent_id] = count - 1
+
+    async def _run(self, agent_id: str, initial_path: Path) -> None:
+        channel = RedisKeys.agent_chat_channel(agent_id)
+        tdir = initial_path.parent
+        current_path = initial_path
+        offset = 0
+        buffer = ""
+        tool_events_by_id: dict[str, dict[str, Any]] = {}
+
+        while True:
+            await asyncio.sleep(self.POLL_INTERVAL)
+
+            try:
+                active = find_active_session(tdir)
+            except OSError:
+                active = None
+            if active is not None and active[0] != current_path:
+                current_path = active[0]
+                offset = 0
+                buffer = ""
+                tool_events_by_id = {}
+                await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
+                continue
+
+            try:
+                size = current_path.stat().st_size
+            except OSError:
+                # File disappeared (rotated/deleted mid-session) — state is
+                # unknown, but the directory keeps getting polled so a
+                # replacement (or the same path reappearing) is picked up.
+                continue
+
+            if size <= offset:
+                continue
+
+            try:
+                with current_path.open("r", encoding="utf-8", errors="replace") as f:
+                    f.seek(offset)
+                    chunk = f.read(size - offset)
+            except OSError:
+                continue
+
+            offset = size
+            buffer += chunk
+            lines = buffer.split("\n")
+            buffer = lines.pop()  # last element: partial line (or "") — held for next tick
+
+            for raw_line in lines:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                for ev in parse_transcript_line(raw_line):
+                    if ev["kind"] == "_tool_result":
+                        tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
+                        if tool_ev is not None:
+                            _merge_tool_result(tool_ev, ev)
+                            await sse.broadcast(channel, "chat_event", tool_ev)
+                        continue
+
+                    if ev["kind"] == "tool":
+                        stats = _compute_edit_stats(ev["name"], ev["detail"])
+                        if stats is not None:
+                            ev["stats"] = stats
+                        tool_use_id = ev.get("toolUseId")
+                        if tool_use_id is not None:
+                            tool_events_by_id[tool_use_id] = ev
+
+                    await sse.broadcast(channel, "chat_event", ev)
+
+
+tailer_manager = ChatTailerManager()

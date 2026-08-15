@@ -54,6 +54,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(messag
 install_log_redaction()
 from app.routers import (
     activity,
+    agent_chat,
     agent_comments,
     agent_scoped,
     agent_task_status,
@@ -898,6 +899,7 @@ app.include_router(cli_plugins.router)
 app.include_router(cli_tools.router)  # /api/v1/cli-tools — CLI update cockpit (Task 7)
 app.include_router(browser_live.router)
 app.include_router(cli_terminal.router)
+app.include_router(agent_chat.router)  # /api/v1/agents/{id}/chat/history|stream — Sessions Chat View (Task A4)
 app.include_router(consensus.router)
 app.include_router(schedule.router)
 app.include_router(voice.router)

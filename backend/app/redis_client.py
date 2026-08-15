@@ -88,6 +88,14 @@ class RedisKeys:
         return f"mc:ratelimit:agent:{agent_id}:api"
 
     @staticmethod
+    def agent_chat_channel(agent_id: str) -> str:
+        """Per-agent Redis pub/sub channel for the live transcript-tail chat
+        view (Sessions Chat View, Task A4). Every SSE frame published here
+        carries the wire event type ``chat_event`` — mirrors the naming
+        convention of ``agent_runtime_switch.terminal_remount_channel``."""
+        return f"mc:agent:{agent_id}:chat"
+
+    @staticmethod
     def bench_entry_rerender_cooldown(entry_id: str) -> str:
         """Per-entry rerender rate limit (SET NX EX) — bench_studio's
         per-video rerender button. Prevents double-click/spam fan-out of
