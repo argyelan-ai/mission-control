@@ -1,31 +1,36 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-06-10",
-  "title": "Design System: Mission Control",
+  "generatedAt": "2026-08-16",
+  "title": "Design System: Mission Control v4 „Signal\"",
   "extensions": {
     "colorMeta": {
-      "accent": { "role": "primary", "displayName": "Leitstand-Teal", "canonical": "#0FA3A3", "tonalRamp": ["#052A2A", "#084747", "#0B6565", "#0E8484", "#0FA3A3", "#14C4C4", "#5FD9D9", "#B5EFEF"] },
-      "bg-deep": { "role": "neutral", "displayName": "Tiefschwarz", "canonical": "#050505", "tonalRamp": ["#050505", "#0A0A0A", "#111111", "#161616", "#1C1C1C", "#3A3A3A", "#888888", "#EDEDED"] },
-      "text-primary": { "role": "neutral", "displayName": "Instrumenten-Weiss", "canonical": "#EDEDED", "tonalRamp": ["#1C1C1C", "#3A3A3A", "#6E6E6E", "#888888", "#A1A1A1", "#C4C4C4", "#EDEDED", "#FFFFFF"] },
-      "status-online": { "role": "status", "displayName": "Online-Grün", "canonical": "#2B9A4A", "tonalRamp": ["#0A2615", "#114222", "#175E30", "#1E7A3D", "#2B9A4A", "#4DB46A", "#84CD99", "#C2E6CC"] },
-      "status-warning": { "role": "status", "displayName": "Warn-Ocker", "canonical": "#B8870A", "tonalRamp": ["#2E2203", "#4D3804", "#6C4F06", "#8B6608", "#B8870A", "#D4A52E", "#E5C470", "#F2E2B8"] },
-      "status-error": { "role": "status", "displayName": "Fehler-Rot", "canonical": "#C23838", "tonalRamp": ["#300E0E", "#521717", "#742121", "#962A2A", "#C23838", "#D05F5F", "#DF9090", "#EFC7C7"] },
-      "status-info": { "role": "status", "displayName": "Info-Blau", "canonical": "#2E6FD8", "tonalRamp": ["#0B1B36", "#132E5A", "#1A417E", "#2254A2", "#2E6FD8", "#5A8CE0", "#92B4EB", "#C8D9F5"] }
+      "accent": { "role": "primary", "displayName": "Signal-Akzent (achromatisch)", "canonical": "#EBE8DE", "tonalRamp": ["#161511", "#2E2C26", "#48453C", "#666257", "#8F8B7E", "#C1BEB2", "#EBE8DE", "#F9F7EF"] },
+      "bg-deep": { "role": "neutral", "displayName": "Off-Black", "canonical": "#0A0A0A", "tonalRamp": ["#0A0A0A", "#101010", "#171717", "#222222", "#2C2C2C", "#3A3A3A", "#666666", "#8F8F8F"] },
+      "text-primary": { "role": "neutral", "displayName": "Instrumenten-Weiss", "canonical": "#EEEEEE", "tonalRamp": ["#222222", "#3A3A3A", "#555555", "#666666", "#8F8F8F", "#BABABA", "#EEEEEE", "#FFFFFF"] },
+      "status-online": { "role": "status", "displayName": "Online-Grün", "canonical": "#55A964", "tonalRamp": ["#14261A", "#1F3F2A", "#2C593A", "#3B7A4E", "#55A964", "#77C185", "#A2D6AC", "#CFE9D5"] },
+      "status-warning": { "role": "status", "displayName": "Warn-Ocker", "canonical": "#A67F3E", "tonalRamp": ["#2A2010", "#463619", "#634C22", "#82652E", "#A67F3E", "#B98F4D", "#CFB07E", "#E4D2B0"] },
+      "status-error": { "role": "status", "displayName": "Fehler-Rot", "canonical": "#FA4942", "tonalRamp": ["#3A1210", "#5E1B18", "#842621", "#B5332C", "#FA4942", "#FB6E68", "#FD9995", "#FEC6C3"] },
+      "status-info": { "role": "status", "displayName": "Info-Blau", "canonical": "#5890CA", "tonalRamp": ["#122234", "#1D3A57", "#28527B", "#356BA1", "#5890CA", "#7CA9D8", "#A4C4E5", "#CFDFF2"] }
     },
     "typographyMeta": {
-      "headline": { "displayName": "Headline", "purpose": "Seitentitel — eine pro Seite." },
-      "title": { "displayName": "Title", "purpose": "Sektions- und Kartentitel." },
-      "body": { "displayName": "Body", "purpose": "Inhalte, Beschreibungen, Kommentare." },
-      "label": { "displayName": "Label", "purpose": "Formular-Labels, Meta, Tabellen-Header." },
-      "mono": { "displayName": "Mono", "purpose": "IDs, Branches, Terminals, Metriken." }
+      "display": { "displayName": "Display", "purpose": "Seitentitel, Wordmark, grosse KPI-Werte — Clash Display 500–600, -0.02em." },
+      "title": { "displayName": "Title", "purpose": "Sektions-, Modal- und Kartentitel — General Sans 600, 16px." },
+      "body": { "displayName": "Body", "purpose": "Inhalte, Beschreibungen, Kommentare — General Sans 400, 14px/1.6." },
+      "label": { "displayName": "Label-sys", "purpose": "Mono Micro-Labels, Meta, Sektions-Marken — JetBrains Mono 500, 10px, uppercase, +0.14em." },
+      "mono": { "displayName": "Mono", "purpose": "IDs, Branches, Terminals, Einheiten, Metriken — JetBrains Mono 400, 12px." }
     },
     "shadows": [
-      { "name": "overlay", "value": "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)", "purpose": "Nur Modals/Dropdowns/Drawer — Flächen im Seitenfluss bleiben flach." }
+      { "name": "card", "value": "0 1px 2px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2)", "purpose": "Leicht abhebende Flächen — sparsam; Flächen im Seitenfluss bleiben flach." },
+      { "name": "elevated", "value": "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)", "purpose": "Modals/Dropdowns/Drawer — dunkel, diffus, nie farbig. ResponsiveModal-Panel nutzt exakt diesen Wert." }
     ],
     "motion": [
-      { "name": "ease-out-quint", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Standard für Reveals/Slides (sectionVariants in colors.ts)." },
+      { "name": "ease-out-quint", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Standard für Reveals/Slides/Modal-Panel (sectionVariants + ResponsiveModal)." },
+      { "name": "ease-spring", "value": "cubic-bezier(0.2, 0.8, 0.2, 1)", "purpose": "Keyframe-Utilities (fade-up/fade-in)." },
+      { "name": "modal-panel", "value": "0.22s cubic-bezier(0.16,1,0.3,1)", "purpose": "Modal-Panel Slide/Scale-in (framer-motion, y 24→0)." },
+      { "name": "modal-backdrop", "value": "0.15s", "purpose": "Backdrop-Fade des ResponsiveModal." },
+      { "name": "disclosure", "value": "0.15–0.2s", "purpose": "Erweitert-/Intake-Klappen (height+opacity)." },
       { "name": "duration-micro", "value": "100ms", "purpose": "Hover/Press-Feedback." },
-      { "name": "duration-normal", "value": "200ms", "purpose": "Zustandswechsel, Panels." },
+      { "name": "duration-normal", "value": "200ms", "purpose": "Zustandswechsel, Panels, Karten-Hover." },
       { "name": "duration-slow", "value": "300ms", "purpose": "Modals, Section-Reveals (max 400ms)." }
     ],
     "breakpoints": [
@@ -38,90 +43,101 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Hauptaktion — Teal-Fläche, grosse Submits optional mit dezentem Teal-Verlauf.",
+      "description": "Hauptaktion — achromatische Akzent-Fläche mit dunklem Text (Reverse Video), kein Gradient, kein Glow.",
       "html": "<button class=\"ds-btn-primary\">Auftrag erstellen</button>",
-      "css": ".ds-btn-primary { background: linear-gradient(135deg, #14C4C4, #0FA3A3); color: #EDEDED; font: 500 13px 'Geist Sans', system-ui, sans-serif; padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; transition: filter 150ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { filter: brightness(1.12); } .ds-btn-primary:focus-visible { outline: 2px solid #0FA3A3; outline-offset: 2px; }"
+      "css": ".ds-btn-primary { background: #EBE8DE; color: #151411; font: 500 14px 'General Sans', ui-sans-serif, sans-serif; padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; transition: background 150ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { background: #F9F7EF; } .ds-btn-primary:focus-visible { outline: 2px solid #EBE8DE; outline-offset: 2px; }"
     },
     {
       "name": "Ghost Button",
       "kind": "button",
       "refersTo": "button-ghost",
-      "description": "Sekundäraktion — transparent mit Rahmen, hellt bei Hover eine Stufe auf.",
+      "description": "Sekundäraktion — transparent mit 1px Rahmen, hellt bei Hover eine Stufe auf.",
       "html": "<button class=\"ds-btn-ghost\">Abbrechen</button>",
-      "css": ".ds-btn-ghost { background: transparent; color: #A1A1A1; font: 500 13px 'Geist Sans', system-ui, sans-serif; padding: 8px 16px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; cursor: pointer; transition: background 150ms, color 150ms; } .ds-btn-ghost:hover { background: #1C1C1C; color: #EDEDED; } .ds-btn-ghost:focus-visible { outline: 2px solid #0FA3A3; outline-offset: 2px; }"
+      "css": ".ds-btn-ghost { background: transparent; color: #BABABA; font: 500 14px 'General Sans', ui-sans-serif, sans-serif; padding: 8px 14px; border: 1px solid rgba(168,168,168,0.16); border-radius: 4px; cursor: pointer; transition: background 150ms, color 150ms; } .ds-btn-ghost:hover { background: #2C2C2C; color: #EEEEEE; } .ds-btn-ghost:focus-visible { outline: 2px solid #EBE8DE; outline-offset: 2px; }"
     },
     {
       "name": "Input",
       "kind": "input",
       "refersTo": "input",
-      "description": "Formularfeld — bg-deep Fläche, Teal-Fokus.",
-      "html": "<input class=\"ds-input\" placeholder=\"Kurzer, klarer Aufgabentitel\" />",
-      "css": ".ds-input { background: #050505; color: #EDEDED; font: 400 13px 'Geist Sans', system-ui, sans-serif; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; width: 100%; transition: border-color 150ms; } .ds-input::placeholder { color: #888888; } .ds-input:focus-visible { outline: 2px solid #0FA3A3; outline-offset: 2px; border-color: rgba(15,163,163,0.30); }"
+      "description": "Formularfeld — bg-deep Fläche, Fokus über Akzent-Rahmen + weichen Akzent-Ring (kein bunter Glow).",
+      "html": "<label class=\"ds-field\"><span class=\"ds-label-sys\">Titel</span><input class=\"ds-input\" placeholder=\"Kurzer, klarer Aufgabentitel\" /></label>",
+      "css": ".ds-field { display: flex; flex-direction: column; gap: 6px; } .ds-input { background: #0A0A0A; color: #EEEEEE; font: 400 14px 'General Sans', ui-sans-serif, sans-serif; padding: 8px 12px; border: 1px solid rgba(168,168,168,0.10); border-radius: 10px; width: 100%; outline: none; transition: border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color: #8F8F8F; } .ds-input:focus { border-color: rgba(235,232,222,0.40); box-shadow: 0 0 0 3px rgba(235,232,222,0.10); } .ds-input:focus-visible { outline: 2px solid #EBE8DE; outline-offset: 2px; }"
     },
     {
-      "name": "Card",
-      "kind": "card",
-      "refersTo": "card",
-      "description": "Standard-Container — eine Tonstufe über dem Seitengrund, flach, 1px Rahmen.",
-      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Agent Performance</div><div class=\"ds-card-body\">Tiefe entsteht durch Flächenton, nicht durch Schatten.</div></div>",
-      "css": ".ds-card { background: #111111; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; transition: background 200ms, border-color 200ms; } .ds-card:hover { background: #161616; border-color: rgba(255,255,255,0.10); } .ds-card-title { font: 600 14px 'Geist Sans', system-ui, sans-serif; color: #EDEDED; margin-bottom: 8px; } .ds-card-body { font: 400 13px/1.6 'Geist Sans', system-ui, sans-serif; color: #A1A1A1; }"
+      "name": "Switch",
+      "kind": "custom",
+      "refersTo": "switch",
+      "description": "Toggle — 36×20 Track, an = Akzent-Fläche + Thumb in on-accent, aus = bg-elevated + text-muted Thumb.",
+      "html": "<button class=\"ds-switch\" role=\"switch\" aria-checked=\"true\" aria-label=\"Reports\"><span class=\"ds-switch-thumb\"></span></button>",
+      "css": ".ds-switch { position: relative; width: 36px; height: 20px; border-radius: 9999px; background: #EBE8DE; border: 1px solid #EBE8DE; cursor: pointer; transition: background 150ms, border-color 150ms; padding: 0; } .ds-switch[aria-checked=\"false\"] { background: #222222; border-color: rgba(168,168,168,0.10); } .ds-switch-thumb { position: absolute; top: 50%; left: 18px; transform: translateY(-50%); width: 14px; height: 14px; border-radius: 9999px; background: #151411; transition: left 150ms, background 150ms; } .ds-switch[aria-checked=\"false\"] .ds-switch-thumb { left: 2px; background: #8F8F8F; } .ds-switch:focus-visible { outline: 2px solid #EBE8DE; outline-offset: 2px; }"
     },
     {
-      "name": "Chip (aktiv)",
+      "name": "Status Chip",
       "kind": "chip",
       "refersTo": "chip-active",
-      "description": "Farbton-22-Muster: ${farbe}22 Fläche + ${farbe}55 Rahmen + Farbtext.",
-      "html": "<span class=\"ds-chip-active\">Mit Planner</span> <span class=\"ds-chip\">Direkt</span>",
-      "css": ".ds-chip-active { background: #0FA3A322; color: #0FA3A3; font: 500 11px 'Geist Sans', system-ui, sans-serif; padding: 4px 10px; border: 1px solid #0FA3A355; border-radius: 8px; display: inline-block; } .ds-chip { background: transparent; color: #888888; font: 500 11px 'Geist Sans', system-ui, sans-serif; padding: 4px 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; display: inline-block; }"
+      "description": "Farbton-22-Muster: ${farbe}22 Fläche + ${farbe}55 Rahmen + Farbtext. Aktiv-Auswahl ohne Statusbedeutung nutzt den Akzent.",
+      "html": "<span class=\"ds-chip ds-chip-run\">Running</span> <span class=\"ds-chip ds-chip-warn\">Waiting gate</span> <span class=\"ds-chip ds-chip-idle\">Draft</span>",
+      "css": ".ds-chip { display: inline-block; font: 500 11px 'JetBrains Mono', ui-monospace, monospace; padding: 4px 10px; border-radius: 4px; border: 1px solid transparent; } .ds-chip-run { background: rgba(235,232,222,0.13); color: #EBE8DE; border-color: rgba(235,232,222,0.33); } .ds-chip-warn { background: rgba(166,127,62,0.13); color: #B98F4D; border-color: rgba(166,127,62,0.33); } .ds-chip-idle { background: transparent; color: #8F8F8F; border-color: rgba(168,168,168,0.10); }"
     },
     {
-      "name": "StatusDot",
+      "name": "Label-sys (Micro-Label)",
       "kind": "custom",
-      "refersTo": "status-dot",
-      "description": "Signature-Komponente: 8px Punkt in STATUS-Farbe + Textlabel — Farbe trägt nie allein.",
-      "html": "<span class=\"ds-status\"><span class=\"ds-status-dot\"></span>Online</span>",
-      "css": ".ds-status { display: inline-flex; align-items: center; gap: 6px; font: 500 12px 'Geist Sans', system-ui, sans-serif; color: #A1A1A1; } .ds-status-dot { width: 8px; height: 8px; border-radius: 9999px; background: #2B9A4A; }"
+      "refersTo": "label-sys",
+      "description": "Die Instrumentenstimme: Mono, uppercase, weit getrackt. Sektions-Marken, Formular-Labels, Meta.",
+      "html": "<span class=\"ds-label-sys\">System Health</span>",
+      "css": ".ds-label-sys { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.14em; color: #8F8F8F; }"
     },
     {
-      "name": "Sidebar-Eintrag",
-      "kind": "nav",
-      "refersTo": "nav-item",
-      "description": "Navigation: aktiv = accent-subtle Fläche + Teal, inaktiv text-secondary.",
-      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item-active\" href=\"#\">Home</a><a class=\"ds-nav-item\" href=\"#\">Agents</a></nav>",
-      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; background: #0A0A0A; padding: 8px; border-radius: 12px; } .ds-nav-item { font: 500 13px 'Geist Sans', system-ui, sans-serif; color: #A1A1A1; text-decoration: none; padding: 8px 12px; border-radius: 8px; transition: background 150ms, color 150ms; } .ds-nav-item:hover { background: #1C1C1C; color: #EDEDED; } .ds-nav-item-active { background: #0FA3A31F; color: #0FA3A3; }"
+      "name": "Card / Panel",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Standard-Container — eine Tonstufe über dem Seitengrund, flach, 1px Rahmen; Tiefe über Flächenton.",
+      "html": "<div class=\"ds-card\"><span class=\"ds-label-sys\">Agent</span><div class=\"ds-card-value\">14 / 15</div><div class=\"ds-card-body\">Tiefe entsteht durch Flächenton, nicht durch Schatten.</div></div>",
+      "css": ".ds-card { background: #171717; border: 1px solid rgba(168,168,168,0.10); border-radius: 4px; padding: 16px; transition: background 200ms, border-color 200ms; } .ds-card:hover { background: #222222; border-color: rgba(168,168,168,0.16); } .ds-label-sys { font: 500 10px 'JetBrains Mono', ui-monospace, monospace; text-transform: uppercase; letter-spacing: 0.14em; color: #8F8F8F; } .ds-card-value { font: 600 30px 'Clash Display', 'General Sans', sans-serif; letter-spacing: -0.02em; color: #EEEEEE; margin-top: 12px; } .ds-card-body { font: 400 13px/1.6 'General Sans', ui-sans-serif, sans-serif; color: #BABABA; margin-top: 8px; }"
+    },
+    {
+      "name": "Modal (ResponsiveModal)",
+      "kind": "custom",
+      "refersTo": "modal",
+      "description": "Overlay-Panel — bg-elevated, 1px Rahmen, elevated-Schatten, 2px Akzent-Kante oben als Gehäuse-Markierung.",
+      "html": "<div class=\"ds-modal\"><div class=\"ds-modal-edge\"></div><div class=\"ds-modal-body\">Panel-Inhalt</div></div>",
+      "css": ".ds-modal { position: relative; width: 100%; max-width: 680px; display: flex; flex-direction: column; overflow: hidden; background: #222222; border: 1px solid rgba(168,168,168,0.10); border-radius: 4px; box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3); } .ds-modal-edge { height: 2px; width: 100%; flex-shrink: 0; background: #EBE8DE; } .ds-modal-body { padding: 20px; color: #EEEEEE; font: 400 14px/1.6 'General Sans', ui-sans-serif, sans-serif; }"
     }
   ],
   "narrative": {
-    "northStar": "Der Leitstand",
-    "overview": "Mission Control ist ein Leitstand: der ruhige, dunkle Kontrollraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. Fast schwarz, präzise beschriftet — Farbe erscheint nur, wo sie etwas bedeutet: ein Teal-Signal für Aktion und Fokus, gedämpfte Zustandsfarben für die Lage der Flotte. Referenzen: Bloomberg Terminal, Linear.app, Stripe Dashboard. Abgelehnt wird das generische AI-Tool-Lila, Neon-Glow, Glassmorphism als Deko und SaaS-Marketing-Ästhetik.",
+    "northStar": "Der Leitstand — Signal",
+    "overview": "Mission Control ist ein Leitstand: der ruhige, dunkle Instrumentenraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. v4 „Signal\" ist radikal achromatisch — Struktur und Interaktion sprechen über Helligkeit und Fläche, der einzige Akzent ist ein fast-weisses Off-Cream (#EBE8DE). Farbe ist allein den vier Statustönen vorbehalten: ist etwas bunt, bedeutet es etwas. Referenzen: Bloomberg Terminal, Linear.app, Stripe Dashboard. Abgelehnt wird das generische AI-Tool-Lila, Farb-Gradients, Neon-Glow, Glassmorphism als Deko und SaaS-Marketing-Ästhetik. Das v3-Cyan (#00E5FF) ist zurückgezogen — verbleibende Cyan/Teal/Lila-Werte im Code sind Regressionen.",
     "keyCharacteristics": [
-      "Fast-schwarze tonale Schichtung (#050505 → #1C1C1C) statt Schatten-Tiefe",
-      "Ein Akzent (Teal #0FA3A3), bewusst entsättigt — nie Neon",
-      "Status-Vokabular app-weit identisch (STATUS/LANE in colors.ts)",
-      "Hohe Informationsdichte: 11–14px UI-Text, klare Label-Hierarchie",
-      "Ruhige Motion: kurze Fades/Slides mit ease-out, kein Bounce"
+      "Neutrale Off-Black-Schichtung (#0A0A0A → #2C2C2C) statt Schatten-Tiefe",
+      "Ein Akzent, achromatisch hell (#EBE8DE) — trägt über Helligkeit + Fläche, ≤10%, Text darauf #151411",
+      "Farbe = Status: nur vier bunte Töne (Grün/Ocker/Rot/Blau), Fehler schlägt Warnung über Chroma nicht Helligkeit",
+      "Hohe Informationsdichte: 11–14px UI-Text, Mono-Micro-Label-Hierarchie",
+      "Ruhige Motion: kurze Fades/Slides mit ease-out (0.16,1,0.3,1), kein Bounce, kein Glow"
     ],
     "rules": [
-      { "name": "Die Eine-Stimme-Regel", "body": "Teal ist die einzige Akzentfarbe und belegt ≤10% jeder Fläche. Eine zweite Akzentfarbe einzuführen ist verboten.", "section": "colors" },
-      { "name": "Die Vokabular-Regel", "body": "Farben kommen ausschliesslich aus colors.ts (C, STATUS, LANE). Lokale Paletten und Inline-Hex in Komponenten sind Regressionen und werden entfernt.", "section": "colors" },
+      { "name": "Die Eine-Stimme-Regel", "body": "Es gibt genau einen Akzent, und er ist achromatisch: Helligkeit ist das Signal. Er belegt ≤10% jeder Fläche. Einen zweiten (bunten) Akzent einzuführen ist verboten.", "section": "colors" },
+      { "name": "Die Farbe-heisst-Status-Regel", "body": "Ist etwas bunt, muss es etwas bedeuten. Buntheit ist ausschliesslich den vier Statustönen vorbehalten — keine dekorative Farbe.", "section": "colors" },
+      { "name": "Die Vokabular-Regel", "body": "Farben kommen ausschliesslich aus colors.ts (C, STATUS, LANE, STATUS_TEXT, P2). Lokale Paletten und Inline-Hex sind Regressionen und werden entfernt.", "section": "colors" },
       { "name": "Die Lila-Null-Regel", "body": "Kein Purple/Violett in irgendeiner Form — auch nicht „nur für diese eine Karte\".", "section": "colors" },
-      { "name": "Die Dichte-Regel", "body": "Leitstand-Dichte ist gewollt: 11–14px UI-Text ist Standard, aber jede Stufe unter 13px braucht ≥5.3:1 Kontrast und 500er-Gewicht oder besser.", "section": "typography" },
-      { "name": "Die Flach-Regel", "body": "Karten und Sektionen im Seitenfluss tragen keinen Schatten — Rahmen + Flächenton genügen. Wer einen Schatten setzen will, baut in Wahrheit ein Overlay.", "section": "elevation" }
+      { "name": "Die Flach-Regel", "body": "Karten und Sektionen im Seitenfluss tragen keinen Schatten — Rahmen + Flächenton genügen. Wer einen Schatten setzen will, baut in Wahrheit ein Overlay.", "section": "elevation" },
+      { "name": "Die Kein-Halo-Regel", "body": "Aktive/selektierte Elemente heben sich über accent-subtle-Fläche + Akzent-Rahmen; ein Glow/box-shadow in Akzentfarbe ist verboten.", "section": "elevation" }
     ],
     "dos": [
-      "Do jede Farbe aus colors.ts beziehen (C, STATUS, LANE) — neue Bedeutung ⇒ neues Token, erst dann verwenden.",
+      "Do jede Farbe aus colors.ts beziehen (C, STATUS, LANE, STATUS_TEXT, P2) — neue Bedeutung ⇒ neues Token, erst dann verwenden.",
+      "Do Buntheit ausschliesslich für Status; Struktur/Interaktion tragen über Helligkeit (Akzent) und Fläche.",
       "Do Tiefe über Flächenton lösen (eine Stufe heller = eine Ebene höher).",
-      "Do Kontraste prüfen: Body/Labels ≥4.5:1; text-muted (#888888) ist die dunkelste zulässige Textfarbe.",
-      "Do jeden interaktiven Zustand sichtbar machen: Hover, Fokus-Ring, aktive Chips mit Fläche+Rahmen.",
-      "Do prefers-reduced-motion respektieren; Motion = kurzes Fade/Slide mit ease-out (100–300ms)."
+      "Do Kontraste prüfen: Body/Labels ≥4.5:1; auf Akzent-Flächen immer #151411-Text; text-dim (#666666) nur für Deko.",
+      "Do jeden interaktiven Zustand über Fläche+Rahmen sichtbar machen — nie über einen Glow.",
+      "Do prefers-reduced-motion respektieren; Motion = kurzes Fade/Slide mit ease-out (0.16,1,0.3,1), 100–300ms."
     ],
     "donts": [
-      "Don't Lila/Violett in irgendeiner Form — das „generische AI-Tool-Lila\" (#8B5CF6, #7C3AED, #A78BFA) ist die zentrale Anti-Referenz.",
-      "Don't Neon-Glow, farbige Schatten, backdrop-blur als Deko — .glass-card nicht neu verwenden.",
-      "Don't Gradient-Text (background-clip: text) — GradientText wird entfernt, nicht nachgeahmt.",
+      "Don't einen bunten Akzent einführen — der Akzent ist achromatisch. Cyan/Teal (#00E5FF, #0FA3A3) sind v3-Regressionen.",
+      "Don't Lila/Violett in irgendeiner Form — das „generische AI-Tool-Lila\" (#8B5CF6, #7C3AED) ist die zentrale Anti-Referenz.",
+      "Don't Neon-Glow, farbige Schatten, Akzent-box-shadow-Halos, backdrop-blur als Deko.",
+      "Don't Gradient-Text (background-clip: text) oder Farb-Verläufe als Akzent.",
       "Don't lokale Farbpaletten oder Inline-Hex in Komponenten anlegen — auch nicht „nur temporär\".",
       "Don't Statusfarben für Deko nutzen oder pro Seite umdeuten.",
-      "Don't Side-Stripe-Borders >1px als Farbakzent, Hero-Metrik-Schablonen oder identische Karten-Grids."
+      "Don't identische Karten-Grids ohne Varianz, Hero-Metrik-Schablonen, Stock-/Marketing-Metaphern."
     ]
   }
 }
