@@ -2260,7 +2260,10 @@
       "footerInfra": "Hosts & Zeitpläne",
       "footerCli": "CLI-Tools",
       "emptyTitle": "Noch keine Runtimes eingerichtet",
-      "emptyHint": "Runtime hinzufügen oder ein Modell herunterladen, um loszulegen."
+      "emptyHint": "Runtime hinzufügen oder ein Modell herunterladen, um loszulegen.",
+      "tabFleet": "Flotte",
+      "tabModels": "Modelle",
+      "tabInfra": "Infrastruktur"
     },
     "loadFailed": "Laden fehlgeschlagen.",
     "unloadFailed": "Entladen fehlgeschlagen.",

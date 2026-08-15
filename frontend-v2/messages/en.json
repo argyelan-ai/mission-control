@@ -2260,7 +2260,10 @@
       "footerInfra": "Hosts & schedules",
       "footerCli": "CLI tools",
       "emptyTitle": "No runtimes configured yet",
-      "emptyHint": "Add a runtime, or download a model to get started."
+      "emptyHint": "Add a runtime, or download a model to get started.",
+      "tabFleet": "Fleet",
+      "tabModels": "Models",
+      "tabInfra": "Infrastructure"
     },
     "loadFailed": "Load failed.",
     "unloadFailed": "Unload failed.",

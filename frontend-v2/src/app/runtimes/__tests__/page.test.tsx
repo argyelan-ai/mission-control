@@ -124,21 +124,34 @@ describe("RuntimesPage", () => {
     expect(await screen.findByText("Porsche Box")).toBeInTheDocument();
   });
 
-  it("(d) the 'Download a model' footer link expands the Models section", async () => {
+  it("(d) page tabs switch the lower area; openModelsTab lands on the Models tab", async () => {
     vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] });
     vi.spyOn(api.hosts, "list").mockResolvedValue([]);
 
     renderPage();
 
-    const footerLink = await screen.findByTestId("footer-models");
-    const toggle = screen.getByTestId("section-toggle-models");
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Tabs render even for an empty fleet — Fleet is the default.
+    const fleetTab = await screen.findByTestId("page-tab-fleet");
+    expect(fleetTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("models-tab-download")).not.toBeInTheDocument();
 
+    // Clicking the Models tab reveals the models content (inner sub-tabs).
     await act(async () => {
-      footerLink.click();
+      screen.getByTestId("page-tab-models").click();
     });
+    expect(await screen.findByTestId("models-tab-download")).toBeInTheDocument();
 
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-expanded", "true"));
+    // Back to Fleet, then the openModelsTab event (SlotStage "+ Model") must
+    // switch the page tab on its own.
+    await act(async () => {
+      screen.getByTestId("page-tab-fleet").click();
+    });
+    expect(screen.queryByTestId("models-tab-download")).not.toBeInTheDocument();
+    const { openModelsTab } = await import("../modelsTab");
+    await act(async () => {
+      openModelsTab("download");
+    });
+    await waitFor(() => expect(screen.getByTestId("page-tab-models")).toHaveAttribute("aria-selected", "true"));
     expect(await screen.findByTestId("models-tab-download")).toBeInTheDocument();
   });
 

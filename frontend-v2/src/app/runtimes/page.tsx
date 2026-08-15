@@ -35,7 +35,7 @@ import { LocalModelBrowser } from "@/components/shared/LocalModelBrowser";
 import { LmStudioLocalModels } from "./LmStudioLocalModels";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
-import { Section, requestSectionOpen } from "@/components/shared/Section";
+import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
 import { SlotStage } from "./SlotStage";
@@ -494,28 +494,7 @@ function ModelCatalog() {
 
 // ── Models section (provider catalog · local recipes · download) ──────────────
 
-/** Jump to the Infrastructure section (hosts CRUD, KV reset schedule, vLLM
- *  container catalog, CLI tools) — shared target for "Hosts & Zeitpläne",
- *  mirroring openModelsTab's mechanics. */
-function openInfraSection() {
-  requestSectionOpen("infrastructure");
-  requestAnimationFrame(() => {
-    document.getElementById("infrastructure")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-}
-
-/** Jump to the Infrastructure section AND scroll straight to the CLI-Tools
- *  anchor within it — the footer's "CLI-Tools" link used to share
- *  openInfraSection with "Hosts & Zeitpläne" and land in the same place as
- *  that link, which defeated the point of having two links. */
-function openCliToolsSection() {
-  requestSectionOpen("infrastructure");
-  requestAnimationFrame(() => {
-    document.getElementById("cli-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-}
-
-function ModelsSection() {
+function ModelsSection({ embedded = false }: { embedded?: boolean }) {
   const t = useTranslations("runtimes.models");
   const [tab, setTab] = useState<ModelsTab>("providers");
 
@@ -546,15 +525,8 @@ function ModelsSection() {
     { id: "download", label: t("tabDownload") },
   ];
 
-  return (
-    <Section
-      id="models"
-      title={t("title")}
-      hint={t("subtitle")}
-      defaultOpen={false}
-      // No count on the header: providers and recipes are different things and
-      // their sum ("11") would read as a model count. Each tab counts itself.
-    >
+  const body = (
+    <>
       <div
         role="tablist"
         aria-label={t("title")}
@@ -600,6 +572,20 @@ function ModelsSection() {
           <ModelCatalog />
         </>
       )}
+    </>
+  );
+
+  if (embedded) return body;
+  return (
+    <Section
+      id="models"
+      title={t("title")}
+      hint={t("subtitle")}
+      defaultOpen={false}
+      // No count on the header: providers and recipes are different things and
+      // their sum ("11") would read as a model count. Each tab counts itself.
+    >
+      {body}
     </Section>
   );
 }
@@ -791,9 +777,17 @@ function UnassignedRow({ runtime, onOpen }: { runtime: Runtime; onOpen: (rt: Run
 export default function RuntimesPage() {
   const t = useTranslations("runtimes");
   const tSlot = useTranslations("runtimes.slotPage");
-  const tInfra = useTranslations("runtimes.infrastructure");
   const [addOpen, setAddOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pageTab, setPageTab] = useState<"fleet" | "models" | "infra">("fleet");
+
+  // SlotStage's "+ Model" (and anyone else firing openModelsTab) must land on
+  // the Models tab — the inner ModelsSection listener only sets its sub-tab.
+  useEffect(() => {
+    const onModelsTab = () => setPageTab("models");
+    window.addEventListener(MODELS_TAB_EVENT, onModelsTab);
+    return () => window.removeEventListener(MODELS_TAB_EVENT, onModelsTab);
+  }, []);
 
   // GET /runtimes live-enriches the whole fleet (~6 s cold) — placeholderData
   // from the last visit paints the page instantly; the fresh fetch replaces it.
@@ -948,74 +942,88 @@ export default function RuntimesPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
 
-            <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
-
-            {unassignedRuntimes.length > 0 && (
-              <section>
-                <div className="flex items-center gap-2.5 mb-3">
-                  <span
-                    className="text-[10px] font-medium uppercase shrink-0"
-                    style={{ color: C.textMuted, letterSpacing: "0.08em" }}
+        {/* Tabs render even for an empty fleet — the Models tab is how a fresh
+            install downloads its first model. */}
+        {!isLoading && !error && (
+          <div className="flex flex-col gap-6 mt-6">
+            {/* Tab bar — the stage above is always visible; everything else
+                lives in one of three quiet tabs (operator feedback: the
+                stacked sections overloaded the page). */}
+            <div
+              role="tablist"
+              aria-label={t("title")}
+              className="flex items-center gap-1 pt-2 flex-wrap"
+              style={{ borderTop: `1px solid ${C.borderSubtle}` }}
+            >
+              {(
+                [
+                  { id: "fleet", label: tSlot("tabFleet") },
+                  { id: "models", label: tSlot("tabModels") },
+                  { id: "infra", label: tSlot("tabInfra") },
+                ] as const
+              ).map((item) => {
+                const active = pageTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setPageTab(item.id)}
+                    data-testid={`page-tab-${item.id}`}
+                    className="inline-flex items-center rounded-md px-3 py-2 min-h-11 sm:min-h-0 sm:px-2.5 sm:py-1.5 text-xs cursor-pointer transition-colors"
+                    style={{
+                      background: active ? C.accentSubtle : "transparent",
+                      border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
+                      color: active ? C.textPrimary : C.textMuted,
+                    }}
                   >
-                    {tSlot("unassignedTitle")}
-                  </span>
-                  <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {unassignedRuntimes.map((rt) => (
-                    <UnassignedRow key={rt.id} runtime={rt} onOpen={openPanel} />
-                  ))}
-                </div>
-              </section>
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {pageTab === "fleet" && !isEmpty && (
+              <>
+                <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
+
+                {unassignedRuntimes.length > 0 && (
+                  <section>
+                    <div className="flex items-center gap-2.5 mb-3">
+                      <span
+                        className="text-[10px] font-medium uppercase shrink-0"
+                        style={{ color: C.textMuted, letterSpacing: "0.08em" }}
+                      >
+                        {tSlot("unassignedTitle")}
+                      </span>
+                      <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {unassignedRuntimes.map((rt) => (
+                        <UnassignedRow key={rt.id} runtime={rt} onOpen={openPanel} />
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
+
+            {pageTab === "models" && <ModelsSection embedded />}
+
+            {pageTab === "infra" && (
+              <div className="flex flex-col gap-5">
+                <HostsSection embedded />
+                <KvResetScheduleToggle />
+                <VllmContainerCatalog />
+                <CliToolsSection embedded />
+              </div>
             )}
           </div>
         )}
 
-        {/* Quiet footer — three text links replacing the old always-open sections */}
-        <div
-          className="flex items-center gap-4 mt-10 pt-4"
-          style={{ borderTop: `1px solid ${C.borderSubtle}` }}
-        >
-          <button
-            type="button"
-            onClick={() => openModelsTab("download")}
-            data-testid="footer-models"
-            className="text-xs cursor-pointer transition-colors hover:underline"
-            style={{ color: C.textMuted }}
-          >
-            {tSlot("footerModels")}
-          </button>
-          <button
-            type="button"
-            onClick={openInfraSection}
-            data-testid="footer-infra"
-            className="text-xs cursor-pointer transition-colors hover:underline"
-            style={{ color: C.textMuted }}
-          >
-            {tSlot("footerInfra")}
-          </button>
-          <button
-            type="button"
-            onClick={openCliToolsSection}
-            data-testid="footer-cli"
-            className="text-xs cursor-pointer transition-colors hover:underline"
-            style={{ color: C.textMuted }}
-          >
-            {tSlot("footerCli")}
-          </button>
-        </div>
-
-        <ModelsSection />
-
-        <Section id="infrastructure" title={tInfra("title")} hint={tInfra("subtitle")} defaultOpen={false}>
-          <div className="flex flex-col gap-5">
-            <HostsSection embedded />
-            <KvResetScheduleToggle />
-            <VllmContainerCatalog />
-            <CliToolsSection embedded />
-          </div>
-        </Section>
       </div>
 
       <RuntimeDetailPanel
