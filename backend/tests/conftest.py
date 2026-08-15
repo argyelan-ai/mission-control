@@ -57,6 +57,19 @@ app.config.settings = app.config.Settings(
     obsidian_export_interval=99999,  # Phase 7 OBS-02 Pitfall 4: never auto-fire in tests
     vault_lint_interval_hours=99999,  # M.3 T4 Pitfall 4 mirror: vault_lint loop must not auto-fire in tests
     ollama_url="http://localhost:99999",
+    # Der Default zeigt auf 192.0.2.10 — eine RFC-5737-Dokumentationsadresse,
+    # die es im Netz nicht gibt. Wer sie anwaehlt, wartet die vollen
+    # spark_embedding_timeout=15s auf einen TCP-Timeout. Gemessen: jeder Test,
+    # der unterwegs eine Einbettung ausloest, kostete dadurch 15 Sekunden —
+    # allein die 40 langsamsten Tests der Suite waren das, also rund 10 von 20
+    # Minuten. 127.0.0.1:1 lehnt sofort ab, derselbe Fehlerpfad in
+    # Millisekunden statt Sekunden (gleiche Idee wie ollama_url darueber).
+    # spark_llm_url bleibt bewusst auf dem Default: runtime_model_resolver
+    # findet die Spark-Runtime ueber genau diesen netloc-Vergleich, und die
+    # zugehoerigen Tests legen Runtimes mit der Default-Adresse an. Der
+    # 15-Sekunden-Haenger kam ausschliesslich vom Einbettungs-Port.
+    spark_embedding_url="http://127.0.0.1:1/v1/embeddings",
+    spark_embedding_timeout=1.0,
     use_subagent_dispatch=False,  # Tests run in legacy mode; new tests enable the flag explicitly
     secrets_encryption_key="bkMM-h80JH3_PRkNc6_-T0YrLMOShvZeoDkKnGrI7JM=",
     vault_path=_TEST_VAULT_ROOT,
