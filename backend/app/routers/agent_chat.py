@@ -111,11 +111,11 @@ async def stream_agent_chat(
     if isinstance(resolved, JSONResponse):
         return resolved
 
-    _agent, path = resolved
+    agent, path = resolved
     channel = RedisKeys.agent_chat_channel(str(agent_id))
 
     async def _generator():
-        await tailer_manager.acquire(str(agent_id), path)
+        await tailer_manager.acquire(str(agent_id), path, agent)
         try:
             async for frame in _sse_generator([channel]):
                 yield frame

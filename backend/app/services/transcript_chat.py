@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services import sse
+from app.services.pane_state import capture_pane, parse_pane_state
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
 
@@ -579,14 +580,32 @@ class ChatTailerManager:
 
     POLL_INTERVAL = 1.0
 
+    # Pane-state probe cadence: every 2nd tick (~every other POLL_INTERVAL)
+    # rather than every tick — capture-pane is a docker exec round-trip, not
+    # worth paying on every 1s poll.
+    STATE_PROBE_EVERY_N_TICKS = 2
+
+    # A transcript that hasn't grown in this long reads as idle for the
+    # Boss/host fallback (no pane to capture) and as the transcript_active
+    # signal parse_pane_state uses to disambiguate an input-prompt marker
+    # (still typing vs. waiting).
+    STATE_ACTIVE_WINDOW_SECONDS = 20
+
     def __init__(self) -> None:
         self._refcounts: dict[str, int] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
-    async def acquire(self, agent_id: str, path: Path) -> None:
+    async def acquire(self, agent_id: str, path: Path, agent: Any | None = None) -> None:
         """Registers one more client for ``agent_id``. Starts the poll task
         if this is the first client; otherwise just bumps the refcount — the
         already-running task keeps tailing from wherever it is.
+
+        ``agent`` (optional) is threaded through to the pane-state probe —
+        it's the only place in the tailer that needs the Agent row itself
+        (for ``capture_pane``'s runtime/slug lookup) rather than just a path.
+        None disables the probe entirely (no state events published), which
+        is also how the raw ``ChatTailerManager`` unit tests exercise the
+        tailer without a DB-backed Agent.
 
         The starting offset is stat()'d HERE, synchronously, rather than as
         the first line of ``_run`` — a freshly created task doesn't actually
@@ -604,7 +623,9 @@ class ChatTailerManager:
                 initial_offset = path.stat().st_size
             except OSError:
                 initial_offset = 0
-            self._tasks[agent_id] = asyncio.create_task(self._run(agent_id, path, initial_offset))
+            self._tasks[agent_id] = asyncio.create_task(
+                self._run(agent_id, path, initial_offset, agent)
+            )
 
     async def release(self, agent_id: str) -> None:
         """Drops one client for ``agent_id``. Cancels and awaits the poll
@@ -620,10 +641,18 @@ class ChatTailerManager:
         else:
             self._refcounts[agent_id] = count - 1
 
-    async def _run(self, agent_id: str, initial_path: Path, initial_offset: int) -> None:
+    async def _run(
+        self,
+        agent_id: str,
+        initial_path: Path,
+        initial_offset: int,
+        agent: Any | None = None,
+    ) -> None:
         channel = RedisKeys.agent_chat_channel(agent_id)
         tdir = initial_path.parent
         current_path = initial_path
+        tick = 0
+        last_pane_state: dict[str, Any] | None = None
         # Seeded from the file's size AT ACQUIRE TIME — NOT 0 — so a first
         # connect (or a refcount 0->1 cycle) tails only new lines instead of
         # re-reading and re-broadcasting the entire existing transcript as
@@ -640,8 +669,17 @@ class ChatTailerManager:
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
+                tick += 1
 
                 try:
+                    if agent is not None and tick % self.STATE_PROBE_EVERY_N_TICKS == 0:
+                        new_state = await self._compute_pane_state(agent, current_path)
+                        if new_state != last_pane_state:
+                            last_pane_state = new_state
+                            await sse.broadcast(
+                                channel, "chat_event", {"kind": "state", **new_state}
+                            )
+
                     try:
                         active = await asyncio.to_thread(find_active_session, tdir)
                     except OSError:
@@ -652,6 +690,7 @@ class ChatTailerManager:
                         buffer = b""
                         tool_events_by_id = {}
                         seen_uuids = set()
+                        last_pane_state = None
                         await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
                         continue
 
@@ -715,6 +754,27 @@ class ChatTailerManager:
             # A silently dead tailer looks identical to "no new events yet"
             # from the outside — make every exit visible.
             logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
+
+    async def _compute_pane_state(self, agent: Any, current_path: Path) -> dict[str, Any]:
+        """One probe tick's worth of state classification (A6). Computes
+        ``transcript_active`` from the current session file's mtime (used
+        both as ``parse_pane_state``'s disambiguation signal and as the
+        entire signal for agents ``capture_pane`` can't reach), then either
+        parses a captured pane snapshot or falls back to the mtime-only
+        heuristic for Boss/host agents — which, per the design brief, must
+        never report ``permission_prompt`` since there's no pane text to
+        have found one in."""
+        try:
+            mtime = await asyncio.to_thread(lambda: current_path.stat().st_mtime)
+            transcript_active = (time.time() - mtime) < self.STATE_ACTIVE_WINDOW_SECONDS
+        except OSError:
+            transcript_active = False
+
+        pane_text = await capture_pane(agent)
+        if pane_text is None:
+            return {"status": "working" if transcript_active else "idle", "prompt": None}
+
+        return parse_pane_state(pane_text, transcript_active)
 
 
 def _read_new_chunk(path: Path, offset: int) -> tuple[int, bytes | None]:

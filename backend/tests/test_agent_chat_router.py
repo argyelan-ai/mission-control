@@ -414,3 +414,108 @@ async def test_tailer_refcount_shares_one_task(manager, fake_broadcast, tmp_path
 
     await manager.release("agent-1")
     assert "agent-1" not in manager._tasks  # last release cancels + drops it
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ChatTailerManager — pane-state probe (A6)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class _StubAgent:
+    def __init__(self, agent_runtime: str, slug: str):
+        self.agent_runtime = agent_runtime
+        self.slug = slug
+
+
+async def test_tailer_no_state_probe_when_agent_absent(manager, fake_broadcast, tmp_path):
+    """acquire() without an agent (as every other ChatTailerManager test in
+    this file does) must never attempt a pane-state probe — no
+    ``capture_pane`` call, no "state" chat_event, ever. This is what keeps
+    every other test in this file docker-free."""
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-1", session_file)  # no agent arg
+    try:
+        await asyncio.sleep(0.2)  # several probe ticks would have fired by now
+    finally:
+        await manager.release("agent-1")
+
+    assert not any(d.get("kind") == "state" for _, _, d in fake_broadcast)
+
+
+async def test_tailer_publishes_state_only_on_change(manager, fake_broadcast, tmp_path, monkeypatch):
+    """The probe fires every 2nd tick, but a "state" chat_event must only be
+    published when the computed state differs from the previously published
+    one — repeats of the same pane text (including repeats of the fallback
+    after the fixture iterator is exhausted) must not spam the channel."""
+    import app.services.transcript_chat as transcript_chat
+
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    pane_texts = iter(["idle pane, no markers\n", "idle pane, no markers\n"])
+    working_text = "✻ Thinking… (esc to interrupt)\n"
+
+    async def _fake_capture_pane(agent):
+        return next(pane_texts, working_text)
+
+    monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-1", session_file, agent)
+    try:
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "state" and d.get("status") == "working"
+                for _, _, d in fake_broadcast
+            )
+        )
+        # Give a few more ticks a chance to (wrongly) re-publish "working".
+        await asyncio.sleep(0.1)
+    finally:
+        await manager.release("agent-1")
+
+    state_events = [d for _, _, d in fake_broadcast if d.get("kind") == "state"]
+    # One event for the initial state (first probe tick, "unknown" — no
+    # markers in the fixture text — differs from the unset previous state),
+    # one for the transition to "working". Every later tick recomputes the
+    # same "working" state and must be suppressed.
+    assert len(state_events) == 2
+    assert state_events[0]["status"] != "working"
+    assert state_events[1]["status"] == "working"
+
+
+async def test_tailer_boss_state_from_mtime_never_permission_prompt(manager, fake_broadcast, tmp_path):
+    """Boss/host agents have no capturable pane (capture_pane returns None
+    for any non-cli-bridge runtime, unmocked here — real implementation) —
+    state must fall back to the transcript-mtime heuristic and must never
+    report permission_prompt."""
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    manager.STATE_ACTIVE_WINDOW_SECONDS = 0.05  # shrink so idle is reachable in-test
+
+    agent = _StubAgent(agent_runtime="host", slug="boss")
+    await manager.acquire("agent-1", session_file, agent)
+    try:
+        # Freshly (re)written file is within the active window -> working.
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "state" and d.get("status") == "working"
+                for _, _, d in fake_broadcast
+            )
+        )
+
+        # Let the (shrunk) active window lapse without touching the file.
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "state" and d.get("status") == "idle"
+                for _, _, d in fake_broadcast
+            ),
+            timeout=2.0,
+        )
+    finally:
+        await manager.release("agent-1")
+
+    assert not any(d.get("status") == "permission_prompt" for _, _, d in fake_broadcast)
