@@ -216,10 +216,14 @@ async def test_tailer_session_changed_on_newer_jsonl(manager, fake_broadcast, tm
 
 async def test_tailer_survives_disappearing_file(manager, fake_broadcast, tmp_path):
     session_file = tmp_path / "sess1.jsonl"
-    session_file.write_text(_user_line("before delete", msg_uuid="u1") + "\n")
+    session_file.write_text("")
 
     await manager.acquire("agent-1", session_file)
     try:
+        # Append AFTER acquire — offset is seeded from the (empty) file at
+        # acquire time, so a line written before acquire would never publish.
+        with session_file.open("a") as f:
+            f.write(_user_line("before delete", msg_uuid="u1") + "\n")
         assert await _wait_until(lambda: len(fake_broadcast) > 0)
         session_file.unlink()
         # Give the loop a few ticks to poll a missing file — must not raise
@@ -228,6 +232,172 @@ async def test_tailer_survives_disappearing_file(manager, fake_broadcast, tmp_pa
         assert not manager._tasks["agent-1"].done()
     finally:
         await manager.release("agent-1")
+
+
+async def test_tailer_seeds_offset_skips_preexisting_content(manager, fake_broadcast, tmp_path):
+    """Acquiring against an already-populated transcript must not re-read and
+    re-broadcast its existing content as live chat_events (that would
+    duplicate what /chat/history already returned) — only lines appended
+    after acquire should publish."""
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text(_user_line("already here before acquire", msg_uuid="u0") + "\n")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        await asyncio.sleep(0.1)
+        assert fake_broadcast == []  # nothing published for pre-existing content
+
+        with session_file.open("a") as f:
+            f.write(_user_line("new after acquire", msg_uuid="u1") + "\n")
+        assert await _wait_until(lambda: len(fake_broadcast) > 0)
+    finally:
+        await manager.release("agent-1")
+
+    assert fake_broadcast[0][2]["text"] == "new after acquire"
+
+
+async def test_tailer_dedups_repeated_uuid(manager, fake_broadcast, tmp_path):
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+    line = _user_line("repeated line", msg_uuid="u1")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        with session_file.open("a") as f:
+            f.write(line + "\n")
+        assert await _wait_until(lambda: len(fake_broadcast) > 0)
+
+        with session_file.open("a") as f:
+            f.write(line + "\n")  # same uuid again — resumed session repeats a line
+        await asyncio.sleep(0.15)
+    finally:
+        await manager.release("agent-1")
+
+    assert len(fake_broadcast) == 1
+
+
+async def test_tailer_survives_broadcast_exception(manager, tmp_path, monkeypatch):
+    """A transient failure inside sse.broadcast (e.g. Redis hiccup) must not
+    silently kill the poll task while clients stay connected."""
+    import app.services.transcript_chat as transcript_chat
+
+    published: list[tuple[str, str, dict]] = []
+    call_count = 0
+
+    async def _flaky_broadcast(channel, event_type, data):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("boom")
+        published.append((channel, event_type, data))
+
+    monkeypatch.setattr(transcript_chat.sse, "broadcast", _flaky_broadcast)
+
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        with session_file.open("a") as f:
+            f.write(_user_line("first (broadcast raises)", msg_uuid="u1") + "\n")
+        await asyncio.sleep(0.15)  # let the failing iteration happen and pass
+        assert not manager._tasks["agent-1"].done()  # task survived the exception
+
+        with session_file.open("a") as f:
+            f.write(_user_line("second (should publish)", msg_uuid="u2") + "\n")
+        assert await _wait_until(lambda: len(published) > 0)
+    finally:
+        await manager.release("agent-1")
+
+    assert published[0][2]["text"] == "second (should publish)"
+
+
+async def test_tailer_handles_multibyte_utf8_across_polls(manager, fake_broadcast, tmp_path):
+    """Regression: offsets must be tracked in bytes against a binary read,
+    not text-mode characters against a byte-based stat size — the old
+    mismatch could truncate or re-read multi-byte UTF-8 content spanning a
+    poll boundary."""
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        line1 = _user_line("héllo wörld 🎉", msg_uuid="u1")
+        with session_file.open("a", encoding="utf-8") as f:
+            f.write(line1 + "\n")
+        assert await _wait_until(lambda: len(fake_broadcast) >= 1)
+
+        line2 = _user_line("犬も歩けば棒に当たる", msg_uuid="u2")
+        with session_file.open("a", encoding="utf-8") as f:
+            f.write(line2 + "\n")
+        assert await _wait_until(lambda: len(fake_broadcast) >= 2)
+    finally:
+        await manager.release("agent-1")
+
+    texts = [d["text"] for _, _, d in fake_broadcast]
+    assert texts == ["héllo wörld 🎉", "犬も歩けば棒に当たる"]
+
+
+async def test_tailer_republishes_tool_event_on_result_merge(manager, fake_broadcast, tmp_path):
+    """A tool_use published live, whose tool_result arrives on a later poll,
+    must be republished under the SAME uuid/toolUseId with the result
+    merged in — a raw _tool_result must never be published on its own."""
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    tool_use_line = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "timestamp": "2026-08-13T00:00:00Z",
+            "message": {
+                "model": "claude-x",
+                "content": [
+                    {"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "ls"}}
+                ],
+            },
+        }
+    )
+    tool_result_line = json.dumps(
+        {
+            "type": "user",
+            "uuid": "u2",
+            "timestamp": "2026-08-13T00:00:01Z",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "file1\nfile2",
+                        "is_error": False,
+                    }
+                ]
+            },
+        }
+    )
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        with session_file.open("a") as f:
+            f.write(tool_use_line + "\n")
+        assert await _wait_until(lambda: len(fake_broadcast) >= 1)
+        assert fake_broadcast[0][2]["kind"] == "tool"
+        assert fake_broadcast[0][2]["result"] is None
+
+        with session_file.open("a") as f:
+            f.write(tool_result_line + "\n")
+        assert await _wait_until(lambda: len(fake_broadcast) >= 2)
+    finally:
+        await manager.release("agent-1")
+
+    kinds = [d["kind"] for _, _, d in fake_broadcast]
+    assert kinds == ["tool", "tool"]  # never a raw "_tool_result"
+
+    republished = fake_broadcast[1][2]
+    assert republished["uuid"] == "a1"
+    assert republished["toolUseId"] == "tool-1"
+    assert republished["result"] == "file1\nfile2"
+    assert republished["status"] == "done"
 
 
 async def test_tailer_refcount_shares_one_task(manager, fake_broadcast, tmp_path):

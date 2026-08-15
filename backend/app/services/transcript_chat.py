@@ -586,11 +586,25 @@ class ChatTailerManager:
     async def acquire(self, agent_id: str, path: Path) -> None:
         """Registers one more client for ``agent_id``. Starts the poll task
         if this is the first client; otherwise just bumps the refcount — the
-        already-running task keeps tailing from wherever it is."""
+        already-running task keeps tailing from wherever it is.
+
+        The starting offset is stat()'d HERE, synchronously, rather than as
+        the first line of ``_run`` — a freshly created task doesn't actually
+        start executing until the event loop regains control (the caller's
+        next ``await``), so if the size were read inside the task body, a
+        caller that writes to the file right after ``acquire()`` returns
+        (with no intervening await) would race it: the task would only get
+        scheduled after that write and seed from the wrong (post-write)
+        size. Reading it here, before the task is even created, closes that
+        window."""
         count = self._refcounts.get(agent_id, 0)
         self._refcounts[agent_id] = count + 1
         if count == 0:
-            self._tasks[agent_id] = asyncio.create_task(self._run(agent_id, path))
+            try:
+                initial_offset = path.stat().st_size
+            except OSError:
+                initial_offset = 0
+            self._tasks[agent_id] = asyncio.create_task(self._run(agent_id, path, initial_offset))
 
     async def release(self, agent_id: str) -> None:
         """Drops one client for ``agent_id``. Cancels and awaits the poll
@@ -606,73 +620,133 @@ class ChatTailerManager:
         else:
             self._refcounts[agent_id] = count - 1
 
-    async def _run(self, agent_id: str, initial_path: Path) -> None:
+    async def _run(self, agent_id: str, initial_path: Path, initial_offset: int) -> None:
         channel = RedisKeys.agent_chat_channel(agent_id)
         tdir = initial_path.parent
         current_path = initial_path
-        offset = 0
-        buffer = ""
+        # Seeded from the file's size AT ACQUIRE TIME — NOT 0 — so a first
+        # connect (or a refcount 0->1 cycle) tails only new lines instead of
+        # re-reading and re-broadcasting the entire existing transcript as
+        # live events (which would duplicate everything /chat/history
+        # already returned). See acquire()'s docstring for why this is
+        # computed there and passed in rather than stat'd here.
+        offset = initial_offset
+        buffer = b""
         tool_events_by_id: dict[str, dict[str, Any]] = {}
+        # Cleared on session rollover (below) — bounded by one session's
+        # lifetime, not by an explicit cap.
+        seen_uuids: set[str] = set()
 
-        while True:
-            await asyncio.sleep(self.POLL_INTERVAL)
+        try:
+            while True:
+                await asyncio.sleep(self.POLL_INTERVAL)
 
-            try:
-                active = find_active_session(tdir)
-            except OSError:
-                active = None
-            if active is not None and active[0] != current_path:
-                current_path = active[0]
-                offset = 0
-                buffer = ""
-                tool_events_by_id = {}
-                await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
-                continue
-
-            try:
-                size = current_path.stat().st_size
-            except OSError:
-                # File disappeared (rotated/deleted mid-session) — state is
-                # unknown, but the directory keeps getting polled so a
-                # replacement (or the same path reappearing) is picked up.
-                continue
-
-            if size <= offset:
-                continue
-
-            try:
-                with current_path.open("r", encoding="utf-8", errors="replace") as f:
-                    f.seek(offset)
-                    chunk = f.read(size - offset)
-            except OSError:
-                continue
-
-            offset = size
-            buffer += chunk
-            lines = buffer.split("\n")
-            buffer = lines.pop()  # last element: partial line (or "") — held for next tick
-
-            for raw_line in lines:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                for ev in parse_transcript_line(raw_line):
-                    if ev["kind"] == "_tool_result":
-                        tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
-                        if tool_ev is not None:
-                            _merge_tool_result(tool_ev, ev)
-                            await sse.broadcast(channel, "chat_event", tool_ev)
+                try:
+                    try:
+                        active = await asyncio.to_thread(find_active_session, tdir)
+                    except OSError:
+                        active = None
+                    if active is not None and active[0] != current_path:
+                        current_path = active[0]
+                        offset = 0
+                        buffer = b""
+                        tool_events_by_id = {}
+                        seen_uuids = set()
+                        await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
                         continue
 
-                    if ev["kind"] == "tool":
-                        stats = _compute_edit_stats(ev["name"], ev["detail"])
-                        if stats is not None:
-                            ev["stats"] = stats
-                        tool_use_id = ev.get("toolUseId")
-                        if tool_use_id is not None:
-                            tool_events_by_id[tool_use_id] = ev
+                    try:
+                        new_offset, chunk = await asyncio.to_thread(
+                            _read_new_chunk, current_path, offset
+                        )
+                    except OSError:
+                        # File disappeared (rotated/deleted mid-session) —
+                        # state is unknown, but the directory keeps getting
+                        # polled so a replacement (or the same path
+                        # reappearing) is picked up.
+                        continue
 
-                    await sse.broadcast(channel, "chat_event", ev)
+                    if chunk is None:
+                        continue
+
+                    offset = new_offset
+                    buffer += chunk
+                    lines = buffer.split(b"\n")
+                    buffer = lines.pop()  # last element: partial line (or b"") — held for next tick
+
+                    for raw_bytes in lines:
+                        raw_line = raw_bytes.decode("utf-8", errors="replace").strip()
+                        if not raw_line:
+                            continue
+
+                        entry_uuid = _peek_uuid(raw_line)
+                        if entry_uuid is not None:
+                            if entry_uuid in seen_uuids:
+                                continue
+                            seen_uuids.add(entry_uuid)
+
+                        for ev in parse_transcript_line(raw_line):
+                            if ev["kind"] == "_tool_result":
+                                tool_ev = tool_events_by_id.pop(ev.get("tool_use_id"), None)
+                                if tool_ev is not None:
+                                    _merge_tool_result(tool_ev, ev)
+                                    await sse.broadcast(channel, "chat_event", tool_ev)
+                                continue
+
+                            if ev["kind"] == "tool":
+                                stats = _compute_edit_stats(ev["name"], ev["detail"])
+                                if stats is not None:
+                                    ev["stats"] = stats
+                                tool_use_id = ev.get("toolUseId")
+                                if tool_use_id is not None:
+                                    tool_events_by_id[tool_use_id] = ev
+
+                            await sse.broadcast(channel, "chat_event", ev)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A single bad iteration (e.g. a transient Redis error in
+                    # sse.broadcast) must not silently kill the task while
+                    # clients stay connected — log and keep tailing.
+                    logger.error(
+                        "chat tailer: poll iteration failed for agent %s", agent_id, exc_info=True
+                    )
+        finally:
+            # A silently dead tailer looks identical to "no new events yet"
+            # from the outside — make every exit visible.
+            logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
+
+
+def _read_new_chunk(path: Path, offset: int) -> tuple[int, bytes | None]:
+    """Blocking: stat + binary-read the bytes appended since ``offset``.
+    Runs via ``asyncio.to_thread`` — never call directly from the event
+    loop. Binary mode + byte offsets (not text mode) so a multi-byte UTF-8
+    character split across two polls can't be double-counted or truncated;
+    the caller decodes only after buffering complete lines.
+
+    Returns ``(new_offset, chunk)``, or ``(offset, None)`` if there's
+    nothing new to read (also on a read failure after the stat succeeded).
+    """
+    size = path.stat().st_size
+    if size <= offset:
+        return offset, None
+    with path.open("rb") as f:
+        f.seek(offset)
+        chunk = f.read(size - offset)
+    return size, chunk
+
+
+def _peek_uuid(line: str) -> str | None:
+    """Best-effort extraction of the top-level ``uuid`` field for live-path
+    dedup, mirroring ``read_history``'s ``seen_uuids`` — Claude Code can
+    repeat a line verbatim across a resumed session. Never raises."""
+    try:
+        d = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    return d.get("uuid")
 
 
 tailer_manager = ChatTailerManager()
