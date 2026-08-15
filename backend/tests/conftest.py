@@ -19,7 +19,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 # ── Patch settings BEFORE the app is imported ────────────────────────────
@@ -102,14 +102,53 @@ test_engine = create_async_engine(
 
 # ── Database fixtures ─────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-async def setup_db():
-    """Before each test: create tables. Afterward: drop everything."""
+@pytest.fixture(scope="session", autouse=True)
+async def _schema_once():
+    """Create the schema once for the whole session.
+
+    It used to be created and dropped around every single test. That is 78
+    CREATE TABLEs plus 78 DROPs per test, and every one of them crosses
+    aiosqlite's thread boundary — measured at 78ms per test, which is roughly
+    8 minutes of the suite spent building a schema that never changes.
+    """
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+
+
+async def _empty_all_tables(conn) -> None:
+    for table in reversed(SQLModel.metadata.sorted_tables):
+        await conn.execute(text(f'DELETE FROM "{table.name}"'))
+
+
+@pytest.fixture(autouse=True)
+async def setup_db(_schema_once):
+    """Give every test an empty database — without rebuilding the schema.
+
+    Deleting the rows costs 8ms instead of 78ms and leaves the isolation the
+    old fixture provided intact: a test still starts with empty tables and
+    leaves nothing behind for the next one. Cleaning up front (not after)
+    means a crashed test cannot poison its successor either.
+
+    Self-healing on purpose: the migration tests (e.g.
+    test_migration_0123_drop_gateway_schema) replay real Alembic steps against
+    this engine and genuinely DROP tables — that is what they are testing. The
+    old per-test create_all silently repaired that; now the repair is explicit
+    and only paid when a table actually went missing.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    try:
+        async with test_engine.begin() as conn:
+            await _empty_all_tables(conn)
+    except OperationalError:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
+        async with test_engine.begin() as conn:
+            await _empty_all_tables(conn)
+    yield
 
 
 @pytest.fixture(autouse=True)
