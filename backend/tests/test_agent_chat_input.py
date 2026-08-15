@@ -79,8 +79,7 @@ async def test_send_text_docker_single_line_one_call(monkeypatch):
     assert "-e" in argv and "LANG=C.UTF-8" in argv
     assert "-u" in argv and "agent" in argv
     assert "mc-agent-rex" in argv
-    assert argv[-4:] == ["tmux", "send-keys", "-t", "rex:0"] or "-l" in argv
-    assert argv[-2:] == ["-l", "hello agent"]
+    assert argv[-3:] == ["-l", "--", "hello agent"]
 
 
 async def test_send_text_docker_multiline_two_calls_bracketed_paste(monkeypatch):
@@ -98,10 +97,45 @@ async def test_send_text_docker_multiline_two_calls_bracketed_paste(monkeypatch)
 
     assert len(calls) == 2
     first, second = calls
-    assert first[-2] == "-l"
+    assert first[-3] == "-l"
+    assert first[-2] == "--"
     assert first[-1] == "\x1b[200~line one\nline two\x1b[201~"
     assert second[-1] == "Enter"
     assert "-l" not in second
+
+
+async def test_send_text_docker_dash_prefixed_single_line_gets_double_dash(monkeypatch):
+    """Reproduces the review finding: text starting with '-' would otherwise
+    be parsed by tmux as a flag (even after -l) and silently dropped."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_text(agent, "-h")
+
+    assert calls[0][-3:] == ["-l", "--", "-h"]
+
+
+async def test_send_text_docker_dash_bullet_single_line_gets_double_dash(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_text(agent, "- bullet")
+
+    assert calls[0][-3:] == ["-l", "--", "- bullet"]
 
 
 async def test_send_keys_docker_named_key_no_literal_flag(monkeypatch):
@@ -136,8 +170,8 @@ async def test_send_keys_docker_digit_key_uses_literal_flag(monkeypatch):
     await agent_chat_input.send_keys(agent, ["1", "y"])
 
     assert len(calls) == 2
-    assert calls[0][-2:] == ["-l", "1"]
-    assert calls[1][-2:] == ["-l", "y"]
+    assert calls[0][-3:] == ["-l", "--", "1"]
+    assert calls[1][-3:] == ["-l", "--", "y"]
 
 
 async def test_send_keys_rejects_non_allowlisted_key(monkeypatch):
@@ -266,6 +300,43 @@ async def test_post_chat_input_422_too_long(auth_client: AsyncClient, make_agent
     assert resp.status_code == 422
 
 
+async def test_post_chat_input_422_nul_byte(auth_client: AsyncClient, make_agent):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/input", json={"text": "hello\x00world"}
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_post_chat_input_422_other_control_char(auth_client: AsyncClient, make_agent):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/input", json={"text": "hello\x1bworld"}
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_post_chat_input_allows_newline_and_tab(auth_client: AsyncClient, make_agent, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    async def _fake_send_text(a, text):
+        pass
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    monkeypatch.setattr(agent_chat_mod, "send_text", _fake_send_text)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/input", json={"text": "line one\n\tline two"}
+    )
+
+    assert resp.status_code == 204, resp.text
+
+
 async def test_post_chat_input_404_unknown_agent(auth_client: AsyncClient):
     resp = await auth_client.post(
         f"/api/v1/agents/{uuid.uuid4()}/chat/input", json={"text": "hi"}
@@ -327,6 +398,33 @@ async def test_post_chat_keys_422_non_allowlisted(auth_client: AsyncClient, make
     )
 
     assert resp.status_code == 422
+
+
+async def test_post_chat_keys_422_too_many_keys(auth_client: AsyncClient, make_agent):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/keys", json={"keys": ["Enter"] * 17}
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_post_chat_keys_allows_max_keys(auth_client: AsyncClient, make_agent, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    async def _fake_send_keys(a, keys):
+        pass
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    monkeypatch.setattr(agent_chat_mod, "send_keys", _fake_send_keys)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/keys", json={"keys": ["Enter"] * 16}
+    )
+
+    assert resp.status_code == 204, resp.text
 
 
 async def test_post_chat_keys_404_unknown_agent(auth_client: AsyncClient):

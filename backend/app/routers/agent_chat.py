@@ -5,6 +5,7 @@ plus a live SSE tail. Parsing/session-resolution lives in
 """
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 
@@ -33,6 +34,12 @@ router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 _NO_TRANSCRIPT = {"reason": "no_transcript"}
 _INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
 _MAX_TEXT_LEN = 20000
+_MAX_KEYS_LEN = 16
+
+# C0 control chars other than \t (0x09) and \n (0x0a) — NUL in particular
+# makes ``subprocess.run`` raise ValueError deep inside delivery, which would
+# otherwise surface as an unhandled 500 instead of a clean 422 (fix round 1).
+_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
 
 
 class ChatInputBody(BaseModel):
@@ -145,6 +152,10 @@ async def post_chat_input(
             status_code=422,
             detail=f"text too long (max {_MAX_TEXT_LEN} chars)",
         )
+    if _DISALLOWED_CONTROL_CHARS.search(body.text):
+        raise HTTPException(
+            status_code=422, detail="text contains disallowed control characters"
+        )
 
     try:
         await send_text(agent, body.text)
@@ -164,6 +175,12 @@ async def post_chat_keys(
     409 ``{"reason":"input_not_supported"}`` for host agents other than
     Boss."""
     agent = await _load_agent_or_404(agent_id, session)
+
+    if len(body.keys) > _MAX_KEYS_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"too many keys (max {_MAX_KEYS_LEN} per request)",
+        )
 
     try:
         await send_keys(agent, body.keys)

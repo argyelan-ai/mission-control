@@ -13,7 +13,12 @@ live terminal (``routers/cli_terminal.py``):
   ``cli_terminal.py`` (agent_terminal_ws) — without the correct UTF-8 locale
   tmux mangles multi-byte characters typed through it. No ``-it`` flags here:
   unlike the persistent PTY attach, a single send-keys invocation needs no
-  controlling terminal of its own.
+  controlling terminal of its own. Every ``-l`` call is followed by a ``--``
+  separator *before* the literal text/key (``-l -- <text>``, never ``-- -l``
+  — order matters): tmux scans the full argv for flags even after ``-l``, so
+  text starting with ``-`` (``-h``, ``- bullet point``) would otherwise be
+  parsed as a tmux flag and silently swallowed (fix round 1, reproduced live
+  on tmux 3.6a).
 - **Boss (host, slug ``boss``/``boss-host``)**: a short-lived WebSocket
   connection to the host-pty-bridge, same upstream URL construction as
   ``_build_host_upstream_url``'s Boss branch in ``cli_terminal.py`` — raw
@@ -127,10 +132,10 @@ async def send_text(agent, text: str) -> None:
     if kind == "docker":
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
-            await _run_docker_exec(_docker_argv(slug, "-l", pasted))
+            await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted))
             await _run_docker_exec(_docker_argv(slug, "Enter"))
         else:
-            await _run_docker_exec(_docker_argv(slug, "-l", text))
+            await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
         return
 
     # kind == "boss"
@@ -154,7 +159,7 @@ async def send_keys(agent, keys: list[str]) -> None:
             if key in _TMUX_NAMED_KEYS:
                 await _run_docker_exec(_docker_argv(slug, key))
             else:
-                await _run_docker_exec(_docker_argv(slug, "-l", ALLOWED_KEYS[key]))
+                await _run_docker_exec(_docker_argv(slug, "-l", "--", ALLOWED_KEYS[key]))
         return
 
     # kind == "boss"
