@@ -14,12 +14,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Runtime, RuntimeLiveStatus, SparkrunRecipe } from "@/lib/types";
 import { pickServing, type HostGroup } from "./grouping";
 import { useGpuSparkline } from "./useGpuSparkline";
 import { fmtCtx } from "@/lib/utils";
@@ -251,10 +252,6 @@ function SwitchRow({
   // arm/confirm behavior (a recipe switch evicts whatever the GPU is currently
   // serving; that must never be one click away).
   const [confirmRecipe, setConfirmRecipe] = useState<string | null>(null);
-  // The sparkrun catalog is 20+ recipes — rendering all of them floods the
-  // stage (the approved mockup shows a curated handful). Default: up to four
-  // solo-capable recipes (current first); the full catalog sits behind a toggle.
-  const [showAllRecipes, setShowAllRecipes] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
   // The vllm_docker runtime actually holding the slot wins over "the first
@@ -333,13 +330,13 @@ function SwitchRow({
 
   const allRecipes = recipesQuery.data?.recipes ?? [];
   const currentName = currentRecipeQuery.data?.current_recipe ?? null;
-  const soloRecipes = allRecipes.filter((r) => r.solo_capable);
-  const curatedRecipes = [
-    ...soloRecipes.filter((r) => r.name === currentName),
-    ...soloRecipes.filter((r) => r.name !== currentName),
-  ].slice(0, 4);
-  const visibleRecipes = showAllRecipes ? allRecipes : curatedRecipes;
-  const hiddenRecipeCount = allRecipes.length - curatedRecipes.length;
+  // Dropdown order: current first, then runnable (solo-capable) recipes, then
+  // the rest (disabled — they need more GPUs/nodes than this host has).
+  const sortedRecipes = [
+    ...allRecipes.filter((r) => r.name === currentName),
+    ...allRecipes.filter((r) => r.name !== currentName && r.solo_capable),
+    ...allRecipes.filter((r) => r.name !== currentName && !r.solo_capable),
+  ];
 
   return (
     <div
@@ -354,70 +351,40 @@ function SwitchRow({
         {t("switchLabel")}
       </span>
 
-      {recipeCapable && isSparkrunManaged && visibleRecipes.map((r) => {
-        const isActive = r.name === currentRecipeQuery.data?.current_recipe;
-        const isDisabled = !r.solo_capable;
-        const gpuHint =
-          r.tp != null || r.nodes != null
-            ? `tp=${r.tp ?? 1}${r.nodes != null ? `, nodes=${r.nodes}` : ""}`
-            : null;
+      {recipeCapable && isSparkrunManaged && confirmRecipe == null && (
+        <RecipeDropdown
+          recipes={sortedRecipes}
+          currentName={currentName}
+          onSelect={(name) => setConfirmRecipe(name)}
+        />
+      )}
 
-        if (confirmRecipe === r.name) {
-          return (
-            <div
-              key={r.name}
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-xs flex-wrap"
-              style={{ background: C.bgSurface, border: `1px solid ${C.borderAccent}` }}
-            >
-              <span className="font-mono" style={{ color: C.textPrimary }}>{r.name}</span>
-              <button
-                onClick={() => switchMutation.mutate(r.name)}
-                className="rounded px-2 py-1 text-[10px] font-semibold cursor-pointer"
-                style={{ background: C.accent, color: C.bgDeep }}
-              >
-                {tRecipe("confirmSwitch")}
-              </button>
-              <button
-                onClick={() => setConfirmRecipe(null)}
-                className="rounded px-2 py-1 text-[10px] cursor-pointer"
-                style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
-              >
-                {tRecipe("cancel")}
-              </button>
-              <span className="text-[10px]" style={{ color: C.textMuted }}>{tRecipe("warmupNotice")}</span>
-            </div>
-          );
-        }
-
-        return (
+      {recipeCapable && isSparkrunManaged && confirmRecipe != null && (
+        <div
+          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs flex-wrap"
+          style={{ background: C.bgSurface, border: `1px solid ${C.borderAccent}` }}
+        >
+          <span className="font-mono" style={{ color: C.textPrimary }}>{confirmRecipe}</span>
           <button
-            key={r.name}
-            onClick={() => {
-              if (isActive || isDisabled) return;
-              setConfirmRecipe(r.name);
-            }}
-            disabled={isActive || isDisabled}
-            title={isDisabled ? tRecipe("needsMoreTitle", { gpuHint: gpuHint ?? tRecipe("moreGpusNodes") }) : undefined}
-            className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ background: C.bgSurface, border: `1px solid ${isActive ? C.borderAccent : C.border}`, color: isActive ? C.accent : C.textPrimary }}
+            onClick={() => switchMutation.mutate(confirmRecipe)}
+            className="rounded px-2 py-1 text-[10px] font-semibold cursor-pointer"
+            style={{ background: C.accent, color: C.bgDeep }}
           >
-            {r.name}
+            {tRecipe("confirmSwitch")}
           </button>
-        );
-      })}
+          <button
+            onClick={() => setConfirmRecipe(null)}
+            className="rounded px-2 py-1 text-[10px] cursor-pointer"
+            style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
+          >
+            {tRecipe("cancel")}
+          </button>
+          <span className="text-[10px]" style={{ color: C.textMuted }}>{tRecipe("warmupNotice")}</span>
+        </div>
+      )}
 
       {recipeCapable && isSparkrunManaged && recipesQuery.isError && (
         <span className="text-xs" style={{ color: STATUS_TEXT.error }}>{tRecipe("unreachable")}</span>
-      )}
-
-      {recipeCapable && isSparkrunManaged && hiddenRecipeCount > 0 && (
-        <button
-          onClick={() => setShowAllRecipes((v) => !v)}
-          className="rounded-md px-2.5 py-2 text-xs cursor-pointer"
-          style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted, background: "transparent" }}
-        >
-          {showAllRecipes ? t("showFewerRecipes") : t("showAllRecipes", { n: allRecipes.length })}
-        </button>
       )}
 
       <button
@@ -632,6 +599,124 @@ export function SlotStage({
       <SwitchRow group={group} serving={serving} live={live} />
       <ReadyList readyRuntimes={readyRuntimes} sizeGb={sizeGb} onOpen={onOpen} />
     </div>
+  );
+}
+
+// ── Recipe dropdown ─────────────────────────────────────────────────────────
+// The sparkrun catalog is 65 recipes — pills flooded the stage. One trigger
+// showing the current recipe; the list opens in a portal (the stage card
+// clips overflow) with runnable recipes first and non-solo ones disabled.
+
+function RecipeDropdown({
+  recipes,
+  currentName,
+  onSelect,
+}: {
+  recipes: SparkrunRecipe[];
+  currentName: string | null;
+  onSelect: (name: string) => void;
+}) {
+  const t = useTranslations("runtimes.slotStage");
+  const tRecipe = useTranslations("runtimes.recipe");
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left });
+    }
+    setOpen((v) => !v);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        data-testid="recipe-dropdown-trigger"
+        className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer"
+        style={{ background: C.bgSurface, border: `1px solid ${open ? C.borderAccent : C.border}`, color: C.textPrimary }}
+      >
+        <span className="font-mono truncate max-w-[340px]">
+          {currentName ?? t("selectRecipe")}
+        </span>
+        <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>▾</span>
+      </button>
+
+      {open && pos != null &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="listbox"
+            data-testid="recipe-dropdown-list"
+            className="fixed z-50 rounded-md overflow-y-auto"
+            style={{
+              top: pos.top,
+              left: pos.left,
+              width: "380px",
+              maxHeight: "280px",
+              background: C.bgElevated,
+              border: `1px solid ${C.borderActive}`,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            }}
+          >
+            {recipes.map((r) => {
+              const isActive = r.name === currentName;
+              const isDisabled = !r.solo_capable;
+              const gpuHint =
+                r.tp != null || r.nodes != null
+                  ? `tp=${r.tp ?? 1}${r.nodes != null ? `, nodes=${r.nodes}` : ""}`
+                  : null;
+              return (
+                <button
+                  key={r.name}
+                  role="option"
+                  aria-selected={isActive}
+                  disabled={isActive || isDisabled}
+                  title={isDisabled ? tRecipe("needsMoreTitle", { gpuHint: gpuHint ?? tRecipe("moreGpusNodes") }) : undefined}
+                  onClick={() => {
+                    setOpen(false);
+                    onSelect(r.name);
+                  }}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
+                  style={{
+                    color: isActive ? C.accent : isDisabled ? C.textDim : C.textPrimary,
+                    borderBottom: `1px solid ${C.borderSubtle}`,
+                  }}
+                >
+                  <span className="truncate">{r.name}</span>
+                  {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
+                </button>
+              );
+            })}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 

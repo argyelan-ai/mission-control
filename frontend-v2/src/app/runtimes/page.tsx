@@ -779,7 +779,7 @@ export default function RuntimesPage() {
   const tSlot = useTranslations("runtimes.slotPage");
   const [addOpen, setAddOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [pageTab, setPageTab] = useState<"fleet" | "models" | "infra">("fleet");
+  const [pageTab, setPageTab] = useState<"fleet" | "cloud" | "models" | "infra">("fleet");
 
   // SlotStage's "+ Model" (and anyone else firing openModelsTab) must land on
   // the Models tab — the inner ModelsSection listener only sets its sub-tab.
@@ -945,6 +945,7 @@ export default function RuntimesPage() {
               {(
                 [
                   { id: "fleet", label: tSlot("tabFleet") },
+                  { id: "cloud", label: tSlot("tabCloud") },
                   { id: "models", label: tSlot("tabModels") },
                   { id: "infra", label: tSlot("tabInfra") },
                 ] as const
@@ -995,8 +996,6 @@ export default function RuntimesPage() {
                   )}
                 </div>
 
-                <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
-
                 {unassignedRuntimes.length > 0 && (
                   <section>
                     <div className="flex items-center gap-2.5 mb-3">
@@ -1016,6 +1015,10 @@ export default function RuntimesPage() {
                   </section>
                 )}
               </>
+            )}
+
+            {pageTab === "cloud" && !isEmpty && (
+              <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
             )}
 
             {pageTab === "models" && <ModelsSection embedded />}

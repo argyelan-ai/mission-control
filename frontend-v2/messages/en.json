@@ -2243,9 +2243,9 @@
       "addModel": "+ Model",
       "placeholderTitle": "No model set up",
       "switchFailed": "Switch failed: {message}",
-      "showAllRecipes": "All recipes ({n})",
-      "showFewerRecipes": "Fewer recipes",
-      "miniExpand": "Show the full stage"
+      "miniExpand": "Show the full stage",
+      "selectRecipe": "Switch recipe…",
+      "recipeCurrent": "current"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
@@ -2264,7 +2264,8 @@
       "emptyHint": "Add a runtime, or download a model to get started.",
       "tabFleet": "Fleet",
       "tabModels": "Models",
-      "tabInfra": "Infrastructure"
+      "tabInfra": "Infrastructure",
+      "tabCloud": "Cloud"
     },
     "loadFailed": "Load failed.",
     "unloadFailed": "Unload failed.",

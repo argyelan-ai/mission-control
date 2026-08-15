@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SlotStage } from "../SlotStage";
 import { api } from "@/lib/api";
@@ -119,10 +119,17 @@ describe("SlotStage", () => {
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
-    const btn = await screen.findByText("laguna-s21");
-    btn.click();
+    // Recipes live behind a dropdown now (65-recipe catalog flooded the row).
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    await act(async () => {
+      trigger.click();
+    });
+    const option = await screen.findByText("laguna-s21");
+    await act(async () => {
+      option.click();
+    });
 
-    // First click only arms the confirm step — one click must never evict
+    // Selecting only arms the confirm step — one click must never evict
     // whatever the GPU is currently serving.
     expect(switchRecipe).not.toHaveBeenCalled();
     const confirmBtn = await screen.findByText("Confirm switch");

@@ -2243,9 +2243,9 @@
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
-      "showAllRecipes": "Alle Rezepte ({n})",
-      "showFewerRecipes": "Weniger Rezepte",
-      "miniExpand": "Volle Bühne zeigen"
+      "miniExpand": "Volle Bühne zeigen",
+      "selectRecipe": "Rezept wählen…",
+      "recipeCurrent": "aktiv"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
@@ -2264,7 +2264,8 @@
       "emptyHint": "Runtime hinzufügen oder ein Modell herunterladen, um loszulegen.",
       "tabFleet": "Flotte",
       "tabModels": "Modelle",
-      "tabInfra": "Infrastruktur"
+      "tabInfra": "Infrastruktur",
+      "tabCloud": "Cloud"
     },
     "loadFailed": "Laden fehlgeschlagen.",
     "unloadFailed": "Entladen fehlgeschlagen.",

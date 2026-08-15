@@ -170,6 +170,10 @@ describe("RuntimesPage", () => {
 
     const { qc } = renderPage();
 
+    // Cloud usage now lives on its own tab.
+    await act(async () => {
+      (await screen.findByTestId("page-tab-cloud")).click();
+    });
     const row = await screen.findByTestId("cloud-usage-row-opus");
     await act(async () => {
       row.click();
