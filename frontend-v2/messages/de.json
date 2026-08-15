@@ -2244,7 +2244,8 @@
       "placeholderTitle": "Kein Modell eingerichtet",
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
       "showAllRecipes": "Alle Rezepte ({n})",
-      "showFewerRecipes": "Weniger Rezepte"
+      "showFewerRecipes": "Weniger Rezepte",
+      "miniExpand": "Volle Bühne zeigen"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",

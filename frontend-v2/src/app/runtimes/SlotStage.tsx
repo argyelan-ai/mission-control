@@ -634,3 +634,71 @@ export function SlotStage({
     </div>
   );
 }
+
+// ── Mini stage bar ──────────────────────────────────────────────────────────
+// "Now playing" strip shown instead of the full stage while a non-Fleet tab
+// is active: monitoring never leaves the screen, but stops dominating it.
+// Clicking it returns to the Fleet tab (the full stage).
+
+const MINI_STATE_COLOR: Record<SlotState, string> = {
+  serving: STATUS.online,
+  warmup: STATUS_TEXT.warning,
+  switching: STATUS_TEXT.warning,
+  off: C.textDim,
+  failed: STATUS_TEXT.error,
+};
+
+export function MiniStageBar({
+  group,
+  live,
+  onExpand,
+}: {
+  group: HostGroup;
+  live?: Record<string, RuntimeLiveStatus>;
+  onExpand: () => void;
+}) {
+  const t = useTranslations("runtimes.slotStage");
+  const serving = pickServing(group, live);
+  const l = serving ? liveFor(serving, live) : undefined;
+  const state = slotState(serving, l);
+
+  const { data } = useQuery({
+    queryKey: ["hosts", group.host.id, "metrics"],
+    queryFn: () => api.hosts.metrics(group.host.id),
+    refetchInterval: 5_000,
+  });
+  const memUsedMb = data?.vram_used_mb ?? data?.ram_used_mb;
+  const memTotalMb = data?.vram_total_mb ?? data?.ram_total_mb;
+
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      title={t("miniExpand")}
+      data-testid={`mini-stage-${group.host.slug}`}
+      className="flex items-center gap-3 w-full px-4 py-2.5 rounded-xl text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full shrink-0"
+        style={{ background: MINI_STATE_COLOR[state] }}
+      />
+      <span
+        className="text-[10px] font-medium uppercase shrink-0"
+        style={{ color: C.textMuted, letterSpacing: "0.08em" }}
+      >
+        {group.host.display_name}
+      </span>
+      <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
+        {serving?.display_name ?? t("stateOff")}
+      </span>
+      <span className="flex items-center gap-3 ml-auto shrink-0 font-mono text-[11px]" style={{ color: C.textMuted }}>
+        {data?.reachable && data.gpu_util_pct != null && <span>GPU {data.gpu_util_pct} %</span>}
+        {data?.reachable && memUsedMb != null && memTotalMb != null && (
+          <span>{(memUsedMb / 1024).toFixed(0)}/{(memTotalMb / 1024).toFixed(0)} GB</span>
+        )}
+        {l?.reachable && l.latency_ms != null && <span>{l.latency_ms} ms</span>}
+      </span>
+    </button>
+  );
+}

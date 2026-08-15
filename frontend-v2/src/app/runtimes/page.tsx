@@ -38,7 +38,7 @@ import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
-import { SlotStage } from "./SlotStage";
+import { MiniStageBar, SlotStage } from "./SlotStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
@@ -929,34 +929,18 @@ export default function RuntimesPage() {
           </div>
         )}
 
-        {!isLoading && !error && !isEmpty && (
-          <div className="flex flex-col gap-6">
-            {stageGroups.map((g) => (
-              <SlotStage key={g.host.id} group={g} live={live} sizeGb={getSizeGb} onOpen={openPanel} />
-            ))}
 
-            {sleepingGroups.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {sleepingGroups.map((g) => (
-                  <SleepingHostLine key={g.host.id} group={g} />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tabs render even for an empty fleet — the Models tab is how a fresh
+        {/* Tabs sit at the top (operator feedback: easier to reach). On the
+            Fleet tab the full stage renders; on the other tabs a slim
+            "now playing" MiniStageBar keeps the monitoring on screen. Tabs
+            render even for an empty fleet — the Models tab is how a fresh
             install downloads its first model. */}
         {!isLoading && !error && (
-          <div className="flex flex-col gap-6 mt-6">
-            {/* Tab bar — the stage above is always visible; everything else
-                lives in one of three quiet tabs (operator feedback: the
-                stacked sections overloaded the page). */}
+          <div className="flex flex-col gap-6">
             <div
               role="tablist"
               aria-label={t("title")}
-              className="flex items-center gap-1 pt-2 flex-wrap"
-              style={{ borderTop: `1px solid ${C.borderSubtle}` }}
+              className="flex items-center gap-1 flex-wrap"
             >
               {(
                 [
@@ -986,8 +970,31 @@ export default function RuntimesPage() {
               })}
             </div>
 
+            {/* Non-fleet tabs: monitoring shrinks to a "now playing" strip. */}
+            {pageTab !== "fleet" && !isEmpty && stageGroups.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {stageGroups.map((g) => (
+                  <MiniStageBar key={g.host.id} group={g} live={live} onExpand={() => setPageTab("fleet")} />
+                ))}
+              </div>
+            )}
+
             {pageTab === "fleet" && !isEmpty && (
               <>
+                <div className="flex flex-col gap-6">
+                  {stageGroups.map((g) => (
+                    <SlotStage key={g.host.id} group={g} live={live} sizeGb={getSizeGb} onOpen={openPanel} />
+                  ))}
+
+                  {sleepingGroups.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      {sleepingGroups.map((g) => (
+                        <SleepingHostLine key={g.host.id} group={g} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
 
                 {unassignedRuntimes.length > 0 && (

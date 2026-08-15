@@ -2244,7 +2244,8 @@
       "placeholderTitle": "No model set up",
       "switchFailed": "Switch failed: {message}",
       "showAllRecipes": "All recipes ({n})",
-      "showFewerRecipes": "Fewer recipes"
+      "showFewerRecipes": "Fewer recipes",
+      "miniExpand": "Show the full stage"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
