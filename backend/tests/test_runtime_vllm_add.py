@@ -242,11 +242,14 @@ async def test_container_runs_vllm_server_returns_false_for_sleeper():
 
 
 @pytest.mark.asyncio
-async def test_container_runs_vllm_server_handles_ssh_failure():
+async def test_container_runs_vllm_server_raises_on_ssh_failure():
+    """Paket 2: SSH-Transportfehler propagieren — «konnte nicht nachsehen»
+    muss von «nachgesehen, kein Prozess» unterscheidbar bleiben. Die
+    Start-Verifikation macht daraus «unknown» statt eines falschen
+    «kein vllm-Prozess»-Fehlers; Discovery fängt es selbst ab."""
     with patch.object(runtime_manager, "_ssh_run", new=AsyncMock(side_effect=RuntimeError("nope"))):
-        is_vllm, endpoint = await runtime_manager._container_runs_vllm_server("x")
-    assert is_vllm is False
-    assert endpoint == ""
+        with pytest.raises(RuntimeError):
+            await runtime_manager._container_runs_vllm_server("x")
 
 
 # ── Router endpoints ──────────────────────────────────────────────────────
