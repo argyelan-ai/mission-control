@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RuntimeCard } from "../page";
+import { RuntimeDetailPanel } from "../RuntimeDetailPanel";
 import { api } from "@/lib/api";
 import type { Runtime, RuntimeAutostartStatus } from "@/lib/types";
 
@@ -38,7 +38,7 @@ const BASE_RUNTIME: Runtime = {
   autostart_supported: true,
 };
 
-describe("AutostartToggle (via RuntimeCard)", () => {
+describe("AutostartToggle (via RuntimeDetailPanel)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
@@ -49,7 +49,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
   });
 
   it("does not render the toggle when autostart_supported is false", () => {
-    renderWithQuery(<RuntimeCard runtime={{ ...BASE_RUNTIME, autostart_supported: false }} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={{ ...BASE_RUNTIME, autostart_supported: false }} onClose={() => {}} />);
     expect(screen.queryByRole("switch", { name: /autostart/i })).not.toBeInTheDocument();
   });
 
@@ -61,7 +61,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
       reachable: true,
     } satisfies RuntimeAutostartStatus);
 
-    renderWithQuery(<RuntimeCard runtime={BASE_RUNTIME} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={BASE_RUNTIME} onClose={() => {}} />);
 
     const toggle = await screen.findByRole("switch", { name: /autostart/i });
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
@@ -76,7 +76,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
       reachable: false,
     } satisfies RuntimeAutostartStatus);
 
-    renderWithQuery(<RuntimeCard runtime={BASE_RUNTIME} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={BASE_RUNTIME} onClose={() => {}} />);
 
     const toggle = await screen.findByRole("switch", { name: /autostart/i });
     await waitFor(() => expect(toggle).toBeDisabled());
@@ -97,7 +97,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
       reachable: true,
     } satisfies RuntimeAutostartStatus);
 
-    renderWithQuery(<RuntimeCard runtime={BASE_RUNTIME} />);
+    renderWithQuery(<RuntimeDetailPanel open runtime={BASE_RUNTIME} onClose={() => {}} />);
 
     const toggle = await screen.findByRole("switch", { name: /autostart/i });
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));

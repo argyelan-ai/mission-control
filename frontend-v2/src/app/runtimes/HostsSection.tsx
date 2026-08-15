@@ -3,35 +3,30 @@
 /**
  * Host Registry UI (ADR-048) — generische Multi-Host Control-Plane.
  *
- * - HostMetricsBar: eine Metrics-Bar pro enabled Host (ersetzt die alte,
- *   hart verdrahtete SparkMetricsBar). 0 Hosts → rendert nichts — ein
- *   Fresh-Install ohne GPU-Box zeigt kein Empty-Gerippe.
- * - HostsSection: Cards (Name, Kind-Badge, Status, gebundene Runtimes) +
- *   Add/Edit-Modal (admin-only) + Delete mit 409-Guard-Feedback.
+ * HostsSection: Cards (Name, Kind-Badge, Status, gebundene Runtimes) +
+ * Add/Edit-Modal (admin-only) + Delete mit 409-Guard-Feedback.
+ *
+ * Metrics-bar-free (slot-stage redesign): live GPU/RAM/temp bars now live in
+ * SlotStage's TelemetryColumn, not here — see docs/plans/2026-08-13
+ * -runtimes-slot-stage-design.md.
  */
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plus, Server, Trash2, Wand2, WifiOff, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Server, Trash2, Wand2, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
-import type { Host, HostCreate, HostKind, HostMetrics } from "@/lib/types";
+import type { Host, HostCreate, HostKind } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function barColor(pct: number): string {
-  if (pct > 85) return C.error;
-  if (pct >= 60) return C.warning;
-  return C.online;
-}
 
 /** Pull the human-readable detail out of `API 409: {"detail":"..."}` errors. */
 function extractApiError(err: unknown): string {
@@ -54,146 +49,6 @@ const KIND_LABEL_KEY: Record<HostKind, string> = {
   flask_wol: "kindFlaskWol",
   local: "kindLocal",
 };
-
-// ── Host Metrics Bar ──────────────────────────────────────────────────────────
-
-function SingleHostMetricsBar({ host }: { host: Host }) {
-  const t = useTranslations("runtimes.hosts");
-  const { data } = useQuery<HostMetrics>({
-    queryKey: ["host-metrics", host.id],
-    queryFn: () => api.hosts.metrics(host.id),
-    refetchInterval: 5_000,
-  });
-
-  // scaleX, not width: animating width relayouts the bar every frame.
-  const barStyle = (pct: number) => ({
-    width: "100%",
-    background: barColor(pct),
-    transform: `scaleX(${Math.min(pct, 100) / 100})`,
-    transformOrigin: "left" as const,
-    transition: "transform 0.6s cubic-bezier(0.16,1,0.3,1)",
-  });
-
-  // flask_wol hosts report awake/health instead of GPU metrics — checked
-  // BEFORE the reachable early-return: the backend maps reachable=awake, so a
-  // sleeping power-managed box (reachable=false, status="asleep") is the
-  // NORMAL idle state (ADR-042), not an outage row.
-  if (host.kind === "flask_wol" && data) {
-    const awake = data.awake ?? false;
-    return (
-      <div
-        className="flex items-center gap-3 px-4 py-3 rounded-xl"
-        style={{ background: C.borderSubtle, border: `1px solid ${C.borderSubtle}` }}
-      >
-        <div className="w-1.5 h-1.5 rounded-full" style={{ background: awake ? C.online : STATUS.offline }} />
-        <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.textMuted, letterSpacing: "0.08em" }}>
-          {host.display_name}
-        </span>
-        <span className="text-xs ml-auto" style={{ color: awake ? C.online : C.textMuted }}>
-          {awake ? t("awake") : t("sleeping")}
-        </span>
-      </div>
-    );
-  }
-
-  if (!data || !data.reachable) {
-    return (
-      <div
-        className="flex items-center gap-3 px-4 py-3 rounded-xl"
-        style={{ background: C.borderSubtle, border: `1px solid ${C.borderSubtle}` }}
-      >
-        <WifiOff size={13} style={{ color: C.textMuted }} />
-        <span className="text-xs" style={{ color: C.textMuted }}>
-          {t("unreachable", { name: host.display_name })}
-        </span>
-      </div>
-    );
-  }
-
-  const ramPct = data.ram_total_mb && data.ram_used_mb != null
-    ? Math.round((data.ram_used_mb / data.ram_total_mb) * 100) : 0;
-  const ramUsedGb = data.ram_used_mb != null ? (data.ram_used_mb / 1024).toFixed(0) : "—";
-  const ramTotalGb = data.ram_total_mb != null ? (data.ram_total_mb / 1024).toFixed(0) : "—";
-  const gpuPct = data.gpu_util_pct ?? 0;
-
-  return (
-    <div
-      className="flex flex-col md:flex-row md:items-stretch gap-0 rounded-xl overflow-hidden"
-      style={{ background: C.borderSubtle, border: `1px solid ${C.borderSubtle}` }}
-    >
-      {/* Label — mobil eigene Zeile, Desktop links wie bisher */}
-      <div
-        className="flex items-center gap-2 px-4 py-2.5 md:py-3 shrink-0 border-b md:border-b-0 md:border-r"
-        style={{ borderColor: C.borderSubtle }}
-      >
-        <div className="w-1.5 h-1.5 rounded-full" style={{ background: C.online }} />
-        <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.textMuted, letterSpacing: "0.08em" }}>
-          {host.display_name}
-        </span>
-      </div>
-
-      {/* Stats — mobil 3er-Grid (passt ohne Scroll), Desktop flex wie bisher */}
-      <div className="grid grid-cols-3 md:flex md:flex-1">
-      {/* GPU */}
-      <div className="md:flex-1 md:min-w-[7.5rem] px-3 md:px-5 py-3" style={{ borderRight: `1px solid ${C.borderSubtle}` }}>
-        <div className="flex items-baseline justify-between mb-1.5">
-          <span className="text-xs" style={{ color: C.textMuted }}>GPU</span>
-          <span className="text-sm font-semibold tabular-nums whitespace-nowrap" style={{ color: barColor(gpuPct) }}>
-            {data.gpu_util_pct != null ? `${data.gpu_util_pct}%` : "—"}
-          </span>
-        </div>
-        <div className="h-0.5 rounded-full overflow-hidden" style={{ background: C.border }}>
-          <div className="h-full rounded-full" style={barStyle(gpuPct)} />
-        </div>
-      </div>
-
-      {/* RAM */}
-      <div className="md:flex-1 md:min-w-[7.5rem] px-3 md:px-5 py-3" style={{ borderRight: `1px solid ${C.borderSubtle}` }}>
-        <div className="flex items-baseline justify-between mb-1.5">
-          <span className="text-xs" style={{ color: C.textMuted }}>RAM</span>
-          <span className="text-sm font-semibold tabular-nums whitespace-nowrap" style={{ color: barColor(ramPct) }}>
-            {ramUsedGb}<span className="text-xs font-normal" style={{ color: C.textMuted }}>/{ramTotalGb} GB</span>
-          </span>
-        </div>
-        <div className="h-0.5 rounded-full overflow-hidden" style={{ background: C.border }}>
-          <div className="h-full rounded-full" style={barStyle(ramPct)} />
-        </div>
-      </div>
-
-      {/* Temp */}
-      <div className="md:flex-1 md:min-w-[7.5rem] px-3 md:px-5 py-3">
-        <div className="flex items-baseline justify-between mb-1.5">
-          <span className="text-xs" style={{ color: C.textMuted }}>Temp</span>
-          <span className="text-sm font-semibold tabular-nums whitespace-nowrap" style={{ color: C.textPrimary }}>
-            {data.gpu_temp_c != null ? `${data.gpu_temp_c}°C` : "—"}
-          </span>
-        </div>
-        <div className="h-0.5 rounded-full" style={{ background: C.border }} />
-      </div>
-      </div>
-    </div>
-  );
-}
-
-export function HostMetricsBar() {
-  const { data: hosts } = useQuery<Host[]>({
-    queryKey: ["hosts"],
-    queryFn: api.hosts.list,
-  });
-
-  // local hosts have no live metrics (spec: metrics endpoint returns empty) —
-  // rendering an empty skeleton for them would be noise.
-  const metricHosts = (hosts ?? []).filter((h) => h.enabled && h.kind !== "local");
-  if (metricHosts.length === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-2 mb-6">
-      {metricHosts.map((h) => (
-        <SingleHostMetricsBar key={h.id} host={h} />
-      ))}
-    </div>
-  );
-}
 
 // ── Host Form Modal (admin-only) ──────────────────────────────────────────────
 
@@ -312,7 +167,6 @@ function HostFormModal({
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["hosts"] });
-    queryClient.invalidateQueries({ queryKey: ["host-metrics"] });
     queryClient.invalidateQueries({ queryKey: ["runtimes"] });
   };
 
@@ -637,7 +491,6 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
     onSuccess: () => {
       setFeedback(null);
       queryClient.invalidateQueries({ queryKey: ["hosts"] });
-      queryClient.invalidateQueries({ queryKey: ["host-metrics"] });
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
     },
     // 409 = runtimes still bound (guard) — show the backend message instead

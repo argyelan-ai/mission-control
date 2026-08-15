@@ -2,6 +2,17 @@ import "@testing-library/jest-dom";
 import { vi } from "vitest";
 import en from "../messages/en.json";
 
+// jsdom implements no scroll methods at all (not even as a no-op) — several
+// components call `el?.scrollIntoView(...)` on an element that DOES exist in
+// the test DOM (only the *lookup* is optional-chained, not the method call
+// itself), which throws "scrollIntoView is not a function" the moment a full
+// page render actually mounts that element and fires the callback. A no-op
+// stub matches real browser behavior closely enough for tests that don't
+// assert on scroll position.
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 // next-intl global mock: resolves keys against the REAL English catalog, so
 // tests keep asserting the actual English labels ("Tasks", "Settings", …)
 // without every test having to mount a NextIntlClientProvider. A key that is
