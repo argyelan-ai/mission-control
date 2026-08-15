@@ -10,7 +10,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.activity import ActivityEvent
 from app.redis_client import RedisKeys
-from app.services.discord import send_discord_notification
 from app.services.sse import broadcast
 from app.utils import utcnow
 
@@ -69,19 +68,14 @@ async def emit_event(
     if event_type.startswith("approval."):
         await broadcast(RedisKeys.approvals_events(), event_type, event_data)
 
-    # Discord push for warning+
+    # Discord: eine Tuer statt zwei paralleler Sends. discord_notify entscheidet
+    # ueber Wiederholungssperre und Sofort-vs-Sammelmeldung — hier steht bewusst
+    # keine Filterlogik mehr, sonst driftet sie wieder auseinander.
+    # Das Event oben ist zu diesem Zeitpunkt bereits geschrieben: die Historie
+    # in der UI bleibt vollstaendig, auch wenn Discord schweigt.
     if severity in ("warning", "error", "critical"):
-        await send_discord_notification(
-            title=title,
-            description=f"Event: `{event_type}`",
-            severity=severity,
-        )
-        # Auch an #mc-alerts Channel
-        try:
-            from app.services.discord_router import notify_alert
-            await notify_alert(title, f"Event: `{event_type}`", severity)
-        except Exception:
-            pass
+        from app.services.discord_notify import notify_event as _discord_notify
+        await _discord_notify(event_type, title, severity, detail=detail)
 
     # Agent-spezifische Events an Agent-Discord-Channel routen
     if agent_id and event_type.startswith(("task.", "agent.")):
