@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -17,6 +18,7 @@ from app.auth import require_user
 from app.database import get_session
 from app.models.agent import Agent
 from app.redis_client import RedisKeys
+from app.services.agent_chat_input import InputNotSupportedError, send_keys, send_text
 from app.services.sse import _sse_generator
 from app.services.transcript_chat import (
     find_active_session,
@@ -29,6 +31,16 @@ from app.services.transcript_chat import (
 router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 
 _NO_TRANSCRIPT = {"reason": "no_transcript"}
+_INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
+_MAX_TEXT_LEN = 20000
+
+
+class ChatInputBody(BaseModel):
+    text: str
+
+
+class ChatKeysBody(BaseModel):
+    keys: list[str]
 
 
 async def _resolve_transcript_path(
@@ -104,3 +116,58 @@ async def stream_agent_chat(
             await tailer_manager.release(str(agent_id))
 
     return EventSourceResponse(_generator())
+
+
+async def _load_agent_or_404(agent_id: uuid.UUID, session: AsyncSession) -> Agent:
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+@router.post("/agents/{agent_id}/chat/input", status_code=204)
+async def post_chat_input(
+    agent_id: uuid.UUID,
+    body: ChatInputBody,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Types ``body.text`` into the agent's live session (tmux send-keys for
+    cli-bridge agents, host-pty-bridge WS for Boss). 422 for empty/oversized
+    text; 409 ``{"reason":"input_not_supported"}`` for host agents other than
+    Boss (mirrors A2's runtime gating)."""
+    agent = await _load_agent_or_404(agent_id, session)
+
+    if not body.text or not body.text.strip():
+        raise HTTPException(status_code=422, detail="text must not be empty")
+    if len(body.text) > _MAX_TEXT_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"text too long (max {_MAX_TEXT_LEN} chars)",
+        )
+
+    try:
+        await send_text(agent, body.text)
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+
+
+@router.post("/agents/{agent_id}/chat/keys", status_code=204)
+async def post_chat_keys(
+    agent_id: uuid.UUID,
+    body: ChatKeysBody,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Sends a sequence of allowlisted control keys (Escape/Enter/Up/Down/
+    digits/y/n) to the agent's live session. 422 on any non-allowlisted key;
+    409 ``{"reason":"input_not_supported"}`` for host agents other than
+    Boss."""
+    agent = await _load_agent_or_404(agent_id, session)
+
+    try:
+        await send_keys(agent, body.keys)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
