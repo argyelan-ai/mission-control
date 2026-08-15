@@ -937,6 +937,18 @@ export default function RuntimesPage() {
             install downloads its first model. */}
         {!isLoading && !error && (
           <div className="flex flex-col gap-6">
+            {/* Page-level "now playing" strip — ABOVE the tab bar on purpose:
+                it is global GPU monitoring, not tab content (rendering it
+                below the tabs made the Spark read as part of the Cloud tab).
+                Hidden on Fleet, where the full stage is visible anyway. */}
+            {pageTab !== "fleet" && !isEmpty && stageGroups.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {stageGroups.map((g) => (
+                  <MiniStageBar key={g.host.id} group={g} live={live} onExpand={() => setPageTab("fleet")} />
+                ))}
+              </div>
+            )}
+
             <div
               role="tablist"
               aria-label={t("title")}
@@ -970,15 +982,6 @@ export default function RuntimesPage() {
                 );
               })}
             </div>
-
-            {/* Non-fleet tabs: monitoring shrinks to a "now playing" strip. */}
-            {pageTab !== "fleet" && !isEmpty && stageGroups.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {stageGroups.map((g) => (
-                  <MiniStageBar key={g.host.id} group={g} live={live} onExpand={() => setPageTab("fleet")} />
-                ))}
-              </div>
-            )}
 
             {pageTab === "fleet" && !isEmpty && (
               <>
