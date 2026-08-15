@@ -397,7 +397,9 @@ async def switch_recipe(
     # until the box is free. A failed eviction ABORTS — starting a second model
     # on top of a still-occupied GPU/RAM is the exact failure we're fixing.
     evict_result = await runtime_manager.evict_spark_runtime_containers(
-        runtime.slug, host=host
+        runtime.slug,
+        container_name=(getattr(runtime, "container_name", None) or None),
+        host=host,
     )
     if not evict_result.get("ok"):
         await runtime_grace.clear_switching(runtime.slug)

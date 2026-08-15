@@ -137,9 +137,9 @@ async def test_start_via_launch_command_verifies_llama_server_process():
          patch.object(runtime_manager, "verify_spark_container_started",
                       new=AsyncMock(return_value=True)), \
          patch.object(runtime_manager, "verify_llamacpp_process_started",
-                      new=AsyncMock(return_value=True)) as verify_llama, \
+                      new=AsyncMock(return_value="serving")) as verify_llama, \
          patch.object(runtime_manager, "verify_spark_vllm_process_started",
-                      new=AsyncMock(return_value=False)) as verify_vllm:
+                      new=AsyncMock(return_value="absent")) as verify_vllm:
         result = await runtime_manager.start_runtime(rt)
     assert result["ok"] is True
     verify_llama.assert_awaited_once()
@@ -156,7 +156,7 @@ async def test_start_fails_when_container_up_but_server_dead():
          patch.object(runtime_manager, "verify_spark_container_started",
                       new=AsyncMock(return_value=True)), \
          patch.object(runtime_manager, "verify_llamacpp_process_started",
-                      new=AsyncMock(return_value=False)):
+                      new=AsyncMock(return_value="absent")):
         result = await runtime_manager.start_runtime(rt)
     assert result["ok"] is False
     assert "llama-server" in result["message"]
@@ -196,7 +196,7 @@ async def test_verify_llamacpp_process_started_reads_docker_top():
 
     with patch.object(runtime_manager, "_verify_poll_interval", 0), \
          patch.object(runtime_manager, "_ssh_run", new=AsyncMock(side_effect=fake_ssh)):
-        assert await runtime_manager.verify_llamacpp_process_started("llamacpp-small") is True
+        assert await runtime_manager.verify_llamacpp_process_started("llamacpp-small") == "serving"
 
 
 @pytest.mark.asyncio
@@ -212,7 +212,7 @@ async def test_verify_llamacpp_process_started_false_when_process_gone():
          patch.object(runtime_manager, "_ssh_run", new=AsyncMock(side_effect=fake_ssh)):
         assert await runtime_manager.verify_llamacpp_process_started(
             "llamacpp-small", timeout=0.01
-        ) is False
+        ) == "absent"
 
 
 # ── Stop ─────────────────────────────────────────────────────────────────────
