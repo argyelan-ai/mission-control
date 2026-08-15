@@ -2243,9 +2243,9 @@
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
-      "miniExpand": "Volle Bühne zeigen",
       "selectRecipe": "Rezept wählen…",
-      "recipeCurrent": "aktiv"
+      "recipeCurrent": "aktiv",
+      "readyListToggle": "{n} weitere Modelle auf diesem Host — bereit für den Slot"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",

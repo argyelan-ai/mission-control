@@ -2243,9 +2243,9 @@
       "addModel": "+ Model",
       "placeholderTitle": "No model set up",
       "switchFailed": "Switch failed: {message}",
-      "miniExpand": "Show the full stage",
       "selectRecipe": "Switch recipe…",
-      "recipeCurrent": "current"
+      "recipeCurrent": "current",
+      "readyListToggle": "{n} more models on this host — ready to take the slot"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",

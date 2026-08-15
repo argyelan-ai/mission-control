@@ -38,7 +38,7 @@ import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
-import { MiniStageBar, SlotStage } from "./SlotStage";
+import { SlotStage } from "./SlotStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
@@ -930,25 +930,14 @@ export default function RuntimesPage() {
         )}
 
 
-        {/* Tabs sit at the top (operator feedback: easier to reach). On the
-            Fleet tab the full stage renders; on the other tabs a slim
-            "now playing" MiniStageBar keeps the monitoring on screen. Tabs
-            render even for an empty fleet — the Models tab is how a fresh
-            install downloads its first model. */}
+        {/* Tabs sit at the top (operator feedback: easier to reach).
+            Monitoring lives ONLY on the Fleet tab (full stage) — a compact
+            monitoring strip on the other tabs was tried and removed on
+            operator feedback (read as misplaced tab content). Tabs render
+            even for an empty fleet — the Models tab is how a fresh install
+            downloads its first model. */}
         {!isLoading && !error && (
           <div className="flex flex-col gap-6">
-            {/* Page-level "now playing" strip — ABOVE the tab bar on purpose:
-                it is global GPU monitoring, not tab content (rendering it
-                below the tabs made the Spark read as part of the Cloud tab).
-                Hidden on Fleet, where the full stage is visible anyway. */}
-            {pageTab !== "fleet" && !isEmpty && stageGroups.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {stageGroups.map((g) => (
-                  <MiniStageBar key={g.host.id} group={g} live={live} onExpand={() => setPageTab("fleet")} />
-                ))}
-              </div>
-            )}
-
             <div
               role="tablist"
               aria-label={t("title")}

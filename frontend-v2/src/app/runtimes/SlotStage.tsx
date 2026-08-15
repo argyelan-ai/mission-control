@@ -405,10 +405,26 @@ function SwitchRow({
 // ── Ready list ─────────────────────────────────────────────────────────────
 
 function ReadyList({ readyRuntimes, sizeGb, onOpen }: { readyRuntimes: Runtime[]; sizeGb: (rt: Runtime) => number | undefined; onOpen: (rt: Runtime) => void }) {
+  const t = useTranslations("runtimes.slotStage");
+  // Collapsed by default: bare rows under the switch area read as clutter
+  // ("why are these here?" — operator feedback). The toggle line names what
+  // they are: other installed models on this host that could take the slot.
+  const [open, setOpen] = useState(false);
   if (readyRuntimes.length === 0) return null;
   return (
     <div className="flex flex-col" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-      {readyRuntimes.map((rt) => {
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        data-testid="ready-list-toggle"
+        className="flex items-center gap-2 px-4 py-2.5 text-xs text-left cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
+        style={{ color: C.textMuted }}
+      >
+        <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>{open ? "▾" : "▸"}</span>
+        {t("readyListToggle", { n: readyRuntimes.length })}
+      </button>
+      {open && readyRuntimes.map((rt) => {
         const gb = sizeGb(rt);
         return (
           <button
@@ -717,73 +733,5 @@ function RecipeDropdown({
           document.body
         )}
     </>
-  );
-}
-
-// ── Mini stage bar ──────────────────────────────────────────────────────────
-// "Now playing" strip shown instead of the full stage while a non-Fleet tab
-// is active: monitoring never leaves the screen, but stops dominating it.
-// Clicking it returns to the Fleet tab (the full stage).
-
-const MINI_STATE_COLOR: Record<SlotState, string> = {
-  serving: STATUS.online,
-  warmup: STATUS_TEXT.warning,
-  switching: STATUS_TEXT.warning,
-  off: C.textDim,
-  failed: STATUS_TEXT.error,
-};
-
-export function MiniStageBar({
-  group,
-  live,
-  onExpand,
-}: {
-  group: HostGroup;
-  live?: Record<string, RuntimeLiveStatus>;
-  onExpand: () => void;
-}) {
-  const t = useTranslations("runtimes.slotStage");
-  const serving = pickServing(group, live);
-  const l = serving ? liveFor(serving, live) : undefined;
-  const state = slotState(serving, l);
-
-  const { data } = useQuery({
-    queryKey: ["hosts", group.host.id, "metrics"],
-    queryFn: () => api.hosts.metrics(group.host.id),
-    refetchInterval: 5_000,
-  });
-  const memUsedMb = data?.vram_used_mb ?? data?.ram_used_mb;
-  const memTotalMb = data?.vram_total_mb ?? data?.ram_total_mb;
-
-  return (
-    <button
-      type="button"
-      onClick={onExpand}
-      title={t("miniExpand")}
-      data-testid={`mini-stage-${group.host.slug}`}
-      className="flex items-center gap-3 w-full px-4 py-2.5 rounded-xl text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
-      style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
-    >
-      <span
-        className="w-1.5 h-1.5 rounded-full shrink-0"
-        style={{ background: MINI_STATE_COLOR[state] }}
-      />
-      <span
-        className="text-[10px] font-medium uppercase shrink-0"
-        style={{ color: C.textMuted, letterSpacing: "0.08em" }}
-      >
-        {group.host.display_name}
-      </span>
-      <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
-        {serving?.display_name ?? t("stateOff")}
-      </span>
-      <span className="flex items-center gap-3 ml-auto shrink-0 font-mono text-[11px]" style={{ color: C.textMuted }}>
-        {data?.reachable && data.gpu_util_pct != null && <span>GPU {data.gpu_util_pct} %</span>}
-        {data?.reachable && memUsedMb != null && memTotalMb != null && (
-          <span>{(memUsedMb / 1024).toFixed(0)}/{(memTotalMb / 1024).toFixed(0)} GB</span>
-        )}
-        {l?.reachable && l.latency_ms != null && <span>{l.latency_ms} ms</span>}
-      </span>
-    </button>
   );
 }

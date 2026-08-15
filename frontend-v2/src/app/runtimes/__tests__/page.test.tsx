@@ -86,6 +86,7 @@ describe("RuntimesPage", () => {
 
     renderPage();
 
+    await act(async () => { (await screen.findByTestId("ready-list-toggle")).click(); });
     expect(await screen.findByTestId("ready-row-omp1")).toBeInTheDocument();
   });
 

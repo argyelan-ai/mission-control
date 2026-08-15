@@ -147,6 +147,7 @@ describe("SlotStage", () => {
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={onOpen} />);
 
+    await act(async () => { (await screen.findByTestId("ready-list-toggle")).click(); });
     const row = await screen.findByTestId("ready-row-other");
     row.click();
 
@@ -173,6 +174,7 @@ describe("SlotStage", () => {
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={onOpen} />);
 
+    await act(async () => { (await screen.findByTestId("ready-list-toggle")).click(); });
     const row = await screen.findByTestId("ready-row-omp1");
     row.click();
     expect(onOpen).toHaveBeenCalledWith(omp);
