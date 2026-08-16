@@ -82,7 +82,7 @@ async def test_send_text_docker_single_line_one_call(monkeypatch):
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "hello agent")
 
-    assert len(calls) == 1
+    assert len(calls) == 2  # send-keys + recycler-marker touch
     argv = calls[0]
     assert argv[:2] == ["docker", "exec"]
     assert "-e" in argv and "LANG=C.UTF-8" in argv
@@ -104,13 +104,57 @@ async def test_send_text_docker_multiline_two_calls_bracketed_paste(monkeypatch)
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "line one\nline two")
 
-    assert len(calls) == 2
-    first, second = calls
+    assert len(calls) == 3  # paste + Enter + recycler-marker touch
+    first, second, third = calls
     assert first[-3] == "-l"
     assert first[-2] == "--"
     assert first[-1] == "\x1b[200~line one\nline two\x1b[201~"
     assert second[-1] == "Enter"
     assert "-l" not in second
+    assert third == ["docker", "exec", "-u", "agent", "mc-agent-rex", "touch", "/home/agent/.claude/last-task.marker"]
+
+
+async def test_send_text_docker_touches_recycler_marker(monkeypatch):
+    """Fix round 3 (live-gate finding): the fleet's agent-recycler kills idle
+    claude sessions based on last-task.marker's mtime — chat input must
+    refresh it or an idle agent gets recycled mid chat-conversation."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_text(agent, "hello agent")
+
+    touch_calls = [c for c in calls if "touch" in c]
+    assert len(touch_calls) == 1
+    assert touch_calls[0] == [
+        "docker", "exec", "-u", "agent", "mc-agent-rex",
+        "touch", "/home/agent/.claude/last-task.marker",
+    ]
+
+
+async def test_send_keys_does_not_touch_recycler_marker(monkeypatch):
+    """Only send_text refreshes the marker — send_keys (Escape/Enter/digits/
+    y-n) is control input, not the kind of activity the recycler should
+    treat as a live conversation continuing."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_keys(agent, ["Escape"])
+
+    assert not any("touch" in c for c in calls)
 
 
 async def test_send_text_docker_dash_prefixed_single_line_gets_double_dash(monkeypatch):
@@ -217,6 +261,28 @@ async def test_send_text_boss_sends_bytes_over_ws(monkeypatch):
 
     assert fake_client.connected_urls == ["ws://host.docker.internal:7682/"]
     assert fake_client.sent == [b"deploy the thing", b"\r"]
+
+
+async def test_send_text_boss_does_not_touch_recycler_marker(monkeypatch):
+    """The recycler marker lives inside the cli-bridge container's
+    filesystem — Boss has no docker exec path at all, so send_text must
+    never attempt a docker-exec touch for it."""
+    from app.services import agent_chat_input
+
+    fake_client = _FakeWSClient()
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+
+    docker_calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        docker_calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.send_text(agent, "deploy the thing")
+
+    assert docker_calls == []
 
 
 async def test_send_text_boss_sends_text_then_enter_as_separate_frames_with_delay(monkeypatch):

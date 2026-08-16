@@ -28,6 +28,12 @@ Every other host-runtime agent (Hermes, Jarvis, ...) has no input channel at
 all — ``InputNotSupportedError`` for the router to turn into 409
 ``{"reason": "input_not_supported"}``, mirroring A2's hard privacy/capability
 rule that only cli-bridge agents and Boss get a live session surface.
+
+``send_text`` additionally touches the cli-bridge agent-recycler's idle
+marker (``/home/agent/.claude/last-task.marker``) — the fleet's recycler
+kills idle claude sessions every ~5-8 minutes based on that file's mtime, and
+chat activity was otherwise invisible to it, killing chat conversations with
+idle agents mid-conversation (live-gate finding, fix round 3).
 """
 from __future__ import annotations
 
@@ -63,6 +69,11 @@ _BOSS_WS_URL = "ws://host.docker.internal:7682/"
 _BRACKETED_PASTE_START = "\x1b[200~"
 _BRACKETED_PASTE_END = "\x1b[201~"
 
+# agent-recycler idle-detection marker (services/agent_recycler.py) — touched
+# on every send_text() to a cli-bridge agent so chat activity counts as
+# activity, not just task dispatch.
+_RECYCLER_MARKER_PATH = "/home/agent/.claude/last-task.marker"
+
 # Gap between the text frame and the Enter frame on the Boss WS path. Sending
 # text + "\r" as ONE frame (or as two frames back-to-back with no gap) makes
 # the Claude TUI's paste detection swallow the Enter as part of the pasted
@@ -95,6 +106,18 @@ async def _run_docker_exec(argv: list[str]) -> None:
             "chat input: docker exec failed (rc=%s): %s",
             result.returncode, result.stderr.decode(errors="replace"),
         )
+
+
+async def _touch_recycler_marker(slug: str) -> None:
+    """Refreshes the agent-recycler's idle-detection marker for a cli-bridge
+    agent. The recycler kills idle claude sessions every ~5-8 minutes based
+    on this file's mtime; chat activity was otherwise invisible to it, so an
+    idle agent could get recycled mid chat-conversation (live-gate finding).
+    Fire-and-forget via ``_run_docker_exec`` — a failed touch (agent
+    container gone, path missing) must never block the actual keystroke."""
+    await _run_docker_exec(
+        ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "touch", _RECYCLER_MARKER_PATH]
+    )
 
 
 async def _send_boss_bytes(*payloads: bytes, delay_before_last: float = 0.0) -> None:
@@ -140,7 +163,9 @@ async def send_text(agent, text: str) -> None:
     as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
     a bracketed-paste sequence (so the target CLI treats it as one paste
     instead of one line per Enter-triggered send-keys call) followed by a
-    separate ``Enter`` to submit it."""
+    separate ``Enter`` to submit it. For cli-bridge agents, also refreshes
+    the agent-recycler's idle marker (see ``_touch_recycler_marker``) — chat
+    input is real activity and must not let an idle agent get recycled."""
     kind = _target_kind(agent)
     slug = agent.slug
 
@@ -151,6 +176,7 @@ async def send_text(agent, text: str) -> None:
             await _run_docker_exec(_docker_argv(slug, "Enter"))
         else:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
+        await _touch_recycler_marker(slug)
         return
 
     # kind == "boss" — text and its submitting Enter MUST be separate frames
