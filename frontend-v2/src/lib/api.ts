@@ -819,6 +819,40 @@ export const api = {
       ),
   },
 
+  // ── Sessions Chat (routers/agent_chat.py) ────────────────────────────────────
+  // Live chat view over an agent's Claude Code transcript. 404 body on
+  // history/stream is `{"reason":"no_transcript"}` (NoTranscriptError,
+  // chatTypes.ts) — callers check `err instanceof Error` + message parsing,
+  // same as every other `request()` 404 in this file (no typed error class).
+  chat: {
+    history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
+      const qs = new URLSearchParams();
+      if (params?.limit != null) qs.set("limit", String(params.limit));
+      if (params?.beforeUuid) qs.set("before_uuid", params.beforeUuid);
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      return request<import("./chatTypes").ChatHistoryResponse>(
+        `/api/v1/agents/${agentId}/chat/history${suffix}`,
+      );
+    },
+    // Normalizes CRLF/CR to LF before sending — the backend's C0 control-char
+    // filter 422s on a bare \r (agent_chat.py's _DISALLOWED_CONTROL_CHARS),
+    // which a pasted Windows-origin clipboard or a textarea's native line
+    // endings can easily carry.
+    sendText: (agentId: string, text: string) =>
+      request<void>(`/api/v1/agents/${agentId}/chat/input`, {
+        method: "POST",
+        body: JSON.stringify({ text: text.replace(/\r\n/g, "\n").replace(/\r/g, "\n") }),
+      }),
+    sendKeys: (agentId: string, keys: string[]) =>
+      request<void>(`/api/v1/agents/${agentId}/chat/keys`, {
+        method: "POST",
+        body: JSON.stringify({ keys }),
+      }),
+    diff: (agentId: string, scope: "worktree" | "last-commit" = "worktree") =>
+      request<CommitDiff>(`/api/v1/agents/${agentId}/chat/diff?scope=${scope}`),
+    streamUrl: (agentId: string) => sseUrls.chat(agentId),
+  },
+
   // ── Reference Files (ADR-054) ────────────────────────────────────────────────
   // Operator-uploaded example/asset files for tasks & projects. Agents read
   // them directly — their paths flow into the dispatch directive automatically.
@@ -2097,4 +2131,5 @@ export const sseUrls = {
   memory: (boardId: string) => `${BASE_URL}/api/v1/boards/${boardId}/memory/stream`,
   schedule: () => `${BASE_URL}/api/v1/schedule/stream`,
   meetings: () => `${BASE_URL}/api/v1/meetings/stream`,
+  chat: (agentId: string) => `${BASE_URL}/api/v1/agents/${agentId}/chat/stream`,
 };
