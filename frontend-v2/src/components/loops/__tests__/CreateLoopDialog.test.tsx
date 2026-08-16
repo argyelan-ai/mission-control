@@ -79,6 +79,19 @@ describe("CreateLoopDialog", () => {
     expect(screen.getByText(/max 10 rounds/).textContent).toContain("budget $5");
   });
 
+  it("gives the source row a keyboard focus ring on behalf of its sr-only radio", async () => {
+    renderDialog();
+
+    const radio = await screen.findByRole("radio", { name: /Markdown list/ });
+    // jsdom cannot evaluate :focus-visible, so assert the CSS contract: the
+    // row div carries the has-[.sr-only:focus-visible] outline utilities that
+    // light up when the hidden radio gains keyboard focus.
+    const row = radio.closest("div.flex.flex-col.rounded-md") as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.className).toContain("has-[.sr-only:focus-visible]:outline-2");
+    expect(row.className).toContain("has-[.sr-only:focus-visible]:outline-[var(--color-accent)]");
+  });
+
   it("clears a stale source error when the source changes", async () => {
     renderDialog();
 

@@ -268,15 +268,17 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
               const Icon = meta.icon;
               const selected = form.backlogSource === src;
               return (
-                <label
+                <div
                   key={src}
-                  className="flex flex-col rounded-md px-3 py-2.5 cursor-pointer transition-colors"
+                  // The radio is sr-only, so the row carries the keyboard focus
+                  // ring on its behalf (same ring as the global :focus-visible).
+                  className="flex flex-col rounded-md px-3 py-2.5 transition-colors has-[.sr-only:focus-visible]:outline-2 has-[.sr-only:focus-visible]:outline-offset-2 has-[.sr-only:focus-visible]:outline-[var(--color-accent)]"
                   style={{
                     background: selected ? C.accentSubtle : C.bgSurface,
                     border: `1px solid ${selected ? C.borderAccent : C.border}`,
                   }}
                 >
-                  <span className="flex items-start gap-2.5">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
                     <input
                       type="radio"
                       name="loop-backlog-source"
@@ -302,9 +304,10 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                         {t(meta.descKey)}
                       </span>
                     </span>
-                  </span>
+                  </label>
 
-                  {/* Source-specific input, nested in the selected row */}
+                  {/* Source-specific input, nested in the selected row (as a
+                      sibling of the label — one label, one control) */}
                   {selected && src === "markdown" && (
                     <span className="mt-2.5 block pl-6">
                       <textarea
@@ -350,7 +353,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                       />
                     </span>
                   )}
-                </label>
+                </div>
               );
             })}
           </div>
