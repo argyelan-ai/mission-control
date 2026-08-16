@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 
-// Task #20: the Sessions page restores the last-viewed agent from
-// localStorage, with ?agent=<id> (from the Agents list "open session"
-// button) taking precedence.
+// Task #20 (pre-chat) / Task B6 (chat rebuild): the Sessions page restores
+// the last-viewed agent from localStorage, with ?agent=<id> (from the
+// Agents list "open session" button) taking precedence.
 const nav = vi.hoisted(() => ({ searchParamsString: "" }));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.searchParamsString),
@@ -27,7 +28,41 @@ vi.mock("@/hooks/useTerminalRemountSignal", () => ({
 }));
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
-vi.mock("@/components/shared/BrowserLiveView", () => ({ BrowserLiveView: () => null }));
+vi.mock("@/components/shared/BrowserLiveView", () => ({
+  BrowserLiveView: () => <div data-testid="browser-live-view-stub">Browser-Panel</div>,
+}));
+
+// TerminalPanel pulls in the real xterm/WebSocket/scaling machinery, all
+// irrelevant to "does the panel rail switch which panel is shown" — a thin
+// stub keeps this suite hermetic (that machinery is exercised elsewhere via
+// TerminalPanel's own move-not-rewrite from the pre-chat page).
+vi.mock("@/components/chat/TerminalPanel", async () => {
+  const actual = await vi.importActual<typeof import("@/components/chat/TerminalPanel")>(
+    "@/components/chat/TerminalPanel"
+  );
+  return {
+    ...actual,
+    TerminalPanel: ({ agent }: { agent: { name: string } }) => (
+      <div data-testid="terminal-panel-stub">Terminal-Panel: {agent.name}</div>
+    ),
+  };
+});
+
+// ChatView owns its own transcript fetch/SSE plumbing (useChatStream) —
+// unrelated to sidebar restore/persist behavior and would otherwise fire
+// unmocked network calls (api.chat.history) plus reach for EventSource,
+// which jsdom doesn't implement. A thin stub keeps this suite hermetic; the
+// chat rendering itself is covered by ChatView.test.tsx.
+vi.mock("@/components/chat/ChatView", () => ({
+  ChatView: ({ agent }: { agent: { name: string } | null }) => (
+    <div data-testid="chat-view-stub">{agent ? `Chat: ${agent.name}` : "Chat: none"}</div>
+  ),
+  DETAIL_LEVELS: [
+    { key: "compact", label: "Kompakt" },
+    { key: "normal", label: "Normal" },
+    { key: "verbose", label: "Ausführlich" },
+  ],
+}));
 
 import SessionsPage from "../page";
 
@@ -98,6 +133,19 @@ function renderPage() {
   );
 }
 
+// The agent's name can legitimately appear twice (the desktop sidebar's
+// list item AND the mobile sheet's collapsed-toggle label, both mounted
+// regardless of viewport in jsdom) — this resolves to the actual
+// `role="option"` row, the one carrying `aria-selected`.
+function findOptionRow(name: string): HTMLElement {
+  const matches = screen.getAllByText(name);
+  const row = matches
+    .map((el) => el.closest('[role="option"]'))
+    .find((el): el is HTMLElement => el !== null);
+  if (!row) throw new Error(`No [role="option"] row found for "${name}"`);
+  return row;
+}
+
 describe("SessionsPage — last-selected-agent restore", () => {
   // jsdom in this environment has no working localStorage (every other
   // *.test.tsx in the repo hits the same gap and stubs its own — see
@@ -135,12 +183,10 @@ describe("SessionsPage — last-selected-agent restore", () => {
     localStorage.setItem("mc-sessions-last-agent", "agent-2");
     renderPage();
 
-    // Selected row's name renders in the primary text color; unselected rows
-    // use the muted secondary color (see AgentList row styling in page.tsx).
-    const selectedName = await screen.findByText("Agent Two");
-    expect(selectedName).toHaveStyle({ color: "var(--color-text-primary)" });
-    const otherName = screen.getByText("Agent One");
-    expect(otherName).not.toHaveStyle({ color: "var(--color-text-primary)" });
+    await screen.findAllByText("Agent Two");
+    const selectedRow = findOptionRow("Agent Two");
+    expect(selectedRow).toHaveAttribute("aria-selected", "true");
+    expect(findOptionRow("Agent One")).toHaveAttribute("aria-selected", "false");
   });
 
   it("prefers ?agent=<id> over the stored value", async () => {
@@ -151,17 +197,108 @@ describe("SessionsPage — last-selected-agent restore", () => {
     nav.searchParamsString = "agent=agent-2";
     renderPage();
 
-    const selectedName = await screen.findByText("Agent Two");
-    expect(selectedName).toHaveStyle({ color: "var(--color-text-primary)" });
-    const otherName = screen.getByText("Agent One");
-    expect(otherName).not.toHaveStyle({ color: "var(--color-text-primary)" });
+    await screen.findAllByText("Agent Two");
+    expect(findOptionRow("Agent Two")).toHaveAttribute("aria-selected", "true");
+    expect(findOptionRow("Agent One")).toHaveAttribute("aria-selected", "false");
   });
 
   it("persists the selection to localStorage after picking an agent from the list", async () => {
     renderPage();
-    const row = await screen.findByText("Agent Two");
+    await screen.findAllByText("Agent Two");
+    const row = findOptionRow("Agent Two");
     fireEvent.click(row);
 
     await waitFor(() => expect(localStorage.getItem("mc-sessions-last-agent")).toBe("agent-2"));
+  });
+
+  it("shows the mocked chat view for the selected agent", async () => {
+    localStorage.setItem("mc-sessions-last-agent", "agent-2");
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-stub")).toHaveTextContent("Chat: Agent Two")
+    );
+  });
+});
+
+describe("SessionsPage — panel rail switches the panel slot's content", () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    nav.searchParamsString = "";
+
+    store = {};
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store[k] ?? null,
+        setItem: (k: string, v: string) => { store[k] = v; },
+        removeItem: (k: string) => { delete store[k]; },
+        clear: () => { store = {}; },
+        length: 0,
+        key: () => null,
+      },
+    });
+
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("no panel is open by default — the panel slot is absent", async () => {
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("browser-live-view-stub")).not.toBeInTheDocument();
+    expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
+  });
+
+  it("selecting Terminal opens the terminal panel for the selected agent", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(screen.getByRole("button", { name: "Terminal" }));
+    expect(await screen.findByTestId("terminal-panel-stub")).toHaveTextContent("Terminal-Panel: Agent One");
+  });
+
+  it("switching from Terminal to Browser replaces the panel content (not both)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(screen.getByRole("button", { name: "Terminal" }));
+    await screen.findByTestId("terminal-panel-stub");
+
+    await user.click(screen.getByRole("button", { name: "Browser" }));
+    expect(await screen.findByTestId("browser-live-view-stub")).toBeInTheDocument();
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+  });
+
+  it("selecting Diff shows the Phase C placeholder", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(screen.getByRole("button", { name: "Diff" }));
+    expect(await screen.findByText("Diff-Ansicht kommt in Teil 3.")).toBeInTheDocument();
+  });
+
+  it("clicking the already-active panel icon collapses the panel", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(screen.getByRole("button", { name: "Terminal" }));
+    await screen.findByTestId("terminal-panel-stub");
+
+    await user.click(screen.getByRole("button", { name: "Terminal" }));
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
   });
 });

@@ -109,3 +109,13 @@ export interface ChatHistoryResponse {
 export interface NoTranscriptError {
   reason: "no_transcript";
 }
+
+/** `request()` (lib/api.ts) has no typed 404 path — it throws a plain
+ *  `Error` whose message embeds the raw response body (`API 404: {"reason":
+ *  "no_transcript"}`). This checks for that shape so callers (ChatView) can
+ *  fall back to the no-transcript empty state even if the sidebar's
+ *  `hasTranscript` derivation was wrong or stale (belt and braces — the
+ *  backend's `transcript_allowed` gate is the actual source of truth). */
+export function isNoTranscriptError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("no_transcript");
+}
