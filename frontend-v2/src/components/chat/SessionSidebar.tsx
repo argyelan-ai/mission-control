@@ -236,13 +236,17 @@ export function SessionSidebar({
         <div role="listbox" aria-label="Sessions" className="flex flex-col items-center gap-1 w-full">
           {agents.map((agent) => {
             const selected = agent.id === selectedId;
+            // Icon-only strip has no room for the open rail's "Terminal"
+            // chip — the same information (no transcript, terminal-only
+            // agent) folds into the title instead, never a visible chip.
+            const title = hasTranscript(agent.id) ? agent.name : `${agent.name} — nur Terminal`;
             return (
               <button
                 key={agent.id}
                 type="button"
                 role="option"
                 aria-selected={selected}
-                title={agent.name}
+                title={title}
                 onClick={() => onSelect(agent.id)}
                 className="relative flex items-center justify-center w-10 h-10 rounded-md shrink-0"
                 style={{

@@ -354,6 +354,30 @@ describe("SessionSidebar", () => {
       expect(row).toHaveAttribute("aria-selected", "true");
     });
 
+    it("never renders the open-rail's Terminal chip when collapsed, even for a no-transcript agent — the info folds into the title instead", () => {
+      const hermes = mkAgent({ id: "hermes-1", name: "Hermes" });
+      const cody = mkAgent({ id: "cody-1", name: "Cody" });
+      render(
+        <SessionSidebar
+          agents={[hermes, cody]}
+          tasks={[]}
+          projects={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          variant="rail"
+          hasTranscript={(id) => id !== "hermes-1"}
+          collapsed
+          onToggleCollapse={() => {}}
+        />
+      );
+      // No visible "Terminal" text anywhere — icon-only, full stop.
+      expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
+      // The no-transcript info still reaches the user, via the title
+      // attribute (hover/a11y name) rather than a chip.
+      expect(screen.getByRole("option", { name: "Hermes — nur Terminal" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Cody" })).toBeInTheDocument();
+    });
+
     it("clicking the collapse chevron (open rail) calls onToggleCollapse", async () => {
       const onToggleCollapse = vi.fn();
       const user = userEvent.setup();
