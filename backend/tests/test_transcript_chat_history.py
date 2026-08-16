@@ -489,6 +489,7 @@ def test_read_history_usage_event_source_cli_when_statusline_fresh(tmp_path):
         json.dumps(
             {
                 "context_window": {
+                    "context_window_size": 1_000_000,
                     "used_percentage": 37.5,
                     "current_usage": {
                         "input_tokens": 10,
@@ -506,6 +507,10 @@ def test_read_history_usage_event_source_cli_when_statusline_fresh(tmp_path):
 
     assert usage["usedPct"] == 37.5
     assert usage["source"] == "cli"
+    # contextWindow_size straight from the CLI's own state OVERRIDES the
+    # settings.context_windows estimate parse_transcript_line stamped
+    # earlier (model "claude-sonnet-4-6" -> 200_000) — ground truth wins.
+    assert usage["contextWindow"] == 1_000_000
 
 
 def test_read_history_usage_event_source_estimate_when_no_statusline_state(tmp_path):

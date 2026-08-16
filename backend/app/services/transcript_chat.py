@@ -511,15 +511,19 @@ def _claude_config_root(session_path: Path) -> Path:
 def read_statusline_state(claude_config_root: Path, session_id: str) -> dict[str, Any] | None:
     """Reads ``<claude_config_root>/statusline-state/<session_id>.json`` —
     the file docker/shared/statusline-mc.sh writes on every Claude Code
-    prompt for this session. Returns ``{"usedPct": float, "usedTokens": int}``
-    (``usedTokens`` = the sum of the four ``current_usage`` fields Claude
-    Code reports) when the file exists, was written less than
-    ``_STATUSLINE_FRESH_SECONDS`` ago (older means no CLI turn has run
-    recently enough to trust it — the agent may have switched sessions or
-    the script may be broken), and parses as the expected shape. ``None`` on
-    any failure — missing file (most agents, always for Boss), stale mtime,
-    or malformed JSON. Never raises; the caller falls back to the static
-    ``resolve_context_window`` estimate."""
+    prompt for this session. Returns ``{"usedPct": float, "usedTokens": int,
+    "contextWindowSize": int}`` (``usedTokens`` = the sum of the four
+    ``current_usage`` fields Claude Code reports; ``contextWindowSize`` =
+    ``context_window.context_window_size``, the CLI's own live context-window
+    size — present even before the session's first turn, so it's ground
+    truth rather than the ``settings.context_windows`` model->size guess)
+    when the file exists, was written less than ``_STATUSLINE_FRESH_SECONDS``
+    ago (older means no CLI turn has run recently enough to trust it — the
+    agent may have switched sessions or the script may be broken), and
+    parses as the expected shape. ``None`` on any failure — missing file
+    (most agents, always for Boss), stale mtime, or malformed JSON. Never
+    raises; the caller falls back to the static ``resolve_context_window``
+    estimate."""
     state_file = claude_config_root / "statusline-state" / f"{session_id}.json"
     try:
         mtime = state_file.stat().st_mtime
@@ -537,6 +541,7 @@ def read_statusline_state(claude_config_root: Path, session_id: str) -> dict[str
         ctx = data["context_window"]
         usage = ctx["current_usage"]
         used_pct = float(ctx["used_percentage"])
+        context_window_size = int(ctx["context_window_size"])
         used_tokens = int(
             (usage.get("input_tokens") or 0)
             + (usage.get("output_tokens") or 0)
@@ -545,7 +550,11 @@ def read_statusline_state(claude_config_root: Path, session_id: str) -> dict[str
         )
     except (KeyError, TypeError, ValueError):
         return None
-    return {"usedPct": used_pct, "usedTokens": used_tokens}
+    return {
+        "usedPct": used_pct,
+        "usedTokens": used_tokens,
+        "contextWindowSize": context_window_size,
+    }
 
 
 def _stamp_usage_source(ev: dict[str, Any], claude_config_root: Path, session_id: str) -> None:
@@ -553,11 +562,15 @@ def _stamp_usage_source(ev: dict[str, Any], claude_config_root: Path, session_id
     preferring fresh statusline state (source ``"cli"``) over the static
     ``contextWindow`` estimate parse_transcript_line already stamped
     (source ``"estimate"``, ``usedPct`` left ``None`` for the frontend to
-    compute from ``contextWindow`` itself)."""
+    compute from ``contextWindow`` itself). When statusline state is fresh,
+    its own ``context_window_size`` also OVERRIDES the ``contextWindow``
+    estimate — the CLI reports its actual context window directly, no need
+    to guess from the model name."""
     state = read_statusline_state(claude_config_root, session_id)
     if state is not None:
         ev["usedPct"] = state["usedPct"]
         ev["source"] = "cli"
+        ev["contextWindow"] = state["contextWindowSize"]
     else:
         ev["usedPct"] = None
         ev["source"] = "estimate"

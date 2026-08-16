@@ -312,6 +312,7 @@ async def test_tailer_usage_event_source_cli_when_statusline_fresh(manager, fake
         json.dumps(
             {
                 "context_window": {
+                    "context_window_size": 1_000_000,
                     "used_percentage": 61.0,
                     "current_usage": {
                         "input_tokens": 1,
@@ -337,6 +338,9 @@ async def test_tailer_usage_event_source_cli_when_statusline_fresh(manager, fake
     usage = next(d for _, _, d in fake_broadcast if d["kind"] == "usage")
     assert usage["usedPct"] == 61.0
     assert usage["source"] == "cli"
+    # CLI's own context_window_size (1M) overrides the model-map estimate
+    # (claude-sonnet-4-6 -> 200_000) — ground truth wins over the guess.
+    assert usage["contextWindow"] == 1_000_000
 
 
 async def test_tailer_usage_event_source_estimate_without_statusline_state(manager, fake_broadcast, tmp_path):

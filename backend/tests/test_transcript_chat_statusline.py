@@ -29,6 +29,7 @@ def _write_state(state_dir: Path, session_id: str, payload: dict, *, age_seconds
 _VALID_PAYLOAD = {
     "session_id": "sess1",
     "context_window": {
+        "context_window_size": 1_000_000,
         "used_percentage": 55.25,
         "current_usage": {
             "input_tokens": 100,
@@ -45,7 +46,11 @@ def test_read_statusline_state_fresh_returns_pct_and_tokens(tmp_path):
 
     result = read_statusline_state(tmp_path, "sess1")
 
-    assert result == {"usedPct": 55.25, "usedTokens": 1050}  # 100+40+900+10
+    assert result == {
+        "usedPct": 55.25,
+        "usedTokens": 1050,  # 100+40+900+10
+        "contextWindowSize": 1_000_000,
+    }
 
 
 def test_read_statusline_state_stale_returns_none(tmp_path):
@@ -95,6 +100,24 @@ def test_read_statusline_state_missing_current_usage_key_returns_none(tmp_path):
     assert read_statusline_state(tmp_path, "sess1") is None
 
 
+def test_read_statusline_state_missing_context_window_size_key_returns_none(tmp_path):
+    """context_window_size is required just like used_percentage/current_usage
+    — a state file predating this field (or a broken write) must fall back
+    to the static estimate rather than surface a half-parsed result."""
+    _write_state(
+        tmp_path / "statusline-state",
+        "sess1",
+        {
+            "context_window": {
+                "used_percentage": 10.0,
+                "current_usage": {"input_tokens": 1},
+            }
+        },
+    )
+
+    assert read_statusline_state(tmp_path, "sess1") is None
+
+
 def test_read_statusline_state_non_dict_json_returns_none(tmp_path):
     state_dir = tmp_path / "statusline-state"
     state_dir.mkdir()
@@ -122,12 +145,18 @@ def test_read_statusline_state_missing_usage_fields_default_to_zero(tmp_path):
     _write_state(
         tmp_path / "statusline-state",
         "sess1",
-        {"context_window": {"used_percentage": 1.0, "current_usage": {"input_tokens": 5}}},
+        {
+            "context_window": {
+                "context_window_size": 200_000,
+                "used_percentage": 1.0,
+                "current_usage": {"input_tokens": 5},
+            }
+        },
     )
 
     result = read_statusline_state(tmp_path, "sess1")
 
-    assert result == {"usedPct": 1.0, "usedTokens": 5}
+    assert result == {"usedPct": 1.0, "usedTokens": 5, "contextWindowSize": 200_000}
 
 
 def test_claude_config_root_three_levels_above_session_file():
