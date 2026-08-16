@@ -62,6 +62,25 @@ another line with no markers at all
 totally unrelated tool output
 """
 
+# Real captured pane from a live /model picker (verified on the "freecode"
+# agent during A6's live-gate check) — a menu with no question line at all,
+# just a plain header/description above the option list and a footer hint
+# below it instead. Neutral UI chrome, no session content.
+MODEL_PICKER_PROMPT = """\
+   Select model
+   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.
+
+     1. Default (recommended)     Sonnet 5 · Efficient for routine tasks
+   ❯ 2. Sonnet ✔                  Sonnet 5 · Efficient for routine tasks
+     3. Opus                      Opus 5 · Best for everyday, complex tasks
+     4. Haiku                     Haiku 4.5 · Fastest for quick answers
+     5. Qwen/Qwen3.6-35B-A3B-FP8  Detected from Local OpenAI-compatible
+
+   ● High effort (default) ←/→ to adjust
+
+   Enter to set as default · s to use this session only · Esc to cancel
+"""
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # parse_pane_state — heuristic priority order
@@ -89,6 +108,27 @@ def test_permission_prompt_plan_approval():
         {"key": "1", "label": "Yes, and auto-accept edits"},
         {"key": "2", "label": "Yes, manually approve edits"},
         {"key": "3", "label": "No, keep planning"},
+    ]
+
+
+def test_permission_prompt_model_picker_menu_no_question_line():
+    # Live-gate finding (fix round 1): a menu/picker has no "?"/"Do you
+    # want" question — just a header + description above the options and a
+    # footer hint ("Enter to ... Esc") below. Rule 1b must still classify
+    # this as permission_prompt, using the short header ("Select model")
+    # over the long description line directly below it as the question, and
+    # truncating each option's right-aligned description column off the
+    # label.
+    result = parse_pane_state(MODEL_PICKER_PROMPT, transcript_active=True)
+
+    assert result["status"] == "permission_prompt"
+    assert result["prompt"]["question"] == "Select model"
+    assert result["prompt"]["options"] == [
+        {"key": "1", "label": "Default (recommended)"},
+        {"key": "2", "label": "Sonnet ✔"},
+        {"key": "3", "label": "Opus"},
+        {"key": "4", "label": "Haiku"},
+        {"key": "5", "label": "Qwen/Qwen3.6-35B-A3B-FP8"},
     ]
 
 
