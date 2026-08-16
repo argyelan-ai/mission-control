@@ -39,7 +39,7 @@ export function ToolRow({
       >
         <Icon size={13} className="shrink-0" style={{ color: C.textMuted }} />
         <span
-          className="text-[13px] font-mono truncate"
+          className="text-xs font-mono truncate"
           style={{ color: isError ? STATUS_TEXT.error : C.textSecondary }}
         >
           {ev.title}

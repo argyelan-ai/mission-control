@@ -177,7 +177,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   key={cmd.command}
                   value={cmd.command}
                   onSelect={() => selectCommand(cmd.command)}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-sm text-[13px] cursor-pointer font-mono data-[selected=true]:bg-[var(--color-accent-subtle)]"
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-sm text-xs cursor-pointer font-mono data-[selected=true]:bg-[var(--color-accent-subtle)]"
                 >
                   <span style={{ color: C.accent }}>{cmd.command}</span>
                   <span className="text-[10px] font-medium" style={{ color: C.textMuted }}>
@@ -197,7 +197,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         onKeyDown={handleKeyDown}
         rows={1}
         placeholder="Nachricht an den Agenten…"
-        className="w-full resize-none bg-transparent outline-none text-[13px] font-mono"
+        className="w-full resize-none bg-transparent outline-none text-xs font-mono"
         style={{ color: C.textPrimary, maxHeight: MAX_ROWS * LINE_HEIGHT_PX }}
       />
 

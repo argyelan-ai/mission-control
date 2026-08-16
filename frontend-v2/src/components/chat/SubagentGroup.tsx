@@ -43,7 +43,7 @@ function renderChildEvent(ev: ChatEvent) {
       return <ThinkingRow key={ev.uuid} ev={ev} detailLevel="normal" />;
     case "command":
       return (
-        <div key={ev.uuid} className="w-full px-4 py-1.5 text-[13px] font-mono" style={{ color: C.textMuted }}>
+        <div key={ev.uuid} className="w-full px-4 py-1.5 text-xs font-mono" style={{ color: C.textMuted }}>
           {ev.command}
         </div>
       );
