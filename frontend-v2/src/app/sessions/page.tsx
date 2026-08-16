@@ -11,8 +11,10 @@ import { C } from "@/lib/colors";
 import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
+import { DiffPanel } from "@/components/chat/DiffPanel";
 import { PanelRail, type PanelKind } from "@/components/chat/PanelRail";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
+import type { StateEvent } from "@/lib/chatTypes";
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
@@ -132,6 +134,10 @@ function SessionsPageContent() {
   // re-trigger the auto-select effect below and snap back).
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
   const [activePanel, setActivePanelState] = useState<PanelKind | null>(null);
+  // Chat stream status, mirrored up from ChatView's own useChatStream
+  // subscription (ChatView.onStatusChange) — drives DiffPanel's refreshHot
+  // without opening a second SSE connection just to read one field.
+  const [chatStatus, setChatStatus] = useState<StateEvent["status"] | null>(null);
   const [detailLevel, setDetailLevelState] = useState<DetailLevel>("normal");
   const [centerView, setCenterViewState] = useState<CenterView>("chat");
   const [sidebarCollapsed, setSidebarCollapsedState] = useState(false);
@@ -325,6 +331,7 @@ function SessionsPageContent() {
                 centerView={centerView}
                 onCenterViewChange={setCenterView}
                 terminalRemountTick={selected ? restartTick[selected.id] ?? 0 : 0}
+                onStatusChange={setChatStatus}
               />
             )}
           </div>
@@ -359,10 +366,8 @@ function SessionsPageContent() {
                 </button>
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {activePanel === "diff" && (
-                  <div className="flex flex-1 items-center justify-center text-[13px] px-6 text-center" style={{ color: C.textMuted }}>
-                    Diff-Ansicht kommt in Teil 3.
-                  </div>
+                {activePanel === "diff" && selected && (
+                  <DiffPanel agentId={selected.id} refreshHot={chatStatus === "working"} />
                 )}
                 {activePanel === "browser" && <BrowserLiveView />}
               </div>

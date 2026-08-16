@@ -32,6 +32,16 @@ vi.mock("@/components/shared/BrowserLiveView", () => ({
   BrowserLiveView: () => <div data-testid="browser-live-view-stub">Browser-Panel</div>,
 }));
 
+// DiffPanel owns its own TanStack Query fetch (api.chat.diff) — unrelated to
+// "does the panel rail switch which panel is shown," which is what this
+// suite tests. A thin stub keeps it hermetic; DiffPanel's own scope-switch/
+// polling/empty-state behavior is covered by DiffPanel.test.tsx.
+vi.mock("@/components/chat/DiffPanel", () => ({
+  DiffPanel: ({ agentId }: { agentId: string }) => (
+    <div data-testid="diff-panel-stub">Diff-Panel: {agentId}</div>
+  ),
+}));
+
 // TerminalPanel pulls in the real xterm/WebSocket/scaling machinery, all
 // irrelevant to "does the panel rail switch which panel is shown" — a thin
 // stub keeps this suite hermetic (that machinery is exercised elsewhere via
@@ -299,7 +309,7 @@ describe("SessionsPage — panel rail switches the panel slot's content (Diff/Br
 
     expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("browser-live-view-stub")).not.toBeInTheDocument();
-    expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diff-panel-stub")).not.toBeInTheDocument();
   });
 
   it("selecting Browser opens the browser panel", async () => {
@@ -317,11 +327,11 @@ describe("SessionsPage — panel rail switches the panel slot's content (Diff/Br
     await screen.findAllByText("Agent One");
 
     await user.click(screen.getByRole("button", { name: "Diff" }));
-    await screen.findByText("Diff-Ansicht kommt in Teil 3.");
+    await screen.findByTestId("diff-panel-stub");
 
     await user.click(screen.getByRole("button", { name: "Browser" }));
     expect(await screen.findByTestId("browser-live-view-stub")).toBeInTheDocument();
-    expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diff-panel-stub")).not.toBeInTheDocument();
   });
 
   it("clicking the already-active panel icon collapses the panel", async () => {
@@ -330,10 +340,10 @@ describe("SessionsPage — panel rail switches the panel slot's content (Diff/Br
     await screen.findAllByText("Agent One");
 
     await user.click(screen.getByRole("button", { name: "Diff" }));
-    await screen.findByText("Diff-Ansicht kommt in Teil 3.");
+    await screen.findByTestId("diff-panel-stub");
 
     await user.click(screen.getByRole("button", { name: "Diff" }));
-    expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diff-panel-stub")).not.toBeInTheDocument();
   });
 });
 

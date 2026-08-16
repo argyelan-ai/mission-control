@@ -24,7 +24,7 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
 import { isNoTranscriptError } from "@/lib/chatTypes";
-import type { TimelineChatEvent } from "@/lib/chatTypes";
+import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
@@ -116,6 +116,12 @@ interface ChatViewProps {
   /** Bumped by the parent page's `useTerminalRemountSignal` (backend-driven
    *  runtime switch) to force-remount just the embedded TerminalPanel. */
   terminalRemountTick?: number;
+  /** Fires whenever the chat stream's `state.status` changes (including to
+   *  `null` while there's no stream yet). Lets the parent page derive a
+   *  plain boolean like DiffPanel's `refreshHot` (status === "working")
+   *  without duplicating `useChatStream`'s SSE connection just to read one
+   *  field — ChatView already owns the one subscription for this agent. */
+  onStatusChange?: (status: StateEvent["status"] | null) => void;
 }
 
 export function ChatView({
@@ -126,12 +132,18 @@ export function ChatView({
   centerView,
   onCenterViewChange,
   terminalRemountTick = 0,
+  onStatusChange,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
 
   const streamEnabled = hasTranscript && !!agent;
   const stream = useChatStream(agent?.id ?? null, streamEnabled);
+
+  const streamStatus = stream.state?.status ?? null;
+  useEffect(() => {
+    onStatusChange?.(streamStatus);
+  }, [streamStatus, onStatusChange]);
 
   // Belt and braces: even if the sidebar thought this agent had a
   // transcript, a runtime 404 from the history fetch forces terminal mode
