@@ -3,12 +3,33 @@
 import { useEffect, useRef, useState } from "react";
 import { Command } from "cmdk";
 import { Square, Send, ChevronDown } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, STATUS } from "@/lib/colors";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
 
 const MAX_ROWS = 8;
 const LINE_HEIGHT_PX = 18;
+
+// Desktop-app-style context ring — compact circular indicator instead of a
+// bar, per the operator's ask to match the Claude Desktop app's look.
+const RING_SIZE = 18;
+const RING_STROKE = 2;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+type RingThreshold = "normal" | "warning" | "error";
+
+function ringThreshold(pct: number): RingThreshold {
+  if (pct >= 90) return "error";
+  if (pct >= 75) return "warning";
+  return "normal";
+}
+
+function ringColor(threshold: RingThreshold): string {
+  if (threshold === "error") return STATUS.error;
+  if (threshold === "warning") return STATUS.warning;
+  return C.textDim;
+}
 
 interface ComposerProps {
   agentId: string;
@@ -86,7 +107,36 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
   const modelLabel = usage?.model ?? "—";
   // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
   const win = usage?.contextWindow;
-  const fillRatio = usage && win ? Math.min(usage.inputTokens / win, 1) : 0;
+  const hasWin = typeof win === "number" && win > 0;
+
+  // CLI ground truth wins when the backend has it; otherwise fall back to
+  // our own tokens/window estimate; otherwise there's nothing honest to show.
+  const hasCliPct = typeof usage?.usedPct === "number";
+  const fallbackPct =
+    usage && hasWin ? Math.min((usage.inputTokens / win) * 100, 100) : null;
+  const pct = hasCliPct ? (usage!.usedPct as number) : fallbackPct;
+  const pctSource: "cli" | "estimate" | null = hasCliPct
+    ? usage?.source === "estimate"
+      ? "estimate"
+      : "cli"
+    : fallbackPct != null
+      ? "estimate"
+      : null;
+
+  const ringThresholdValue = pct != null ? ringThreshold(pct) : "normal";
+  const ringStrokeColor = ringColor(ringThresholdValue);
+  const ringOffset =
+    pct != null ? RING_CIRCUMFERENCE * (1 - Math.min(Math.max(pct, 0), 100) / 100) : RING_CIRCUMFERENCE;
+
+  const tokenDetail =
+    usage && hasWin
+      ? `≈${formatCompactTokens(usage.inputTokens)}/${formatCompactTokens(win)} belegt. `
+      : "";
+  const sourceLabel = pctSource === "estimate" ? "Schätzung" : "CLI";
+  const ringTitle =
+    pct != null
+      ? `${tokenDetail}Quelle: ${sourceLabel}. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.`
+      : undefined;
 
   return (
     <div
@@ -188,38 +238,47 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
           </span>
         )}
 
-        {usage && win != null && win > 0 && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <div
-              data-testid="context-meter"
-              className="h-1.5 rounded-full overflow-hidden shrink-0"
-              style={{ width: 64, backgroundColor: C.bgHover }}
-              title={
-                `Belegt: ${usage.inputTokens.toLocaleString("en-US")} von ${win.toLocaleString("en-US")} Tokens. ` +
-                "Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
-              }
-            >
-              <div
-                data-testid="context-meter-fill"
-                className="h-full"
-                style={{
-                  // toFixed(2) + Number() strips binary-float noise
-                  // (153000/1000000*100 is 15.299999999999999 in raw JS
-                  // math) without padding whole percentages to "50.00%".
-                  width: `${Number((fillRatio * 100).toFixed(2))}%`,
-                  backgroundColor: fillRatio > 0.85 ? C.warning : C.accent,
-                }}
+        {usage && pct != null && (
+          <div
+            data-testid="context-ring"
+            role="progressbar"
+            aria-valuenow={Math.round(pct)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            data-threshold={ringThresholdValue}
+            data-source={pctSource ?? undefined}
+            title={ringTitle}
+            className="flex items-center gap-1 shrink-0"
+          >
+            <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
+              <circle
+                cx={RING_SIZE / 2}
+                cy={RING_SIZE / 2}
+                r={RING_RADIUS}
+                fill="none"
+                stroke={C.bgHover}
+                strokeWidth={RING_STROKE}
               />
-            </div>
-            {/* Own semantics, not the CLI statusline's "% remaining until
-                auto-compact" — spelling out "belegt" (used) + both absolute
-                numbers is what stops this from reading as a bug next to it. */}
+              <circle
+                data-testid="context-ring-arc"
+                cx={RING_SIZE / 2}
+                cy={RING_SIZE / 2}
+                r={RING_RADIUS}
+                fill="none"
+                stroke={ringStrokeColor}
+                strokeWidth={RING_STROKE}
+                strokeLinecap="round"
+                strokeDasharray={RING_CIRCUMFERENCE}
+                strokeDashoffset={ringOffset}
+                transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+              />
+            </svg>
             <span
-              data-testid="context-meter-label"
-              className="font-mono text-[10px] font-medium whitespace-nowrap"
+              data-testid="context-ring-pct"
+              className="font-mono text-[10px] font-medium tabular-nums"
               style={{ color: C.textMuted }}
             >
-              ≈{formatCompactTokens(usage.inputTokens)}/{formatCompactTokens(win)} belegt
+              {Math.round(pct)}%
             </span>
           </div>
         )}

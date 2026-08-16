@@ -11,6 +11,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
+import { C, STATUS } from "@/lib/colors";
 
 beforeAll(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -133,21 +134,22 @@ describe("Composer", () => {
     expect(screen.getByText("high")).toBeInTheDocument();
   });
 
-  it("fills the context meter proportionally to usage.inputTokens / usage.contextWindow", () => {
+  it("prefers usage.usedPct (CLI ground truth) over the contextWindow-based estimate", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 100_000, contextWindow: 200_000 })}
+        // If it fell back to the token estimate this would read 50%, not 15%.
+        usage={mkUsage({ inputTokens: 100_000, contextWindow: 200_000, usedPct: 15, source: "cli" })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
-    const fill = screen.getByTestId("context-meter-fill");
-    expect(fill.style.width).toBe("50%");
+    expect(screen.getByTestId("context-ring-pct")).toHaveTextContent("15%");
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("aria-valuenow", "15");
   });
 
-  it("uses usage.contextWindow directly, whatever it is (verified live: Boss on claude-opus-5, 153k used against a backend-stamped 1M window = 15% on the CLI's own statusline)", () => {
+  it("falls back to the inputTokens/contextWindow estimate when usedPct is absent (verified live: Boss on claude-opus-5, 153k used against a 1M window ≈ 15%)", () => {
     render(
       <Composer
         agentId="a1"
@@ -157,87 +159,106 @@ describe("Composer", () => {
         onStop={vi.fn()}
       />
     );
-    const fill = screen.getByTestId("context-meter-fill");
-    // 153,000 / 1,000,000 = 15.3%
-    expect(fill.style.width).toBe("15.3%");
-    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈153k/1M belegt");
+    // 153,000 / 1,000,000 = 15.3%, rounded to 15 for display + aria-valuenow.
+    expect(screen.getByTestId("context-ring-pct")).toHaveTextContent("15%");
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("aria-valuenow", "15");
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("data-source", "estimate");
   });
 
-  it("shows a visible ≈usedk/windowk label so the bar isn't mistaken for the CLI statusline's remaining-% reading", () => {
+  it("marks the ring's data-source as cli when usedPct is used", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 100_000, contextWindow: 200_000 })}
+        usage={mkUsage({ usedPct: 42, source: "cli" })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
-    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈100k/200k belegt");
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("data-source", "cli");
   });
 
-  it("rounds the label's used-tokens figure to the nearest k", () => {
-    render(
-      <Composer
-        agentId="a1"
-        usage={mkUsage({ inputTokens: 12_345, contextWindow: 200_000 })}
-        state={null}
-        onSend={vi.fn()}
-        onStop={vi.fn()}
-      />
-    );
-    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈12k/200k belegt");
-  });
-
-  it("puts the exact token numbers in the meter's title tooltip, and explains the CLI statusline's different basis", () => {
-    render(
-      <Composer
-        agentId="a1"
-        usage={mkUsage({ inputTokens: 12_345, contextWindow: 200_000 })}
-        state={null}
-        onSend={vi.fn()}
-        onStop={vi.fn()}
-      />
-    );
-    expect(screen.getByTestId("context-meter")).toHaveAttribute(
-      "title",
-      "Belegt: 12,345 von 200,000 Tokens. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
-    );
-  });
-
-  it("renders no meter at all when there is no usage yet, instead of a misleading empty bar", () => {
+  it("renders no ring when there is no usage yet", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.queryByTestId("context-meter")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("context-ring")).not.toBeInTheDocument();
   });
 
-  it("renders no meter when the backend hasn't stamped a contextWindow (null) — honest absence over a guessed-wrong bar", () => {
+  it("renders no ring when neither usedPct nor contextWindow is available — honest absence over a guessed-wrong indicator", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ contextWindow: null })}
+        usage={mkUsage({ usedPct: null, contextWindow: null })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
-    expect(screen.queryByTestId("context-meter")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("context-ring")).not.toBeInTheDocument();
   });
 
-  it("renders no meter when contextWindow is absent entirely (older backend, field not rolled out yet)", () => {
-    const { contextWindow: _omit, ...usageWithoutWindow } = mkUsage();
+  it('marks the ring data-threshold "normal" below 75%', () => {
+    render(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 50, source: "cli" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("data-threshold", "normal");
+  });
+
+  it('marks the ring data-threshold "warning" at 75% and above', () => {
+    render(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 75, source: "cli" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("data-threshold", "warning");
+  });
+
+  it('marks the ring data-threshold "error" at 90% and above', () => {
+    render(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 90, source: "cli" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("data-threshold", "error");
+  });
+
+  it("colors the ring arc using STATUS tokens, not raw hex, per threshold", () => {
+    const { rerender } = render(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 50, source: "cli" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByTestId("context-ring-arc")).toHaveAttribute("stroke", C.textDim);
+
+    rerender(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 95, source: "cli" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByTestId("context-ring-arc")).toHaveAttribute("stroke", STATUS.error);
+  });
+
+  it("puts the token detail, source, and explanation sentence in the ring's title tooltip", () => {
     render(
       <Composer
         agentId="a1"
-        usage={usageWithoutWindow as UsageEvent}
+        usage={mkUsage({ inputTokens: 12_345, contextWindow: 200_000, usedPct: 6, source: "cli" })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
-    expect(screen.queryByTestId("context-meter")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
+    expect(screen.getByTestId("context-ring")).toHaveAttribute(
+      "title",
+      "≈12k/200k belegt. Quelle: CLI. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
+    );
+  });
+
+  it('labels the tooltip source "Schätzung" when falling back to the token estimate', () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ inputTokens: 100_000, contextWindow: 200_000, usedPct: null })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("context-ring")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Quelle: Schätzung")
+    );
   });
 
   it('opens the slash-command palette when "/" is typed at position 0', async () => {

@@ -59,6 +59,16 @@ export interface UsageEvent {
    *  means the backend doesn't know either; consumers render no context
    *  meter rather than guess. */
   contextWindow?: number | null;
+  /** 0–100, the CLI's own `context_window.used_percentage` when the backend
+   *  can read it straight from the CLI's structured output — ground truth,
+   *  preferred over any token-count-based estimate. `null`/absent means the
+   *  CLI didn't report it; consumers fall back to `inputTokens /
+   *  contextWindow`, or render nothing if that's unavailable too. */
+  usedPct?: number | null;
+  /** Provenance of `usedPct`: `"cli"` = read straight from the CLI, an exact
+   *  figure. `"estimate"` = the backend computed it itself (no ground truth
+   *  available). Only meaningful together with `usedPct`. */
+  source?: "cli" | "estimate";
 }
 
 export interface ChatPromptOption {
