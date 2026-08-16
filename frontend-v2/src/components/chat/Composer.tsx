@@ -5,7 +5,7 @@ import { Command } from "cmdk";
 import { Square, Send, ChevronDown } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
-import { CLAUDE_MODELS, SLASH_COMMANDS, contextWindow } from "@/lib/claudeCommands";
+import { CLAUDE_MODELS, SLASH_COMMANDS, contextWindow, formatCompactTokens } from "@/lib/claudeCommands";
 
 const MAX_ROWS = 8;
 const LINE_HEIGHT_PX = 18;
@@ -85,7 +85,7 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
 
   const modelLabel = usage?.model ?? "—";
   const win = contextWindow(usage?.model);
-  const fillRatio = usage ? Math.min(usage.inputTokens / win, 1) : 0;
+  const fillRatio = usage && win ? Math.min(usage.inputTokens / win, 1) : 0;
 
   return (
     <div
@@ -187,7 +187,7 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
           </span>
         )}
 
-        {usage && win > 0 && (
+        {usage && win != null && win > 0 && (
           <div className="flex items-center gap-1.5 shrink-0">
             <div
               data-testid="context-meter"
@@ -202,7 +202,10 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
                 data-testid="context-meter-fill"
                 className="h-full"
                 style={{
-                  width: `${fillRatio * 100}%`,
+                  // toFixed(2) + Number() strips binary-float noise
+                  // (153000/1000000*100 is 15.299999999999999 in raw JS
+                  // math) without padding whole percentages to "50.00%".
+                  width: `${Number((fillRatio * 100).toFixed(2))}%`,
                   backgroundColor: fillRatio > 0.85 ? C.warning : C.accent,
                 }}
               />
@@ -215,7 +218,7 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
               className="font-mono text-[10px] font-medium whitespace-nowrap"
               style={{ color: C.textMuted }}
             >
-              ≈{Math.round(usage.inputTokens / 1000)}k/{Math.round(win / 1000)}k belegt
+              ≈{formatCompactTokens(usage.inputTokens)}/{formatCompactTokens(win)} belegt
             </span>
           </div>
         )}

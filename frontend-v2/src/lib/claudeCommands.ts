@@ -41,13 +41,33 @@ const MILLION_CONTEXT_WINDOW = 1_000_000;
 
 /**
  * Static context-window size for the context meter, keyed off the
- * transcript's truthful `usage.model` string. Claude model identifiers carry
- * a "[1m]" suffix for the 1M-token beta variants (e.g.
- * "claude-sonnet-4-6[1m]"); every other known/unknown model — including
- * `null` before the first usage event arrives — gets the standard 200k
- * window. Never guesses a bigger window than what's documented.
+ * transcript's truthful `usage.model` string. Verified live against the
+ * fleet (2026-08): the Claude 5 family (opus-5, sonnet-5, fable-5) ships a
+ * 1M window by default — e.g. Boss on "claude-opus-5" with 153k used reads
+ * 15% on the CLI's own statusline, which only holds at a 1M base. Any model
+ * carrying an explicit "[1m]" suffix (the 4.x beta variants, e.g.
+ * "claude-sonnet-4-6[1m]") gets 1M too. The Claude 4.x family otherwise gets
+ * the standard 200k window.
+ *
+ * Returns `null` for anything not recognized — including `null`/`undefined`
+ * before the first usage event arrives. Guessing a window for an unknown
+ * model produces a confidently wrong bar (this is the second time this
+ * meter's basis was wrong); an absent meter is honest, a wrong one is not.
  */
-export function contextWindow(model: string | null | undefined): number {
-  if (model?.includes("[1m]")) return MILLION_CONTEXT_WINDOW;
-  return DEFAULT_CONTEXT_WINDOW;
+export function contextWindow(model: string | null | undefined): number | null {
+  if (!model) return null;
+  if (model.includes("[1m]")) return MILLION_CONTEXT_WINDOW;
+  if (/^claude-(opus|sonnet|fable)-5\b/.test(model)) return MILLION_CONTEXT_WINDOW;
+  if (/^claude-\w+-4(-|$)/.test(model)) return DEFAULT_CONTEXT_WINDOW;
+  return null;
+}
+
+/** Compact "153k" / "1M" formatting for the context-meter label — exact
+ *  numbers still go in the tooltip, this is just the at-a-glance figure. */
+export function formatCompactTokens(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const millions = tokens / 1_000_000;
+    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+  }
+  return `${Math.round(tokens / 1000)}k`;
 }

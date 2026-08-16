@@ -209,6 +209,36 @@ describe("Composer", () => {
     expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
   });
 
+  it("uses the 1M window for Claude 5 family models (verified live: Boss on claude-opus-5, 153k used = 15% on the CLI's own statusline)", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ inputTokens: 153_000, model: "claude-opus-5" })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    const fill = screen.getByTestId("context-meter-fill");
+    // 153,000 / 1,000,000 = 15.3%
+    expect(fill.style.width).toBe("15.3%");
+    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈153k/1M belegt");
+  });
+
+  it("renders no meter for an unrecognized model — honest absence over a guessed-wrong bar", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ inputTokens: 50_000, model: "some-future-model-x" })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId("context-meter")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
+  });
+
   it('opens the slash-command palette when "/" is typed at position 0', async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
