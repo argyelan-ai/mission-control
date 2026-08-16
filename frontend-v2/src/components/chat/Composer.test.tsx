@@ -161,7 +161,33 @@ describe("Composer", () => {
     expect(fill.style.width).toBe("50%");
   });
 
-  it("puts the exact token numbers in the meter's title tooltip", () => {
+  it("shows a visible ≈usedk/windowk label so the bar isn't mistaken for the CLI statusline's remaining-% reading", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ inputTokens: 100_000, model: "claude-sonnet-4-6" })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈100k/200k belegt");
+  });
+
+  it("rounds the label's used-tokens figure to the nearest k", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ inputTokens: 12_345, model: "claude-sonnet-4-6" })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈12k/200k belegt");
+  });
+
+  it("puts the exact token numbers in the meter's title tooltip, and explains the CLI statusline's different basis", () => {
     render(
       <Composer
         agentId="a1"
@@ -173,8 +199,14 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-meter")).toHaveAttribute(
       "title",
-      "12,345 / 200,000 Tokens"
+      "Belegt: 12,345 von 200,000 Tokens. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
     );
+  });
+
+  it("renders no meter at all when there is no usage yet, instead of a misleading empty bar", () => {
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.queryByTestId("context-meter")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
   });
 
   it('opens the slash-command palette when "/" is typed at position 0', async () => {

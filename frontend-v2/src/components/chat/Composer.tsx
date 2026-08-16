@@ -187,21 +187,36 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
           </span>
         )}
 
-        {usage && (
-          <div
-            data-testid="context-meter"
-            className="h-1.5 rounded-full overflow-hidden shrink-0"
-            style={{ width: 64, backgroundColor: C.bgHover }}
-            title={`${usage.inputTokens.toLocaleString("en-US")} / ${win.toLocaleString("en-US")} Tokens`}
-          >
+        {usage && win > 0 && (
+          <div className="flex items-center gap-1.5 shrink-0">
             <div
-              data-testid="context-meter-fill"
-              className="h-full"
-              style={{
-                width: `${fillRatio * 100}%`,
-                backgroundColor: fillRatio > 0.85 ? C.warning : C.accent,
-              }}
-            />
+              data-testid="context-meter"
+              className="h-1.5 rounded-full overflow-hidden shrink-0"
+              style={{ width: 64, backgroundColor: C.bgHover }}
+              title={
+                `Belegt: ${usage.inputTokens.toLocaleString("en-US")} von ${win.toLocaleString("en-US")} Tokens. ` +
+                "Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
+              }
+            >
+              <div
+                data-testid="context-meter-fill"
+                className="h-full"
+                style={{
+                  width: `${fillRatio * 100}%`,
+                  backgroundColor: fillRatio > 0.85 ? C.warning : C.accent,
+                }}
+              />
+            </div>
+            {/* Own semantics, not the CLI statusline's "% remaining until
+                auto-compact" — spelling out "belegt" (used) + both absolute
+                numbers is what stops this from reading as a bug next to it. */}
+            <span
+              data-testid="context-meter-label"
+              className="font-mono text-[10px] font-medium whitespace-nowrap"
+              style={{ color: C.textMuted }}
+            >
+              ≈{Math.round(usage.inputTokens / 1000)}k/{Math.round(win / 1000)}k belegt
+            </span>
           </div>
         )}
 
