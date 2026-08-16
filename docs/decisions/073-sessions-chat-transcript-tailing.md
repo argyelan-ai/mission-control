@@ -126,11 +126,19 @@ unabhängige Lese-/Schreib-Surface über derselben tmux-Session:
   **erlaubt**. Jede künftige Änderung an Boss' Host-Setup (neuer Checkout-Pfad, neue
   CWD-Konvention) muss gegen diesen Filter geprüft werden — ein stiller Bruch würde
   private Sessions in die Chat-UI durchreichen.
-- **Zwei zusätzliche Docker-exec-Roundtrips pro Sekunde/zwei Sekunden** (Tailer-Poll,
-  Pane-Sonde) pro offener Chat-Verbindung — refcounted (`ChatTailerManager.acquire`/
-  `release`), damit N Browser-Tabs auf demselben Agenten nur einen Poller erzeugen, aber
-  bei vielen gleichzeitig geöffneten Chats ist das zusätzliche Docker-Last, die die reine
-  Terminal-Ansicht nicht hatte.
+- **Ein zusätzlicher Docker-exec-Roundtrip alle ~2 Sekunden** (die Pane-Sonde) pro
+  offener Chat-Verbindung — refcounted (`ChatTailerManager.acquire`/`release`), damit N
+  Browser-Tabs auf demselben Agenten nur einen Poller erzeugen, aber bei vielen
+  gleichzeitig geöffneten Chats ist das zusätzliche Docker-Last, die die reine
+  Terminal-Ansicht nicht hatte. Der Tailer-Poll selbst (1 s) ist dagegen ein reiner
+  lokaler Datei-Read, kein Docker-exec.
+- **Statusline-Hook ist ein flottenweiter Single-Source-of-Truth-Pfad (ADR-006):** die
+  Context-Window-Wahrheit im Composer kommt aus `docker/shared/statusline-mc.sh`, das
+  `plugin_manager.render_agent_settings` in jeden claude-harness-Agenten ausrollt — ein
+  `settings.json`-Key (`statusLine`) plus eine Kopie des Skripts selbst
+  (`cli_agent_settings.json.j2`), Stand Ledger 7/7 Agenten. Künftige Änderungen an
+  Skript oder Key müssen über diesen Template-Pfad laufen, nicht per Hand-Edit im
+  Container, sonst driftet die Flotte.
 - **v1-Scope-Lücke bewusst in Kauf genommen:** Hermes/Jarvis/Sparky haben (noch) keinen
   Adapter — ehrlicher „kein Transkript verfügbar"-Zustand statt eines vorgetäuschten
   Chats. Sparky (openclaude-Dialekt) ist der nächstliegende v2-Kandidat, weil
@@ -138,9 +146,10 @@ unabhängige Lese-/Schreib-Surface über derselben tmux-Session:
 
 ### Härtungs-Regeln, gegen die künftige Änderungen geprüft werden müssen (aus dem
 Live-Gate teuer bezahlt, siehe `.superpowers/sdd/2026-08-13-sessions-chat-view-plan/progress.md`)
-- **Tailer-Offset wird bei `acquire()` synchron vor dem Task-Start gestattet** (nicht als
-  erste Zeile von `_run()`), sonst läuft ein First-Connect das gesamte bestehende
-  Transkript nochmal als „live" Events durch die History bereits geliefert hat.
+- **Tailer-Offset wird bei `acquire()` synchron vor dem Task-Start ermittelt/gesetzt**
+  (nicht als erste Zeile von `_run()`), sonst würde ein First-Connect das gesamte
+  bestehende Transkript nochmal als „live" Events durchlaufen lassen, obwohl
+  `/chat/history` es bereits geliefert hat.
 - **Binäre Byte-Reads mit expliziten Offsets** (`_read_new_chunk`), nicht Text-Modus —
   ein mehrbyte-UTF-8-Zeichen, das über zwei Polls hinweg geteilt wird, darf weder
   doppelt gezählt noch abgeschnitten werden; dekodiert wird erst nach dem
