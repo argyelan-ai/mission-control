@@ -65,4 +65,30 @@ describe("ToolRow", () => {
     await user.click(title);
     expect(screen.queryByText(/line 1/)).not.toBeInTheDocument();
   });
+
+  it("expands an already-mounted row when detailLevel changes Normal -> Ausführlich (I-3)", () => {
+    const { rerender } = render(<ToolRow ev={mkEvent()} detailLevel="normal" />);
+    expect(screen.queryByText(/line 1/)).not.toBeInTheDocument();
+
+    rerender(<ToolRow ev={mkEvent()} detailLevel="verbose" />);
+    expect(screen.getByText(/line 1/)).toBeInTheDocument();
+  });
+
+  it("collapses an already-mounted row when detailLevel changes Ausführlich -> Normal (I-3)", () => {
+    const { rerender } = render(<ToolRow ev={mkEvent()} detailLevel="verbose" />);
+    expect(screen.getByText(/line 1/)).toBeInTheDocument();
+
+    rerender(<ToolRow ev={mkEvent()} detailLevel="normal" />);
+    expect(screen.queryByText(/line 1/)).not.toBeInTheDocument();
+  });
+
+  it("still supports manual toggle after a detailLevel-driven sync", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<ToolRow ev={mkEvent()} detailLevel="normal" />);
+    rerender(<ToolRow ev={mkEvent()} detailLevel="verbose" />);
+    expect(screen.getByText(/line 1/)).toBeInTheDocument();
+
+    await user.click(screen.getByText("Read backend/app/main.py"));
+    expect(screen.queryByText(/line 1/)).not.toBeInTheDocument();
+  });
 });

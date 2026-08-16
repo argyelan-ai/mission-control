@@ -99,8 +99,19 @@ async def _run_docker_exec(argv: list[str]) -> None:
     """Runs a docker-exec argv list off the event loop. Never raises —
     delivery failures (agent container gone, tmux window missing) are logged
     and swallowed, matching the fire-and-forget nature of typing into a
-    live terminal (there is no request/response to fail)."""
-    result = await asyncio.to_thread(subprocess.run, argv, capture_output=True)
+    live terminal (there is no request/response to fail). ``timeout=5``
+    mirrors ``pane_state.capture_pane`` — without it a wedged ``docker exec``
+    (daemon stall, container in uninterruptible state) pins a thread from
+    the default executor forever, and ``send_keys`` can fire up to 16 of
+    these per request against the same shared pool the tailer's own
+    ``to_thread`` calls use (review finding I-2)."""
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, argv, capture_output=True, timeout=5
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("chat input: docker exec timed out: %s", argv)
+        return
     if result.returncode != 0:
         logger.warning(
             "chat input: docker exec failed (rc=%s): %s",

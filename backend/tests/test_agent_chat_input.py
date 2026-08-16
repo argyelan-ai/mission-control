@@ -256,6 +256,27 @@ async def test_send_keys_rejects_non_allowlisted_key(monkeypatch):
     assert not called  # nothing delivered once one key fails validation
 
 
+async def test_run_docker_exec_timeout_does_not_raise(monkeypatch):
+    """A wedged ``docker exec`` (daemon stall, container in uninterruptible
+    state) must not raise — same fail-silent contract as every other
+    delivery failure this module swallows, and the same ``timeout=5`` its
+    sibling ``pane_state.capture_pane`` already uses (review finding I-2).
+    Without the timeout, a hang here pins a thread from the shared executor
+    pool forever and ``POST /chat/input`` never returns."""
+    import subprocess
+
+    from app.services import agent_chat_input
+
+    def _fake_run(argv, capture_output=True, timeout=None):
+        assert timeout == 5
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
+
+    monkeypatch.setattr(agent_chat_input.subprocess, "run", _fake_run)
+
+    await agent_chat_input._run_docker_exec(["docker", "exec", "mc-agent-rex", "true"])
+    # No exception -> pass.
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # services/agent_chat_input.py — Boss (host) delivery
 # ══════════════════════════════════════════════════════════════════════════

@@ -50,11 +50,15 @@ def resolve_workspace_path(raw: str) -> Path:
 
     Since ADR-022, the DB stores absolute HOST paths already (verified
     against live rows: e.g. ``/Users/<host-user>/.mc/workspaces/rex`` — no ``~``
-    prefix in practice). The backend container mounts ``${HOME}:${HOME}``
-    1:1 (see CLAUDE.local.md), so that host path resolves unchanged
-    in-container. Only legacy/hand-edited rows that do carry a literal
-    ``~`` need the ``token_harvester._host_home()`` translation — mirrors
-    ``token_harvester._expand_harvest_path``.
+    prefix in practice). The backend container only mounts
+    ``${HOME}/.mc:${HOME}/.mc`` (``docker-compose.yml``, backend service
+    volumes) — not the full ``${HOME}`` tree — so a host path resolves
+    unchanged in-container *because* every agent workspace lives under
+    ``~/.mc/agents/{slug}/workspace`` or ``~/.mc/workspaces/{slug}``; a
+    ``workspace_path`` pointing anywhere outside ``~/.mc`` is unreadable
+    here and surfaces as a bare 404 ``no_workspace``. Only legacy/hand-edited
+    rows that do carry a literal ``~`` need the ``token_harvester._host_home()``
+    translation — mirrors ``token_harvester._expand_harvest_path``.
     """
     if raw.startswith("~"):
         return _host_home() / raw.lstrip("~/").lstrip("/")

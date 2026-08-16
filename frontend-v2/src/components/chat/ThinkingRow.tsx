@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Brain } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { ThinkingEvent } from "@/lib/chatTypes";
@@ -18,6 +18,12 @@ export function ThinkingRow({
   detailLevel?: "compact" | "normal" | "verbose";
 }) {
   const [expanded, setExpanded] = useState(detailLevel === "verbose");
+  // See ToolRow.tsx: useState's initial value is read once, so a mounted
+  // row never reacted to detailLevel changing under it. Re-sync on every
+  // detailLevel change; manual clicks in between are untouched (I-3).
+  useEffect(() => {
+    setExpanded(detailLevel === "verbose");
+  }, [detailLevel]);
 
   return (
     <div className="w-full px-4 py-1.5">

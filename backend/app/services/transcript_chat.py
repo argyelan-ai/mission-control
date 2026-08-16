@@ -823,6 +823,11 @@ class ChatTailerManager:
         # Cleared on session rollover (below) — bounded by one session's
         # lifetime, not by an explicit cap.
         seen_uuids: set[str] = set()
+        # Dedup guard for the rejected-rollover warning below — without it a
+        # disallowed newest-mtime file that keeps existing (e.g. Mark's own
+        # personal session sitting in Boss's transcript dir) would log once
+        # per poll tick forever.
+        rejected_rollover_path: Path | None = None
 
         try:
             while True:
@@ -843,14 +848,43 @@ class ChatTailerManager:
                     except OSError:
                         active = None
                     if active is not None and active[0] != current_path:
-                        current_path = active[0]
-                        offset = 0
-                        buffer = b""
-                        tool_events_by_id = {}
-                        seen_uuids = set()
-                        last_pane_state = None
-                        await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
-                        continue
+                        # Re-run the same Boss privacy gate the SSE handshake
+                        # enforces at connect time (agent_chat.py:80) — a
+                        # rollover mid-stream is a second, later "which file
+                        # may this agent publish" decision and must not
+                        # bypass it (review finding I-1). ``agent`` is only
+                        # ``None`` in tests that don't exercise the gate; the
+                        # real caller (acquire(), agent_chat.py:121) always
+                        # passes it. ``transcript_allowed`` does blocking file
+                        # I/O (opens the file, scans up to 20 lines) and this
+                        # branch re-runs it every tick for as long as the
+                        # rejected file stays newest — to_thread it, same
+                        # rule as every other disk read in this loop.
+                        allowed = True
+                        if agent is not None:
+                            allowed = await asyncio.to_thread(
+                                transcript_allowed, agent, active[0]
+                            )
+                        if not allowed:
+                            if active[0] != rejected_rollover_path:
+                                rejected_rollover_path = active[0]
+                                logger.warning(
+                                    "chat tailer: rollover to %s rejected by "
+                                    "transcript_allowed (agent_id=%s) — keeping "
+                                    "current session %s",
+                                    active[0], agent_id, current_path,
+                                )
+                            # Do NOT switch — keep tailing current_path below.
+                        else:
+                            rejected_rollover_path = None
+                            current_path = active[0]
+                            offset = 0
+                            buffer = b""
+                            tool_events_by_id = {}
+                            seen_uuids = set()
+                            last_pane_state = None
+                            await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
+                            continue
 
                     try:
                         new_offset, chunk = await asyncio.to_thread(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText, Pencil, Terminal, Globe, Bot, Wrench } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ToolEvent } from "@/lib/chatTypes";
@@ -27,6 +27,14 @@ export function ToolRow({
   detailLevel: "compact" | "normal" | "verbose";
 }) {
   const [expanded, setExpanded] = useState(detailLevel === "verbose");
+  // useState's initial value is read once, so a mounted row never reacted to
+  // detailLevel changing under it (e.g. Normal -> Ausführlich never expanded
+  // an already-rendered row). Re-sync on every detailLevel change; manual
+  // clicks in between are untouched since this effect doesn't depend on
+  // `expanded` (review finding I-3).
+  useEffect(() => {
+    setExpanded(detailLevel === "verbose");
+  }, [detailLevel]);
   const Icon = iconFor(ev.name);
   const isError = ev.status === "error";
 

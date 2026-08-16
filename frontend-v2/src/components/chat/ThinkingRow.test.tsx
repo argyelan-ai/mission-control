@@ -43,4 +43,30 @@ describe("ThinkingRow", () => {
     render(<ThinkingRow ev={mkEvent()} detailLevel="verbose" />);
     expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
   });
+
+  it("expands an already-mounted row when detailLevel changes Normal -> Ausführlich (I-3)", () => {
+    const { rerender } = render(<ThinkingRow ev={mkEvent()} detailLevel="normal" />);
+    expect(screen.queryByText(/tradeoffs/)).not.toBeInTheDocument();
+
+    rerender(<ThinkingRow ev={mkEvent()} detailLevel="verbose" />);
+    expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
+  });
+
+  it("collapses an already-mounted row when detailLevel changes Ausführlich -> Normal (I-3)", () => {
+    const { rerender } = render(<ThinkingRow ev={mkEvent()} detailLevel="verbose" />);
+    expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
+
+    rerender(<ThinkingRow ev={mkEvent()} detailLevel="normal" />);
+    expect(screen.queryByText(/tradeoffs/)).not.toBeInTheDocument();
+  });
+
+  it("still supports manual toggle after a detailLevel-driven sync", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<ThinkingRow ev={mkEvent()} detailLevel="normal" />);
+    rerender(<ThinkingRow ev={mkEvent()} detailLevel="verbose" />);
+    expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
+
+    await user.click(screen.getByText("Denkt nach…"));
+    expect(screen.queryByText(/tradeoffs/)).not.toBeInTheDocument();
+  });
 });

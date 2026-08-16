@@ -1005,7 +1005,7 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
      └── docker exec /      GET  /agents/{id}/chat/history   (Datei von vorn parsen)
          host-pty-bridge ◀──POST /agents/{id}/chat/input     (Text, separater Enter-Frame)
                              POST /agents/{id}/chat/keys      (Escape/Ziffern/Enter)
-                             GET  /agents/{id}/workspace/diff (git diff im Agent-Workspace)
+                             GET  /agents/{id}/chat/diff      (git diff im Agent-Workspace)
 ```
 
 - **Transkript-Quelle:** Claude Code schreibt jede Session live als JSONL nach
@@ -1046,7 +1046,7 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   `~/.claude/last-task.marker`-Alter. Chat-Aktivität war dafür ursprünglich unsichtbar
   (laufende Chat-Konversationen wurden mitten im Gespräch recycelt) — `send_text()`
   touched den Marker deshalb bei jeder Chat-Eingabe mit.
-- **Diff-Panel:** `GET /agents/{id}/workspace/diff?scope=worktree|last-commit` läuft
+- **Diff-Panel:** `GET /agents/{id}/chat/diff?scope=worktree|last-commit` läuft
   `git diff`/`git show` im Agent-Workspace und liefert dieselbe `CommitDiff`-Form, die
   `GitDiffView` schon aus dem Git-Workflow (oben) kennt — read-only, kein Staging/Revert.
 - **Adapter-Kontrakt:** die vier Bausteine (Session-Resolution+Parser, Tailer,
@@ -1337,7 +1337,7 @@ Alle ADRs in `docs/decisions/`:
   Text und submittierender `Enter` **immer als getrennte Frames**, sonst schluckt die
   Claude-TUI den Enter als Teil eines Pastes), `routers/agent_chat.py` (`GET
   /agents/{id}/chat/history`, `GET .../chat/stream` SSE, `POST .../chat/input`,
-  `POST .../chat/keys`, `GET .../workspace/diff`), Frontend
+  `POST .../chat/keys`, `GET .../chat/diff`), Frontend
   `components/chat/*` (ChatView, Composer, ApprovalCard, ToolRow, ThinkingRow,
   SubagentGroup, StatusLine, PanelRail, DiffPanel, TerminalPanel, SessionSidebar) +
   `lib/chatTypes.ts`/`hooks/useChatStream.ts`. **Boss-Privacy-Filter fail-closed**

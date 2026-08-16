@@ -214,6 +214,59 @@ async def test_tailer_session_changed_on_newer_jsonl(manager, fake_broadcast, tm
     assert fake_broadcast[-1][2]["text"] == "in the new session"
 
 
+async def test_tailer_rollover_respects_boss_privacy_gate(manager, fake_broadcast, tmp_path):
+    """A session rollover to a newer .jsonl must re-run the same Boss privacy
+    gate the SSE handshake enforces at connect time (``transcript_allowed``,
+    ``agent_chat.py:80``) — not just at ``acquire()`` time. A disallowed
+    newest-mtime file (e.g. Mark's own personal session sitting in Boss's
+    transcript dir, distinguishable only by ``cwd``) must be neither adopted
+    nor published (review finding I-1)."""
+    old_session = tmp_path / "sess-old.jsonl"
+    old_session.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "u-old",
+                "timestamp": "2026-08-13T00:00:00Z",
+                "cwd": "/Users/mark/.mc/checkouts/mission-control",
+                "message": {"content": [{"type": "text", "text": "boss work"}]},
+            }
+        )
+        + "\n"
+    )
+
+    agent = _StubAgent(agent_runtime="host", slug="boss")
+
+    await manager.acquire("agent-1", old_session, agent)
+    try:
+        await asyncio.sleep(0.05)
+        new_session = tmp_path / "sess-new.jsonl"
+        new_session.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "u-new",
+                    "timestamp": "2026-08-13T00:00:01Z",
+                    "cwd": "/Users/mark/personal-project",
+                    "message": {"content": [{"type": "text", "text": "private session"}]},
+                }
+            )
+            + "\n"
+        )
+        # Ensure a strictly newer mtime than old_session.
+        import os
+        os.utime(new_session, None)
+
+        # Give the tailer several poll ticks — enough for a wrongful rollover
+        # to have already happened if the gate weren't re-checked.
+        await asyncio.sleep(0.15)
+    finally:
+        await manager.release("agent-1")
+
+    assert not any(d.get("kind") == "session_changed" for _, _, d in fake_broadcast)
+    assert not any(d.get("text") == "private session" for _, _, d in fake_broadcast)
+
+
 async def test_tailer_survives_disappearing_file(manager, fake_broadcast, tmp_path):
     session_file = tmp_path / "sess1.jsonl"
     session_file.write_text("")
