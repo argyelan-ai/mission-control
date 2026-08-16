@@ -12,7 +12,7 @@ Normalized event shapes (plain dicts, JSON-serializable):
   {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
   {"kind":"command","uuid":str,"ts":str,"command":str}
   {"kind":"usage","uuid":str,"ts":str,"inputTokens":int,"outputTokens":int,
-   "model":str|None,"effort":str|None}
+   "model":str|None,"effort":str|None,"contextWindow":int|None}
 
 `parse_transcript_line` also emits an internal ``_tool_result`` event for
 ``tool_result`` content blocks (type=="user" lines) — ``{"kind":"_tool_result",
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.config import settings
 from app.services import sse
 from app.services.pane_state import capture_pane, parse_pane_state
 from app.redis_client import RedisKeys
@@ -53,6 +54,40 @@ _BOSS_SLUGS = ("boss", "boss-host")
 
 # Tools whose title is built from a file_path basename, prefixed "Read".
 _FILE_PATH_READ_TOOLS = {"Read", "NotebookEdit"}
+
+
+def resolve_context_window(model: str | None) -> int | None:
+    """Resolves a model name to its context window size (tokens) via
+    ``settings.context_windows``, so the frontend needs no hardcoded model
+    map. Shared by both consumers of ``parse_transcript_line`` — ``read_history``
+    and the live tailer — since both funnel through this one call site in
+    ``_parse_assistant_entry``.
+
+    Matching order:
+    1. Exact match against a configured key.
+    2. The LONGEST configured key that is a prefix of ``model`` (handles
+       dated/versioned model strings, e.g. a future
+       "claude-sonnet-4-6-20261201" against the configured "claude-sonnet-4-6").
+    3. ``model`` contains the literal substring ``"[1m]"`` (Anthropic's 1M-
+       context beta suffix) -> 1,000,000.
+    4. Otherwise ``None`` — an unknown model gets no number rather than a
+       guessed one.
+    """
+    if not model:
+        return None
+
+    windows = settings.context_windows
+    if model in windows:
+        return windows[model]
+
+    prefix_matches = [key for key in windows if model.startswith(key)]
+    if prefix_matches:
+        return windows[max(prefix_matches, key=len)]
+
+    if "[1m]" in model:
+        return 1_000_000
+
+    return None
 
 
 def parse_transcript_line(line: str) -> list[dict[str, Any]]:
@@ -222,6 +257,7 @@ def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                 "outputTokens": usage.get("output_tokens") or 0,
                 "model": model,
                 "effort": d.get("effort"),
+                "contextWindow": resolve_context_window(model),
             }
         )
 

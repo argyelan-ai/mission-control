@@ -3,7 +3,7 @@
 Fixture lines are trimmed, redacted copies of the real Claude Code JSONL
 schema (structure kept, content neutralized — no personal data).
 """
-from app.services.transcript_chat import build_tool_title, parse_transcript_line
+from app.services.transcript_chat import build_tool_title, parse_transcript_line, resolve_context_window
 
 # ── Fixture lines ──────────────────────────────────────────────────────────
 
@@ -169,6 +169,7 @@ def test_assistant_usage_event_shape():
         "outputTokens": 50,
         "model": "claude-sonnet-4-6",
         "effort": None,
+        "contextWindow": 200_000,
     }
 
 
@@ -179,6 +180,7 @@ def test_usage_effort_from_top_level_entry():
     assert usage["inputTokens"] == 10
     assert usage["outputTokens"] == 5
     assert usage["model"] == "claude-opus-5"
+    assert usage["contextWindow"] == 1_000_000
 
 
 def test_tool_use_detail_truncated_over_2000_chars():
@@ -267,3 +269,39 @@ def test_build_tool_title_truncates_to_80_chars():
     title = build_tool_title("Bash", {"command": "x" * 200})
     assert len(title) == 80
     assert title.endswith("…")
+
+
+# ── resolve_context_window ──────────────────────────────────────────────────
+
+
+def test_resolve_context_window_exact_match():
+    assert resolve_context_window("claude-sonnet-4-6") == 200_000
+    assert resolve_context_window("claude-opus-5") == 1_000_000
+
+
+def test_resolve_context_window_prefix_match_picks_longest_key(monkeypatch):
+    """A dated/versioned model string not present verbatim falls back to the
+    LONGEST configured key that is a prefix — not just any prefix match, and
+    not the shorter one that also happens to match."""
+    import app.services.transcript_chat as transcript_chat_mod
+
+    monkeypatch.setattr(
+        transcript_chat_mod.settings,
+        "context_windows",
+        {"claude-sonnet-4": 100_000, "claude-sonnet-4-6": 200_000},
+    )
+    assert resolve_context_window("claude-sonnet-4-6-20261201") == 200_000
+
+
+def test_resolve_context_window_1m_suffix_hint_when_no_prefix_matches():
+    # No configured key is a prefix of this model name, so the "[1m]"
+    # substring hint is what resolves it.
+    assert resolve_context_window("grok-5-fast[1m]") == 1_000_000
+
+
+def test_resolve_context_window_unknown_model_returns_none():
+    assert resolve_context_window("some-unreleased-model") is None
+
+
+def test_resolve_context_window_none_model_returns_none():
+    assert resolve_context_window(None) is None
