@@ -5,6 +5,7 @@ plus a live SSE tail. Parsing/session-resolution lives in
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from pathlib import Path
@@ -28,10 +29,12 @@ from app.services.transcript_chat import (
     tailer_manager,
     transcript_allowed,
 )
+from app.services.workspace_diff import NoWorkspaceError, resolve_workspace_path, workspace_diff
 
 router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 
 _NO_TRANSCRIPT = {"reason": "no_transcript"}
+_NO_WORKSPACE = {"reason": "no_workspace"}
 _INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
@@ -130,6 +133,32 @@ async def _load_agent_or_404(agent_id: uuid.UUID, session: AsyncSession) -> Agen
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
+
+
+@router.get("/agents/{agent_id}/chat/diff")
+async def get_chat_diff(
+    agent_id: uuid.UUID,
+    scope: str = Query("worktree", pattern="^(worktree|last-commit)$"),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Structured git diff over the agent's workspace: uncommitted changes
+    (``scope=worktree``, default) or the most recent commit
+    (``scope=last-commit``). 404 ``{"reason": "no_workspace"}`` when the
+    agent has no ``workspace_path``, the path doesn't exist on disk, isn't a
+    git repository, or (``last-commit`` only) has no commits yet."""
+    agent = await _load_agent_or_404(agent_id, session)
+
+    if not agent.workspace_path:
+        return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+
+    workspace = resolve_workspace_path(agent.workspace_path)
+    try:
+        diff = await asyncio.to_thread(workspace_diff, workspace, scope)
+    except NoWorkspaceError:
+        return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+
+    return diff
 
 
 @router.post("/agents/{agent_id}/chat/input", status_code=204)
