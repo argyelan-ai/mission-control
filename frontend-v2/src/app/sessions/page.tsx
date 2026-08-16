@@ -10,9 +10,9 @@ import { useAppStore } from "@/lib/store";
 import { C } from "@/lib/colors";
 import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
-import { ChatView, type DetailLevel, DETAIL_LEVELS } from "@/components/chat/ChatView";
+import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
 import { PanelRail, type PanelKind } from "@/components/chat/PanelRail";
-import { TerminalPanel, agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
+import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
@@ -35,11 +35,16 @@ function saveLastAgentId(id: string) {
   } catch {}
 }
 
-// ── Panel + detail-level persistence ────────────────────────────────────────
+// ── Panel + detail-level + center-view persistence ──────────────────────────
 const PANEL_STORAGE_KEY = "mc.chat.panel";
 const DETAIL_STORAGE_KEY = "mc.chat.detail";
-const VALID_PANELS: PanelKind[] = ["terminal", "diff", "browser"];
+const VIEW_STORAGE_KEY = "mc.chat.view";
+// Diff + Browser only — Terminal moved from the side panel to ChatView's own
+// center-view toggle (mc.chat.view). A stale "terminal" value from before
+// that change simply falls back to `null` here (not in this allow-list).
+const VALID_PANELS: PanelKind[] = ["diff", "browser"];
 const VALID_DETAIL_LEVELS = DETAIL_LEVELS.map((d) => d.key);
+const VALID_CENTER_VIEWS = CENTER_VIEWS.map((v) => v.key);
 
 function loadActivePanel(): PanelKind | null {
   try {
@@ -65,6 +70,19 @@ function loadDetailLevel(): DetailLevel {
 function saveDetailLevel(level: DetailLevel) {
   try {
     localStorage.setItem(DETAIL_STORAGE_KEY, level);
+  } catch {}
+}
+
+function loadCenterView(): CenterView {
+  try {
+    const v = localStorage.getItem(VIEW_STORAGE_KEY);
+    return (VALID_CENTER_VIEWS as string[]).includes(v ?? "") ? (v as CenterView) : "chat";
+  } catch { return "chat"; }
+}
+
+function saveCenterView(view: CenterView) {
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, view);
   } catch {}
 }
 
@@ -98,6 +116,7 @@ function SessionsPageContent() {
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
   const [activePanel, setActivePanelState] = useState<PanelKind | null>(null);
   const [detailLevel, setDetailLevelState] = useState<DetailLevel>("normal");
+  const [centerView, setCenterViewState] = useState<CenterView>("chat");
   const [restartTick, setRestartTick] = useState<Record<string, number>>({});
 
   // Persisted state is read from localStorage after mount (SSR has no
@@ -105,6 +124,7 @@ function SessionsPageContent() {
   useEffect(() => {
     setActivePanelState(loadActivePanel());
     setDetailLevelState(loadDetailLevel());
+    setCenterViewState(loadCenterView());
   }, []);
 
   function setActivePanel(panel: PanelKind | null) {
@@ -115,6 +135,11 @@ function SessionsPageContent() {
   function setDetailLevel(level: DetailLevel) {
     setDetailLevelState(level);
     saveDetailLevel(level);
+  }
+
+  function setCenterView(view: CenterView) {
+    setCenterViewState(view);
+    saveCenterView(view);
   }
 
   const { data: dockerAgents = [], isLoading, isError } = useQuery({
@@ -192,11 +217,7 @@ function SessionsPageContent() {
     setMobileView("chat");
   }
 
-  function handleShowTerminal() {
-    setActivePanel("terminal");
-  }
-
-  const panelTitle = activePanel === "terminal" ? "Terminal" : activePanel === "diff" ? "Diff" : activePanel === "browser" ? "Browser" : "";
+  const panelTitle = activePanel === "diff" ? "Diff" : activePanel === "browser" ? "Browser" : "";
 
   return (
     <AppShell fullHeight>
@@ -275,7 +296,9 @@ function SessionsPageContent() {
                 hasTranscript={agentHasTranscript(selected)}
                 detailLevel={detailLevel}
                 onDetailLevelChange={setDetailLevel}
-                onShowTerminal={handleShowTerminal}
+                centerView={centerView}
+                onCenterViewChange={setCenterView}
+                terminalRemountTick={selected ? restartTick[selected.id] ?? 0 : 0}
               />
             )}
           </div>
@@ -310,15 +333,6 @@ function SessionsPageContent() {
                 </button>
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {activePanel === "terminal" && (
-                  selected ? (
-                    <TerminalPanel key={`${selected.id}:${restartTick[selected.id] ?? 0}`} agent={selected} />
-                  ) : (
-                    <div className="flex flex-1 items-center justify-center text-[11px]" style={{ color: C.textMuted }}>
-                      {t("selectAgent")}
-                    </div>
-                  )
-                )}
                 {activePanel === "diff" && (
                   <div className="flex flex-1 items-center justify-center text-[13px] px-6 text-center" style={{ color: C.textMuted }}>
                     Diff-Ansicht kommt in Teil 3.

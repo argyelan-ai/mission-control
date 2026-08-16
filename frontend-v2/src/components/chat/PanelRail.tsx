@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * PanelRail — Task B6. Thin icon rail toggling the side panel next to the
- * chat: Terminal, Diff (placeholder — DiffPanel itself is task C1), Browser.
+ * PanelRail — Task B6 (revised: Terminal moved to a ChatView center-view
+ * toggle instead of living here — see ChatView.tsx's CenterView). Thin icon
+ * rail toggling the side panel next to the chat: Diff (placeholder —
+ * DiffPanel itself is task C1) and Browser.
  *
  * "Collapsible": clicking the already-active icon sets `active` back to
  * `null`, which collapses the panel slot entirely (chat goes full-width) —
@@ -13,13 +15,12 @@
  * mobile (<768px) becomes a fixed bottom bar — the "bottom-sheet trigger"
  * row for the full-screen panel overlay the parent page renders.
  */
-import { Terminal, GitCompare, Globe } from "lucide-react";
+import { GitCompare, Globe } from "lucide-react";
 import { C } from "@/lib/colors";
 
-export type PanelKind = "terminal" | "diff" | "browser";
+export type PanelKind = "diff" | "browser";
 
-const PANELS: { key: PanelKind; label: string; icon: typeof Terminal }[] = [
-  { key: "terminal", label: "Terminal", icon: Terminal },
+const PANELS: { key: PanelKind; label: string; icon: typeof GitCompare }[] = [
   { key: "diff", label: "Diff", icon: GitCompare },
   { key: "browser", label: "Browser", icon: Globe },
 ];

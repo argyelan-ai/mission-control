@@ -1,24 +1,30 @@
 "use client";
 
 /**
- * ChatView — Task B6. Composes the chat timeline over an agent's Claude Code
- * transcript: header (name, live/beendet badge, detail-level toggle), a
- * scroll-locked event list, the approval card (only while a permission
- * prompt is open), the truthful status line, and the composer.
+ * ChatView — Task B6 (revised). Composes the chat timeline over an agent's
+ * Claude Code transcript: header (name, live/beendet badge, detail-level
+ * toggle, Chat/Terminal center-view toggle), a scroll-locked event list, the
+ * approval card (only while a permission prompt is open), the truthful
+ * status line, and the composer.
  *
- * Owns nothing about panel layout (Terminal/Diff/Browser) — that's the
- * parent page's job; this only asks to open the terminal via
- * `onShowTerminal` (no-transcript empty state + ApprovalCard's escape hatch).
+ * Terminal used to be a side panel (PanelRail); it's now a CENTER-VIEW
+ * toggle right next to the detail-level switcher — selecting it swaps the
+ * whole body (timeline+composer) for `TerminalPanel` full-size instead of
+ * splitting the screen. No-transcript agents (Hermes/Jarvis, or a runtime
+ * 404 despite `hasTranscript` saying otherwise) force terminal mode: there's
+ * no chat to show, so the "Chat" segment is disabled rather than presenting
+ * a dead-end empty-state screen.
+ *
+ * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
+ * orthogonal to this toggle.
  */
 import { useEffect, useRef, useState } from "react";
-import { MessageSquareOff } from "lucide-react";
 import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
 import { isNoTranscriptError } from "@/lib/chatTypes";
 import type { TimelineChatEvent } from "@/lib/chatTypes";
-import type { Agent } from "@/lib/types";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
@@ -26,6 +32,7 @@ import { SubagentGroup } from "./SubagentGroup";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
+import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 
 export type DetailLevel = "compact" | "normal" | "verbose";
 
@@ -33,6 +40,13 @@ export const DETAIL_LEVELS: { key: DetailLevel; label: string }[] = [
   { key: "compact", label: "Kompakt" },
   { key: "normal", label: "Normal" },
   { key: "verbose", label: "Ausführlich" },
+];
+
+export type CenterView = "chat" | "terminal";
+
+export const CENTER_VIEWS: { key: CenterView; label: string }[] = [
+  { key: "chat", label: "Chat" },
+  { key: "terminal", label: "Terminal" },
 ];
 
 // Distance (px) from the bottom of the scroll container within which the
@@ -90,16 +104,29 @@ function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel) {
 }
 
 interface ChatViewProps {
-  agent: Agent | null;
+  agent: AgentWithState | null;
   /** Sidebar-derived, mirrors the backend's fail-closed transcript gate
-   *  (resolve_transcript_dir). `false` skips the history/SSE fetch outright. */
+   *  (resolve_transcript_dir). `false` skips the history/SSE fetch outright
+   *  and forces terminal mode — there's nothing to chat with. */
   hasTranscript: boolean;
   detailLevel: DetailLevel;
   onDetailLevelChange: (level: DetailLevel) => void;
-  onShowTerminal: () => void;
+  centerView: CenterView;
+  onCenterViewChange: (view: CenterView) => void;
+  /** Bumped by the parent page's `useTerminalRemountSignal` (backend-driven
+   *  runtime switch) to force-remount just the embedded TerminalPanel. */
+  terminalRemountTick?: number;
 }
 
-export function ChatView({ agent, hasTranscript, detailLevel, onDetailLevelChange, onShowTerminal }: ChatViewProps) {
+export function ChatView({
+  agent,
+  hasTranscript,
+  detailLevel,
+  onDetailLevelChange,
+  centerView,
+  onCenterViewChange,
+  terminalRemountTick = 0,
+}: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
 
@@ -107,9 +134,11 @@ export function ChatView({ agent, hasTranscript, detailLevel, onDetailLevelChang
   const stream = useChatStream(agent?.id ?? null, streamEnabled);
 
   // Belt and braces: even if the sidebar thought this agent had a
-  // transcript, a runtime 404 from the history fetch falls back to the same
-  // empty state instead of showing a permanently-loading chat.
-  const noTranscript = !hasTranscript || isNoTranscriptError(stream.error);
+  // transcript, a runtime 404 from the history fetch forces terminal mode
+  // the same way a known-no-transcript agent (Hermes/Jarvis) does — no
+  // separate dead-end empty-state screen, the toggle just can't reach "chat".
+  const canChat = hasTranscript && !isNoTranscriptError(stream.error);
+  const effectiveView: CenterView = canChat ? centerView : "terminal";
 
   useEffect(() => {
     if (!stickToBottom) return;
@@ -149,25 +178,6 @@ export function ChatView({ agent, hasTranscript, detailLevel, onDetailLevelChang
     );
   }
 
-  if (noTranscript) {
-    return (
-      <div className="flex flex-col flex-1 items-center justify-center gap-3 px-6 text-center">
-        <MessageSquareOff size={28} style={{ color: C.textMuted, opacity: 0.3 }} />
-        <p className="text-[13px]" style={{ color: C.textMuted }}>
-          Kein Transkript verfügbar — dieser Agent läuft ohne Claude Code
-        </p>
-        <button
-          type="button"
-          onClick={onShowTerminal}
-          className="min-h-touch inline-flex items-center rounded-md px-3 text-[12px] font-medium"
-          style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-        >
-          Terminal öffnen
-        </button>
-      </div>
-    );
-  }
-
   const visibleEvents = stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel));
   const grouped = groupTimeline(visibleEvents);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
@@ -178,7 +188,7 @@ export function ChatView({ agent, hasTranscript, detailLevel, onDetailLevelChang
         <span className="text-[13px] font-medium truncate" style={{ color: C.textPrimary }}>
           {agent.name}
         </span>
-        {stream.session && (
+        {canChat && stream.session && (
           <span
             className="text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0"
             style={{
@@ -190,53 +200,95 @@ export function ChatView({ agent, hasTranscript, detailLevel, onDetailLevelChang
             {stream.session.live ? "live" : "beendet"}
           </span>
         )}
-        <div
-          className="ml-auto flex items-center rounded-md overflow-hidden shrink-0"
-          style={{ border: `1px solid ${C.border}` }}
-        >
-          {DETAIL_LEVELS.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => onDetailLevelChange(key)}
-              aria-pressed={detailLevel === key}
-              className="px-2.5 py-1.5 text-[10px] font-medium transition-colors cursor-pointer whitespace-nowrap"
-              style={{
-                background: detailLevel === key ? C.accentSubtle : "transparent",
-                color: detailLevel === key ? C.accent : C.textMuted,
-                borderRight: key !== "verbose" ? `1px solid ${C.border}` : undefined,
-              }}
+
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          {effectiveView === "chat" && (
+            <div
+              className="flex items-center rounded-md overflow-hidden"
+              style={{ border: `1px solid ${C.border}` }}
             >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+              {DETAIL_LEVELS.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onDetailLevelChange(key)}
+                  aria-pressed={detailLevel === key}
+                  className="px-2.5 py-1.5 text-[10px] font-medium transition-colors cursor-pointer whitespace-nowrap"
+                  style={{
+                    background: detailLevel === key ? C.accentSubtle : "transparent",
+                    color: detailLevel === key ? C.accent : C.textMuted,
+                    borderRight: key !== "verbose" ? `1px solid ${C.border}` : undefined,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
-        {grouped.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
-            {stream.loading ? "Lädt…" : "Noch keine Nachrichten."}
+          <div
+            className="flex items-center rounded-md overflow-hidden"
+            style={{ border: `1px solid ${C.border}` }}
+          >
+            {CENTER_VIEWS.map(({ key, label }) => {
+              const disabled = key === "chat" && !canChat;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onCenterViewChange(key)}
+                  aria-pressed={effectiveView === key}
+                  title={disabled ? "Kein Transkript verfügbar" : undefined}
+                  className="px-2.5 py-1.5 text-[10px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap"
+                  style={{
+                    background: effectiveView === key ? C.accentSubtle : "transparent",
+                    color: effectiveView === key ? C.accent : C.textMuted,
+                    borderRight: key !== "terminal" ? `1px solid ${C.border}` : undefined,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
-        ) : (
-          grouped.map((item) =>
-            Array.isArray(item) ? (
-              <SubagentGroup key={`sidechain-${item[0].uuid}`} events={item} />
-            ) : (
-              renderTimelineEvent(item, detailLevel)
-            ),
-          )
-        )}
+        </div>
       </div>
 
-      {prompt && (
-        <div className="px-3 pt-2">
-          <ApprovalCard prompt={prompt} onAnswer={handleAnswer} onShowTerminal={onShowTerminal} />
-        </div>
-      )}
+      {effectiveView === "terminal" ? (
+        <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent} />
+      ) : (
+        <>
+          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+            {grouped.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
+                {stream.loading ? "Lädt…" : "Noch keine Nachrichten."}
+              </div>
+            ) : (
+              grouped.map((item) =>
+                Array.isArray(item) ? (
+                  <SubagentGroup key={`sidechain-${item[0].uuid}`} events={item} />
+                ) : (
+                  renderTimelineEvent(item, detailLevel)
+                ),
+              )
+            )}
+          </div>
 
-      <StatusLine state={stream.state} connected={stream.connected} />
-      <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} />
+          {prompt && (
+            <div className="px-3 pt-2">
+              <ApprovalCard
+                prompt={prompt}
+                onAnswer={handleAnswer}
+                onShowTerminal={() => onCenterViewChange("terminal")}
+              />
+            </div>
+          )}
+
+          <StatusLine state={stream.state} connected={stream.connected} />
+          <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} />
+        </>
+      )}
     </div>
   );
 }

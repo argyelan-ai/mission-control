@@ -1,22 +1,26 @@
 /**
- * ChatView — Task B6 vitest.
+ * ChatView — Task B6 vitest (revised: Terminal moved from a side panel to a
+ * center-view toggle in ChatView's own header, next to the detail switcher).
  *
- * Coverage: no-transcript empty state (hasTranscript=false AND the
- * belt-and-braces runtime 404 fallback), detail-level filtering (Kompakt
- * hides tool/thinking rows entirely, Ausführlich expands them), the approval
- * card only appearing on a permission_prompt state, and outbound actions
- * (send / stop / answer) reaching `api.chat.*` with the right arguments.
+ * Coverage: the Chat/Terminal header toggle switches the center content,
+ * no-transcript agents (and the belt-and-braces runtime-404 case) force
+ * terminal mode and disable the Chat segment, detail-level filtering
+ * (Kompakt/Normal/Ausführlich), the approval card only on a permission
+ * prompt, and outbound actions (send / stop / answer) reaching
+ * `api.chat.*` with the right arguments.
  *
- * `useChatStream` itself is mocked — its own reducer/hook wiring is covered
- * by useChatStream.test.ts; this only needs to control what it returns.
+ * `useChatStream` and `TerminalPanel` are both mocked — the stream's own
+ * reducer/hook wiring is covered by useChatStream.test.ts, and
+ * TerminalPanel's xterm/WebSocket machinery is out of scope here (it's a
+ * verbatim move covered by its own future test surface / manual live-gate).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatView } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
-import type { Agent } from "@/lib/types";
+import type { AgentWithState } from "./TerminalPanel";
 import type { MessageEvent, ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
@@ -28,6 +32,15 @@ vi.mock("@/lib/api", () => ({
     },
   },
 }));
+vi.mock("./TerminalPanel", async () => {
+  const actual = await vi.importActual<typeof import("./TerminalPanel")>("./TerminalPanel");
+  return {
+    ...actual,
+    TerminalPanel: ({ agent }: { agent: { name: string } }) => (
+      <div data-testid="terminal-panel-stub">Terminal-Panel: {agent.name}</div>
+    ),
+  };
+});
 
 // cmdk's <Command.List> (inside Composer) reaches for ResizeObserver and
 // scrollIntoView — neither exists in jsdom (same stub as Composer.test.tsx).
@@ -43,7 +56,7 @@ beforeAll(() => {
 
 const mockUseChatStream = vi.mocked(useChatStream);
 
-function mkAgent(overrides: Partial<Agent> = {}): Agent {
+function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
   return {
     id: "agent-1",
     board_id: null,
@@ -94,6 +107,7 @@ function mkAgent(overrides: Partial<Agent> = {}): Agent {
     runtime_switch_blocked_reason: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
+    container_state: "running",
     ...overrides,
   };
 }
@@ -146,75 +160,102 @@ const THINKING: ThinkingEvent = {
 
 const noop = () => {};
 
+function renderChatView(overrides: Partial<React.ComponentProps<typeof ChatView>> = {}) {
+  return render(
+    <ChatView
+      agent={mkAgent()}
+      hasTranscript
+      detailLevel="normal"
+      onDetailLevelChange={noop}
+      centerView="chat"
+      onCenterViewChange={noop}
+      {...overrides}
+    />
+  );
+}
+
 describe("ChatView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("shows the no-transcript empty state when hasTranscript is false", () => {
-    mockUseChatStream.mockReturnValue(mkStream());
-    const onShowTerminal = vi.fn();
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript={false}
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={onShowTerminal}
-      />
-    );
-
-    expect(
-      screen.getByText("Kein Transkript verfügbar — dieser Agent läuft ohne Claude Code")
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Terminal öffnen" }));
-    expect(onShowTerminal).toHaveBeenCalledTimes(1);
+  it("renders the chat timeline in chat mode", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
   });
 
-  it("falls back to the no-transcript empty state on a runtime no_transcript 404, even if hasTranscript was true", () => {
+  it("switching the header toggle to Terminal swaps the center content", async () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    const onCenterViewChange = vi.fn();
+    const user = userEvent.setup();
+    renderChatView({ onCenterViewChange });
+
+    await user.click(screen.getByRole("button", { name: "Terminal" }));
+    expect(onCenterViewChange).toHaveBeenCalledWith("terminal");
+  });
+
+  it("centerView='terminal' renders TerminalPanel instead of the timeline/composer", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ centerView: "terminal" });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toHaveTextContent("Terminal-Panel: Cody");
+    expect(screen.queryByText("Hallo!")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Nachricht an den Agenten…")).not.toBeInTheDocument();
+  });
+
+  it("switching back to Chat calls onCenterViewChange('chat')", async () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    const onCenterViewChange = vi.fn();
+    const user = userEvent.setup();
+    renderChatView({ centerView: "terminal", onCenterViewChange });
+
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(onCenterViewChange).toHaveBeenCalledWith("chat");
+  });
+
+  it("hides the detail-level switcher while in terminal mode", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ centerView: "terminal" });
+    expect(screen.queryByRole("button", { name: "Kompakt" })).not.toBeInTheDocument();
+  });
+
+  it("shows the detail-level switcher in chat mode", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ centerView: "chat" });
+    expect(screen.getByRole("button", { name: "Kompakt" })).toBeInTheDocument();
+  });
+
+  it("no-transcript agents force terminal mode and disable the Chat segment", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ hasTranscript: false, centerView: "chat" });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+    const chatButton = screen.getByRole("button", { name: "Chat" });
+    expect(chatButton).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a runtime no_transcript 404 also forces terminal mode, even if hasTranscript was true", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ error: new Error('API 404: {"reason":"no_transcript"}') })
     );
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView({ hasTranscript: true, centerView: "chat" });
 
-    expect(
-      screen.getByText("Kein Transkript verfügbar — dieser Agent läuft ohne Claude Code")
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat" })).toBeDisabled();
   });
 
   it("does not fetch the stream at all when hasTranscript is false", () => {
     mockUseChatStream.mockReturnValue(mkStream());
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript={false}
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView({ hasTranscript: false });
     expect(mockUseChatStream).toHaveBeenCalledWith("agent-1", false);
   });
 
   it("Kompakt hides tool and thinking rows entirely", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, THINKING] }));
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="compact"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView({ detailLevel: "compact" });
 
     expect(screen.getByText("Hallo!")).toBeInTheDocument();
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
@@ -223,15 +264,7 @@ describe("ChatView", () => {
 
   it("Normal shows tool/thinking rows collapsed by default", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, THINKING] }));
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView({ detailLevel: "normal" });
 
     expect(screen.getByText("Read foo.py")).toBeInTheDocument();
     expect(screen.getByText("Denkt nach…")).toBeInTheDocument();
@@ -241,15 +274,7 @@ describe("ChatView", () => {
 
   it("Ausführlich expands tool/thinking rows by default", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, THINKING] }));
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="verbose"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView({ detailLevel: "verbose" });
 
     expect(screen.getByText(/file_path/)).toBeInTheDocument();
     expect(screen.getByText("Hmm, let me check...")).toBeInTheDocument();
@@ -259,15 +284,7 @@ describe("ChatView", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
     const onChange = vi.fn();
     const user = userEvent.setup();
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={onChange}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView({ onDetailLevelChange: onChange });
 
     await user.click(screen.getByRole("button", { name: "Ausführlich" }));
     expect(onChange).toHaveBeenCalledWith("verbose");
@@ -283,17 +300,27 @@ describe("ChatView", () => {
         },
       })
     );
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView();
 
     expect(screen.getByText("Datei löschen?")).toBeInTheDocument();
+  });
+
+  it("the ApprovalCard's terminal escape hatch calls onCenterViewChange('terminal')", async () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: {
+          kind: "state",
+          status: "permission_prompt",
+          prompt: { question: "Löschen?", options: [{ key: "1", label: "Ja" }] },
+        },
+      })
+    );
+    const onCenterViewChange = vi.fn();
+    const user = userEvent.setup();
+    renderChatView({ onCenterViewChange });
+
+    await user.click(screen.getByText("Im Terminal prüfen"));
+    expect(onCenterViewChange).toHaveBeenCalledWith("terminal");
   });
 
   it("answering the approval sends the bare key via api.chat.sendKeys (no Enter)", async () => {
@@ -307,15 +334,7 @@ describe("ChatView", () => {
       })
     );
     const user = userEvent.setup();
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView();
 
     await user.click(screen.getByRole("button", { name: "Ja" }));
     expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["1"]);
@@ -325,15 +344,7 @@ describe("ChatView", () => {
   it("sending a composer message calls api.chat.sendText", async () => {
     mockUseChatStream.mockReturnValue(mkStream());
     const user = userEvent.setup();
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView();
 
     await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "Hi");
     await user.click(screen.getByRole("button", { name: "Senden" }));
@@ -343,15 +354,7 @@ describe("ChatView", () => {
   it("stopping sends Escape via api.chat.sendKeys", async () => {
     mockUseChatStream.mockReturnValue(mkStream({ state: { kind: "state", status: "working", prompt: null } }));
     const user = userEvent.setup();
-    render(
-      <ChatView
-        agent={mkAgent()}
-        hasTranscript
-        detailLevel="normal"
-        onDetailLevelChange={noop}
-        onShowTerminal={noop}
-      />
-    );
+    renderChatView();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]);
@@ -365,7 +368,8 @@ describe("ChatView", () => {
         hasTranscript={false}
         detailLevel="normal"
         onDetailLevelChange={noop}
-        onShowTerminal={noop}
+        centerView="chat"
+        onCenterViewChange={noop}
       />
     );
     expect(screen.getByText("Wähle eine Session in der Seitenleiste.")).toBeInTheDocument();

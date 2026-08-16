@@ -52,21 +52,62 @@ vi.mock("@/components/chat/TerminalPanel", async () => {
 // unrelated to sidebar restore/persist behavior and would otherwise fire
 // unmocked network calls (api.chat.history) plus reach for EventSource,
 // which jsdom doesn't implement. A thin stub keeps this suite hermetic; the
-// chat rendering itself is covered by ChatView.test.tsx.
+// chat rendering itself (incl. the Chat/Terminal header toggle swapping
+// content and no-transcript agents forcing terminal mode) is covered by
+// ChatView.test.tsx. This stub surfaces just enough of `hasTranscript` and
+// `centerView`/`onCenterViewChange` for the page-level tests below, which
+// only care that sessions/page.tsx computes and wires those props/persists
+// them correctly — not how ChatView renders once it has them.
 vi.mock("@/components/chat/ChatView", () => ({
-  ChatView: ({ agent }: { agent: { name: string } | null }) => (
-    <div data-testid="chat-view-stub">{agent ? `Chat: ${agent.name}` : "Chat: none"}</div>
+  ChatView: ({
+    agent,
+    hasTranscript,
+    centerView,
+    onCenterViewChange,
+  }: {
+    agent: { name: string } | null;
+    hasTranscript: boolean;
+    centerView: string;
+    onCenterViewChange: (v: string) => void;
+  }) => (
+    <div data-testid="chat-view-stub">
+      <span>{agent ? `Chat: ${agent.name}` : "Chat: none"}</span>
+      <span data-testid="chat-view-has-transcript">{String(hasTranscript)}</span>
+      <span data-testid="chat-view-center">{centerView}</span>
+      <button
+        type="button"
+        onClick={() => onCenterViewChange(centerView === "chat" ? "terminal" : "chat")}
+      >
+        Toggle Center View
+      </button>
+    </div>
   ),
   DETAIL_LEVELS: [
     { key: "compact", label: "Kompakt" },
     { key: "normal", label: "Normal" },
     { key: "verbose", label: "Ausführlich" },
   ],
+  CENTER_VIEWS: [
+    { key: "chat", label: "Chat" },
+    { key: "terminal", label: "Terminal" },
+  ],
 }));
 
 import SessionsPage from "../page";
 
-function mkAgent(overrides: Partial<Agent> & { container_state?: string } = {}): Agent & { container_state: string } {
+function mkAgent(
+  overrides: Partial<Agent> & {
+    container_state?: string;
+    session_name?: string;
+    session_running?: boolean;
+    slug?: string | null;
+  } = {}
+): Agent & {
+  container_state: string;
+  session_name: string;
+  session_running: boolean;
+  slug?: string | null;
+} {
   return {
     id: "agent-1",
     board_id: null,
@@ -118,6 +159,8 @@ function mkAgent(overrides: Partial<Agent> & { container_state?: string } = {}):
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     container_state: "exited",
+    session_name: "agent-one-host",
+    session_running: false,
     ...overrides,
   };
 }
@@ -221,7 +264,7 @@ describe("SessionsPage — last-selected-agent restore", () => {
   });
 });
 
-describe("SessionsPage — panel rail switches the panel slot's content", () => {
+describe("SessionsPage — panel rail switches the panel slot's content (Diff/Browser only)", () => {
   let store: Record<string, string>;
 
   beforeEach(() => {
@@ -250,44 +293,35 @@ describe("SessionsPage — panel rail switches the panel slot's content", () => 
     vi.restoreAllMocks();
   });
 
-  it("no panel is open by default — the panel slot is absent", async () => {
+  it("no panel is open by default, and Terminal is no longer one of the rail's options", async () => {
     renderPage();
     await screen.findAllByText("Agent One");
 
-    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("browser-live-view-stub")).not.toBeInTheDocument();
     expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
   });
 
-  it("selecting Terminal opens the terminal panel for the selected agent", async () => {
+  it("selecting Browser opens the browser panel", async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
-
-    await user.click(screen.getByRole("button", { name: "Terminal" }));
-    expect(await screen.findByTestId("terminal-panel-stub")).toHaveTextContent("Terminal-Panel: Agent One");
-  });
-
-  it("switching from Terminal to Browser replaces the panel content (not both)", async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findAllByText("Agent One");
-
-    await user.click(screen.getByRole("button", { name: "Terminal" }));
-    await screen.findByTestId("terminal-panel-stub");
 
     await user.click(screen.getByRole("button", { name: "Browser" }));
     expect(await screen.findByTestId("browser-live-view-stub")).toBeInTheDocument();
-    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
   });
 
-  it("selecting Diff shows the Phase C placeholder", async () => {
+  it("switching from Diff to Browser replaces the panel content (not both)", async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
 
     await user.click(screen.getByRole("button", { name: "Diff" }));
-    expect(await screen.findByText("Diff-Ansicht kommt in Teil 3.")).toBeInTheDocument();
+    await screen.findByText("Diff-Ansicht kommt in Teil 3.");
+
+    await user.click(screen.getByRole("button", { name: "Browser" }));
+    expect(await screen.findByTestId("browser-live-view-stub")).toBeInTheDocument();
+    expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
   });
 
   it("clicking the already-active panel icon collapses the panel", async () => {
@@ -295,10 +329,97 @@ describe("SessionsPage — panel rail switches the panel slot's content", () => 
     renderPage();
     await screen.findAllByText("Agent One");
 
-    await user.click(screen.getByRole("button", { name: "Terminal" }));
-    await screen.findByTestId("terminal-panel-stub");
+    await user.click(screen.getByRole("button", { name: "Diff" }));
+    await screen.findByText("Diff-Ansicht kommt in Teil 3.");
 
-    await user.click(screen.getByRole("button", { name: "Terminal" }));
-    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Diff" }));
+    expect(screen.queryByText("Diff-Ansicht kommt in Teil 3.")).not.toBeInTheDocument();
+  });
+});
+
+describe("SessionsPage — center view (Chat/Terminal) wiring and hasTranscript derivation", () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    nav.searchParamsString = "";
+
+    store = {};
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store[k] ?? null,
+        setItem: (k: string, v: string) => { store[k] = v; },
+        removeItem: (k: string) => { delete store[k]; },
+        clear: () => { store = {}; },
+        length: 0,
+        key: () => null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("defaults centerView to 'chat' and persists a change to mc.chat.view", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByTestId("chat-view-center")).toHaveTextContent("chat");
+
+    await user.click(screen.getByRole("button", { name: "Toggle Center View" }));
+    expect(screen.getByTestId("chat-view-center")).toHaveTextContent("terminal");
+    await waitFor(() => expect(localStorage.getItem("mc.chat.view")).toBe("terminal"));
+  });
+
+  it("restores a persisted mc.chat.view=terminal on load", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+    localStorage.setItem("mc.chat.view", "terminal");
+    renderPage();
+
+    expect(await screen.findByTestId("chat-view-center")).toHaveTextContent("terminal");
+  });
+
+  it("passes hasTranscript=true for a cli-bridge agent", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One", agent_runtime: "cli-bridge" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("true")
+    );
+  });
+
+  it("passes hasTranscript=false for a non-Boss host agent (Hermes/Jarvis) — ChatView forces terminal mode from this", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Hermes", agent_runtime: "host", slug: "hermes" }),
+    ]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("false")
+    );
+  });
+
+  it("passes hasTranscript=true for the Boss host agent", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Boss", agent_runtime: "host", slug: "boss" }),
+    ]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("true")
+    );
   });
 });
