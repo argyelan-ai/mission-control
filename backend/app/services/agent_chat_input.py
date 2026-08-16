@@ -63,6 +63,13 @@ _BOSS_WS_URL = "ws://host.docker.internal:7682/"
 _BRACKETED_PASTE_START = "\x1b[200~"
 _BRACKETED_PASTE_END = "\x1b[201~"
 
+# Gap between the text frame and the Enter frame on the Boss WS path. Sending
+# text + "\r" as ONE frame (or as two frames back-to-back with no gap) makes
+# the Claude TUI's paste detection swallow the Enter as part of the pasted
+# text instead of submitting it — the message sits in the input box forever
+# (fix round 2, reproduced live: text landed but never submitted for hours).
+_BOSS_ENTER_DELAY_SECONDS = 0.15
+
 
 class InputNotSupportedError(Exception):
     """Raised when the agent's runtime has no live input channel."""
@@ -90,16 +97,24 @@ async def _run_docker_exec(argv: list[str]) -> None:
         )
 
 
-async def _send_boss_bytes(*payloads: bytes) -> None:
+async def _send_boss_bytes(*payloads: bytes, delay_before_last: float = 0.0) -> None:
     """Opens a short-lived WS connection to the host-pty-bridge, writes each
-    payload in order, then closes. Never raises for the same reason as
-    ``_run_docker_exec`` — a dead bridge just means the keystroke is lost,
-    not a request the caller can retry meaningfully."""
+    payload in order as its OWN frame, then closes. If ``delay_before_last``
+    is set, waits that long before sending the final payload — needed when
+    the last payload is a submitting ``Enter``, since sending it back-to-back
+    with the preceding text (or worse, concatenated into one frame) makes the
+    Claude TUI treat the whole thing as a paste and never submit (fix round 2).
+    Never raises for the same reason as ``_run_docker_exec`` — a dead bridge
+    just means the keystroke is lost, not a request the caller can retry
+    meaningfully."""
     try:
         async with ws_client.connect(
             _BOSS_WS_URL, open_timeout=5, ping_interval=None,
         ) as ws:
-            for payload in payloads:
+            last_index = len(payloads) - 1
+            for i, payload in enumerate(payloads):
+                if i == last_index and delay_before_last:
+                    await asyncio.sleep(delay_before_last)
                 await ws.send(payload)
     except Exception:
         logger.warning("chat input: boss WS delivery failed", exc_info=True)
@@ -138,8 +153,11 @@ async def send_text(agent, text: str) -> None:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
         return
 
-    # kind == "boss"
-    await _send_boss_bytes(text.encode() + b"\r")
+    # kind == "boss" — text and its submitting Enter MUST be separate frames
+    # with a gap between them (see _send_boss_bytes docstring / fix round 2).
+    await _send_boss_bytes(
+        text.encode(), b"\r", delay_before_last=_BOSS_ENTER_DELAY_SECONDS
+    )
 
 
 async def send_keys(agent, keys: list[str]) -> None:

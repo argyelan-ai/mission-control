@@ -32,11 +32,14 @@ class _StubAgent:
 
 
 class _FakeWSConn:
-    def __init__(self, sent: list[bytes]):
+    def __init__(self, sent: list[bytes], events: list[tuple] | None = None):
         self._sent = sent
+        self._events = events
 
     async def send(self, payload: bytes) -> None:
         self._sent.append(payload)
+        if self._events is not None:
+            self._events.append(("send", payload))
 
     async def __aenter__(self) -> "_FakeWSConn":
         return self
@@ -46,13 +49,19 @@ class _FakeWSConn:
 
 
 class _FakeWSClient:
+    """``events`` interleaves ``("send", payload)`` entries with whatever a
+    test also appends to it (e.g. a monkeypatched ``asyncio.sleep`` recording
+    ``("sleep", delay)``) — needed to assert frame/delay ordering, not just
+    the final set of bytes sent."""
+
     def __init__(self):
         self.sent: list[bytes] = []
         self.connected_urls: list[str] = []
+        self.events: list[tuple] = []
 
     def connect(self, url: str, **kwargs):
         self.connected_urls.append(url)
-        return _FakeWSConn(self.sent)
+        return _FakeWSConn(self.sent, self.events)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -207,7 +216,32 @@ async def test_send_text_boss_sends_bytes_over_ws(monkeypatch):
     await agent_chat_input.send_text(agent, "deploy the thing")
 
     assert fake_client.connected_urls == ["ws://host.docker.internal:7682/"]
-    assert fake_client.sent == [b"deploy the thing\r"]
+    assert fake_client.sent == [b"deploy the thing", b"\r"]
+
+
+async def test_send_text_boss_sends_text_then_enter_as_separate_frames_with_delay(monkeypatch):
+    """Fix round 2 — reproduced live: text + '\\r' sent as one frame (or two
+    frames with no gap) makes the Claude TUI treat the Enter as part of a
+    paste and never submit. Text must land, THEN a delay, THEN Enter as its
+    own frame."""
+    from app.services import agent_chat_input
+
+    fake_client = _FakeWSClient()
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+
+    async def _fake_sleep(delay):
+        fake_client.events.append(("sleep", delay))
+
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.send_text(agent, "deploy the thing")
+
+    assert fake_client.events == [
+        ("send", b"deploy the thing"),
+        ("sleep", 0.15),
+        ("send", b"\r"),
+    ]
 
 
 async def test_send_text_boss_host_alias_slug(monkeypatch):
@@ -219,7 +253,7 @@ async def test_send_text_boss_host_alias_slug(monkeypatch):
     agent = _StubAgent(slug="boss-host", agent_runtime="host")
     await agent_chat_input.send_text(agent, "hi")
 
-    assert fake_client.sent == [b"hi\r"]
+    assert fake_client.sent == [b"hi", b"\r"]
 
 
 async def test_send_keys_boss_sends_mapped_bytes(monkeypatch):
