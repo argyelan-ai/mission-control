@@ -28,5 +28,16 @@
       }
     ]
   },
+  {% endif %}{% if status_line %}{#
+    Statusline hook: mirrors Claude Code's own live context-window
+    accounting to disk on every prompt (docker/shared/statusline-mc.sh),
+    so the chat context meter reads the CLI's ground truth instead of
+    guessing from a static model->window map. claude harness only, same
+    reasoning as the hooks block above — openclaude's tolerance to an
+    unknown top-level `statusLine` key is unproven.
+  #}"statusLine": {
+    "type": "command",
+    "command": "bash /home/agent/.claude/statusline-mc.sh"
+  },
   {% endif %}"skipDangerousModePermissionPrompt": true
 }

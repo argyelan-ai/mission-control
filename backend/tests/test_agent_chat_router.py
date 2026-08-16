@@ -276,6 +276,93 @@ async def test_tailer_dedups_repeated_uuid(manager, fake_broadcast, tmp_path):
     assert len(fake_broadcast) == 1
 
 
+def _assistant_usage_line(msg_uuid: str = "u1") -> str:
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": msg_uuid,
+            "timestamp": "2026-08-13T00:00:00Z",
+            "isSidechain": False,
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "id": f"msg_{msg_uuid}",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "content": [{"type": "text", "text": "usage carrier"}],
+            },
+        }
+    )
+
+
+async def test_tailer_usage_event_source_cli_when_statusline_fresh(manager, fake_broadcast, tmp_path):
+    """A live usage event picks up docker/shared/statusline-mc.sh's fresh
+    state file — same claude-config-root derivation read_history uses, see
+    test_transcript_chat_history.py's _session_file fixture. session_file
+    must sit 3 levels below claude-config/ (.../projects/<enc>/<sess>.jsonl,
+    matching resolve_transcript_dir's real shape) for the derivation to land
+    on the right statusline-state/ directory."""
+    tdir = tmp_path / "claude-config" / "projects" / "-home-agent"
+    tdir.mkdir(parents=True)
+    session_file = tdir / "sess1.jsonl"
+    session_file.write_text("")
+
+    state_dir = tmp_path / "claude-config" / "statusline-state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "sess1.json").write_text(
+        json.dumps(
+            {
+                "context_window": {
+                    "used_percentage": 61.0,
+                    "current_usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "cache_read_input_tokens": 1,
+                        "cache_creation_input_tokens": 1,
+                    },
+                }
+            }
+        )
+    )
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        with session_file.open("a") as f:
+            f.write(_assistant_usage_line() + "\n")
+        assert await _wait_until(
+            lambda: any(d["kind"] == "usage" for _, _, d in fake_broadcast)
+        )
+    finally:
+        await manager.release("agent-1")
+
+    usage = next(d for _, _, d in fake_broadcast if d["kind"] == "usage")
+    assert usage["usedPct"] == 61.0
+    assert usage["source"] == "cli"
+
+
+async def test_tailer_usage_event_source_estimate_without_statusline_state(manager, fake_broadcast, tmp_path):
+    """No statusline-mc.sh write ever happened (fresh agent, Boss, or the
+    script failed) — usage events still publish, just with the static
+    contextWindow estimate and no usedPct."""
+    tdir = tmp_path / "claude-config" / "projects" / "-home-agent"
+    tdir.mkdir(parents=True)
+    session_file = tdir / "sess1.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        with session_file.open("a") as f:
+            f.write(_assistant_usage_line() + "\n")
+        assert await _wait_until(
+            lambda: any(d["kind"] == "usage" for _, _, d in fake_broadcast)
+        )
+    finally:
+        await manager.release("agent-1")
+
+    usage = next(d for _, _, d in fake_broadcast if d["kind"] == "usage")
+    assert usage["usedPct"] is None
+    assert usage["source"] == "estimate"
+
+
 async def test_tailer_survives_broadcast_exception(manager, tmp_path, monkeypatch):
     """A transient failure inside sse.broadcast (e.g. Redis hiccup) must not
     silently kill the poll task while clients stay connected."""

@@ -457,6 +457,89 @@ def transcript_allowed(agent, path: Path) -> bool:
     return _should_attribute_boss_path(cwd, git_branch)
 
 
+# ── Statusline state (I/O — reads the CLI's own context-window truth) ───────
+#
+# Claude Code invokes settings.json's `statusLine` command on every prompt,
+# piping it a JSON blob with the CLI's own live token accounting
+# (context_window.used_percentage, context_window.current_usage.*).
+# docker/shared/statusline-mc.sh (wired in via plugin_manager.render_agent_settings,
+# claude-harness agents only) mirrors that blob to
+# <claude-config>/statusline-state/<session_id>.json. Reading it back here
+# gives the chat context meter ground truth instead of a guess from the
+# static settings.context_windows model->size map (resolve_context_window
+# above) — the estimate stays as the fallback for models/agents where no
+# fresh statusline write exists yet (Boss, whose ~/.claude isn't managed by
+# this codebase; agents that haven't sent a prompt since the feature shipped).
+
+_STATUSLINE_FRESH_SECONDS = 120
+
+
+def _claude_config_root(session_path: Path) -> Path:
+    """Given a session's transcript file path, returns the claude-config (or
+    Boss's ~/.claude) root two levels above its parent directory — the
+    inverse of resolve_transcript_dir's own shape:
+    ``<root>/projects/<encoded-cwd>/<session>.jsonl``, so
+    ``session_path.parent`` is ``projects/<encoded-cwd>`` and
+    ``session_path.parent.parent`` is ``<root>``... two levels up from the
+    session's *parent* dir, i.e. three from the file itself."""
+    return session_path.parent.parent.parent
+
+
+def read_statusline_state(claude_config_root: Path, session_id: str) -> dict[str, Any] | None:
+    """Reads ``<claude_config_root>/statusline-state/<session_id>.json`` —
+    the file docker/shared/statusline-mc.sh writes on every Claude Code
+    prompt for this session. Returns ``{"usedPct": float, "usedTokens": int}``
+    (``usedTokens`` = the sum of the four ``current_usage`` fields Claude
+    Code reports) when the file exists, was written less than
+    ``_STATUSLINE_FRESH_SECONDS`` ago (older means no CLI turn has run
+    recently enough to trust it — the agent may have switched sessions or
+    the script may be broken), and parses as the expected shape. ``None`` on
+    any failure — missing file (most agents, always for Boss), stale mtime,
+    or malformed JSON. Never raises; the caller falls back to the static
+    ``resolve_context_window`` estimate."""
+    state_file = claude_config_root / "statusline-state" / f"{session_id}.json"
+    try:
+        mtime = state_file.stat().st_mtime
+    except OSError:
+        return None
+    if (time.time() - mtime) >= _STATUSLINE_FRESH_SECONDS:
+        return None
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        ctx = data["context_window"]
+        usage = ctx["current_usage"]
+        used_pct = float(ctx["used_percentage"])
+        used_tokens = int(
+            (usage.get("input_tokens") or 0)
+            + (usage.get("output_tokens") or 0)
+            + (usage.get("cache_read_input_tokens") or 0)
+            + (usage.get("cache_creation_input_tokens") or 0)
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"usedPct": used_pct, "usedTokens": used_tokens}
+
+
+def _stamp_usage_source(ev: dict[str, Any], claude_config_root: Path, session_id: str) -> None:
+    """Mutates a ``usage`` event in place with ``usedPct``/``source``,
+    preferring fresh statusline state (source ``"cli"``) over the static
+    ``contextWindow`` estimate parse_transcript_line already stamped
+    (source ``"estimate"``, ``usedPct`` left ``None`` for the frontend to
+    compute from ``contextWindow`` itself)."""
+    state = read_statusline_state(claude_config_root, session_id)
+    if state is not None:
+        ev["usedPct"] = state["usedPct"]
+        ev["source"] = "cli"
+    else:
+        ev["usedPct"] = None
+        ev["source"] = "estimate"
+
+
 # ── History reading (I/O — reads a transcript file, not pure) ───────────────
 
 _RESULT_TRUNCATE_LEN = 4000
@@ -485,6 +568,7 @@ def read_history(path: Path, limit: int = 200, before_uuid: str | None = None) -
     just part of it. An unknown ``before_uuid`` yields an empty page.
     """
     session_id = path.stem
+    claude_config_root = _claude_config_root(path)
     try:
         live = (time.time() - path.stat().st_mtime) < _LIVE_WINDOW_SECONDS
     except OSError:
@@ -536,6 +620,8 @@ def read_history(path: Path, limit: int = 200, before_uuid: str | None = None) -
                         tool_use_id = ev.get("toolUseId")
                         if tool_use_id is not None:
                             tool_events_by_id[tool_use_id] = ev
+                    elif ev["kind"] == "usage":
+                        _stamp_usage_source(ev, claude_config_root, session_id)
 
                     events.append(ev)
 
@@ -775,6 +861,19 @@ class ChatTailerManager:
                                 tool_use_id = ev.get("toolUseId")
                                 if tool_use_id is not None:
                                     tool_events_by_id[tool_use_id] = ev
+                            elif ev["kind"] == "usage":
+                                # Sync file I/O (stat + read of the statusline
+                                # state file) -> to_thread, same rule as
+                                # _read_new_chunk above: the event loop never
+                                # blocks on disk. current_path is re-derived
+                                # per event (not hoisted) since a rollover mid-
+                                # tick swaps it.
+                                await asyncio.to_thread(
+                                    _stamp_usage_source,
+                                    ev,
+                                    _claude_config_root(current_path),
+                                    current_path.stem,
+                                )
 
                             await sse.broadcast(channel, "chat_event", ev)
                 except asyncio.CancelledError:

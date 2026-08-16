@@ -83,6 +83,22 @@ def _assistant_multi_tool(uuid, ts, tools):
     }
 
 
+def _assistant_usage(uuid, ts, input_tokens=100, output_tokens=50):
+    return {
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": ts,
+        "isSidechain": False,
+        "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "id": f"msg_{uuid}",
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            "content": [{"type": "text", "text": "usage carrier"}],
+        },
+    }
+
+
 def _tool_result(uuid, ts, tool_use_id, content, is_error=False):
     block = {"type": "tool_result", "tool_use_id": tool_use_id, "content": content}
     if is_error:
@@ -419,3 +435,91 @@ def test_read_history_malformed_and_blank_lines_skipped(tmp_path):
         ("message", "m1"),
         ("message", "m2"),
     ]
+
+
+# ── usage events: statusline-state source stamping ──────────────────────────
+#
+# resolve_transcript_dir shapes an agent's transcript dir as
+# <claude-config>/projects/<encoded-cwd>/, and find_active_session returns a
+# .jsonl file directly inside it — so a session file's path is
+# <claude-config>/projects/<encoded-cwd>/<session>.jsonl. These fixtures
+# replicate that same nesting (3 levels below <claude-config>) so
+# _claude_config_root's "three up from the file" derivation resolves to a
+# real, writable statusline-state/ dir, exactly like on disk.
+
+
+def _session_file(tmp_path):
+    """Builds <tmp_path>/claude-config/projects/-encoded-/session.jsonl and
+    returns (session_file, claude_config_root)."""
+    tdir = tmp_path / "claude-config" / "projects" / "-home-agent"
+    tdir.mkdir(parents=True)
+    return tdir / "session.jsonl", tmp_path / "claude-config"
+
+
+def test_read_history_usage_event_source_cli_when_statusline_fresh(tmp_path):
+    f, claude_config_root = _session_file(tmp_path)
+    _write_jsonl(f, [_assistant_usage("u1", "2026-08-13T10:00:00Z")])
+
+    state_dir = claude_config_root / "statusline-state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "session.json").write_text(
+        json.dumps(
+            {
+                "context_window": {
+                    "used_percentage": 37.5,
+                    "current_usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
+                }
+            }
+        )
+    )
+
+    result = read_history(f, limit=200)
+    usage = next(e for e in result["events"] if e["kind"] == "usage")
+
+    assert usage["usedPct"] == 37.5
+    assert usage["source"] == "cli"
+
+
+def test_read_history_usage_event_source_estimate_when_no_statusline_state(tmp_path):
+    f, _claude_config_root = _session_file(tmp_path)
+    _write_jsonl(f, [_assistant_usage("u1", "2026-08-13T10:00:00Z")])
+
+    result = read_history(f, limit=200)
+    usage = next(e for e in result["events"] if e["kind"] == "usage")
+
+    assert usage["usedPct"] is None
+    assert usage["source"] == "estimate"
+    # contextWindow (the static estimate) is untouched — resolve_context_window
+    # still ran inside parse_transcript_line.
+    assert usage["contextWindow"] == 200_000
+
+
+def test_read_history_usage_event_source_estimate_when_statusline_stale(tmp_path):
+    import os
+    import time
+
+    f, claude_config_root = _session_file(tmp_path)
+    _write_jsonl(f, [_assistant_usage("u1", "2026-08-13T10:00:00Z")])
+
+    state_dir = claude_config_root / "statusline-state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "session.json"
+    state_file.write_text(
+        json.dumps(
+            {"context_window": {"used_percentage": 90.0, "current_usage": {}}}
+        )
+    )
+    # Backdate mtime well past the 120s freshness window.
+    stale = time.time() - 300
+    os.utime(state_file, (stale, stale))
+
+    result = read_history(f, limit=200)
+    usage = next(e for e in result["events"] if e["kind"] == "usage")
+
+    assert usage["source"] == "estimate"
+    assert usage["usedPct"] is None

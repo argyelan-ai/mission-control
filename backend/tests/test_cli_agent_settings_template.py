@@ -17,7 +17,7 @@ from jinja2 import Environment, FileSystemLoader
 _TEMPLATES = pathlib.Path(__file__).parent.parent / "templates"
 
 
-def _render(extra_marketplaces, turn_signal_hooks):
+def _render(extra_marketplaces, turn_signal_hooks, status_line=True):
     env = Environment(loader=FileSystemLoader(str(_TEMPLATES)))
     template = env.get_template("cli_agent_settings.json.j2")
     return template.render(
@@ -26,6 +26,7 @@ def _render(extra_marketplaces, turn_signal_hooks):
         enabled_plugins={"superpowers@claude-plugins-official": True, "x@y": False},
         extra_marketplaces=extra_marketplaces,
         turn_signal_hooks=turn_signal_hooks,
+        status_line=status_line,
     )
 
 
@@ -73,6 +74,23 @@ def test_claude_harness_renders_hooks(extra_marketplaces):
 def test_openclaude_harness_omits_hooks(extra_marketplaces):
     # openclaude's tolerance to an unknown top-level `hooks` key is unproven,
     # so the block must be ELIMINATED, not merely hoped harmless.
-    data = json.loads(_render(extra_marketplaces, turn_signal_hooks=False))
+    data = json.loads(_render(extra_marketplaces, turn_signal_hooks=False, status_line=False))
     _assert_common(data, extra_marketplaces)
     assert "hooks" not in data
+
+
+def test_claude_harness_renders_status_line():
+    data = json.loads(_render({}, turn_signal_hooks=True, status_line=True))
+    _assert_common(data, {})
+    assert data["statusLine"] == {
+        "type": "command",
+        "command": "bash /home/agent/.claude/statusline-mc.sh",
+    }
+
+
+def test_openclaude_harness_omits_status_line():
+    # Same unproven-tolerance reasoning as the hooks block — the unknown
+    # top-level `statusLine` key must be ELIMINATED for openclaude.
+    data = json.loads(_render({}, turn_signal_hooks=False, status_line=False))
+    _assert_common(data, {})
+    assert "statusLine" not in data
