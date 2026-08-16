@@ -20,6 +20,14 @@ Normalized event shapes (plain dicts, JSON-serializable):
 these onto their matching ``tool`` event by ``tool_use_id`` == ``toolUseId``
 (needed to disambiguate parallel tool calls within one assistant turn);
 they never reach the frontend on their own.
+
+``message.content`` has TWO shapes in real transcripts: the API's list-of-
+blocks form, and a plain string — real interactively-typed user turns write
+the latter (fix round 5, live-gate finding: string content silently produced
+zero events, symptom "I don't see my own message"). Both ``_parse_user_entry``
+and ``_parse_assistant_entry`` normalize a string ``content`` into a single
+``{"type":"text","text":...}`` block up front so the rest of the block-loop
+logic (slash-command rule included, for user entries) runs unchanged.
 """
 from __future__ import annotations
 
@@ -123,6 +131,13 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     content = message.get("content")
+    if isinstance(content, str):
+        # Real interactive user turns write ``message.content`` as a plain
+        # string, not the list-of-blocks shape tool-driven turns use —
+        # verified live (fix round 5): {"type":"user","message":{"content":
+        # "..."}}. Normalize to the one-text-block shape so the existing
+        # block loop below (slash-command rule included) handles it unchanged.
+        content = [{"type": "text", "text": content}]
     if not isinstance(content, list):
         return []
 
@@ -180,6 +195,14 @@ def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     content = message.get("content")
+    if isinstance(content, str):
+        # Assistant entries are API-shaped (block arrays) in every real
+        # transcript observed so far — but the user-entry string-content
+        # discovery (fix round 5, see above) means the format isn't as
+        # rigid as assumed. Tolerate it defensively the same way rather
+        # than silently drop a whole assistant turn (including its usage
+        # event) if it ever shows up here too.
+        content = [{"type": "text", "text": content}]
     if not isinstance(content, list):
         return []
 

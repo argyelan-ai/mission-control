@@ -19,6 +19,18 @@ SIDECHAIN_LINE = '{"type":"user","uuid":"u4","timestamp":"2026-08-13T10:00:04Z",
 
 USAGE_WITH_EFFORT_LINE = '{"type":"assistant","uuid":"a2","timestamp":"2026-08-13T10:00:05Z","isSidechain":false,"effort":"high","message":{"role":"assistant","model":"claude-opus-5","id":"msg_y","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"ok"}]}}'
 
+# fix round 5 — real interactive user turns write message.content as a plain
+# string, not the list-of-blocks shape. Exact shape verified live:
+# {"type":"user","message":{"role":"user","content":"Systemtest: ..."}}
+USER_STRING_CONTENT_LINE = '{"type":"user","uuid":"u7","timestamp":"2026-08-13T10:00:09Z","isSidechain":false,"message":{"role":"user","content":"Systemtest: Rechne sieben mal sechs"}}'
+
+USER_STRING_CONTENT_SLASH_COMMAND_LINE = '{"type":"user","uuid":"u8","timestamp":"2026-08-13T10:00:10Z","isSidechain":false,"message":{"role":"user","content":"/model sonnet"}}'
+
+# Defensive path — no live evidence of assistant entries using string
+# content, but tolerated the same way rather than silently dropping the
+# turn (including its usage event) if the format ever appears here too.
+ASSISTANT_STRING_CONTENT_LINE = '{"type":"assistant","uuid":"a3","timestamp":"2026-08-13T10:00:11Z","isSidechain":false,"message":{"role":"assistant","model":"claude-sonnet-4-6","id":"msg_z","usage":{"input_tokens":20,"output_tokens":8},"content":"plain string reply"}}'
+
 
 # ── type == "user" ──────────────────────────────────────────────────────────
 
@@ -103,6 +115,59 @@ def test_sidechain_flag_set():
     evs = parse_transcript_line(SIDECHAIN_LINE)
     assert len(evs) == 1
     assert evs[0]["sidechain"] is True
+
+
+# ── message.content as a plain string (fix round 5) ─────────────────────────
+
+
+def test_user_string_content_emits_message():
+    evs = parse_transcript_line(USER_STRING_CONTENT_LINE)
+    assert evs == [
+        {
+            "kind": "message",
+            "uuid": "u7",
+            "ts": "2026-08-13T10:00:09Z",
+            "role": "user",
+            "text": "Systemtest: Rechne sieben mal sechs",
+            "model": None,
+            "sidechain": False,
+        }
+    ]
+
+
+def test_user_string_content_slash_command_still_recognized():
+    """The slash-command rule (leading '/' + no newline) must apply to
+    string content exactly like it does to a text block."""
+    evs = parse_transcript_line(USER_STRING_CONTENT_SLASH_COMMAND_LINE)
+    assert evs == [
+        {
+            "kind": "command",
+            "uuid": "u8",
+            "ts": "2026-08-13T10:00:10Z",
+            "command": "/model sonnet",
+        }
+    ]
+
+
+def test_assistant_string_content_defensive_path():
+    """No live evidence assistants ever use string content, but the same
+    tolerance is applied defensively — including still emitting the usage
+    event, which previously would have been dropped along with the whole
+    turn under the old ``isinstance(content, list)`` early-return."""
+    evs = parse_transcript_line(ASSISTANT_STRING_CONTENT_LINE)
+    kinds = [e["kind"] for e in evs]
+    assert kinds == ["message", "usage"]
+    assert evs[0] == {
+        "kind": "message",
+        "uuid": "a3",
+        "ts": "2026-08-13T10:00:11Z",
+        "role": "assistant",
+        "text": "plain string reply",
+        "model": "claude-sonnet-4-6",
+        "sidechain": False,
+    }
+    assert evs[1]["inputTokens"] == 20
+    assert evs[1]["outputTokens"] == 8
 
 
 # ── type == "assistant" ─────────────────────────────────────────────────────

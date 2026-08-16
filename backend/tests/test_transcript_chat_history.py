@@ -437,6 +437,29 @@ def test_read_history_malformed_and_blank_lines_skipped(tmp_path):
     ]
 
 
+def test_read_history_surfaces_string_content_user_turn(tmp_path):
+    """Fix round 5: real interactive user turns write message.content as a
+    plain string, not a list of blocks — read_history must surface them
+    exactly like a normal text-block message (existing merge/dedup logic
+    untouched, since the normalization happens inside parse_transcript_line)."""
+    f = tmp_path / "session.jsonl"
+    string_content_line = {
+        "type": "user",
+        "uuid": "m3",
+        "timestamp": "2026-08-13T10:00:02Z",
+        "isSidechain": False,
+        "message": {"role": "user", "content": "typed straight into the TUI"},
+    }
+    _write_jsonl(f, [_user("m1", "2026-08-13T10:00:00Z", "hi"), string_content_line])
+
+    result = read_history(f, limit=200)
+
+    assert [(e["kind"], e["uuid"], e.get("text")) for e in result["events"]] == [
+        ("message", "m1", "hi"),
+        ("message", "m3", "typed straight into the TUI"),
+    ]
+
+
 # ── usage events: statusline-state source stamping ──────────────────────────
 #
 # resolve_transcript_dir shapes an agent's transcript dir as
