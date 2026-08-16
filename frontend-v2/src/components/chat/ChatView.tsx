@@ -190,7 +190,7 @@ export function ChatView({
         </span>
         {canChat && stream.session && (
           <span
-            className="text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0"
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded font-mono shrink-0"
             style={{
               background: stream.session.live ? `${C.online}1A` : C.bgHover,
               color: stream.session.live ? C.online : C.textMuted,
@@ -286,7 +286,7 @@ export function ChatView({
           )}
 
           <StatusLine state={stream.state} connected={stream.connected} />
-          <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} />
+          <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} sessionLive={stream.session?.live ?? false} />
         </>
       )}
     </div>
