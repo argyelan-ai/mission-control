@@ -77,25 +77,63 @@ describe("Composer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("shows the Stop button only while state.status is working", () => {
+  it("shows the prominent Stop button while state.status is working", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument();
+    expect(screen.getByTestId("stop-button-prominent")).toBeInTheDocument();
+    expect(screen.queryByTestId("stop-button-quiet")).not.toBeInTheDocument();
   });
 
-  it("calls onStop when the Stop button is clicked", async () => {
+  it("shows a quiet Stop button when the session is live but not confirmed working — sessionLive defaults to true so Boss (no pane probe, mtime heuristic often misses 'working') keeps a way to interrupt", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("stop-button-quiet")).toBeInTheDocument();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it('gives the quiet Stop button an "Unterbrechen (ESC)" tooltip', () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("stop-button-quiet")).toHaveAttribute("title", "Unterbrechen (ESC)");
+  });
+
+  it("hides the Stop button entirely when sessionLive is false, even while working", () => {
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("working")} sessionLive={false} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("stop-button-quiet")).not.toBeInTheDocument();
+  });
+
+  it("hides the Stop button entirely when sessionLive is false and idle", () => {
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} sessionLive={false} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("stop-button-quiet")).not.toBeInTheDocument();
+  });
+
+  it("calls onStop when the prominent Stop button is clicked", async () => {
     const user = userEvent.setup();
     const onStop = vi.fn();
     render(
       <Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={onStop} />
     );
-    await user.click(screen.getByRole("button", { name: /stop/i }));
+    await user.click(screen.getByTestId("stop-button-prominent"));
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onStop when the quiet Stop button is clicked", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={onStop} />
+    );
+    await user.click(screen.getByTestId("stop-button-quiet"));
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 

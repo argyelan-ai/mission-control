@@ -38,6 +38,17 @@ interface ComposerProps {
   state: StateEvent | null;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** Whether the underlying CLI session is currently live (from
+   *  `session.live`) — distinct from `state.status`. Boss has no pane probe
+   *  in v1 (mtime heuristic only), so `state.status === "working"` is often
+   *  missed while he's actually busy; gating Stop on that alone hides the
+   *  one control that would actually help. Whenever the session is live the
+   *  Stop button stays reachable — prominent while `state.status ===
+   *  "working"`, a quiet secondary icon otherwise. Never rendered when the
+   *  session isn't live. Defaults to `true` so callers that haven't wired up
+   *  the real `session.live` value yet keep the previous working-only
+   *  behavior instead of silently losing the button. */
+  sessionLive?: boolean;
 }
 
 /**
@@ -47,7 +58,7 @@ interface ComposerProps {
  * newline. Text reaches `onSend` raw — CRLF normalization already happens in
  * `api.chat.sendText` (B1), so this never touches it twice.
  */
-export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true }: ComposerProps) {
   const [text, setText] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -284,12 +295,14 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          {isWorking ? (
+          {sessionLive && isWorking && (
             <button
               type="button"
               onClick={onStop}
               aria-label="Stop"
-              className="inline-flex items-center justify-center w-7 h-7 rounded-md"
+              title="Unterbrechen (ESC)"
+              data-testid="stop-button-prominent"
+              className="animate-pulse inline-flex items-center justify-center w-7 h-7 rounded-md"
               style={{
                 backgroundColor: C.accentSubtle,
                 color: C.textPrimary,
@@ -298,7 +311,30 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
             >
               <Square size={13} fill={C.textPrimary} />
             </button>
-          ) : (
+          )}
+          {sessionLive && !isWorking && (
+            // Boss has no pane probe in v1 — "working" is often missed while
+            // he's genuinely busy. A live session can always be interrupted,
+            // even when we're not confident it's mid-task; this stays quiet
+            // (unfilled icon, no pulse) so it doesn't compete with Send for
+            // attention when the agent really is idle.
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop"
+              title="Unterbrechen (ESC)"
+              data-testid="stop-button-quiet"
+              className="inline-flex items-center justify-center w-6 h-6 rounded-md"
+              style={{
+                backgroundColor: "transparent",
+                color: C.textDim,
+                border: `1px solid ${C.borderSubtle}`,
+              }}
+            >
+              <Square size={11} />
+            </button>
+          )}
+          {!isWorking && (
             <button
               type="button"
               onClick={send}
