@@ -162,10 +162,14 @@ async def send_text(agent, text: str) -> None:
     """Types ``text`` into the agent's live session. Single-line text is sent
     as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
     a bracketed-paste sequence (so the target CLI treats it as one paste
-    instead of one line per Enter-triggered send-keys call) followed by a
-    separate ``Enter`` to submit it. For cli-bridge agents, also refreshes
-    the agent-recycler's idle marker (see ``_touch_recycler_marker``) — chat
-    input is real activity and must not let an idle agent get recycled."""
+    instead of one line per Enter-triggered send-keys call). BOTH cases are
+    followed by a separate ``Enter`` call to submit — a literal ``-l`` send
+    only types the text into the TUI's input box, it never submits on its
+    own (fix round 4: the single-line path was missing this Enter entirely,
+    root cause of messages sitting unsubmitted; the multi-line path already
+    had it). For cli-bridge agents, also refreshes the agent-recycler's idle
+    marker (see ``_touch_recycler_marker``) — chat input is real activity and
+    must not let an idle agent get recycled."""
     kind = _target_kind(agent)
     slug = agent.slug
 
@@ -173,9 +177,9 @@ async def send_text(agent, text: str) -> None:
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
             await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted))
-            await _run_docker_exec(_docker_argv(slug, "Enter"))
         else:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
+        await _run_docker_exec(_docker_argv(slug, "Enter"))
         await _touch_recycler_marker(slug)
         return
 

@@ -69,7 +69,12 @@ class _FakeWSClient:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def test_send_text_docker_single_line_one_call(monkeypatch):
+async def test_send_text_docker_single_line_submits_via_separate_enter(monkeypatch):
+    """Fix round 4: a literal ``-l`` send only types text into the TUI's
+    input box — it never submits on its own. The single-line path was
+    missing a follow-up Enter call entirely (root cause of messages sitting
+    unsubmitted); this asserts the exact 3-call sequence: literal text,
+    THEN a separate Enter, THEN the recycler-marker touch."""
     from app.services import agent_chat_input
 
     calls: list[list[str]] = []
@@ -82,13 +87,19 @@ async def test_send_text_docker_single_line_one_call(monkeypatch):
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "hello agent")
 
-    assert len(calls) == 2  # send-keys + recycler-marker touch
-    argv = calls[0]
-    assert argv[:2] == ["docker", "exec"]
-    assert "-e" in argv and "LANG=C.UTF-8" in argv
-    assert "-u" in argv and "agent" in argv
-    assert "mc-agent-rex" in argv
-    assert argv[-3:] == ["-l", "--", "hello agent"]
+    assert len(calls) == 3  # send-keys -l text + send-keys Enter + touch marker
+    first, second, third = calls
+    assert first[:2] == ["docker", "exec"]
+    assert "-e" in first and "LANG=C.UTF-8" in first
+    assert "-u" in first and "agent" in first
+    assert "mc-agent-rex" in first
+    assert first[-3:] == ["-l", "--", "hello agent"]
+    assert second[-1] == "Enter"
+    assert "-l" not in second
+    assert third == [
+        "docker", "exec", "-u", "agent", "mc-agent-rex",
+        "touch", "/home/agent/.claude/last-task.marker",
+    ]
 
 
 async def test_send_text_docker_multiline_two_calls_bracketed_paste(monkeypatch):
