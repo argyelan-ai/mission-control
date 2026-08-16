@@ -312,4 +312,122 @@ describe("SessionSidebar", () => {
     await user.click(screen.getByText("Cody"));
     expect(screen.queryByText("Rex")).not.toBeInTheDocument();
   });
+
+  // ── Rail collapse (operator addition on top of B5) ────────────────────────
+  describe("rail collapse", () => {
+    it("shows no collapse chevron when onToggleCollapse is omitted (backward compatible)", () => {
+      const agent = mkAgent({ id: "agent-1", name: "Rex" });
+      render(
+        <SessionSidebar
+          agents={[agent]}
+          tasks={[]}
+          projects={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          variant="rail"
+        />
+      );
+      expect(screen.queryByRole("button", { name: /einklappen|ausklappen/i })).not.toBeInTheDocument();
+      expect(screen.getByText("Rex")).toBeInTheDocument();
+    });
+
+    it("collapsed=true renders a slim icon-only strip, no group labels or task titles", () => {
+      const agent = mkAgent({ id: "agent-1", name: "Rex", current_task_id: "task-1" });
+      render(
+        <SessionSidebar
+          agents={[agent]}
+          tasks={[{ id: "task-1", title: "Fix the bug", project_id: null } as unknown as Task]}
+          projects={[]}
+          selectedId="agent-1"
+          onSelect={() => {}}
+          variant="rail"
+          collapsed
+          onToggleCollapse={() => {}}
+        />
+      );
+      // Icon-only: the agent's name/task title text is gone, but the row is
+      // still selectable (title attribute carries the name for a11y/hover).
+      expect(screen.queryByText("Rex")).not.toBeInTheDocument();
+      expect(screen.queryByText("Fix the bug")).not.toBeInTheDocument();
+      expect(screen.queryByText("Ad-hoc")).not.toBeInTheDocument();
+      const row = screen.getByRole("option", { name: "Rex" });
+      expect(row).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("clicking the collapse chevron (open rail) calls onToggleCollapse", async () => {
+      const onToggleCollapse = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <SessionSidebar
+          agents={[mkAgent({ id: "agent-1", name: "Rex" })]}
+          tasks={[]}
+          projects={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          variant="rail"
+          collapsed={false}
+          onToggleCollapse={onToggleCollapse}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: "Seitenleiste einklappen" }));
+      expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+    });
+
+    it("clicking the expand chevron (collapsed rail) calls onToggleCollapse", async () => {
+      const onToggleCollapse = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <SessionSidebar
+          agents={[mkAgent({ id: "agent-1", name: "Rex" })]}
+          tasks={[]}
+          projects={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          variant="rail"
+          collapsed
+          onToggleCollapse={onToggleCollapse}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: "Seitenleiste ausklappen" }));
+      expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+    });
+
+    it("selecting an agent from the collapsed strip still calls onSelect", async () => {
+      const onSelect = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <SessionSidebar
+          agents={[mkAgent({ id: "agent-1", name: "Rex" })]}
+          tasks={[]}
+          projects={[]}
+          selectedId={null}
+          onSelect={onSelect}
+          variant="rail"
+          collapsed
+          onToggleCollapse={() => {}}
+        />
+      );
+      await user.click(screen.getByRole("option", { name: "Rex" }));
+      expect(onSelect).toHaveBeenCalledWith("agent-1");
+    });
+
+    it("collapsed has no effect on the sheet variant", () => {
+      const agent = mkAgent({ id: "agent-1", name: "Rex" });
+      render(
+        <SessionSidebar
+          agents={[agent]}
+          tasks={[]}
+          projects={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          variant="sheet"
+          collapsed
+          onToggleCollapse={() => {}}
+        />
+      );
+      // Sheet still renders its own collapsed-by-default toggle, unaffected
+      // by the rail-only `collapsed` prop.
+      expect(screen.getByRole("button", { name: /Session wählen/i })).toBeInTheDocument();
+    });
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -421,5 +421,82 @@ describe("SessionsPage — center view (Chat/Terminal) wiring and hasTranscript 
     await waitFor(() =>
       expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("true")
     );
+  });
+});
+
+describe("SessionsPage — sidebar collapse (mc.chat.sidebar)", () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    nav.searchParamsString = "";
+
+    store = {};
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store[k] ?? null,
+        setItem: (k: string, v: string) => { store[k] = v; },
+        removeItem: (k: string) => { delete store[k]; },
+        clear: () => { store = {}; },
+        length: 0,
+        key: () => null,
+      },
+    });
+
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("defaults to open, collapses on chevron click, persists to mc.chat.sidebar, and restores on expand", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    // Scoped to the desktop rail instance — the mobile sheet is a separate,
+    // always-mounted SessionSidebar (jsdom ignores its `md:hidden` class)
+    // and legitimately renders "Agent One" too, in its own toggle label.
+    const desktopSidebar = screen.getByTestId("sidebar-desktop");
+
+    // Open by default: the row's name is visible in the desktop rail.
+    expect(within(desktopSidebar).getByRole("option", { name: "Agent One" })).toBeInTheDocument();
+
+    await user.click(within(desktopSidebar).getByRole("button", { name: "Seitenleiste einklappen" }));
+
+    // Collapsed: name text is gone, row is icon-only but still an
+    // accessible option (title attribute carries the name).
+    expect(within(desktopSidebar).queryByText("Agent One")).not.toBeInTheDocument();
+    expect(within(desktopSidebar).getByRole("option", { name: "Agent One" })).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem("mc.chat.sidebar")).toBe("collapsed"));
+
+    await user.click(within(desktopSidebar).getByRole("button", { name: "Seitenleiste ausklappen" }));
+    expect(await within(desktopSidebar).findByText("Agent One")).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem("mc.chat.sidebar")).toBe("open"));
+  });
+
+  it("restores a persisted mc.chat.sidebar=collapsed on load", async () => {
+    localStorage.setItem("mc.chat.sidebar", "collapsed");
+    renderPage();
+
+    const desktopSidebar = screen.getByTestId("sidebar-desktop");
+    await waitFor(() =>
+      expect(within(desktopSidebar).getByRole("option", { name: "Agent One" })).toBeInTheDocument()
+    );
+    expect(within(desktopSidebar).queryByText("Agent One")).not.toBeInTheDocument();
+  });
+
+  it("the mobile sheet sidebar is unaffected by the desktop collapse state", async () => {
+    localStorage.setItem("mc.chat.sidebar", "collapsed");
+    renderPage();
+
+    // Desktop rail is collapsed (icon-only, no text) — the only actual text
+    // node reading "Agent One" left in the DOM is the mobile sheet's own
+    // toggle-button label, which the rail-only `collapsed` prop never
+    // reaches (it's a separate SessionSidebar instance, variant="sheet").
+    expect(await screen.findByText("Agent One")).toBeInTheDocument();
   });
 });

@@ -86,6 +86,23 @@ function saveCenterView(view: CenterView) {
   } catch {}
 }
 
+// ── Sidebar collapse persistence ────────────────────────────────────────────
+// Desktop rail only (SessionSidebar's `collapsed` prop is a no-op on the
+// mobile `sheet` variant, which has its own collapsed-by-default toggle).
+const SIDEBAR_STORAGE_KEY = "mc.chat.sidebar";
+
+function loadSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "collapsed";
+  } catch { return false; }
+}
+
+function saveSidebarCollapsed(collapsed: boolean) {
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? "collapsed" : "open");
+  } catch {}
+}
+
 // ── Transcript availability ─────────────────────────────────────────────────
 // Mirrors the backend's fail-closed gate exactly (resolve_transcript_dir,
 // backend/app/services/transcript_chat.py): cli-bridge agents always have a
@@ -117,6 +134,7 @@ function SessionsPageContent() {
   const [activePanel, setActivePanelState] = useState<PanelKind | null>(null);
   const [detailLevel, setDetailLevelState] = useState<DetailLevel>("normal");
   const [centerView, setCenterViewState] = useState<CenterView>("chat");
+  const [sidebarCollapsed, setSidebarCollapsedState] = useState(false);
   const [restartTick, setRestartTick] = useState<Record<string, number>>({});
 
   // Persisted state is read from localStorage after mount (SSR has no
@@ -125,6 +143,7 @@ function SessionsPageContent() {
     setActivePanelState(loadActivePanel());
     setDetailLevelState(loadDetailLevel());
     setCenterViewState(loadCenterView());
+    setSidebarCollapsedState(loadSidebarCollapsed());
   }, []);
 
   function setActivePanel(panel: PanelKind | null) {
@@ -140,6 +159,11 @@ function SessionsPageContent() {
   function setCenterView(view: CenterView) {
     setCenterViewState(view);
     saveCenterView(view);
+  }
+
+  function setSidebarCollapsed(collapsed: boolean) {
+    setSidebarCollapsedState(collapsed);
+    saveSidebarCollapsed(collapsed);
   }
 
   const { data: dockerAgents = [], isLoading, isError } = useQuery({
@@ -260,7 +284,7 @@ function SessionsPageContent() {
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
             />
           </div>
-          <div className="hidden md:flex shrink-0">
+          <div className="hidden md:flex shrink-0" data-testid="sidebar-desktop">
             <SessionSidebar
               agents={agents}
               tasks={tasks}
@@ -269,6 +293,8 @@ function SessionsPageContent() {
               onSelect={handleSelect}
               variant="rail"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
+              collapsed={sidebarCollapsed}
+              onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
             />
           </div>
 

@@ -17,9 +17,10 @@
  * standalone.
  */
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
 
 const ADHOC_KEY = "__adhoc__";
@@ -89,6 +90,12 @@ interface SessionSidebarProps {
   variant?: "rail" | "sheet";
   /** Per-agent lookup; caller-supplied (B6). Omitted = assume every agent has one. */
   hasTranscript?: (agentId: string) => boolean;
+  /** Rail-only — collapses the column to a slim icon-avatar strip. The sheet
+   *  variant ignores this (it has its own collapsed-by-default toggle). */
+  collapsed?: boolean;
+  /** Presence of this prop is also what shows the collapse/expand chevron —
+   *  omit it to render the rail without one (backward compatible). */
+  onToggleCollapse?: () => void;
 }
 
 export function SessionSidebar({
@@ -99,6 +106,8 @@ export function SessionSidebar({
   onSelect,
   variant = "rail",
   hasTranscript = () => true,
+  collapsed = false,
+  onToggleCollapse,
 }: SessionSidebarProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const groups = buildGroups(agents, tasks, projects);
@@ -203,12 +212,82 @@ export function SessionSidebar({
     );
   }
 
+  // Rail, collapsed: slim icon-avatar strip. Group headers make no sense at
+  // this width — every agent renders flat, one icon button each, still fully
+  // functional (title = name, click = onSelect).
+  if (collapsed) {
+    return (
+      <div
+        className="w-14 shrink-0 h-full flex flex-col items-center py-3 gap-1 overflow-y-auto"
+        style={{ background: C.bgSurface, borderRight: `1px solid ${C.border}` }}
+      >
+        {onToggleCollapse && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-label="Seitenleiste ausklappen"
+            title="Seitenleiste ausklappen"
+            className="flex items-center justify-center w-9 h-9 rounded-md shrink-0 mb-1"
+            style={{ color: C.textMuted }}
+          >
+            <ChevronRight size={14} />
+          </button>
+        )}
+        <div role="listbox" aria-label="Sessions" className="flex flex-col items-center gap-1 w-full">
+          {agents.map((agent) => {
+            const selected = agent.id === selectedId;
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                title={agent.name}
+                onClick={() => onSelect(agent.id)}
+                className="relative flex items-center justify-center w-10 h-10 rounded-md shrink-0"
+                style={{
+                  background: selected ? C.accentSubtle : "transparent",
+                  border: `1px solid ${selected ? C.borderAccent : "transparent"}`,
+                }}
+              >
+                <EntityIcon value={agent.emoji} size={16} />
+                <StatusDot
+                  status={toDotStatus(agent.status)}
+                  size="sm"
+                  pulse={agent.status === "busy"}
+                  className="absolute bottom-0.5 right-0.5"
+                />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
-      className="w-64 shrink-0 h-full flex flex-col py-3 overflow-y-auto"
+      className="w-64 shrink-0 h-full flex flex-col"
       style={{ background: C.bgSurface, borderRight: `1px solid ${C.border}` }}
     >
-      {list}
+      {onToggleCollapse && (
+        <div
+          className="flex items-center justify-end px-2 py-1.5 shrink-0"
+          style={{ borderBottom: `1px solid ${C.border}` }}
+        >
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-label="Seitenleiste einklappen"
+            title="Seitenleiste einklappen"
+            className="flex items-center justify-center w-7 h-7 rounded-md"
+            style={{ color: C.textMuted }}
+          >
+            <ChevronLeft size={14} />
+          </button>
+        </div>
+      )}
+      <div className="flex-1 overflow-y-auto py-3">{list}</div>
     </div>
   );
 }
