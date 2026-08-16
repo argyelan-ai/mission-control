@@ -73,14 +73,14 @@ export function ToolRow({
       {expanded && (
         <div className="mt-1.5 ml-5 space-y-1.5">
           <pre
-            className="max-h-[320px] overflow-auto text-[11px] font-mono p-2 rounded"
+            className="max-h-[320px] overflow-auto text-xs font-mono p-2 rounded"
             style={{ background: "var(--color-bg-elevated)", color: C.textMuted, border: `1px solid ${C.border}` }}
           >
             {JSON.stringify(ev.detail, null, 2)}
           </pre>
           {ev.result != null && (
             <pre
-              className="max-h-[320px] overflow-auto text-[11px] font-mono p-2 rounded"
+              className="max-h-[320px] overflow-auto text-xs font-mono p-2 rounded"
               style={{
                 background: "var(--color-bg-elevated)",
                 color: isError ? STATUS_TEXT.error : C.textSecondary,
