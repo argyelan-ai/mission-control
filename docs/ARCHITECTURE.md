@@ -2,8 +2,8 @@
 
 > **Lebende Dokumentation.** Bei jeder Architektur-Änderung (neue Services, Runtime-Wechsel, Dispatch-Flow, Schema-Migration) muss dieses Dokument angepasst werden. Bei Design-Entscheidungen zusätzlich neues ADR in `docs/decisions/` anlegen.
 
-**Letztes Update:** 2026-07-11
-**Stand:** v0.9+ Benchmark Studio Vertical + Kern-Bausteine (ADR-070); OpenClaw Gateway Sunset complete (Phases 28-31, ADR-039 Accepted)
+**Letztes Update:** 2026-08-16
+**Stand:** v0.9+ Sessions-Chat-View (ADR-073); Benchmark Studio Vertical + Kern-Bausteine (ADR-070); OpenClaw Gateway Sunset complete (Phases 28-31, ADR-039 Accepted)
 
 ---
 
@@ -118,7 +118,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | `/tasks` | Projects-View (Linear-Style), Phasen-Hierarchie, Ad-hoc |
 | `/inbox` | Approval/Review Queue, Task-Acceptance |
 | `/agents` + `/agents/[id]` | Agent-Grid, Detail mit 4 Tabs (overview/skills/config/memory) |
-| `/sessions` | Live PTY Terminal zu Docker-Agents, Lifecycle-Buttons (Start/Stop/Restart) |
+| `/sessions` | Projects→Sessions-Sidebar + Chat-View (Standard-Ansicht für Agenten mit Claude-Code-Transkript, ADR-073) mit Composer, Approval-Karten, Terminal/Diff/Browser als Toggle-Panels; PTY-Terminal + Lifecycle-Buttons (Start/Stop/Restart) bleiben ein Panel-Toggle entfernt |
 | `/chat` | Gateway Chat, direkte Agent-Kommunikation |
 | `/memory` | 3-Layer Memory (Episodic/Semantic/Agent Tabs), Qdrant-Suche, Scope-Dropdown |
 | `/insights` | Intelligence Dashboard: KPIs, Agent-Performance, Failure Patterns, LLM Reports |
@@ -991,6 +991,73 @@ poll.sh (Window 1)
   ← Heartbeat POST /api/v1/agent/me/heartbeat (alle 30s)
 ```
 
+### Sessions-Chat-Flow (NEU 2026-08-16, ADR-073)
+
+Codex/Claude-Code-Web-artige Chat-Ansicht auf `/sessions` als **zweite, unabhängige
+Surface über der unveränderten interaktiven CLI** — die tmux-TUI läuft weiter exakt wie
+vorher, der Chat liest/schreibt daneben mit.
+
+```
+tmux (unverändert)          Backend
+claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll, refcounted)
+     ▲                        → parse → Redis mc:agent:{id}:chat → SSE /chat/stream
+     │ send-keys              → pane_state-Sonde (~2s) → state-Events
+     └── docker exec /      GET  /agents/{id}/chat/history   (Datei von vorn parsen)
+         host-pty-bridge ◀──POST /agents/{id}/chat/input     (Text, separater Enter-Frame)
+                             POST /agents/{id}/chat/keys      (Escape/Ziffern/Enter)
+                             GET  /agents/{id}/workspace/diff (git diff im Agent-Workspace)
+```
+
+- **Transkript-Quelle:** Claude Code schreibt jede Session live als JSONL nach
+  `$CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl` — bei Docker-Agenten
+  unter dem ohnehin gemounteten `~/.mc/agents/{slug}/claude-config/…`, bei Boss unter
+  seinem persönlichen `~/.claude/projects/…` (opt-in ro-Mount). `transcript_chat.py`
+  parst diese Zeilen zu normalisierten Events (`message`/`tool`/`thinking`/`command`/
+  `usage`/`state`/`session_changed`), merged `tool_use`+`tool_result` über die
+  `toolu_*`-ID und dedupliziert auf dem Top-Level-`uuid` — dieselbe Regel, die
+  `token_harvester.py` für Kosten-Attribution schon verwendet.
+- **`ChatTailerManager`** (ein asyncio-Task pro Agent, refcounted über alle offenen
+  Browser-Tabs) seedet seinen Lese-Offset synchron bei `acquire()` auf die aktuelle
+  Dateigrösse (nicht 0) und liest danach nur neue Bytes binär+offset-basiert — sonst
+  würde ein Erstverbinden das gesamte Transkript nochmal als „live" Events replayen.
+- **Boss-Privacy-Filter (fail-closed):** Boss' `~/.claude` teilt sich mit den privaten
+  Sessions des Operators. `transcript_allowed()` lässt cli-bridge-Agenten (eigene isolierte
+  Container-Workspaces) immer durch, gated Boss aber hart auf die
+  `token_harvester._should_attribute_boss_path`-Heuristik (MC-Workspace-CWD oder
+  `task/`-Branch) — jeder Lesefehler fällt auf **verweigert**.
+- **Eingabe** (`services/agent_chat_input.py`) läuft über dieselben Kanäle wie das
+  bestehende Live-Terminal: Docker-Agenten via `docker exec … tmux send-keys`,
+  Boss via Kurzverbindung zur host-pty-bridge. Text und der submittierende `Enter`
+  gehen **immer als getrennte Frames** raus (Docker: zwei `docker exec`-Aufrufe;
+  Boss-WS: zwei Frames mit 150 ms Pause) — in einem Frame verschmolzen liest die
+  Claude-TUI das als Paste und schluckt den Enter (live gefunden: Nachricht sass
+  stundenlang unversendet in der Eingabebox).
+- **Pane-State-Sonde** (`services/pane_state.py`, alle ~2 Ticks auf den Tailer
+  huckepack) liefert per `tmux capture-pane`-Heuristik, was das Transkript nicht
+  enthält: Permission-Prompts, Modell-Picker, Ready/Working/Idle. Kein Treffer →
+  `unknown`, nie eine geratene Antwort — Freigaben bleiben in der CLI.
+- **Statusline-State als Context-Wahrheit:** `docker/shared/statusline-mc.sh`
+  (claude-harness-Agenten) spiegelt Claude Codes eigene Context-Window-Buchführung nach
+  `<claude-config>/statusline-state/<session_id>.json`; `read_statusline_state()` bevorzugt
+  diese CLI-eigene Zahl (Source `"cli"`) vor der statischen `resolve_context_window()`
+  Modell→Grösse-Schätzung (Source `"estimate"`) — der Context-Meter im Composer zeigt
+  damit die reale CLI-Wahrheit, sobald ein Turn gelaufen ist.
+- **Recycler-Kopplung:** Der Agent-Recycler killt idle Claude-Sessions nach
+  `~/.claude/last-task.marker`-Alter. Chat-Aktivität war dafür ursprünglich unsichtbar
+  (laufende Chat-Konversationen wurden mitten im Gespräch recycelt) — `send_text()`
+  touched den Marker deshalb bei jeder Chat-Eingabe mit.
+- **Diff-Panel:** `GET /agents/{id}/workspace/diff?scope=worktree|last-commit` läuft
+  `git diff`/`git show` im Agent-Workspace und liefert dieselbe `CommitDiff`-Form, die
+  `GitDiffView` schon aus dem Git-Workflow (oben) kennt — read-only, kein Staging/Revert.
+- **Adapter-Kontrakt:** die vier Bausteine (Session-Resolution+Parser, Tailer,
+  Eingabe-Kanal, Pane-Sonde) sind bewusst austauschbar pro CLI gehalten (Muster wie
+  `HOST_ADAPTERS`/ADR-064 und der Turn-Signal-Kontrakt/ADR-071) — v1 liefert nur den
+  Claude-Code-Adapter (8 Docker-Agenten + Boss), Hermes/Jarvis/Sparky zeigen ehrlich
+  „kein Transkript verfügbar" statt eines vorgetäuschten Chats. Onboarding-Anleitung:
+  `~/.claude/skills/mc-chat-cli-adapter/SKILL.md`.
+- **Auth:** alle Endpoints laufen über `require_user` (User-JWT), keine Agent-Scopes —
+  der Chat-Input ist Operator-Eingabe, äquivalent zum bestehenden Terminal-WS.
+
 ### Knowledge Base Scoping
 
 Ein `board_memory` Table speichert drei Scopes über `board_id`/`agent_id` null-checks:
@@ -1229,6 +1296,9 @@ Alle ADRs in `docs/decisions/`:
 | Neuer Chat-Kanal (Slack, …) | `backend/app/services/chat_<kanal>.py` (implementiert `ChatAdapter`) + Eintrag in `chat_adapter._registry()` + Harness in `backend/tests/chat_harnesses.py` | ADR-072 — KEINE kanal-neutrale Datei anfassen; der TCK `tests/test_chat_adapter_tck.py` läuft automatisch mit und ist rot ohne Harness |
 | Chat-Regel (was wird gespiegelt, wie laut, Nachtruhe, Routing) | `backend/app/services/chat_outbound.py` bzw. `chat_inbound.py` | ADR-072 — nie in einem Adapter nachbauen; gilt sofort für alle Kanäle |
 | Chat-Kanal an-/abschalten | `.env` `CHAT_CHANNELS=` (Komma-Liste, mehrere erlaubt; leer = keine explizite Auswahl) + kanal-eigener Schalter (Telegram: `TELEGRAM_TEAM_CHAT_ENABLED`, Setup: `docs/setup/telegram.md`; Slack: `SLACK_TEAM_CHAT_ENABLED` + `SLACK_DEFAULT_CHANNEL`, Setup: `docs/setup/slack.md`) | ADR-072 — kein aktiver Kanal ist ein stiller No-op, kein Code wird entfernt |
+| Sessions-Chat: neuer CLI-Harness anbinden | `backend/app/services/transcript_chat.py` (Parser+Tailer), `pane_state.py` (Sonde), `agent_chat_input.py` (Eingabe) | ADR-073 — Pflicht-Discovery zuerst: `~/.claude/skills/mc-chat-cli-adapter/SKILL.md`; SSE-Kern/Frontend-Reducer nie CLI-spezifisch anfassen |
+| Sessions-Chat: Event-Schema / Parsing-Regel | `backend/app/services/transcript_chat.py::parse_transcript_line` | Frontend `lib/chatTypes.ts` synchron halten (Event-Shapes gespiegelt) |
+| Sessions-Chat: Eingabe-Kanal / Recycler-Marker | `backend/app/services/agent_chat_input.py` | Separater Enter-Frame pro Transport ist Pflicht (ADR-073) — nie Text+Enter in einem Frame |
 | Frontend-Page | `frontend-v2/src/app/{page}/page.tsx` | Ggf. `lib/api.ts` + types |
 | Browsebare Datei-Wurzel hinzufügen/ändern | `backend/app/services/fs_roots.py` (Registry, SSoT) | Nie `secrets`/Token-Config browsebar machen (ADR-040) |
 | Datei-Zugriff (list/stat/stream) | `backend/app/services/fs_service.py` (einziger Containment-Guard) | Nie an `fs_service` vorbei os.listdir/open |
@@ -1252,6 +1322,36 @@ Alle ADRs in `docs/decisions/`:
 ---
 
 ## Änderungshistorie (high-level)
+
+- **2026-08-16** — **Sessions-Chat-View: read-only Transkript-Tailing + tmux-Eingabe als
+  zweite Surface (ADR-073):** `/sessions` bekommt eine Codex/Claude-Code-Web-artige
+  Chat-Ansicht **neben** der unveränderten interaktiven TUI, statt sie zu ersetzen. Neu:
+  `services/transcript_chat.py` (Parser für Claude Codes live geschriebenes
+  JSONL-Transkript + `ChatTailerManager` — 1s-Poll, refcounted über alle offenen Tabs,
+  Offset synchron bei `acquire()` geseedet damit ein Erstverbinden nicht das gesamte
+  Transkript als „live" repliziert, binäre Byte-Reads gegen UTF-8-Split, Dedup auf
+  Top-Level-`uuid` wie in `token_harvester`), `services/pane_state.py` (Heuristik-Sonde
+  für Permission-Prompts/Menüs, die das Transkript nicht enthält — kein Treffer =
+  `unknown`, nie geraten), `services/agent_chat_input.py` (Eingabe über dieselben
+  Docker-exec-tmux-send-keys/host-pty-bridge-Kanäle wie das bestehende Live-Terminal,
+  Text und submittierender `Enter` **immer als getrennte Frames**, sonst schluckt die
+  Claude-TUI den Enter als Teil eines Pastes), `routers/agent_chat.py` (`GET
+  /agents/{id}/chat/history`, `GET .../chat/stream` SSE, `POST .../chat/input`,
+  `POST .../chat/keys`, `GET .../workspace/diff`), Frontend
+  `components/chat/*` (ChatView, Composer, ApprovalCard, ToolRow, ThinkingRow,
+  SubagentGroup, StatusLine, PanelRail, DiffPanel, TerminalPanel, SessionSidebar) +
+  `lib/chatTypes.ts`/`hooks/useChatStream.ts`. **Boss-Privacy-Filter fail-closed**
+  wiederverwendet `token_harvester._should_attribute_boss_path` (Boss' `~/.claude` teilt
+  sich mit den privaten Sessions des Operators — jeder Lesefehler fällt auf verweigert). **Recycler-
+  Kopplung:** Chat-Eingabe touched jetzt den Agent-Recycler-Idle-Marker mit, sonst
+  killte der Recycler laufende Chat-Gespräche mit sonst idle Agenten mitten im Turn
+  (Live-Gate-Befund). **Context-Meter** bevorzugt die CLI-eigene Statusline-State-Datei
+  (`docker/shared/statusline-mc.sh`) vor der statischen Modell→Fenstergrösse-Schätzung.
+  Adapter-Kontrakt (Session-Resolution+Parser / Tailer / Eingabe / Pane-Sonde) hält die
+  Tür für weitere CLI-Harnesses offen (Muster wie ADR-064/ADR-071); v1 nur Claude-Code
+  (8 Docker-Agenten + Boss), Hermes/Jarvis/Sparky zeigen ehrlich „kein Transkript
+  verfügbar". Additiv, kein bestehender Dispatch-/Terminal-Pfad geändert — Rollback =
+  PR revert. Onboarding: `~/.claude/skills/mc-chat-cli-adapter/SKILL.md`. ADR-073.
 
 - **2026-07-28** — **ChatAdapter-Kontrakt für den Team-Chat (ADR-072):** Der Team-Chat wird kanal-neutral, damit ein zweiter Kanal (Slack) danebengesetzt werden kann, ohne die geteilte Logik anzufassen. Neu: `services/chat_adapter.py` (Protocol + Registry + Schalter `CHAT_CHANNELS` + Katalog — dasselbe Muster wie `HOST_ADAPTERS`/ADR-064), `chat_outbound.py` (Skip-Regeln inkl. Schleifenschutz, Absender-Auflösung, Ping-Regel, Nachtruhe, Fan-out über alle aktiven Kanäle), `chat_inbound.py` (Routing-Entscheidung: bekannter Raum → sein Thread, unbekannter Raum → nachfragen statt raten, kein Raum → DM mit Boss; `INBOUND_MESSAGE_KWARGS` trägt den Schleifenschutz), `chat_rooms.py` (Fan-out für task-done + 30-Tage-Purge), `chat_telegram.py` (`TelegramChatAdapter`). **Absender-Identität ist ein eigenes Konzept** — die neutrale Pipeline reicht `ChatSender(kind, display_name, agent_id)` durch; ein Kanal ohne `capabilities.sender_identity` (Telegram: ein einziger Bot) degradiert sie sichtbar zum Präfix, verliert sie nie. Umgehängt (kein Verhaltenswechsel): `messaging.post_message` spiegelt über `chat_outbound.mirror_message_to_all`, `task_lifecycle`/`routers/tasks`/`routers/agent_task_status` rufen `chat_rooms.handle_task_done`, `main._telegram_topic_purge_loop` ruft `chat_rooms.purge_rooms_tick`. Neuer TCK `backend/tests/test_chat_adapter_tck.py` parametrisiert über die registrierten Adapter, mit Pflicht-Harness je Kanal (`tests/chat_harnesses.py`) — ein registrierter Kanal ohne Harness macht die Suite rot. Telegram-Verhalten unverändert, alle bestehenden Telegram-Tests unangetastet grün. ADR-072.
 
