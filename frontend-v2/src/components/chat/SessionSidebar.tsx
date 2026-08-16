@@ -215,11 +215,14 @@ export function SessionSidebar({
   // Rail, collapsed: slim icon-avatar strip. Group headers make no sense at
   // this width — every agent renders flat, one icon button each, still fully
   // functional (title = name, click = onSelect).
+  // No self-drawn right border — the only caller (sessions/page.tsx) wraps
+  // both rail states in an island `div` that owns all four edges now (Codex-
+  // island layout); drawing one here too would double up against it.
   if (collapsed) {
     return (
       <div
         className="w-14 shrink-0 h-full flex flex-col items-center py-3 gap-1 overflow-y-auto"
-        style={{ background: C.bgSurface, borderRight: `1px solid ${C.border}` }}
+        style={{ background: C.bgSurface }}
       >
         {onToggleCollapse && (
           <button
@@ -269,10 +272,12 @@ export function SessionSidebar({
     );
   }
 
+  // Same reasoning as the collapsed branch above — no self-drawn right
+  // border, the page's island wrapper owns it.
   return (
     <div
       className="w-64 shrink-0 h-full flex flex-col"
-      style={{ background: C.bgSurface, borderRight: `1px solid ${C.border}` }}
+      style={{ background: C.bgSurface }}
     >
       {onToggleCollapse && (
         <div

@@ -11,9 +11,11 @@
  * no separate chevron/collapse control needed.
  *
  * Responsive via Tailwind `md:` variants in one markup block instead of two
- * parallel renders: desktop is a vertical strip beside the panel slot;
- * mobile (<768px) becomes a fixed bottom bar — the "bottom-sheet trigger"
- * row for the full-screen panel overlay the parent page renders.
+ * parallel renders: desktop is its own slim floating island (rounded-xl,
+ * bordered on all sides, gap from its neighbors comes from the parent flex
+ * row's `md:gap-2`) beside the panel slot; mobile (<768px) stays a fixed
+ * bottom bar, unchanged — the "bottom-sheet trigger" row for the full-screen
+ * panel overlay the parent page renders.
  */
 import { GitCompare, Globe } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -35,7 +37,7 @@ export function PanelRail({ active, onSelect }: PanelRailProps) {
     <div
       role="toolbar"
       aria-label="Panels"
-      className="flex md:flex-col items-center justify-center gap-1 px-2 py-1.5 md:px-1.5 md:py-3 fixed inset-x-0 bottom-0 z-30 md:static md:inset-auto border-t md:border-t-0 md:border-l shrink-0"
+      className="flex md:flex-col items-center justify-center gap-1 px-2 py-1.5 md:px-1.5 md:py-3 fixed inset-x-0 bottom-0 z-30 md:static md:inset-auto border-t md:border md:rounded-xl md:overflow-hidden shrink-0"
       style={{ background: C.bgSurface, borderColor: C.border }}
     >
       {PANELS.map(({ key, label, icon: Icon }) => {

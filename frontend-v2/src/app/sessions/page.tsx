@@ -251,7 +251,7 @@ function SessionsPageContent() {
 
   return (
     <AppShell fullHeight>
-      <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="flex flex-col flex-1 overflow-hidden" style={{ background: C.bgDeep }}>
         {isError && (
           <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
@@ -276,9 +276,13 @@ function SessionsPageContent() {
           </span>
         </div>
 
-        {/* Split Layout: [sidebar | chat | panel rail | panel] */}
-        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-          {/* Session sidebar — mobile: sheet at top; desktop: fixed rail */}
+        {/* Split Layout: [sidebar | chat | panel rail | panel] — desktop:
+            Codex-style floating islands (padded gap, rounded-xl, 1px border,
+            overflow-hidden) via `md:` utilities only; mobile stays exactly
+            as before (full-bleed, no gap/border/radius — "don't waste phone
+            width"), same components/state, zero mobile-visible change. */}
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden md:p-2 md:gap-2">
+          {/* Session sidebar — mobile: sheet at top; desktop: fixed rail island */}
           <div className="md:hidden shrink-0">
             <SessionSidebar
               agents={agents}
@@ -290,7 +294,17 @@ function SessionsPageContent() {
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
             />
           </div>
-          <div className="hidden md:flex shrink-0" data-testid="sidebar-desktop">
+          {/* `hidden md:flex` already gates this to desktop-only — the island
+              chrome doesn't need its own `md:` prefixes to stay mobile-inert,
+              but keeps them anyway for a diff that reads consistently with
+              the chat/panel islands below (which ARE visible on both). No
+              background override here: SessionSidebar's rail variant already
+              paints its own `bg-surface` — its self-drawn `border-right` was
+              dropped instead (this wrapper's border now owns that edge). */}
+          <div
+            className="hidden md:flex shrink-0 md:rounded-xl md:overflow-hidden md:border md:border-[var(--color-border)]"
+            data-testid="sidebar-desktop"
+          >
             <SessionSidebar
               agents={agents}
               tasks={tasks}
@@ -304,8 +318,12 @@ function SessionsPageContent() {
             />
           </div>
 
-          {/* Chat — mobile: full-bleed only when an agent is picked (stack nav) */}
-          <div className={`flex-1 min-w-0 overflow-hidden flex-col min-h-0 ${mobileView === "chat" || !selected ? "flex" : "hidden"} md:flex`}>
+          {/* Chat — mobile: full-bleed only when an agent is picked (stack
+              nav); desktop: its own island (ChatView/TerminalPanel have no
+              background of their own, so this wrapper supplies bg-base). */}
+          <div
+            className={`flex-1 min-w-0 overflow-hidden flex-col min-h-0 ${mobileView === "chat" || !selected ? "flex" : "hidden"} md:flex md:rounded-xl md:border md:border-[var(--color-border)] md:bg-[var(--color-bg-base)]`}
+          >
             {/* Mobile: back button — returns to the sidebar sheet (stack nav) */}
             {selected && (
               <button
@@ -336,16 +354,22 @@ function SessionsPageContent() {
             )}
           </div>
 
-          {/* Panel rail — always visible next to the chat on desktop; fixed
-              bottom bar on mobile (see PanelRail's own responsive classes) */}
+          {/* Panel rail — always visible next to the chat on desktop, as its
+              own slim island; fixed bottom bar on mobile, unchanged (see
+              PanelRail's own responsive classes for both). */}
           <PanelRail active={activePanel} onSelect={setActivePanel} />
 
-          {/* Panel content — desktop: inline column; mobile: full-screen
-              overlay with its own close button (single markup block, no
-              duplicate render — Tailwind `md:` variants do the switch) */}
+          {/* Panel content — desktop: its own island column; mobile: full-
+              screen overlay with its own close button (single markup block,
+              no duplicate render — Tailwind `md:` variants do the switch).
+              `overflow-hidden` added so DiffPanel/BrowserLiveView content
+              clips to the desktop radius instead of squaring off the
+              corners; background stays unconditional (the mobile overlay
+              needs an opaque backing too), only the border/radius are
+              desktop-only (mobile is edge-to-edge, no island chrome). */}
           {activePanel && (
             <div
-              className="fixed inset-0 z-40 flex flex-col md:static md:z-auto md:w-[45%] md:max-w-[720px] md:border-l"
+              className="fixed inset-0 z-40 flex flex-col overflow-hidden md:static md:z-auto md:w-[45%] md:max-w-[720px] md:rounded-xl md:border"
               style={{ background: C.bgBase, borderColor: C.border }}
             >
               <div
