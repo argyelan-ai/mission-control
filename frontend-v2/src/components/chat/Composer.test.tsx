@@ -31,6 +31,7 @@ function mkUsage(overrides: Partial<UsageEvent> = {}): UsageEvent {
     outputTokens: 1_200,
     model: "claude-sonnet-4-6",
     effort: null,
+    contextWindow: 200_000,
     ...overrides,
   };
 }
@@ -132,40 +133,41 @@ describe("Composer", () => {
     expect(screen.getByText("high")).toBeInTheDocument();
   });
 
-  it("fills the context meter proportionally to usage.inputTokens / contextWindow(model)", () => {
+  it("fills the context meter proportionally to usage.inputTokens / usage.contextWindow", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 100_000, model: "claude-sonnet-4-6" })}
+        usage={mkUsage({ inputTokens: 100_000, contextWindow: 200_000 })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
     const fill = screen.getByTestId("context-meter-fill");
-    // 100,000 / 200,000 (standard window) = 50%
     expect(fill.style.width).toBe("50%");
   });
 
-  it("uses the 1M window for [1m] model variants in the meter", () => {
+  it("uses usage.contextWindow directly, whatever it is (verified live: Boss on claude-opus-5, 153k used against a backend-stamped 1M window = 15% on the CLI's own statusline)", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 500_000, model: "claude-sonnet-4-6[1m]" })}
+        usage={mkUsage({ inputTokens: 153_000, model: "claude-opus-5", contextWindow: 1_000_000 })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
     const fill = screen.getByTestId("context-meter-fill");
-    expect(fill.style.width).toBe("50%");
+    // 153,000 / 1,000,000 = 15.3%
+    expect(fill.style.width).toBe("15.3%");
+    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈153k/1M belegt");
   });
 
   it("shows a visible ≈usedk/windowk label so the bar isn't mistaken for the CLI statusline's remaining-% reading", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 100_000, model: "claude-sonnet-4-6" })}
+        usage={mkUsage({ inputTokens: 100_000, contextWindow: 200_000 })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
@@ -178,7 +180,7 @@ describe("Composer", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 12_345, model: "claude-sonnet-4-6" })}
+        usage={mkUsage({ inputTokens: 12_345, contextWindow: 200_000 })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
@@ -191,7 +193,7 @@ describe("Composer", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 12_345, model: "claude-sonnet-4-6" })}
+        usage={mkUsage({ inputTokens: 12_345, contextWindow: 200_000 })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
@@ -209,27 +211,26 @@ describe("Composer", () => {
     expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
   });
 
-  it("uses the 1M window for Claude 5 family models (verified live: Boss on claude-opus-5, 153k used = 15% on the CLI's own statusline)", () => {
+  it("renders no meter when the backend hasn't stamped a contextWindow (null) — honest absence over a guessed-wrong bar", () => {
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 153_000, model: "claude-opus-5" })}
+        usage={mkUsage({ contextWindow: null })}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}
       />
     );
-    const fill = screen.getByTestId("context-meter-fill");
-    // 153,000 / 1,000,000 = 15.3%
-    expect(fill.style.width).toBe("15.3%");
-    expect(screen.getByTestId("context-meter-label")).toHaveTextContent("≈153k/1M belegt");
+    expect(screen.queryByTestId("context-meter")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("context-meter-label")).not.toBeInTheDocument();
   });
 
-  it("renders no meter for an unrecognized model — honest absence over a guessed-wrong bar", () => {
+  it("renders no meter when contextWindow is absent entirely (older backend, field not rolled out yet)", () => {
+    const { contextWindow: _omit, ...usageWithoutWindow } = mkUsage();
     render(
       <Composer
         agentId="a1"
-        usage={mkUsage({ inputTokens: 50_000, model: "some-future-model-x" })}
+        usage={usageWithoutWindow as UsageEvent}
         state={null}
         onSend={vi.fn()}
         onStop={vi.fn()}

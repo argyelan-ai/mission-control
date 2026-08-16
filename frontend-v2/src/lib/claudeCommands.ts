@@ -36,31 +36,15 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { command: "/help", description: "Hilfe anzeigen" },
 ];
 
-const DEFAULT_CONTEXT_WINDOW = 200_000;
-const MILLION_CONTEXT_WINDOW = 1_000_000;
-
 /**
- * Static context-window size for the context meter, keyed off the
- * transcript's truthful `usage.model` string. Verified live against the
- * fleet (2026-08): the Claude 5 family (opus-5, sonnet-5, fable-5) ships a
- * 1M window by default — e.g. Boss on "claude-opus-5" with 153k used reads
- * 15% on the CLI's own statusline, which only holds at a 1M base. Any model
- * carrying an explicit "[1m]" suffix (the 4.x beta variants, e.g.
- * "claude-sonnet-4-6[1m]") gets 1M too. The Claude 4.x family otherwise gets
- * the standard 200k window.
- *
- * Returns `null` for anything not recognized — including `null`/`undefined`
- * before the first usage event arrives. Guessing a window for an unknown
- * model produces a confidently wrong bar (this is the second time this
- * meter's basis was wrong); an absent meter is honest, a wrong one is not.
+ * There is deliberately no model→context-window map here. Two fix rounds in
+ * a row shipped a wrong one (first missing the Claude 5 family's 1M default,
+ * then still guessing for models this frontend doesn't know about) — model
+ * lineups change faster than this file gets reviewed. The backend stamps the
+ * real window straight onto `UsageEvent.contextWindow` from its own model
+ * registry; the Composer renders the meter only when that field is a
+ * positive number, and renders nothing otherwise. See `chatTypes.ts`.
  */
-export function contextWindow(model: string | null | undefined): number | null {
-  if (!model) return null;
-  if (model.includes("[1m]")) return MILLION_CONTEXT_WINDOW;
-  if (/^claude-(opus|sonnet|fable)-5\b/.test(model)) return MILLION_CONTEXT_WINDOW;
-  if (/^claude-\w+-4(-|$)/.test(model)) return DEFAULT_CONTEXT_WINDOW;
-  return null;
-}
 
 /** Compact "153k" / "1M" formatting for the context-meter label — exact
  *  numbers still go in the tooltip, this is just the at-a-glance figure. */

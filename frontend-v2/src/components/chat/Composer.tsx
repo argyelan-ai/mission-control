@@ -5,7 +5,7 @@ import { Command } from "cmdk";
 import { Square, Send, ChevronDown } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
-import { CLAUDE_MODELS, SLASH_COMMANDS, contextWindow, formatCompactTokens } from "@/lib/claudeCommands";
+import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
 
 const MAX_ROWS = 8;
 const LINE_HEIGHT_PX = 18;
@@ -84,7 +84,8 @@ export function Composer({ agentId, usage, state, onSend, onStop }: ComposerProp
   }
 
   const modelLabel = usage?.model ?? "—";
-  const win = contextWindow(usage?.model);
+  // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
+  const win = usage?.contextWindow;
   const fillRatio = usage && win ? Math.min(usage.inputTokens / win, 1) : 0;
 
   return (

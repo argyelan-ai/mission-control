@@ -53,6 +53,12 @@ export interface UsageEvent {
   outputTokens: number;
   model: string | null;
   effort: string | null;
+  /** The model's actual context window, stamped by the backend from its own
+   *  model registry — the frontend never maintains its own model→window map
+   *  (that map went stale the moment a new model shipped). `null`/absent
+   *  means the backend doesn't know either; consumers render no context
+   *  meter rather than guess. */
+  contextWindow?: number | null;
 }
 
 export interface ChatPromptOption {
