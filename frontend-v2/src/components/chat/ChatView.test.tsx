@@ -130,6 +130,7 @@ function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamRe
     pendingEchoes: [],
     echoSent: vi.fn(),
     echoFailed: vi.fn(),
+    echoAgentStarting: vi.fn(),
     awaitingResponse: false,
     ...overrides,
   };
@@ -706,6 +707,86 @@ describe("ChatView", () => {
     ]);
   });
 
+  // ── Queued / starting echoes ──────────────────────────────────────────────
+
+  it("shows a mid-turn send as queued, with no warning", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "mach danach noch X", sentAt: Date.now(), status: "queued" },
+        ],
+      })
+    );
+    renderChatView();
+
+    expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "queued");
+    expect(
+      screen.getByText("Eingereiht — wird nach dem laufenden Zug gesendet")
+    ).toBeInTheDocument();
+    // The whole point: nothing here looks like a problem.
+    expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
+  });
+
+  it("shows a send waiting on a booting agent calmly", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        pendingEchoes: [
+          { id: "echo-1", text: "hallo", sentAt: Date.now(), status: "starting" },
+        ],
+      })
+    );
+    renderChatView();
+
+    expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "starting");
+    expect(screen.getByText("Agent startet — wird zugestellt…")).toBeInTheDocument();
+    expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
+  });
+
+  it("routes a 409 agent_starting to the calm state and a retry, not to a failure", async () => {
+    const echoAgentStarting = vi.fn();
+    const echoFailed = vi.fn();
+    vi.mocked(api.chat.sendText).mockRejectedValue(
+      new Error('API 409: {"reason":"agent_starting"}')
+    );
+    mockUseChatStream.mockReturnValue(mkStream({ echoAgentStarting, echoFailed }));
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "start doch");
+    await user.click(screen.getByTestId("send-button"));
+
+    await waitFor(() => expect(echoAgentStarting).toHaveBeenCalled());
+    expect(echoAgentStarting.mock.calls[0][0]).toBe("start doch");
+    // Nothing withdrawn, nothing shouted about — the message is still coming.
+    expect(echoFailed).not.toHaveBeenCalled();
+  });
+
+  it("retries the send through the very same path when asked to", async () => {
+    const sendText = vi.mocked(api.chat.sendText);
+    sendText.mockRejectedValue(new Error('API 409: {"reason":"agent_starting"}'));
+    let retryFn: (() => void) | null = null;
+    const echoAgentStarting = vi.fn((_text: string, retry: () => void) => {
+      retryFn = retry;
+    });
+    mockUseChatStream.mockReturnValue(mkStream({ echoAgentStarting }));
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "nochmal");
+    await user.click(screen.getByTestId("send-button"));
+    await waitFor(() => expect(retryFn).not.toBeNull());
+
+    const callsBefore = sendText.mock.calls.length;
+    sendText.mockResolvedValue(undefined);
+    retryFn!();
+
+    // Same api call, same arguments — the retry is not a second, subtly
+    // different code path.
+    await waitFor(() => expect(sendText.mock.calls.length).toBe(callsBefore + 1));
+    expect(sendText.mock.calls.at(-1)).toEqual(["agent-1", "nochmal"]);
+  });
+
   // ── Session badge semantics ───────────────────────────────────────────────
 
   it('shows the "live" badge for an active session', () => {
@@ -751,21 +832,24 @@ describe("ChatView", () => {
     expect(screen.queryByText("beendet")).not.toBeInTheDocument();
   });
 
-  it("keeps Stop reachable while the session is merely idle", () => {
+  it("offers a Send (not a Stop) on an idle session — the morph follows the agent, not the session", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" } })
     );
     renderChatView();
-    // An idle CLI is still there to interrupt; only an ended one is not.
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    // Per the operator's single-button ruling: Stop only appears while the agent
+    // is mid-turn. An idle session offers the (disabled) Send instead.
+    expect(screen.getByTestId("send-button")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
   });
 
-  it("removes Stop once the session has genuinely ended", () => {
+  it("removes both faces of the button once the session has genuinely ended", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
     );
     renderChatView();
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
   });
 
   // ── Chunked first paint ───────────────────────────────────────────────────

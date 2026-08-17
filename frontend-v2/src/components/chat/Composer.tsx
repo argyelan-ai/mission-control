@@ -185,6 +185,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isWorking = state?.status === "working";
+  const hasText = text.trim().length > 0;
   const effortLevels = resolveEffortLevels(capabilities);
   const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
   const modelOptions = resolveModelOptions(capabilities?.modelOptions);
@@ -712,73 +713,60 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             </div>
           )}
 
-          {/* Circular controls, the app convention: a round button in a
-              rounded field reads as "the one thing to press". */}
+          {/* ONE morphing primary button, the Claude Code / Desktop pattern.
+              Two buttons side by side asked the operator to aim; a single
+              control at a fixed spot means the thing under the cursor is always
+              "the thing to do next".
+
+              Empty input while the agent works => Stop, because there is
+              nothing to send and interrupting is the only useful action.
+              The moment there IS text, it becomes Send even mid-turn: steering
+              a working agent with a normal message is legitimate and is exactly
+              what the terminal allows. Idle with empty input => a ghost Send,
+              since the accent means "this is the action" and there is none yet.
+
+              Nothing at all once the session has ended — neither sending nor
+              interrupting can reach a session that is over. */}
           <div className="ml-auto flex items-center gap-1.5">
-            {sessionLive && isWorking && (
-              <button
-                type="button"
-                onClick={onStop}
-                aria-label="Stop"
-                title="Unterbrechen (ESC)"
-                data-testid="stop-button-prominent"
-                className="animate-pulse inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer"
-                style={{
-                  backgroundColor: C.accentSubtle,
-                  color: C.textPrimary,
-                  border: `1px solid ${C.borderAccent}`,
-                }}
-              >
-                <Square size={12} fill={C.textPrimary} />
-              </button>
-            )}
-            {sessionLive && !isWorking && (
-              // Boss has no pane probe in v1 — "working" is often missed while
-              // he's genuinely busy. A live session can always be interrupted,
-              // even when we're not confident it's mid-task; this stays quiet
-              // (unfilled icon, no pulse) so it doesn't compete with Send for
-              // attention when the agent really is idle.
-              <button
-                type="button"
-                onClick={onStop}
-                aria-label="Stop"
-                title="Unterbrechen (ESC)"
-                data-testid="stop-button-quiet"
-                className="inline-flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-full cursor-pointer transition-colors"
-                style={{
-                  backgroundColor: "transparent",
-                  color: C.textMuted,
-                  border: `1px solid ${C.borderSubtle}`,
-                }}
-              >
-                <Square size={11} />
-              </button>
-            )}
-            {!isWorking && (
-              // Arrow-up-in-a-circle, the convention every current chat surface
-              // uses (Codex, ChatGPT, Claude) — a paper plane reads as "send
-              // mail", not "submit this turn". Empty input is a ghost outline
-              // rather than a dimmed accent disc: the accent means "this is the
-              // action", and there is no action until something is typed.
-              <button
-                type="button"
-                onClick={send}
-                aria-label="Senden"
-                disabled={text.trim().length === 0}
-                data-empty={text.trim().length === 0}
-                className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors"
-                style={
-                  text.trim().length === 0
-                    ? {
-                        backgroundColor: "transparent",
-                        color: C.textDim,
-                        border: `1px solid ${C.border}`,
-                      }
-                    : { backgroundColor: C.accent, color: C.onAccent }
-                }
-              >
-                <ArrowUp size={16} strokeWidth={2.25} />
-              </button>
+            {sessionLive && (
+              hasText || !isWorking ? (
+                <button
+                  type="button"
+                  onClick={send}
+                  aria-label="Senden"
+                  disabled={!hasText}
+                  data-empty={!hasText}
+                  data-testid="send-button"
+                  className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors"
+                  style={
+                    hasText
+                      ? { backgroundColor: C.accent, color: C.onAccent }
+                      : {
+                          backgroundColor: "transparent",
+                          color: C.textDim,
+                          border: `1px solid ${C.border}`,
+                        }
+                  }
+                >
+                  <ArrowUp size={16} strokeWidth={2.25} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  aria-label="Stop"
+                  title="Unterbrechen (ESC)"
+                  data-testid="stop-button-prominent"
+                  className="animate-pulse inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer"
+                  style={{
+                    backgroundColor: C.accentSubtle,
+                    color: C.textPrimary,
+                    border: `1px solid ${C.borderAccent}`,
+                  }}
+                >
+                  <Square size={12} fill={C.textPrimary} />
+                </button>
+              )
             )}
           </div>
         </div>

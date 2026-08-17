@@ -93,15 +93,54 @@ describe("Composer", () => {
     expect(screen.queryByTestId("stop-button-quiet")).not.toBeInTheDocument();
   });
 
-  it("shows a quiet Stop button when the session is live but not confirmed working — sessionLive defaults to true so Boss (no pane probe, mtime heuristic often misses 'working') keeps a way to interrupt", () => {
-    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.getByTestId("stop-button-quiet")).toBeInTheDocument();
+  // ── One morphing primary button (operator ruling) ─────────────────────────
+  // Replaces the earlier two-button layout: a single control at a fixed spot,
+  // so whatever sits under the cursor is always "the thing to do next".
+  //
+  // KNOWN CONSEQUENCE, deliberate: the old quiet Stop existed because Boss has
+  // no pane probe and therefore rarely reports "working" — with the morph, an
+  // idle-looking session offers a disabled Send instead of a way to interrupt.
+  // Interrupting Boss now goes through the Terminal view.
+
+  it("morphs to Stop while the agent works and the input is empty", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("stop-button-prominent")).toBeInTheDocument();
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+  });
+
+  it("morphs back to Send as soon as there is text, even mid-turn", async () => {
+    const user = userEvent.setup();
+    render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText(/Nachricht/), "stopp mal, mach lieber X");
+
+    // Steering a working agent with a normal message is the point — the same
+    // thing the terminal allows.
+    expect(screen.getByTestId("send-button")).toBeEnabled();
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
   });
 
-  it('gives the quiet Stop button an "Unterbrechen (ESC)" tooltip', () => {
+  it("shows a disabled ghost Send when the agent is idle and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.getByTestId("stop-button-quiet")).toHaveAttribute("title", "Unterbrechen (ESC)");
+    const send = screen.getByTestId("send-button");
+    expect(send).toBeDisabled();
+    expect(send.style.backgroundColor).toBe("transparent");
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it("sends while the agent works when Enter is pressed", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={onSend} onStop={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText(/Nachricht/), "auch mitten im Zug{Enter}");
+
+    // Wave-review M-9 was the mismatch between a hidden button and a working
+    // Enter; both paths now agree.
+    expect(onSend).toHaveBeenCalledWith("auch mitten im Zug");
+  });
+
+  it('keeps the "Unterbrechen (ESC)" tooltip on the Stop face', () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("title", "Unterbrechen (ESC)");
   });
 
   it("hides the Stop button entirely when sessionLive is false, even while working", () => {
@@ -109,7 +148,8 @@ describe("Composer", () => {
       <Composer agentId="a1" usage={null} state={mkState("working")} sessionLive={false} onSend={vi.fn()} onStop={vi.fn()} />
     );
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("stop-button-quiet")).not.toBeInTheDocument();
+    // Nor a Send: nothing can reach a session that has ended.
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
   });
 
   it("hides the Stop button entirely when sessionLive is false and idle", () => {
@@ -117,7 +157,8 @@ describe("Composer", () => {
       <Composer agentId="a1" usage={null} state={mkState("idle")} sessionLive={false} onSend={vi.fn()} onStop={vi.fn()} />
     );
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("stop-button-quiet")).not.toBeInTheDocument();
+    // Nor a Send: nothing can reach a session that has ended.
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
   });
 
   it("calls onStop when the prominent Stop button is clicked", async () => {
@@ -130,15 +171,6 @@ describe("Composer", () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("calls onStop when the quiet Stop button is clicked", async () => {
-    const user = userEvent.setup();
-    const onStop = vi.fn();
-    render(
-      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={onStop} />
-    );
-    await user.click(screen.getByTestId("stop-button-quiet"));
-    expect(onStop).toHaveBeenCalledTimes(1);
-  });
 
   it("shows the transcript-truth model from usage, not an optimistic guess", () => {
     render(

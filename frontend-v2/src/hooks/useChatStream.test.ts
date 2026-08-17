@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { resolveAliveness } from "@/lib/chatTypes";
 import {
   chatReducer,
+  markEchoRetried,
+  markEchoStarting,
   createInitialChatState,
   markUnconfirmedEchoes,
   reconcilePendingEchoes,
@@ -271,6 +273,44 @@ describe("markUnconfirmedEchoes", () => {
     expect(flipped.status).toBe("unconfirmed");
   });
 
+  // The operator's live bug: a message sent while the agent works is QUEUED by
+  // the CLI and only written once the running turn ends. A turn easily outlasts
+  // ten seconds, so the timer accused a message that was perfectly safe.
+
+  it("never warns while the agent is mid-turn, no matter how long it takes", () => {
+    const a = echo({ sentAt: 1_000 });
+    const [result] = markUnconfirmedEchoes([a], 1_000 + ECHO_CONFIRM_TIMEOUT_MS * 10, true);
+
+    expect(result.status).toBe("queued");
+  });
+
+  it("shows a mid-turn send as queued straight away", () => {
+    const a = echo({ sentAt: 1_000 });
+    expect(markUnconfirmedEchoes([a], 1_100, true)[0].status).toBe("queued");
+  });
+
+  it("returns a queued echo to waiting once the turn is over", () => {
+    // The queue should now drain, so it counts again rather than staying
+    // "queued" forever.
+    const a = echo({ sentAt: 1_000, status: "queued" });
+    expect(markUnconfirmedEchoes([a], 1_100, false)[0].status).toBe("pending");
+  });
+
+  it("still warns on an idle agent after the timeout", () => {
+    const a = echo({ sentAt: 1_000 });
+    expect(
+      markUnconfirmedEchoes([a], 1_000 + ECHO_CONFIRM_TIMEOUT_MS, false)[0].status
+    ).toBe("unconfirmed");
+  });
+
+  it("never warns about an echo waiting on a starting agent", () => {
+    // That one has its own retry in flight.
+    const a = echo({ sentAt: 1_000, status: "starting" });
+    expect(
+      markUnconfirmedEchoes([a], 1_000 + ECHO_CONFIRM_TIMEOUT_MS * 5, false)[0].status
+    ).toBe("starting");
+  });
+
   it("leaves a fresh echo pending", () => {
     const a = echo({ sentAt: 1_000 });
     expect(markUnconfirmedEchoes([a], 1_500)[0].status).toBe("pending");
@@ -319,5 +359,120 @@ describe("resolveAliveness", () => {
   it("treats a missing session as idle rather than ended", () => {
     expect(resolveAliveness(null)).toBe("idle");
     expect(resolveAliveness(undefined)).toBe("idle");
+  });
+});
+
+
+describe("reconcilePendingEchoes — history vs live", () => {
+  it("retires an echo the refetched history confirms by text", () => {
+    // After a session rollover the confirmation can arrive ONLY through the
+    // refetched history; without this the echo would dangle into a false warning.
+    const a = echo({ id: "a", text: "mach weiter" });
+    expect(
+      reconcilePendingEchoes([a], "mach weiter", { allowOldestFallback: false })
+    ).toEqual([]);
+  });
+
+  it("does NOT retire an echo against an unrelated history message", () => {
+    // A rollover page is full of other user messages; the oldest-echo fallback
+    // would claim a delivery that never happened.
+    const a = echo({ id: "a", text: "mach weiter" });
+    expect(
+      reconcilePendingEchoes([a], "etwas voellig anderes", { allowOldestFallback: false })
+    ).toEqual([a]);
+  });
+
+  it("keeps the fallback for a live event, where it is the safer choice", () => {
+    const a = echo({ id: "a", text: "mach weiter" });
+    expect(reconcilePendingEchoes([a], "umformatiert")).toEqual([]);
+  });
+});
+
+describe("markEchoStarting / markEchoRetried", () => {
+  it("marks the newest matching echo as waiting on a starting agent", () => {
+    const older = echo({ id: "old", text: "gleich", sentAt: 1_000 });
+    const newer = echo({ id: "new", text: "gleich", sentAt: 2_000 });
+
+    const [a, b] = markEchoStarting([older, newer], "gleich");
+    expect(a.status).toBe("pending");
+    expect(b.status).toBe("starting");
+  });
+
+  it("records the spent retry and returns the echo to ordinary waiting", () => {
+    const a = echo({ text: "gleich", status: "starting" });
+    const [result] = markEchoRetried([a], "gleich");
+
+    expect(result.status).toBe("pending");
+    expect(result.retried).toBe(true);
+  });
+
+  it("leaves the list alone when no echo matches", () => {
+    const a = echo({ text: "hallo" });
+    expect(markEchoStarting([a], "anderes")).toEqual([a]);
+    expect(markEchoRetried([a], "anderes")).toEqual([a]);
+  });
+});
+
+describe("chatReducer — session rollover", () => {
+  it("clears the transcript but cannot touch pending echoes", () => {
+    // Echoes live OUTSIDE the reducer on purpose (it is a pure projection of the
+    // transcript). That design choice is also what makes them survive a
+    // rollover — a send that triggers one must not lose its bubble.
+    const seeded = chatReducer(createInitialChatState(), {
+      kind: "message",
+      uuid: "m1",
+      ts: "2026-08-17T10:00:00Z",
+      role: "assistant",
+      text: "hi",
+      model: null,
+      sidechain: false,
+    });
+    const rolled = chatReducer(seeded, { kind: "session_changed" });
+
+    expect(rolled.events).toEqual([]);
+    expect(Object.keys(rolled)).not.toContain("pendingEchoes");
+  });
+});
+
+
+describe("chatReducer — state freshness", () => {
+  // "Status settle": the frontend must never keep an older probe result over a
+  // newer one. It doesn't cache at all — every state frame replaces the last —
+  // so the only residual staleness is the probe's own ~2s poll interval, which
+  // is the backend's to shorten, not something the UI can honestly paper over.
+  it("always takes the newest state frame", () => {
+    let st = chatReducer(createInitialChatState(), {
+      kind: "state",
+      status: "working",
+      prompt: null,
+    });
+    expect(st.state?.status).toBe("working");
+
+    st = chatReducer(st, { kind: "state", status: "idle", prompt: null });
+    expect(st.state?.status).toBe("idle");
+
+    // And back again — no stickiness in either direction.
+    st = chatReducer(st, { kind: "state", status: "working", prompt: null });
+    expect(st.state?.status).toBe("working");
+  });
+
+  it("does not let an assistant message resurrect or freeze a state", () => {
+    let st = chatReducer(createInitialChatState(), {
+      kind: "state",
+      status: "idle",
+      prompt: null,
+    });
+    st = chatReducer(st, {
+      kind: "message",
+      uuid: "m1",
+      ts: "2026-08-17T10:00:00Z",
+      role: "assistant",
+      text: "fertig",
+      model: null,
+      sidechain: false,
+    });
+
+    // Messages carry no status claim; the probe stays the only source.
+    expect(st.state?.status).toBe("idle");
   });
 });

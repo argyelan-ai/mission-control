@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Clock } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
+import type { EchoStatus } from "@/hooks/useChatStream";
 
 // ── Markdown renderer — mirrors LegacyMemoryPage's `MarkdownContent` exactly
 // (same component config incl. code-block styling), so knowledge docs and
@@ -183,12 +184,21 @@ export function ChatMessage({
   /** Set only for a locally-echoed send that the transcript hasn't confirmed
    *  yet (see useChatStream's optimistic echo). Absent = a real transcript
    *  message, which needs no qualifier. */
-  echoStatus?: "pending" | "unconfirmed";
+  echoStatus?: EchoStatus;
 }) {
   const isUser = ev.role === "user";
 
   if (isUser) {
     const unconfirmed = echoStatus === "unconfirmed";
+    // Queued and starting are WAITS, not problems: the CLI genuinely holds a
+    // message sent mid-turn until the turn ends, and a booting agent will get it
+    // shortly. They say what they are waiting for and stay out of the way.
+    const waitingNote =
+      echoStatus === "queued"
+        ? "Eingereiht — wird nach dem laufenden Zug gesendet"
+        : echoStatus === "starting"
+          ? "Agent startet — wird zugestellt…"
+          : null;
     return (
       <div className="w-full px-4 md:px-5 py-2 flex justify-end">
         <div
@@ -203,6 +213,8 @@ export function ChatMessage({
             // isn't acknowledged yet. Once confirmed the bubble is replaced by
             // the real transcript event and returns to full opacity.
             opacity: echoStatus === "pending" ? 0.55 : 1,
+            // queued/starting keep full opacity: they carry an explanatory line
+            // of their own, and dimming them too would read as "degraded".
           }}
         >
           <span className="sr-only">Du</span>
@@ -217,6 +229,17 @@ export function ChatMessage({
             >
               <AlertTriangle size={12} aria-hidden="true" />
               <span>Nicht bestätigt — Terminal prüfen</span>
+            </div>
+          )}
+          {waitingNote && (
+            // Muted, with a clock rather than a warning glyph — nothing here
+            // needs the operator to act.
+            <div
+              className="mt-1.5 pt-1.5 flex items-center gap-1.5 text-xs"
+              style={{ color: C.textMuted, borderTop: `1px solid ${C.borderSubtle}` }}
+            >
+              <Clock size={12} aria-hidden="true" />
+              <span>{waitingNote}</span>
             </div>
           )}
         </div>

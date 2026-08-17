@@ -25,19 +25,44 @@ import type {
 // projection of the transcript, and mixing a local guess into it would make
 // "what the agent actually recorded" unanswerable.
 
-/** How long an echo may stay unconfirmed before it says so. Generous on
+/** How long an echo may stay unacknowledged before it says so. Generous on
  *  purpose — the floor is the tailer's 1s poll plus however long the CLI takes
- *  to flush the line, and a busy agent can be slower than that. */
+ *  to flush the line. Only counted while the agent is NOT mid-turn; see
+ *  `markUnconfirmedEchoes`. */
 export const ECHO_CONFIRM_TIMEOUT_MS = 10_000;
+
+/** Wait before the single automatic retry of a send the backend rejected with
+ *  `agent_starting`. One retry, not a loop: if the agent still isn't up, that is
+ *  news the operator should get, not something to paper over indefinitely. */
+export const ECHO_RETRY_DELAY_MS = 10_000;
+
+/**
+ * `pending`     — sent, waiting for the transcript. The ordinary case.
+ * `queued`      — sent while the agent was mid-turn. The CLI genuinely queues
+ *                 the line and only writes it once the running turn ends, so
+ *                 there is nothing wrong and nothing to warn about.
+ * `starting`    — the backend said the agent is still coming up
+ *                 (`agent_starting`); one automatic retry is scheduled.
+ * `unconfirmed` — the timeout passed while the agent was idle AND the stream
+ *                 healthy, so the message may never have reached the CLI.
+ *                 Truthful, not a spinner.
+ */
+export type EchoStatus = "pending" | "queued" | "starting" | "unconfirmed";
 
 export interface PendingEcho {
   /** Local id — never a transcript uuid, so it can't collide with one. */
   id: string;
   text: string;
   sentAt: number;
-  /** `unconfirmed` = the timeout passed while the stream was healthy, so the
-   *  message may never have reached the CLI. Truthful, not a spinner. */
-  status: "pending" | "unconfirmed";
+  status: EchoStatus;
+  /** True once the single `agent_starting` retry has been used up. */
+  retried?: boolean;
+}
+
+/** Echo states that are simply waiting on something known and expected — no
+ *  warning belongs on any of them. */
+export function isCalmEchoStatus(status: EchoStatus): boolean {
+  return status !== "unconfirmed";
 }
 
 /** Whitespace-insensitive compare: the CLI echoes back what it received, but a
@@ -59,11 +84,21 @@ function sameMessage(a: string, b: string): boolean {
  *
  * Pure so the rule can be tested without React.
  */
-export function reconcilePendingEchoes(echoes: PendingEcho[], incomingText: string): PendingEcho[] {
+export function reconcilePendingEchoes(
+  echoes: PendingEcho[],
+  incomingText: string,
+  { allowOldestFallback = true }: { allowOldestFallback?: boolean } = {},
+): PendingEcho[] {
   if (echoes.length === 0) return echoes;
   const matched = echoes.findIndex((e) => sameMessage(e.text, incomingText));
-  const drop = matched >= 0 ? matched : 0;
-  return echoes.filter((_, i) => i !== drop);
+  if (matched >= 0) return echoes.filter((_, i) => i !== matched);
+  // The fallback is only safe for a LIVE user event, which almost certainly is
+  // our own send arriving reformatted. A bulk history scan is different: after a
+  // session rollover the refetched page is full of unrelated user messages, and
+  // falling back there would retire a still-queued echo against a stranger —
+  // claiming a delivery that hasn't happened.
+  if (!allowOldestFallback) return echoes;
+  return echoes.slice(1);
 }
 
 /** Removes the newest echo with this text — a failed send is always the most
@@ -75,11 +110,42 @@ export function withdrawPendingEcho(echoes: PendingEcho[], text: string): Pendin
   return echoes.filter((_, i) => i !== idx);
 }
 
-/** Flips echoes that have gone unacknowledged past the timeout. Returns the
- *  same array when nothing changed, so callers can skip a re-render. */
-export function markUnconfirmedEchoes(echoes: PendingEcho[], now: number): PendingEcho[] {
+/**
+ * Flips echoes that have gone unacknowledged past the timeout — but ONLY while
+ * the agent is not mid-turn.
+ *
+ * This is the bug the operator hit: a message sent while the agent is working is
+ * QUEUED by the CLI and reaches the transcript only after the running turn ends.
+ * A turn can easily outlast ten seconds, so the timer declared "nicht
+ * bestätigt" at a message that was sitting safely in the queue. While the agent
+ * works, echoes read `queued` instead and the clock does not run at all; it
+ * resumes once the agent is idle, where an unacknowledged message really is
+ * suspicious.
+ *
+ * `starting` is likewise never flipped: it has its own retry in flight.
+ * Returns the same array when nothing changed, so callers can skip a re-render.
+ */
+export function markUnconfirmedEchoes(
+  echoes: PendingEcho[],
+  now: number,
+  agentWorking = false,
+): PendingEcho[] {
   let changed = false;
   const next = echoes.map((e) => {
+    if (agentWorking) {
+      // Mid-turn: show the queue, don't start a clock.
+      if (e.status === "pending") {
+        changed = true;
+        return { ...e, status: "queued" as const };
+      }
+      return e;
+    }
+    // Turn over: a queued line should now be written, so it goes back to
+    // waiting-and-counting rather than staying "queued" forever.
+    if (e.status === "queued") {
+      changed = true;
+      return { ...e, status: "pending" as const };
+    }
     if (e.status === "pending" && now - e.sentAt >= ECHO_CONFIRM_TIMEOUT_MS) {
       changed = true;
       return { ...e, status: "unconfirmed" as const };
@@ -87,6 +153,27 @@ export function markUnconfirmedEchoes(echoes: PendingEcho[], now: number): Pendi
     return e;
   });
   return changed ? next : echoes;
+}
+
+/** Marks an echo as waiting on a starting agent and records that its one retry
+ *  is still available. */
+export function markEchoStarting(echoes: PendingEcho[], text: string): PendingEcho[] {
+  const reversedIdx = [...echoes].reverse().findIndex((e) => sameMessage(e.text, text));
+  if (reversedIdx < 0) return echoes;
+  const idx = echoes.length - 1 - reversedIdx;
+  const next = echoes.slice();
+  next[idx] = { ...next[idx], status: "starting" };
+  return next;
+}
+
+/** Records that the single automatic retry for this echo has been spent. */
+export function markEchoRetried(echoes: PendingEcho[], text: string): PendingEcho[] {
+  const reversedIdx = [...echoes].reverse().findIndex((e) => sameMessage(e.text, text));
+  if (reversedIdx < 0) return echoes;
+  const idx = echoes.length - 1 - reversedIdx;
+  const next = echoes.slice();
+  next[idx] = { ...next[idx], status: "pending", retried: true };
+  return next;
 }
 
 // ── Reducer ──────────────────────────────────────────────────────────────────
@@ -209,6 +296,9 @@ export interface UseChatStreamResult {
   /** Call when that send failed: the echo is removed again, since nothing was
    *  delivered and a lingering bubble would claim otherwise. */
   echoFailed: (text: string) => void;
+  /** Call on a 409 `agent_starting`: the echo waits calmly and the send is
+   *  retried once via the supplied function. */
+  echoAgentStarting: (text: string, retry: () => void) => void;
   /** True from a send until the transcript shows any sign of life (a state
    *  change, a tool call, a message). Drives the honest "Gesendet…" line. */
   awaitingResponse: boolean;
@@ -264,12 +354,38 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     setAwaitingResponse(false);
   }, []);
 
+  /**
+   * The backend refused because the agent is still booting. That is a wait, not
+   * a failure: the echo says so calmly and the send is retried ONCE, after a
+   * delay. One retry rather than a loop — if the agent still isn't up by then,
+   * that is news the operator should get instead of an indefinitely spinning
+   * bubble. `retry` is the caller's own send function, so the retry travels the
+   * exact same path (including its error handling) as the original.
+   */
+  const echoAgentStarting = useCallback((text: string, retry: () => void) => {
+    let alreadyRetried = false;
+    setPendingEchoes((prev) => {
+      const target = [...prev].reverse().find((e) => sameMessage(e.text, text));
+      alreadyRetried = target?.retried === true;
+      return alreadyRetried ? prev : markEchoStarting(prev, text);
+    });
+    if (alreadyRetried) return;
+    window.setTimeout(() => {
+      setPendingEchoes((prev) => markEchoRetried(prev, text));
+      retry();
+    }, ECHO_RETRY_DELAY_MS);
+  }, []);
+
   /** Retires the echo this transcript message corresponds to. Prefers a text
    *  match; falls back to the oldest echo, because a visible duplicate bubble is
    *  a worse failure than retiring one echo early (the real message is on screen
    *  either way — only the local copy disappears). */
-  const reconcileEcho = useCallback((incomingText: string) => {
-    setPendingEchoes((prev) => reconcilePendingEchoes(prev, incomingText));
+  /** `fromHistory` = this text came from a bulk history page, not a live event,
+   *  so no oldest-echo fallback (see reconcilePendingEchoes). */
+  const reconcileEcho = useCallback((incomingText: string, fromHistory = false) => {
+    setPendingEchoes((prev) =>
+      reconcilePendingEchoes(prev, incomingText, { allowOldestFallback: !fromHistory }),
+    );
   }, []);
 
   // Retire echoes that history brings in (a refetch after session rollover can
@@ -278,21 +394,25 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     const data = historyQuery.data;
     if (!data) return;
     for (const ev of data.events) {
-      if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text);
+      if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text, true);
     }
   }, [historyQuery.data, reconcileEcho]);
 
-  // Flip long-unconfirmed echoes rather than leaving them looking delivered.
+  // Flip long-unacknowledged echoes rather than leaving them looking delivered —
+  // but the clock only runs while the agent is NOT mid-turn (see
+  // markUnconfirmedEchoes: the CLI queues messages sent during a turn, so a
+  // timer running then accuses a message that is perfectly safe).
   // Only while the stream is healthy: on a dead stream we genuinely don't know,
   // and StatusLine already says the status is unclear.
+  const agentWorking = chatState.state?.status === "working";
   useEffect(() => {
     if (pendingEchoes.length === 0 || !connected) return;
     const timer = setInterval(() => {
       const now = Date.now();
-      setPendingEchoes((prev) => markUnconfirmedEchoes(prev, now));
+      setPendingEchoes((prev) => markUnconfirmedEchoes(prev, now, agentWorking));
     }, 1_000);
     return () => clearInterval(timer);
-  }, [pendingEchoes.length, connected]);
+  }, [pendingEchoes.length, connected, agentWorking]);
 
   const streamUrl = agentId ? api.chat.streamUrl(agentId) : "";
 
@@ -339,6 +459,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     pendingEchoes,
     echoSent,
     echoFailed,
+    echoAgentStarting,
     awaitingResponse,
   };
 }

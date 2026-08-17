@@ -272,6 +272,13 @@ export function isAgentBusyError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("agent_busy");
 }
 
+/** 409 from `/chat/input` when the agent's CLI is still booting. A wait, not a
+ *  failure — the message hasn't been rejected, it just can't be delivered yet,
+ *  so the echo says so and the send is retried once. */
+export function isAgentStartingError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("agent_starting");
+}
+
 /** 409 from `/chat/effort` when the CLI itself said no and explained why.
  *  Distinct from `effort_switch_failed` (which means "we could not verify it"):
  *  here the outcome is known and there is a real reason to pass on. */

@@ -24,7 +24,7 @@ import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
-import { isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
+import { isAgentStartingError, isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
@@ -323,7 +323,21 @@ export function ChatView({
     // failing removes the echo again — an echo that outlived a failed send would
     // be the one thing worse than the old delay.
     stream.echoSent(text);
-    api.chat.sendText(agent.id, text).catch(() => {
+    deliver(text);
+  }
+
+  /** The actual delivery, separated so the `agent_starting` retry travels the
+   *  exact same path — including this error handling — instead of a second,
+   *  subtly different one. */
+  function deliver(text: string) {
+    if (!agent) return;
+    api.chat.sendText(agent.id, text).catch((err) => {
+      if (isAgentStartingError(err)) {
+        // Not a failure: the agent is booting. The echo says so and the send is
+        // retried once. No toast — nothing has gone wrong yet.
+        stream.echoAgentStarting(text, () => deliver(text));
+        return;
+      }
       stream.echoFailed(text);
       notify.error("Senden fehlgeschlagen");
     });
