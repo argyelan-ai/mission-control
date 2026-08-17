@@ -172,14 +172,14 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
                 {s.label}
               </span>
               <span
-                className="font-mono text-[11px] font-medium tabular-nums shrink-0"
+                className="font-mono text-xs font-medium tabular-nums shrink-0"
                 style={{ color: C.textPrimary }}
               >
                 {formatCompactTokens(s.tokens)}
               </span>
               {window_ != null && (
                 <span
-                  className="font-mono text-[11px] font-medium tabular-nums shrink-0 w-11 text-right"
+                  className="font-mono text-xs font-medium tabular-nums shrink-0 w-12 text-right"
                   style={{ color: C.textMuted }}
                 >
                   {share(s.tokens).toFixed(1)}%
@@ -190,13 +190,13 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
         </div>
 
         <div className="mt-3 pt-2.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-          <div className="flex items-center justify-between gap-2 text-[11px] font-medium" style={{ color: C.textMuted }}>
+          <div className="flex items-center justify-between gap-2 text-xs font-medium" style={{ color: C.textMuted }}>
             <span>Fenster gesamt</span>
             <span className="font-mono tabular-nums" style={{ color: C.textSecondary }}>
               {window_ != null ? formatCompactTokens(window_) : "unbekannt"}
             </span>
           </div>
-          <div className="flex items-center justify-between gap-2 text-[11px] font-medium" style={{ color: C.textMuted }}>
+          <div className="flex items-center justify-between gap-2 text-xs font-medium" style={{ color: C.textMuted }}>
             <span>Quelle</span>
             <span className="font-mono" data-testid="context-panel-source" style={{ color: C.textSecondary }}>
               {pctSource === "estimate" ? "Schätzung" : pctSource === "cli" ? "CLI" : "—"}

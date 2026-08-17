@@ -74,22 +74,35 @@ vi.mock("@/components/chat/ChatView", () => ({
     hasTranscript,
     centerView,
     onCenterViewChange,
+    onBack,
+    contextLine,
   }: {
     agent: { name: string } | null;
     hasTranscript: boolean;
     centerView: string;
     onCenterViewChange: (v: string) => void;
+    onBack?: () => void;
+    contextLine?: string | null;
   }) => (
     <div data-testid="chat-view-stub">
       <span>{agent ? `Chat: ${agent.name}` : "Chat: none"}</span>
       <span data-testid="chat-view-has-transcript">{String(hasTranscript)}</span>
       <span data-testid="chat-view-center">{centerView}</span>
+      <span data-testid="chat-view-context-line">{contextLine ?? ""}</span>
       <button
         type="button"
         onClick={() => onCenterViewChange(centerView === "chat" ? "terminal" : "chat")}
       >
         Toggle Center View
       </button>
+      {/* The real back chevron lives in ChatView's header (covered by
+          ChatView.test.tsx). What the PAGE owes is a reaction to `onBack`:
+          returning to the list screen. This stands in for that trigger. */}
+      {onBack && (
+        <button type="button" onClick={onBack}>
+          Stub Back
+        </button>
+      )}
     </div>
   ),
   DETAIL_LEVELS: [
@@ -499,14 +512,118 @@ describe("SessionsPage — sidebar collapse (mc.chat.sidebar)", () => {
     expect(within(desktopSidebar).queryByText("Agent One")).not.toBeInTheDocument();
   });
 
-  it("the mobile sheet sidebar is unaffected by the desktop collapse state", async () => {
+  it("the mobile stack list is unaffected by the desktop collapse state", async () => {
     localStorage.setItem("mc.chat.sidebar", "collapsed");
     renderPage();
 
-    // Desktop rail is collapsed (icon-only, no text) — the only actual text
-    // node reading "Agent One" left in the DOM is the mobile sheet's own
-    // toggle-button label, which the rail-only `collapsed` prop never
-    // reaches (it's a separate SessionSidebar instance, variant="sheet").
+    // Desktop rail is collapsed (icon-only, no text). The remaining text node
+    // reading "Agent One" belongs to the mobile stack's own list screen — a
+    // separate SessionSidebar instance (variant="list") that the rail-only
+    // `collapsed` prop never reaches.
     expect(await screen.findByText("Agent One")).toBeInTheDocument();
+  });
+});
+
+// ── Mobile stack visibility ─────────────────────────────────────────────────
+// Both stack screens stay MOUNTED (the chat must keep its SSE subscription and
+// scroll position while the list is up), so the inactive one has to be
+// `display: none` — not merely clipped. Clipped-but-in-flow was a real defect:
+// the shell column measured scrollHeight 2794 against clientHeight 852, the
+// dead screen was reachable by momentum scroll and keyboard focus, and a
+// programmatic scroll landed on a fully black viewport.
+//
+// jsdom computes no layout, so the enforceable invariant here is the class
+// contract that produces `display: none`. Exactly one screen may be visible.
+describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
+  beforeEach(() => {
+    nav.searchParamsString = "";
+    localStorage.clear();
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+      mkAgent({ id: "agent-2", name: "Agent Two" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const list = () => screen.getByTestId("session-list-mobile");
+  const chat = () => screen.getByTestId("chat-column");
+  const isHidden = (el: HTMLElement) => el.className.split(/\s+/).includes("hidden");
+
+  it("starts on the list screen with the chat screen display:none", async () => {
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    expect(isHidden(list())).toBe(false);
+    expect(isHidden(chat())).toBe(true);
+  });
+
+  it("hides the list screen once a session is opened", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(within(list()).getByRole("option", { name: /Agent One/ }));
+
+    expect(isHidden(chat())).toBe(false);
+    expect(isHidden(list())).toBe(true);
+  });
+
+  it("returns to the list screen on back, hiding the chat again", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(within(list()).getByRole("option", { name: /Agent One/ }));
+    await user.click(screen.getByRole("button", { name: "Stub Back" }));
+
+    expect(isHidden(list())).toBe(false);
+    expect(isHidden(chat())).toBe(true);
+  });
+
+  it("never leaves both screens in flow at once", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    const bothVisible = () => !isHidden(list()) && !isHidden(chat());
+    expect(bothVisible()).toBe(false);
+
+    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    expect(bothVisible()).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Stub Back" }));
+    expect(bothVisible()).toBe(false);
+  });
+
+  it("keeps both screens mounted so the chat's stream and scroll survive the switch", async () => {
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    // Hidden, but present — unmounting would drop the SSE subscription and the
+    // scroll position every time the operator glances at the list.
+    expect(chat()).toBeInTheDocument();
+    expect(list()).toBeInTheDocument();
+  });
+
+  it("a ?agent= deep link opens the chat screen directly", async () => {
+    nav.searchParamsString = "agent=agent-2";
+    renderPage();
+    await screen.findAllByText("Agent Two");
+
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(isHidden(list())).toBe(true);
+  });
+
+  it("a merely remembered selection still opens on the list screen", async () => {
+    localStorage.setItem("mc-sessions-last-agent", "agent-2");
+    renderPage();
+    await screen.findAllByText("Agent Two");
+
+    expect(isHidden(list())).toBe(false);
+    expect(isHidden(chat())).toBe(true);
   });
 });

@@ -1,9 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Square, ArrowUp, ChevronDown } from "lucide-react";
+import { Square, ArrowUp, Check, ChevronDown } from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
-import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
+import { api } from "@/lib/api";
+import { notify } from "@/lib/notify";
+import {
+  isEffortSwitchFailedError,
+  isInputNotSupportedError,
+  type StateEvent,
+  type UsageEvent,
+} from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
 import { ContextPanel } from "./ContextPanel";
 
@@ -18,6 +25,12 @@ const RING_SIZE = 18;
 const RING_STROKE = 2;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/** The only levels the backend allowlists (`ChatEffortBody`). Whatever else a
+ *  transcript may report, these are the three the operator can switch to. */
+export type EffortLevel = "low" | "medium" | "high";
+
+export const EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high"];
 
 type RingThreshold = "normal" | "warning" | "error";
 
@@ -75,6 +88,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [effortOpen, setEffortOpen] = useState(false);
+  /** The level asked for, while the request is in flight. Never used as the
+   *  chip's label — the label stays transcript truth. */
+  const [pendingEffort, setPendingEffort] = useState<EffortLevel | null>(null);
+  /** Flips to false the first time the backend answers `input_not_supported`
+   *  (host agents have no pane to drive). Only the backend knows, so the chip
+   *  starts interactive and demotes itself to a labelled read-only value —
+   *  better than hiding a control that works for most of the fleet. */
+  const [effortSupported, setEffortSupported] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -167,6 +189,28 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   function selectModel(name: string) {
     onSend(`/model ${name}`);
     setModelOpen(false);
+  }
+
+  async function selectEffort(level: EffortLevel) {
+    setEffortOpen(false);
+    if (level === usage?.effort) return;
+    setPendingEffort(level);
+    try {
+      await api.chat.setEffort(agentId, level);
+      // Deliberately no optimistic relabel: the next transcript turn reports
+      // the level the agent is actually running, and that is the only figure
+      // the chip is allowed to show.
+    } catch (err) {
+      if (isInputNotSupportedError(err)) {
+        setEffortSupported(false);
+      } else if (isEffortSwitchFailedError(err)) {
+        notify.error("Effort-Wechsel nicht bestätigt — im Terminal prüfen");
+      } else {
+        notify.error("Effort-Wechsel fehlgeschlagen");
+      }
+    } finally {
+      setPendingEffort(null);
+    }
   }
 
   function selectCommand(command: string) {
@@ -320,7 +364,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               // Quiet by default: this is a switcher, not an active state, so
               // it doesn't get the accent tint (which in this system means
               // "selected"). It lights up on hover and while open.
-              className="inline-flex items-center gap-1 font-mono text-[11px] font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
+              className="inline-flex items-center gap-1 font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
               style={{
                 backgroundColor: modelOpen ? C.bgHover : "transparent",
                 color: modelOpen ? C.textPrimary : C.textSecondary,
@@ -364,14 +408,96 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             )}
           </div>
 
-          {usage?.effort && (
-            <span
-              className="font-mono text-[11px] font-medium px-2 py-1 rounded-lg"
-              style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-            >
-              {usage.effort}
-            </span>
-          )}
+          {usage?.effort &&
+            (effortSupported ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setEffortOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={effortOpen}
+                  aria-label="Effort-Stufe"
+                  data-testid="effort-chip"
+                  data-pending={pendingEffort != null}
+                  disabled={pendingEffort != null}
+                  className="inline-flex items-center gap-1 font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors disabled:cursor-wait"
+                  style={{
+                    backgroundColor: effortOpen ? C.bgHover : "transparent",
+                    color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
+                    border: `1px solid ${C.border}`,
+                    opacity: pendingEffort != null ? 0.6 : 1,
+                  }}
+                >
+                  {usage.effort}
+                  <ChevronDown
+                    size={11}
+                    className="transition-transform duration-150"
+                    style={{ transform: effortOpen ? "rotate(180deg)" : undefined }}
+                  />
+                </button>
+                {effortOpen && (
+                  <div
+                    role="listbox"
+                    aria-label="Effort-Stufe"
+                    data-testid="effort-menu"
+                    className="absolute bottom-full left-0 mb-1.5 w-52 rounded-lg overflow-hidden z-20 p-1"
+                    style={{
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                    }}
+                  >
+                    {EFFORT_LEVELS.map((level) => {
+                      const isCurrent = usage.effort === level;
+                      const isPending = pendingEffort === level;
+                      return (
+                        <button
+                          key={level}
+                          type="button"
+                          role="option"
+                          aria-selected={isCurrent}
+                          onClick={() => selectEffort(level)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-mono rounded-md cursor-pointer text-left transition-colors hover:bg-[var(--color-bg-hover)]"
+                          style={{
+                            color: isCurrent ? C.accent : C.textPrimary,
+                            backgroundColor: isCurrent ? C.accentSubtle : "transparent",
+                          }}
+                        >
+                          <span className="flex-1">{level}</span>
+                          {/* "…" while the switch is in flight, a check only
+                              once the transcript confirms it — the chip never
+                              claims a level the agent hasn't reported. */}
+                          {isPending ? (
+                            <span style={{ color: C.textMuted }}>…</span>
+                          ) : isCurrent ? (
+                            <Check size={12} style={{ color: C.accent }} />
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                    {/* CLI reality, verified empirically: Claude Code has no
+                        session-only effort. The switch rewrites the agent's
+                        persisted default, so the operator must know it outlives
+                        this session. */}
+                    <p
+                      className="px-2 pt-1.5 pb-0.5 text-xs leading-[1.45]"
+                      style={{ color: C.textMuted }}
+                    >
+                      Gilt als neuer Standard des Agenten.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <span
+                data-testid="effort-chip-static"
+                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                {usage.effort}
+              </span>
+            ))}
 
           {usage && pct != null && (
             // The ring stays the compact indicator and the tooltip stays the

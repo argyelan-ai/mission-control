@@ -353,7 +353,7 @@ export function ChatView({
               working on" at all, and the sidebar row that does is easy to lose
               once the rail is collapsed. */}
           {contextLine && (
-            <span className="text-[11px] md:text-[12px] truncate min-w-0" style={{ color: C.textMuted }}>
+            <span className="text-xs truncate min-w-0" style={{ color: C.textMuted }}>
               {contextLine}
             </span>
           )}

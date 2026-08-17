@@ -216,7 +216,7 @@ export function TerminalPanel({ agent }: { agent: AgentWithState }) {
       ? (agent.session_running ? "running" : "idle")
       : (agent.container_state ?? "unknown");
     return (
-      <div className="flex flex-col items-center justify-center flex-1 bg-[var(--color-bg-deep)] gap-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+      <div className="flex flex-col items-center justify-center flex-1 bg-[var(--color-bg-deep)] gap-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
         <MonitorOff size={32} style={{ opacity: 0.3 }} />
         <div>{t("sessionIs")} <span className="font-mono">{stateText}</span></div>
       </div>
@@ -286,7 +286,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           >
             {connected ? t("connected") : t("disconnected")}
           </span>
-          <span className="text-[11px] font-mono truncate min-w-0" style={{ color: "var(--color-text-secondary)" }}>
+          <span className="text-xs font-mono truncate min-w-0" style={{ color: "var(--color-text-secondary)" }}>
             mc-agent-{agent.name}
           </span>
         </div>

@@ -149,3 +149,18 @@ export interface NoTranscriptError {
 export function isNoTranscriptError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("no_transcript");
 }
+
+/** 409 from any chat-input endpoint on an agent whose runtime has no pane to
+ *  drive (host agents — Boss, Hermes, Jarvis). Not an error to shout about:
+ *  the control is simply unavailable there, and the UI should say so quietly
+ *  rather than offer a button that can never work. */
+export function isInputNotSupportedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("input_not_supported");
+}
+
+/** 409 from `/chat/effort` when the switch was sent but could not be verified
+ *  as applied. This one IS a real failure — the operator asked for something
+ *  and it didn't happen, so it needs surfacing. */
+export function isEffortSwitchFailedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("effort_switch_failed");
+}

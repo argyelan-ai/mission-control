@@ -29,6 +29,10 @@ vi.mock("@/lib/api", () => ({
     chat: {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendKeys: vi.fn().mockResolvedValue(undefined),
+      // The Composer rendered inside ChatView reaches for this one directly
+      // (effort switching); stubbed so the mock stays a faithful stand-in even
+      // though no test here drives the chip.
+      setEffort: vi.fn().mockResolvedValue(undefined),
     },
   },
 }));

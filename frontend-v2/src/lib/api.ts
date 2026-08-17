@@ -848,6 +848,15 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ keys }),
       }),
+    // 204 on success. Two distinct 409s the caller must tell apart:
+    // `input_not_supported` (host agents — no pane to drive, the control is
+    // simply unavailable) and `effort_switch_failed` (the switch was sent but
+    // couldn't be verified as applied — a real error worth surfacing).
+    setEffort: (agentId: string, level: "low" | "medium" | "high") =>
+      request<void>(`/api/v1/agents/${agentId}/chat/effort`, {
+        method: "POST",
+        body: JSON.stringify({ level }),
+      }),
     diff: (agentId: string, scope: "worktree" | "last-commit" = "worktree") =>
       request<CommitDiff>(`/api/v1/agents/${agentId}/chat/diff?scope=${scope}`),
     streamUrl: (agentId: string) => sseUrls.chat(agentId),

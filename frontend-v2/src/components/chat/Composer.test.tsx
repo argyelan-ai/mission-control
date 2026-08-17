@@ -1,12 +1,22 @@
 /**
  * Composer — Task B4 vitest.
  */
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
+import { api } from "@/lib/api";
+import { notify } from "@/lib/notify";
+
+// The effort chip talks to the backend directly (it is the only control in the
+// composer that does), so both the client and the toast helper are stubbed.
+vi.mock("@/lib/api", () => ({ api: { chat: { setEffort: vi.fn() } } }));
+vi.mock("@/lib/notify", () => ({ notify: { error: vi.fn(), success: vi.fn() } }));
+
+const mockSetEffort = vi.mocked(api.chat.setEffort);
+const mockNotifyError = vi.mocked(notify.error);
 
 function mkUsage(overrides: Partial<UsageEvent> = {}): UsageEvent {
   return {
@@ -27,6 +37,11 @@ function mkState(status: StateEvent["status"]): StateEvent {
 }
 
 describe("Composer", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSetEffort.mockResolvedValue(undefined);
+  });
+
   it("sends the typed text on Enter and clears the textarea", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
@@ -242,6 +257,138 @@ describe("Composer", () => {
       <Composer agentId="a1" usage={mkUsage({ effort: "high" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
     expect(screen.getByText("high")).toBeInTheDocument();
+  });
+
+  // ── Effort switching ──────────────────────────────────────────────────────
+
+  describe("effort chip", () => {
+    function renderWithEffort(effort: string | null = "medium") {
+      return render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort })}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+    }
+
+    it("offers exactly the three switchable levels", async () => {
+      const user = userEvent.setup();
+      renderWithEffort();
+      await user.click(screen.getByTestId("effort-chip"));
+
+      const options = screen.getAllByRole("option");
+      expect(options.map((o) => o.textContent?.replace("…", "").trim())).toEqual([
+        "low",
+        "medium",
+        "high",
+      ]);
+    });
+
+    it("marks the level the transcript reports as the selected one", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("high");
+      await user.click(screen.getByTestId("effort-chip"));
+
+      expect(screen.getByRole("option", { name: /high/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: /low/ })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("sends the chosen level to the backend", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /high/ }));
+
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "high");
+    });
+
+    it("does not call the backend when the current level is re-picked", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /medium/ }));
+
+      expect(mockSetEffort).not.toHaveBeenCalled();
+    });
+
+    it("warns that the switch outlives this session", async () => {
+      const user = userEvent.setup();
+      renderWithEffort();
+      await user.click(screen.getByTestId("effort-chip"));
+
+      expect(screen.getByText("Gilt als neuer Standard des Agenten.")).toBeInTheDocument();
+    });
+
+    it("keeps showing the transcript's level while the switch is in flight", async () => {
+      let resolve: (() => void) | undefined;
+      mockSetEffort.mockImplementation(() => new Promise<void>((r) => { resolve = () => r(); }));
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /high/ }));
+
+      const chip = screen.getByTestId("effort-chip");
+      // No fake instant flip: the label is still what the agent last reported.
+      expect(chip).toHaveTextContent("medium");
+      expect(chip).toHaveAttribute("data-pending", "true");
+      expect(chip).toBeDisabled();
+
+      resolve?.();
+      await waitFor(() => expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-pending", "false"));
+    });
+
+    it("demotes the chip to a read-only value when the runtime has no terminal to drive", async () => {
+      mockSetEffort.mockRejectedValue(new Error('API 409: {"reason":"input_not_supported"}'));
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /high/ }));
+
+      await waitFor(() => expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument());
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+      expect(screen.getByTestId("effort-chip-static")).toHaveAttribute("title", expect.stringContaining("Runtime"));
+      // Not an error the operator caused — no toast.
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it("surfaces an unverified switch as an error and keeps the chip interactive", async () => {
+      mockSetEffort.mockRejectedValue(new Error('API 409: {"reason":"effort_switch_failed"}'));
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /high/ }));
+
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith(
+        "Effort-Wechsel nicht bestätigt — im Terminal prüfen"
+      ));
+      const chip = screen.getByTestId("effort-chip");
+      expect(chip).toHaveTextContent("medium");
+      expect(chip).toHaveAttribute("data-pending", "false");
+    });
+
+    it("surfaces any other failure without demoting the chip", async () => {
+      mockSetEffort.mockRejectedValue(new Error("API 500: boom"));
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /high/ }));
+
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel fehlgeschlagen"));
+      expect(screen.getByTestId("effort-chip")).toBeInTheDocument();
+    });
+
+    it("keeps the model and effort chips on the documented mono step", () => {
+      renderWithEffort();
+      expect(screen.getByTestId("effort-chip").className).toContain("text-xs");
+      expect(screen.getByTestId("effort-chip").className).not.toContain("text-[11px]");
+      const modelChip = screen.getByRole("button", { name: /claude-sonnet-4-6/ });
+      expect(modelChip.className).toContain("text-xs");
+      expect(modelChip.className).not.toContain("text-[11px]");
+    });
   });
 
   it("prefers usage.usedPct (CLI ground truth) over the contextWindow-based estimate", () => {
