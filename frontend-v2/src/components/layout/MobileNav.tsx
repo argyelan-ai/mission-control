@@ -23,11 +23,13 @@ const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
 const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
 
 // P2: Bottom-Tab-Bar — 4 Kernziele + Index. Text + Kanal-Nummer, keine Icons.
+// 17.08.26 (Marks Entscheid): Agents raus (liegt im Index-Drawer), dafür
+// Runtimes direkt erreichbar — Motor-Umschalten ist ein Daumen-Ziel.
 const TAB_ITEMS = [
   { href: "/", label: "HOME", num: "01" },
   { href: "/tasks", label: "TASKS", num: "02" },
-  { href: "/agents", label: "AGTS", num: "03" },
-  { href: "/sessions", label: "SESS", num: "04" },
+  { href: "/sessions", label: "SESS", num: "03" },
+  { href: "/runtimes", label: "RUNT", num: "04" },
 ] as const;
 
 const MONO = { fontFamily: "var(--font-p2-mono)" };
