@@ -145,6 +145,21 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("/model sonnet");
   });
 
+  it("keeps the send button a ghost outline until there is something to send", async () => {
+    const user = userEvent.setup();
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const send = screen.getByRole("button", { name: "Senden" });
+    // The accent means "this is the action" — there is no action yet.
+    expect(send).toBeDisabled();
+    expect(send).toHaveAttribute("data-empty", "true");
+    expect(send.style.backgroundColor).toBe("transparent");
+
+    await user.type(screen.getByPlaceholderText(/Nachricht/), "los");
+    expect(send).toBeEnabled();
+    expect(send).toHaveAttribute("data-empty", "false");
+    expect(send.style.backgroundColor).not.toBe("transparent");
+  });
+
   // Regression: the mobile stack keeps the off-screen pane mounted with
   // `display: none`. There the textarea measures scrollHeight 0, and writing
   // that back pinned the input to its padding height (12px) for good — the

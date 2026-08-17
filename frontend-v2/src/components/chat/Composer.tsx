@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Square, Send, ChevronDown } from "lucide-react";
+import { Square, ArrowUp, ChevronDown } from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
@@ -216,7 +216,6 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       // below this and already owns `env(safe-area-inset-bottom)`; adding it
       // again would double the gap.
       className="relative px-3 pt-2 pb-3 md:pb-4 md:px-4"
-      style={{ backgroundColor: C.bgSurface }}
     >
       {paletteVisible && (
         <div
@@ -277,10 +276,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           soft accent-alpha ring from DESIGN.md's input spec, never a glow. */}
       <div
         className="flex flex-col transition-colors"
+        // One step above the ground, not below it: page and islands now share
+        // bg-deep, so the old sunken-input look would have made the pill vanish
+        // into the surface it sits on. A control lifts.
         style={{
-          backgroundColor: C.bgDeep,
+          backgroundColor: C.bgSurface,
           borderRadius: "var(--radius-xl)",
-          border: `1px solid ${focused ? `${C.accent}66` : C.border}`,
+          border: `1px solid ${focused ? `${C.accent}66` : C.borderActive}`,
           boxShadow: focused ? "0 0 0 3px rgba(235,232,222,0.10)" : undefined,
         }}
       >
@@ -457,18 +459,29 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               </button>
             )}
             {!isWorking && (
+              // Arrow-up-in-a-circle, the convention every current chat surface
+              // uses (Codex, ChatGPT, Claude) — a paper plane reads as "send
+              // mail", not "submit this turn". Empty input is a ghost outline
+              // rather than a dimmed accent disc: the accent means "this is the
+              // action", and there is no action until something is typed.
               <button
                 type="button"
                 onClick={send}
                 aria-label="Senden"
                 disabled={text.trim().length === 0}
-                className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 transition-opacity"
-                style={{
-                  backgroundColor: C.accent,
-                  color: C.onAccent,
-                }}
+                data-empty={text.trim().length === 0}
+                className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors"
+                style={
+                  text.trim().length === 0
+                    ? {
+                        backgroundColor: "transparent",
+                        color: C.textDim,
+                        border: `1px solid ${C.border}`,
+                      }
+                    : { backgroundColor: C.accent, color: C.onAccent }
+                }
               >
-                <Send size={14} />
+                <ArrowUp size={16} strokeWidth={2.25} />
               </button>
             )}
           </div>

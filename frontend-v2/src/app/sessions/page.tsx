@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { MonitorPlay, X } from "lucide-react";
+import { X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { C } from "@/lib/colors";
@@ -276,28 +276,10 @@ function SessionsPageContent() {
         {isError && (
           <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
-        {/* Page header — hidden on the mobile chat screen: there the chat's own
-            compact header (back chevron, agent, options) is the screen's
-            header, and a second title bar above it would be pure chrome. */}
-        <div
-          className={`${onChatScreen ? "hidden md:flex" : "flex"} flex-wrap items-center gap-x-3 gap-y-2 px-4 md:px-6 py-3 md:py-4 border-b shrink-0`}
-          style={{ borderColor: "var(--color-border-subtle)" }}
-        >
-          <MonitorPlay size={18} style={{ color: "var(--color-text-secondary)" }} />
-          <h1 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            {t("title")}
-          </h1>
-          <span
-            className="ml-1 text-[10px] px-2 py-0.5 rounded-full font-mono"
-            style={{
-              background: C.accentSubtle,
-              color: C.accent,
-              border: `1px solid ${C.borderAccent}`,
-            }}
-          >
-            {agents.length}
-          </span>
-        </div>
+        {/* No page-title row. The app bar already says SESSIONS and the bottom
+            tab bar already says SESS, so an icon + "Agent Terminals" + count
+            repeated the answer twice and spent a whole row of vertical space
+            doing it. The islands claim that space instead. */}
 
         {/* Split Layout: [sidebar | chat | panel rail | panel] — desktop:
             Codex-style floating islands (padded gap, rounded-xl, 1px border,
@@ -330,8 +312,15 @@ function SessionsPageContent() {
               background override here: SessionSidebar's rail variant already
               paints its own `bg-surface` — its self-drawn `border-right` was
               dropped instead (this wrapper's border now owns that edge). */}
+          {/* ONE ground for the page and all three islands (bg-deep). The
+              islands used to sit a tonal step above the page, which read as
+              three panels floating on a darker backdrop — the operator saw the
+              seam around the chat and asked for it gone. Separation now comes
+              from the 1px border and the 8px gap alone, Codex-style, so the
+              whole surface reads as one instrument. Borders are the stronger
+              neutral step (0.16) because they are now the only separator. */}
           <div
-            className="hidden md:flex shrink-0 md:rounded-xl md:overflow-hidden md:border md:border-[var(--color-border)]"
+            className="hidden md:flex shrink-0 md:rounded-xl md:overflow-hidden md:border md:border-[var(--color-border-strong)]"
             data-testid="sidebar-desktop"
           >
             <SessionSidebar
@@ -352,7 +341,7 @@ function SessionsPageContent() {
               wrapper supplies bg-base — and on mobile it is the whole screen,
               edge to edge, no island chrome. */}
           <div
-            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border)] md:bg-[var(--color-bg-base)]`}
+            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border-strong)]`}
             data-testid="chat-column"
           >
             {isLoading && !selected ? null : (
@@ -394,7 +383,7 @@ function SessionsPageContent() {
               // z-10 stacking context, so it cannot paint over that z-40
               // header; anchoring to it beats being half-hidden behind it).
               className="fixed inset-x-0 bottom-0 top-[var(--mobile-appbar-h)] z-40 flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[45%] md:max-w-[720px] md:rounded-xl md:border"
-              style={{ background: C.bgBase, borderColor: C.border }}
+              style={{ background: C.bgDeep, borderColor: C.borderActive }}
             >
               <div
                 className="flex md:hidden items-center justify-between px-4 py-3 border-b shrink-0"

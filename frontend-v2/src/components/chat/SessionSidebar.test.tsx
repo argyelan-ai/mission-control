@@ -307,7 +307,7 @@ describe("SessionSidebar", () => {
     it("gives rows a touch-sized height (they open a screen, not a dropdown)", () => {
       renderList();
       const row = screen.getByText("Rex").closest('[role="option"]') as HTMLElement;
-      expect(row.className).toContain("min-h-[60px]");
+      expect(row.className).toContain("min-h-[52px]");
     });
 
     it("selecting a row reports the agent id", async () => {

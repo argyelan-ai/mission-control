@@ -216,7 +216,7 @@ export function TerminalPanel({ agent }: { agent: AgentWithState }) {
       ? (agent.session_running ? "running" : "idle")
       : (agent.container_state ?? "unknown");
     return (
-      <div className="flex flex-col items-center justify-center flex-1 bg-[var(--color-bg-base)] gap-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+      <div className="flex flex-col items-center justify-center flex-1 bg-[var(--color-bg-deep)] gap-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
         <MonitorOff size={32} style={{ opacity: 0.3 }} />
         <div>{t("sessionIs")} <span className="font-mono">{stateText}</span></div>
       </div>
@@ -262,7 +262,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
   const { scale, size } = useTerminalScale(outerRef, term, termView);
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden bg-[var(--color-bg-base)]">
+    <div className="flex flex-col flex-1 overflow-hidden bg-[var(--color-bg-deep)]">
       {/* Header */}
       {/* flex-wrap: on phones the two toggles drop to their own row instead of
           getting crushed next to the status badge + agent name */}

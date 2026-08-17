@@ -42,7 +42,7 @@ export function PanelRail({ active, onSelect }: PanelRailProps) {
       // full-height column read as a mistake. They belong next to the chat
       // header they act on.
       className="hidden md:flex md:flex-col items-center gap-1 md:px-1.5 md:py-3 md:border md:rounded-xl md:overflow-hidden shrink-0"
-      style={{ background: C.bgSurface, borderColor: C.border }}
+      style={{ background: C.bgDeep, borderColor: C.borderActive }}
     >
       {PANELS.map(({ key, label, icon: Icon }) => {
         const isActive = active === key;

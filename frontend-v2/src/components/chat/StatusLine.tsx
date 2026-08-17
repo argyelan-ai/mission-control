@@ -16,6 +16,10 @@ import type { StateEvent } from "@/lib/chatTypes";
 interface StatusLineProps {
   state: StateEvent | null;
   connected: boolean;
+  /** Whether the underlying CLI session is still running. A session that has
+   *  ENDED is not an unknown state — it is a known, ordinary one, and painting
+   *  it amber told the operator something was wrong when nothing was. */
+  sessionLive?: boolean;
 }
 
 interface StatusDisplay {
@@ -32,7 +36,25 @@ const UNKNOWN_DISPLAY: StatusDisplay = {
   pulse: false,
 };
 
-function resolveDisplay(state: StateEvent | null, connected: boolean): StatusDisplay {
+// A finished session is a normal end state, not a fault: neutral tones, no
+// pulse, and it says what happens next instead of leaving the operator to
+// wonder whether typing is even possible. Amber stays reserved for the case
+// that genuinely needs attention — the session is live but we cannot read it.
+const ENDED_DISPLAY: StatusDisplay = {
+  dotColor: C.textDim,
+  textColor: C.textMuted,
+  label: "Session beendet — neue Nachricht startet die nächste Session",
+  pulse: false,
+};
+
+function resolveDisplay(
+  state: StateEvent | null,
+  connected: boolean,
+  sessionLive: boolean,
+): StatusDisplay {
+  if (!sessionLive) {
+    return ENDED_DISPLAY;
+  }
   if (!connected || !state || state.status === "unknown") {
     return UNKNOWN_DISPLAY;
   }
@@ -49,8 +71,8 @@ function resolveDisplay(state: StateEvent | null, connected: boolean): StatusDis
   }
 }
 
-export function StatusLine({ state, connected }: StatusLineProps) {
-  const display = resolveDisplay(state, connected);
+export function StatusLine({ state, connected, sessionLive = true }: StatusLineProps) {
+  const display = resolveDisplay(state, connected, sessionLive);
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status

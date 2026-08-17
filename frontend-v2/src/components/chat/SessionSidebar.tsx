@@ -153,7 +153,10 @@ export function SessionSidebar({
                   aria-selected={selected}
                   onClick={() => handleSelect(agent.id)}
                   className={`flex items-center gap-2.5 text-left w-full transition-colors cursor-pointer ${
-                    stack ? "px-4 min-h-[60px] py-2.5" : "px-3 py-2 rounded"
+                    // 52px, not 60: with no task subtitle a 60px row wasted a
+                    // third of its height on air and only ~8 sessions fit a
+                    // phone screen. Still comfortably past the 44px touch floor.
+                    stack ? "px-4 min-h-[52px] py-2" : "px-3 py-2 rounded"
                   }`}
                   style={{
                     background: selected ? C.accentSubtle : "transparent",
@@ -252,7 +255,7 @@ export function SessionSidebar({
     return (
       <div
         className="w-14 shrink-0 h-full flex flex-col items-center py-3 gap-1 overflow-y-auto"
-        style={{ background: C.bgSurface }}
+        style={{ background: C.bgDeep }}
       >
         {onToggleCollapse && (
           <button
@@ -307,7 +310,7 @@ export function SessionSidebar({
   return (
     <div
       className="w-64 shrink-0 h-full flex flex-col"
-      style={{ background: C.bgSurface }}
+      style={{ background: C.bgDeep }}
     >
       {onToggleCollapse && (
         // The bar used to hold nothing but the chevron, which read as an

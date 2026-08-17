@@ -51,4 +51,32 @@ describe("StatusLine", () => {
     render(<StatusLine state={null} connected />);
     expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
   });
+
+  // ── Ended session: a known end state, not an unknown one ──────────────────
+
+  it("reports an ended session plainly instead of as an unknown status", () => {
+    render(<StatusLine state={null} connected sessionLive={false} />);
+    expect(
+      screen.getByText("Session beendet — neue Nachricht startet die nächste Session")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Status unklar — Terminal prüfen")).not.toBeInTheDocument();
+  });
+
+  it("does not paint an ended session in the warning tone", () => {
+    const { container } = render(<StatusLine state={mkState("unknown")} connected sessionLive={false} />);
+    const line = container.firstElementChild as HTMLElement;
+    // C.textMuted, not STATUS_TEXT.warning — amber stays reserved for
+    // "live but unreadable", the one case that needs the operator's attention.
+    expect(line.style.color).toBe("rgb(143, 143, 143)");
+  });
+
+  it("never pulses on an ended session", () => {
+    const { container } = render(<StatusLine state={mkState("working")} connected sessionLive={false} />);
+    expect(container.querySelector(".animate-ping")).toBeNull();
+  });
+
+  it("still shows live statuses while the session is live", () => {
+    render(<StatusLine state={mkState("working")} connected sessionLive />);
+    expect(screen.getByText("Arbeitet…")).toBeInTheDocument();
+  });
 });

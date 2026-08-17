@@ -493,7 +493,11 @@ export function ChatView({
             </div>
           )}
 
-          <StatusLine state={stream.state} connected={stream.connected} />
+          <StatusLine
+            state={stream.state}
+            connected={stream.connected}
+            sessionLive={stream.session?.live ?? true}
+          />
           <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} sessionLive={stream.session?.live ?? false} />
         </>
       )}
