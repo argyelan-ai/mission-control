@@ -31,6 +31,7 @@ import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup, type ActivityEvent } from "./ToolGroup";
+import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
@@ -191,11 +192,7 @@ function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel, sh
     case "thinking":
       return <ThinkingRow key={ev.uuid} ev={ev} detailLevel={detailLevel} />;
     case "command":
-      return (
-        <div key={ev.uuid} className="w-full px-4 py-1.5 text-xs font-mono" style={{ color: C.textMuted }}>
-          {ev.command}
-        </div>
-      );
+      return <CommandRow key={ev.uuid} ev={ev} detailLevel={detailLevel} />;
     default:
       return null;
   }

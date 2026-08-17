@@ -7,6 +7,7 @@ import type { ChatEvent } from "@/lib/chatTypes";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
+import { CommandRow } from "./CommandRow";
 
 const TITLE_MAX_LEN = 60;
 
@@ -42,11 +43,7 @@ function renderChildEvent(ev: ChatEvent) {
     case "thinking":
       return <ThinkingRow key={ev.uuid} ev={ev} detailLevel="normal" />;
     case "command":
-      return (
-        <div key={ev.uuid} className="w-full px-4 py-1.5 text-xs font-mono" style={{ color: C.textMuted }}>
-          {ev.command}
-        </div>
-      );
+      return <CommandRow key={ev.uuid} ev={ev} detailLevel="normal" />;
     default:
       return null;
   }
