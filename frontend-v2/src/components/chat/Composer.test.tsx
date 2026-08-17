@@ -145,6 +145,28 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("/model sonnet");
   });
 
+  it("reports the model dropdown's open state to assistive tech", async () => {
+    const user = userEvent.setup();
+    render(<Composer agentId="a1" usage={mkUsage()} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: /claude-sonnet-4-6/ });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("marks the running model as the selected option in the dropdown", async () => {
+    const user = userEvent.setup();
+    // CLAUDE_MODELS entries are short names ("sonnet"); the running model here
+    // is one of them so the list can show which one is live.
+    render(
+      <Composer agentId="a1" usage={mkUsage({ model: "sonnet" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    await user.click(screen.getByRole("button", { name: /sonnet/ }));
+    expect(screen.getByRole("option", { name: "Sonnet" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: "Opus" })).toHaveAttribute("aria-selected", "false");
+  });
+
   it("only shows the effort chip when usage.effort is present", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ effort: null })} state={null} onSend={vi.fn()} onStop={vi.fn()} />

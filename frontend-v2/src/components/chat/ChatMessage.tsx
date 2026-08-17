@@ -51,36 +51,52 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-export function ChatMessage({ ev }: { ev: MessageEvent }) {
+/**
+ * One transcript message.
+ *
+ * The two roles get deliberately different shapes, the way the Claude app
+ * does it: what the agent said is the page — full width, reading measure,
+ * generous leading, no container. What the operator said is an aside — a
+ * right-aligned bubble that reads as "this came from outside", capped at 85%
+ * so the asymmetry itself carries the speaker. That removes the need for a
+ * visible "Du" label; it stays as screen-reader text, since alignment is not
+ * information a screen reader can hear.
+ */
+export function ChatMessage({ ev, showModel = false }: { ev: MessageEvent; showModel?: boolean }) {
   const isUser = ev.role === "user";
 
-  return (
-    <div
-      className="w-full px-4 py-3"
-      style={{ background: isUser ? C.bgSurface : "transparent" }}
-    >
-      <div className="flex items-baseline gap-2 mb-1.5">
-        {isUser ? (
-          <span
-            className="text-[10px] font-mono font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{ background: C.accentSubtle, color: C.accent }}
-          >
-            Du
-          </span>
-        ) : (
-          <span
-            className="inline-block w-2 h-2 rounded-full shrink-0"
-            style={{ background: C.accent }}
-            aria-hidden="true"
-          />
-        )}
-        {ev.model && (
-          <span className="text-[10px] font-mono" style={{ color: C.textDim }}>
-            {ev.model}
-          </span>
-        )}
+  if (isUser) {
+    return (
+      <div className="w-full px-4 md:px-5 py-2 flex justify-end">
+        <div
+          className="max-w-[85%] px-3.5 py-2.5 text-[14px] leading-[1.65] [&>*:last-child]:mb-0"
+          style={{
+            background: C.bgSurface,
+            border: `1px solid ${C.border}`,
+            borderRadius: "var(--radius-xl)",
+          }}
+        >
+          <span className="sr-only">Du</span>
+          <MarkdownContent content={ev.text} />
+        </div>
       </div>
-      <MarkdownContent content={ev.text} />
+    );
+  }
+
+  return (
+    <div className="w-full px-4 md:px-5 py-3 md:py-4">
+      {/* Only shown when the model CHANGED (see ChatView's modelBadgeUuids):
+          stamping every assistant turn with the same name is noise, but a
+          switch mid-session is exactly what this fleet's operator needs to
+          see. */}
+      {showModel && ev.model && (
+        <div className="text-[10px] font-mono mb-2" style={{ color: C.textMuted }}>
+          {ev.model}
+        </div>
+      )}
+      <div className="text-[14px] leading-[1.7] [&>*:last-child]:mb-0">
+        <MarkdownContent content={ev.text} />
+      </div>
     </div>
   );
 }

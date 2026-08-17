@@ -53,8 +53,14 @@ export function StatusLine({ state, connected }: StatusLineProps) {
   const display = resolveDisplay(state, connected);
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-xs" style={{ color: display.textColor }}>
-      <span className="relative inline-flex h-2 w-2 shrink-0">
+    // Left edge lines up with the message column (px-4 md:px-5), so the status
+    // reads as the last line of the conversation rather than composer chrome.
+    <div
+      className="flex items-center gap-2 px-4 md:px-5 pb-1.5 text-[12px]"
+      style={{ color: display.textColor }}
+      aria-live="polite"
+    >
+      <span className="relative inline-flex h-1.5 w-1.5 shrink-0">
         <span
           className="absolute inset-0 rounded-full"
           style={{ backgroundColor: display.dotColor }}

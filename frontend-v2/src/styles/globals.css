@@ -425,6 +425,13 @@ body {
 /* ── Reduced Motion: alle Deko-Loops aus, Interaktion bleibt instant */
 @media (prefers-reduced-motion: reduce) {
   .animate-float { animation: none; }
+  /* Tailwind's own looping animations aren't reduced-motion aware. The ones we
+     use as *state* indicators (status dot, working stop button) must still be
+     visible when motion is off — they carry meaning through colour and shape,
+     so stopping the loop costs nothing. */
+  .animate-ping,
+  .animate-pulse,
+  .animate-spin { animation: none; }
 }
 
 

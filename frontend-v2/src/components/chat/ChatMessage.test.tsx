@@ -29,6 +29,28 @@ describe("ChatMessage", () => {
     expect(screen.getByText("Erledigt.")).toBeInTheDocument();
   });
 
+  it("keeps the 'Du' attribution available to screen readers only", () => {
+    // The right-aligned bubble carries the speaker visually; a visible label
+    // would repeat it. Screen readers can't hear alignment, so the text stays.
+    render(<ChatMessage ev={mkEvent({ role: "user", text: "Mach mal X" })} />);
+    expect(screen.getByText("Du")).toHaveClass("sr-only");
+  });
+
+  it("hides the model name by default", () => {
+    render(<ChatMessage ev={mkEvent({ model: "claude-sonnet-5" })} />);
+    expect(screen.queryByText("claude-sonnet-5")).not.toBeInTheDocument();
+  });
+
+  it("shows the model name when the caller flags it as a change", () => {
+    render(<ChatMessage ev={mkEvent({ model: "claude-sonnet-5" })} showModel />);
+    expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
+  });
+
+  it("shows no model line for a flagged message that carries no model", () => {
+    render(<ChatMessage ev={mkEvent({ model: null, text: "Ohne Modell" })} showModel />);
+    expect(screen.getByText("Ohne Modell")).toBeInTheDocument();
+  });
+
   it("renders markdown content: bold as <strong>", () => {
     render(<ChatMessage ev={mkEvent({ text: "Das ist **wichtig**." })} />);
     const strong = screen.getByText("wichtig");

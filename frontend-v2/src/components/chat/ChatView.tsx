@@ -138,10 +138,27 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
   return out;
 }
 
-function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel) {
+/**
+ * The uuids of assistant messages whose model differs from the previous
+ * assistant message's — the only turns where naming the model tells the
+ * reader something. Stamping every turn with the same name is noise; a switch
+ * mid-session (this fleet runs several models) is a fact worth seeing.
+ */
+export function modelBadgeUuids(events: TimelineChatEvent[]): Set<string> {
+  const out = new Set<string>();
+  let previous: string | null = null;
+  for (const ev of events) {
+    if (ev.kind !== "message" || ev.role !== "assistant" || !ev.model) continue;
+    if (ev.model !== previous) out.add(ev.uuid);
+    previous = ev.model;
+  }
+  return out;
+}
+
+function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel, showModel = false) {
   switch (ev.kind) {
     case "message":
-      return <ChatMessage key={ev.uuid} ev={ev} />;
+      return <ChatMessage key={ev.uuid} ev={ev} showModel={showModel} />;
     case "tool":
       // toolUseId ?? uuid: parallel tool calls in one assistant turn share
       // the turn's uuid but carry distinct toolUseIds (useChatStream.ts).
@@ -248,6 +265,7 @@ export function ChatView({
 
   const visibleEvents = stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel));
   const items = buildTimelineItems(visibleEvents);
+  const modelBadges = modelBadgeUuids(visibleEvents);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
 
   return (
@@ -346,7 +364,7 @@ export function ChatView({
                     />
                   );
                 }
-                return renderTimelineEvent(item.event, detailLevel);
+                return renderTimelineEvent(item.event, detailLevel, modelBadges.has(item.event.uuid));
               })
             )}
           </div>

@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ChatView, buildTimelineItems, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
+import { ChatView, buildTimelineItems, modelBadgeUuids, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
@@ -232,6 +232,50 @@ describe("buildTimelineItems", () => {
 
   it("returns nothing for an empty timeline", () => {
     expect(buildTimelineItems([])).toEqual([]);
+  });
+});
+
+describe("modelBadgeUuids", () => {
+  it("flags the first assistant message so the reader knows what is answering", () => {
+    const a = mkMsg({ model: "sonnet" });
+    expect(modelBadgeUuids([a])).toEqual(new Set([a.uuid]));
+  });
+
+  it("does not repeat the model on every turn", () => {
+    const a = mkMsg({ model: "sonnet" });
+    const b = mkMsg({ model: "sonnet" });
+    expect(modelBadgeUuids([a, b])).toEqual(new Set([a.uuid]));
+  });
+
+  it("flags the turn where the model actually changed", () => {
+    const a = mkMsg({ model: "sonnet" });
+    const b = mkMsg({ model: "sonnet" });
+    const c = mkMsg({ model: "opus" });
+    expect(modelBadgeUuids([a, b, c])).toEqual(new Set([a.uuid, c.uuid]));
+  });
+
+  it("ignores user messages and events without a model", () => {
+    const user = mkMsg({ role: "user", model: null, text: "Wechsle das Modell" });
+    const a = mkMsg({ model: null });
+    expect(modelBadgeUuids([user, a, mkTool()])).toEqual(new Set());
+  });
+
+  it("renders the model line only on the changed turn", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [
+          { ...MSG, uuid: "m1", text: "Erste", model: "sonnet" },
+          { ...MSG, uuid: "m2", text: "Zweite", model: "sonnet" },
+          { ...MSG, uuid: "m3", text: "Dritte", model: "opus" },
+        ],
+      })
+    );
+    renderChatView();
+
+    expect(screen.getByText("sonnet")).toBeInTheDocument();
+    expect(screen.getByText("opus")).toBeInTheDocument();
+    // Once each, not once per message.
+    expect(screen.getAllByText("sonnet")).toHaveLength(1);
   });
 });
 

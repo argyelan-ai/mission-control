@@ -7,7 +7,9 @@ import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
 
 const MAX_ROWS = 8;
-const LINE_HEIGHT_PX = 18;
+// Matches the textarea's own line-height (14px body × 1.5, rounded) so the
+// auto-grow ceiling lands on a whole row instead of clipping one mid-glyph.
+const LINE_HEIGHT_PX = 22;
 
 // Desktop-app-style context ring — compact circular indicator instead of a
 // bar, per the operator's ask to match the Claude Desktop app's look.
@@ -69,6 +71,7 @@ interface ComposerProps {
  */
 export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true }: ComposerProps) {
   const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
@@ -197,8 +200,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   return (
     <div
       data-testid={`composer-${agentId}`}
-      className="relative flex flex-col gap-2 px-3 py-2"
-      style={{ borderTop: `1px solid ${C.border}`, backgroundColor: C.bgSurface }}
+      // The composer is the app's own floor, not a strip bolted to the
+      // timeline: no top border, the pill inside carries the edge. No
+      // safe-area padding here — on mobile the app's bottom tab bar sits
+      // below this and already owns `env(safe-area-inset-bottom)`; adding it
+      // again would double the gap.
+      className="relative px-3 pt-2 pb-3 md:pb-4 md:px-4"
+      style={{ backgroundColor: C.bgSurface }}
     >
       {paletteVisible && (
         <div
@@ -252,165 +260,201 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         </div>
       )}
 
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        rows={1}
-        placeholder="Nachricht an den Agenten…"
-        className="w-full resize-none bg-transparent outline-none text-xs font-mono"
-        style={{ color: C.textPrimary, maxHeight: MAX_ROWS * LINE_HEIGHT_PX }}
-      />
+      {/* The pill: one container holding the input and its controls, so the
+          whole thing reads as a single field instead of a toolbar sitting
+          under a textarea. Radius is the system cap (10px, --radius-xl).
+          Focus is drawn on the pill, not the textarea — the border plus the
+          soft accent-alpha ring from DESIGN.md's input spec, never a glow. */}
+      <div
+        className="flex flex-col transition-colors"
+        style={{
+          backgroundColor: C.bgDeep,
+          borderRadius: "var(--radius-xl)",
+          border: `1px solid ${focused ? `${C.accent}66` : C.border}`,
+          boxShadow: focused ? "0 0 0 3px rgba(235,232,222,0.10)" : undefined,
+        }}
+      >
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          rows={1}
+          placeholder="Nachricht an den Agenten…"
+          // 16px on mobile is not a taste call: anything smaller makes iOS
+          // Safari zoom the viewport on focus.
+          className="w-full resize-none bg-transparent outline-none px-3.5 pt-3 text-[16px] md:text-[14px] leading-[1.5]"
+          style={{ color: C.textPrimary, maxHeight: MAX_ROWS * LINE_HEIGHT_PX }}
+        />
 
-      <div className="flex items-center gap-2">
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setModelOpen((v) => !v)}
-            className="inline-flex items-center gap-1 font-mono text-[10px] font-medium px-2 py-1 rounded-md"
-            style={{
-              backgroundColor: C.accentSubtle,
-              color: C.textSecondary,
-              border: `1px solid ${C.border}`,
-            }}
-          >
-            {modelLabel}
-            <ChevronDown size={11} />
-          </button>
-          {modelOpen && (
-            <div
-              className="absolute bottom-full left-0 mb-1 w-32 rounded-md overflow-hidden z-20"
+        <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1.5">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setModelOpen((v) => !v)}
+              aria-haspopup="listbox"
+              aria-expanded={modelOpen}
+              // Quiet by default: this is a switcher, not an active state, so
+              // it doesn't get the accent tint (which in this system means
+              // "selected"). It lights up on hover and while open.
+              className="inline-flex items-center gap-1 font-mono text-[11px] font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
               style={{
-                backgroundColor: C.bgElevated,
+                backgroundColor: modelOpen ? C.bgHover : "transparent",
+                color: modelOpen ? C.textPrimary : C.textSecondary,
                 border: `1px solid ${C.border}`,
-                boxShadow: "var(--shadow-elevated)",
               }}
             >
-              {CLAUDE_MODELS.map((m) => (
-                <button
-                  key={m.name}
-                  type="button"
-                  onClick={() => selectModel(m.name)}
-                  className="w-full text-left px-2 py-1.5 text-[12px] font-mono"
-                  style={{ color: C.textPrimary }}
-                >
-                  {m.label}
-                </button>
-              ))}
+              {modelLabel}
+              <ChevronDown
+                size={11}
+                className="transition-transform duration-150"
+                style={{ transform: modelOpen ? "rotate(180deg)" : undefined }}
+              />
+            </button>
+            {modelOpen && (
+              <div
+                role="listbox"
+                className="absolute bottom-full left-0 mb-1.5 w-36 rounded-lg overflow-hidden z-20 p-1"
+                style={{
+                  backgroundColor: C.bgElevated,
+                  border: `1px solid ${C.border}`,
+                  boxShadow: "var(--shadow-elevated)",
+                }}
+              >
+                {CLAUDE_MODELS.map((m) => (
+                  <button
+                    key={m.name}
+                    type="button"
+                    role="option"
+                    aria-selected={m.name === usage?.model}
+                    onClick={() => selectModel(m.name)}
+                    className="w-full text-left px-2 py-1.5 text-[12px] font-mono rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                    style={{
+                      color: m.name === usage?.model ? C.accent : C.textPrimary,
+                      backgroundColor: m.name === usage?.model ? C.accentSubtle : "transparent",
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {usage?.effort && (
+            <span
+              className="font-mono text-[11px] font-medium px-2 py-1 rounded-lg"
+              style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+            >
+              {usage.effort}
+            </span>
+          )}
+
+          {usage && pct != null && (
+            <div
+              data-testid="context-ring"
+              role="progressbar"
+              aria-valuenow={Math.round(pct)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              data-threshold={ringThresholdValue}
+              data-source={pctSource ?? undefined}
+              title={ringTitle}
+              className="flex items-center gap-1 shrink-0 pl-0.5"
+            >
+              <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
+                <circle
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke={C.bgHover}
+                  strokeWidth={RING_STROKE}
+                />
+                <circle
+                  data-testid="context-ring-arc"
+                  cx={RING_SIZE / 2}
+                  cy={RING_SIZE / 2}
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke={ringStrokeColor}
+                  strokeWidth={RING_STROKE}
+                  strokeLinecap="round"
+                  strokeDasharray={RING_CIRCUMFERENCE}
+                  strokeDashoffset={ringOffset}
+                  transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+                />
+              </svg>
+              <span
+                data-testid="context-ring-pct"
+                className="font-mono text-[10px] font-medium tabular-nums"
+                style={{ color: C.textMuted }}
+              >
+                {Math.round(pct)}%
+              </span>
             </div>
           )}
-        </div>
 
-        {usage?.effort && (
-          <span
-            className="font-mono text-[10px] font-medium px-2 py-1 rounded-md"
-            style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-          >
-            {usage.effort}
-          </span>
-        )}
-
-        {usage && pct != null && (
-          <div
-            data-testid="context-ring"
-            role="progressbar"
-            aria-valuenow={Math.round(pct)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            data-threshold={ringThresholdValue}
-            data-source={pctSource ?? undefined}
-            title={ringTitle}
-            className="flex items-center gap-1 shrink-0"
-          >
-            <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
-              <circle
-                cx={RING_SIZE / 2}
-                cy={RING_SIZE / 2}
-                r={RING_RADIUS}
-                fill="none"
-                stroke={C.bgHover}
-                strokeWidth={RING_STROKE}
-              />
-              <circle
-                data-testid="context-ring-arc"
-                cx={RING_SIZE / 2}
-                cy={RING_SIZE / 2}
-                r={RING_RADIUS}
-                fill="none"
-                stroke={ringStrokeColor}
-                strokeWidth={RING_STROKE}
-                strokeLinecap="round"
-                strokeDasharray={RING_CIRCUMFERENCE}
-                strokeDashoffset={ringOffset}
-                transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
-              />
-            </svg>
-            <span
-              data-testid="context-ring-pct"
-              className="font-mono text-[10px] font-medium tabular-nums"
-              style={{ color: C.textMuted }}
-            >
-              {Math.round(pct)}%
-            </span>
+          {/* Circular controls, the app convention: a round button in a
+              rounded field reads as "the one thing to press". */}
+          <div className="ml-auto flex items-center gap-1.5">
+            {sessionLive && isWorking && (
+              <button
+                type="button"
+                onClick={onStop}
+                aria-label="Stop"
+                title="Unterbrechen (ESC)"
+                data-testid="stop-button-prominent"
+                className="animate-pulse inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer"
+                style={{
+                  backgroundColor: C.accentSubtle,
+                  color: C.textPrimary,
+                  border: `1px solid ${C.borderAccent}`,
+                }}
+              >
+                <Square size={12} fill={C.textPrimary} />
+              </button>
+            )}
+            {sessionLive && !isWorking && (
+              // Boss has no pane probe in v1 — "working" is often missed while
+              // he's genuinely busy. A live session can always be interrupted,
+              // even when we're not confident it's mid-task; this stays quiet
+              // (unfilled icon, no pulse) so it doesn't compete with Send for
+              // attention when the agent really is idle.
+              <button
+                type="button"
+                onClick={onStop}
+                aria-label="Stop"
+                title="Unterbrechen (ESC)"
+                data-testid="stop-button-quiet"
+                className="inline-flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-full cursor-pointer transition-colors"
+                style={{
+                  backgroundColor: "transparent",
+                  color: C.textMuted,
+                  border: `1px solid ${C.borderSubtle}`,
+                }}
+              >
+                <Square size={11} />
+              </button>
+            )}
+            {!isWorking && (
+              <button
+                type="button"
+                onClick={send}
+                aria-label="Senden"
+                disabled={text.trim().length === 0}
+                className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 transition-opacity"
+                style={{
+                  backgroundColor: C.accent,
+                  color: C.onAccent,
+                }}
+              >
+                <Send size={14} />
+              </button>
+            )}
           </div>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          {sessionLive && isWorking && (
-            <button
-              type="button"
-              onClick={onStop}
-              aria-label="Stop"
-              title="Unterbrechen (ESC)"
-              data-testid="stop-button-prominent"
-              className="animate-pulse inline-flex items-center justify-center w-7 h-7 rounded-md"
-              style={{
-                backgroundColor: C.accentSubtle,
-                color: C.textPrimary,
-                border: `1px solid ${C.border}`,
-              }}
-            >
-              <Square size={13} fill={C.textPrimary} />
-            </button>
-          )}
-          {sessionLive && !isWorking && (
-            // Boss has no pane probe in v1 — "working" is often missed while
-            // he's genuinely busy. A live session can always be interrupted,
-            // even when we're not confident it's mid-task; this stays quiet
-            // (unfilled icon, no pulse) so it doesn't compete with Send for
-            // attention when the agent really is idle.
-            <button
-              type="button"
-              onClick={onStop}
-              aria-label="Stop"
-              title="Unterbrechen (ESC)"
-              data-testid="stop-button-quiet"
-              className="inline-flex items-center justify-center w-6 h-6 rounded-md"
-              style={{
-                backgroundColor: "transparent",
-                color: C.textDim,
-                border: `1px solid ${C.borderSubtle}`,
-              }}
-            >
-              <Square size={11} />
-            </button>
-          )}
-          {!isWorking && (
-            <button
-              type="button"
-              onClick={send}
-              aria-label="Senden"
-              disabled={text.trim().length === 0}
-              className="inline-flex items-center justify-center w-7 h-7 rounded-md disabled:opacity-40"
-              style={{
-                backgroundColor: C.accent,
-                color: C.onAccent,
-              }}
-            >
-              <Send size={13} />
-            </button>
-          )}
         </div>
       </div>
     </div>
