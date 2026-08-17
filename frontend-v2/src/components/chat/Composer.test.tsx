@@ -319,11 +319,19 @@ describe("Composer", () => {
   // ── Effort switching ──────────────────────────────────────────────────────
 
   describe("effort chip", () => {
+    // The real capability block a docker/cli-bridge agent reports
+    // (ALLOWED_EFFORT_LEVELS in agent_chat_input.py).
+    const CAPS = {
+      effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+      canSwitchEffort: true,
+    };
+
     function renderWithEffort(effort: string | null = "medium") {
       return render(
         <Composer
           agentId="a1"
           usage={mkUsage({ effort })}
+          capabilities={CAPS}
           state={null}
           onSend={vi.fn()}
           onStop={vi.fn()}
@@ -331,32 +339,69 @@ describe("Composer", () => {
       );
     }
 
+    /** Levels in render order, read from `data-level` rather than the label —
+     *  the label also carries the persist hint now. */
     const optionLabels = () =>
-      screen.getAllByRole("option").map((o) => o.textContent?.replace("…", "").trim());
+      screen.getAllByRole("option").map((o) => o.getAttribute("data-level"));
 
-    it("falls back to the known three levels while the backend sends none", async () => {
-      const user = userEvent.setup();
-      renderWithEffort();
-      await user.click(screen.getByTestId("effort-chip"));
+    /** One option row, addressed exactly. No `\b` after the level: the option's
+     *  accessible name concatenates the level and its persist hint without a
+     *  separator ("highwird Standard"), so there is no word boundary there —
+     *  the leading anchor alone is what distinguishes "high" from "xhigh". */
+    const option = (level: string) =>
+      screen.getByRole("option", { name: new RegExp(`^${level}`) });
 
-      expect(optionLabels()).toEqual(["low", "medium", "high"]);
-    });
-
-    it("renders whatever level list the backend sends, in its order", async () => {
-      const user = userEvent.setup();
+    it("shows the level read-only when the backend reports no capabilities", () => {
       render(
         <Composer
           agentId="a1"
-          usage={mkUsage({ effort: "balanced", effortLevels: ["fast", "balanced", "thorough", "max"] })}
+          usage={mkUsage({ effort: "high" })}
           state={null}
           onSend={vi.fn()}
           onStop={vi.fn()}
         />
       );
+      // No capability block at all (older backend, or still loading): a picker
+      // with nothing in it would be worse than an honest read-only value.
+      expect(screen.getByTestId("effort-chip-static")).toHaveTextContent("high");
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+    });
+
+    it("shows the level read-only when the runtime cannot switch", () => {
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{ effortLevels: [], canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument();
+    });
+
+    it("renders exactly the level list the backend reports, in its order", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("high");
       await user.click(screen.getByTestId("effort-chip"));
 
-      expect(optionLabels()).toEqual(["fast", "balanced", "thorough", "max"]);
-      expect(screen.getByRole("option", { name: /balanced/ })).toHaveAttribute("aria-selected", "true");
+      // The real Claude Code 2.1.233 set — six levels, not three.
+      expect(optionLabels()).toEqual(["low", "medium", "high", "xhigh", "max", "ultracode"]);
+      expect(option("high")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("marks which levels outlive the session and which do not", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("high");
+      await user.click(screen.getByTestId("effort-chip"));
+
+      // The operator's original question was "does this stick?" — answered per
+      // level, because the CLI answers it differently per level.
+      expect(option("high")).toHaveTextContent("wird Standard");
+      expect(option("xhigh")).toHaveTextContent("wird Standard");
+      expect(option("max")).toHaveTextContent("nur diese Session");
+      expect(option("ultracode")).toHaveTextContent("nur diese Session");
     });
 
     it("switches to a backend-supplied level the frontend has never heard of", async () => {
@@ -364,34 +409,35 @@ describe("Composer", () => {
       render(
         <Composer
           agentId="a1"
-          usage={mkUsage({ effort: "fast", effortLevels: ["fast", "thorough"] })}
+          usage={mkUsage({ effort: "fast" })}
+          capabilities={{ effortLevels: ["fast", "thorough"], canSwitchEffort: true }}
           state={null}
           onSend={vi.fn()}
           onStop={vi.fn()}
         />
       );
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /thorough/ }));
+      await user.click(option("thorough"));
 
       expect(mockSetEffort).toHaveBeenCalledWith("a1", "thorough");
+      // Unknown to the frontend, so it cannot claim session-only semantics.
+      expect(screen.queryByText("nur diese Session")).not.toBeInTheDocument();
     });
 
-    it("ignores a malformed level list rather than offering blank options", async () => {
-      const user = userEvent.setup();
+    it("falls back to read-only when the reported list is all blanks", () => {
       render(
         <Composer
           agentId="a1"
-          // Empty strings and an empty array are the two shapes that would turn
-          // the picker into a list of nothing.
-          usage={mkUsage({ effort: "medium", effortLevels: ["", "   "] })}
+          usage={mkUsage({ effort: "medium" })}
+          capabilities={{ effortLevels: ["", "   "], canSwitchEffort: true }}
           state={null}
           onSend={vi.fn()}
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByTestId("effort-chip"));
-
-      expect(optionLabels()).toEqual(["low", "medium", "high"]);
+      // Blank entries are filtered out; nothing left to offer means read-only,
+      // not a picker full of empty rows.
+      expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument();
     });
 
     it("marks the level the transcript reports as the selected one", async () => {
@@ -399,15 +445,15 @@ describe("Composer", () => {
       renderWithEffort("high");
       await user.click(screen.getByTestId("effort-chip"));
 
-      expect(screen.getByRole("option", { name: /high/ })).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByRole("option", { name: /low/ })).toHaveAttribute("aria-selected", "false");
+      expect(option("high")).toHaveAttribute("aria-selected", "true");
+      expect(option("low")).toHaveAttribute("aria-selected", "false");
     });
 
     it("sends the chosen level to the backend", async () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /high/ }));
+      await user.click(option("high"));
 
       expect(mockSetEffort).toHaveBeenCalledWith("a1", "high");
     });
@@ -416,17 +462,9 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /medium/ }));
+      await user.click(option("medium"));
 
       expect(mockSetEffort).not.toHaveBeenCalled();
-    });
-
-    it("warns that the switch outlives this session", async () => {
-      const user = userEvent.setup();
-      renderWithEffort();
-      await user.click(screen.getByTestId("effort-chip"));
-
-      expect(screen.getByText("Gilt als neuer Standard des Agenten.")).toBeInTheDocument();
     });
 
     it("keeps showing the transcript's level while the switch is in flight", async () => {
@@ -436,7 +474,7 @@ describe("Composer", () => {
       renderWithEffort("medium");
 
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /high/ }));
+      await user.click(option("high"));
 
       const chip = screen.getByTestId("effort-chip");
       // No fake instant flip: the label is still what the agent last reported.
@@ -453,7 +491,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /high/ }));
+      await user.click(option("high"));
 
       await waitFor(() => expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument());
       expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
@@ -470,7 +508,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /high/ }));
+      await user.click(option("high"));
 
       await waitFor(() =>
         expect(mockNotifyInfo).toHaveBeenCalledWith(
@@ -488,7 +526,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /high/ }));
+      await user.click(option("high"));
 
       await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith(
         "Effort-Wechsel nicht bestätigt — im Terminal prüfen"
@@ -503,7 +541,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(screen.getByRole("option", { name: /high/ }));
+      await user.click(option("high"));
 
       await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel fehlgeschlagen"));
       expect(screen.getByTestId("effort-chip")).toBeInTheDocument();

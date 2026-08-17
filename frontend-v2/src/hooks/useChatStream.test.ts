@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { chatReducer, createInitialChatState, MAX_CHAT_EVENTS } from "./useChatStream";
+import {
+  chatReducer,
+  createInitialChatState,
+  markUnconfirmedEchoes,
+  reconcilePendingEchoes,
+  withdrawPendingEcho,
+  ECHO_CONFIRM_TIMEOUT_MS,
+  MAX_CHAT_EVENTS,
+  type PendingEcho,
+} from "./useChatStream";
 import type {
   ChatEvent,
   CommandEvent,
@@ -191,5 +200,88 @@ describe("chatReducer", () => {
     const before = createInitialChatState();
     const after = chatReducer(before, weird);
     expect(after).toBe(before);
+  });
+});
+
+
+// ── Optimistic echo rules ────────────────────────────────────────────────────
+// The three decisions that decide whether the operator ever sees a duplicated
+// or a lying bubble. Pure, so they are tested without React.
+
+function echo(overrides: Partial<PendingEcho> = {}): PendingEcho {
+  return { id: "e1", text: "hallo", sentAt: 1_000, status: "pending", ...overrides };
+}
+
+describe("reconcilePendingEchoes", () => {
+  it("retires the echo whose text the transcript just confirmed", () => {
+    const a = echo({ id: "a", text: "erste" });
+    const b = echo({ id: "b", text: "zweite" });
+
+    expect(reconcilePendingEchoes([a, b], "zweite")).toEqual([a]);
+  });
+
+  it("ignores whitespace differences — the CLI may re-wrap what it received", () => {
+    const a = echo({ id: "a", text: "mach  das\n bitte" });
+
+    expect(reconcilePendingEchoes([a], "mach das bitte")).toEqual([]);
+  });
+
+  it("retires the oldest echo when nothing matches, rather than risk a double bubble", () => {
+    const a = echo({ id: "a", text: "erste" });
+    const b = echo({ id: "b", text: "zweite" });
+
+    // A visible duplicate is worse than dropping a local copy of a message that
+    // is on screen either way.
+    expect(reconcilePendingEchoes([a, b], "etwas ganz anderes")).toEqual([b]);
+  });
+
+  it("never doubles: two confirmations retire two echoes", () => {
+    const a = echo({ id: "a", text: "erste" });
+    const b = echo({ id: "b", text: "zweite" });
+
+    const afterFirst = reconcilePendingEchoes([a, b], "erste");
+    expect(reconcilePendingEchoes(afterFirst, "zweite")).toEqual([]);
+  });
+
+  it("does nothing when there is no echo to retire", () => {
+    expect(reconcilePendingEchoes([], "irgendwas")).toEqual([]);
+  });
+});
+
+describe("withdrawPendingEcho", () => {
+  it("removes the newest echo with that text (the send that just failed)", () => {
+    const older = echo({ id: "old", text: "gleich", sentAt: 1_000 });
+    const newer = echo({ id: "new", text: "gleich", sentAt: 2_000 });
+
+    expect(withdrawPendingEcho([older, newer], "gleich")).toEqual([older]);
+  });
+
+  it("leaves the list alone when the text isn't pending", () => {
+    const a = echo({ id: "a", text: "hallo" });
+    expect(withdrawPendingEcho([a], "was anderes")).toEqual([a]);
+  });
+});
+
+describe("markUnconfirmedEchoes", () => {
+  it("flips an echo that has gone unacknowledged past the timeout", () => {
+    const a = echo({ sentAt: 1_000 });
+    const [flipped] = markUnconfirmedEchoes([a], 1_000 + ECHO_CONFIRM_TIMEOUT_MS);
+
+    expect(flipped.status).toBe("unconfirmed");
+  });
+
+  it("leaves a fresh echo pending", () => {
+    const a = echo({ sentAt: 1_000 });
+    expect(markUnconfirmedEchoes([a], 1_500)[0].status).toBe("pending");
+  });
+
+  it("returns the identical array when nothing changed, so no re-render is forced", () => {
+    const list = [echo({ sentAt: 1_000 })];
+    expect(markUnconfirmedEchoes(list, 1_500)).toBe(list);
+  });
+
+  it("does not re-flip an already-unconfirmed echo", () => {
+    const list = [echo({ sentAt: 1_000, status: "unconfirmed" })];
+    expect(markUnconfirmedEchoes(list, 99_000)).toBe(list);
   });
 });

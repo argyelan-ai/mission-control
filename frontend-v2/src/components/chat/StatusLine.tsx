@@ -20,6 +20,10 @@ interface StatusLineProps {
    *  ENDED is not an unknown state — it is a known, ordinary one, and painting
    *  it amber told the operator something was wrong when nothing was. */
   sessionLive?: boolean;
+  /** A send has gone out and the transcript hasn't shown any sign of the turn
+   *  yet. Local knowledge, and honest about being exactly that: it says the
+   *  message left, not that the agent received or started it. */
+  sending?: boolean;
 }
 
 interface StatusDisplay {
@@ -47,11 +51,29 @@ const ENDED_DISPLAY: StatusDisplay = {
   pulse: false,
 };
 
+// Local, and scoped to exactly what we know: the request left the browser.
+// It deliberately does NOT claim the agent got it or started working — that
+// only becomes true when a real state/tool/message frame arrives, which is
+// what clears this.
+const SENDING_DISPLAY: StatusDisplay = {
+  dotColor: STATUS.busy,
+  textColor: STATUS_TEXT.info,
+  label: "Gesendet…",
+  pulse: true,
+};
+
 function resolveDisplay(
   state: StateEvent | null,
   connected: boolean,
   sessionLive: boolean,
+  sending: boolean,
 ): StatusDisplay {
+  // Outranks the pane probe on purpose: right after a send the probe still
+  // reports the PREVIOUS state (idle), and showing "Bereit" one frame after the
+  // operator hit send is exactly the unresponsive feeling this round is about.
+  if (sending) {
+    return SENDING_DISPLAY;
+  }
   if (!sessionLive) {
     return ENDED_DISPLAY;
   }
@@ -71,8 +93,8 @@ function resolveDisplay(
   }
 }
 
-export function StatusLine({ state, connected, sessionLive = true }: StatusLineProps) {
-  const display = resolveDisplay(state, connected, sessionLive);
+export function StatusLine({ state, connected, sessionLive = true, sending = false }: StatusLineProps) {
+  const display = resolveDisplay(state, connected, sessionLive, sending);
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status

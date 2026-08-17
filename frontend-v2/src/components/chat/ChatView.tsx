@@ -80,6 +80,10 @@ export type TimelineItem =
  *  cost a tap to get it back. Two or more is where the wall starts. */
 export const ACTIVITY_GROUP_MIN_SIZE = 2;
 
+/** Timeline items mounted in the first commit — roughly a screenful, so the
+ *  operator sees the end of the conversation immediately. */
+export const INITIAL_RENDER_WINDOW = 30;
+
 /**
  * Turns the flat event list into the timeline's render items.
  *
@@ -245,6 +249,14 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  // Chunked first paint: a full Boss transcript is ~200 events of ReactMarkdown,
+  // and rendering all of it in one commit blocked the main thread long enough
+  // that the page stopped answering (measured: repeated >5s stalls, 741ms LCP
+  // render delay). The operator reads the END of the conversation first, so the
+  // last screenful is mounted immediately and the rest follows in the next
+  // frame. No virtualization library — the list is bounded at MAX_CHAT_EVENTS
+  // and this costs one boolean.
+  const [renderAll, setRenderAll] = useState(false);
 
   const streamEnabled = hasTranscript && !!agent;
   const stream = useChatStream(agent?.id ?? null, streamEnabled);
@@ -261,12 +273,27 @@ export function ChatView({
   const canChat = hasTranscript && !isNoTranscriptError(stream.error);
   const effectiveView: CenterView = canChat ? centerView : "terminal";
 
+  // `renderAll` is in the deps for a reason: when the deferred remainder mounts,
+  // content appears ABOVE the viewport, so a scroll position left untouched
+  // would silently show older messages instead of the end.
   useEffect(() => {
     if (!stickToBottom) return;
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [stream.events, stickToBottom]);
+  }, [stream.events, stickToBottom, renderAll]);
+
+  // One frame later, not on a timer: the browser gets to paint the tail first,
+  // which is the whole point.
+  useEffect(() => {
+    if (renderAll) return;
+    if (typeof requestAnimationFrame === "undefined") {
+      setRenderAll(true);
+      return;
+    }
+    const handle = requestAnimationFrame(() => setRenderAll(true));
+    return () => cancelAnimationFrame(handle);
+  }, [renderAll]);
 
   // The effect above fires on new events, which is not enough: the mobile
   // stack keeps the off-screen pane mounted with `display: none`, where the
@@ -294,7 +321,15 @@ export function ChatView({
 
   function handleSend(text: string) {
     if (!agent) return;
-    api.chat.sendText(agent.id, text).catch(() => notify.error("Senden fehlgeschlagen"));
+    // Echo BEFORE the request: the bubble and the scroll happen in this frame,
+    // not a second later when the tailer has polled the transcript. The request
+    // failing removes the echo again — an echo that outlived a failed send would
+    // be the one thing worse than the old delay.
+    stream.echoSent(text);
+    api.chat.sendText(agent.id, text).catch(() => {
+      stream.echoFailed(text);
+      notify.error("Senden fehlgeschlagen");
+    });
   }
 
   function handleStop() {
@@ -318,6 +353,8 @@ export function ChatView({
 
   const visibleEvents = stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel));
   const items = buildTimelineItems(visibleEvents);
+  // Tail first; the remainder joins one frame later (see `renderAll`).
+  const visibleItems = renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW);
   const modelBadges = modelBadgeUuids(visibleEvents);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
 
@@ -446,7 +483,7 @@ export function ChatView({
             onScroll={handleScroll}
             className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
           >
-            {items.length === 0 ? (
+            {items.length === 0 && stream.pendingEchoes.length === 0 ? (
               stream.loading ? (
                 <TimelineSkeleton />
               ) : (
@@ -465,7 +502,7 @@ export function ChatView({
                 </div>
               )
             ) : (
-              items.map((item) => {
+              visibleItems.map((item) => {
                 if (item.kind === "sidechain") {
                   return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
                 }
@@ -481,6 +518,25 @@ export function ChatView({
                 return renderTimelineEvent(item.event, detailLevel, modelBadges.has(item.event.uuid));
               })
             )}
+
+            {/* Locally-echoed sends, always last: they are by definition the
+                newest thing in the conversation, and they disappear the moment
+                the transcript confirms them (useChatStream.reconcileEcho). */}
+            {stream.pendingEchoes.map((echo) => (
+              <ChatMessage
+                key={echo.id}
+                ev={{
+                  kind: "message",
+                  uuid: echo.id,
+                  ts: new Date(echo.sentAt).toISOString(),
+                  role: "user",
+                  text: echo.text,
+                  model: null,
+                  sidechain: false,
+                }}
+                echoStatus={echo.status}
+              />
+            ))}
           </div>
 
           {prompt && (
@@ -497,8 +553,17 @@ export function ChatView({
             state={stream.state}
             connected={stream.connected}
             sessionLive={stream.session?.live ?? true}
+            sending={stream.awaitingResponse}
           />
-          <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} sessionLive={stream.session?.live ?? false} />
+          <Composer
+            agentId={agent.id}
+            usage={stream.usage}
+            state={stream.state}
+            onSend={handleSend}
+            onStop={handleStop}
+            sessionLive={stream.session?.live ?? false}
+            capabilities={stream.capabilities}
+          />
         </>
       )}
 

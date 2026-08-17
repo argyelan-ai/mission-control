@@ -5,12 +5,89 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
 import type {
+  ChatCapabilities,
   ChatEvent,
   ChatSession,
   StateEvent,
   TimelineChatEvent,
   UsageEvent,
 } from "@/lib/chatTypes";
+
+// ── Optimistic echo ──────────────────────────────────────────────────────────
+//
+// A sent message used to appear only once the tailer had polled the transcript
+// (1s interval) and the CLI had written the line — so the operator's own words
+// took over a second to show up, which is what "fühlt sich nicht snappy an"
+// was about. The echo renders the bubble locally the instant it is sent and
+// steps aside when the real transcript event lands.
+//
+// It is deliberately NOT pushed through `chatReducer`: that reducer is a pure
+// projection of the transcript, and mixing a local guess into it would make
+// "what the agent actually recorded" unanswerable.
+
+/** How long an echo may stay unconfirmed before it says so. Generous on
+ *  purpose — the floor is the tailer's 1s poll plus however long the CLI takes
+ *  to flush the line, and a busy agent can be slower than that. */
+export const ECHO_CONFIRM_TIMEOUT_MS = 10_000;
+
+export interface PendingEcho {
+  /** Local id — never a transcript uuid, so it can't collide with one. */
+  id: string;
+  text: string;
+  sentAt: number;
+  /** `unconfirmed` = the timeout passed while the stream was healthy, so the
+   *  message may never have reached the CLI. Truthful, not a spinner. */
+  status: "pending" | "unconfirmed";
+}
+
+/** Whitespace-insensitive compare: the CLI echoes back what it received, but a
+ *  trailing newline or a re-wrapped paste must still count as the same message. */
+function sameMessage(a: string, b: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+  return norm(a) === norm(b);
+}
+
+/**
+ * Retires the echo that an incoming transcript user-message corresponds to.
+ *
+ * Prefers a text match. Falls back to the OLDEST echo when nothing matches,
+ * because the two failure modes are not symmetric: retiring an echo early only
+ * removes a local copy while the real message is on screen anyway, whereas
+ * keeping it would show the same message twice — visible, and it looks broken.
+ * (The operator typing directly in the terminal is the case that hits the
+ * fallback; losing a still-pending echo there is harmless.)
+ *
+ * Pure so the rule can be tested without React.
+ */
+export function reconcilePendingEchoes(echoes: PendingEcho[], incomingText: string): PendingEcho[] {
+  if (echoes.length === 0) return echoes;
+  const matched = echoes.findIndex((e) => sameMessage(e.text, incomingText));
+  const drop = matched >= 0 ? matched : 0;
+  return echoes.filter((_, i) => i !== drop);
+}
+
+/** Removes the newest echo with this text — a failed send is always the most
+ *  recent one, and nothing was delivered, so the bubble must go. */
+export function withdrawPendingEcho(echoes: PendingEcho[], text: string): PendingEcho[] {
+  const reversedIdx = [...echoes].reverse().findIndex((e) => sameMessage(e.text, text));
+  if (reversedIdx < 0) return echoes;
+  const idx = echoes.length - 1 - reversedIdx;
+  return echoes.filter((_, i) => i !== idx);
+}
+
+/** Flips echoes that have gone unacknowledged past the timeout. Returns the
+ *  same array when nothing changed, so callers can skip a re-render. */
+export function markUnconfirmedEchoes(echoes: PendingEcho[], now: number): PendingEcho[] {
+  let changed = false;
+  const next = echoes.map((e) => {
+    if (e.status === "pending" && now - e.sentAt >= ECHO_CONFIRM_TIMEOUT_MS) {
+      changed = true;
+      return { ...e, status: "unconfirmed" as const };
+    }
+    return e;
+  });
+  return changed ? next : echoes;
+}
 
 // ── Reducer ──────────────────────────────────────────────────────────────────
 //
@@ -121,6 +198,20 @@ export interface UseChatStreamResult {
   connected: boolean;
   loading: boolean;
   error: Error | null;
+  /** Server-derived harness capabilities (effort levels). `null` while history
+   *  is still loading, or on a backend that predates the field. */
+  capabilities: ChatCapabilities | null;
+  /** Locally-rendered messages awaiting their transcript confirmation, oldest
+   *  first. Render these AFTER `events`. */
+  pendingEchoes: PendingEcho[];
+  /** Call the moment a send is dispatched — before the request resolves. */
+  echoSent: (text: string) => void;
+  /** Call when that send failed: the echo is removed again, since nothing was
+   *  delivered and a lingering bubble would claim otherwise. */
+  echoFailed: (text: string) => void;
+  /** True from a send until the transcript shows any sign of life (a state
+   *  change, a tool call, a message). Drives the honest "Gesendet…" line. */
+  awaitingResponse: boolean;
 }
 
 /**
@@ -134,6 +225,9 @@ export interface UseChatStreamResult {
 export function useChatStream(agentId: string | null, enabled = true): UseChatStreamResult {
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
   const [connected, setConnected] = useState(false);
+  const [pendingEchoes, setPendingEchoes] = useState<PendingEcho[]>([]);
+  const [awaitingResponse, setAwaitingResponse] = useState(false);
+  const echoSeqRef = useRef(0);
   // Tracks which session's history has already been dispatched into the
   // reducer, so a query re-render with the same data doesn't re-seed (which
   // would be harmless — pushOrReplace is idempotent for non-tool dupes and
@@ -156,6 +250,50 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     for (const ev of data.events) dispatch(ev);
   }, [historyQuery.data]);
 
+  const echoSent = useCallback((text: string) => {
+    echoSeqRef.current += 1;
+    setPendingEchoes((prev) => [
+      ...prev,
+      { id: `echo-${echoSeqRef.current}`, text, sentAt: Date.now(), status: "pending" },
+    ]);
+    setAwaitingResponse(true);
+  }, []);
+
+  const echoFailed = useCallback((text: string) => {
+    setPendingEchoes((prev) => withdrawPendingEcho(prev, text));
+    setAwaitingResponse(false);
+  }, []);
+
+  /** Retires the echo this transcript message corresponds to. Prefers a text
+   *  match; falls back to the oldest echo, because a visible duplicate bubble is
+   *  a worse failure than retiring one echo early (the real message is on screen
+   *  either way — only the local copy disappears). */
+  const reconcileEcho = useCallback((incomingText: string) => {
+    setPendingEchoes((prev) => reconcilePendingEchoes(prev, incomingText));
+  }, []);
+
+  // Retire echoes that history brings in (a refetch after session rollover can
+  // carry a message that was still pending locally).
+  useEffect(() => {
+    const data = historyQuery.data;
+    if (!data) return;
+    for (const ev of data.events) {
+      if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text);
+    }
+  }, [historyQuery.data, reconcileEcho]);
+
+  // Flip long-unconfirmed echoes rather than leaving them looking delivered.
+  // Only while the stream is healthy: on a dead stream we genuinely don't know,
+  // and StatusLine already says the status is unclear.
+  useEffect(() => {
+    if (pendingEchoes.length === 0 || !connected) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setPendingEchoes((prev) => markUnconfirmedEchoes(prev, now));
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [pendingEchoes.length, connected]);
+
   const streamUrl = agentId ? api.chat.streamUrl(agentId) : "";
 
   const onSSEEvent = useCallback(
@@ -164,6 +302,12 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
       setConnected(true);
       const ev = data as unknown as ChatEvent;
       dispatch(ev);
+      if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text);
+      // Any sign the agent processed the turn ends the "Gesendet…" line. A
+      // `usage` frame alone doesn't count — it can arrive for the previous turn.
+      if (ev.kind === "state" || ev.kind === "tool" || ev.kind === "thinking" || ev.kind === "message") {
+        setAwaitingResponse(false);
+      }
       if (ev.kind === "session_changed") {
         // The new session has different history — force a re-seed once the
         // refetch resolves instead of trusting the (now stale) sessionId.
@@ -171,7 +315,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
         historyQuery.refetch();
       }
     },
-    [historyQuery],
+    [historyQuery, reconcileEcho],
   );
 
   const onSSEError = useCallback(() => setConnected(false), []);
@@ -191,5 +335,10 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     connected,
     loading: historyQuery.isLoading,
     error: historyQuery.error as Error | null,
+    capabilities: historyQuery.data?.capabilities ?? null,
+    pendingEchoes,
+    echoSent,
+    echoFailed,
+    awaitingResponse,
   };
 }

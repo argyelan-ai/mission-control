@@ -69,12 +69,6 @@ export interface UsageEvent {
    *  figure. `"estimate"` = the backend computed it itself (no ground truth
    *  available). Only meaningful together with `usedPct`. */
   source?: "cli" | "estimate";
-  /** The effort levels this agent's harness actually accepts, in the order it
-   *  offers them. Absent means the backend hasn't told us — consumers fall back
-   *  to the three levels every Claude Code build has had rather than showing an
-   *  empty picker. Never hardcode the list against this field: a harness with
-   *  more (or differently named) levels is exactly why it exists. */
-  effortLevels?: string[] | null;
   /** The four token buckets kept apart, for the context breakdown view.
    *  `inputTokens` above stays their input-side SUM — every existing consumer
    *  relies on that. When fresh CLI statusline state exists these describe the
@@ -134,10 +128,42 @@ export interface ChatSession {
   startedAt: string | null;
 }
 
+/**
+ * What this agent's harness can actually do, derived server-side from its
+ * runtime (`agent_chat_input.effort_capabilities`). The composer builds its
+ * effort chip from this instead of hardcoding a level list — the levels differ
+ * per harness and per CLI version, and the backend is the single source that
+ * also validates the switch request.
+ *
+ * `canSwitchEffort: false` with an empty list is the normal, expected answer
+ * for every host agent (Boss included): no pane probe exists there, so the chip
+ * has nothing to offer and says so rather than showing an empty picker.
+ */
+export interface ChatCapabilities {
+  effortLevels: string[];
+  canSwitchEffort: boolean;
+}
+
+/**
+ * Levels Claude Code applies to the CURRENT SESSION ONLY, by its own design
+ * ("this session only" in the CLI's own confirmation). Every other level
+ * rewrites the agent's persisted default — see
+ * `backend/app/services/agent_chat_input.py`, which documents the split from
+ * empirical testing, and ADR-073. The distinction matters to the operator: one
+ * choice outlives the session, the other does not.
+ */
+export const SESSION_ONLY_EFFORT_LEVELS = new Set(["max", "ultracode"]);
+
+export function isSessionOnlyEffort(level: string): boolean {
+  return SESSION_ONLY_EFFORT_LEVELS.has(level);
+}
+
 export interface ChatHistoryResponse {
   events: ChatEvent[];
   session: ChatSession;
   hasMore: boolean;
+  /** Absent on older backends — consumers must treat that as "cannot switch". */
+  capabilities?: ChatCapabilities | null;
 }
 
 /** 404 body shared by /chat/history and /chat/stream when the agent/runtime

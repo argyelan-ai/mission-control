@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { C } from "@/lib/colors";
+import { AlertTriangle } from "lucide-react";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 
 // ── Markdown renderer — mirrors LegacyMemoryPage's `MarkdownContent` exactly
@@ -172,22 +173,52 @@ function ClampedUserContent({ text }: { text: string }) {
  * visible "Du" label; it stays as screen-reader text, since alignment is not
  * information a screen reader can hear.
  */
-export function ChatMessage({ ev, showModel = false }: { ev: MessageEvent; showModel?: boolean }) {
+export function ChatMessage({
+  ev,
+  showModel = false,
+  echoStatus,
+}: {
+  ev: MessageEvent;
+  showModel?: boolean;
+  /** Set only for a locally-echoed send that the transcript hasn't confirmed
+   *  yet (see useChatStream's optimistic echo). Absent = a real transcript
+   *  message, which needs no qualifier. */
+  echoStatus?: "pending" | "unconfirmed";
+}) {
   const isUser = ev.role === "user";
 
   if (isUser) {
+    const unconfirmed = echoStatus === "unconfirmed";
     return (
       <div className="w-full px-4 md:px-5 py-2 flex justify-end">
         <div
-          className="max-w-[85%] min-w-0 px-3.5 py-2.5 text-[14px] leading-[1.6]"
+          data-testid={echoStatus ? "echo-bubble" : undefined}
+          data-echo-status={echoStatus}
+          className="max-w-[85%] min-w-0 px-3.5 py-2.5 text-[14px] leading-[1.6] transition-opacity"
           style={{
             background: C.bgElevated,
-            border: `1px solid ${C.border}`,
+            border: `1px solid ${unconfirmed ? `${C.warning}55` : C.border}`,
             borderRadius: "var(--radius-xl)",
+            // Pending is dimmed, not spinning: the message is there, it just
+            // isn't acknowledged yet. Once confirmed the bubble is replaced by
+            // the real transcript event and returns to full opacity.
+            opacity: echoStatus === "pending" ? 0.55 : 1,
           }}
         >
           <span className="sr-only">Du</span>
           <ClampedUserContent text={ev.text} />
+          {unconfirmed && (
+            // Truthful, not reassuring: after the timeout we genuinely do not
+            // know whether the CLI received this, so it says so and names the
+            // one place that can answer it.
+            <div
+              className="mt-1.5 pt-1.5 flex items-center gap-1.5 text-xs"
+              style={{ color: STATUS_TEXT.warning, borderTop: `1px solid ${C.borderSubtle}` }}
+            >
+              <AlertTriangle size={12} aria-hidden="true" />
+              <span>Nicht bestätigt — Terminal prüfen</span>
+            </div>
+          )}
         </div>
       </div>
     );

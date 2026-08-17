@@ -15,7 +15,7 @@
  * verbatim move covered by its own future test surface / manual live-gate).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatView, buildTimelineItems, modelBadgeUuids, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
@@ -126,6 +126,11 @@ function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamRe
     connected: true,
     loading: false,
     error: null,
+    capabilities: null,
+    pendingEchoes: [],
+    echoSent: vi.fn(),
+    echoFailed: vi.fn(),
+    awaitingResponse: false,
     ...overrides,
   };
 }
@@ -579,6 +584,154 @@ describe("ChatView", () => {
     await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
     expect(screen.getByRole("radio", { name: /Chat/ })).toBeDisabled();
     expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
+  });
+
+  // ── Optimistic echo ───────────────────────────────────────────────────────
+  // The bubble must exist in the frame the send happens, not a tailer poll
+  // later. ChatView's job here is narrow: echo BEFORE the request, drop the
+  // echo if the request fails, render pending echoes last.
+
+  it("echoes the message before the request is even dispatched", async () => {
+    const echoSent = vi.fn();
+    let sendResolved = false;
+    vi.mocked(api.chat.sendText).mockImplementation(() => {
+      // Asserted inside the request: the echo must already have happened.
+      expect(echoSent).toHaveBeenCalledWith("los gehts");
+      sendResolved = true;
+      return Promise.resolve(undefined);
+    });
+    mockUseChatStream.mockReturnValue(mkStream({ echoSent }));
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "los gehts");
+    await user.click(screen.getByRole("button", { name: "Senden" }));
+
+    expect(sendResolved).toBe(true);
+  });
+
+  it("withdraws the echo when the send fails", async () => {
+    const echoFailed = vi.fn();
+    vi.mocked(api.chat.sendText).mockRejectedValue(new Error("API 500"));
+    mockUseChatStream.mockReturnValue(mkStream({ echoFailed }));
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "geht nicht");
+    await user.click(screen.getByRole("button", { name: "Senden" }));
+
+    // A bubble that outlived a failed send would claim a delivery that never
+    // happened — worse than the delay it was meant to hide.
+    await waitFor(() => expect(echoFailed).toHaveBeenCalledWith("geht nicht"));
+  });
+
+  it("renders a pending echo as a dimmed bubble after the real timeline", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        pendingEchoes: [{ id: "echo-1", text: "gerade abgeschickt", sentAt: Date.now(), status: "pending" }],
+      })
+    );
+    renderChatView();
+
+    const bubble = screen.getByTestId("echo-bubble");
+    expect(bubble).toHaveAttribute("data-echo-status", "pending");
+    expect(bubble).toHaveTextContent("gerade abgeschickt");
+    // After the confirmed content, because it is by definition the newest thing.
+    expect(screen.getByText("Hallo!").compareDocumentPosition(bubble)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("says so when an echo stays unconfirmed instead of looking delivered", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        pendingEchoes: [{ id: "echo-1", text: "keine Antwort", sentAt: Date.now() - 20_000, status: "unconfirmed" }],
+      })
+    );
+    renderChatView();
+
+    expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "unconfirmed");
+    expect(screen.getByText("Nicht bestätigt — Terminal prüfen")).toBeInTheDocument();
+  });
+
+  it("does not show the empty state while an echo is on screen", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [],
+        pendingEchoes: [{ id: "echo-1", text: "erste Nachricht", sentAt: Date.now(), status: "pending" }],
+      })
+    );
+    renderChatView();
+
+    expect(screen.queryByText("Noch keine Nachrichten")).not.toBeInTheDocument();
+    expect(screen.getByTestId("echo-bubble")).toBeInTheDocument();
+  });
+
+  it('shows "Gesendet…" until the transcript shows a sign of the turn', () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ awaitingResponse: true, state: { kind: "state", status: "idle", prompt: null } })
+    );
+    renderChatView();
+
+    // Outranks the pane probe's stale "idle" — otherwise the line reads
+    // "Bereit" one frame after the operator hit send.
+    expect(screen.getByText("Gesendet…")).toBeInTheDocument();
+    expect(screen.queryByText("Bereit")).not.toBeInTheDocument();
+  });
+
+  it("hands the server's capabilities to the composer", async () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        usage: {
+          kind: "usage",
+          uuid: "u9",
+          ts: "2026-08-17T10:00:00Z",
+          inputTokens: 10,
+          outputTokens: 1,
+          model: "claude-opus-5",
+          effort: "high",
+        },
+        capabilities: { effortLevels: ["low", "high", "max"], canSwitchEffort: true },
+      })
+    );
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.click(screen.getByTestId("effort-chip"));
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("data-level"))).toEqual([
+      "low",
+      "high",
+      "max",
+    ]);
+  });
+
+  // ── Chunked first paint ───────────────────────────────────────────────────
+
+  it("mounts the tail of a long transcript first, then the rest", async () => {
+    // 120 alternating messages -> 120 items, well past the window.
+    const many = Array.from({ length: 120 }, (_, i) =>
+      mkMsg({ uuid: `m${i}`, text: `Nachricht ${i}`, role: i % 2 === 0 ? "assistant" : "user" })
+    );
+    mockUseChatStream.mockReturnValue(mkStream({ events: many }));
+    renderChatView();
+
+    // First commit: the end of the conversation is on screen, the beginning is
+    // not — that is what makes the page answer immediately on a long history.
+    expect(screen.getByText("Nachricht 119")).toBeInTheDocument();
+    expect(screen.queryByText("Nachricht 0")).not.toBeInTheDocument();
+
+    // One frame later the remainder joins, without the reader losing the end.
+    await waitFor(() => expect(screen.getByText("Nachricht 0")).toBeInTheDocument());
+    expect(screen.getByText("Nachricht 119")).toBeInTheDocument();
+  });
+
+  it("does not defer anything when the transcript is short", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    // Below the window the slice is a no-op — no reason to make a short
+    // conversation arrive in two steps.
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
   });
 
   // ── Loading / empty states ────────────────────────────────────────────────

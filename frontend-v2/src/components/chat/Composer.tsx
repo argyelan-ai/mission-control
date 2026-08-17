@@ -9,6 +9,8 @@ import {
   isAgentBusyError,
   isEffortSwitchFailedError,
   isInputNotSupportedError,
+  isSessionOnlyEffort,
+  type ChatCapabilities,
   type StateEvent,
   type UsageEvent,
 } from "@/lib/chatTypes";
@@ -29,20 +31,20 @@ const RING_STROKE = 2;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-/** Fallback list for as long as the backend doesn't ship `usage.effortLevels`:
- *  the three levels every Claude Code build has had. The dropdown renders
- *  whatever it is given, so a harness with four levels — or different names —
- *  needs no frontend change. The backend stays the allowlist either way (422 on
- *  a level it doesn't accept). */
-export const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high"] as const;
-
-/** Only strings survive: a malformed `effortLevels` (nulls, numbers, an empty
- *  array) must not turn the picker into a list of blanks — it falls back. */
-export function resolveEffortLevels(levels: string[] | null | undefined): string[] {
-  const clean = (levels ?? []).filter(
+/**
+ * The switchable levels, straight from the server's capability block — no
+ * hardcoded list, because it differs per harness and per CLI version and the
+ * backend is the same source that validates the switch.
+ *
+ * Returns `[]` when the agent can't switch at all (every host agent: no pane to
+ * drive) or when the backend predates the field. An empty list means the chip
+ * shows the level read-only instead of opening an empty picker.
+ */
+export function resolveEffortLevels(capabilities: ChatCapabilities | null | undefined): string[] {
+  if (!capabilities?.canSwitchEffort) return [];
+  return (capabilities.effortLevels ?? []).filter(
     (level): level is string => typeof level === "string" && level.trim().length > 0,
   );
-  return clean.length > 0 ? clean : [...DEFAULT_EFFORT_LEVELS];
 }
 
 type RingThreshold = "normal" | "warning" | "error";
@@ -77,6 +79,10 @@ interface ComposerProps {
    *  the real `session.live` value yet keep the previous working-only
    *  behavior instead of silently losing the button. */
   sessionLive?: boolean;
+  /** Server-derived harness capabilities. Drives the effort chip: no
+   *  capabilities (or `canSwitchEffort: false`) means the level is shown
+   *  read-only rather than as a picker that cannot work. */
+  capabilities?: ChatCapabilities | null;
 }
 
 /**
@@ -96,7 +102,7 @@ interface ComposerProps {
  * `search` state simply stayed empty forever and every item was shown
  * unfiltered — the bug this component was rewritten to fix.
  */
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null }: ComposerProps) {
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -115,7 +121,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isWorking = state?.status === "working";
-  const effortLevels = resolveEffortLevels(usage?.effortLevels);
+  const effortLevels = resolveEffortLevels(capabilities);
 
   // Palette is only ever "/<query>" with no space yet — once a space lands,
   // the user has moved on to arguments and the palette has no business
@@ -445,7 +451,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           </div>
 
           {usage?.effort &&
-            (effortSupported ? (
+            // A picker needs levels to offer. No capabilities, `canSwitchEffort:
+            // false`, or an empty list all mean the same thing here: show the
+            // level, don't pretend it can be changed.
+            (effortSupported && effortLevels.length > 0 ? (
               <div className="relative">
                 <button
                   type="button"
@@ -476,7 +485,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                     role="listbox"
                     aria-label="Effort-Stufe"
                     data-testid="effort-menu"
-                    className="absolute bottom-full left-0 mb-1.5 w-52 rounded-lg overflow-hidden z-20 p-1"
+                    className="absolute bottom-full left-0 mb-1.5 w-60 rounded-lg overflow-hidden z-20 p-1"
                     style={{
                       backgroundColor: C.bgElevated,
                       border: `1px solid ${C.border}`,
@@ -492,6 +501,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                           type="button"
                           role="option"
                           aria-selected={isCurrent}
+                          // The level verbatim, so callers (and tests) can
+                          // address a row without parsing its label — "high"
+                          // is otherwise a substring of "xhigh".
+                          data-level={level}
                           onClick={() => selectEffort(level)}
                           className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-mono rounded-md cursor-pointer text-left transition-colors hover:bg-[var(--color-bg-hover)]"
                           style={{
@@ -499,28 +512,33 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                             backgroundColor: isCurrent ? C.accentSubtle : "transparent",
                           }}
                         >
-                          <span className="flex-1">{level}</span>
+                          <span className="min-w-0 truncate">{level}</span>
+                          {/* Per level, not one blanket line: low/medium/high/
+                              xhigh rewrite the agent's persisted default, while
+                              max/ultracode are session-only by CLI design
+                              (agent_chat_input.py documents the split from
+                              empirical testing). Which one the operator is
+                              picking is the whole question the original "does
+                              this outlive my session?" concern was about. */}
+                          <span
+                            className="ml-auto shrink-0 font-sans text-[10px]"
+                            style={{ color: C.textMuted }}
+                          >
+                            {isSessionOnlyEffort(level) ? "nur diese Session" : "wird Standard"}
+                          </span>
                           {/* "…" while the switch is in flight, a check only
                               once the transcript confirms it — the chip never
                               claims a level the agent hasn't reported. */}
                           {isPending ? (
-                            <span style={{ color: C.textMuted }}>…</span>
+                            <span className="shrink-0" style={{ color: C.textMuted }}>…</span>
                           ) : isCurrent ? (
-                            <Check size={12} style={{ color: C.accent }} />
-                          ) : null}
+                            <Check size={12} className="shrink-0" style={{ color: C.accent }} />
+                          ) : (
+                            <span className="shrink-0 w-3" aria-hidden="true" />
+                          )}
                         </button>
                       );
                     })}
-                    {/* CLI reality, verified empirically: Claude Code has no
-                        session-only effort. The switch rewrites the agent's
-                        persisted default, so the operator must know it outlives
-                        this session. */}
-                    <p
-                      className="px-2 pt-1.5 pb-0.5 text-xs leading-[1.45]"
-                      style={{ color: C.textMuted }}
-                    >
-                      Gilt als neuer Standard des Agenten.
-                    </p>
                   </div>
                 )}
               </div>
