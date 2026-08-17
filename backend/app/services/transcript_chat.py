@@ -66,6 +66,7 @@ from typing import Any
 
 from app.config import settings
 from app.services import sse
+from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_state import capture_pane, parse_pane_state, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
@@ -191,25 +192,41 @@ def _parse_local_command_wrapper(
     return None
 
 
-def resolve_context_window(model: str | None) -> int | None:
-    """Resolves a model name to its context window size (tokens) via
-    ``settings.context_windows``, so the frontend needs no hardcoded model
-    map. Shared by both consumers of ``parse_transcript_line`` — ``read_history``
-    and the live tailer — since both funnel through this one call site in
+def resolve_context_window(
+    model: str | None, observed: dict[str, int] | None = None
+) -> int | None:
+    """Resolves a model name to its context window size (tokens). Shared by
+    both consumers of ``parse_transcript_line`` — ``read_history`` and the
+    live tailer — since both funnel through this one call site in
     ``_parse_assistant_entry``.
 
-    Matching order:
-    1. Exact match against a configured key.
-    2. The LONGEST configured key that is a prefix of ``model`` (handles
+    Matching order (harness-catalog round — the OBSERVED tier is new; the
+    CURRENT-SESSION-statusline tier that outranks even this whole function
+    is applied separately, AFTER parsing, by ``_stamp_usage_source``):
+    1. ``observed`` (an EXACT match only) — a model->window map the caller
+       fetched from ``harness_catalog.get_observed_model_windows()`` (every
+       FRESH statusline-state read anywhere in the fleet feeds this Redis
+       hash; ``None``/``{}`` here just skips this tier, keeping this
+       function itself Redis-free and pure/synchronous — see
+       ``harness_catalog``'s module docstring for why the dependency runs
+       this direction and not the reverse).
+    2. Exact match against a configured key in ``settings.context_windows``
+       (the static, config-seeded fallback — demoted from primary to
+       tertiary this round, not deleted: still what answers before any
+       observation exists).
+    3. The LONGEST configured key that is a prefix of ``model`` (handles
        dated/versioned model strings, e.g. a future
        "claude-sonnet-4-6-20261201" against the configured "claude-sonnet-4-6").
-    3. ``model`` contains the literal substring ``"[1m]"`` (Anthropic's 1M-
+    4. ``model`` contains the literal substring ``"[1m]"`` (Anthropic's 1M-
        context beta suffix) -> 1,000,000.
-    4. Otherwise ``None`` — an unknown model gets no number rather than a
+    5. Otherwise ``None`` — an unknown model gets no number rather than a
        guessed one.
     """
     if not model:
         return None
+
+    if observed and model in observed:
+        return observed[model]
 
     windows = settings.context_windows
     if model in windows:
@@ -225,8 +242,17 @@ def resolve_context_window(model: str | None) -> int | None:
     return None
 
 
-def parse_transcript_line(line: str) -> list[dict[str, Any]]:
-    """One raw JSONL line -> 0..n normalized chat events. Never raises."""
+def parse_transcript_line(
+    line: str, observed_windows: dict[str, int] | None = None
+) -> list[dict[str, Any]]:
+    """One raw JSONL line -> 0..n normalized chat events. Never raises.
+
+    ``observed_windows`` (harness-catalog round) is passed straight through
+    to ``resolve_context_window`` for a ``usage`` event's ``contextWindow``
+    estimate — see that function's docstring for the full precedence chain.
+    Optional and ``None`` by default so this stays call-compatible with
+    every existing caller; only ``read_history`` and the tailer, which have
+    a fetched observed-map available, pass a real dict."""
     try:
         d = json.loads(line)
     except (json.JSONDecodeError, ValueError):
@@ -242,7 +268,7 @@ def parse_transcript_line(line: str) -> list[dict[str, Any]]:
         if entry_type == "user":
             return _parse_user_entry(d)
         if entry_type == "assistant":
-            return _parse_assistant_entry(d)
+            return _parse_assistant_entry(d, observed_windows)
     except Exception:
         logger.debug("transcript_chat: failed to parse %s entry", entry_type, exc_info=True)
         return []
@@ -320,7 +346,9 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
-def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
+def _parse_assistant_entry(
+    d: dict[str, Any], observed_windows: dict[str, int] | None = None
+) -> list[dict[str, Any]]:
     msg_uuid = d.get("uuid")
     ts = d.get("timestamp")
     message = d.get("message")
@@ -421,7 +449,7 @@ def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                 "outputTokens": components["output"],
                 "model": model,
                 "effort": d.get("effort"),
-                "contextWindow": resolve_context_window(model),
+                "contextWindow": resolve_context_window(model, observed_windows),
                 "components": components,
             }
         )
@@ -779,9 +807,22 @@ _RESULT_TRUNCATE_LEN = 4000
 _STATS_TOOLS = ("Edit", "Write")
 
 
-def read_history(path: Path, limit: int = 200, before_uuid: str | None = None) -> dict[str, Any]:
+def read_history(
+    path: Path,
+    limit: int = 200,
+    before_uuid: str | None = None,
+    observed_windows: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """Reads a transcript file top-to-bottom and returns one page of chat
     events plus session metadata.
+
+    ``observed_windows`` (harness-catalog round): a pre-fetched
+    model->context-window map (``harness_catalog.get_observed_model_windows()``)
+    threaded into ``parse_transcript_line`` for each ``usage`` event's
+    estimate. Fetched by the CALLER (the router, which has async Redis
+    access), not by this function — ``read_history`` itself stays a plain
+    synchronous function with no Redis dependency of its own; ``None``
+    (the default) just skips that resolution tier.
 
     Streams the file line-by-line (transcripts can grow large over a long
     session). Dedups on the top-level entry ``uuid`` — Claude Code can repeat
@@ -840,7 +881,7 @@ def read_history(path: Path, limit: int = 200, before_uuid: str | None = None) -
                 if started_at is None and d.get("timestamp"):
                     started_at = d["timestamp"]
 
-                for ev in parse_transcript_line(raw_line):
+                for ev in parse_transcript_line(raw_line, observed_windows):
                     if ev["kind"] == "_tool_result":
                         tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
                         if tool_ev is not None:
@@ -1035,6 +1076,15 @@ class ChatTailerManager:
         buffer = b""
         tool_events_by_id: dict[str, dict[str, Any]] = {}
         command_events_by_uuid: dict[str, dict[str, Any]] = {}
+        # Fetched once per task lifetime (not per tick — the observed map
+        # changes rarely; a long-lived tailer task tolerating some staleness
+        # here matches every other TTL-cache in this adapter). A fresh
+        # observation THIS session writes below is visible to THIS task
+        # immediately regardless (kept in sync locally, see the usage-event
+        # branch), so staleness only affects observations from OTHER
+        # sessions/agents that happened after this task started.
+        # get_observed_model_windows() is itself fail-silent (-> {}).
+        observed_windows = await get_observed_model_windows()
         # Cleared on session rollover (below) — bounded by one session's
         # lifetime, not by an explicit cap.
         seen_uuids: set[str] = set()
@@ -1142,7 +1192,7 @@ class ChatTailerManager:
                                 continue
                             seen_uuids.add(entry_uuid)
 
-                        for ev in parse_transcript_line(raw_line):
+                        for ev in parse_transcript_line(raw_line, observed_windows):
                             if ev["kind"] == "_tool_result":
                                 tool_ev = tool_events_by_id.pop(ev.get("tool_use_id"), None)
                                 if tool_ev is not None:
@@ -1179,6 +1229,22 @@ class ChatTailerManager:
                                     _claude_config_root(current_path),
                                     current_path.stem,
                                 )
+                                # A fresh statusline read (source=="cli") is
+                                # ground truth for THIS model's window right
+                                # now — feed it into the shared observed map
+                                # (harness_catalog round) so every other
+                                # agent's estimate benefits too, and update
+                                # this task's own local copy immediately
+                                # rather than waiting for the next re-fetch
+                                # (there isn't one — see the fetch-once
+                                # comment above).
+                                if (
+                                    ev.get("source") == "cli"
+                                    and ev.get("model")
+                                    and ev.get("contextWindow")
+                                ):
+                                    observed_windows[ev["model"]] = ev["contextWindow"]
+                                    await observe_model_window(ev["model"], ev["contextWindow"])
 
                             await sse.broadcast(channel, "chat_event", ev)
                 except asyncio.CancelledError:

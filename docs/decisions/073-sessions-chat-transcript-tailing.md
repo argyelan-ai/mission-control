@@ -102,6 +102,14 @@ unabhängige Lese-/Schreib-Surface über derselben tmux-Session:
   „arbeitet…", falsch feuernde Approvals).
 - **Adapter-Kontrakt hält die Tür für weitere Harnesses offen**, ohne dass der SSE-Kern,
   der Redis-Kanal oder der Frontend-Reducer je CLI-spezifisches Wissen brauchen.
+- **Harness-Katalog statt Festkodierung ist jetzt das Muster, nicht die Ausnahme:**
+  nachdem ein Review bemängelte, dass die Effort-Stufenliste UND die Modell-Alias-Map
+  hartkodierte Python-Konstanten waren, wurde `services/harness_catalog.py` als eigenes
+  Modul gebaut — `/model`-Picker-Zeilen und Kontextfenster-Grössen kommen jetzt aus
+  echter, Redis-gecachter Discovery statt aus einer Liste, die bei jedem neuen Modell
+  von Hand nachgezogen werden müsste (siehe Negativ-Konsequenz unten für die Details
+  und Grenzen). Das ist der Referenz-Fall für jeden künftigen Harness: „was kann diese
+  CLI wirklich" wird beobachtet und gecacht, nie angenommen.
 
 ### Negativ
 - **Die Pane-State-Sonde ist strukturell eine Heuristik**, kein Parser — ein
@@ -170,6 +178,35 @@ unabhängige Lese-/Schreib-Surface über derselben tmux-Session:
      `GET /chat/history` → `capabilities.effortLevels`, gespeist aus derselben
      `ALLOWED_EFFORT_LEVELS`-Konstante, gegen die `set_effort` validiert. Eine neue
      CLI-Version ändert damit eine Zeile im Backend, nicht die UI.
+- **Harness-Katalog (Modelle + Kontextfenster) — dynamisch statt hartkodiert, mit
+  eigenen Grenzen (`services/harness_catalog.py`, Belege im A5-Report):**
+  - **`/model`-Picker-Zeilen werden aus einem WEGWERF-tmux-Fenster gelesen** (nie der
+    Live-Session des Agenten — dieselbe Regel wie `set_effort`s Preflight, nur hier für
+    eine reine Discovery, nicht einen Wechsel), gecacht in Redis unter
+    `(harness, cli_version)`. Ein CLI-Upgrade invalidiert den Cache automatisch über
+    den geänderten Versions-Key; `settings.model_aliases` (statische Map) ist nur noch
+    der Fallback bei kaltem Cache — nie mehr die primäre Quelle, sobald ein Katalog
+    existiert.
+  - **Kontextfenster kommen aus einer dreistufigen Kette:** aktuelle Session-Statusline
+    (bereits vorher vorhanden, `_stamp_usage_source`) > beobachtete Redis-Hash
+    (`mc:catalog:model-windows`, gespeist von JEDEM frischen Statusline-Read flottenweit,
+    „neuester Schreib gewinnt") > statische `settings.context_windows`-Saat > `None`.
+    `resolve_context_window()` selbst bleibt bewusst synchron/Redis-frei (nimmt die
+    beobachtete Map als vorgeholtes Dict entgegen) — sonst hätte der reine Parser-Kern
+    eine Redis-Abhängigkeit bekommen, und `transcript_chat.py`/`harness_catalog.py`
+    wären sich zirkulär ins Gehege gekommen (der Tailer, der Beobachtungen SCHREIBT,
+    lebt in `transcript_chat.py`).
+  - **Discovery blockiert nie den Request-Pfad:** ein Cache-Miss liefert sofort den
+    statischen Fallback zurück; die eigentliche Wegwerf-Fenster-Discovery läuft nur
+    einmal pro `(harness, cli_version)` (Redis-`SET NX EX`-Lock verhindert parallele
+    Discovery-Fenster bei gleichzeitigen Cache-Misses).
+  - **Effort-Stufen bleiben ABSICHTLICH die feste, verifizierte Liste — kein
+    Auto-Reprobe.** Ein CLI-Versionswechsel wird erkannt (`cli_version` gegen die zuletzt
+    verifizierte Version geprüft) und einmal pro Version geloggt (Redis-Dedup), löst aber
+    NIE eine automatische Neuermittlung aus: `/effort <stufe>` schreibt persistent in
+    `settings.json` (siehe Konsequenz oben), ein unbeaufsichtigter Reprobe würde also den
+    Standard eines echten Agenten stumm verändern. Eine Drift-Warnung ist ein Signal für
+    eine manuelle Phase-0-Nachverifikation, kein Auto-Fix.
 - **v1-Scope-Lücke bewusst in Kauf genommen:** Hermes/Jarvis/Sparky haben (noch) keinen
   Adapter — ehrlicher „kein Transkript verfügbar"-Zustand statt eines vorgetäuschten
   Chats. Sparky (openclaude-Dialekt) ist der nächstliegende v2-Kandidat, weil

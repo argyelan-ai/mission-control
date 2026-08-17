@@ -733,11 +733,19 @@ async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeyp
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def test_effort_capabilities_docker_agent_gets_full_level_list():
+async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch):
     from app.services import agent_chat_input
 
+    # Docker agent -> triggers the version-drift check -> resolve_cli_version
+    # -> a real docker-exec subprocess call unless mocked (same real-host
+    # concern as elsewhere in this file/round).
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
-    caps = agent_chat_input.effort_capabilities(agent)
+    caps = await agent_chat_input.effort_capabilities(agent)
 
     assert caps == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
@@ -751,7 +759,7 @@ async def test_effort_capabilities_boss_cannot_switch():
     from app.services import agent_chat_input
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
-    caps = agent_chat_input.effort_capabilities(agent)
+    caps = await agent_chat_input.effort_capabilities(agent)
 
     assert caps == {"effortLevels": [], "canSwitchEffort": False}
 
@@ -760,9 +768,105 @@ async def test_effort_capabilities_other_host_agent_cannot_switch():
     from app.services import agent_chat_input
 
     agent = _StubAgent(slug="hermes", agent_runtime="host")
-    caps = agent_chat_input.effort_capabilities(agent)
+    caps = await agent_chat_input.effort_capabilities(agent)
 
     assert caps == {"effortLevels": [], "canSwitchEffort": False}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# services/agent_chat_input.py — effort-levels version-drift check
+#
+# ALLOWED_EFFORT_LEVELS is NEVER auto-reprobed on a version mismatch
+# (/effort persists to settings.json — an unattended reprobe would silently
+# change a real agent's default) — this only logs, once per cli_version
+# fleet-wide via a Redis SET NX EX dedup.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+async def test_effort_capabilities_matching_version_does_not_log(monkeypatch, fake_redis, caplog):
+    import app.redis_client as redis_client_mod
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(redis_client_mod, "_redis", fake_redis)
+
+    async def _matching_version(agent):
+        return agent_chat_input._EFFORT_LEVELS_VERIFIED_CLI_VERSION
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _matching_version)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with caplog.at_level("WARNING", logger="mc.agent_chat_input"):
+        await agent_chat_input.effort_capabilities(agent)
+
+    assert "verified against" not in caplog.text
+
+
+async def test_effort_capabilities_version_drift_logs_once_per_version(monkeypatch, fake_redis, caplog):
+    import app.redis_client as redis_client_mod
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(redis_client_mod, "_redis", fake_redis)
+
+    async def _newer_version(agent):
+        return "2.9.999"
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _newer_version)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with caplog.at_level("WARNING", logger="mc.agent_chat_input"):
+        await agent_chat_input.effort_capabilities(agent)
+        first_count = caplog.text.count("verified against")
+        caplog.clear()
+        await agent_chat_input.effort_capabilities(agent)  # same version again
+        second_count = caplog.text.count("verified against")
+
+    assert first_count == 1
+    assert second_count == 0  # deduped via the Redis SET NX
+
+
+async def test_effort_capabilities_no_version_does_not_log(monkeypatch, fake_redis, caplog):
+    """resolve_cli_version returning None (container gone, check failed) is
+    a normal "can't tell" outcome, not evidence of drift — must not log."""
+    import app.redis_client as redis_client_mod
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(redis_client_mod, "_redis", fake_redis)
+
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with caplog.at_level("WARNING", logger="mc.agent_chat_input"):
+        caps = await agent_chat_input.effort_capabilities(agent)
+
+    assert "verified against" not in caplog.text
+    # Still returns the normal capability payload — the drift check is
+    # purely observability, never affects the response.
+    assert caps["canSwitchEffort"] is True
+
+
+async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatch, fake_redis):
+    """The whole point: a version mismatch changes nothing about what's
+    served — same static, verified level list either way."""
+    import app.redis_client as redis_client_mod
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(redis_client_mod, "_redis", fake_redis)
+
+    async def _newer_version(agent):
+        return "2.9.999"
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _newer_version)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.effort_capabilities(agent)
+
+    assert caps == {
+        "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+        "canSwitchEffort": True,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -774,10 +878,31 @@ async def test_effort_capabilities_other_host_agent_cannot_switch():
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def test_model_options_capabilities_present_with_windows():
+async def _patch_model_options_deps(monkeypatch, agent_chat_input, *, catalog, observed):
+    monkeypatch.setattr(
+        agent_chat_input, "discover_model_catalog", _async_return(catalog)
+    )
+    monkeypatch.setattr(
+        agent_chat_input, "get_observed_model_windows", _async_return(observed)
+    )
+
+
+def _async_return(value):
+    async def _fn(*args, **kwargs):
+        return value
+    return _fn
+
+
+async def test_model_options_capabilities_falls_back_to_static_aliases_when_catalog_empty(monkeypatch):
+    """Empty catalog (cold cache / no harness for this runtime / discovery
+    failed) -> settings.model_aliases is the fallback, exactly like before
+    harness-catalog discovery existed."""
     from app.services import agent_chat_input
 
-    caps = agent_chat_input.model_options_capabilities()
+    await _patch_model_options_deps(monkeypatch, agent_chat_input, catalog=[], observed={})
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.model_options_capabilities(agent)
 
     options = {o["command"]: o for o in caps["modelOptions"]}
     assert set(options) == {"default", "opus", "sonnet", "haiku"}
@@ -802,14 +927,62 @@ async def test_model_options_capabilities_unknown_model_id_yields_null_window(mo
     monkeypatch.setattr(
         settings, "model_aliases", {"mystery": "some-future-model-nobody-configured"}
     )
+    await _patch_model_options_deps(monkeypatch, agent_chat_input, catalog=[], observed={})
 
-    caps = agent_chat_input.model_options_capabilities()
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.model_options_capabilities(agent)
 
     assert caps == {
         "modelOptions": [
             {"command": "mystery", "label": "Mystery", "contextWindow": None},
         ]
     }
+
+
+async def test_model_options_capabilities_prefers_discovered_catalog_over_static_aliases(monkeypatch):
+    """A non-empty catalog (the agent's OWN /model picker rows) wins over
+    settings.model_aliases entirely — including surfacing a LOCAL model row
+    the static alias map has no entry for at all."""
+    from app.services import agent_chat_input
+
+    catalog = [
+        {"command": "default", "label": "Default"},
+        {"command": "opus", "label": "Opus"},
+        {"command": "Qwen/Qwen3.6-35B-A3B-FP8", "label": "Qwen/Qwen3.6-35B-A3B-FP8"},
+    ]
+    await _patch_model_options_deps(monkeypatch, agent_chat_input, catalog=catalog, observed={})
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+
+    commands = [o["command"] for o in caps["modelOptions"]]
+    assert commands == ["default", "opus", "Qwen/Qwen3.6-35B-A3B-FP8"]
+    # Known aliases in the catalog still resolve a window via model_aliases.
+    options = {o["command"]: o for o in caps["modelOptions"]}
+    assert options["opus"]["contextWindow"] == 1_000_000
+    # The local model isn't in model_aliases at all — no window guess exists
+    # for it yet (would come from the observed map once a real turn runs on
+    # it), so null rather than a fabricated number.
+    assert options["Qwen/Qwen3.6-35B-A3B-FP8"]["contextWindow"] is None
+
+
+async def test_model_options_capabilities_observed_map_overrides_config_seed(monkeypatch):
+    """The observed-window tier (real statusline reads from the fleet)
+    outranks the static settings.context_windows seed — same precedence
+    resolve_context_window itself documents."""
+    from app.services import agent_chat_input
+
+    await _patch_model_options_deps(
+        monkeypatch, agent_chat_input,
+        catalog=[],
+        observed={"claude-haiku-4-5": 999_999},  # config seed says 200_000
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+
+    options = {o["command"]: o for o in caps["modelOptions"]}
+    assert options["haiku"]["contextWindow"] == 999_999
 
 
 # ══════════════════════════════════════════════════════════════════════════

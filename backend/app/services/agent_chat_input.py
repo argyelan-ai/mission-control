@@ -108,6 +108,12 @@ from pathlib import Path
 import websockets as ws_client
 
 from app.config import settings
+from app.redis_client import RedisKeys, get_redis
+from app.services.harness_catalog import (
+    discover_model_catalog,
+    get_observed_model_windows,
+    resolve_cli_version,
+)
 from app.services.pane_state import capture_pane, parse_pane_state
 from app.services.plugin_manager import list_skills_in_dir
 from app.services.token_harvester import _host_home
@@ -477,26 +483,73 @@ async def _verify_effort_applied(agent, level: str) -> bool:
     return False
 
 
-def effort_capabilities(agent) -> dict[str, object]:
+# ALLOWED_EFFORT_LEVELS was empirically verified (Phase-0 discovery +
+# fix-round live reproduction attempts on Davinci) against this exact CLI
+# build. Deliberately NOT auto-re-probed on a version mismatch: /effort
+# argument commands persist to the agent's settings.json (see the module
+# docstring), so an unattended reprobe on every new CLI version would
+# silently change a real agent's default effort level — far worse than a
+# possibly-stale level list. A drift just gets logged, once per cli_version
+# fleet-wide (Redis SET NX EX dedup, same TTL as the model catalog), as a
+# signal that a manual Phase-0 re-verification pass is due.
+_EFFORT_LEVELS_VERIFIED_CLI_VERSION = "2.1.234"
+_EFFORT_DRIFT_LOG_DEDUP_TTL_SECONDS = 24 * 3600  # matches the model catalog's own TTL
+
+
+async def _check_effort_levels_version_drift(agent) -> None:
+    """Fire-and-forget observability check — see
+    ``_EFFORT_LEVELS_VERIFIED_CLI_VERSION`` above for why this only logs,
+    never reprobes. Never raises; a Redis hiccup logs anyway (better a
+    possible duplicate log line than a check that silently does nothing)."""
+    try:
+        cli_version = await resolve_cli_version(agent)
+    except Exception:
+        return
+    if not cli_version or cli_version == _EFFORT_LEVELS_VERIFIED_CLI_VERSION:
+        return
+
+    try:
+        redis = await get_redis()
+        claimed = await redis.set(
+            RedisKeys.effort_levels_drift_logged(cli_version),
+            "1", nx=True, ex=_EFFORT_DRIFT_LOG_DEDUP_TTL_SECONDS,
+        )
+    except Exception:
+        claimed = True
+
+    if not claimed:
+        return
+    logger.warning(
+        "agent_chat_input: ALLOWED_EFFORT_LEVELS was verified against Claude "
+        "Code %s but slug=%s runs %s — the level list/verification wording "
+        "may be stale and needs a manual Phase-0 re-verification pass "
+        "(never auto-probed: /effort persists to settings.json).",
+        _EFFORT_LEVELS_VERIFIED_CLI_VERSION, getattr(agent, "slug", None), cli_version,
+    )
+
+
+async def effort_capabilities(agent) -> dict[str, object]:
     """Effort-switching capability for the composer chip:
     ``{"effortLevels": [...], "canSwitchEffort": bool}`` — consumed by
     ``routers/agent_chat.get_chat_history`` to let the frontend build the
     chip dynamically from what the agent's actual harness supports, instead
     of hardcoding a level list. Docker/cli-bridge agents get
     ``ALLOWED_EFFORT_LEVELS`` verbatim (the single source of truth ``
-    set_effort`` validates against too); every other runtime (Boss, any
-    other host agent) gets an empty list and ``canSwitchEffort=False`` — no
-    pane probe exists for them, the same v1 boundary ``set_effort`` itself
-    enforces via ``InputNotSupportedError``. Never raises: an unsupported
-    runtime is a normal, expected answer here (unlike ``set_effort``, where
-    it's a request the caller made in error), so it's handled as data, not
-    an exception."""
+    set_effort`` validates against too) — and trigger the version-drift
+    check above; every other runtime (Boss, any other host agent) gets an
+    empty list and ``canSwitchEffort=False`` — no pane probe exists for
+    them, the same v1 boundary ``set_effort`` itself enforces via
+    ``InputNotSupportedError``. Never raises: an unsupported runtime is a
+    normal, expected answer here (unlike ``set_effort``, where it's a
+    request the caller made in error), so it's handled as data, not an
+    exception."""
     try:
         kind = _target_kind(agent)
     except InputNotSupportedError:
         kind = None
 
     if kind == "docker":
+        await _check_effort_levels_version_drift(agent)
         return {"effortLevels": list(ALLOWED_EFFORT_LEVELS), "canSwitchEffort": True}
     return {"effortLevels": [], "canSwitchEffort": False}
 
@@ -567,29 +620,49 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     return {"slashCommands": commands}
 
 
-def model_options_capabilities() -> dict[str, object]:
+async def model_options_capabilities(agent) -> dict[str, object]:
     """``{"modelOptions": [{"command": str, "label": str,
     "contextWindow": int|None}, ...]}`` — the composer's model-switcher
-    dropdown, built from ``settings.model_aliases`` (config-driven, single
-    source — "default" is just another alias there, not special-cased) and
-    ``transcript_chat.resolve_context_window`` (the SAME model->window
-    resolution usage events already use, via ``settings.context_windows``)
-    so the frontend never needs its own hardcoded model/window map. Not
-    gated by agent runtime or cached — this is a static informational list
-    (which models exist and their context windows), not a per-agent live
-    capability check.
+    dropdown.
 
-    NOTE (harness-catalog follow-up round): ``model_aliases`` is a fallback
-    seed, not the long-term source of truth — a future per-agent CLI
-    discovery (the actual ``/model`` picker rows, cached per
-    ``cli_version``) is meant to take over as the primary source, with this
-    static map demoted to "what to show when the catalog is empty"."""
-    options = [
-        {
+    PRIMARY source (harness-catalog round): ``harness_catalog
+    .discover_model_catalog(agent)`` — the agent's OWN ``/model`` picker
+    rows, discovered live from a throwaway session and Redis-cached by
+    ``(harness, cli_version)``. FALLBACK, used only when that catalog is
+    empty (cold cache, discovery not finished yet, or genuinely no harness
+    for this runtime): ``settings.model_aliases`` (config-driven —
+    ``"default"`` is just another alias there, not special-cased). Either
+    way, ``contextWindow`` comes from ``transcript_chat
+    .resolve_context_window`` using the observed-map + config-seed tiers
+    (no current-session statusline tier here — this isn't a specific
+    session's usage event) — same resolution chain usage events use, so the
+    frontend never needs its own hardcoded model/window map.
+
+    Not gated by agent runtime in the sense of returning nothing for a host
+    agent — ``discover_model_catalog`` already returns ``[]`` for those (no
+    harness), which falls straight through to the SAME static
+    ``model_aliases`` fallback every agent gets when its catalog is
+    unavailable. Never raises — catalog discovery is fully fail-silent on
+    its own (see ``harness_catalog``)."""
+    catalog = await discover_model_catalog(agent)
+    observed = await get_observed_model_windows()
+
+    if catalog:
+        rows = catalog
+    else:
+        rows = [
+            {"command": command, "label": command.capitalize()}
+            for command in settings.model_aliases
+        ]
+
+    alias_to_model_id = settings.model_aliases
+    options = []
+    for row in rows:
+        command = row["command"]
+        model_id = alias_to_model_id.get(command, command)
+        options.append({
             "command": command,
-            "label": command.capitalize(),
-            "contextWindow": resolve_context_window(model_id),
-        }
-        for command, model_id in settings.model_aliases.items()
-    ]
+            "label": row["label"],
+            "contextWindow": resolve_context_window(model_id, observed),
+        })
     return {"modelOptions": options}

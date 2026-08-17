@@ -69,6 +69,24 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
         agent_chat_input_mod, "_agent_skills_dir", lambda slug: tmp_path / "no-skills-dir"
     )
     monkeypatch.setattr(agent_chat_input_mod, "_slash_commands_cache", {})
+    # Same real-host-leak concern as the skills dir above, but for the model
+    # catalog: a cli-bridge agent triggers harness_catalog.discover_model_catalog
+    # -> resolve_cli_version -> a REAL `docker exec ... claude --version`
+    # subprocess call unless mocked — "rex" being a real fleet agent slug
+    # means this would hit an actual container on the host running the
+    # suite. Force the empty-catalog (static-alias-fallback) path instead;
+    # the catalog's own behavior is covered by test_harness_catalog.py.
+    async def _empty_catalog(agent):
+        return []
+
+    monkeypatch.setattr(agent_chat_input_mod, "discover_model_catalog", _empty_catalog)
+    # effort_capabilities' version-drift check ALSO calls resolve_cli_version
+    # independently (not through discover_model_catalog) — same real-docker-
+    # exec risk, mocked out the same way.
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input_mod, "resolve_cli_version", _no_version)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
@@ -84,14 +102,15 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     assert body["session"]["aliveness"] == "active"
     # Dynamic effort-level capabilities (docker/cli-bridge agent): the
     # discovered 6-level list, switching allowed. slashCommands: builtins
-    # only (skills dir monkeypatched to not exist, see above).
+    # only (skills dir monkeypatched to not exist, see above). modelOptions:
+    # static-alias fallback (catalog forced empty, see above).
     assert body["capabilities"] == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
-        # modelOptions isn't agent/runtime-specific (config-driven, see its
-        # own dedicated unit tests) — just confirm it's merged in.
-        "modelOptions": agent_chat_input_mod.model_options_capabilities()["modelOptions"],
+        "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
+            "modelOptions"
+        ],
     }
 
 
@@ -122,9 +141,12 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
         "effortLevels": [],
         "canSwitchEffort": False,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
-        # modelOptions is agent-independent (config-driven) — Boss gets the
-        # same list as a docker agent.
-        "modelOptions": agent_chat_input_mod.model_options_capabilities()["modelOptions"],
+        # modelOptions: Boss has no harness (host runtime) -> catalog is
+        # empty, no subprocess attempted at all -> static-alias fallback,
+        # same list a docker agent gets on a cold cache.
+        "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
+            "modelOptions"
+        ],
     }
 
 

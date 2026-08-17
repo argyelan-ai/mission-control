@@ -32,6 +32,7 @@ from app.services.agent_chat_input import (
     set_effort,
     slash_command_capabilities,
 )
+from app.services.harness_catalog import get_observed_model_windows
 from app.services.sse import _sse_generator
 from app.services.transcript_chat import (
     find_active_session,
@@ -113,10 +114,13 @@ async def get_chat_history(
     (``{"effortLevels": [...], "canSwitchEffort": bool, "slashCommands":
     [...], "modelOptions": [...]}``) so the composer can build its effort
     chip, command palette, and model dropdown from what this agent's
-    harness actually supports (or, for ``modelOptions``, from the
-    config-driven alias map — see ``agent_chat_input.effort_capabilities`` /
-    ``slash_command_capabilities`` / ``model_options_capabilities`` for each
-    derivation), instead of a hardcoded frontend list. Also stamps
+    harness actually supports, instead of a hardcoded frontend list — see
+    ``agent_chat_input.effort_capabilities`` / ``slash_command_capabilities``
+    / ``model_options_capabilities`` for each derivation (the latter two,
+    and each ``usage`` event's ``contextWindow`` estimate, use the
+    harness-catalog Redis-backed discovery + observed-window map, fetched
+    once here and threaded into ``read_history`` — see
+    ``harness_catalog``'s module docstring). Also stamps
     ``session.aliveness`` (``"active" | "idle" | "ended"`` —
     ``transcript_chat.resolve_aliveness``): the old ``session.live`` alone
     (mtime<60s) read an idle-but-still-running CLI as "ended" everywhere,
@@ -127,12 +131,15 @@ async def get_chat_history(
         return resolved
 
     agent, path = resolved
-    history = read_history(path, limit=limit, before_uuid=before_uuid)
+    observed_windows = await get_observed_model_windows()
+    history = read_history(
+        path, limit=limit, before_uuid=before_uuid, observed_windows=observed_windows
+    )
     history["session"]["aliveness"] = await resolve_aliveness(agent, path)
     history["capabilities"] = {
-        **effort_capabilities(agent),
+        **await effort_capabilities(agent),
         **await slash_command_capabilities(agent),
-        **model_options_capabilities(),
+        **await model_options_capabilities(agent),
     }
     return history
 
