@@ -69,6 +69,12 @@ export interface UsageEvent {
    *  figure. `"estimate"` = the backend computed it itself (no ground truth
    *  available). Only meaningful together with `usedPct`. */
   source?: "cli" | "estimate";
+  /** The effort levels this agent's harness actually accepts, in the order it
+   *  offers them. Absent means the backend hasn't told us — consumers fall back
+   *  to the three levels every Claude Code build has had rather than showing an
+   *  empty picker. Never hardcode the list against this field: a harness with
+   *  more (or differently named) levels is exactly why it exists. */
+  effortLevels?: string[] | null;
   /** The four token buckets kept apart, for the context breakdown view.
    *  `inputTokens` above stays their input-side SUM — every existing consumer
    *  relies on that. When fresh CLI statusline state exists these describe the

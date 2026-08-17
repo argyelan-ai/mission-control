@@ -16,6 +16,8 @@ import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claude
 import { ContextPanel } from "./ContextPanel";
 
 const MAX_ROWS = 8;
+/** Rows of room the input holds at rest, before anything is typed. */
+const MIN_ROWS = 2;
 // Matches the textarea's own line-height (14px body × 1.5, rounded) so the
 // auto-grow ceiling lands on a whole row instead of clipping one mid-glyph.
 const LINE_HEIGHT_PX = 22;
@@ -27,11 +29,21 @@ const RING_STROKE = 2;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-/** The only levels the backend allowlists (`ChatEffortBody`). Whatever else a
- *  transcript may report, these are the three the operator can switch to. */
-export type EffortLevel = "low" | "medium" | "high";
+/** Fallback list for as long as the backend doesn't ship `usage.effortLevels`:
+ *  the three levels every Claude Code build has had. The dropdown renders
+ *  whatever it is given, so a harness with four levels — or different names —
+ *  needs no frontend change. The backend stays the allowlist either way (422 on
+ *  a level it doesn't accept). */
+export const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high"] as const;
 
-export const EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high"];
+/** Only strings survive: a malformed `effortLevels` (nulls, numbers, an empty
+ *  array) must not turn the picker into a list of blanks — it falls back. */
+export function resolveEffortLevels(levels: string[] | null | undefined): string[] {
+  const clean = (levels ?? []).filter(
+    (level): level is string => typeof level === "string" && level.trim().length > 0,
+  );
+  return clean.length > 0 ? clean : [...DEFAULT_EFFORT_LEVELS];
+}
 
 type RingThreshold = "normal" | "warning" | "error";
 
@@ -92,7 +104,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [effortOpen, setEffortOpen] = useState(false);
   /** The level asked for, while the request is in flight. Never used as the
    *  chip's label — the label stays transcript truth. */
-  const [pendingEffort, setPendingEffort] = useState<EffortLevel | null>(null);
+  const [pendingEffort, setPendingEffort] = useState<string | null>(null);
   /** Flips to false the first time the backend answers `input_not_supported`
    *  (host agents have no pane to drive). Only the backend knows, so the chip
    *  starts interactive and demotes itself to a labelled read-only value —
@@ -103,6 +115,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isWorking = state?.status === "working";
+  const effortLevels = resolveEffortLevels(usage?.effortLevels);
 
   // Palette is only ever "/<query>" with no space yet — once a space lands,
   // the user has moved on to arguments and the palette has no business
@@ -192,7 +205,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     setModelOpen(false);
   }
 
-  async function selectEffort(level: EffortLevel) {
+  async function selectEffort(level: string) {
     setEffortOpen(false);
     if (level === usage?.effort) return;
     setPendingEffort(level);
@@ -324,18 +337,24 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       {/* The pill: one container holding the input and its controls, so the
           whole thing reads as a single field instead of a toolbar sitting
           under a textarea. Radius is the system cap (10px, --radius-xl).
-          Focus is drawn on the pill, not the textarea — the border plus the
-          soft accent-alpha ring from DESIGN.md's input spec, never a glow. */}
+          The white frame the operator saw was NOT this component's own ring —
+          measured live: globals.css draws `outline: 2px solid #EBEBDE` with a
+          2px offset on every `:focus-visible` element, and a textarea matches
+          that pseudo-class even on a plain mouse click. So a near-white,
+          offset, 2px halo appeared just inside the pill on every keystroke
+          session. Removing only the local accent border would have left it.
+          Now: that outline is suppressed here, and focus is carried by the
+          pill's own frame stepping to a neutral grey (text-muted, 4.6:1
+          against the pill — perceivable per WCAG 2.4.11 without being a halo,
+          and unmistakably grey rather than white). */}
       <div
         className="flex flex-col transition-colors"
-        // One step above the ground, not below it: page and islands now share
-        // bg-deep, so the old sunken-input look would have made the pill vanish
-        // into the surface it sits on. A control lifts.
+        // One step above the island tone: the panel is bg-surface, so the
+        // control lifts to bg-elevated rather than sinking into it.
         style={{
-          backgroundColor: C.bgSurface,
+          backgroundColor: C.bgElevated,
           borderRadius: "var(--radius-xl)",
-          border: `1px solid ${focused ? `${C.accent}66` : C.borderActive}`,
-          boxShadow: focused ? "0 0 0 3px rgba(235,232,222,0.10)" : undefined,
+          border: `1px solid ${focused ? C.textMuted : C.border}`,
         }}
       >
         <textarea
@@ -351,11 +370,22 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           // Safari zoom the viewport on focus. The placeholder and caret are
           // themed explicitly — the browser's own placeholder (50% alpha of
           // the text colour) lands under 4.5:1 on this background.
-          className="w-full resize-none bg-transparent outline-none px-3.5 pt-3 text-[16px] md:text-[14px] leading-[1.5] placeholder:text-[var(--color-text-muted)]"
+          className="w-full resize-none bg-transparent outline-none focus-visible:outline-none px-3.5 pt-3.5 text-[16px] md:text-[14px] leading-[1.5] placeholder:text-[var(--color-text-muted)]"
           style={{
             color: C.textPrimary,
             caretColor: C.accent,
-            minHeight: LINE_HEIGHT_PX,
+            // INLINE, not a utility class: globals.css's `:where(…):focus-visible`
+            // rule is unlayered plain CSS, and unlayered CSS beats Tailwind's
+            // `@layer utilities` no matter the specificity — the same cascade-
+            // layer trap the slash palette hit with `position: absolute` (see
+            // its comment above). `focus-visible:outline-none` was silently
+            // ignored; only an inline value wins. Measured, not assumed.
+            outline: "none",
+            // Two lines of room at rest, not one: a one-line slot made a
+            // multi-sentence instruction feel like the wrong place to write it.
+            // Auto-grow is unaffected — it only ever sets a height ABOVE this
+            // floor, and `min-height` wins whenever the content is shorter.
+            minHeight: MIN_ROWS * LINE_HEIGHT_PX,
             maxHeight: MAX_ROWS * LINE_HEIGHT_PX,
           }}
         />
@@ -453,7 +483,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       boxShadow: "var(--shadow-elevated)",
                     }}
                   >
-                    {EFFORT_LEVELS.map((level) => {
+                    {effortLevels.map((level) => {
                       const isCurrent = usage.effort === level;
                       const isPending = pendingEffort === level;
                       return (

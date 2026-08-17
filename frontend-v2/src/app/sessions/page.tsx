@@ -323,15 +323,16 @@ function SessionsPageContent() {
               background override here: SessionSidebar's rail variant already
               paints its own `bg-surface` — its self-drawn `border-right` was
               dropped instead (this wrapper's border now owns that edge). */}
-          {/* ONE ground for the page and all three islands (bg-deep). The
-              islands used to sit a tonal step above the page, which read as
-              three panels floating on a darker backdrop — the operator saw the
-              seam around the chat and asked for it gone. Separation now comes
-              from the 1px border and the 8px gap alone, Codex-style, so the
-              whole surface reads as one instrument. Borders are the stronger
-              neutral step (0.16) because they are now the only separator. */}
+          {/* Islands sit a tonal step ABOVE the page ground: page stays bg-deep,
+              every island is bg-surface, raised controls inside them (composer
+              pill, user bubbles, group cards) go to bg-elevated. This reverses
+              the earlier one-surface pass — operator-directed: reading a long
+              transcript on near-black was tiring, and the lighter panel is what
+              gives the eye somewhere to rest. Border + gap stay, but the border
+              returns to the spec step (0.10): with a visible tonal difference
+              doing the separating, 0.16 was louder than it needed to be. */}
           <div
-            className="hidden md:flex shrink-0 md:rounded-xl md:overflow-hidden md:border md:border-[var(--color-border-strong)]"
+            className="hidden md:flex shrink-0 md:rounded-xl md:overflow-hidden md:border md:border-[var(--color-border)]"
             data-testid="sidebar-desktop"
           >
             <SessionSidebar
@@ -348,11 +349,13 @@ function SessionsPageContent() {
           </div>
 
           {/* Mobile stack, screen 2 (and the desktop island): the chat itself.
-              ChatView/TerminalPanel paint no background of their own, so this
-              wrapper supplies bg-base — and on mobile it is the whole screen,
-              edge to edge, no island chrome. */}
+              ChatView paints no background of its own, so this wrapper supplies
+              the island tone — on mobile it IS the whole screen, edge to edge,
+              and it carries the same tone as the list screen so switching
+              between them is not a colour jump. */}
           <div
-            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border-strong)]`}
+            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border)]`}
+            style={{ background: C.bgSurface }}
             data-testid="chat-column"
           >
             {isLoading && !selectedLive ? null : (
@@ -397,7 +400,7 @@ function SessionsPageContent() {
               // z-10 stacking context, so it cannot paint over that z-40
               // header; anchoring to it beats being half-hidden behind it).
               className="fixed inset-x-0 bottom-0 top-[var(--mobile-appbar-h)] z-40 flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[45%] md:max-w-[720px] md:rounded-xl md:border"
-              style={{ background: C.bgDeep, borderColor: C.borderActive }}
+              style={{ background: C.bgSurface, borderColor: C.border }}
             >
               <div
                 className="flex md:hidden items-center justify-between px-4 py-3 border-b shrink-0"

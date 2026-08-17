@@ -181,7 +181,7 @@ export function ChatMessage({ ev, showModel = false }: { ev: MessageEvent; showM
         <div
           className="max-w-[85%] min-w-0 px-3.5 py-2.5 text-[14px] leading-[1.6]"
           style={{
-            background: C.bgSurface,
+            background: C.bgElevated,
             border: `1px solid ${C.border}`,
             borderRadius: "var(--radius-xl)",
           }}

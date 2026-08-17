@@ -203,7 +203,7 @@ export function SessionSidebar({
   // Mobile stack screen 1 — owns the full remaining height and scrolls.
   if (variant === "list") {
     return (
-      <div className="flex flex-col w-full h-full min-h-0 overflow-y-auto py-2" style={{ background: C.bgDeep }}>
+      <div className="flex flex-col w-full h-full min-h-0 overflow-y-auto py-2" style={{ background: C.bgSurface }}>
         {list}
       </div>
     );
@@ -255,7 +255,7 @@ export function SessionSidebar({
     return (
       <div
         className="w-14 shrink-0 h-full flex flex-col items-center py-3 gap-1 overflow-y-auto"
-        style={{ background: C.bgDeep }}
+        style={{ background: C.bgSurface }}
       >
         {onToggleCollapse && (
           <button
@@ -310,7 +310,7 @@ export function SessionSidebar({
   return (
     <div
       className="w-64 shrink-0 h-full flex flex-col"
-      style={{ background: C.bgDeep }}
+      style={{ background: C.bgSurface }}
     >
       {onToggleCollapse && (
         // The bar used to hold nothing but the chevron, which read as an

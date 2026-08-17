@@ -113,7 +113,7 @@ export function ToolGroup({
         aria-expanded={expanded}
         className="group flex w-full items-center gap-2 rounded-lg px-2.5 text-left min-h-[44px] md:min-h-[34px] cursor-pointer transition-colors"
         style={{
-          background: expanded ? C.bgSurface : "transparent",
+          background: expanded ? C.bgElevated : "transparent",
           border: `1px solid ${C.border}`,
         }}
       >

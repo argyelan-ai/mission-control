@@ -231,6 +231,45 @@ describe("Composer", () => {
     expect(send.style.backgroundColor).not.toBe("transparent");
   });
 
+  // ── Focus + resting height (operator taste round 2) ───────────────────────
+
+  it("marks focus with a neutral border step, never a bright frame", async () => {
+    const user = userEvent.setup();
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const pill = textarea.parentElement as HTMLElement;
+
+    expect(pill.style.border).toContain("rgba(168, 168, 168, 0.1)");
+
+    await user.click(textarea);
+    // Neutral grey frame (text-muted, 4.6:1 against the pill) — perceivable,
+    // but not the near-white 2px offset halo the global :focus-visible rule
+    // drew before. No accent tint anywhere, and no ring at all.
+    // jsdom normalises hex to rgb(), so compare in that form — a hex literal
+    // here would make the negative assertion vacuously true.
+    expect(pill.style.border).toContain("rgb(143, 143, 143)");
+    expect(pill.style.border).not.toContain("rgb(235, 232, 222)");
+    expect(pill.style.boxShadow).toBe("");
+    // The app-wide accent outline is suppressed here on purpose: on a textarea
+    // it fires for plain mouse clicks too, which is what produced the frame.
+    expect(textarea.className).toContain("focus-visible:outline-none");
+  });
+
+  it("gives the input two lines of room at rest without breaking autogrow", () => {
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const textarea = screen.getByPlaceholderText(/Nachricht/) as HTMLTextAreaElement;
+    // 2 rows floor, 8 rows ceiling — the ceiling is what autogrow stops at.
+    expect(textarea.style.minHeight).toBe("44px");
+    expect(textarea.style.maxHeight).toBe("176px");
+  });
+
+  it("lifts the pill above the island tone instead of sinking below it", () => {
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const pill = screen.getByPlaceholderText(/Nachricht/).parentElement as HTMLElement;
+    // Panels are bg-surface now, so a bg-surface pill would disappear into them.
+    expect(pill.style.backgroundColor).toBe("rgb(34, 34, 34)");
+  });
+
   // Regression: the mobile stack keeps the off-screen pane mounted with
   // `display: none`. There the textarea measures scrollHeight 0, and writing
   // that back pinned the input to its padding height (12px) for good — the
@@ -292,17 +331,67 @@ describe("Composer", () => {
       );
     }
 
-    it("offers exactly the three switchable levels", async () => {
+    const optionLabels = () =>
+      screen.getAllByRole("option").map((o) => o.textContent?.replace("…", "").trim());
+
+    it("falls back to the known three levels while the backend sends none", async () => {
       const user = userEvent.setup();
       renderWithEffort();
       await user.click(screen.getByTestId("effort-chip"));
 
-      const options = screen.getAllByRole("option");
-      expect(options.map((o) => o.textContent?.replace("…", "").trim())).toEqual([
-        "low",
-        "medium",
-        "high",
-      ]);
+      expect(optionLabels()).toEqual(["low", "medium", "high"]);
+    });
+
+    it("renders whatever level list the backend sends, in its order", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "balanced", effortLevels: ["fast", "balanced", "thorough", "max"] })}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+
+      expect(optionLabels()).toEqual(["fast", "balanced", "thorough", "max"]);
+      expect(screen.getByRole("option", { name: /balanced/ })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("switches to a backend-supplied level the frontend has never heard of", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "fast", effortLevels: ["fast", "thorough"] })}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /thorough/ }));
+
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "thorough");
+    });
+
+    it("ignores a malformed level list rather than offering blank options", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          // Empty strings and an empty array are the two shapes that would turn
+          // the picker into a list of nothing.
+          usage={mkUsage({ effort: "medium", effortLevels: ["", "   "] })}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+
+      expect(optionLabels()).toEqual(["low", "medium", "high"]);
     });
 
     it("marks the level the transcript reports as the selected one", async () => {

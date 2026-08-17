@@ -67,7 +67,7 @@ export function SubagentGroup({ events }: { events: ChatEvent[] }) {
     <div className="w-full px-4 md:px-5 py-1.5">
       <div
         className="w-full rounded-lg overflow-hidden"
-        style={{ border: `1px solid ${C.border}`, background: C.bgSurface }}
+        style={{ border: `1px solid ${C.border}`, background: C.bgElevated }}
       >
       <button
         type="button"

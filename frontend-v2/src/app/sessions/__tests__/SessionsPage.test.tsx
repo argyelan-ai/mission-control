@@ -622,6 +622,54 @@ describe("SessionsPage — the selected agent follows the live data, not the cli
   });
 });
 
+// ── Island tones ────────────────────────────────────────────────────────────
+// Operator-directed (taste round 2, reversing the earlier one-surface pass):
+// reading a long transcript on near-black was tiring, so the page ground stays
+// dark and every island sits a tonal step above it. The mobile list and chat
+// screens must carry the SAME tone, or switching between them flashes.
+describe("SessionsPage — islands sit a step above the page ground", () => {
+  beforeEach(() => {
+    nav.searchParamsString = "";
+    installLocalStorageShim();
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const BG_DEEP = "rgb(10, 10, 10)";
+  const BG_SURFACE = "rgb(23, 23, 23)";
+
+  it("keeps the page ground dark and lifts the chat island above it", async () => {
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    const chat = screen.getByTestId("chat-column");
+    expect(chat.style.backgroundColor).toBe(BG_SURFACE);
+
+    const ground = chat.parentElement?.parentElement as HTMLElement;
+    expect(ground.style.background).toBe(BG_DEEP);
+  });
+
+  it("gives the mobile list and chat screens the same tone (no jump on switch)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    const listGround = screen.getByTestId("session-list-mobile").firstElementChild as HTMLElement;
+    expect(listGround.style.background).toBe(BG_SURFACE);
+
+    await user.click(
+      within(screen.getByTestId("session-list-mobile")).getByRole("option", { name: /Agent One/ })
+    );
+    expect(screen.getByTestId("chat-column").style.backgroundColor).toBe(BG_SURFACE);
+  });
+});
+
 // ── Mobile stack visibility ─────────────────────────────────────────────────
 // Both stack screens stay MOUNTED (the chat must keep its SSE subscription and
 // scroll position while the list is up), so the inactive one has to be
