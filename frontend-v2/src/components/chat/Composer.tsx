@@ -132,16 +132,12 @@ interface ComposerProps {
   state: StateEvent | null;
   onSend: (text: string) => void;
   onStop: () => void;
-  /** Whether the underlying CLI session is currently live (from
-   *  `session.live`) — distinct from `state.status`. Boss has no pane probe
-   *  in v1 (mtime heuristic only), so `state.status === "working"` is often
-   *  missed while he's actually busy; gating Stop on that alone hides the
-   *  one control that would actually help. Whenever the session is live the
-   *  Stop button stays reachable — prominent while `state.status ===
-   *  "working"`, a quiet secondary icon otherwise. Never rendered when the
-   *  session isn't live. Defaults to `true` so callers that haven't wired up
-   *  the real `session.live` value yet keep the previous working-only
-   *  behavior instead of silently losing the button. */
+  /** Whether the underlying CLI session is currently live (derived from
+   *  `session.aliveness`) — distinct from `state.status`. Gates the primary
+   *  button entirely: an ended session can neither be sent to nor interrupted,
+   *  so it gets no button at all rather than one that fails. Defaults to
+   *  `true` so a caller that hasn't wired the real value yet keeps a usable
+   *  composer instead of silently losing its only control. */
   sessionLive?: boolean;
   /** Server-derived harness capabilities. Drives the effort chip: no
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
@@ -186,6 +182,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
 
   const isWorking = state?.status === "working";
   const hasText = text.trim().length > 0;
+  /** The probe ran and could not classify the pane at all (`parse_pane_state`
+   *  rule 4). "Working" is not disprovable there, so an interrupt is the
+   *  truthful primary action rather than a Send that claims we know better.
+   *  Deliberately NOT `!state`: a missing state event means the first probe
+   *  tick hasn't landed yet, which is a loading moment, not an unreadable
+   *  pane — treating it as unknown would flash a Stop on every mount. */
+  const statusUnknown = state?.status === "unknown";
+  /** Empty input leaves nothing to send, so the button carries the interrupt. */
+  const showStop = !hasText && (isWorking || statusUnknown);
   const effortLevels = resolveEffortLevels(capabilities);
   const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
   const modelOptions = resolveModelOptions(capabilities?.modelOptions);
@@ -719,17 +724,27 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               "the thing to do next".
 
               Empty input while the agent works => Stop, because there is
-              nothing to send and interrupting is the only useful action.
+              nothing to send and interrupting is the only useful action. Same
+              for an UNCLASSIFIABLE pane (`status: "unknown"`): working can't be
+              disproved there, and a disabled Send would assert idleness we
+              haven't established.
               The moment there IS text, it becomes Send even mid-turn: steering
               a working agent with a normal message is legitimate and is exactly
               what the terminal allows. Idle with empty input => a ghost Send,
               since the accent means "this is the action" and there is none yet.
 
               Nothing at all once the session has ended — neither sending nor
-              interrupting can reach a session that is over. */}
+              interrupting can reach a session that is over.
+
+              NOTE this does NOT cover Boss. For host agents `capture_pane`
+              returns None, so `_compute_pane_state` reports a confident
+              `working`/`idle` from transcript mtime alone and never `unknown`
+              (transcript_chat.py:1285-1291) — a Boss that thinks without
+              writing reads as `idle` and offers the disabled Send. Closing that
+              needs the runtime, not this flag. */}
           <div className="ml-auto flex items-center gap-1.5">
             {sessionLive && (
-              hasText || !isWorking ? (
+              !showStop ? (
                 <button
                   type="button"
                   onClick={send}
@@ -757,7 +772,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-label="Stop"
                   title="Unterbrechen (ESC)"
                   data-testid="stop-button-prominent"
-                  className="animate-pulse inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer"
+                  data-reason={isWorking ? "working" : "unknown"}
+                  /* The pulse is a claim of live activity, so it only runs when
+                     the probe actually confirmed "working". On an unreadable
+                     pane the control is offered without animating something we
+                     don't know. */
+                  className={`${isWorking ? "animate-pulse " : ""}inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer`}
                   style={{
                     backgroundColor: C.accentSubtle,
                     color: C.textPrimary,

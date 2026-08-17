@@ -97,10 +97,15 @@ describe("Composer", () => {
   // Replaces the earlier two-button layout: a single control at a fixed spot,
   // so whatever sits under the cursor is always "the thing to do next".
   //
-  // KNOWN CONSEQUENCE, deliberate: the old quiet Stop existed because Boss has
-  // no pane probe and therefore rarely reports "working" — with the morph, an
-  // idle-looking session offers a disabled Send instead of a way to interrupt.
-  // Interrupting Boss now goes through the Terminal view.
+  // Stop appears whenever working cannot be DISPROVED and there is nothing to
+  // send: confirmed "working", or a pane the probe couldn't classify at all.
+  //
+  // KNOWN GAP, deliberate: this still does not cover Boss. For host agents
+  // `capture_pane` returns None, so the backend reports a confident
+  // `working`/`idle` from transcript mtime alone and never `unknown`
+  // (transcript_chat.py:1285-1291) — a Boss thinking without writing reads as
+  // `idle` and offers the disabled Send. Interrupting him goes through the
+  // Terminal view until that is closed via the runtime, not via this flag.
 
   it("morphs to Stop while the agent works and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
@@ -125,6 +130,65 @@ describe("Composer", () => {
     expect(send).toBeDisabled();
     expect(send.style.backgroundColor).toBe("transparent");
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it("shows Stop on an unclassifiable pane, since working cannot be disproved", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("unknown")} onSend={vi.fn()} onStop={vi.fn()} />);
+    const stop = screen.getByTestId("stop-button-prominent");
+    expect(stop).toHaveAttribute("data-reason", "unknown");
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+  });
+
+  it("does not pulse the unknown-pane Stop — the pulse claims live activity", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("unknown")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("stop-button-prominent").className).not.toContain("animate-pulse");
+  });
+
+  it("pulses the Stop only when the probe confirmed working", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
+    const stop = screen.getByTestId("stop-button-prominent");
+    expect(stop.className).toContain("animate-pulse");
+    expect(stop).toHaveAttribute("data-reason", "working");
+  });
+
+  it("still yields to Send once there is text on an unknown pane", async () => {
+    const user = userEvent.setup();
+    render(<Composer agentId="a1" usage={null} state={mkState("unknown")} onSend={vi.fn()} onStop={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText(/Nachricht/), "bist du da?");
+
+    expect(screen.getByTestId("send-button")).toBeEnabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it("shows the ghost Send, not a Stop, before the first probe tick lands", () => {
+    // `state === null` is a loading moment, not an unreadable pane — treating
+    // it as unknown would flash a Stop on every mount.
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it("keeps an ended session buttonless even on an unknown pane", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={null}
+        state={mkState("unknown")}
+        sessionLive={false}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+  });
+
+  it("calls onStop from the unknown-pane Stop", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    render(<Composer agentId="a1" usage={null} state={mkState("unknown")} onSend={vi.fn()} onStop={onStop} />);
+    await user.click(screen.getByTestId("stop-button-prominent"));
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 
   it("sends while the agent works when Enter is pressed", async () => {
