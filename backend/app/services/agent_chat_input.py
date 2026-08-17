@@ -34,6 +34,25 @@ marker (``/home/agent/.claude/last-task.marker``) — the fleet's recycler
 kills idle claude sessions every ~5-8 minutes based on that file's mtime, and
 chat activity was otherwise invisible to it, killing chat conversations with
 idle agents mid-conversation (live-gate finding, fix round 3).
+
+``set_effort`` (effort-level switch, v1 docker-only) sends ``/effort
+<level>`` as a direct CLI argument rather than driving the ``/model``
+picker's Left/Right/``s`` sequence — Phase-0 discovery (empirically, on a
+throwaway tmux window, Claude Code 2.1.233) found BOTH paths persist the new
+effort level to the agent's ``settings.json`` (``effortLevel``) identically;
+the picker's "s = session only" option genuinely scopes the MODEL choice to
+the session but does NOT extend that scoping to effort, despite its own
+label. Since the picker buys no session-only guarantee it appeared to
+promise, the direct-argument form is strictly simpler and equally
+side-effecting — see the Phase-0 discovery notes in the A5 report for the
+full empirical trail (settings.json mtime/content diffs before/after each
+path). ``set_effort`` verifies the switch actually landed by polling
+``pane_state.capture_pane`` for the CLI's own status-line confirmation
+(``"<level> · /effort"``) before returning success; on a verification
+timeout it sends ``Escape`` as a safety net (in case an unexpected
+autocomplete/picker state was left open) and raises
+``EffortSwitchFailedError`` for the router to turn into 409
+``{"reason": "effort_switch_failed"}``.
 """
 from __future__ import annotations
 
@@ -42,6 +61,8 @@ import logging
 import subprocess
 
 import websockets as ws_client
+
+from app.services.pane_state import capture_pane
 
 logger = logging.getLogger("mc.agent_chat_input")
 
@@ -81,9 +102,23 @@ _RECYCLER_MARKER_PATH = "/home/agent/.claude/last-task.marker"
 # (fix round 2, reproduced live: text landed but never submitted for hours).
 _BOSS_ENTER_DELAY_SECONDS = 0.15
 
+# Effort switching (v1, docker-only). 3-level API surface — the underlying
+# CLI also has xhigh/max/ultracode, deliberately not exposed here.
+ALLOWED_EFFORT_LEVELS = ("low", "medium", "high")
+
+# Polling budget for _verify_effort_applied: a docker-exec capture-pane round
+# trip is fast (<100ms typically) but not instant, and the CLI needs a brief
+# moment to re-render its status line after processing the /effort command.
+_EFFORT_VERIFY_ATTEMPTS = 5
+_EFFORT_VERIFY_DELAY_SECONDS = 0.2
+
 
 class InputNotSupportedError(Exception):
     """Raised when the agent's runtime has no live input channel."""
+
+
+class EffortSwitchFailedError(Exception):
+    """Raised when the effort level could not be verified as applied."""
 
 
 def _docker_argv(slug: str, *tail: str) -> list[str]:
@@ -223,3 +258,53 @@ async def send_keys(agent, keys: list[str]) -> None:
 
     # kind == "boss"
     await _send_boss_bytes(*(ALLOWED_KEYS[key].encode() for key in keys))
+
+
+async def set_effort(agent, level: str) -> None:
+    """Switches a cli-bridge agent's effort level via ``/effort <level>``
+    (direct CLI argument — see module docstring for why the ``/model``
+    picker's Left/Right/``s`` sequence was NOT used despite that being
+    Phase-0's assumed path). Docker/cli-bridge only in v1: Boss and every
+    other host agent raise ``InputNotSupportedError`` (no pane probe exists
+    for them — mirrors ``pane_state.capture_pane``'s own v1 scope).
+
+    Validates ``level`` against ``ALLOWED_EFFORT_LEVELS`` before doing
+    anything (raises ``ValueError``, matching ``send_keys``'s allowlist-first
+    convention), then sends the command as one literal ``-l --`` call plus a
+    separate submitting ``Enter`` (same two-call shape as ``send_text``'s
+    single-line path). Unlike ``send_text``/``send_keys``, delivery here is
+    NOT fire-and-forget: the command is polled for its own status-line
+    confirmation before this returns success, and a verification timeout
+    sends ``Escape`` (best-effort — leaves the TUI clean rather than mid-
+    input for the next turn) before raising ``EffortSwitchFailedError``."""
+    if level not in ALLOWED_EFFORT_LEVELS:
+        raise ValueError(f"effort level not allowlisted: {level!r}")
+
+    kind = _target_kind(agent)
+    if kind != "docker":
+        raise InputNotSupportedError()
+    slug = agent.slug
+
+    await _run_docker_exec(_docker_argv(slug, "-l", "--", f"/effort {level}"))
+    await _run_docker_exec(_docker_argv(slug, "Enter"))
+
+    if not await _verify_effort_applied(agent, level):
+        await _run_docker_exec(_docker_argv(slug, "Escape"))
+        raise EffortSwitchFailedError()
+
+
+async def _verify_effort_applied(agent, level: str) -> bool:
+    """Polls the pane for the CLI's own status-line confirmation — it prints
+    ``"<level> · /effort"`` bottom-right immediately after ``/effort``
+    applies (e.g. ``"○ low · /effort"``, live-verified across low/medium/
+    high). Fire-and-forget delivery (``_run_docker_exec``) gives no
+    confirmation on its own that the command actually landed; this is the
+    one call site in the module that needs a real success/failure signal
+    instead of the usual "log a warning and move on" contract."""
+    marker = f"{level} · /effort"
+    for _ in range(_EFFORT_VERIFY_ATTEMPTS):
+        await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
+        pane = await capture_pane(agent)
+        if pane and marker in pane:
+            return True
+    return False

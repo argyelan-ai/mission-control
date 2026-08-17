@@ -388,6 +388,138 @@ async def test_send_keys_other_host_agent_raises_input_not_supported():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# services/agent_chat_input.py — effort switching (set_effort)
+#
+# Phase-0 discovery (live, throwaway tmux window on mc-agent-freecode,
+# Claude Code 2.1.233): `/effort <level>` as a direct argument switches
+# effort instantly (confirmed via the pane's own "<level> · /effort"
+# status-line indicator AND the statusline-state file's effort.level).
+# The /model picker's Left/Right/"s" (session-only) sequence was also tested
+# and rejected as the implementation path: "s" correctly scopes a MODEL
+# choice to the session (settings.json's "model" stayed unchanged) but does
+# NOT extend that scoping to effort — settings.json's "effortLevel" changed
+# identically via BOTH the direct-argument form and the picker's "s" path
+# (verified twice, cleanly isolated from the model-selection side effect the
+# first attempt accidentally introduced). Since the picker buys no
+# behavioral difference over the direct argument for effort, the simpler
+# path was implemented; ALLOWED_KEYS was NOT extended with Left/Right/s.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+async def _patch_effort_deps(monkeypatch, agent_chat_input, *, pane_text: str | None):
+    """Shared fixture wiring for set_effort tests: captures docker-exec argv
+    calls, stubs capture_pane to return a fixed pane snapshot on every poll,
+    and stubs asyncio.sleep so verification polling doesn't actually sleep."""
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        return pane_text
+
+    async def _fake_sleep(delay):
+        pass
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+    return calls
+
+
+async def test_set_effort_success_sends_command_and_verifies(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input, pane_text="stuff\n   ● high · /effort\nmore"
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "high")
+
+    assert len(calls) == 2  # /effort high (literal) + Enter — no Escape
+    first, second = calls
+    assert first[-3:] == ["-l", "--", "/effort high"]
+    assert second[-1] == "Enter"
+
+
+async def test_set_effort_rejects_non_allowlisted_level(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(ValueError):
+        await agent_chat_input.set_effort(agent, "xhigh")  # not in the 3-level v1 surface
+
+    assert calls == []  # nothing delivered — validated before any docker call
+
+
+async def test_set_effort_non_docker_agent_raises_input_not_supported(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+
+    agent = _StubAgent(slug="hermes", agent_runtime="host")
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.set_effort(agent, "high")
+
+    assert calls == []  # no docker exec attempted for an unsupported runtime
+
+
+async def test_set_effort_boss_raises_input_not_supported(monkeypatch):
+    """v1 scope: Boss has no pane probe (mirrors pane_state.capture_pane's
+    own v1 scope) — effort switching stays docker-only even though Boss has
+    an input channel for send_text/send_keys."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.set_effort(agent, "high")
+
+    assert calls == []
+
+
+async def test_set_effort_verification_timeout_sends_escape_and_raises(monkeypatch):
+    """The abort path: the pane never shows the expected confirmation (CLI
+    version drifted, an unexpected picker/autocomplete opened instead, ...).
+    Must send Escape to leave the TUI clean and raise EffortSwitchFailedError
+    (-> router 409 effort_switch_failed) rather than silently claim success."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input, pane_text="nothing matching here"
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "high")
+
+    # /effort high + Enter + Escape (cleanup) — no false-positive success.
+    assert len(calls) == 3
+    assert calls[0][-3:] == ["-l", "--", "/effort high"]
+    assert calls[1][-1] == "Enter"
+    assert calls[2][-1] == "Escape"
+
+
+async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeypatch):
+    """capture_pane returning None (container gone, tmux window missing —
+    pane_state's own documented None case) must be treated as "not verified
+    yet", not crash the polling loop."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "medium")
+
+    assert calls[-1][-1] == "Escape"
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Router: /agents/{id}/chat/input
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -582,6 +714,106 @@ async def test_post_chat_keys_requires_auth(client: AsyncClient, make_agent):
 
     resp = await client.post(
         f"/api/v1/agents/{agent.id}/chat/keys", json={"keys": ["Enter"]}
+    )
+
+    assert resp.status_code == 401
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Router: /agents/{id}/chat/effort
+# ══════════════════════════════════════════════════════════════════════════
+
+
+async def test_post_chat_effort_204_and_forwards_level(auth_client: AsyncClient, make_agent, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    calls = []
+
+    async def _fake_set_effort(a, level):
+        calls.append((a.id, level))
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    monkeypatch.setattr(agent_chat_mod, "set_effort", _fake_set_effort)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "high"}
+    )
+
+    assert resp.status_code == 204, resp.text
+    assert calls == [(agent.id, "high")]
+
+
+async def test_post_chat_effort_422_non_allowlisted_level(auth_client: AsyncClient, make_agent, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    import app.routers.agent_chat as agent_chat_mod
+    from app.services.agent_chat_input import set_effort as real_set_effort
+
+    monkeypatch.setattr(agent_chat_mod, "set_effort", real_set_effort)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "xhigh"}
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_post_chat_effort_404_unknown_agent(auth_client: AsyncClient):
+    resp = await auth_client.post(
+        f"/api/v1/agents/{uuid.uuid4()}/chat/effort", json={"level": "high"}
+    )
+    assert resp.status_code == 404
+
+
+async def test_post_chat_effort_409_unsupported_runtime(auth_client: AsyncClient, make_agent):
+    agent = await make_agent(name="Hermes", agent_runtime="host", slug="hermes")
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "high"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"reason": "input_not_supported"}
+
+
+async def test_post_chat_effort_409_boss_unsupported_no_pane_probe(auth_client: AsyncClient, make_agent):
+    """v1 scope: Boss has an input channel (send_text/send_keys) but no pane
+    probe, so effort switching stays docker-only for it too."""
+    agent = await make_agent(name="Boss", agent_runtime="host", slug="boss")
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "high"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"reason": "input_not_supported"}
+
+
+async def test_post_chat_effort_409_switch_failed(auth_client: AsyncClient, make_agent, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    import app.routers.agent_chat as agent_chat_mod
+    from app.services.agent_chat_input import EffortSwitchFailedError
+
+    async def _fake_set_effort(a, level):
+        raise EffortSwitchFailedError()
+
+    monkeypatch.setattr(agent_chat_mod, "set_effort", _fake_set_effort)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "high"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"reason": "effort_switch_failed"}
+
+
+async def test_post_chat_effort_requires_auth(client: AsyncClient, make_agent):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    resp = await client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "high"}
     )
 
     assert resp.status_code == 401

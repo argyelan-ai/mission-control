@@ -20,7 +20,13 @@ from app.auth import require_user
 from app.database import get_session
 from app.models.agent import Agent
 from app.redis_client import RedisKeys
-from app.services.agent_chat_input import InputNotSupportedError, send_keys, send_text
+from app.services.agent_chat_input import (
+    EffortSwitchFailedError,
+    InputNotSupportedError,
+    send_keys,
+    send_text,
+    set_effort,
+)
 from app.services.sse import _sse_generator
 from app.services.transcript_chat import (
     find_active_session,
@@ -36,6 +42,7 @@ router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 _NO_TRANSCRIPT = {"reason": "no_transcript"}
 _NO_WORKSPACE = {"reason": "no_workspace"}
 _INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
+_EFFORT_SWITCH_FAILED = {"reason": "effort_switch_failed"}
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
 
@@ -51,6 +58,10 @@ class ChatInputBody(BaseModel):
 
 class ChatKeysBody(BaseModel):
     keys: list[str]
+
+
+class ChatEffortBody(BaseModel):
+    level: str
 
 
 async def _resolve_transcript_path(
@@ -217,3 +228,36 @@ async def post_chat_keys(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+
+
+@router.post("/agents/{agent_id}/chat/effort", status_code=204)
+async def post_chat_effort(
+    agent_id: uuid.UUID,
+    body: ChatEffortBody,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Switches the agent's effort level via ``/effort <level>`` (v1:
+    cli-bridge/docker agents only — Boss and every other host agent get 409
+    ``{"reason":"input_not_supported"}``, no pane probe exists for them).
+    422 on a non-allowlisted level; 409
+    ``{"reason":"effort_switch_failed"}`` when the switch couldn't be
+    verified as applied (see ``agent_chat_input.set_effort``).
+
+    NOTE (Phase-0 discovery, empirically verified): this also changes the
+    agent's PERSISTED default effort level in its ``settings.json`` — Claude
+    Code 2.1.233 has no way to change effort session-only, not even via the
+    ``/model`` picker's "s" option (which does correctly scope a MODEL
+    choice to the session, just not effort). Every chat-triggered effort
+    switch is a durable change to what a fresh session for this agent starts
+    at, until switched again."""
+    agent = await _load_agent_or_404(agent_id, session)
+
+    try:
+        await set_effort(agent, body.level)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except EffortSwitchFailedError:
+        return JSONResponse(status_code=409, content=_EFFORT_SWITCH_FAILED)
