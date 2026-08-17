@@ -403,20 +403,49 @@ async def test_send_keys_other_host_agent_raises_input_not_supported():
 # first attempt accidentally introduced). Since the picker buys no
 # behavioral difference over the direct argument for effort, the simpler
 # path was implemented; ALLOWED_KEYS was NOT extended with Left/Right/s.
+#
+# Wave-review I-1 (fix round): Escape is this app's INTERRUPT key, not a
+# neutral cleanup — set_effort must never send anything into a working turn
+# or an open permission prompt, and a verify-timeout Escape cleanup must only
+# fire when a FRESH pane capture confirms the pane is no longer busy.
 # ══════════════════════════════════════════════════════════════════════════
 
+# Synthetic pane snapshots exercising the real parse_pane_state heuristics
+# (not mocked) — same fixture shapes as test_pane_state.py's own, kept local
+# here so this file's busy/idle assumptions don't silently drift with edits
+# over there.
+_WORKING_PANE = "✻ Thinking… (esc to interrupt)\n\n  Reading demo.py\n"
 
-async def _patch_effort_deps(monkeypatch, agent_chat_input, *, pane_text: str | None):
+_PERMISSION_PROMPT_PANE = (
+    "Do you want to make this edit to demo.py?\n"
+    "❯ 1. Yes\n"
+    "  2. Yes, and don't ask again this session\n"
+)
+
+_IDLE_PANE = "╭──────────╮\n│ ❯          │\n╰──────────╯\n  ? for shortcuts\n"
+
+# Doesn't match any parse_pane_state rule (no spinner, no options, no ❯/>
+# marker) -> "unknown", which is NOT a busy status. Used where the test only
+# cares that the pane is *not* busy, not that it's affirmatively idle.
+_UNMATCHED_PANE = "nothing matching here"
+
+
+async def _patch_effort_deps(monkeypatch, agent_chat_input, *, pane_sequence: list):
     """Shared fixture wiring for set_effort tests: captures docker-exec argv
-    calls, stubs capture_pane to return a fixed pane snapshot on every poll,
-    and stubs asyncio.sleep so verification polling doesn't actually sleep."""
+    calls, stubs capture_pane to walk through ``pane_sequence`` on successive
+    calls (repeating the last entry once exhausted — so a single-element
+    sequence behaves like a fixed snapshot for every poll), and stubs
+    asyncio.sleep so verification polling doesn't actually sleep."""
     calls: list[list[str]] = []
+    call_count = {"n": 0}
 
     async def _fake_run(argv):
         calls.append(argv)
 
     async def _fake_capture_pane(agent):
-        return pane_text
+        idx = min(call_count["n"], len(pane_sequence) - 1)
+        call_count["n"] += 1
+        return pane_sequence[idx]
 
     async def _fake_sleep(delay):
         pass
@@ -431,7 +460,8 @@ async def test_set_effort_success_sends_command_and_verifies(monkeypatch):
     from app.services import agent_chat_input
 
     calls = await _patch_effort_deps(
-        monkeypatch, agent_chat_input, pane_text="stuff\n   ● high · /effort\nmore"
+        monkeypatch, agent_chat_input,
+        pane_sequence=["stuff\n   ● high · /effort\nmore"],
     )
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
@@ -446,7 +476,7 @@ async def test_set_effort_success_sends_command_and_verifies(monkeypatch):
 async def test_set_effort_rejects_non_allowlisted_level(monkeypatch):
     from app.services import agent_chat_input
 
-    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_sequence=[None])
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     with pytest.raises(ValueError):
@@ -458,7 +488,7 @@ async def test_set_effort_rejects_non_allowlisted_level(monkeypatch):
 async def test_set_effort_non_docker_agent_raises_input_not_supported(monkeypatch):
     from app.services import agent_chat_input
 
-    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_sequence=[None])
 
     agent = _StubAgent(slug="hermes", agent_runtime="host")
     with pytest.raises(agent_chat_input.InputNotSupportedError):
@@ -473,7 +503,7 @@ async def test_set_effort_boss_raises_input_not_supported(monkeypatch):
     an input channel for send_text/send_keys."""
     from app.services import agent_chat_input
 
-    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_sequence=[None])
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
     with pytest.raises(agent_chat_input.InputNotSupportedError):
@@ -482,15 +512,66 @@ async def test_set_effort_boss_raises_input_not_supported(monkeypatch):
     assert calls == []
 
 
+async def test_set_effort_preflight_blocks_when_working(monkeypatch):
+    """I-1: a working pane must reject BEFORE anything is sent — not queue
+    /effort behind the running turn."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[_WORKING_PANE]
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.AgentBusyError):
+        await agent_chat_input.set_effort(agent, "high")
+
+    assert calls == []  # not even the send-keys call — TUI never touched
+
+
+async def test_set_effort_preflight_blocks_when_permission_prompt(monkeypatch):
+    """I-1: an open permission prompt must also reject before anything is
+    sent — /effort would otherwise queue behind an unrelated approval."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[_PERMISSION_PROMPT_PANE]
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.AgentBusyError):
+        await agent_chat_input.set_effort(agent, "high")
+
+    assert calls == []
+
+
+async def test_set_effort_preflight_allows_idle_pane(monkeypatch):
+    """A plain idle prompt (❯ with no spinner, no options) must NOT be
+    misclassified as busy — regression guard for the transcript_active
+    choice in _pane_is_busy (see its docstring: True would make every idle
+    pane look "working" and permanently block this endpoint)."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input,
+        pane_sequence=[_IDLE_PANE, "○ low · /effort"],
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "low")
+
+    assert len(calls) == 2  # reached send-keys + Enter — preflight passed
+
+
 async def test_set_effort_verification_timeout_sends_escape_and_raises(monkeypatch):
     """The abort path: the pane never shows the expected confirmation (CLI
-    version drifted, an unexpected picker/autocomplete opened instead, ...).
-    Must send Escape to leave the TUI clean and raise EffortSwitchFailedError
+    version drifted, an unexpected picker/autocomplete opened instead, ...),
+    and the pane is confirmed idle (not busy) on the fresh re-check — so the
+    Escape cleanup IS safe to send. Must raise EffortSwitchFailedError
     (-> router 409 effort_switch_failed) rather than silently claim success."""
     from app.services import agent_chat_input
 
     calls = await _patch_effort_deps(
-        monkeypatch, agent_chat_input, pane_text="nothing matching here"
+        monkeypatch, agent_chat_input, pane_sequence=[_UNMATCHED_PANE]
     )
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
@@ -504,13 +585,41 @@ async def test_set_effort_verification_timeout_sends_escape_and_raises(monkeypat
     assert calls[2][-1] == "Escape"
 
 
+async def test_set_effort_verification_timeout_working_pane_skips_escape(monkeypatch):
+    """I-1's core scenario: preflight passes on an idle pane, /effort is
+    sent, but by the time verification polls the pane a real turn has
+    started (e.g. a queued task, or the /effort itself got interpreted as
+    part of an in-flight prompt). The verify-timeout cleanup must NOT send
+    Escape in that case — that would abort the now-running turn instead of
+    tidying up a stray UI state."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input,
+        # index 0 (preflight): idle/unmatched -> not busy, proceeds.
+        # index 1+ (verify loop + fresh re-check): working -> never matches
+        # the effort marker AND confirms busy on the re-check.
+        pane_sequence=[_UNMATCHED_PANE, _WORKING_PANE],
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "high")
+
+    # /effort high + Enter — NO Escape, because the fresh re-check saw "working".
+    assert len(calls) == 2
+    assert calls[0][-3:] == ["-l", "--", "/effort high"]
+    assert calls[1][-1] == "Enter"
+
+
 async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeypatch):
     """capture_pane returning None (container gone, tmux window missing —
     pane_state's own documented None case) must be treated as "not verified
-    yet", not crash the polling loop."""
+    yet" AND "not busy" (nothing to protect from interrupting), not crash
+    the polling loop."""
     from app.services import agent_chat_input
 
-    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_text=None)
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_sequence=[None])
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     with pytest.raises(agent_chat_input.EffortSwitchFailedError):
@@ -807,6 +916,28 @@ async def test_post_chat_effort_409_switch_failed(auth_client: AsyncClient, make
 
     assert resp.status_code == 409
     assert resp.json() == {"reason": "effort_switch_failed"}
+
+
+async def test_post_chat_effort_409_agent_busy(auth_client: AsyncClient, make_agent, monkeypatch):
+    """I-1: the router maps AgentBusyError to its own 409 reason, distinct
+    from effort_switch_failed — the composer chip needs to tell "don't
+    interrupt a working turn" apart from "the switch itself didn't verify"."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    import app.routers.agent_chat as agent_chat_mod
+    from app.services.agent_chat_input import AgentBusyError
+
+    async def _fake_set_effort(a, level):
+        raise AgentBusyError()
+
+    monkeypatch.setattr(agent_chat_mod, "set_effort", _fake_set_effort)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "high"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"reason": "agent_busy"}
 
 
 async def test_post_chat_effort_requires_auth(client: AsyncClient, make_agent):

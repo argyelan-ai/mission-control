@@ -21,6 +21,7 @@ from app.database import get_session
 from app.models.agent import Agent
 from app.redis_client import RedisKeys
 from app.services.agent_chat_input import (
+    AgentBusyError,
     EffortSwitchFailedError,
     InputNotSupportedError,
     send_keys,
@@ -43,6 +44,7 @@ _NO_TRANSCRIPT = {"reason": "no_transcript"}
 _NO_WORKSPACE = {"reason": "no_workspace"}
 _INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
 _EFFORT_SWITCH_FAILED = {"reason": "effort_switch_failed"}
+_AGENT_BUSY = {"reason": "agent_busy"}
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
 
@@ -240,7 +242,10 @@ async def post_chat_effort(
     """Switches the agent's effort level via ``/effort <level>`` (v1:
     cli-bridge/docker agents only — Boss and every other host agent get 409
     ``{"reason":"input_not_supported"}``, no pane probe exists for them).
-    422 on a non-allowlisted level; 409
+    422 on a non-allowlisted level; 409 ``{"reason":"agent_busy"}`` when the
+    pane shows a working turn or an open permission prompt (refused before
+    touching the TUI at all — Escape is this app's INTERRUPT key, not a
+    neutral cleanup, wave-review I-1); 409
     ``{"reason":"effort_switch_failed"}`` when the switch couldn't be
     verified as applied (see ``agent_chat_input.set_effort``).
 
@@ -259,5 +264,7 @@ async def post_chat_effort(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AgentBusyError:
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
     except EffortSwitchFailedError:
         return JSONResponse(status_code=409, content=_EFFORT_SWITCH_FAILED)

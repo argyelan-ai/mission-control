@@ -46,11 +46,18 @@ label. Since the picker buys no session-only guarantee it appeared to
 promise, the direct-argument form is strictly simpler and equally
 side-effecting — see the Phase-0 discovery notes in the A5 report for the
 full empirical trail (settings.json mtime/content diffs before/after each
-path). ``set_effort`` verifies the switch actually landed by polling
+path). ``set_effort`` refuses to touch a busy pane at all — a preflight via
+``pane_state.parse_pane_state`` 409s with ``AgentBusyError``
+(``{"reason": "agent_busy"}``) if the agent is mid-turn or showing an open
+permission prompt, since ``Escape`` is this app's INTERRUPT key, not a
+neutral cleanup keystroke (wave-review finding I-1: sending ``/effort`` into
+a working turn only queues it, and an Escape "cleanup" on a busy pane
+silently aborts real work or dismisses a live permission prompt). Past the
+preflight, it verifies the switch actually landed by polling
 ``pane_state.capture_pane`` for the CLI's own status-line confirmation
 (``"<level> · /effort"``) before returning success; on a verification
-timeout it sends ``Escape`` as a safety net (in case an unexpected
-autocomplete/picker state was left open) and raises
+timeout it re-checks busy-ness on a FRESH capture and only sends ``Escape``
+as a cleanup safety net if that fresh check is clear, before raising
 ``EffortSwitchFailedError`` for the router to turn into 409
 ``{"reason": "effort_switch_failed"}``.
 """
@@ -62,7 +69,7 @@ import subprocess
 
 import websockets as ws_client
 
-from app.services.pane_state import capture_pane
+from app.services.pane_state import capture_pane, parse_pane_state
 
 logger = logging.getLogger("mc.agent_chat_input")
 
@@ -119,6 +126,16 @@ class InputNotSupportedError(Exception):
 
 class EffortSwitchFailedError(Exception):
     """Raised when the effort level could not be verified as applied."""
+
+
+class AgentBusyError(Exception):
+    """Raised when the pane shows a working turn or an open permission
+    prompt — an effort switch preflight refuses to touch a busy session."""
+
+
+# Pane states an effort switch must never touch (see set_effort's preflight
+# and its verify-timeout cleanup — wave-review finding I-1).
+_BUSY_PANE_STATUSES = frozenset({"working", "permission_prompt"})
 
 
 def _docker_argv(slug: str, *tail: str) -> list[str]:
@@ -270,13 +287,29 @@ async def set_effort(agent, level: str) -> None:
 
     Validates ``level`` against ``ALLOWED_EFFORT_LEVELS`` before doing
     anything (raises ``ValueError``, matching ``send_keys``'s allowlist-first
-    convention), then sends the command as one literal ``-l --`` call plus a
-    separate submitting ``Enter`` (same two-call shape as ``send_text``'s
-    single-line path). Unlike ``send_text``/``send_keys``, delivery here is
-    NOT fire-and-forget: the command is polled for its own status-line
-    confirmation before this returns success, and a verification timeout
-    sends ``Escape`` (best-effort — leaves the TUI clean rather than mid-
-    input for the next turn) before raising ``EffortSwitchFailedError``."""
+    convention), then a PREFLIGHT: refuses to send anything at all into a
+    pane that's mid-turn (``working``) or showing an open
+    ``permission_prompt`` — raises ``AgentBusyError`` untouched (wave-review
+    I-1). ``Escape`` is this app's INTERRUPT key, not a neutral cleanup
+    keystroke: sending ``/effort`` into a working turn only queues it (it
+    fires later as a garbage prompt once the turn finishes), and an Escape
+    "cleanup" against a working pane would silently abort real work in
+    progress or dismiss a live permission prompt instead of tidying up a
+    stray autocomplete.
+
+    Once past the preflight, sends the command as one literal ``-l --`` call
+    plus a separate submitting ``Enter`` (same two-call shape as
+    ``send_text``'s single-line path). Unlike ``send_text``/``send_keys``,
+    delivery here is NOT fire-and-forget: the command is polled for its own
+    status-line confirmation before this returns success. On a verification
+    timeout, a FRESH pane capture decides whether ``Escape`` cleanup is safe
+    — sent only if that fresh capture is NOT ``working``/``permission_prompt``
+    (same I-1 reasoning: the pane may have started a real turn in the gap
+    since the preflight passed) — before raising
+    ``EffortSwitchFailedError``. When no pane can be captured at all
+    (container/window gone), Escape is sent regardless — there's no live
+    process left to interrupt, matching ``_run_docker_exec``'s own
+    fail-silent contract for a target that no longer exists."""
     if level not in ALLOWED_EFFORT_LEVELS:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
@@ -285,12 +318,42 @@ async def set_effort(agent, level: str) -> None:
         raise InputNotSupportedError()
     slug = agent.slug
 
+    if await _pane_is_busy(agent):
+        raise AgentBusyError()
+
     await _run_docker_exec(_docker_argv(slug, "-l", "--", f"/effort {level}"))
     await _run_docker_exec(_docker_argv(slug, "Enter"))
 
     if not await _verify_effort_applied(agent, level):
-        await _run_docker_exec(_docker_argv(slug, "Escape"))
+        if not await _pane_is_busy(agent):
+            await _run_docker_exec(_docker_argv(slug, "Escape"))
         raise EffortSwitchFailedError()
+
+
+async def _pane_is_busy(agent) -> bool:
+    """True if the agent's pane shows a working turn or an open permission
+    prompt.
+
+    ``transcript_active=False`` is passed deliberately, NOT as a "trust the
+    pane" shortcut but because it's the choice that keeps the check honest:
+    ``parse_pane_state``'s spinner rule (``"esc to interrupt"`` anywhere in
+    the pane -> ``working``) is the reliable working-detector for a docker
+    agent — it fires independently of ``transcript_active`` and is checked
+    BEFORE the ambiguous rule this parameter affects. That ambiguous rule
+    (a plain input-prompt marker with NO spinner) only gets reached when the
+    spinner rule already didn't match, i.e. there is no visible sign of an
+    active turn — the CLI shows ``esc to interrupt`` whenever it's actually
+    working. Forcing ``transcript_active=True`` here would make that
+    fallback rule always resolve to ``"working"``, since a genuinely idle
+    Claude Code pane's input line is ALSO just a plain ``❯ `` prompt with no
+    spinner — that would make this check permanently reject idle agents too,
+    defeating its own purpose. Returns ``False`` when no pane can be
+    captured at all — nothing to protect from interrupting if there's no
+    reachable pane."""
+    pane = await capture_pane(agent)
+    if pane is None:
+        return False
+    return parse_pane_state(pane, transcript_active=False)["status"] in _BUSY_PANE_STATUSES
 
 
 async def _verify_effort_applied(agent, level: str) -> bool:
