@@ -271,3 +271,34 @@ export function isEffortSwitchFailedError(err: unknown): boolean {
 export function isAgentBusyError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("agent_busy");
 }
+
+/** 409 from `/chat/effort` when the CLI itself said no and explained why.
+ *  Distinct from `effort_switch_failed` (which means "we could not verify it"):
+ *  here the outcome is known and there is a real reason to pass on. */
+export function isEffortSwitchRejectedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("effort_switch_rejected");
+}
+
+/**
+ * Pulls the CLI's own words out of an error body, so a rejection can be shown
+ * as the reason it actually was instead of a generic failure.
+ *
+ * `request()` throws a plain Error whose message embeds the raw response body
+ * (`API 409: {"reason":…,"message":…}`), so the JSON has to be recovered from
+ * the string. Never throws: an unparseable body simply yields `null` and the
+ * caller falls back to its own wording.
+ */
+export function extractErrorMessage(err: unknown): string | null {
+  if (!(err instanceof Error)) return null;
+  const start = err.message.indexOf("{");
+  const end = err.message.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const body = JSON.parse(err.message.slice(start, end + 1)) as { message?: unknown };
+    return typeof body.message === "string" && body.message.trim().length > 0
+      ? body.message.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}

@@ -616,6 +616,43 @@ describe("Composer", () => {
       expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-pending", "false");
     });
 
+    it("passes the CLI's own rejection reason through instead of a generic failure", async () => {
+      // `effort_switch_rejected` differs from `effort_switch_failed`: the CLI
+      // said no AND said why. Its words name the real constraint; ours would
+      // hide it.
+      mockSetEffort.mockRejectedValue(
+        new Error(
+          'API 409: {"reason":"effort_switch_rejected","message":"ultracode requires a reasoning model"}'
+        )
+      );
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(option("ultracode"));
+
+      await waitFor(() =>
+        expect(mockNotifyError).toHaveBeenCalledWith(
+          "Effort abgelehnt: ultracode requires a reasoning model"
+        )
+      );
+      // Rejection is about this level, not about the runtime — the chip stays.
+      expect(screen.getByTestId("effort-chip")).toBeInTheDocument();
+    });
+
+    it("falls back to its own wording when the rejection carries no message", async () => {
+      mockSetEffort.mockRejectedValue(
+        new Error('API 409: {"reason":"effort_switch_rejected"}')
+      );
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(option("high"));
+
+      await waitFor(() =>
+        expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel abgelehnt")
+      );
+    });
+
     it("surfaces an unverified switch as an error and keeps the chip interactive", async () => {
       mockSetEffort.mockRejectedValue(new Error('API 409: {"reason":"effort_switch_failed"}'));
       const user = userEvent.setup();

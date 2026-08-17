@@ -6,8 +6,10 @@ import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import {
+  extractErrorMessage,
   isAgentBusyError,
   isEffortSwitchFailedError,
+  isEffortSwitchRejectedError,
   isInputNotSupportedError,
   isSessionOnlyEffort,
   type ChatCapabilities,
@@ -292,6 +294,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         // (its own preflight). Nothing failed — the moment was wrong — so this
         // is an info, not the red persistent toast a real failure gets.
         notify.info("Agent arbeitet gerade — nach dem Zug erneut versuchen");
+      } else if (isEffortSwitchRejectedError(err)) {
+        // The CLI said no AND said why. Passing its own words through beats any
+        // wording of ours: it names the actual constraint (a level the current
+        // model doesn't support, for instance), which a generic failure hides.
+        const reason = extractErrorMessage(err);
+        notify.error(reason ? `Effort abgelehnt: ${reason}` : "Effort-Wechsel abgelehnt");
       } else if (isEffortSwitchFailedError(err)) {
         notify.error("Effort-Wechsel nicht bestätigt — im Terminal prüfen");
       } else {
