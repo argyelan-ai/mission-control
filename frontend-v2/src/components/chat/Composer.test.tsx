@@ -13,10 +13,13 @@ import { notify } from "@/lib/notify";
 // The effort chip talks to the backend directly (it is the only control in the
 // composer that does), so both the client and the toast helper are stubbed.
 vi.mock("@/lib/api", () => ({ api: { chat: { setEffort: vi.fn() } } }));
-vi.mock("@/lib/notify", () => ({ notify: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("@/lib/notify", () => ({
+  notify: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}));
 
 const mockSetEffort = vi.mocked(api.chat.setEffort);
 const mockNotifyError = vi.mocked(notify.error);
+const mockNotifyInfo = vi.mocked(notify.info);
 
 function mkUsage(overrides: Partial<UsageEvent> = {}): UsageEvent {
   return {
@@ -368,6 +371,27 @@ describe("Composer", () => {
       expect(screen.getByTestId("effort-chip-static")).toHaveAttribute("title", expect.stringContaining("Runtime"));
       // Not an error the operator caused — no toast.
       expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it("treats a busy agent as a wrong moment, not a failure", async () => {
+      // The backend refuses mid-turn on purpose (its own preflight, so a
+      // working agent never gets interrupted). A red persistent error toast
+      // would tell the operator something broke when nothing did.
+      mockSetEffort.mockRejectedValue(new Error('API 409: {"reason":"agent_busy"}'));
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      await user.click(screen.getByRole("option", { name: /high/ }));
+
+      await waitFor(() =>
+        expect(mockNotifyInfo).toHaveBeenCalledWith(
+          "Agent arbeitet gerade — nach dem Zug erneut versuchen"
+        )
+      );
+      expect(mockNotifyError).not.toHaveBeenCalled();
+      // Still switchable — the runtime supports it, this attempt was just early.
+      expect(screen.getByTestId("effort-chip")).toBeInTheDocument();
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-pending", "false");
     });
 
     it("surfaces an unverified switch as an error and keeps the chip interactive", async () => {

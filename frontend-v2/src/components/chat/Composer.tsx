@@ -6,6 +6,7 @@ import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import {
+  isAgentBusyError,
   isEffortSwitchFailedError,
   isInputNotSupportedError,
   type StateEvent,
@@ -203,6 +204,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     } catch (err) {
       if (isInputNotSupportedError(err)) {
         setEffortSupported(false);
+      } else if (isAgentBusyError(err)) {
+        // The backend refuses mid-turn rather than interrupting the agent
+        // (its own preflight). Nothing failed — the moment was wrong — so this
+        // is an info, not the red persistent toast a real failure gets.
+        notify.info("Agent arbeitet gerade — nach dem Zug erneut versuchen");
       } else if (isEffortSwitchFailedError(err)) {
         notify.error("Effort-Wechsel nicht bestätigt — im Terminal prüfen");
       } else {

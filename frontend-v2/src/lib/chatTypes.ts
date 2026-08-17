@@ -164,3 +164,11 @@ export function isInputNotSupportedError(err: unknown): boolean {
 export function isEffortSwitchFailedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("effort_switch_failed");
 }
+
+/** 409 from `/chat/effort` when the agent is mid-turn or sitting on an open
+ *  prompt — the backend refuses rather than interrupting it. Nothing is broken
+ *  and nothing needs fixing; the operator just picked the wrong moment, so this
+ *  wants a "not now", not a failure. */
+export function isAgentBusyError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("agent_busy");
+}

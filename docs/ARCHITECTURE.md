@@ -1007,8 +1007,9 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
                              POST /agents/{id}/chat/keys      (Escape/Ziffern/Enter)
                              POST /agents/{id}/chat/effort    (low|medium|high, 204;
                                                                409 input_not_supported bei
-                                                               host-Agents, 409
-                                                               effort_switch_failed wenn
+                                                               host-Agents, 409 agent_busy
+                                                               mitten im Zug/offener Prompt,
+                                                               409 effort_switch_failed wenn
                                                                nicht verifizierbar)
                              GET  /agents/{id}/chat/diff      (git diff im Agent-Workspace)
 ```
