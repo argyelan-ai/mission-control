@@ -422,11 +422,17 @@ describe("Composer", () => {
 
     it("keeps the model and effort chips on the documented mono step", () => {
       renderWithEffort();
-      expect(screen.getByTestId("effort-chip").className).toContain("text-xs");
-      expect(screen.getByTestId("effort-chip").className).not.toContain("text-[11px]");
-      const modelChip = screen.getByRole("button", { name: /claude-sonnet-4-6/ });
-      expect(modelChip.className).toContain("text-xs");
-      expect(modelChip.className).not.toContain("text-[11px]");
+      // Guarded by shape, not by naming the banned value: any arbitrary pixel
+      // size is off the documented ramp, so this catches the next off-ramp step
+      // too — and leaves no literal off-ramp size in the file to grep for.
+      const arbitraryFontSize = /text-\[\d+px\]/;
+      const effortChip = screen.getByTestId("effort-chip").className;
+      expect(effortChip).toContain("text-xs");
+      expect(effortChip).not.toMatch(arbitraryFontSize);
+
+      const modelChip = screen.getByRole("button", { name: /claude-sonnet-4-6/ }).className;
+      expect(modelChip).toContain("text-xs");
+      expect(modelChip).not.toMatch(arbitraryFontSize);
     });
   });
 
