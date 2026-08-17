@@ -29,6 +29,7 @@ import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
+import { ToolGroup, type ActivityEvent } from "./ToolGroup";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
@@ -62,23 +63,78 @@ function isSidechain(ev: TimelineChatEvent): boolean {
 function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
   if (level !== "compact") return true;
   // Kompakt: tool/thinking rows are noise for a quick skim — hide entirely
-  // rather than collapse (that's what Normal is for).
+  // rather than collapse (that's what Normal is for). Since no tool/thinking
+  // event survives this filter, `Kompakt` also produces no activity groups —
+  // the level's semantics are unchanged by the grouping layer.
   return ev.kind === "message" || ev.kind === "command";
 }
 
-/** Groups consecutive sidechain events (subagent turns) into runs for
- *  SubagentGroup; top-level events stay standalone. */
-function groupTimeline(events: TimelineChatEvent[]): (TimelineChatEvent | TimelineChatEvent[])[] {
-  const out: (TimelineChatEvent | TimelineChatEvent[])[] = [];
-  for (const ev of events) {
-    if (isSidechain(ev)) {
-      const last = out[out.length - 1];
-      if (Array.isArray(last)) last.push(ev);
-      else out.push([ev]);
-    } else {
-      out.push(ev);
+function isActivity(ev: TimelineChatEvent): ev is ActivityEvent {
+  return ev.kind === "tool" || ev.kind === "thinking";
+}
+
+export type TimelineItem =
+  /** A message or command, or a run too short to be worth collapsing. */
+  | { kind: "single"; event: TimelineChatEvent }
+  /** A run of consecutive tool/thinking events → one ToolGroup chip. */
+  | { kind: "activity"; events: ActivityEvent[] }
+  /** A run of consecutive sidechain (subagent) events → one SubagentGroup. */
+  | { kind: "sidechain"; events: TimelineChatEvent[] };
+
+/** Runs shorter than this render as plain rows: collapsing a single tool call
+ *  behind "1 Befehl ausgeführt" would hide its title (the useful part) and
+ *  cost a tap to get it back. Two or more is where the wall starts. */
+export const ACTIVITY_GROUP_MIN_SIZE = 2;
+
+/**
+ * Turns the flat event list into the timeline's render items.
+ *
+ * Two independent runs are accumulated: sidechain events (subagent turns,
+ * unchanged behavior) and top-level tool/thinking events (the new activity
+ * groups). Any other event — an assistant text message, a user message, a
+ * slash command — closes both runs, which is exactly the group boundary the
+ * reference contract asks for: a group covers one working stretch between two
+ * things a human said or read.
+ */
+export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] {
+  const out: TimelineItem[] = [];
+  let sidechainRun: TimelineChatEvent[] = [];
+  let activityRun: ActivityEvent[] = [];
+
+  function flushSidechain() {
+    if (sidechainRun.length > 0) {
+      out.push({ kind: "sidechain", events: sidechainRun });
+      sidechainRun = [];
     }
   }
+
+  function flushActivity() {
+    if (activityRun.length === 0) return;
+    if (activityRun.length >= ACTIVITY_GROUP_MIN_SIZE) {
+      out.push({ kind: "activity", events: activityRun });
+    } else {
+      for (const ev of activityRun) out.push({ kind: "single", event: ev });
+    }
+    activityRun = [];
+  }
+
+  for (const ev of events) {
+    if (isSidechain(ev)) {
+      flushActivity();
+      sidechainRun.push(ev);
+      continue;
+    }
+    flushSidechain();
+    if (isActivity(ev)) {
+      activityRun.push(ev);
+      continue;
+    }
+    flushActivity();
+    out.push({ kind: "single", event: ev });
+  }
+
+  flushActivity();
+  flushSidechain();
   return out;
 }
 
@@ -191,7 +247,7 @@ export function ChatView({
   }
 
   const visibleEvents = stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel));
-  const grouped = groupTimeline(visibleEvents);
+  const items = buildTimelineItems(visibleEvents);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
 
   return (
@@ -272,18 +328,26 @@ export function ChatView({
       ) : (
         <>
           <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
-            {grouped.length === 0 ? (
+            {items.length === 0 ? (
               <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
                 {stream.loading ? "Lädt…" : "Noch keine Nachrichten."}
               </div>
             ) : (
-              grouped.map((item) =>
-                Array.isArray(item) ? (
-                  <SubagentGroup key={`sidechain-${item[0].uuid}`} events={item} />
-                ) : (
-                  renderTimelineEvent(item, detailLevel)
-                ),
-              )
+              items.map((item) => {
+                if (item.kind === "sidechain") {
+                  return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
+                }
+                if (item.kind === "activity") {
+                  return (
+                    <ToolGroup
+                      key={`activity-${item.events[0].uuid}`}
+                      events={item.events}
+                      detailLevel={detailLevel}
+                    />
+                  );
+                }
+                return renderTimelineEvent(item.event, detailLevel);
+              })
             )}
           </div>
 

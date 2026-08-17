@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ChatView } from "./ChatView";
+import { ChatView, buildTimelineItems, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
@@ -160,6 +160,81 @@ const THINKING: ThinkingEvent = {
 
 const noop = () => {};
 
+// ── Grouping logic ─────────────────────────────────────────────────────────
+// Pure function, tested directly: the render tests below only need to prove
+// the wiring, not re-derive every boundary case through the DOM.
+
+function mkTool(overrides: Partial<ToolEvent> = {}): ToolEvent {
+  return { ...TOOL, uuid: `t-${Math.random()}`, toolUseId: `tu-${Math.random()}`, ...overrides };
+}
+
+function mkThinking(overrides: Partial<ThinkingEvent> = {}): ThinkingEvent {
+  return { ...THINKING, uuid: `th-${Math.random()}`, ...overrides };
+}
+
+function mkMsg(overrides: Partial<MessageEvent> = {}): MessageEvent {
+  return { ...MSG, uuid: `m-${Math.random()}`, ...overrides };
+}
+
+describe("buildTimelineItems", () => {
+  it("collapses consecutive tool/thinking events into one activity run", () => {
+    const items = buildTimelineItems([mkTool(), mkThinking(), mkTool()]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "activity" });
+    expect(items[0].kind === "activity" && items[0].events).toHaveLength(3);
+  });
+
+  it("ends a run at an assistant message", () => {
+    const items = buildTimelineItems([mkTool(), mkTool(), mkMsg(), mkTool(), mkTool()]);
+    expect(items.map((i) => i.kind)).toEqual(["activity", "single", "activity"]);
+  });
+
+  it("ends a run at a user message", () => {
+    const items = buildTimelineItems([mkTool(), mkTool(), mkMsg({ role: "user", text: "Weiter" }), mkTool(), mkTool()]);
+    expect(items.map((i) => i.kind)).toEqual(["activity", "single", "activity"]);
+  });
+
+  it("ends a run at a slash command", () => {
+    const cmd = { kind: "command", uuid: "c1", ts: MSG.ts, command: "/clear" } as const;
+    const items = buildTimelineItems([mkTool(), mkTool(), cmd, mkTool(), mkTool()]);
+    expect(items.map((i) => i.kind)).toEqual(["activity", "single", "activity"]);
+  });
+
+  it(`emits runs shorter than ${ACTIVITY_GROUP_MIN_SIZE} as plain rows`, () => {
+    const items = buildTimelineItems([mkMsg(), mkTool(), mkMsg()]);
+    expect(items.map((i) => i.kind)).toEqual(["single", "single", "single"]);
+  });
+
+  it("keeps sidechain runs separate from top-level activity runs", () => {
+    const items = buildTimelineItems([
+      mkTool(),
+      mkTool(),
+      mkTool({ sidechain: true }),
+      mkTool({ sidechain: true }),
+      mkTool(),
+      mkTool(),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["activity", "sidechain", "activity"]);
+  });
+
+  it("keeps a single sidechain event grouped (SubagentGroup owns its own header)", () => {
+    const items = buildTimelineItems([mkTool({ sidechain: true })]);
+    expect(items.map((i) => i.kind)).toEqual(["sidechain"]);
+  });
+
+  it("preserves event order across mixed input", () => {
+    const first = mkMsg({ text: "A" });
+    const last = mkMsg({ text: "B" });
+    const items = buildTimelineItems([first, mkTool(), mkTool(), last]);
+    expect(items[0]).toMatchObject({ kind: "single", event: first });
+    expect(items[2]).toMatchObject({ kind: "single", event: last });
+  });
+
+  it("returns nothing for an empty timeline", () => {
+    expect(buildTimelineItems([])).toEqual([]);
+  });
+});
+
 function renderChatView(overrides: Partial<React.ComponentProps<typeof ChatView>> = {}) {
   return render(
     <ChatView
@@ -260,16 +335,34 @@ describe("ChatView", () => {
     expect(screen.getByText("Hallo!")).toBeInTheDocument();
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
     expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
+    // No group chip either — Kompakt hides the activity entirely, it doesn't
+    // trade a wall of rows for a wall of chips.
+    expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
   });
 
-  it("Normal shows tool/thinking rows collapsed by default", () => {
+  it("Normal collapses a run of tool/thinking events into one group chip", async () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, THINKING] }));
+    const user = userEvent.setup();
+    renderChatView({ detailLevel: "normal" });
+
+    // The wall of rows is gone by default — one summary chip stands in for it.
+    const chip = screen.getByRole("button", { name: /1 Tool verwendet, nachgedacht/ });
+    expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
+    expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
+
+    await user.click(chip);
+    expect(screen.getByText("Read foo.py")).toBeInTheDocument();
+    expect(screen.getByText("Denkt nach…")).toBeInTheDocument();
+    // Rows themselves are still collapsed at Normal — that's Ausführlich's job.
+    expect(screen.queryByText(/file_path/)).not.toBeInTheDocument();
+  });
+
+  it("Normal leaves a lone tool event as a plain row (no group chip)", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, { ...MSG, uuid: "u9", text: "Fertig." }] }));
     renderChatView({ detailLevel: "normal" });
 
     expect(screen.getByText("Read foo.py")).toBeInTheDocument();
-    expect(screen.getByText("Denkt nach…")).toBeInTheDocument();
-    // Collapsed: the tool's JSON detail block isn't rendered until clicked.
-    expect(screen.queryByText(/file_path/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
   });
 
   it("Ausführlich expands tool/thinking rows by default", () => {
