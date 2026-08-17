@@ -198,6 +198,17 @@ function SessionsPageContent() {
 
   const agents: AgentWithState[] = [...dockerAgents, ...hostAgents];
 
+  // `selected` is a SNAPSHOT taken when the row was clicked — it never updates,
+  // while the two agent queries refetch every 5–10s. Anything derived from it
+  // (status, current task, container state) would be frozen at selection time:
+  // the header's context line would keep naming a task the agent finished ten
+  // minutes ago, or stay empty for one it has picked up since. Re-resolving the
+  // id against the live list fixes that for every consumer at once. The
+  // snapshot stays the fallback for the frame before a refetch lands — and for
+  // an agent that has since been deleted, where it is all that is left.
+  const selectedLive: AgentWithState | null =
+    (selected ? agents.find((a) => a.id === selected.id) : undefined) ?? selected;
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
     qc.invalidateQueries({ queryKey: ["agents", "host-sessions"] });
@@ -233,9 +244,9 @@ function SessionsPageContent() {
   // selected agent's runtime (incl. cross-image recreate). Without this
   // the WebSocket still points at the killed container's tmux PTY and
   // shows a frozen buffer.
-  useTerminalRemountSignal(selected?.id ?? null, (payload) => {
-    if (!selected) return;
-    setRestartTick((prev) => ({ ...prev, [selected.id]: (prev[selected.id] ?? 0) + 1 }));
+  useTerminalRemountSignal(selectedLive?.id ?? null, (payload) => {
+    if (!selectedLive) return;
+    setRestartTick((prev) => ({ ...prev, [selectedLive.id]: (prev[selectedLive.id] ?? 0) + 1 }));
     invalidate();
     notify.success(
       payload.image_changed
@@ -255,9 +266,9 @@ function SessionsPageContent() {
 
   // Mobile stack navigation. Desktop (≥md) ignores all three: it always shows
   // list + chat side by side, so every branch below resolves via `md:` classes.
-  const onChatScreen = mobileView === "chat" && !!selected;
-  const selectedTaskTitle = selected?.current_task_id
-    ? tasks.find((task) => task.id === selected.current_task_id)?.title ?? null
+  const onChatScreen = mobileView === "chat" && !!selectedLive;
+  const selectedTaskTitle = selectedLive?.current_task_id
+    ? tasks.find((task) => task.id === selectedLive.current_task_id)?.title ?? null
     : null;
 
   return (
@@ -299,7 +310,7 @@ function SessionsPageContent() {
               agents={agents}
               tasks={tasks}
               projects={projects}
-              selectedId={selected?.id ?? null}
+              selectedId={selectedLive?.id ?? null}
               onSelect={handleSelect}
               variant="list"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
@@ -327,7 +338,7 @@ function SessionsPageContent() {
               agents={agents}
               tasks={tasks}
               projects={projects}
-              selectedId={selected?.id ?? null}
+              selectedId={selectedLive?.id ?? null}
               onSelect={handleSelect}
               variant="rail"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
@@ -344,16 +355,19 @@ function SessionsPageContent() {
             className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border-strong)]`}
             data-testid="chat-column"
           >
-            {isLoading && !selected ? null : (
+            {isLoading && !selectedLive ? null : (
+              // `key` stays on the id, not the object: re-keying on every
+              // refetch would remount the chat (and drop its SSE subscription
+              // and scroll position) ten times a minute.
               <ChatView
-                key={selected?.id ?? "none"}
-                agent={selected}
-                hasTranscript={agentHasTranscript(selected)}
+                key={selectedLive?.id ?? "none"}
+                agent={selectedLive}
+                hasTranscript={agentHasTranscript(selectedLive)}
                 detailLevel={detailLevel}
                 onDetailLevelChange={setDetailLevel}
                 centerView={centerView}
                 onCenterViewChange={setCenterView}
-                terminalRemountTick={selected ? restartTick[selected.id] ?? 0 : 0}
+                terminalRemountTick={selectedLive ? restartTick[selectedLive.id] ?? 0 : 0}
                 onStatusChange={setChatStatus}
                 onBack={() => setMobileView("list")}
                 contextLine={selectedTaskTitle}
@@ -403,8 +417,8 @@ function SessionsPageContent() {
                 </button>
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {activePanel === "diff" && selected && (
-                  <DiffPanel agentId={selected.id} refreshHot={chatStatus === "working"} />
+                {activePanel === "diff" && selectedLive && (
+                  <DiffPanel agentId={selectedLive.id} refreshHot={chatStatus === "working"} />
                 )}
                 {activePanel === "browser" && <BrowserLiveView />}
               </div>

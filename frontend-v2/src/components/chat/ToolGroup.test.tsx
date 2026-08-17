@@ -106,6 +106,23 @@ describe("ToolGroup", () => {
     expect(screen.getByTestId("tool-group-error-icon")).toBeInTheDocument();
   });
 
+  it("announces the failure to screen readers, not just in colour", () => {
+    // The icon is aria-hidden and the colour is invisible to a screen reader,
+    // so without this the group's failure was sighted-only information.
+    render(<ToolGroup events={[tool(), tool({ status: "error" })]} detailLevel="normal" />);
+    expect(screen.getByRole("button", { name: /Fehler enthalten/ })).toBeInTheDocument();
+  });
+
+  it("adds no failure wording to a run that succeeded", () => {
+    render(<ToolGroup events={RUN} detailLevel="normal" />);
+    expect(screen.queryByRole("button", { name: /Fehler enthalten/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the failure wording out of the visible line", () => {
+    render(<ToolGroup events={[tool(), tool({ status: "error" })]} detailLevel="normal" />);
+    expect(screen.getByText("— Fehler enthalten", { exact: false })).toHaveClass("sr-only");
+  });
+
   it("shows the neutral icon when nothing failed", () => {
     render(<ToolGroup events={RUN} detailLevel="normal" />);
     expect(screen.getByTestId("tool-group-icon")).toBeInTheDocument();

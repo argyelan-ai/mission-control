@@ -1005,6 +1005,11 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
      └── docker exec /      GET  /agents/{id}/chat/history   (Datei von vorn parsen)
          host-pty-bridge ◀──POST /agents/{id}/chat/input     (Text, separater Enter-Frame)
                              POST /agents/{id}/chat/keys      (Escape/Ziffern/Enter)
+                             POST /agents/{id}/chat/effort    (low|medium|high, 204;
+                                                               409 input_not_supported bei
+                                                               host-Agents, 409
+                                                               effort_switch_failed wenn
+                                                               nicht verifizierbar)
                              GET  /agents/{id}/chat/diff      (git diff im Agent-Workspace)
 ```
 
@@ -1337,10 +1342,17 @@ Alle ADRs in `docs/decisions/`:
   Text und submittierender `Enter` **immer als getrennte Frames**, sonst schluckt die
   Claude-TUI den Enter als Teil eines Pastes), `routers/agent_chat.py` (`GET
   /agents/{id}/chat/history`, `GET .../chat/stream` SSE, `POST .../chat/input`,
-  `POST .../chat/keys`, `GET .../chat/diff`), Frontend
+  `POST .../chat/keys`, `POST .../chat/effort`, `GET .../chat/diff`), Frontend
   `components/chat/*` (ChatView, Composer, ApprovalCard, ToolRow, ThinkingRow,
-  SubagentGroup, StatusLine, PanelRail, DiffPanel, TerminalPanel, SessionSidebar) +
-  `lib/chatTypes.ts`/`hooks/useChatStream.ts`. **Boss-Privacy-Filter fail-closed**
+  ToolGroup, SubagentGroup, StatusLine, ContextPanel, ChatOptionsSheet, PanelRail,
+  DiffPanel, TerminalPanel, SessionSidebar) +
+  `lib/chatTypes.ts`/`hooks/useChatStream.ts`.
+  **`usage.components`** (`{input, cacheRead, cacheCreation, output}`) liegt neben
+  dem summierten `inputTokens` und traegt die Aufschluesselung fuer `ContextPanel`
+  (das Popover hinter dem Kontext-Ring). Frische CLI-Statuszeilen-Daten gewinnen
+  ueber die Transkriptzeile: die beschreibt einen einzelnen Zug, die Statuszeile das
+  ganze lebende Fenster. Fehlt `components`, zeigt das Panel nur belegt/frei statt
+  Segmente zu erfinden. **Boss-Privacy-Filter fail-closed**
   wiederverwendet `token_harvester._should_attribute_boss_path` (Boss' `~/.claude` teilt
   sich mit den privaten Sessions des Operators — jeder Lesefehler fällt auf verweigert). **Recycler-
   Kopplung:** Chat-Eingabe touched jetzt den Agent-Recycler-Idle-Marker mit, sonst

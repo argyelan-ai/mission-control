@@ -89,6 +89,11 @@ vi.mock("@/components/chat/ChatView", () => ({
       <span data-testid="chat-view-has-transcript">{String(hasTranscript)}</span>
       <span data-testid="chat-view-center">{centerView}</span>
       <span data-testid="chat-view-context-line">{contextLine ?? ""}</span>
+      {/* The agent object the page hands down — the context line, the
+          transcript gate and TerminalPanel all read from it, so whether it is
+          the live row or a stale click-time snapshot is observable here. */}
+      <span data-testid="chat-view-agent-task">{(agent as { current_task_id?: string | null })?.current_task_id ?? ""}</span>
+      <span data-testid="chat-view-agent-status">{(agent as { status?: string })?.status ?? ""}</span>
       <button
         type="button"
         onClick={() => onCenterViewChange(centerView === "chat" ? "terminal" : "chat")}
@@ -188,15 +193,20 @@ function mkAgent(
   };
 }
 
+// Returns the QueryClient alongside the render result so a test can force a
+// refetch deterministically instead of waiting out `refetchInterval`.
 function renderPage() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={qc}>
-      <SessionsPage />
-    </QueryClientProvider>
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={qc}>
+        <SessionsPage />
+      </QueryClientProvider>
+    ),
+    qc,
+  };
 }
 
 // The agent's name can legitimately appear twice (the desktop sidebar's
@@ -524,6 +534,94 @@ describe("SessionsPage — sidebar collapse (mc.chat.sidebar)", () => {
   });
 });
 
+// jsdom in this environment has no working localStorage (see the note on the
+// first describe). Installed per describe so no block depends on another
+// having run first.
+function installLocalStorageShim() {
+  let store: Record<string, string> = {};
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+      clear: () => { store = {}; },
+      length: 0,
+      key: () => null,
+    },
+  });
+}
+
+// ── Live agent snapshot ─────────────────────────────────────────────────────
+// `selected` is captured when the row is clicked and never changes, while the
+// agent queries refetch every 5–10s. Everything downstream (header context
+// line, transcript gate, TerminalPanel) must read the LIVE row instead, or it
+// keeps describing the agent as it was at click time — a task it has since
+// finished, a status it has since left.
+describe("SessionsPage — the selected agent follows the live data, not the click-time snapshot", () => {
+  beforeEach(() => {
+    nav.searchParamsString = "";
+    installLocalStorageShim();
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("picks up a changed current task on the next refetch", async () => {
+    vi.spyOn(api.agents, "listDockerSessions")
+      .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-1" })])
+      .mockResolvedValue([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-2" })]);
+
+    const { qc } = renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-agent-task")).toHaveTextContent("task-1")
+    );
+
+    await qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-agent-task")).toHaveTextContent("task-2")
+    );
+  });
+
+  it("picks up a changed status on the next refetch", async () => {
+    vi.spyOn(api.agents, "listDockerSessions")
+      .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", status: "idle" })])
+      .mockResolvedValue([mkAgent({ id: "agent-1", name: "Agent One", status: "busy" })]);
+
+    const { qc } = renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-agent-status")).toHaveTextContent("idle")
+    );
+
+    await qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-agent-status")).toHaveTextContent("busy")
+    );
+  });
+
+  it("falls back to the snapshot when the agent disappears from the list", async () => {
+    vi.spyOn(api.agents, "listDockerSessions")
+      .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-1" })])
+      .mockResolvedValue([]);
+
+    const { qc } = renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-agent-task")).toHaveTextContent("task-1")
+    );
+
+    await qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
+
+    // Deleted or filtered out: keep showing what we last knew rather than
+    // blanking the chat out from under the operator.
+    await waitFor(() => expect(screen.getByText("Chat: Agent One")).toBeInTheDocument());
+    expect(screen.getByTestId("chat-view-agent-task")).toHaveTextContent("task-1");
+  });
+});
+
 // ── Mobile stack visibility ─────────────────────────────────────────────────
 // Both stack screens stay MOUNTED (the chat must keep its SSE subscription and
 // scroll position while the list is up), so the inactive one has to be
@@ -537,7 +635,7 @@ describe("SessionsPage — sidebar collapse (mc.chat.sidebar)", () => {
 describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
   beforeEach(() => {
     nav.searchParamsString = "";
-    localStorage.clear();
+    installLocalStorageShim();
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
       mkAgent({ id: "agent-1", name: "Agent One" }),
       mkAgent({ id: "agent-2", name: "Agent Two" }),

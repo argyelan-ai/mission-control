@@ -130,6 +130,10 @@ export function ToolGroup({
         />
         <span className="flex-1 min-w-0 truncate text-[13px] font-medium" style={{ color: C.textSecondary }}>
           {summary.label}
+          {/* The failure was carried by colour and an aria-hidden icon alone,
+              which is nothing at all to a screen reader. This puts it into the
+              button's accessible name without changing the visual line. */}
+          {summary.hasError && <span className="sr-only"> — Fehler enthalten</span>}
         </span>
         <span
           className="shrink-0 font-mono text-[10px] font-medium tabular-nums"

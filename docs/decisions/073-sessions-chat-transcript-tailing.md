@@ -139,6 +139,20 @@ unabhängige Lese-/Schreib-Surface über derselben tmux-Session:
   (`cli_agent_settings.json.j2`), Stand Ledger 7/7 Agenten. Künftige Änderungen an
   Skript oder Key müssen über diesen Template-Pfad laufen, nicht per Hand-Edit im
   Container, sonst driftet die Flotte.
+- **Effort-Umstellung aus dem Chat ist NICHT session-lokal, sondern dauerhaft:**
+  `POST /agents/{id}/chat/effort` fährt `/effort <level>` in die TUI, und Claude Code
+  2.1.233 kennt dafür keinen session-only Pfad — auch die „s"-Option des
+  `/model`-Pickers scopet nur das MODELL auf die Session, nicht den Effort. Jede
+  Umstellung schreibt damit den **persistierten Standard** des Agenten in seiner
+  `settings.json` um und gilt für jede frische Session, bis sie erneut umgestellt wird
+  oder der nächste `sync-config`/Reprovision sie aus dem Template überschreibt (ADR-006:
+  DB → Template → Datei bleibt die Single Source of Truth, ein Chat-Wechsel ist
+  ausdrücklich KEINE Eintragung in diese Kette). Empirisch verifiziert, nicht aus der
+  Doku gelesen. Konsequenzen: (1) die UI muss es sagen — das Effort-Dropdown im Composer
+  trägt die Zeile „Gilt als neuer Standard des Agenten."; (2) wer Effort künftig
+  wirklich session-lokal braucht, braucht CLI-Support, keinen UI-Trick; (3) ein
+  Reprovision kann eine per Chat gesetzte Stufe stillschweigend zurücksetzen — das ist
+  gewollt, aber überrascht, wenn man es nicht weiß.
 - **v1-Scope-Lücke bewusst in Kauf genommen:** Hermes/Jarvis/Sparky haben (noch) keinen
   Adapter — ehrlicher „kein Transkript verfügbar"-Zustand statt eines vorgetäuschten
   Chats. Sparky (openclaude-Dialekt) ist der nächstliegende v2-Kandidat, weil

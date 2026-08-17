@@ -177,13 +177,28 @@ describe("Composer", () => {
     );
     expect(screen.queryByTestId("context-panel")).not.toBeInTheDocument();
 
-    const trigger = screen.getByRole("button", { name: "Kontext-Aufschlüsselung" });
+    const trigger = screen.getByRole("button", { name: /^Kontext: \d+% belegt$/ });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
 
     expect(screen.getByTestId("context-panel")).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByTestId("context-row-cacheRead")).toHaveTextContent("Cache gelesen");
+  });
+
+  it("puts the fill percentage in the trigger's accessible name, and keeps it current", () => {
+    // A `role="progressbar"` nested inside a button is unreachable — the
+    // button's own name is what gets announced, so the figure must live there.
+    const { rerender } = render(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 15 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByRole("button", { name: "Kontext: 15% belegt" })).toBeInTheDocument();
+
+    rerender(
+      <Composer agentId="a1" usage={mkUsage({ usedPct: 92 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    expect(screen.getByRole("button", { name: "Kontext: 92% belegt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Kontext: 15% belegt" })).not.toBeInTheDocument();
   });
 
   it("keeps the ring itself a progressbar with its tooltip (quick glance stays)", () => {
@@ -195,7 +210,7 @@ describe("Composer", () => {
 
   it("does not offer the breakdown when there is no usage to break down", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: "Kontext-Aufschlüsselung" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Kontext:/ })).not.toBeInTheDocument();
   });
 
   it("keeps the send button a ghost outline until there is something to send", async () => {

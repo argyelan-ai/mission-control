@@ -510,7 +510,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 data-context-trigger
                 aria-haspopup="dialog"
                 aria-expanded={contextOpen}
-                aria-label="Kontext-Aufschlüsselung"
+                // The ring's own `role="progressbar"` is unreachable inside a
+                // button (the button's name wins), so the figure has to live in
+                // that name — otherwise a screen-reader user learns only that
+                // there is a breakdown, never how full the window is.
+                aria-label={`Kontext: ${Math.round(pct)}% belegt`}
                 onClick={() => setContextOpen((v) => !v)}
                 className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
               >
