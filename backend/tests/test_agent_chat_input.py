@@ -668,6 +668,50 @@ async def test_set_effort_verification_timeout_working_pane_skips_escape(monkeyp
     assert calls[1][-1] == "Enter"
 
 
+async def test_set_effort_explicit_rejection_raises_distinct_error_no_escape(monkeypatch):
+    """Live-verified on Davinci (2026-08-18): the CLI can answer a switch
+    attempt with "Kept effort level as <X>" instead of "Set effort level to
+    <X>" — an explicit decline, not a verification timeout. Must raise
+    EffortSwitchRejectedError (-> router 409 effort_switch_rejected) WITH
+    the CLI's own message, stop polling immediately (not burn the rest of
+    the attempt budget), and send NO Escape — the CLI already answered and
+    left the pane in a normal ready state, nothing to clean up."""
+    from app.services import agent_chat_input
+
+    poll_count = {"n": 0}
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        poll_count["n"] += 1
+        return "❯ /effort low\n  ⎿  Kept effort level as auto"
+
+    async def _fake_sleep(delay):
+        pass
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="davinci", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.EffortSwitchRejectedError) as exc_info:
+        await agent_chat_input.set_effort(agent, "low")
+
+    assert exc_info.value.cli_message == "Kept effort level as auto"
+    # /effort low + Enter only — NO Escape (nothing to clean up).
+    assert len(calls) == 2
+    assert calls[0][-3:] == ["-l", "--", "/effort low"]
+    assert calls[1][-1] == "Enter"
+    # capture_pane was called exactly twice — once for the preflight
+    # busy-check (passes: this pane text has a "❯" input marker, no
+    # spinner) and once for the FIRST verify-loop poll, which already sees
+    # the rejection and stops immediately — not after burning through all 5
+    # verify attempts.
+    assert poll_count["n"] == 2
+
+
 async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeypatch):
     """capture_pane returning None (container gone, tmux window missing —
     pane_state's own documented None case) must be treated as "not verified
@@ -719,6 +763,53 @@ async def test_effort_capabilities_other_host_agent_cannot_switch():
     caps = agent_chat_input.effort_capabilities(agent)
 
     assert caps == {"effortLevels": [], "canSwitchEffort": False}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# services/agent_chat_input.py — model_options_capabilities
+#
+# Config-driven (settings.model_aliases + transcript_chat.resolve_context_window
+# via settings.context_windows) — not agent/runtime-gated, unlike effort/
+# slash-command capabilities.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+async def test_model_options_capabilities_present_with_windows():
+    from app.services import agent_chat_input
+
+    caps = agent_chat_input.model_options_capabilities()
+
+    options = {o["command"]: o for o in caps["modelOptions"]}
+    assert set(options) == {"default", "opus", "sonnet", "haiku"}
+    assert options["opus"] == {
+        "command": "opus", "label": "Opus", "contextWindow": 1_000_000,
+    }
+    assert options["sonnet"] == {
+        "command": "sonnet", "label": "Sonnet", "contextWindow": 1_000_000,
+    }
+    assert options["haiku"] == {
+        "command": "haiku", "label": "Haiku", "contextWindow": 200_000,
+    }
+    # "default" resolves to whatever settings.model_aliases["default"]
+    # points at (claude-sonnet-5) — same 1M window, not a special case.
+    assert options["default"]["contextWindow"] == 1_000_000
+
+
+async def test_model_options_capabilities_unknown_model_id_yields_null_window(monkeypatch):
+    from app.services import agent_chat_input
+    from app.config import settings
+
+    monkeypatch.setattr(
+        settings, "model_aliases", {"mystery": "some-future-model-nobody-configured"}
+    )
+
+    caps = agent_chat_input.model_options_capabilities()
+
+    assert caps == {
+        "modelOptions": [
+            {"command": "mystery", "label": "Mystery", "contextWindow": None},
+        ]
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1176,6 +1267,31 @@ async def test_post_chat_effort_409_agent_busy(auth_client: AsyncClient, make_ag
 
     assert resp.status_code == 409
     assert resp.json() == {"reason": "agent_busy"}
+
+
+async def test_post_chat_effort_409_switch_rejected_with_cli_message(auth_client: AsyncClient, make_agent, monkeypatch):
+    """Distinct from effort_switch_failed: the CLI explicitly declined the
+    switch (live-verified on Davinci), and its own message text is surfaced
+    so the UI can show the operator WHY."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    import app.routers.agent_chat as agent_chat_mod
+    from app.services.agent_chat_input import EffortSwitchRejectedError
+
+    async def _fake_set_effort(a, level):
+        raise EffortSwitchRejectedError("Kept effort level as auto")
+
+    monkeypatch.setattr(agent_chat_mod, "set_effort", _fake_set_effort)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "low"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {
+        "reason": "effort_switch_rejected",
+        "message": "Kept effort level as auto",
+    }
 
 
 async def test_post_chat_effort_requires_auth(client: AsyncClient, make_agent):

@@ -100,15 +100,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
 
 import websockets as ws_client
 
+from app.config import settings
 from app.services.pane_state import capture_pane, parse_pane_state
 from app.services.plugin_manager import list_skills_in_dir
 from app.services.token_harvester import _host_home
+from app.services.transcript_chat import resolve_context_window
 
 logger = logging.getLogger("mc.agent_chat_input")
 
@@ -167,7 +170,33 @@ class InputNotSupportedError(Exception):
 
 
 class EffortSwitchFailedError(Exception):
-    """Raised when the effort level could not be verified as applied."""
+    """Raised when the effort level could not be verified as applied (a
+    verification timeout — no explicit rejection or confirmation seen)."""
+
+
+class EffortSwitchRejectedError(Exception):
+    """Raised when the CLI EXPLICITLY declined the switch (its own inline
+    message says so) rather than the verification just timing out.
+
+    Root cause investigated live on a throwaway window on mc-agent-davinci
+    (2026-08-18): a real operator's `/effort low` was answered "Kept effort
+    level as auto" instead of "Set effort level to low" — the switch
+    genuinely did not apply. Reproducing the exact same command sequence
+    (fresh throwaway session starting from the same unset/"auto" baseline,
+    same CLI version 2.1.234, same model) worked correctly every time;
+    repeating the SAME already-current level also always said "Set effort
+    level to X", never "Kept". No reproducible root cause was found despite
+    genuine attempts (checked: duplicate/racing commands — none; same-value
+    no-op — ruled out; model/provider mismatch — none, same Sonnet 5 both
+    times) — this may be a transient CLI-side race specific to a real,
+    longer-lived session's exact internal state at that moment. Given no
+    fix was reproducible, this is the documented fallback the wave-review
+    itself specified: detect the CLI's own rejection wording and surface it
+    honestly instead of the switch silently failing or a generic timeout."""
+
+    def __init__(self, cli_message: str):
+        super().__init__(cli_message)
+        self.cli_message = cli_message
 
 
 class AgentBusyError(Exception):
@@ -178,6 +207,12 @@ class AgentBusyError(Exception):
 # Pane states an effort switch must never touch (see set_effort's preflight
 # and its verify-timeout cleanup — wave-review finding I-1).
 _BUSY_PANE_STATUSES = frozenset({"working", "permission_prompt"})
+
+# The CLI's own explicit-rejection wording (live-verified, Davinci
+# 2026-08-18: "Kept effort level as auto") — distinct from its
+# apply-confirmation wording ("Set effort level to <level>"). Captures the
+# CLI's whole response line so the operator sees exactly what it said.
+_EFFORT_REJECTED_RE = re.compile(r"Kept effort level as \S+")
 
 
 def _docker_argv(slug: str, *tail: str) -> list[str]:
@@ -343,15 +378,23 @@ async def set_effort(agent, level: str) -> None:
     plus a separate submitting ``Enter`` (same two-call shape as
     ``send_text``'s single-line path). Unlike ``send_text``/``send_keys``,
     delivery here is NOT fire-and-forget: the command is polled for its own
-    status-line confirmation before this returns success. On a verification
-    timeout, a FRESH pane capture decides whether ``Escape`` cleanup is safe
-    — sent only if that fresh capture is NOT ``working``/``permission_prompt``
-    (same I-1 reasoning: the pane may have started a real turn in the gap
-    since the preflight passed) — before raising
-    ``EffortSwitchFailedError``. When no pane can be captured at all
-    (container/window gone), Escape is sent regardless — there's no live
-    process left to interrupt, matching ``_run_docker_exec``'s own
-    fail-silent contract for a target that no longer exists."""
+    inline confirmation before this returns success. Two distinct failure
+    modes:
+    - The CLI EXPLICITLY declined the switch (``"Kept effort level as
+      <X>"``, live-verified on Davinci — see ``EffortSwitchRejectedError``'s
+      docstring for the investigation) -> that error, immediately, carrying
+      the CLI's own message. No Escape cleanup — the CLI already answered
+      and left the pane in a normal ready state.
+    - Verification simply times out (no confirmation, no explicit
+      rejection, seen) -> a FRESH pane capture decides whether ``Escape``
+      cleanup is safe — sent only if that fresh capture is NOT
+      ``working``/``permission_prompt`` (same I-1 reasoning: the pane may
+      have started a real turn in the gap since the preflight passed) —
+      before raising ``EffortSwitchFailedError``. When no pane can be
+      captured at all (container/window gone), Escape is sent regardless —
+      there's no live process left to interrupt, matching
+      ``_run_docker_exec``'s own fail-silent contract for a target that no
+      longer exists."""
     if level not in ALLOWED_EFFORT_LEVELS:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
@@ -419,8 +462,18 @@ async def _verify_effort_applied(agent, level: str) -> bool:
     for _ in range(_EFFORT_VERIFY_ATTEMPTS):
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
         pane = await capture_pane(agent)
-        if pane and marker in pane:
+        if not pane:
+            continue
+        if marker in pane:
             return True
+        rejected = _EFFORT_REJECTED_RE.search(pane)
+        if rejected is not None:
+            # The CLI answered definitively (just not with what was asked
+            # for) — stop polling immediately rather than burning the rest
+            # of the attempt budget waiting for a confirmation that will
+            # never come. See EffortSwitchRejectedError's docstring for the
+            # live investigation behind this (Davinci, 2026-08-18).
+            raise EffortSwitchRejectedError(rejected.group(0))
     return False
 
 
@@ -512,3 +565,31 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
         commands = commands + await _discover_skill_commands(slug)
 
     return {"slashCommands": commands}
+
+
+def model_options_capabilities() -> dict[str, object]:
+    """``{"modelOptions": [{"command": str, "label": str,
+    "contextWindow": int|None}, ...]}`` — the composer's model-switcher
+    dropdown, built from ``settings.model_aliases`` (config-driven, single
+    source — "default" is just another alias there, not special-cased) and
+    ``transcript_chat.resolve_context_window`` (the SAME model->window
+    resolution usage events already use, via ``settings.context_windows``)
+    so the frontend never needs its own hardcoded model/window map. Not
+    gated by agent runtime or cached — this is a static informational list
+    (which models exist and their context windows), not a per-agent live
+    capability check.
+
+    NOTE (harness-catalog follow-up round): ``model_aliases`` is a fallback
+    seed, not the long-term source of truth — a future per-agent CLI
+    discovery (the actual ``/model`` picker rows, cached per
+    ``cli_version``) is meant to take over as the primary source, with this
+    static map demoted to "what to show when the catalog is empty"."""
+    options = [
+        {
+            "command": command,
+            "label": command.capitalize(),
+            "contextWindow": resolve_context_window(model_id),
+        }
+        for command, model_id in settings.model_aliases.items()
+    ]
+    return {"modelOptions": options}

@@ -89,6 +89,9 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
+        # modelOptions isn't agent/runtime-specific (config-driven, see its
+        # own dedicated unit tests) — just confirm it's merged in.
+        "modelOptions": agent_chat_input_mod.model_options_capabilities()["modelOptions"],
     }
 
 
@@ -119,6 +122,9 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
         "effortLevels": [],
         "canSwitchEffort": False,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
+        # modelOptions is agent-independent (config-driven) — Boss gets the
+        # same list as a docker agent.
+        "modelOptions": agent_chat_input_mod.model_options_capabilities()["modelOptions"],
     }
 
 

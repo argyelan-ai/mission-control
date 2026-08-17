@@ -43,6 +43,12 @@ export interface CommandEvent {
   uuid: string;
   ts: string;
   command: string;
+  /** Local-command stdout/stderr merged onto this event by parentUuid — the
+   *  TUI writes a slash command run in-session as a caveat + this command
+   *  entry + a stdout/stderr entry, chained; the caveat is suppressed
+   *  entirely and never reaches the frontend, the stdout/stderr text lands
+   *  here. `null`/absent until (or unless) that merge happens. */
+  result?: string | null;
 }
 
 export interface UsageEvent {

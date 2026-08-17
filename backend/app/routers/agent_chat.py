@@ -23,8 +23,10 @@ from app.redis_client import RedisKeys
 from app.services.agent_chat_input import (
     AgentBusyError,
     EffortSwitchFailedError,
+    EffortSwitchRejectedError,
     InputNotSupportedError,
     effort_capabilities,
+    model_options_capabilities,
     send_keys,
     send_text,
     set_effort,
@@ -109,10 +111,12 @@ async def get_chat_history(
 ):
     """History page plus a ``capabilities`` block
     (``{"effortLevels": [...], "canSwitchEffort": bool, "slashCommands":
-    [...]}``) so the composer can build its effort chip and command palette
-    from what this agent's harness actually supports, instead of a
-    hardcoded list — see ``agent_chat_input.effort_capabilities`` /
-    ``slash_command_capabilities`` for the derivation. Also stamps
+    [...], "modelOptions": [...]}``) so the composer can build its effort
+    chip, command palette, and model dropdown from what this agent's
+    harness actually supports (or, for ``modelOptions``, from the
+    config-driven alias map — see ``agent_chat_input.effort_capabilities`` /
+    ``slash_command_capabilities`` / ``model_options_capabilities`` for each
+    derivation), instead of a hardcoded frontend list. Also stamps
     ``session.aliveness`` (``"active" | "idle" | "ended"`` —
     ``transcript_chat.resolve_aliveness``): the old ``session.live`` alone
     (mtime<60s) read an idle-but-still-running CLI as "ended" everywhere,
@@ -128,6 +132,7 @@ async def get_chat_history(
     history["capabilities"] = {
         **effort_capabilities(agent),
         **await slash_command_capabilities(agent),
+        **model_options_capabilities(),
     }
     return history
 
@@ -266,8 +271,14 @@ async def post_chat_effort(
     pane shows a working turn or an open permission prompt (refused before
     touching the TUI at all — Escape is this app's INTERRUPT key, not a
     neutral cleanup, wave-review I-1); 409
-    ``{"reason":"effort_switch_failed"}`` when the switch couldn't be
-    verified as applied (see ``agent_chat_input.set_effort``).
+    ``{"reason":"effort_switch_rejected","message":str}`` when the CLI
+    EXPLICITLY declined the switch (its own ``"Kept effort level as <X>"``
+    wording, live-verified on Davinci — see
+    ``agent_chat_input.EffortSwitchRejectedError``'s docstring) — the CLI's
+    own message is included so the UI can show the operator WHY, distinct
+    from 409 ``{"reason":"effort_switch_failed"}`` when verification simply
+    timed out with no explicit answer either way (see
+    ``agent_chat_input.set_effort``).
 
     NOTE (Phase-0 discovery, empirically verified): this also changes the
     agent's PERSISTED default effort level in its ``settings.json`` — Claude
@@ -286,5 +297,10 @@ async def post_chat_effort(
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentBusyError:
         return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except EffortSwitchRejectedError as e:
+        return JSONResponse(
+            status_code=409,
+            content={"reason": "effort_switch_rejected", "message": e.cli_message},
+        )
     except EffortSwitchFailedError:
         return JSONResponse(status_code=409, content=_EFFORT_SWITCH_FAILED)

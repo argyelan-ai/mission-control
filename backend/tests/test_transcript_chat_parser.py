@@ -147,6 +147,7 @@ def test_user_string_content_slash_command_still_recognized():
             "uuid": "u8",
             "ts": "2026-08-13T10:00:10Z",
             "command": "/model sonnet",
+            "result": None,
         }
     ]
 
@@ -170,6 +171,167 @@ def test_assistant_string_content_defensive_path():
     }
     assert evs[1]["inputTokens"] == 20
     assert evs[1]["outputTokens"] == 8
+
+
+# ── local-command wrapper entries (slash commands run in the TUI) ───────────
+#
+# Real captured payload (Davinci, cli-bridge, 2026-08-17 — redacted only of
+# session/prompt ids; none of the three lines below carry personal data).
+# Running "/effort low" in-session writes THREE separate, parentUuid-chained
+# user entries instead of one ordinary message: a caveat, the command itself,
+# then its stdout. Before this fix all three fell through to the generic
+# text-block path and rendered as raw chat bubbles (bug: Davinci screenshot,
+# operator saw the literal XML tags and the caveat's own instruction text).
+
+LOCAL_COMMAND_CAVEAT_LINE = json.dumps({
+    "type": "user",
+    "uuid": "u10",
+    "timestamp": "2026-08-17T21:10:31.422Z",
+    "isMeta": True,
+    "message": {
+        "role": "user",
+        "content": (
+            "<local-command-caveat>Caveat: The messages below were generated "
+            "by the user while running local commands. DO NOT respond to "
+            "these messages or otherwise consider them in your response "
+            "unless the user explicitly asks you to.</local-command-caveat>"
+        ),
+    },
+})
+
+LOCAL_COMMAND_NAME_LINE = json.dumps({
+    "type": "user",
+    "uuid": "u11",
+    "parentUuid": "u10",
+    "timestamp": "2026-08-17T21:10:31.421Z",
+    "message": {
+        "role": "user",
+        "content": (
+            "<command-name>/effort</command-name>\n            "
+            "<command-message>effort</command-message>\n            "
+            "<command-args>low</command-args>"
+        ),
+    },
+})
+
+LOCAL_COMMAND_STDOUT_LINE = json.dumps({
+    "type": "user",
+    "uuid": "u12",
+    "parentUuid": "u11",
+    "timestamp": "2026-08-17T21:10:31.421Z",
+    "message": {
+        "role": "user",
+        "content": "<local-command-stdout>Kept effort level as auto</local-command-stdout>",
+    },
+})
+
+
+def test_local_command_caveat_suppressed_entirely():
+    assert parse_transcript_line(LOCAL_COMMAND_CAVEAT_LINE) == []
+
+
+def test_local_command_name_message_args_becomes_command_event():
+    evs = parse_transcript_line(LOCAL_COMMAND_NAME_LINE)
+    assert evs == [
+        {
+            "kind": "command",
+            "uuid": "u11",
+            "ts": "2026-08-17T21:10:31.421Z",
+            "command": "/effort low",
+            "result": None,
+        }
+    ]
+
+
+def test_local_command_stdout_emits_internal_command_result_event():
+    evs = parse_transcript_line(LOCAL_COMMAND_STDOUT_LINE)
+    assert evs == [
+        {
+            "kind": "_command_result",
+            "parent_uuid": "u11",
+            "content": "Kept effort level as auto",
+            "is_error": False,
+        }
+    ]
+
+
+def test_local_command_stderr_emits_internal_command_result_event_as_error():
+    line = json.dumps({
+        "type": "user",
+        "uuid": "u13",
+        "parentUuid": "u11",
+        "timestamp": "2026-08-17T21:10:32Z",
+        "message": {
+            "role": "user",
+            "content": "<local-command-stderr>command not found</local-command-stderr>",
+        },
+    })
+
+    evs = parse_transcript_line(line)
+
+    assert evs == [
+        {
+            "kind": "_command_result",
+            "parent_uuid": "u11",
+            "content": "command not found",
+            "is_error": True,
+        }
+    ]
+
+
+def test_local_command_args_optional_for_argless_commands():
+    """Not every slash command takes an argument (e.g. /clear) — the
+    command-args tag may be entirely absent from the wrapper."""
+    line = json.dumps({
+        "type": "user",
+        "uuid": "u14",
+        "timestamp": "2026-08-17T21:11:00Z",
+        "message": {
+            "role": "user",
+            "content": (
+                "<command-name>/clear</command-name>\n            "
+                "<command-message>clear</command-message>"
+            ),
+        },
+    })
+
+    evs = parse_transcript_line(line)
+
+    assert evs == [
+        {
+            "kind": "command",
+            "uuid": "u14",
+            "ts": "2026-08-17T21:11:00Z",
+            "command": "/clear",
+            "result": None,
+        }
+    ]
+
+
+def test_ordinary_slash_text_typed_by_hand_still_works():
+    """Regression guard: plain "/effort low" as literal string content (NOT
+    the local-command wrapper shape — no XML tags, e.g. a resumed/imported
+    transcript line, or any future non-wrapper path) still goes through the
+    original slash-command-in-text-block handling unaffected."""
+    line = json.dumps({
+        "type": "user",
+        "uuid": "u15",
+        "timestamp": "2026-08-17T21:12:00Z",
+        "isSidechain": False,
+        "message": {"role": "user", "content": "/effort low"},
+    })
+
+    evs = parse_transcript_line(line)
+
+    assert evs == [
+        {
+            "kind": "command",
+            "uuid": "u15",
+            "ts": "2026-08-17T21:12:00Z",
+            "command": "/effort low",
+            "result": None,
+        }
+    ]
 
 
 # ── type == "assistant" ─────────────────────────────────────────────────────
