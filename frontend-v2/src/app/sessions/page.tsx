@@ -322,10 +322,16 @@ function SessionsPageContent() {
               nav); desktop: its own island (ChatView/TerminalPanel have no
               background of their own, so this wrapper supplies bg-base). */}
           <div
-            className={`flex-1 min-w-0 overflow-hidden flex-col min-h-0 ${mobileView === "chat" || !selected ? "flex" : "hidden"} md:flex md:rounded-xl md:border md:border-[var(--color-border)] md:bg-[var(--color-bg-base)]`}
+            className={`flex-1 min-w-0 overflow-hidden flex-col min-h-0 flex md:rounded-xl md:border md:border-[var(--color-border)] md:bg-[var(--color-bg-base)]`}
           >
-            {/* Mobile: back button — returns to the sidebar sheet (stack nav) */}
-            {selected && (
+            {/* Mobile: back button — returns to the sidebar sheet (stack nav).
+                Hotfix 2026-08-17: chat is ALWAYS visible on mobile when an
+                agent is selected — a restored selection previously left
+                mobileView on "list", whose sheet-only layout has no content
+                area, rendering a blank page. Selection switching happens via
+                the sheet dropdown, so the back button is hidden for now
+                (full mobile stack-nav comes with the redesign pass). */}
+            {selected && false && (
               <button
                 onClick={() => setMobileView("list")}
                 className="flex md:hidden items-center gap-2 px-4 py-3 text-sm border-b cursor-pointer min-h-touch"
