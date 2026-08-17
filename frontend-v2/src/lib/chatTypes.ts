@@ -176,11 +176,33 @@ export interface ChatCapabilities {
    *  depending on the source, so consumers must normalize (see
    *  `resolveSlashCommands`) rather than assume. */
   slashCommands?: ChatSlashCommand[] | null;
+  /** The models this harness offers, with their context windows. Absent on older
+   *  backends, where the switcher falls back to its static list and shows no
+   *  window sizes at all — better than printing a number we made up. */
+  modelOptions?: ChatModelOption[] | null;
 }
 
 export interface ChatSlashCommand {
   name: string;
   description?: string | null;
+}
+
+/**
+ * One entry of the model switcher, reported by the harness so the picker can
+ * show what each model's context window actually is instead of the frontend
+ * carrying a model→size map that goes stale the moment a model ships.
+ *
+ * `command` is what gets sent as `/model <command>`. `name` is accepted as a
+ * synonym because the backend assembles this alongside `slashCommands`, whose
+ * key IS `name` — tolerating both here costs one line and removes a whole class
+ * of silent mismatch. `contextWindow` may legitimately be unknown; then the row
+ * simply carries no suffix rather than a guess.
+ */
+export interface ChatModelOption {
+  command?: string | null;
+  name?: string | null;
+  label?: string | null;
+  contextWindow?: number | null;
 }
 
 /**

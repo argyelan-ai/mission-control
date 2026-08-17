@@ -163,6 +163,101 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("/model sonnet");
   });
 
+  // ── Model switcher: context window per model ──────────────────────────────
+
+  describe("reported model options", () => {
+    const modelRow = (name: string) =>
+      screen.getByRole("option", { name: new RegExp(`^${name}`, "i") });
+
+    it("shows each model's context window, right-aligned and muted", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ model: "sonnet" })}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            modelOptions: [
+              { command: "sonnet", label: "Sonnet", contextWindow: 200_000 },
+              { command: "opus", label: "Opus", contextWindow: 1_000_000 },
+            ],
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: /sonnet/ }));
+
+      expect(modelRow("Sonnet")).toHaveTextContent("200k");
+      expect(modelRow("Opus")).toHaveTextContent("1M");
+    });
+
+    it("shows no suffix for a model whose window the harness doesn't know", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ model: "custom" })}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            // null and a nonsense value must both mean "say nothing" — an
+            // invented number here would be worse than no number.
+            modelOptions: [
+              { command: "custom", label: "Custom", contextWindow: null },
+              { command: "broken", label: "Broken", contextWindow: 0 },
+            ],
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: /custom/ }));
+
+      expect(modelRow("Custom").textContent?.trim()).toBe("Custom");
+      expect(modelRow("Broken").textContent?.trim()).toBe("Broken");
+    });
+
+    it("sends the reported command, not the label", async () => {
+      const onSend = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ model: "sonnet" })}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            modelOptions: [{ command: "opus-5", label: "Opus 5", contextWindow: 1_000_000 }],
+          }}
+          state={null}
+          onSend={onSend}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: /sonnet/ }));
+      await user.click(modelRow("Opus 5"));
+
+      expect(onSend).toHaveBeenCalledWith("/model opus-5");
+    });
+
+    it("keeps the static list without any sizes when the field is absent", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage()} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByRole("button", { name: /claude-sonnet-4-6/ }));
+
+      // Static entries carry no window — the frontend keeps no model→size map,
+      // because such a map is wrong the day a new model ships.
+      expect(modelRow("Sonnet").textContent?.trim()).toBe("Sonnet");
+      expect(modelRow("Opus").textContent?.trim()).toBe("Opus");
+    });
+  });
+
   // ── Context ring → breakdown popover ──────────────────────────────────────
 
   it("opens the context breakdown when the ring is clicked", async () => {

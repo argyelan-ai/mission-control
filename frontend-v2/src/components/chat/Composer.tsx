@@ -11,6 +11,7 @@ import {
   isInputNotSupportedError,
   isSessionOnlyEffort,
   type ChatCapabilities,
+  type ChatModelOption,
   type ChatSlashCommand,
   type StateEvent,
   type UsageEvent,
@@ -71,6 +72,41 @@ export function resolveSlashCommands(
     })
     .filter((cmd) => cmd.command.length > 1);
   return normalized.length > 0 ? normalized : SLASH_COMMANDS;
+}
+
+/** One row of the model switcher, after normalization. */
+export interface ModelChoice {
+  /** Sent as `/model <name>`. */
+  name: string;
+  label: string;
+  /** `null` = the harness didn't say; the row then shows no size suffix. */
+  contextWindow: number | null;
+}
+
+/**
+ * The model switcher's rows, from the harness when it reports them, otherwise
+ * the static list without any window sizes.
+ *
+ * The frontend deliberately keeps no model→window map of its own: such a map is
+ * wrong the day a new model ships, and the composer's context ring already
+ * learned that lesson (`contextWindow` on the usage event is backend-stamped for
+ * the same reason).
+ */
+export function resolveModelOptions(
+  reported: ChatModelOption[] | null | undefined,
+): ModelChoice[] {
+  const fallback = CLAUDE_MODELS.map((m) => ({ name: m.name, label: m.label, contextWindow: null }));
+  if (!reported || reported.length === 0) return fallback;
+  const normalized = reported
+    .map((option) => {
+      const name = (option.command ?? option.name ?? "").trim();
+      const window = typeof option.contextWindow === "number" && option.contextWindow > 0
+        ? option.contextWindow
+        : null;
+      return { name, label: option.label?.trim() || name, contextWindow: window };
+    })
+    .filter((option) => option.name.length > 0);
+  return normalized.length > 0 ? normalized : fallback;
 }
 
 type RingThreshold = "normal" | "warning" | "error";
@@ -149,6 +185,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const isWorking = state?.status === "working";
   const effortLevels = resolveEffortLevels(capabilities);
   const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
+  const modelOptions = resolveModelOptions(capabilities?.modelOptions);
 
   // Palette is only ever "/<query>" with no space yet — once a space lands,
   // the user has moved on to arguments and the palette has no business
@@ -457,20 +494,34 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   boxShadow: "var(--shadow-elevated)",
                 }}
               >
-                {CLAUDE_MODELS.map((m) => (
+                {modelOptions.map((m) => (
                   <button
                     key={m.name}
                     type="button"
                     role="option"
                     aria-selected={m.name === usage?.model}
+                    data-model={m.name}
                     onClick={() => selectModel(m.name)}
-                    className="w-full text-left px-2 py-1.5 text-[12px] font-mono rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                    className="w-full flex items-center gap-3 text-left px-2 py-1.5 text-[12px] font-mono rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                     style={{
                       color: m.name === usage?.model ? C.accent : C.textPrimary,
                       backgroundColor: m.name === usage?.model ? C.accentSubtle : "transparent",
                     }}
                   >
-                    {m.label}
+                    <span className="min-w-0 truncate">{m.label}</span>
+                    {/* The window belongs next to the model it describes —
+                        "which one has room for this task" is the actual question
+                        behind switching. Right-aligned and muted so the list
+                        still reads as a list of models, with a fact attached.
+                        Unknown window = no suffix; never an invented number. */}
+                    {m.contextWindow != null && (
+                      <span
+                        className="ml-auto shrink-0 tabular-nums"
+                        style={{ color: C.textMuted }}
+                      >
+                        {formatCompactTokens(m.contextWindow)}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
