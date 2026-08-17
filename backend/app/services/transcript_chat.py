@@ -12,7 +12,16 @@ Normalized event shapes (plain dicts, JSON-serializable):
   {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
   {"kind":"command","uuid":str,"ts":str,"command":str}
   {"kind":"usage","uuid":str,"ts":str,"inputTokens":int,"outputTokens":int,
-   "model":str|None,"effort":str|None,"contextWindow":int|None}
+   "model":str|None,"effort":str|None,"contextWindow":int|None,
+   "components":{"input":int,"cacheRead":int,"cacheCreation":int,"output":int}}
+
+``inputTokens`` is deliberately the SUM of the three input-side fields
+(``input`` + ``cacheRead`` + ``cacheCreation``); ``components`` carries the same
+numbers unsummed for the context breakdown view. ``_stamp_usage_source``
+replaces ``components`` with the CLI statusline's ``current_usage`` when that is
+fresh — the transcript line describes one turn, the statusline describes the
+whole live context window, so it is the better answer to "where did the window
+go" whenever it exists.
 
 `parse_transcript_line` also emits an internal ``_tool_result`` event for
 ``tool_result`` content blocks (type=="user" lines) — ``{"kind":"_tool_result",
@@ -266,10 +275,18 @@ def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
 
     usage = message.get("usage")
     if usage:
+        # `inputTokens` stays the SUM of the three input-side fields — every
+        # existing consumer (the context ring's fallback estimate) depends on
+        # that. `components` keeps them apart as well, so a breakdown view can
+        # show where the window actually went without re-deriving anything.
+        components = {
+            "input": usage.get("input_tokens") or 0,
+            "cacheRead": usage.get("cache_read_input_tokens") or 0,
+            "cacheCreation": usage.get("cache_creation_input_tokens") or 0,
+            "output": usage.get("output_tokens") or 0,
+        }
         input_tokens = (
-            (usage.get("input_tokens") or 0)
-            + (usage.get("cache_read_input_tokens") or 0)
-            + (usage.get("cache_creation_input_tokens") or 0)
+            components["input"] + components["cacheRead"] + components["cacheCreation"]
         )
         events.append(
             {
@@ -277,10 +294,11 @@ def _parse_assistant_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                 "uuid": msg_uuid,
                 "ts": ts,
                 "inputTokens": input_tokens,
-                "outputTokens": usage.get("output_tokens") or 0,
+                "outputTokens": components["output"],
                 "model": model,
                 "effort": d.get("effort"),
                 "contextWindow": resolve_context_window(model),
+                "components": components,
             }
         )
 
@@ -542,18 +560,20 @@ def read_statusline_state(claude_config_root: Path, session_id: str) -> dict[str
         usage = ctx["current_usage"]
         used_pct = float(ctx["used_percentage"])
         context_window_size = int(ctx["context_window_size"])
-        used_tokens = int(
-            (usage.get("input_tokens") or 0)
-            + (usage.get("output_tokens") or 0)
-            + (usage.get("cache_read_input_tokens") or 0)
-            + (usage.get("cache_creation_input_tokens") or 0)
-        )
+        components = {
+            "input": int(usage.get("input_tokens") or 0),
+            "cacheRead": int(usage.get("cache_read_input_tokens") or 0),
+            "cacheCreation": int(usage.get("cache_creation_input_tokens") or 0),
+            "output": int(usage.get("output_tokens") or 0),
+        }
+        used_tokens = sum(components.values())
     except (KeyError, TypeError, ValueError):
         return None
     return {
         "usedPct": used_pct,
         "usedTokens": used_tokens,
         "contextWindowSize": context_window_size,
+        "components": components,
     }
 
 
@@ -571,6 +591,11 @@ def _stamp_usage_source(ev: dict[str, Any], claude_config_root: Path, session_id
         ev["usedPct"] = state["usedPct"]
         ev["source"] = "cli"
         ev["contextWindow"] = state["contextWindowSize"]
+        # The CLI's own per-field usage describes the WHOLE live context, while
+        # the transcript line only describes that one turn — so when it is
+        # available it wins, the same way usedPct/contextWindow do. Otherwise
+        # the turn-level breakdown parse_transcript_line stamped stays.
+        ev["components"] = state["components"]
     else:
         ev["usedPct"] = None
         ev["source"] = "estimate"

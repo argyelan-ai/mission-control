@@ -69,6 +69,20 @@ export interface UsageEvent {
    *  figure. `"estimate"` = the backend computed it itself (no ground truth
    *  available). Only meaningful together with `usedPct`. */
   source?: "cli" | "estimate";
+  /** The four token buckets kept apart, for the context breakdown view.
+   *  `inputTokens` above stays their input-side SUM — every existing consumer
+   *  relies on that. When fresh CLI statusline state exists these describe the
+   *  whole live context window; otherwise they describe just this turn.
+   *  `null`/absent means the backend had no breakdown, and consumers show only
+   *  used-vs-free rather than inventing segments. */
+  components?: UsageComponents | null;
+}
+
+export interface UsageComponents {
+  input: number;
+  cacheRead: number;
+  cacheCreation: number;
+  output: number;
 }
 
 export interface ChatPromptOption {

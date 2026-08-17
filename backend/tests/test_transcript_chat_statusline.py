@@ -50,6 +50,12 @@ def test_read_statusline_state_fresh_returns_pct_and_tokens(tmp_path):
         "usedPct": 55.25,
         "usedTokens": 1050,  # 100+40+900+10
         "contextWindowSize": 1_000_000,
+        "components": {
+            "input": 100,
+            "cacheRead": 900,
+            "cacheCreation": 10,
+            "output": 40,
+        },
     }
 
 
@@ -156,10 +162,25 @@ def test_read_statusline_state_missing_usage_fields_default_to_zero(tmp_path):
 
     result = read_statusline_state(tmp_path, "sess1")
 
-    assert result == {"usedPct": 1.0, "usedTokens": 5, "contextWindowSize": 200_000}
+    assert result == {
+        "usedPct": 1.0,
+        "usedTokens": 5,
+        "contextWindowSize": 200_000,
+        "components": {"input": 5, "cacheRead": 0, "cacheCreation": 0, "output": 0},
+    }
 
 
 def test_claude_config_root_three_levels_above_session_file():
     session_path = Path("/x/claude-config/projects/-home-agent/sess1.jsonl")
 
     assert _claude_config_root(session_path) == Path("/x/claude-config")
+
+
+def test_read_statusline_state_components_sum_to_used_tokens(tmp_path):
+    """The breakdown view derives "Frei" as window minus the sum, so the parts
+    must add up to the total the same reader reports."""
+    _write_state(tmp_path / "statusline-state", "sess1", _VALID_PAYLOAD)
+
+    result = read_statusline_state(tmp_path, "sess1")
+
+    assert sum(result["components"].values()) == result["usedTokens"]

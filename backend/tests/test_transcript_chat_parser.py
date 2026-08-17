@@ -3,6 +3,8 @@
 Fixture lines are trimmed, redacted copies of the real Claude Code JSONL
 schema (structure kept, content neutralized — no personal data).
 """
+import json
+
 from app.services.transcript_chat import build_tool_title, parse_transcript_line, resolve_context_window
 
 # ── Fixture lines ──────────────────────────────────────────────────────────
@@ -235,7 +237,46 @@ def test_assistant_usage_event_shape():
         "model": "claude-sonnet-4-6",
         "effort": None,
         "contextWindow": 200_000,
+        "components": {
+            "input": 100,
+            "cacheRead": 900,
+            "cacheCreation": 0,
+            "output": 50,
+        },
     }
+
+
+def test_usage_components_keep_the_input_fields_apart():
+    """`inputTokens` stays the sum (every existing consumer relies on it), but
+    the breakdown view needs the three input-side fields unsummed."""
+    usage = [e for e in parse_transcript_line(ASSIST_LINE) if e["kind"] == "usage"][0]
+    comp = usage["components"]
+    assert comp["input"] + comp["cacheRead"] + comp["cacheCreation"] == usage["inputTokens"]
+    assert comp["output"] == usage["outputTokens"]
+
+
+def test_usage_components_default_missing_fields_to_zero():
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "a9",
+            "timestamp": "2026-08-13T10:00:02Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {"input_tokens": 7},
+            },
+        }
+    )
+    usage = [e for e in parse_transcript_line(line) if e["kind"] == "usage"][0]
+    assert usage["components"] == {
+        "input": 7,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 0,
+    }
+    assert usage["inputTokens"] == 7
 
 
 def test_usage_effort_from_top_level_entry():

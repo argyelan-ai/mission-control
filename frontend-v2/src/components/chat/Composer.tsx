@@ -5,6 +5,7 @@ import { Square, ArrowUp, ChevronDown } from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
+import { ContextPanel } from "./ContextPanel";
 
 const MAX_ROWS = 8;
 // Matches the textarea's own line-height (14px body × 1.5, rounded) so the
@@ -73,6 +74,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -372,6 +374,20 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           )}
 
           {usage && pct != null && (
+            // The ring stays the compact indicator and the tooltip stays the
+            // quick glance; the click opens the breakdown — "how full" and
+            // "with what" are two questions, and only the first fits in 18px.
+            // `relative` is what the desktop popover anchors to.
+            <div className="relative shrink-0">
+            <button
+              type="button"
+              data-context-trigger
+              aria-haspopup="dialog"
+              aria-expanded={contextOpen}
+              aria-label="Kontext-Aufschlüsselung"
+              onClick={() => setContextOpen((v) => !v)}
+              className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
+            >
             <div
               data-testid="context-ring"
               role="progressbar"
@@ -381,7 +397,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               data-threshold={ringThresholdValue}
               data-source={pctSource ?? undefined}
               title={ringTitle}
-              className="flex items-center gap-1 shrink-0 pl-0.5"
+              className="flex items-center gap-1 shrink-0"
             >
               <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
                 <circle
@@ -413,6 +429,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               >
                 {Math.round(pct)}%
               </span>
+            </div>
+            </button>
+            {contextOpen && (
+              <ContextPanel
+                usage={usage}
+                pct={pct}
+                pctSource={pctSource}
+                onClose={() => setContextOpen(false)}
+              />
+            )}
             </div>
           )}
 

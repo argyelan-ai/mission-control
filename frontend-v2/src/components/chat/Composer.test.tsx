@@ -145,6 +145,44 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("/model sonnet");
   });
 
+  // ── Context ring → breakdown popover ──────────────────────────────────────
+
+  it("opens the context breakdown when the ring is clicked", async () => {
+    const user = userEvent.setup();
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({
+          components: { input: 10_000, cacheRead: 38_000, cacheCreation: 2_000, output: 1_000 },
+        })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId("context-panel")).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "Kontext-Aufschlüsselung" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+
+    expect(screen.getByTestId("context-panel")).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("context-row-cacheRead")).toHaveTextContent("Cache gelesen");
+  });
+
+  it("keeps the ring itself a progressbar with its tooltip (quick glance stays)", () => {
+    render(<Composer agentId="a1" usage={mkUsage()} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const ring = screen.getByTestId("context-ring");
+    expect(ring).toHaveAttribute("role", "progressbar");
+    expect(ring).toHaveAttribute("title");
+  });
+
+  it("does not offer the breakdown when there is no usage to break down", () => {
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Kontext-Aufschlüsselung" })).not.toBeInTheDocument();
+  });
+
   it("keeps the send button a ghost outline until there is something to send", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
