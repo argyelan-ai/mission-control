@@ -39,14 +39,34 @@ idle agents mid-conversation (live-gate finding, fix round 3).
 <level>`` as a direct CLI argument rather than driving the ``/model``
 picker's Left/Right/``s`` sequence — Phase-0 discovery (empirically, on a
 throwaway tmux window, Claude Code 2.1.233) found BOTH paths persist the new
-effort level to the agent's ``settings.json`` (``effortLevel``) identically;
-the picker's "s = session only" option genuinely scopes the MODEL choice to
-the session but does NOT extend that scoping to effort, despite its own
-label. Since the picker buys no session-only guarantee it appeared to
-promise, the direct-argument form is strictly simpler and equally
-side-effecting — see the Phase-0 discovery notes in the A5 report for the
-full empirical trail (settings.json mtime/content diffs before/after each
-path). ``set_effort`` refuses to touch a busy pane at all — a preflight via
+effort level to the agent's ``settings.json`` (``effortLevel``) identically
+for the four LOWER levels; the picker's "s = session only" option genuinely
+scopes the MODEL choice to the session but does NOT extend that scoping to
+effort, despite its own label. Since the picker buys no session-only
+guarantee it appeared to promise, the direct-argument form is strictly
+simpler and equally side-effecting — see the Phase-0 discovery notes in the
+A5 report for the full empirical trail (settings.json mtime/content diffs
+before/after each path).
+
+``ALLOWED_EFFORT_LEVELS`` (single source of truth, also driving the
+``GET /chat/history`` capabilities payload via ``effort_capabilities``) is
+the 6 levels discovered via the CLI's OWN validation error (feeding it an
+invalid argument, zero persistence risk): ``low, medium, high, xhigh, max,
+ultracode`` — plus a 7th CLI-accepted value, ``auto``, deliberately
+EXCLUDED: it clears the persisted override entirely rather than setting one
+("Effort level set to auto", no "(saved.../this session only)" suffix, no
+stable displayed state for a chip to show as "current"), so it doesn't fit
+this endpoint's "pick one of N levels" contract. Also discovered: ``max``
+and ``ultracode`` are session-only BY CLI DESIGN ("this session only" in
+their own confirmation text, ``settings.json`` genuinely untouched) — unlike
+the other 4, which persist. Because of this split, verification does NOT
+rely on the compact status-line badge (``"<level> · /effort"``) that only
+renders for a PERSISTED level — it polls for the CLI's own inline
+confirmation line instead (``"effort level to <level>"``, present in both
+the persisting and session-only phrasings alike), which is a strictly more
+reliable, level-independent signal.
+
+``set_effort`` refuses to touch a busy pane at all — a preflight via
 ``pane_state.parse_pane_state`` 409s with ``AgentBusyError``
 (``{"reason": "agent_busy"}``) if the agent is mid-turn or showing an open
 permission prompt, since ``Escape`` is this app's INTERRUPT key, not a
@@ -54,12 +74,11 @@ neutral cleanup keystroke (wave-review finding I-1: sending ``/effort`` into
 a working turn only queues it, and an Escape "cleanup" on a busy pane
 silently aborts real work or dismisses a live permission prompt). Past the
 preflight, it verifies the switch actually landed by polling
-``pane_state.capture_pane`` for the CLI's own status-line confirmation
-(``"<level> · /effort"``) before returning success; on a verification
-timeout it re-checks busy-ness on a FRESH capture and only sends ``Escape``
-as a cleanup safety net if that fresh check is clear, before raising
-``EffortSwitchFailedError`` for the router to turn into 409
-``{"reason": "effort_switch_failed"}``.
+``pane_state.capture_pane`` for that confirmation line before returning
+success; on a verification timeout it re-checks busy-ness on a FRESH capture
+and only sends ``Escape`` as a cleanup safety net if that fresh check is
+clear, before raising ``EffortSwitchFailedError`` for the router to turn
+into 409 ``{"reason": "effort_switch_failed"}``.
 """
 from __future__ import annotations
 
@@ -109,13 +128,16 @@ _RECYCLER_MARKER_PATH = "/home/agent/.claude/last-task.marker"
 # (fix round 2, reproduced live: text landed but never submitted for hours).
 _BOSS_ENTER_DELAY_SECONDS = 0.15
 
-# Effort switching (v1, docker-only). 3-level API surface — the underlying
-# CLI also has xhigh/max/ultracode, deliberately not exposed here.
-ALLOWED_EFFORT_LEVELS = ("low", "medium", "high")
+# Effort switching (v1, docker-only). All 6 discrete levels the CLI's own
+# /effort argument validator accepts (see module docstring for the discovery
+# evidence and why the 7th accepted value, "auto", is deliberately excluded).
+# Single source of truth — reused by set_effort's validation AND
+# effort_capabilities' GET /chat/history payload.
+ALLOWED_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 
 # Polling budget for _verify_effort_applied: a docker-exec capture-pane round
 # trip is fast (<100ms typically) but not instant, and the CLI needs a brief
-# moment to re-render its status line after processing the /effort command.
+# moment to render its confirmation line after processing the /effort command.
 _EFFORT_VERIFY_ATTEMPTS = 5
 _EFFORT_VERIFY_DELAY_SECONDS = 0.2
 
@@ -357,17 +379,50 @@ async def _pane_is_busy(agent) -> bool:
 
 
 async def _verify_effort_applied(agent, level: str) -> bool:
-    """Polls the pane for the CLI's own status-line confirmation — it prints
-    ``"<level> · /effort"`` bottom-right immediately after ``/effort``
-    applies (e.g. ``"○ low · /effort"``, live-verified across low/medium/
-    high). Fire-and-forget delivery (``_run_docker_exec``) gives no
-    confirmation on its own that the command actually landed; this is the
-    one call site in the module that needs a real success/failure signal
-    instead of the usual "log a warning and move on" contract."""
-    marker = f"{level} · /effort"
+    """Polls the pane for the CLI's own inline confirmation line — it always
+    echoes ``"Set effort level to <level> (...)"`` into the transcript pane
+    right after ``/effort`` applies, live-verified across all 6 allowed
+    levels. This is deliberately NOT the compact status-line badge
+    (``"<level> · /effort"``) the earlier implementation polled for: that
+    badge only renders for a level that becomes the PERSISTED default
+    (low/medium/high/xhigh) — ``max``/``ultracode`` are session-only by CLI
+    design and never show it at all, which would make verification always
+    time out for them. The confirmation-line substring
+    (``"effort level to <level>"``) is present in both the persisting
+    ("saved as your default for new sessions") and session-only ("this
+    session only") phrasings alike, so one check covers every allowed level.
+    Fire-and-forget delivery (``_run_docker_exec``) gives no confirmation on
+    its own that the command actually landed; this is the one call site in
+    the module that needs a real success/failure signal instead of the
+    usual "log a warning and move on" contract."""
+    marker = f"effort level to {level}"
     for _ in range(_EFFORT_VERIFY_ATTEMPTS):
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
         pane = await capture_pane(agent)
         if pane and marker in pane:
             return True
     return False
+
+
+def effort_capabilities(agent) -> dict[str, object]:
+    """Effort-switching capability for the composer chip:
+    ``{"effortLevels": [...], "canSwitchEffort": bool}`` — consumed by
+    ``routers/agent_chat.get_chat_history`` to let the frontend build the
+    chip dynamically from what the agent's actual harness supports, instead
+    of hardcoding a level list. Docker/cli-bridge agents get
+    ``ALLOWED_EFFORT_LEVELS`` verbatim (the single source of truth ``
+    set_effort`` validates against too); every other runtime (Boss, any
+    other host agent) gets an empty list and ``canSwitchEffort=False`` — no
+    pane probe exists for them, the same v1 boundary ``set_effort`` itself
+    enforces via ``InputNotSupportedError``. Never raises: an unsupported
+    runtime is a normal, expected answer here (unlike ``set_effort``, where
+    it's a request the caller made in error), so it's handled as data, not
+    an exception."""
+    try:
+        kind = _target_kind(agent)
+    except InputNotSupportedError:
+        kind = None
+
+    if kind == "docker":
+        return {"effortLevels": list(ALLOWED_EFFORT_LEVELS), "canSwitchEffort": True}
+    return {"effortLevels": [], "canSwitchEffort": False}

@@ -63,6 +63,35 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     assert len(body["events"]) == 1
     assert body["events"][0]["kind"] == "message"
     assert body["events"][0]["text"] == "hello from fixture"
+    # Dynamic effort-level capabilities (docker/cli-bridge agent): the
+    # discovered 6-level list, switching allowed.
+    assert body["capabilities"] == {
+        "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+        "canSwitchEffort": True,
+    }
+
+
+async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """Boss (host runtime) has no pane probe — capabilities must say so
+    explicitly rather than the frontend guessing from agent_runtime alone."""
+    agent = await make_agent(name="Boss", agent_runtime="host", slug="boss")
+
+    tdir = tmp_path / "boss-transcripts"
+    tdir.mkdir()
+    (tdir / "sess1.jsonl").write_text(_user_line("hi from boss") + "\n")
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    # Only the capabilities derivation is under test here — bypass the A2
+    # Boss privacy heuristic (cwd/branch sniffing) entirely rather than
+    # constructing a transcript line that would satisfy it.
+    monkeypatch.setattr(agent_chat_mod, "transcript_allowed", lambda a, p: True)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["capabilities"] == {"effortLevels": [], "canSwitchEffort": False}
 
 
 async def test_history_404_no_transcript_for_host_agent_without_dir(auth_client: AsyncClient, make_agent):

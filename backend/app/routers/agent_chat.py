@@ -24,6 +24,7 @@ from app.services.agent_chat_input import (
     AgentBusyError,
     EffortSwitchFailedError,
     InputNotSupportedError,
+    effort_capabilities,
     send_keys,
     send_text,
     set_effort,
@@ -104,12 +105,21 @@ async def get_chat_history(
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
+    """History page plus a ``capabilities`` block
+    (``{"effortLevels": [...], "canSwitchEffort": bool}``) so the composer's
+    effort chip can build itself from what this agent's harness actually
+    supports instead of a hardcoded level list — see
+    ``agent_chat_input.effort_capabilities`` for the derivation (docker/
+    cli-bridge gets the discovered level list, every other runtime gets an
+    empty list and ``canSwitchEffort=False``)."""
     resolved = await _resolve_transcript_path(agent_id, session)
     if isinstance(resolved, JSONResponse):
         return resolved
 
-    _agent, path = resolved
-    return read_history(path, limit=limit, before_uuid=before_uuid)
+    agent, path = resolved
+    history = read_history(path, limit=limit, before_uuid=before_uuid)
+    history["capabilities"] = effort_capabilities(agent)
+    return history
 
 
 @router.get("/agents/{agent_id}/chat/stream")

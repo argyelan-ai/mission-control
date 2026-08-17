@@ -408,6 +408,18 @@ async def test_send_keys_other_host_agent_raises_input_not_supported():
 # neutral cleanup — set_effort must never send anything into a working turn
 # or an open permission prompt, and a verify-timeout Escape cleanup must only
 # fire when a FRESH pane capture confirms the pane is no longer busy.
+#
+# Dynamic effort levels (fix round): the CLI's OWN invalid-argument error
+# (zero persistence risk) is the authoritative list — "low, medium, high,
+# xhigh, max, ultracode, auto". "auto" is deliberately excluded from
+# ALLOWED_EFFORT_LEVELS (clears the override rather than setting one, no
+# stable displayed state). "max"/"ultracode" turned out to be session-only
+# BY CLI DESIGN ("this session only" in their own confirmation text,
+# settings.json genuinely untouched) — unlike the other 4, which persist —
+# and neither renders the compact "<level> · /effort" status-line badge the
+# original verification polled for. Verification now polls for the CLI's
+# inline confirmation line instead ("effort level to <level>", present in
+# both phrasings), so the marker text in these fixtures reads that way.
 # ══════════════════════════════════════════════════════════════════════════
 
 # Synthetic pane snapshots exercising the real parse_pane_state heuristics
@@ -461,7 +473,10 @@ async def test_set_effort_success_sends_command_and_verifies(monkeypatch):
 
     calls = await _patch_effort_deps(
         monkeypatch, agent_chat_input,
-        pane_sequence=["stuff\n   ● high · /effort\nmore"],
+        pane_sequence=[
+            "❯ /effort high\n"
+            "  ⎿  Set effort level to high (saved as your default for new sessions): ..."
+        ],
     )
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
@@ -473,6 +488,44 @@ async def test_set_effort_success_sends_command_and_verifies(monkeypatch):
     assert second[-1] == "Enter"
 
 
+async def test_set_effort_success_session_only_level(monkeypatch):
+    """max/ultracode are session-only by CLI design and never show the
+    compact status-line badge — verification must succeed via the inline
+    confirmation line alone (its "(this session only)" phrasing)."""
+    from app.services import agent_chat_input
+
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input,
+        pane_sequence=[
+            "❯ /effort max\n"
+            "  ⎿  Set effort level to max (this session only): ..."
+        ],
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "max")
+
+    assert len(calls) == 2
+    assert calls[0][-3:] == ["-l", "--", "/effort max"]
+    assert calls[1][-1] == "Enter"
+
+
+async def test_set_effort_accepts_all_six_discovered_levels(monkeypatch):
+    """The full authoritative list from the CLI's own invalid-argument error
+    message — low/medium/high/xhigh persist, max/ultracode are session-only,
+    but all 6 must be accepted and verifiable via the confirmation line."""
+    from app.services import agent_chat_input
+
+    for level in agent_chat_input.ALLOWED_EFFORT_LEVELS:
+        calls = await _patch_effort_deps(
+            monkeypatch, agent_chat_input,
+            pane_sequence=[f"  ⎿  Set effort level to {level} (...)"],
+        )
+        agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+        await agent_chat_input.set_effort(agent, level)
+        assert calls[0][-3:] == ["-l", "--", f"/effort {level}"]
+
+
 async def test_set_effort_rejects_non_allowlisted_level(monkeypatch):
     from app.services import agent_chat_input
 
@@ -480,7 +533,10 @@ async def test_set_effort_rejects_non_allowlisted_level(monkeypatch):
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     with pytest.raises(ValueError):
-        await agent_chat_input.set_effort(agent, "xhigh")  # not in the 3-level v1 surface
+        # "auto" IS a CLI-accepted /effort argument (confirmed live) but is
+        # deliberately excluded from ALLOWED_EFFORT_LEVELS — see the module
+        # docstring for why (clears the override, no stable displayed state).
+        await agent_chat_input.set_effort(agent, "auto")
 
     assert calls == []  # nothing delivered — validated before any docker call
 
@@ -553,7 +609,7 @@ async def test_set_effort_preflight_allows_idle_pane(monkeypatch):
 
     calls = await _patch_effort_deps(
         monkeypatch, agent_chat_input,
-        pane_sequence=[_IDLE_PANE, "○ low · /effort"],
+        pane_sequence=[_IDLE_PANE, "  ⎿  Set effort level to low (saved as your default for new sessions): ..."],
     )
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
@@ -626,6 +682,43 @@ async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeyp
         await agent_chat_input.set_effort(agent, "medium")
 
     assert calls[-1][-1] == "Escape"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# services/agent_chat_input.py — effort_capabilities
+# ══════════════════════════════════════════════════════════════════════════
+
+
+async def test_effort_capabilities_docker_agent_gets_full_level_list():
+    from app.services import agent_chat_input
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = agent_chat_input.effort_capabilities(agent)
+
+    assert caps == {
+        "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+        "canSwitchEffort": True,
+    }
+    # Same single-source constant set_effort validates against — no drift.
+    assert caps["effortLevels"] == list(agent_chat_input.ALLOWED_EFFORT_LEVELS)
+
+
+async def test_effort_capabilities_boss_cannot_switch():
+    from app.services import agent_chat_input
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    caps = agent_chat_input.effort_capabilities(agent)
+
+    assert caps == {"effortLevels": [], "canSwitchEffort": False}
+
+
+async def test_effort_capabilities_other_host_agent_cannot_switch():
+    from app.services import agent_chat_input
+
+    agent = _StubAgent(slug="hermes", agent_runtime="host")
+    caps = agent_chat_input.effort_capabilities(agent)
+
+    assert caps == {"effortLevels": [], "canSwitchEffort": False}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -853,6 +946,25 @@ async def test_post_chat_effort_204_and_forwards_level(auth_client: AsyncClient,
     assert calls == [(agent.id, "high")]
 
 
+async def test_post_chat_effort_accepts_all_six_discovered_levels(auth_client: AsyncClient, make_agent, monkeypatch):
+    from app.services.agent_chat_input import ALLOWED_EFFORT_LEVELS
+
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    async def _fake_set_effort(a, level):
+        pass
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    monkeypatch.setattr(agent_chat_mod, "set_effort", _fake_set_effort)
+
+    for level in ALLOWED_EFFORT_LEVELS:
+        resp = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/chat/effort", json={"level": level}
+        )
+        assert resp.status_code == 204, f"level={level!r}: {resp.text}"
+
+
 async def test_post_chat_effort_422_non_allowlisted_level(auth_client: AsyncClient, make_agent, monkeypatch):
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
 
@@ -861,8 +973,10 @@ async def test_post_chat_effort_422_non_allowlisted_level(auth_client: AsyncClie
 
     monkeypatch.setattr(agent_chat_mod, "set_effort", real_set_effort)
 
+    # "auto" is a real CLI-accepted /effort argument but deliberately
+    # excluded from ALLOWED_EFFORT_LEVELS (see module docstring) — 422, not 204.
     resp = await auth_client.post(
-        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "xhigh"}
+        f"/api/v1/agents/{agent.id}/chat/effort", json={"level": "auto"}
     )
 
     assert resp.status_code == 422
