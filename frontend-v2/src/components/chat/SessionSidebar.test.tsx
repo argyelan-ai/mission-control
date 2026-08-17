@@ -274,6 +274,51 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Rex")).toBeInTheDocument();
   });
 
+  // ── Mobile stack screen (variant="list") ──────────────────────────────────
+  describe("list variant (mobile stack screen 1)", () => {
+    function renderList(props: Partial<React.ComponentProps<typeof SessionSidebar>> = {}) {
+      const a1 = mkAgent({ id: "agent-1", name: "Rex", current_task_id: "task-1" });
+      const a2 = mkAgent({ id: "agent-2", name: "Cody" });
+      return render(
+        <SessionSidebar
+          agents={[a1, a2]}
+          tasks={[mkTask({ id: "task-1", title: "Login reparieren" })]}
+          projects={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          variant="list"
+          {...props}
+        />
+      );
+    }
+
+    it("shows every session immediately — no dropdown to open first", () => {
+      renderList();
+      expect(screen.getByText("Rex")).toBeInTheDocument();
+      expect(screen.getByText("Cody")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Session wählen/i })).not.toBeInTheDocument();
+    });
+
+    it("keeps the task subtitle so a row says what the session is about", () => {
+      renderList();
+      expect(screen.getByText("Login reparieren")).toBeInTheDocument();
+    });
+
+    it("gives rows a touch-sized height (they open a screen, not a dropdown)", () => {
+      renderList();
+      const row = screen.getByText("Rex").closest('[role="option"]') as HTMLElement;
+      expect(row.className).toContain("min-h-[60px]");
+    });
+
+    it("selecting a row reports the agent id", async () => {
+      const onSelect = vi.fn();
+      const user = userEvent.setup();
+      renderList({ onSelect });
+      await user.click(screen.getByText("Cody"));
+      expect(onSelect).toHaveBeenCalledWith("agent-2");
+    });
+  });
+
   it("collapses the sheet variant behind a toggle and opens it on click", async () => {
     const user = userEvent.setup();
     const agent = mkAgent({ id: "agent-1", name: "Rex" });

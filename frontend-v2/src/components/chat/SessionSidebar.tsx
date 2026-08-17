@@ -86,8 +86,10 @@ interface SessionSidebarProps {
   projects: Project[];
   selectedId: string | null;
   onSelect: (agentId: string) => void;
-  /** Rail = fixed desktop column. Sheet = collapsed dropdown for <768px. */
-  variant?: "rail" | "sheet";
+  /** Rail = fixed desktop column. List = the mobile stack's first screen (a
+   *  full-height list you tap into). Sheet = the older collapsed dropdown,
+   *  kept for callers that still embed the picker above content. */
+  variant?: "rail" | "list" | "sheet";
   /** Per-agent lookup; caller-supplied (B6). Omitted = assume every agent has one. */
   hasTranscript?: (agentId: string) => boolean;
   /** Rail-only — collapses the column to a slim icon-avatar strip. The sheet
@@ -118,16 +120,24 @@ export function SessionSidebar({
     setSheetOpen(false);
   }
 
+  // `stack` = the mobile list screen: taller rows (touch), a chevron saying
+  // "this opens a screen", and a hairline between rows so a long list still
+  // has structure. The desktop rail keeps its dense rhythm.
+  const stack = variant === "list";
+
   const list = (
     <div role="listbox" aria-label="Sessions" className="flex flex-col gap-3">
       {groups.length === 0 && (
-        <div className="px-3 py-6 text-[13px]" style={{ color: C.textMuted }}>
+        <div className="px-4 py-8 text-[13px]" style={{ color: C.textMuted }}>
           Keine Sessions aktiv.
         </div>
       )}
       {groups.map((group) => (
         <div key={group.key}>
-          <div className="label-sys px-3 pb-1.5 truncate" style={{ color: C.textDim }}>
+          <div
+            className={`label-sys pb-1.5 truncate ${stack ? "px-4" : "px-3"}`}
+            style={{ color: C.textMuted }}
+          >
             {group.label}
           </div>
           <div className="flex flex-col">
@@ -142,19 +152,27 @@ export function SessionSidebar({
                   role="option"
                   aria-selected={selected}
                   onClick={() => handleSelect(agent.id)}
-                  className="flex items-center gap-2 px-3 py-2 text-left w-full rounded transition-colors"
-                  style={{ background: selected ? C.accentSubtle : "transparent" }}
+                  className={`flex items-center gap-2.5 text-left w-full transition-colors cursor-pointer ${
+                    stack ? "px-4 min-h-[60px] py-2.5" : "px-3 py-2 rounded"
+                  }`}
+                  style={{
+                    background: selected ? C.accentSubtle : "transparent",
+                    borderTop: stack ? `1px solid ${C.borderSubtle}` : undefined,
+                  }}
                 >
                   <StatusDot status={toDotStatus(agent.status)} size="sm" pulse={agent.status === "busy"} />
                   <span className="flex-1 min-w-0">
                     <span
-                      className="block text-[13px] font-medium truncate"
+                      className={`block font-medium truncate ${stack ? "text-[14px]" : "text-[13px]"}`}
                       style={{ color: selected ? C.textPrimary : C.textSecondary }}
                     >
                       {agent.name}
                     </span>
                     {taskTitle && (
-                      <span className="block text-[12px] truncate" style={{ color: C.textMuted }}>
+                      <span
+                        className={`block truncate ${stack ? "text-[13px] mt-0.5" : "text-[12px]"}`}
+                        style={{ color: C.textMuted }}
+                      >
                         {taskTitle}
                       </span>
                     )}
@@ -167,6 +185,9 @@ export function SessionSidebar({
                       Terminal
                     </span>
                   )}
+                  {stack && (
+                    <ChevronRight size={15} className="shrink-0" style={{ color: C.textMuted }} aria-hidden="true" />
+                  )}
                 </button>
               );
             })}
@@ -175,6 +196,15 @@ export function SessionSidebar({
       ))}
     </div>
   );
+
+  // Mobile stack screen 1 — owns the full remaining height and scrolls.
+  if (variant === "list") {
+    return (
+      <div className="flex flex-col w-full h-full min-h-0 overflow-y-auto py-2" style={{ background: C.bgDeep }}>
+        {list}
+      </div>
+    );
+  }
 
   if (variant === "sheet") {
     return (

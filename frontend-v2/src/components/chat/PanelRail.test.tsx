@@ -43,4 +43,13 @@ describe("PanelRail", () => {
     await user.click(screen.getByRole("button", { name: "Browser" }));
     expect(onSelect).toHaveBeenCalledWith(null);
   });
+
+  it("is desktop-only and never a fixed bar (it used to cover the app's bottom nav)", () => {
+    render(<PanelRail active={null} onSelect={vi.fn()} />);
+    const rail = screen.getByRole("toolbar", { name: "Panels" });
+    expect(rail.className).toContain("hidden");
+    expect(rail.className).toContain("md:flex");
+    expect(rail.className).not.toContain("fixed");
+    expect(rail.className).not.toContain("bottom-0");
+  });
 });

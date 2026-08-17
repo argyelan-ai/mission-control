@@ -14,10 +14,13 @@ function MarkdownContent({ content }: { content: string }) {
         h1: ({ children }) => <h1 className="text-lg font-bold mb-3 mt-4" style={{ color: "var(--color-text-primary)" }}>{children}</h1>,
         h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-4" style={{ color: "var(--color-text-primary)" }}>{children}</h2>,
         h3: ({ children }) => <h3 className="text-sm font-semibold mb-1.5 mt-3" style={{ color: "var(--color-text-primary)" }}>{children}</h3>,
-        p: ({ children }) => <p className="mb-3 leading-relaxed" style={{ color: "var(--color-text-body)" }}>{children}</p>,
-        ul: ({ children }) => <ul className="mb-3 pl-4 space-y-1" style={{ color: "var(--color-text-body)" }}>{children}</ul>,
-        ol: ({ children }) => <ol className="mb-3 pl-4 space-y-1 list-decimal" style={{ color: "var(--color-text-body)" }}>{children}</ol>,
-        li: ({ children }) => <li className="text-sm leading-relaxed list-disc">{children}</li>,
+        // Leading is set here rather than inherited: `leading-relaxed` (1.625)
+        // used to win over the container's value, so the reading measure and
+        // the line spacing disagreed.
+        p: ({ children }) => <p className="mb-3 leading-[1.7]" style={{ color: "var(--color-text-body)" }}>{children}</p>,
+        ul: ({ children }) => <ul className="mb-3 pl-4 space-y-1.5" style={{ color: "var(--color-text-body)" }}>{children}</ul>,
+        ol: ({ children }) => <ol className="mb-3 pl-4 space-y-1.5 list-decimal" style={{ color: "var(--color-text-body)" }}>{children}</ol>,
+        li: ({ children }) => <li className="text-[14px] leading-[1.7] list-disc">{children}</li>,
         code: ({ children, className }) => {
           const isBlock = className?.includes("language-");
           return isBlock ? (
@@ -94,7 +97,12 @@ export function ChatMessage({ ev, showModel = false }: { ev: MessageEvent; showM
           {ev.model}
         </div>
       )}
-      <div className="text-[14px] leading-[1.7] [&>*:last-child]:mb-0">
+      {/* Reading measure, not island width: at full desktop width a line ran
+          ~95 characters, well past where the eye loses its place. Capped in
+          `ch` so it stays a measure and not a magic pixel number; below md the
+          viewport is narrower than the cap anyway, so this is desktop-only in
+          effect. */}
+      <div className="text-[14px] leading-[1.7] max-w-[76ch] [&>*:last-child]:mb-0">
         <MarkdownContent content={ev.text} />
       </div>
     </div>

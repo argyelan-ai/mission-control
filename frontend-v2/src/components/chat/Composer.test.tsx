@@ -145,6 +145,18 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("/model sonnet");
   });
 
+  // Regression: the mobile stack keeps the off-screen pane mounted with
+  // `display: none`. There the textarea measures scrollHeight 0, and writing
+  // that back pinned the input to its padding height (12px) for good — the
+  // auto-grow effect only re-runs on `text`. Leaving the height unset keeps the
+  // natural rows=1 box. jsdom reports 0 for every metric, so it stands in for
+  // the hidden case exactly.
+  it("does not pin the textarea height while the element cannot be measured", () => {
+    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    const textarea = screen.getByPlaceholderText(/Nachricht/) as HTMLTextAreaElement;
+    expect(textarea.style.height).toBe("");
+  });
+
   it("reports the model dropdown's open state to assistive tech", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={mkUsage()} state={null} onSend={vi.fn()} onStop={vi.fn()} />);

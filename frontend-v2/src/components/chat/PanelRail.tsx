@@ -10,12 +10,13 @@
  * `null`, which collapses the panel slot entirely (chat goes full-width) —
  * no separate chevron/collapse control needed.
  *
- * Responsive via Tailwind `md:` variants in one markup block instead of two
- * parallel renders: desktop is its own slim floating island (rounded-xl,
- * bordered on all sides, gap from its neighbors comes from the parent flex
- * row's `md:gap-2`) beside the panel slot; mobile (<768px) stays a fixed
- * bottom bar, unchanged — the "bottom-sheet trigger" row for the full-screen
- * panel overlay the parent page renders.
+ * Desktop only (`hidden md:flex`). It used to double as a `fixed bottom-0`
+ * bar on mobile, which sat exactly on top of the app's own bottom tab bar —
+ * that bar is an in-flow flex child of the shell (deliberately not `fixed`,
+ * because iOS gets `fixed` wrong in standalone mode), so a fixed overlay at
+ * bottom-0 covers it every time. On mobile the same two panels are reached
+ * from the chat header's options sheet instead (ChatOptionsSheet), and open as
+ * full-screen sheets — the phone has no room for a permanent rail anyway.
  */
 import { GitCompare, Globe } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -37,7 +38,10 @@ export function PanelRail({ active, onSelect }: PanelRailProps) {
     <div
       role="toolbar"
       aria-label="Panels"
-      className="flex md:flex-col items-center justify-center gap-1 px-2 py-1.5 md:px-1.5 md:py-3 fixed inset-x-0 bottom-0 z-30 md:static md:inset-auto border-t md:border md:rounded-xl md:overflow-hidden shrink-0"
+      // Top-aligned, not centred: two icons floating in the middle of a
+      // full-height column read as a mistake. They belong next to the chat
+      // header they act on.
+      className="hidden md:flex md:flex-col items-center gap-1 md:px-1.5 md:py-3 md:border md:rounded-xl md:overflow-hidden shrink-0"
       style={{ background: C.bgSurface, borderColor: C.border }}
     >
       {PANELS.map(({ key, label, icon: Icon }) => {

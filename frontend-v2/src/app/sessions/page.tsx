@@ -210,7 +210,11 @@ function SessionsPageContent() {
     if (agents.length === 0 || selected) return;
     const paramId = searchParams.get("agent");
     const paramAgent = paramId ? agents.find((a) => a.id === paramId) : undefined;
-    if (paramAgent) { setSelected(paramAgent); return; }
+    // A deep link names one session, so it opens it: on mobile that means
+    // going straight to the chat screen. A merely *remembered* selection does
+    // not — the phone opens on the list, which is the overview, and one tap
+    // reaches the remembered session (still highlighted there).
+    if (paramAgent) { setSelected(paramAgent); setMobileView("chat"); return; }
 
     const storedId = loadLastAgentId();
     const storedAgent = storedId ? agents.find((a) => a.id === storedId) : undefined;
@@ -249,15 +253,34 @@ function SessionsPageContent() {
 
   const panelTitle = activePanel === "diff" ? "Diff" : activePanel === "browser" ? "Browser" : "";
 
+  // Mobile stack navigation. Desktop (≥md) ignores all three: it always shows
+  // list + chat side by side, so every branch below resolves via `md:` classes.
+  const onChatScreen = mobileView === "chat" && !!selected;
+  const selectedTaskTitle = selected?.current_task_id
+    ? tasks.find((task) => task.id === selected.current_task_id)?.title ?? null
+    : null;
+
   return (
     <AppShell fullHeight>
-      <div className="flex flex-col flex-1 overflow-hidden" style={{ background: C.bgDeep }}>
+      {/* Full-bleed on mobile: AppShell's <main> pads the content column so
+          ordinary pages breathe (px-4, 1rem bottom, and a top inset of
+          safe-area + 5.5rem against a fixed header that is only safe-area +
+          4rem tall). A chat must not — phone width and height are the scarce
+          resources, and the composer belongs on the floor directly above the
+          app's bottom tab bar. These negative margins reclaim that padding
+          below md (leaving 0.5rem above the header) and nothing above it. */}
+      <div
+        className="flex flex-col flex-1 overflow-hidden -mx-4 -mb-4 -mt-4 md:mx-0 md:mb-0 md:mt-0"
+        style={{ background: C.bgDeep }}
+      >
         {isError && (
           <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
-        {/* Page Header */}
+        {/* Page header — hidden on the mobile chat screen: there the chat's own
+            compact header (back chevron, agent, options) is the screen's
+            header, and a second title bar above it would be pure chrome. */}
         <div
-          className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 md:px-6 py-3 md:py-4 border-b shrink-0"
+          className={`${onChatScreen ? "hidden md:flex" : "flex"} flex-wrap items-center gap-x-3 gap-y-2 px-4 md:px-6 py-3 md:py-4 border-b shrink-0`}
           style={{ borderColor: "var(--color-border-subtle)" }}
         >
           <MonitorPlay size={18} style={{ color: "var(--color-text-secondary)" }} />
@@ -281,16 +304,22 @@ function SessionsPageContent() {
             overflow-hidden) via `md:` utilities only; mobile stays exactly
             as before (full-bleed, no gap/border/radius — "don't waste phone
             width"), same components/state, zero mobile-visible change. */}
-        <div className="flex flex-col md:flex-row flex-1 overflow-hidden md:p-2 md:gap-2">
-          {/* Session sidebar — mobile: sheet at top; desktop: fixed rail island */}
-          <div className="md:hidden shrink-0">
+        <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden md:p-2 md:gap-2">
+          {/* Mobile stack, screen 1: the session list as a real screen you tap
+              into — not the dropdown sheet it used to be, which had no content
+              area of its own and left the page blank whenever a restored
+              selection kept `mobileView` on "list". */}
+          <div
+            className={`${onChatScreen ? "hidden" : "flex"} md:hidden flex-1 min-h-0 overflow-hidden`}
+            data-testid="session-list-mobile"
+          >
             <SessionSidebar
               agents={agents}
               tasks={tasks}
               projects={projects}
               selectedId={selected?.id ?? null}
               onSelect={handleSelect}
-              variant="sheet"
+              variant="list"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
             />
           </div>
@@ -318,33 +347,14 @@ function SessionsPageContent() {
             />
           </div>
 
-          {/* Chat — mobile: full-bleed only when an agent is picked (stack
-              nav); desktop: its own island (ChatView/TerminalPanel have no
-              background of their own, so this wrapper supplies bg-base). */}
+          {/* Mobile stack, screen 2 (and the desktop island): the chat itself.
+              ChatView/TerminalPanel paint no background of their own, so this
+              wrapper supplies bg-base — and on mobile it is the whole screen,
+              edge to edge, no island chrome. */}
           <div
-            className={`flex-1 min-w-0 overflow-hidden flex-col min-h-0 flex md:rounded-xl md:border md:border-[var(--color-border)] md:bg-[var(--color-bg-base)]`}
+            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border)] md:bg-[var(--color-bg-base)]`}
+            data-testid="chat-column"
           >
-            {/* Mobile: back button — returns to the sidebar sheet (stack nav).
-                Hotfix 2026-08-17: chat is ALWAYS visible on mobile when an
-                agent is selected — a restored selection previously left
-                mobileView on "list", whose sheet-only layout has no content
-                area, rendering a blank page. Selection switching happens via
-                the sheet dropdown, so the back button is hidden for now
-                (full mobile stack-nav comes with the redesign pass). */}
-            {selected && false && (
-              <button
-                onClick={() => setMobileView("list")}
-                className="flex md:hidden items-center gap-2 px-4 py-3 text-sm border-b cursor-pointer min-h-touch"
-                style={{
-                  color: "var(--color-text-secondary)",
-                  borderColor: "var(--color-border-subtle)",
-                  background: "rgba(255,255,255,0.02)",
-                }}
-              >
-                <span style={{ fontSize: "16px" }}>←</span>
-                <span>{t("agentsBack")}</span>
-              </button>
-            )}
             {isLoading && !selected ? null : (
               <ChatView
                 key={selected?.id ?? "none"}
@@ -356,13 +366,17 @@ function SessionsPageContent() {
                 onCenterViewChange={setCenterView}
                 terminalRemountTick={selected ? restartTick[selected.id] ?? 0 : 0}
                 onStatusChange={setChatStatus}
+                onBack={() => setMobileView("list")}
+                contextLine={selectedTaskTitle}
+                onOpenPanel={setActivePanel}
               />
             )}
           </div>
 
-          {/* Panel rail — always visible next to the chat on desktop, as its
-              own slim island; fixed bottom bar on mobile, unchanged (see
-              PanelRail's own responsive classes for both). */}
+          {/* Panel rail — desktop only, its own slim island next to the chat.
+              On mobile the same panels are reached from the chat header's
+              options sheet; the rail used to be a `fixed bottom-0` bar there,
+              which covered the app's own bottom tab bar. */}
           <PanelRail active={activePanel} onSelect={setActivePanel} />
 
           {/* Panel content — desktop: its own island column; mobile: full-
@@ -375,24 +389,28 @@ function SessionsPageContent() {
               desktop-only (mobile is edge-to-edge, no island chrome). */}
           {activePanel && (
             <div
-              className="fixed inset-0 z-40 flex flex-col overflow-hidden md:static md:z-auto md:w-[45%] md:max-w-[720px] md:rounded-xl md:border"
+              // Mobile: a sheet filling everything below the app's own top bar
+              // (see --mobile-appbar-h — this sits inside the content column's
+              // z-10 stacking context, so it cannot paint over that z-40
+              // header; anchoring to it beats being half-hidden behind it).
+              className="fixed inset-x-0 bottom-0 top-[var(--mobile-appbar-h)] z-40 flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[45%] md:max-w-[720px] md:rounded-xl md:border"
               style={{ background: C.bgBase, borderColor: C.border }}
             >
               <div
                 className="flex md:hidden items-center justify-between px-4 py-3 border-b shrink-0"
                 style={{ borderColor: C.border }}
               >
-                <span className="text-[13px] font-medium" style={{ color: C.textPrimary }}>
+                <span className="text-[14px] font-semibold" style={{ color: C.textPrimary }}>
                   {panelTitle}
                 </span>
                 <button
                   type="button"
                   onClick={() => setActivePanel(null)}
                   aria-label="Schliessen"
-                  className="flex items-center justify-center w-9 h-9 rounded-md"
+                  className="flex items-center justify-center w-10 h-10 rounded-lg cursor-pointer"
                   style={{ color: C.textMuted }}
                 >
-                  <X size={16} />
+                  <X size={17} />
                 </button>
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">

@@ -113,9 +113,12 @@ export function ToolGroup({
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         className="group flex w-full items-center gap-2 rounded-lg px-2.5 text-left min-h-[44px] md:min-h-[34px] cursor-pointer transition-colors"
+        // The failure is carried by the icon's shape and the label's colour,
+        // not by tinting the frame: one failed tool out of sixty should not
+        // make the whole run read as a red alert box.
         style={{
           background: expanded ? C.bgSurface : "transparent",
-          border: `1px solid ${summary.hasError ? `${C.error}33` : C.border}`,
+          border: `1px solid ${C.border}`,
         }}
       >
         <Icon

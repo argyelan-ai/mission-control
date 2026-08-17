@@ -497,6 +497,86 @@ describe("ChatView", () => {
     expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]);
   });
 
+  // Regression: the mobile stack keeps the off-screen pane mounted with
+  // `display: none`, where the scroll container measures 0 and the
+  // scroll-to-bottom effect is a silent no-op. Nothing re-triggers it when the
+  // pane becomes visible, so the chat opened at the very top of a long
+  // history. A ResizeObserver on the container catches the box appearing.
+  it("scrolls to the bottom when the timeline box changes size (pane became visible)", () => {
+    const original = window.ResizeObserver;
+    const observed: Element[] = [];
+    let fire: (() => void) | null = null;
+    class CapturingResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        fire = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe(el: Element) { observed.push(el); }
+      unobserve() {}
+      disconnect() {}
+    }
+    window.ResizeObserver = CapturingResizeObserver as unknown as typeof ResizeObserver;
+
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+
+      expect(observed).toHaveLength(1);
+      const el = observed[0] as HTMLElement;
+      // jsdom reports 0 for every layout metric, so stand in for a long history.
+      Object.defineProperty(el, "scrollHeight", { value: 5000, configurable: true });
+      el.scrollTop = 0;
+
+      fire!();
+      expect(el.scrollTop).toBe(5000);
+    } finally {
+      window.ResizeObserver = original;
+    }
+  });
+
+  // ── Mobile stack header ───────────────────────────────────────────────────
+
+  it("shows no back chevron when the caller has no list to go back to (desktop)", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView();
+    expect(screen.queryByRole("button", { name: "Zurück zur Sessionliste" })).not.toBeInTheDocument();
+  });
+
+  it("the back chevron reports the intent to return to the list", async () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    const onBack = vi.fn();
+    const user = userEvent.setup();
+    renderChatView({ onBack });
+
+    await user.click(screen.getByRole("button", { name: "Zurück zur Sessionliste" }));
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("shows the context line under the agent name", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ contextLine: "Login reparieren" });
+    expect(screen.getByText("Login reparieren")).toBeInTheDocument();
+  });
+
+  it("keeps the options sheet closed until the header button is used", async () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    const user = userEvent.setup();
+    renderChatView();
+
+    expect(screen.queryByTestId("chat-options-sheet")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
+    expect(screen.getByTestId("chat-options-sheet")).toBeInTheDocument();
+  });
+
+  it("passes the effective view to the sheet, so a forced-terminal agent can't pick Chat there", async () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    const user = userEvent.setup();
+    renderChatView({ hasTranscript: false, centerView: "chat" });
+
+    await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
+    expect(screen.getByRole("radio", { name: /Chat/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
+  });
+
   it("shows a neutral placeholder when no agent is selected", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     render(

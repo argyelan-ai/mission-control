@@ -224,6 +224,17 @@
   --color-text: #eeeeee; /* alias used by a few components */
   --color-text-dim: #666666; /* Deko/inaktive Icons — nie für Fliesstext */
 
+  /* Gerenderte Höhe der mobilen App-Kopfleiste (MobileNav <header>):
+     pt-island (safe + 0.75rem) + Link h-11 (2.75rem) + 0.5rem padding-bottom
+     = safe + 4rem. Ihre min-height (safe + 3.5rem) liegt darunter, greift also
+     nie. Overlays INNERHALB der Content-Spalte brauchen diesen Wert: die
+     Spalte ist ein Stacking-Context (z-10), die Kopfleiste ein Geschwister mit
+     z-40 — kein z-index im Inneren kommt darüber. Ein Overlay setzt daher
+     seine Oberkante hierauf statt vergeblich `inset-0` zu versuchen.
+     Das +1px ist die border-bottom der Kopfleiste — ohne sie bleibt eine
+     1px-Lichtkante zwischen Leiste und Overlay stehen (live nachgemessen). */
+  --mobile-appbar-h: calc(env(safe-area-inset-top) + 4rem + 1px);
+
   /* Status-Text — AA-sichere Stufen für Fliesstext (mirrors colors.ts STATUS_TEXT) */
   --color-status-error-text: #fa4942;
   --color-status-info-text: #5890ca;
@@ -289,6 +300,14 @@ body {
   font-size: var(--text-base);
   font-weight: var(--font-body);
   line-height: 1.6;
+}
+
+/* Text selection — a browser surface that otherwise ships in the UA's own
+   blue, the one chromatic colour this palette does not contain. Accent tint
+   with the normal text colour kept on top, so selected code stays readable. */
+::selection {
+  background-color: rgba(235, 232, 222, 0.22);
+  color: var(--color-text-primary);
 }
 
 /* ============================================================
@@ -622,6 +641,24 @@ body {
 }
 .scroll-x-snap::-webkit-scrollbar { display: none; }
 .snap-card { scroll-snap-align: start; }
+
+/* Thin, palette-tinted scrollbar for long reading surfaces (chat timeline).
+   The default macOS/Windows bar is the one element on the page that belongs to
+   no design system; hiding it entirely would cost the position cue, so it is
+   themed instead of removed. */
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+.scroll-quiet::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-quiet::-webkit-scrollbar-track { background: transparent; }
+.scroll-quiet::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-quiet::-webkit-scrollbar-thumb:hover { background: var(--color-text-dim); background-clip: content-box; }
 
 /* Reusable: hide scrollbar visually but keep scroll behaviour functional.
    Use for floating side panels where the scrollbar track breaks the

@@ -93,7 +93,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    const previous = el.style.height;
     el.style.height = "auto";
+    // A hidden element measures 0 (the mobile stack keeps the non-visible
+    // screen mounted with `display: none`). Writing that back would pin the
+    // input to its padding height forever, since this effect only re-runs on
+    // `text`. Leaving it at the natural rows=1 height is correct until it is
+    // measurable again.
+    if (el.scrollHeight === 0) {
+      el.style.height = previous;
+      return;
+    }
     const maxHeight = MAX_ROWS * LINE_HEIGHT_PX;
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, [text]);
@@ -284,9 +294,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           rows={1}
           placeholder="Nachricht an den Agenten…"
           // 16px on mobile is not a taste call: anything smaller makes iOS
-          // Safari zoom the viewport on focus.
-          className="w-full resize-none bg-transparent outline-none px-3.5 pt-3 text-[16px] md:text-[14px] leading-[1.5]"
-          style={{ color: C.textPrimary, maxHeight: MAX_ROWS * LINE_HEIGHT_PX }}
+          // Safari zoom the viewport on focus. The placeholder and caret are
+          // themed explicitly — the browser's own placeholder (50% alpha of
+          // the text colour) lands under 4.5:1 on this background.
+          className="w-full resize-none bg-transparent outline-none px-3.5 pt-3 text-[16px] md:text-[14px] leading-[1.5] placeholder:text-[var(--color-text-muted)]"
+          style={{
+            color: C.textPrimary,
+            caretColor: C.accent,
+            minHeight: LINE_HEIGHT_PX,
+            maxHeight: MAX_ROWS * LINE_HEIGHT_PX,
+          }}
         />
 
         <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1.5">

@@ -19,6 +19,7 @@
  * orthogonal to this toggle.
  */
 import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, MoreHorizontal } from "lucide-react";
 import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -34,21 +35,14 @@ import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
+import { ChatOptionsSheet } from "./ChatOptionsSheet";
+import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
+import type { PanelKind } from "./PanelRail";
 
-export type DetailLevel = "compact" | "normal" | "verbose";
-
-export const DETAIL_LEVELS: { key: DetailLevel; label: string }[] = [
-  { key: "compact", label: "Kompakt" },
-  { key: "normal", label: "Normal" },
-  { key: "verbose", label: "Ausführlich" },
-];
-
-export type CenterView = "chat" | "terminal";
-
-export const CENTER_VIEWS: { key: CenterView; label: string }[] = [
-  { key: "chat", label: "Chat" },
-  { key: "terminal", label: "Terminal" },
-];
+// Re-exported from their own module so ChatOptionsSheet can use them without
+// importing ChatView back (see chatOptions.ts). Importers are unaffected.
+export { CENTER_VIEWS, DETAIL_LEVELS };
+export type { CenterView, DetailLevel };
 
 // Distance (px) from the bottom of the scroll container within which the
 // view still counts as "at the bottom" — classic chat scroll-lock.
@@ -195,6 +189,17 @@ interface ChatViewProps {
    *  without duplicating `useChatStream`'s SSE connection just to read one
    *  field — ChatView already owns the one subscription for this agent. */
   onStatusChange?: (status: StateEvent["status"] | null) => void;
+  /** Mobile stack navigation: present = show the back chevron that returns to
+   *  the session list. Omitted on desktop, where the list is always visible
+   *  beside the chat and a back affordance would be a lie. */
+  onBack?: () => void;
+  /** One short line under the agent name on the mobile header — what this
+   *  session is currently about (its task title). Desktop's header stays a
+   *  single dense row, so this is <md only. */
+  contextLine?: string | null;
+  /** Lets the mobile options sheet open the side panels the desktop rail
+   *  owns. Omitted = no Panels section in the sheet. */
+  onOpenPanel?: (panel: PanelKind) => void;
 }
 
 export function ChatView({
@@ -206,9 +211,13 @@ export function ChatView({
   onCenterViewChange,
   terminalRemountTick = 0,
   onStatusChange,
+  onBack,
+  contextLine,
+  onOpenPanel,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   const streamEnabled = hasTranscript && !!agent;
   const stream = useChatStream(agent?.id ?? null, streamEnabled);
@@ -231,6 +240,23 @@ export function ChatView({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [stream.events, stickToBottom]);
+
+  // The effect above fires on new events, which is not enough: the mobile
+  // stack keeps the off-screen pane mounted with `display: none`, where the
+  // container measures 0 and "scroll to the bottom" is a no-op. Nothing then
+  // changes when it becomes visible, so the timeline opened at the very top of
+  // a 6000px history. Observing the container's own box catches that, plus
+  // every later resize (window, rotation, on-screen keyboard).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottom) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [stickToBottom]);
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -270,10 +296,37 @@ export function ChatView({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b shrink-0" style={{ borderColor: C.border }}>
-        <span className="text-[13px] font-medium truncate" style={{ color: C.textPrimary }}>
-          {agent.name}
-        </span>
+      {/* One header for both breakpoints — the parts that only make sense on
+          a phone (back chevron, context line, options button) carry
+          `md:hidden`, the desktop toolbar carries `hidden md:flex`. Rendering
+          two headers would duplicate the agent name in the DOM for no gain. */}
+      <div
+        className="flex items-center gap-2 pl-1 pr-2 md:px-4 py-1.5 md:py-2.5 border-b shrink-0"
+        style={{ borderColor: C.border }}
+      >
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Zurück zur Sessionliste"
+            className="flex md:hidden items-center justify-center w-10 h-10 shrink-0 rounded-lg cursor-pointer"
+            style={{ color: C.textSecondary }}
+          >
+            <ChevronLeft size={20} />
+          </button>
+        )}
+
+        <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-center md:gap-2 pl-2 md:pl-0">
+          <span className="text-[14px] md:text-[13px] font-semibold md:font-medium truncate" style={{ color: C.textPrimary }}>
+            {agent.name}
+          </span>
+          {contextLine && (
+            <span className="md:hidden text-[11px] truncate" style={{ color: C.textMuted }}>
+              {contextLine}
+            </span>
+          )}
+        </div>
+
         {canChat && stream.session && (
           <span
             className="text-[10px] font-medium px-1.5 py-0.5 rounded font-mono shrink-0"
@@ -287,7 +340,18 @@ export function ChatView({
           </span>
         )}
 
-        <div className="ml-auto flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => setOptionsOpen(true)}
+          aria-label="Chat-Optionen"
+          aria-expanded={optionsOpen}
+          className="flex md:hidden items-center justify-center w-10 h-10 shrink-0 rounded-lg cursor-pointer"
+          style={{ color: C.textSecondary }}
+        >
+          <MoreHorizontal size={19} />
+        </button>
+
+        <div className="ml-auto hidden md:flex items-center gap-2 shrink-0">
           {effectiveView === "chat" && (
             <div
               className="flex items-center rounded-md overflow-hidden"
@@ -345,7 +409,11 @@ export function ChatView({
         <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent} />
       ) : (
         <>
-          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
+          >
             {items.length === 0 ? (
               <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
                 {stream.loading ? "Lädt…" : "Noch keine Nachrichten."}
@@ -383,6 +451,17 @@ export function ChatView({
           <Composer agentId={agent.id} usage={stream.usage} state={stream.state} onSend={handleSend} onStop={handleStop} sessionLive={stream.session?.live ?? false} />
         </>
       )}
+
+      <ChatOptionsSheet
+        open={optionsOpen}
+        onClose={() => setOptionsOpen(false)}
+        centerView={effectiveView}
+        onCenterViewChange={onCenterViewChange}
+        canChat={canChat}
+        detailLevel={detailLevel}
+        onDetailLevelChange={onDetailLevelChange}
+        onOpenPanel={onOpenPanel}
+      />
     </div>
   );
 }
