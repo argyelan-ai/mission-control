@@ -65,6 +65,17 @@ _BOX_DRAWING_STRIP_RE = re.compile(r"^[\s│╭╰─┃┆┊]+")
 
 _ESC_TO_INTERRUPT = "esc to interrupt"
 
+# A prompt line carrying DRAFT/QUEUED text (the operator typed a follow-up
+# while the agent was still working — "steering") — "❯ " immediately
+# followed by a non-whitespace character. Live repro (wave-review): the
+# CLI's own trailing status-bar chrome (model name + permission-mode line)
+# can push this line below the last-3-non-empty-lines window rule 3 checks,
+# so it's scanned across the WHOLE tail separately rather than by widening
+# that window (which would risk a false "ready" read from something else
+# further up the pane). Deliberately NOT anchored to line-start (`^`) —
+# real captures sometimes carry leading indentation/box-drawing padding.
+_QUEUED_DRAFT_PROMPT_RE = re.compile(r"❯ \S")
+
 # Menu/picker footer hint (real /model picker: "Enter to set as default · s
 # to use this session only · Esc to cancel") — these have no "?"/"Do you
 # want" question line at all, just a plain header above a numbered option
@@ -91,8 +102,16 @@ def parse_pane_state(pane_text: str, transcript_active: bool) -> dict[str, Any]:
     2. The Claude Code spinner footer (``esc to interrupt``) anywhere in the
        captured text -> ``working``.
     3. An input-prompt marker (``❯ `` or ``> ``) on one of the last 3
-       non-empty lines, with neither 1 nor 2 matching -> ``working`` if the
-       transcript is actively growing, else ``idle``.
+       non-empty lines, OR a prompt line carrying DRAFT/QUEUED text anywhere
+       in the tail (``❯ `` immediately followed by non-whitespace — the
+       operator "steered" a follow-up in while the agent was still working;
+       scanned separately/wider than the last-3 window because the CLI's own
+       trailing status-bar chrome can push it out of that window — live
+       repro, wave-review), with neither 1 nor 2 matching -> ``working`` if
+       the transcript is actively growing, else ``idle``. NEVER
+       ``permission_prompt`` for either shape — rule 1 already ran and
+       didn't match, so a prompt-marker line is unambiguously the input line
+       itself, not an option.
     4. Otherwise -> ``unknown``.
     """
     lines = pane_text.splitlines()
@@ -108,7 +127,9 @@ def parse_pane_state(pane_text: str, transcript_active: bool) -> dict[str, Any]:
 
     non_empty = [line for line in tail if line.strip()]
     last_three = non_empty[-3:]
-    if any(("❯" in line) or ("> " in line) for line in last_three):
+    has_bare_prompt = any(("❯" in line) or ("> " in line) for line in last_three)
+    has_queued_draft_prompt = any(_QUEUED_DRAFT_PROMPT_RE.search(line) for line in tail)
+    if has_bare_prompt or has_queued_draft_prompt:
         return {"status": "working" if transcript_active else "idle", "prompt": None}
 
     return {"status": "unknown", "prompt": None}

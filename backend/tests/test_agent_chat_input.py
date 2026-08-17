@@ -73,8 +73,11 @@ async def test_send_text_docker_single_line_submits_via_separate_enter(monkeypat
     """Fix round 4: a literal ``-l`` send only types text into the TUI's
     input box — it never submits on its own. The single-line path was
     missing a follow-up Enter call entirely (root cause of messages sitting
-    unsubmitted); this asserts the exact 3-call sequence: literal text,
-    THEN a separate Enter, THEN the recycler-marker touch."""
+    unsubmitted); this asserts the exact 3-call sequence: the recycler-
+    marker touch FIRST (send-readiness-gate hardening round — touched
+    before the readiness gate so a slow poll can't race a recycle), THEN
+    literal text, THEN a separate Enter. ``capture_pane`` is stubbed ready
+    immediately so the gate never blocks."""
     from app.services import agent_chat_input
 
     calls: list[list[str]] = []
@@ -82,24 +85,28 @@ async def test_send_text_docker_single_line_submits_via_separate_enter(monkeypat
     async def _fake_run(argv):
         calls.append(argv)
 
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "hello agent")
 
-    assert len(calls) == 3  # send-keys -l text + send-keys Enter + touch marker
+    assert len(calls) == 3  # touch marker + send-keys -l text + send-keys Enter
     first, second, third = calls
-    assert first[:2] == ["docker", "exec"]
-    assert "-e" in first and "LANG=C.UTF-8" in first
-    assert "-u" in first and "agent" in first
-    assert "mc-agent-rex" in first
-    assert first[-3:] == ["-l", "--", "hello agent"]
-    assert second[-1] == "Enter"
-    assert "-l" not in second
-    assert third == [
+    assert first == [
         "docker", "exec", "-u", "agent", "mc-agent-rex",
         "touch", "/home/agent/.claude/last-task.marker",
     ]
+    assert second[:2] == ["docker", "exec"]
+    assert "-e" in second and "LANG=C.UTF-8" in second
+    assert "-u" in second and "agent" in second
+    assert "mc-agent-rex" in second
+    assert second[-3:] == ["-l", "--", "hello agent"]
+    assert third[-1] == "Enter"
+    assert "-l" not in third
 
 
 async def test_send_text_docker_multiline_two_calls_bracketed_paste(monkeypatch):
@@ -110,19 +117,23 @@ async def test_send_text_docker_multiline_two_calls_bracketed_paste(monkeypatch)
     async def _fake_run(argv):
         calls.append(argv)
 
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "line one\nline two")
 
-    assert len(calls) == 3  # paste + Enter + recycler-marker touch
+    assert len(calls) == 3  # recycler-marker touch + paste + Enter
     first, second, third = calls
-    assert first[-3] == "-l"
-    assert first[-2] == "--"
-    assert first[-1] == "\x1b[200~line one\nline two\x1b[201~"
-    assert second[-1] == "Enter"
-    assert "-l" not in second
-    assert third == ["docker", "exec", "-u", "agent", "mc-agent-rex", "touch", "/home/agent/.claude/last-task.marker"]
+    assert first == ["docker", "exec", "-u", "agent", "mc-agent-rex", "touch", "/home/agent/.claude/last-task.marker"]
+    assert second[-3] == "-l"
+    assert second[-2] == "--"
+    assert second[-1] == "\x1b[200~line one\nline two\x1b[201~"
+    assert third[-1] == "Enter"
+    assert "-l" not in third
 
 
 async def test_send_text_docker_touches_recycler_marker(monkeypatch):
@@ -136,7 +147,11 @@ async def test_send_text_docker_touches_recycler_marker(monkeypatch):
     async def _fake_run(argv):
         calls.append(argv)
 
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "hello agent")
@@ -178,12 +193,16 @@ async def test_send_text_docker_dash_prefixed_single_line_gets_double_dash(monke
     async def _fake_run(argv):
         calls.append(argv)
 
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "-h")
 
-    assert calls[0][-3:] == ["-l", "--", "-h"]
+    assert calls[1][-3:] == ["-l", "--", "-h"]  # calls[0] is the recycler-marker touch
 
 
 async def test_send_text_docker_dash_bullet_single_line_gets_double_dash(monkeypatch):
@@ -194,12 +213,160 @@ async def test_send_text_docker_dash_bullet_single_line_gets_double_dash(monkeyp
     async def _fake_run(argv):
         calls.append(argv)
 
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     await agent_chat_input.send_text(agent, "- bullet")
 
-    assert calls[0][-3:] == ["-l", "--", "- bullet"]
+    assert calls[1][-3:] == ["-l", "--", "- bullet"]  # calls[0] is the recycler-marker touch
+
+
+async def test_send_text_docker_readiness_gate_types_after_becoming_ready_mid_poll(monkeypatch):
+    """Send-readiness-gate hardening: capture_pane returns an unrecognizable
+    (booting) pane for the first two polls, then a ready pane — the gate
+    must keep polling (not give up early) and let the actual keystrokes
+    through once the pane resolves to a real status."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    capture_count = {"n": 0}
+    sleep_calls: list[float] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        capture_count["n"] += 1
+        # First two polls: still booting (unrecognized pane) -> "unknown".
+        if capture_count["n"] <= 2:
+            return _UNMATCHED_PANE
+        return _IDLE_PANE
+
+    async def _fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_text(agent, "hello agent")
+
+    assert capture_count["n"] == 3  # 2 booting polls + 1 that finally reads ready
+    assert len(sleep_calls) == 2  # slept between each of the two booting polls
+    assert len(calls) == 3  # touch + literal text + Enter — typing DID happen
+    assert calls[1][-3:] == ["-l", "--", "hello agent"]
+    assert calls[2][-1] == "Enter"
+
+
+async def test_send_text_docker_readiness_gate_never_ready_raises_and_types_nothing(monkeypatch):
+    """The other half of the same finding: a pane that NEVER becomes
+    recognizable within the poll budget (persistent boot failure, stuck
+    respawn) must raise AgentStartingError and must NOT type anything — the
+    whole point of the gate is that a half-booted TUI never sees
+    send-keys."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    capture_count = {"n": 0}
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        capture_count["n"] += 1
+        return _UNMATCHED_PANE  # never resolves to a recognized status
+
+    async def _fake_sleep(delay):
+        pass
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    with pytest.raises(agent_chat_input.AgentStartingError):
+        await agent_chat_input.send_text(agent, "hello agent")
+
+    assert capture_count["n"] == agent_chat_input._SEND_READINESS_POLL_ATTEMPTS
+    # ONLY the recycler-marker touch went out — zero send-keys, exactly the
+    # "never type into a half-booted TUI" contract the router turns into
+    # 409 {"reason": "agent_starting"}.
+    assert len(calls) == 1
+    assert calls[0] == [
+        "docker", "exec", "-u", "agent", "mc-agent-rex",
+        "touch", "/home/agent/.claude/last-task.marker",
+    ]
+
+
+async def test_send_text_docker_readiness_gate_working_pane_types_immediately_no_poll(monkeypatch):
+    """A pane already mid-turn (spinner visible) is NOT a boot state — the
+    gate must resolve on the very first capture and type right away.
+    Queueing text into a working agent is legitimate (see the queued-draft
+    idle-detection fix); this gate only protects against booting/respawning
+    panes, never against a busy-but-alive one."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    capture_count = {"n": 0}
+    sleep_calls: list[float] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        capture_count["n"] += 1
+        return _WORKING_PANE
+
+    async def _fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_text(agent, "queued message")
+
+    assert capture_count["n"] == 1  # resolved on the very first poll
+    assert sleep_calls == []  # never had to wait
+    assert len(calls) == 3  # touch + literal text + Enter
+    assert calls[1][-3:] == ["-l", "--", "queued message"]
+    assert calls[2][-1] == "Enter"
+
+
+async def test_send_text_docker_marker_touched_before_readiness_gate_starts_polling(monkeypatch):
+    """Marker-touch-before-gate ordering (explicit hardening requirement):
+    the recycler marker must be refreshed BEFORE the gate's first
+    capture_pane call, not after — a gate poll can run for up to ~20s, and
+    without an early touch the recycler could decide the session is idle
+    and kill it while this function is still waiting on the gate."""
+    from app.services import agent_chat_input
+
+    events: list[tuple[str, object]] = []
+
+    async def _fake_run(argv):
+        events.append(("exec", argv))
+
+    async def _fake_capture_pane(agent):
+        events.append(("capture", None))
+        return _IDLE_PANE
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_text(agent, "hello agent")
+
+    assert events[0] == (
+        "exec",
+        ["docker", "exec", "-u", "agent", "mc-agent-rex", "touch", "/home/agent/.claude/last-task.marker"],
+    )
+    assert events[1][0] == "capture"  # gate's first poll happens right after the touch
 
 
 async def test_send_keys_docker_named_key_no_literal_flag(monkeypatch):
@@ -1207,6 +1374,28 @@ async def test_post_chat_input_409_unsupported_runtime(auth_client: AsyncClient,
 
     assert resp.status_code == 409
     assert resp.json() == {"reason": "input_not_supported"}
+
+
+async def test_post_chat_input_409_agent_starting(auth_client: AsyncClient, make_agent, monkeypatch):
+    """Send-readiness-gate hardening: when send_text's gate never sees the
+    pane become ready (booting/plugin-loading/recycler-respawn), the router
+    must surface 409 {"reason": "agent_starting"} instead of a 500 or a
+    silently-swallowed lost keystroke."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    async def _fake_send_text(a, text):
+        raise agent_chat_mod.AgentStartingError()
+
+    monkeypatch.setattr(agent_chat_mod, "send_text", _fake_send_text)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/input", json={"text": "hi"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"reason": "agent_starting"}
 
 
 async def test_post_chat_input_requires_auth(client: AsyncClient, make_agent):

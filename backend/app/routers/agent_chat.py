@@ -22,6 +22,7 @@ from app.models.agent import Agent
 from app.redis_client import RedisKeys
 from app.services.agent_chat_input import (
     AgentBusyError,
+    AgentStartingError,
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
@@ -51,6 +52,7 @@ _NO_WORKSPACE = {"reason": "no_workspace"}
 _INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
 _EFFORT_SWITCH_FAILED = {"reason": "effort_switch_failed"}
 _AGENT_BUSY = {"reason": "agent_busy"}
+_AGENT_STARTING = {"reason": "agent_starting"}
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
 
@@ -216,7 +218,11 @@ async def post_chat_input(
     """Types ``body.text`` into the agent's live session (tmux send-keys for
     cli-bridge agents, host-pty-bridge WS for Boss). 422 for empty/oversized
     text; 409 ``{"reason":"input_not_supported"}`` for host agents other than
-    Boss (mirrors A2's runtime gating)."""
+    Boss (mirrors A2's runtime gating); 409 ``{"reason":"agent_starting"}``
+    (docker only) when the pane never became ready within ``send_text``'s
+    readiness gate — the CLI is still booting/loading plugins or a recycler
+    respawn is mid-flight, and nothing was typed (see
+    ``agent_chat_input._wait_for_send_readiness``)."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -235,6 +241,8 @@ async def post_chat_input(
         await send_text(agent, body.text)
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AgentStartingError:
+        return JSONResponse(status_code=409, content=_AGENT_STARTING)
 
 
 @router.post("/agents/{agent_id}/chat/keys", status_code=204)

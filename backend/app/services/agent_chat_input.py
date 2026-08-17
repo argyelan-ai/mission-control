@@ -33,7 +33,15 @@ rule that only cli-bridge agents and Boss get a live session surface.
 marker (``/home/agent/.claude/last-task.marker``) — the fleet's recycler
 kills idle claude sessions every ~5-8 minutes based on that file's mtime, and
 chat activity was otherwise invisible to it, killing chat conversations with
-idle agents mid-conversation (live-gate finding, fix round 3).
+idle agents mid-conversation (live-gate finding, fix round 3). It ALSO gates
+on pane readiness before typing anything (docker path only) — live
+measurement found a send landing in a session file created 27s after a
+recycler respawn, and an earlier ping lost entirely into a still-booting
+CLI. ``_wait_for_send_readiness`` polls fresh ``capture_pane`` reads for up
+to ~20s; a pane that never becomes readable raises ``AgentStartingError``
+(-> router 409 ``{"reason":"agent_starting"}``) WITHOUT ever typing. The
+recycler-marker touch runs BEFORE this gate, not after — a ~20s poll must
+not let the recycler kill the very session it's waiting to become ready.
 
 ``set_effort`` (effort-level switch, v1 docker-only) sends ``/effort
 <level>`` as a direct CLI argument rather than driving the ``/model``
@@ -210,9 +218,23 @@ class AgentBusyError(Exception):
     prompt — an effort switch preflight refuses to touch a busy session."""
 
 
+class AgentStartingError(Exception):
+    """Raised when send_text's readiness gate never saw the pane become
+    ready within its poll budget — the CLI is still booting/loading plugins,
+    or a recycler respawn is mid-flight. See ``_wait_for_send_readiness``."""
+
+
 # Pane states an effort switch must never touch (see set_effort's preflight
 # and its verify-timeout cleanup — wave-review finding I-1).
 _BUSY_PANE_STATUSES = frozenset({"working", "permission_prompt"})
+
+# send_text's readiness gate (docker path): live measurement (wave-review)
+# found a send landing in a session file created 27s AFTER a recycler
+# respawn's previous write, and an earlier ping lost entirely into a
+# still-booting CLI. ~20s at 1s steps mirrors the fleet's own boot/respawn
+# timing (docker_agent_sync's own window-ready wait is in the same range).
+_SEND_READINESS_POLL_ATTEMPTS = 20
+_SEND_READINESS_POLL_INTERVAL_SECONDS = 1.0
 
 # The CLI's own explicit-rejection wording (live-verified, Davinci
 # 2026-08-18: "Kept effort level as auto") — distinct from its
@@ -304,6 +326,46 @@ def _target_kind(agent) -> str:
     raise InputNotSupportedError()
 
 
+async def _wait_for_send_readiness(agent) -> None:
+    """Readiness gate before typing into a docker agent's pane. Live
+    measurement (wave-review) found a real send landing in a session file
+    created 27s AFTER a recycler respawn's previous write — the message was
+    typed into a pane that was mid-boot, not the running session it looked
+    like from the outside. An earlier ping was lost entirely the same way.
+
+    Polls ``capture_pane`` fresh (never cached — this is exactly the kind
+    of transient state a cache would hide) up to
+    ``_SEND_READINESS_POLL_ATTEMPTS`` times, ``_SEND_READINESS_POLL_INTERVAL_SECONDS``
+    apart: returns immediately once ``parse_pane_state`` recognizes ANYTHING
+    in the pane — ``"working"`` (queueing a message into a busy turn is
+    legit, this gate does NOT block on it — see the queued-draft-prompt fix
+    above for why a mid-steer pane still classifies correctly), ``"idle"``,
+    or ``"permission_prompt"`` all mean the CLI is responsive and rendering
+    something recognizable, i.e. NOT booting. Only ``"unknown"`` (or no pane
+    captured at all — container/window not even up yet) blocks: that shape
+    is what a booting CLI, a loading-plugins splash, or a tmux window
+    mid-respawn all share, and there's no cheap way to tell those apart
+    from pane text alone — so this gate treats them identically and keeps
+    waiting. Raises ``AgentStartingError`` if the pane never becomes
+    readable within the poll budget — the caller must NOT type anything
+    into a pane this gate never confirmed as ready.
+
+    ``transcript_active=False`` is passed to ``parse_pane_state`` for the
+    same reason ``_pane_is_busy`` uses it (see that function's docstring):
+    it only affects whether an ambiguous bare-prompt/queued-draft line
+    resolves to ``"working"`` vs ``"idle"`` — and this gate treats both
+    identically anyway, so the choice is moot here beyond staying
+    consistent with the rest of the module."""
+    for _ in range(_SEND_READINESS_POLL_ATTEMPTS):
+        pane = await capture_pane(agent)
+        if pane is not None:
+            status = parse_pane_state(pane, transcript_active=False)["status"]
+            if status != "unknown":
+                return
+        await asyncio.sleep(_SEND_READINESS_POLL_INTERVAL_SECONDS)
+    raise AgentStartingError()
+
+
 async def send_text(agent, text: str) -> None:
     """Types ``text`` into the agent's live session. Single-line text is sent
     as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
@@ -313,20 +375,32 @@ async def send_text(agent, text: str) -> None:
     only types the text into the TUI's input box, it never submits on its
     own (fix round 4: the single-line path was missing this Enter entirely,
     root cause of messages sitting unsubmitted; the multi-line path already
-    had it). For cli-bridge agents, also refreshes the agent-recycler's idle
-    marker (see ``_touch_recycler_marker``) — chat input is real activity and
-    must not let an idle agent get recycled."""
+    had it).
+
+    Docker path, in order: (1) refreshes the agent-recycler's idle marker
+    FIRST — see ``_touch_recycler_marker`` — deliberately BEFORE the
+    readiness gate below, not after typing like the fire-and-forget keys
+    themselves: a gate poll can run for up to ~20s, and without an early
+    marker touch the recycler could decide the session is idle and kill it
+    WHILE this function is still waiting for it to finish booting, racing
+    the very gate meant to protect the send. (2) the readiness gate itself
+    (``_wait_for_send_readiness``, raises ``AgentStartingError`` on
+    timeout — the router turns that into 409
+    ``{"reason":"agent_starting"}``) — never type into a half-booted TUI or
+    a plain shell prompt left behind by a mid-respawn container. (3) only
+    then the actual keystrokes."""
     kind = _target_kind(agent)
     slug = agent.slug
 
     if kind == "docker":
+        await _touch_recycler_marker(slug)
+        await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
             await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted))
         else:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
         await _run_docker_exec(_docker_argv(slug, "Enter"))
-        await _touch_recycler_marker(slug)
         return
 
     # kind == "boss" — text and its submitting Enter MUST be separate frames

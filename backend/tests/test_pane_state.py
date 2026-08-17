@@ -63,6 +63,30 @@ another line with no markers at all
 totally unrelated tool output
 """
 
+# Live repro (wave-review): the operator "steered" a follow-up message in
+# while the agent was still working (queued/draft text sitting in the
+# prompt line, not yet submitted). The CLI's own trailing status-bar chrome
+# (model name + permission-mode line) pushes the "❯ <queued text>" line
+# below the last-3-non-empty-lines window rule 3 originally checked —
+# before the fix this fell through to "unknown" and the operator saw
+# "Status unklar — Terminal prüfen" mid-steer.
+QUEUED_DRAFT_PROMPT_NO_SPINNER = """\
+────────────────────────────────────────────────────────────────────────────
+❯ finish the report once you're done with this
+────────────────────────────────────────────────────────────────────────────
+  Sonnet 5
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+"""
+
+QUEUED_DRAFT_PROMPT_WITH_SPINNER = """\
+✻ Thinking… (esc to interrupt)
+
+❯ finish the report once you're done with this
+────────────────────────────────────────────────────────────────────────────
+  Sonnet 5
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+"""
+
 # Real captured pane from a live /model picker (verified on the "freecode"
 # agent during A6's live-gate check) — a menu with no question line at all,
 # just a plain header/description above the option list and a footer hint
@@ -158,6 +182,35 @@ def test_input_prompt_marker_is_working_when_transcript_active():
     result = parse_pane_state(IDLE_PROMPT, transcript_active=True)
 
     assert result == {"status": "working", "prompt": None}
+
+
+def test_queued_draft_prompt_no_spinner_is_idle_when_transcript_not_active():
+    # The trailing status-bar chrome pushes the "❯ <queued text>" line out
+    # of the last-3-non-empty-lines window — must still resolve via the
+    # wider whole-tail scan, not fall through to "unknown".
+    result = parse_pane_state(QUEUED_DRAFT_PROMPT_NO_SPINNER, transcript_active=False)
+
+    assert result == {"status": "idle", "prompt": None}
+
+
+def test_queued_draft_prompt_no_spinner_is_working_when_transcript_active():
+    result = parse_pane_state(QUEUED_DRAFT_PROMPT_NO_SPINNER, transcript_active=True)
+
+    assert result == {"status": "working", "prompt": None}
+
+
+def test_queued_draft_prompt_with_spinner_is_working_regardless_of_transcript_active():
+    # Spinner (rule 2) must still win over the draft-prompt shape (rule 3) —
+    # priority order unchanged, just a new pattern added within rule 3.
+    result = parse_pane_state(QUEUED_DRAFT_PROMPT_WITH_SPINNER, transcript_active=False)
+
+    assert result == {"status": "working", "prompt": None}
+
+
+def test_queued_draft_prompt_never_classified_as_permission_prompt():
+    result = parse_pane_state(QUEUED_DRAFT_PROMPT_NO_SPINNER, transcript_active=True)
+
+    assert result["status"] != "permission_prompt"
 
 
 def test_garbage_output_is_unknown():
