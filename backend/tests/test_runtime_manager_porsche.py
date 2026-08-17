@@ -51,14 +51,21 @@ async def test_state_booted_no_model_when_awake_but_no_http():
 @pytest.mark.asyncio
 async def test_state_probe_avoids_double_v1():
     """Regression (review finding A): endpoint '.../v1' + healthcheck '/v1/models'
-    must NOT probe '.../v1/v1/models'. The branch strips the redundant /v1."""
+    must NOT probe '.../v1/v1/models'.
+
+    Asserted on the URL that actually goes out, not on the arguments handed to
+    ``_probe_http``. The normalization moved into ``join_probe_url`` so every
+    runtime type benefits (the earlier per-branch guard left the others broken);
+    an argument-level assertion would pin the old layering and pass even if the
+    resulting URL were wrong.
+    """
     rt = {**PORSCHE_RT, "endpoint": "http://192.0.2.20:8000/v1", "healthcheck_path": "/v1/models"}
-    probe = AsyncMock(return_value=True)
+    assert runtime_manager.join_probe_url(rt["endpoint"], rt["healthcheck_path"]) == (
+        "http://192.0.2.20:8000/v1/models"
+    )
     with patch.object(runtime_manager, "_porsche_reachable", new=AsyncMock(return_value=True)), \
-         patch.object(runtime_manager, "_probe_http", new=probe):
+         patch.object(runtime_manager, "_probe_http", new=AsyncMock(return_value=True)):
         state = await runtime_manager.get_runtime_state(rt)
-    # normalized: probed path is /models (→ final URL .../v1/models), not /v1/models
-    assert probe.await_args.args == ("http://192.0.2.20:8000/v1", "/models")
     assert state["state"] == "ready"
 
 
