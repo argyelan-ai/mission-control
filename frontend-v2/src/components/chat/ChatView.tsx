@@ -19,7 +19,7 @@
  * orthogonal to this toggle.
  */
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, MoreHorizontal } from "lucide-react";
+import { ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -147,6 +147,33 @@ export function modelBadgeUuids(events: TimelineChatEvent[]): Set<string> {
     previous = ev.model;
   }
   return out;
+}
+
+/** Loading placeholder shaped like what is about to arrive (a couple of
+ *  paragraphs and a tool row), rather than a spinner parked mid-content. The
+ *  pulse is reduced-motion aware via globals.css. */
+function TimelineSkeleton() {
+  const rows = [
+    ["88%", "96%", "62%"],
+    ["44%"],
+    ["92%", "78%"],
+  ];
+  return (
+    <div className="flex flex-col gap-5 px-4 md:px-5 pt-3 animate-pulse" data-testid="timeline-skeleton" aria-hidden="true">
+      {rows.map((widths, block) => (
+        <div key={block} className="flex flex-col gap-2">
+          {widths.map((w, line) => (
+            <div
+              key={line}
+              className="h-3 rounded-sm"
+              style={{ width: w, background: C.bgElevated }}
+            />
+          ))}
+        </div>
+      ))}
+      <span className="sr-only">Transkript wird geladen…</span>
+    </div>
+  );
 }
 
 function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel, showModel = false) {
@@ -316,12 +343,17 @@ export function ChatView({
           </button>
         )}
 
-        <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-center md:gap-2 pl-2 md:pl-0">
-          <span className="text-[14px] md:text-[13px] font-semibold md:font-medium truncate" style={{ color: C.textPrimary }}>
+        <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-baseline md:gap-2 pl-2 md:pl-0">
+          <span className="text-[14px] md:text-[13px] font-semibold md:font-medium truncate shrink-0" style={{ color: C.textPrimary }}>
             {agent.name}
           </span>
+          {/* What this session is currently about. Stacked under the name on a
+              phone (where the header is the screen title), inline beside it on
+              desktop — the desktop header had no answer to "what is this agent
+              working on" at all, and the sidebar row that does is easy to lose
+              once the rail is collapsed. */}
           {contextLine && (
-            <span className="md:hidden text-[11px] truncate" style={{ color: C.textMuted }}>
+            <span className="text-[11px] md:text-[12px] truncate min-w-0" style={{ color: C.textMuted }}>
               {contextLine}
             </span>
           )}
@@ -415,9 +447,23 @@ export function ChatView({
             className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
           >
             {items.length === 0 ? (
-              <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
-                {stream.loading ? "Lädt…" : "Noch keine Nachrichten."}
-              </div>
+              stream.loading ? (
+                <TimelineSkeleton />
+              ) : (
+                // Teaches the surface instead of reporting emptiness: a fresh
+                // session genuinely has no transcript yet, and the two things
+                // the operator can do about it are named.
+                <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
+                  <MessagesSquare size={20} style={{ color: C.textDim }} aria-hidden="true" />
+                  <span className="text-[13px] font-medium" style={{ color: C.textSecondary }}>
+                    Noch keine Nachrichten
+                  </span>
+                  <span className="text-[12px] max-w-[42ch]" style={{ color: C.textMuted }}>
+                    Schreib unten die erste Nachricht an {agent.name} — oder öffne das Terminal,
+                    um die rohe Sitzung zu sehen.
+                  </span>
+                </div>
+              )
             ) : (
               items.map((item) => {
                 if (item.kind === "sidechain") {

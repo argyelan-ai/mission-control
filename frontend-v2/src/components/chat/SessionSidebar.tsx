@@ -310,16 +310,22 @@ export function SessionSidebar({
       style={{ background: C.bgSurface }}
     >
       {onToggleCollapse && (
+        // The bar used to hold nothing but the chevron, which read as an
+        // unfinished toolbar. Labelling the region (the same name the listbox
+        // already carries for screen readers) gives it a reason to exist.
         <div
-          className="flex items-center justify-end px-2 py-1.5 shrink-0"
+          className="flex items-center justify-between pl-3 pr-2 py-1.5 shrink-0"
           style={{ borderBottom: `1px solid ${C.border}` }}
         >
+          <span className="label-sys truncate" style={{ color: C.textMuted }}>
+            Sessions
+          </span>
           <button
             type="button"
             onClick={onToggleCollapse}
             aria-label="Seitenleiste einklappen"
             title="Seitenleiste einklappen"
-            className="flex items-center justify-center w-7 h-7 rounded-md"
+            className="flex items-center justify-center w-7 h-7 rounded-md shrink-0 cursor-pointer"
             style={{ color: C.textMuted }}
           >
             <ChevronLeft size={14} />

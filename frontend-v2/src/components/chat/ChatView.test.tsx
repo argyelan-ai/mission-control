@@ -577,6 +577,30 @@ describe("ChatView", () => {
     expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
   });
 
+  // ── Loading / empty states ────────────────────────────────────────────────
+
+  it("shows a skeleton shaped like the timeline while history loads", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ loading: true }));
+    renderChatView();
+    expect(screen.getByTestId("timeline-skeleton")).toBeInTheDocument();
+    expect(screen.getByText("Transkript wird geladen…")).toBeInTheDocument();
+  });
+
+  it("names both ways forward in the empty state instead of just reporting emptiness", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ loading: false }));
+    renderChatView();
+    expect(screen.getByText("Noch keine Nachrichten")).toBeInTheDocument();
+    expect(screen.getByText(/Schreib unten die erste Nachricht an Cody/)).toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-skeleton")).not.toBeInTheDocument();
+  });
+
+  it("drops the skeleton as soon as there is anything to render", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ loading: true, events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByTestId("timeline-skeleton")).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
   it("shows a neutral placeholder when no agent is selected", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     render(
