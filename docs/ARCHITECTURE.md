@@ -1353,7 +1353,15 @@ Alle ADRs in `docs/decisions/`:
   (das Popover hinter dem Kontext-Ring). Frische CLI-Statuszeilen-Daten gewinnen
   ueber die Transkriptzeile: die beschreibt einen einzelnen Zug, die Statuszeile das
   ganze lebende Fenster. Fehlt `components`, zeigt das Panel nur belegt/frei statt
-  Segmente zu erfinden. **Boss-Privacy-Filter fail-closed**
+  Segmente zu erfinden.
+  **`capabilities`** (`{effortLevels, canSwitchEffort}`, aus
+  `agent_chat_input.effort_capabilities`) liegt auf der History-Antwort und baut den
+  Effort-Chip: gerendert wird ausschliesslich die gemeldete Liste, damit eine neue
+  CLI-Version eine Backend-Konstante aendert und nicht die UI. Host-Agents (Boss
+  eingeschlossen) melden eine leere Liste + `canSwitchEffort: false` — der Chip zeigt
+  die Stufe dann nur an, statt einen Picker anzubieten, der nicht funktionieren kann.
+  Die Persistenz-Semantik unterscheidet sich pro Stufe (low/medium/high/xhigh werden
+  zum Standard, max/ultracode gelten nur fuer die Session) — siehe ADR-073. **Boss-Privacy-Filter fail-closed**
   wiederverwendet `token_harvester._should_attribute_boss_path` (Boss' `~/.claude` teilt
   sich mit den privaten Sessions des Operators — jeder Lesefehler fällt auf verweigert). **Recycler-
   Kopplung:** Chat-Eingabe touched jetzt den Agent-Recycler-Idle-Marker mit, sonst

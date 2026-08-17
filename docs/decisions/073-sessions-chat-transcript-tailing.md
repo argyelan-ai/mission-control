@@ -139,20 +139,37 @@ unabhängige Lese-/Schreib-Surface über derselben tmux-Session:
   (`cli_agent_settings.json.j2`), Stand Ledger 7/7 Agenten. Künftige Änderungen an
   Skript oder Key müssen über diesen Template-Pfad laufen, nicht per Hand-Edit im
   Container, sonst driftet die Flotte.
-- **Effort-Umstellung aus dem Chat ist NICHT session-lokal, sondern dauerhaft:**
-  `POST /agents/{id}/chat/effort` fährt `/effort <level>` in die TUI, und Claude Code
-  2.1.233 kennt dafür keinen session-only Pfad — auch die „s"-Option des
-  `/model`-Pickers scopet nur das MODELL auf die Session, nicht den Effort. Jede
-  Umstellung schreibt damit den **persistierten Standard** des Agenten in seiner
-  `settings.json` um und gilt für jede frische Session, bis sie erneut umgestellt wird
-  oder der nächste `sync-config`/Reprovision sie aus dem Template überschreibt (ADR-006:
-  DB → Template → Datei bleibt die Single Source of Truth, ein Chat-Wechsel ist
-  ausdrücklich KEINE Eintragung in diese Kette). Empirisch verifiziert, nicht aus der
-  Doku gelesen. Konsequenzen: (1) die UI muss es sagen — das Effort-Dropdown im Composer
-  trägt die Zeile „Gilt als neuer Standard des Agenten."; (2) wer Effort künftig
-  wirklich session-lokal braucht, braucht CLI-Support, keinen UI-Trick; (3) ein
-  Reprovision kann eine per Chat gesetzte Stufe stillschweigend zurücksetzen — das ist
-  gewollt, aber überrascht, wenn man es nicht weiß.
+- **Effort-Persistenz ist PRO STUFE verschieden — die CLI, nicht wir, entscheidet das:**
+  `POST /agents/{id}/chat/effort` fährt `/effort <level>` in die TUI. Claude Code 2.1.233
+  kennt sechs Stufen, und sie teilen sich in zwei Klassen, empirisch verifiziert über
+  `settings.json`-Diffs nach jeder einzelnen Stufe (Belege in
+  `.superpowers/sdd/2026-08-13-sessions-chat-view-plan/task-A5-report.md`):
+  - **`low` / `medium` / `high` / `xhigh` schreiben den persistierten Standard um.** Die
+    CLI bestätigt wörtlich „saved as your default for new sessions"; die Stufe gilt für
+    jede frische Session, bis sie erneut umgestellt wird oder der nächste
+    `sync-config`/Reprovision sie aus dem Template überschreibt (ADR-006: DB → Template
+    → Datei bleibt die Single Source of Truth — ein Chat-Wechsel ist ausdrücklich KEINE
+    Eintragung in diese Kette und kann darum stillschweigend zurückgesetzt werden).
+  - **`max` / `ultracode` gelten nur für die laufende Session.** Die CLI sagt „this
+    session only" und lässt `settings.json` nachweislich unberührt. Das ist CLI-Design,
+    nichts, was unsere Orchestrierung baut oder verhindern könnte.
+  - **`auto` ist bewusst NICHT in `ALLOWED_EFFORT_LEVELS`:** es ist keine siebte Stufe,
+    sondern löscht den Override. Es hat damit keinen „aktuellen Wert", den ein Chip als
+    ausgewählt anzeigen könnte.
+
+  Drei Konsequenzen, die künftige Änderungen mitdenken müssen:
+  1. **Die UI muss die Klasse pro Stufe nennen**, nicht pauschal. Das Effort-Dropdown im
+     Composer schreibt an jede Zeile „wird Standard" bzw. „nur diese Session" — eine
+     einzelne Sammelzeile war für `max`/`ultracode` schlicht falsch.
+  2. **Verifikation darf nicht am Statuszeilen-Badge hängen.** Das rendert nur für die
+     vier persistierenden Stufen; eine Badge-Prüfung hätte `max`/`ultracode` dauerhaft
+     mit `effort_switch_failed` abgelehnt — also genau die zwei Stufen, die jemand wählt,
+     der „maximale Tiefe" will. Geprüft wird deshalb die Inline-Bestätigung
+     (`effort level to <level>`), die in BEIDEN Formulierungen vorkommt.
+  3. **Die Stufenliste gehört nicht ins Frontend.** Sie kommt aus
+     `GET /chat/history` → `capabilities.effortLevels`, gespeist aus derselben
+     `ALLOWED_EFFORT_LEVELS`-Konstante, gegen die `set_effort` validiert. Eine neue
+     CLI-Version ändert damit eine Zeile im Backend, nicht die UI.
 - **v1-Scope-Lücke bewusst in Kauf genommen:** Hermes/Jarvis/Sparky haben (noch) keinen
   Adapter — ehrlicher „kein Transkript verfügbar"-Zustand statt eines vorgetäuschten
   Chats. Sparky (openclaude-Dialekt) ist der nächstliegende v2-Kandidat, weil

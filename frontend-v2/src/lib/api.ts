@@ -853,9 +853,9 @@ export const api = {
     // simply unavailable) and `effort_switch_failed` (the switch was sent but
     // couldn't be verified as applied — a real error worth surfacing).
     // `level` is a plain string on purpose: the set of levels comes from the
-    // backend (`usage.effortLevels`), and a union pinned here would have to be
-    // edited every time a harness gains one. The backend is the allowlist —
-    // it 422s on anything it doesn't accept.
+    // backend (`GET /chat/history` -> `capabilities.effortLevels`), and a union
+    // pinned here would have to be edited every time a harness gains one. The
+    // backend is the allowlist — it 422s on anything it doesn't accept.
     setEffort: (agentId: string, level: string) =>
       request<void>(`/api/v1/agents/${agentId}/chat/effort`, {
         method: "POST",
