@@ -379,66 +379,66 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             // "with what" are two questions, and only the first fits in 18px.
             // `relative` is what the desktop popover anchors to.
             <div className="relative shrink-0">
-            <button
-              type="button"
-              data-context-trigger
-              aria-haspopup="dialog"
-              aria-expanded={contextOpen}
-              aria-label="Kontext-Aufschlüsselung"
-              onClick={() => setContextOpen((v) => !v)}
-              className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
-            >
-            <div
-              data-testid="context-ring"
-              role="progressbar"
-              aria-valuenow={Math.round(pct)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              data-threshold={ringThresholdValue}
-              data-source={pctSource ?? undefined}
-              title={ringTitle}
-              className="flex items-center gap-1 shrink-0"
-            >
-              <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
-                <circle
-                  cx={RING_SIZE / 2}
-                  cy={RING_SIZE / 2}
-                  r={RING_RADIUS}
-                  fill="none"
-                  stroke={C.bgHover}
-                  strokeWidth={RING_STROKE}
-                />
-                <circle
-                  data-testid="context-ring-arc"
-                  cx={RING_SIZE / 2}
-                  cy={RING_SIZE / 2}
-                  r={RING_RADIUS}
-                  fill="none"
-                  stroke={ringStrokeColor}
-                  strokeWidth={RING_STROKE}
-                  strokeLinecap="round"
-                  strokeDasharray={RING_CIRCUMFERENCE}
-                  strokeDashoffset={ringOffset}
-                  transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
-                />
-              </svg>
-              <span
-                data-testid="context-ring-pct"
-                className="font-mono text-[10px] font-medium tabular-nums"
-                style={{ color: C.textMuted }}
+              <button
+                type="button"
+                data-context-trigger
+                aria-haspopup="dialog"
+                aria-expanded={contextOpen}
+                aria-label="Kontext-Aufschlüsselung"
+                onClick={() => setContextOpen((v) => !v)}
+                className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
               >
-                {Math.round(pct)}%
-              </span>
-            </div>
-            </button>
-            {contextOpen && (
-              <ContextPanel
-                usage={usage}
-                pct={pct}
-                pctSource={pctSource}
-                onClose={() => setContextOpen(false)}
-              />
-            )}
+                <div
+                  data-testid="context-ring"
+                  role="progressbar"
+                  aria-valuenow={Math.round(pct)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  data-threshold={ringThresholdValue}
+                  data-source={pctSource ?? undefined}
+                  title={ringTitle}
+                  className="flex items-center gap-1 shrink-0"
+                >
+                  <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
+                    <circle
+                      cx={RING_SIZE / 2}
+                      cy={RING_SIZE / 2}
+                      r={RING_RADIUS}
+                      fill="none"
+                      stroke={C.bgHover}
+                      strokeWidth={RING_STROKE}
+                    />
+                    <circle
+                      data-testid="context-ring-arc"
+                      cx={RING_SIZE / 2}
+                      cy={RING_SIZE / 2}
+                      r={RING_RADIUS}
+                      fill="none"
+                      stroke={ringStrokeColor}
+                      strokeWidth={RING_STROKE}
+                      strokeLinecap="round"
+                      strokeDasharray={RING_CIRCUMFERENCE}
+                      strokeDashoffset={ringOffset}
+                      transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+                    />
+                  </svg>
+                  <span
+                    data-testid="context-ring-pct"
+                    className="font-mono text-[10px] font-medium tabular-nums"
+                    style={{ color: C.textMuted }}
+                  >
+                    {Math.round(pct)}%
+                  </span>
+                </div>
+              </button>
+              {contextOpen && (
+                <ContextPanel
+                  usage={usage}
+                  pct={pct}
+                  pctSource={pctSource}
+                  onClose={() => setContextOpen(false)}
+                />
+              )}
             </div>
           )}
 
