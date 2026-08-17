@@ -799,6 +799,98 @@ describe("Composer", () => {
     expect(screen.queryByText("/clear")).not.toBeInTheDocument();
   });
 
+  // ── Slash palette from the server's command list ──────────────────────────
+
+  describe("reported slash commands", () => {
+    const withCommands = (slashCommands: { name: string; description?: string | null }[] | null) =>
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={
+            slashCommands === null
+              ? { effortLevels: [], canSwitchEffort: false }
+              : { effortLevels: [], canSwitchEffort: false, slashCommands }
+          }
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+
+    it("lists everything the harness reports, built-ins and skills alike", async () => {
+      const user = userEvent.setup();
+      withCommands([
+        { name: "clear", description: "Verlauf löschen" },
+        { name: "/mc-tdd", description: "TDD-Skill" },
+        { name: "mc-verify" },
+      ]);
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+
+      const palette = screen.getByTestId("slash-palette");
+      expect(palette).toHaveTextContent("/clear");
+      expect(palette).toHaveTextContent("/mc-tdd");
+      expect(palette).toHaveTextContent("/mc-verify");
+      // Not the static fallback list — that one has /model, which is absent here.
+      expect(palette).not.toHaveTextContent("/model");
+    });
+
+    it("normalizes a name that already carries the slash", async () => {
+      const user = userEvent.setup();
+      withCommands([{ name: "/compact", description: "Kontext komprimieren" }]);
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+
+      // "//compact" would be unreachable by the prefix filter and wrong to send.
+      expect(screen.getByTestId("slash-item-/compact")).toBeInTheDocument();
+    });
+
+    it("filters the reported list as you type", async () => {
+      const user = userEvent.setup();
+      withCommands([{ name: "mc-tdd" }, { name: "mc-verify" }, { name: "clear" }]);
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/mc-");
+
+      const palette = screen.getByTestId("slash-palette");
+      expect(palette).toHaveTextContent("/mc-tdd");
+      expect(palette).toHaveTextContent("/mc-verify");
+      expect(palette).not.toHaveTextContent("/clear");
+    });
+
+    it("puts the highlight on the first match after filtering", async () => {
+      const user = userEvent.setup();
+      withCommands([{ name: "clear" }, { name: "mc-tdd" }, { name: "mc-verify" }]);
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/mc-");
+
+      expect(screen.getByTestId("slash-item-/mc-tdd")).toHaveAttribute("data-highlighted", "true");
+    });
+
+    it("scrolls internally instead of growing past the viewport", async () => {
+      const user = userEvent.setup();
+      // A real fleet agent reports dozens once skills are included.
+      withCommands(Array.from({ length: 40 }, (_, i) => ({ name: `cmd-${i}` })));
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+
+      const scroller = screen.getByTestId("slash-palette").firstElementChild as HTMLElement;
+      expect(scroller.className).toContain("overflow-y-auto");
+      expect(scroller.className).toMatch(/max-h-/);
+    });
+
+    it("keeps the static list while the backend does not report one", async () => {
+      const user = userEvent.setup();
+      withCommands(null);
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+
+      expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
+    });
+
+    it("falls back rather than rendering blank rows for a malformed list", async () => {
+      const user = userEvent.setup();
+      withCommands([{ name: "" }, { name: "   " }]);
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+
+      expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
+    });
+  });
+
   it("anchors the palette directly above the input via absolute positioning (bottom-full) with a 320px floor", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { resolveAliveness } from "@/lib/chatTypes";
 import {
   chatReducer,
   createInitialChatState,
@@ -283,5 +284,40 @@ describe("markUnconfirmedEchoes", () => {
   it("does not re-flip an already-unconfirmed echo", () => {
     const list = [echo({ sentAt: 1_000, status: "unconfirmed" })];
     expect(markUnconfirmedEchoes(list, 99_000)).toBe(list);
+  });
+});
+
+
+// ── Aliveness ────────────────────────────────────────────────────────────────
+// The rule that stopped the UI from announcing a finished session at one that
+// was merely quiet.
+
+describe("resolveAliveness", () => {
+  const session = (over: Partial<Parameters<typeof resolveAliveness>[0] & object> = {}) => ({
+    sessionId: "s1",
+    live: true,
+    startedAt: null,
+    ...over,
+  });
+
+  it("trusts the server's answer when it has one", () => {
+    expect(resolveAliveness(session({ aliveness: "ended", live: true }))).toBe("ended");
+    expect(resolveAliveness(session({ aliveness: "idle", live: true }))).toBe("idle");
+    expect(resolveAliveness(session({ aliveness: "active", live: false }))).toBe("active");
+  });
+
+  it("reads a live session as active when the server field is missing", () => {
+    expect(resolveAliveness(session({ live: true }))).toBe("active");
+  });
+
+  it("reads a NON-live session as idle, never as ended", () => {
+    // This is the whole point: `live` is mtime-based, and a stale mtime is not
+    // evidence that a session finished. Only the server may claim `ended`.
+    expect(resolveAliveness(session({ live: false }))).toBe("idle");
+  });
+
+  it("treats a missing session as idle rather than ended", () => {
+    expect(resolveAliveness(null)).toBe("idle");
+    expect(resolveAliveness(undefined)).toBe("idle");
   });
 });

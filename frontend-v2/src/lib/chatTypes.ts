@@ -122,10 +122,38 @@ export type ChatEvent =
  *  `session_changed` (a reset signal, never rendered itself). */
 export type TimelineChatEvent = MessageEvent | ToolEvent | ThinkingEvent | CommandEvent;
 
+/**
+ * How alive the underlying CLI session is.
+ *
+ * `live` alone could not express this: it was derived from the transcript's
+ * mtime being younger than 60s, which is false for every CLI that is running
+ * but idle — waiting at its prompt writes nothing. The UI therefore declared
+ * "Session beendet" at a session that was sitting right there, ready. Three
+ * states separate "nothing is happening" from "nothing can happen".
+ */
+export type ChatAliveness = "active" | "idle" | "ended";
+
 export interface ChatSession {
   sessionId: string;
   live: boolean;
   startedAt: string | null;
+  /** Absent on older backends — use `resolveAliveness`, never read directly. */
+  aliveness?: ChatAliveness | null;
+}
+
+/**
+ * The one place that decides how alive a session is, so no component can
+ * disagree with another.
+ *
+ * Without the server field, `live === true` means active and everything else
+ * means IDLE — deliberately not `ended`. A stale mtime is not evidence that a
+ * session finished, and treating it as such is exactly the false alarm this
+ * replaces. `ended` is only ever claimed when the server says so.
+ */
+export function resolveAliveness(session: ChatSession | null | undefined): ChatAliveness {
+  if (!session) return "idle";
+  if (session.aliveness) return session.aliveness;
+  return session.live ? "active" : "idle";
 }
 
 /**
@@ -142,6 +170,17 @@ export interface ChatSession {
 export interface ChatCapabilities {
   effortLevels: string[];
   canSwitchEffort: boolean;
+  /** Every slash command this harness actually offers — built-ins AND the
+   *  agent's skills. Absent on older backends, where the composer falls back to
+   *  its own short static list. `name` may or may not carry the leading slash
+   *  depending on the source, so consumers must normalize (see
+   *  `resolveSlashCommands`) rather than assume. */
+  slashCommands?: ChatSlashCommand[] | null;
+}
+
+export interface ChatSlashCommand {
+  name: string;
+  description?: string | null;
 }
 
 /**

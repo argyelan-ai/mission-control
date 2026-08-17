@@ -24,7 +24,7 @@ import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
-import { isNoTranscriptError } from "@/lib/chatTypes";
+import { isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
@@ -356,6 +356,9 @@ export function ChatView({
   // Tail first; the remainder joins one frame later (see `renderAll`).
   const visibleItems = renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW);
   const modelBadges = modelBadgeUuids(visibleEvents);
+  // Single source for how alive this session is — see resolveAliveness for why
+  // a missing server field must never be read as "ended".
+  const aliveness = resolveAliveness(stream.session);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
 
   return (
@@ -396,17 +399,35 @@ export function ChatView({
           )}
         </div>
 
-        {canChat && stream.session && (
+        {/* Three states, three treatments — and only ONE of them is a claim
+            about the session being over. The old two-way badge read `live`,
+            which is mtime-based and therefore false for any CLI that is running
+            but idle at its prompt; the header then announced "beendet" at a
+            session sitting right there. `idle` now gets a quiet dot with no
+            word at all: nothing is happening, and nothing is wrong. */}
+        {canChat && stream.session && aliveness !== "idle" && (
           <span
+            data-testid="session-badge"
+            data-aliveness={aliveness}
             className="text-[10px] font-medium px-1.5 py-0.5 rounded font-mono shrink-0"
             style={{
-              background: stream.session.live ? `${C.online}1A` : C.bgHover,
-              color: stream.session.live ? C.online : C.textMuted,
-              border: `1px solid ${stream.session.live ? `${C.online}33` : C.border}`,
+              background: aliveness === "active" ? `${C.online}1A` : C.bgHover,
+              color: aliveness === "active" ? C.online : C.textMuted,
+              border: `1px solid ${aliveness === "active" ? `${C.online}33` : C.border}`,
             }}
           >
-            {stream.session.live ? "live" : "beendet"}
+            {aliveness === "active" ? "live" : "beendet"}
           </span>
+        )}
+        {canChat && stream.session && aliveness === "idle" && (
+          <span
+            data-testid="session-badge"
+            data-aliveness="idle"
+            title="Session läuft, wartet am Prompt"
+            className="w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ background: C.textDim }}
+            aria-label="Session läuft, wartet am Prompt"
+          />
         )}
 
         <button
@@ -552,7 +573,7 @@ export function ChatView({
           <StatusLine
             state={stream.state}
             connected={stream.connected}
-            sessionLive={stream.session?.live ?? true}
+            aliveness={aliveness}
             sending={stream.awaitingResponse}
           />
           <Composer
@@ -561,7 +582,7 @@ export function ChatView({
             state={stream.state}
             onSend={handleSend}
             onStop={handleStop}
-            sessionLive={stream.session?.live ?? false}
+            sessionLive={aliveness !== "ended"}
             capabilities={stream.capabilities}
           />
         </>

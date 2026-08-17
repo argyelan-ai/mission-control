@@ -706,6 +706,68 @@ describe("ChatView", () => {
     ]);
   });
 
+  // ── Session badge semantics ───────────────────────────────────────────────
+
+  it('shows the "live" badge for an active session', () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" } })
+    );
+    renderChatView();
+    const badge = screen.getByTestId("session-badge");
+    expect(badge).toHaveAttribute("data-aliveness", "active");
+    expect(badge).toHaveTextContent("live");
+  });
+
+  it("shows no alarming word for an IDLE session — only a quiet dot", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" } })
+    );
+    renderChatView();
+    const badge = screen.getByTestId("session-badge");
+    expect(badge).toHaveAttribute("data-aliveness", "idle");
+    expect(badge).toHaveTextContent("");
+    expect(screen.queryByText("beendet")).not.toBeInTheDocument();
+  });
+
+  it('keeps "beendet" for a session the server actually calls ended', () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+    expect(
+      screen.getByText("Session beendet — neue Nachricht startet die nächste Session")
+    ).toBeInTheDocument();
+  });
+
+  it('does NOT say "beendet" on a stale mtime alone (old backend)', () => {
+    // The operator's actual complaint: `live: false` with no server aliveness
+    // used to render the finished-session treatment at a running CLI.
+    mockUseChatStream.mockReturnValue(
+      mkStream({ session: { sessionId: "s1", live: false, startedAt: null } })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "idle");
+    expect(screen.queryByText("beendet")).not.toBeInTheDocument();
+  });
+
+  it("keeps Stop reachable while the session is merely idle", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" } })
+    );
+    renderChatView();
+    // An idle CLI is still there to interrupt; only an ended one is not.
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  });
+
+  it("removes Stop once the session has genuinely ended", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
+    );
+    renderChatView();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+  });
+
   // ── Chunked first paint ───────────────────────────────────────────────────
 
   it("mounts the tail of a long transcript first, then the rest", async () => {

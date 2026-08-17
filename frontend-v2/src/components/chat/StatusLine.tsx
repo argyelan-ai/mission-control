@@ -11,15 +11,17 @@
  * the terminal, the one place that can't lie.
  */
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import type { StateEvent } from "@/lib/chatTypes";
+import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
 
 interface StatusLineProps {
   state: StateEvent | null;
   connected: boolean;
-  /** Whether the underlying CLI session is still running. A session that has
-   *  ENDED is not an unknown state — it is a known, ordinary one, and painting
-   *  it amber told the operator something was wrong when nothing was. */
-  sessionLive?: boolean;
+  /** How alive the session is (see `resolveAliveness`). Only `ended` is a
+   *  statement that nothing more can happen; `idle` is a running CLI waiting at
+   *  its prompt, which reads as "Bereit" like any other quiet moment. The old
+   *  boolean could not tell those apart and therefore announced a finished
+   *  session at one that was merely quiet. */
+  aliveness?: ChatAliveness;
   /** A send has gone out and the transcript hasn't shown any sign of the turn
    *  yet. Local knowledge, and honest about being exactly that: it says the
    *  message left, not that the agent received or started it. */
@@ -65,7 +67,7 @@ const SENDING_DISPLAY: StatusDisplay = {
 function resolveDisplay(
   state: StateEvent | null,
   connected: boolean,
-  sessionLive: boolean,
+  aliveness: ChatAliveness,
   sending: boolean,
 ): StatusDisplay {
   // Outranks the pane probe on purpose: right after a send the probe still
@@ -74,7 +76,7 @@ function resolveDisplay(
   if (sending) {
     return SENDING_DISPLAY;
   }
-  if (!sessionLive) {
+  if (aliveness === "ended") {
     return ENDED_DISPLAY;
   }
   if (!connected || !state || state.status === "unknown") {
@@ -93,8 +95,13 @@ function resolveDisplay(
   }
 }
 
-export function StatusLine({ state, connected, sessionLive = true, sending = false }: StatusLineProps) {
-  const display = resolveDisplay(state, connected, sessionLive, sending);
+export function StatusLine({
+  state,
+  connected,
+  aliveness = "active",
+  sending = false,
+}: StatusLineProps) {
+  const display = resolveDisplay(state, connected, aliveness, sending);
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status

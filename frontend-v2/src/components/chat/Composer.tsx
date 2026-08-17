@@ -11,10 +11,11 @@ import {
   isInputNotSupportedError,
   isSessionOnlyEffort,
   type ChatCapabilities,
+  type ChatSlashCommand,
   type StateEvent,
   type UsageEvent,
 } from "@/lib/chatTypes";
-import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens } from "@/lib/claudeCommands";
+import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens, type SlashCommand } from "@/lib/claudeCommands";
 import { ContextPanel } from "./ContextPanel";
 
 const MAX_ROWS = 8;
@@ -45,6 +46,31 @@ export function resolveEffortLevels(capabilities: ChatCapabilities | null | unde
   return (capabilities.effortLevels ?? []).filter(
     (level): level is string => typeof level === "string" && level.trim().length > 0,
   );
+}
+
+/**
+ * The palette's command list: everything the harness reports (built-ins plus
+ * the agent's own skills), falling back to the short static list only while the
+ * backend doesn't ship the field.
+ *
+ * Normalizes the leading slash instead of trusting it: the backend assembles
+ * this from more than one source (CLI built-ins, skill directories), and a name
+ * arriving as either `compact` or `/compact` must not produce `//compact` or a
+ * row the "/"-prefix filter can never match. Entries without a usable name are
+ * dropped rather than rendered as an unclickable blank.
+ */
+export function resolveSlashCommands(
+  reported: ChatSlashCommand[] | null | undefined,
+): SlashCommand[] {
+  if (!reported || reported.length === 0) return SLASH_COMMANDS;
+  const normalized = reported
+    .filter((cmd): cmd is ChatSlashCommand => typeof cmd?.name === "string" && cmd.name.trim().length > 0)
+    .map((cmd) => {
+      const bare = cmd.name.trim().replace(/^\/+/, "");
+      return { command: `/${bare}`, description: cmd.description?.trim() || "" };
+    })
+    .filter((cmd) => cmd.command.length > 1);
+  return normalized.length > 0 ? normalized : SLASH_COMMANDS;
 }
 
 type RingThreshold = "normal" | "warning" | "error";
@@ -122,6 +148,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
 
   const isWorking = state?.status === "working";
   const effortLevels = resolveEffortLevels(capabilities);
+  const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
 
   // Palette is only ever "/<query>" with no space yet — once a space lands,
   // the user has moved on to arguments and the palette has no business
@@ -129,7 +156,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const isSlashToken = text.startsWith("/") && !text.includes(" ");
   const paletteQuery = isSlashToken ? text.slice(1).toLowerCase() : "";
   const filteredCommands = isSlashToken
-    ? SLASH_COMMANDS.filter((cmd) => cmd.command.slice(1).toLowerCase().startsWith(paletteQuery))
+    ? slashCommands.filter((cmd) => cmd.command.slice(1).toLowerCase().startsWith(paletteQuery))
     : [];
   const paletteVisible = paletteOpen && filteredCommands.length > 0;
   const highlightedIndex = Math.min(paletteIndex, Math.max(filteredCommands.length - 1, 0));
@@ -196,7 +223,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     setText(value);
     if (value.startsWith("/") && !value.includes(" ")) {
       const query = value.slice(1).toLowerCase();
-      const hasMatch = SLASH_COMMANDS.some((cmd) => cmd.command.slice(1).toLowerCase().startsWith(query));
+      const hasMatch = slashCommands.some((cmd) => cmd.command.slice(1).toLowerCase().startsWith(query));
       // Highlight resets to the first match on every keystroke — an empty
       // result closes the palette entirely rather than showing "no matches".
       setPaletteOpen(hasMatch);

@@ -55,7 +55,7 @@ describe("StatusLine", () => {
   // ── Ended session: a known end state, not an unknown one ──────────────────
 
   it("reports an ended session plainly instead of as an unknown status", () => {
-    render(<StatusLine state={null} connected sessionLive={false} />);
+    render(<StatusLine state={null} connected aliveness="ended" />);
     expect(
       screen.getByText("Session beendet — neue Nachricht startet die nächste Session")
     ).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("StatusLine", () => {
   });
 
   it("does not paint an ended session in the warning tone", () => {
-    const { container } = render(<StatusLine state={mkState("unknown")} connected sessionLive={false} />);
+    const { container } = render(<StatusLine state={mkState("unknown")} connected aliveness="ended" />);
     const line = container.firstElementChild as HTMLElement;
     // C.textMuted, not STATUS_TEXT.warning — amber stays reserved for
     // "live but unreadable", the one case that needs the operator's attention.
@@ -71,12 +71,29 @@ describe("StatusLine", () => {
   });
 
   it("never pulses on an ended session", () => {
-    const { container } = render(<StatusLine state={mkState("working")} connected sessionLive={false} />);
+    const { container } = render(<StatusLine state={mkState("working")} connected aliveness="ended" />);
     expect(container.querySelector(".animate-ping")).toBeNull();
   });
 
-  it("still shows live statuses while the session is live", () => {
-    render(<StatusLine state={mkState("working")} connected sessionLive />);
+  it("still shows live statuses while the session is active", () => {
+    render(<StatusLine state={mkState("working")} connected aliveness="active" />);
     expect(screen.getByText("Arbeitet…")).toBeInTheDocument();
+  });
+
+  it('reads an IDLE session as "Bereit", never as ended', () => {
+    // The complaint this replaces: a running CLI waiting at its prompt writes
+    // nothing, so the mtime heuristic called it finished and the UI announced
+    // "Session beendet" at a session sitting right there.
+    render(<StatusLine state={mkState("idle")} connected aliveness="idle" />);
+    expect(screen.getByText("Bereit")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Session beendet — neue Nachricht startet die nächste Session")
+    ).not.toBeInTheDocument();
+  });
+
+  it("still reports an unreadable IDLE session honestly", () => {
+    // Idle is not a licence to invent a status: a dead stream is still unknown.
+    render(<StatusLine state={null} connected={false} aliveness="idle" />);
+    expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
   });
 });
