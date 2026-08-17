@@ -297,7 +297,7 @@ async def test_verify_process_returns_true_when_vllm_serve_running():
         ok = await runtime_manager.verify_spark_vllm_process_started(
             "qwen-general", timeout=1.0
         )
-    assert ok is True
+    assert ok == "serving"
 
 
 @pytest.mark.asyncio
@@ -313,7 +313,7 @@ async def test_verify_process_returns_false_when_process_never_appears():
         ok = await runtime_manager.verify_spark_vllm_process_started(
             "qwen-general", timeout=0.05
         )
-    assert ok is False
+    assert ok == "absent"
 
 
 @pytest.mark.asyncio
@@ -324,7 +324,7 @@ async def test_verify_process_returns_false_when_container_never_appears():
         ok = await runtime_manager.verify_spark_vllm_process_started(
             "qwen-general", timeout=0.05
         )
-    assert ok is False
+    assert ok == "absent"
 
 
 # ── start_runtime: launch then verify ────────────────────────────────────────
@@ -358,7 +358,7 @@ async def test_start_runtime_ok_when_container_appears_and_vllm_serves():
          patch.object(
              runtime_manager,
              "verify_spark_vllm_process_started",
-             AsyncMock(return_value=True),
+             AsyncMock(return_value="serving"),
          ):
         result = await runtime_manager.start_runtime(SPARK_RT)
     assert result["ok"] is True
@@ -379,7 +379,7 @@ async def test_start_runtime_fails_when_container_appears_but_vllm_process_never
          patch.object(
              runtime_manager,
              "verify_spark_vllm_process_started",
-             AsyncMock(return_value=False),
+             AsyncMock(return_value="absent"),
          ):
         result = await runtime_manager.start_runtime(SPARK_RT)
     assert result["ok"] is False
