@@ -11,7 +11,8 @@ import subprocess
 
 import pytest
 
-from app.services.pane_state import capture_pane, parse_pane_state
+from app.services import pane_state
+from app.services.pane_state import capture_pane, parse_pane_state, process_alive
 
 # ══════════════════════════════════════════════════════════════════════════
 # Fixtures — synthetic tmux capture-pane snapshots
@@ -297,3 +298,128 @@ async def test_capture_pane_truncates_to_last_40_lines(monkeypatch):
     assert len(lines) == 40
     assert lines[0] == "line 60"
     assert lines[-1] == "line 99"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# process_alive — I/O, subprocess mocked. Each test clears the module-level
+# cache first (keyed by slug, TTL-based) so results from other tests in this
+# file (or a previous run within the same slug) can never leak in.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    captured_argv: list[str] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_argv.extend(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    result = await process_alive(agent)
+
+    assert captured_argv == [
+        "docker", "exec", "-u", "agent", "mc-agent-rex", "pgrep", "-x", "claude",
+    ]
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_process_alive_false_when_pgrep_finds_nothing(monkeypatch):
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+
+    def _fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    result = await process_alive(agent)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_process_alive_none_for_host_runtime():
+    agent = _StubAgent(agent_runtime="host", slug="boss")
+
+    result = await process_alive(agent)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_process_alive_none_on_subprocess_exception(monkeypatch):
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+
+    def _fake_run(argv, **kwargs):
+        raise FileNotFoundError("docker not found")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    result = await process_alive(agent)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_process_alive_none_on_unexpected_returncode(monkeypatch):
+    """Neither 0 (found) nor 1 (clean "nothing found") — pgrep's own
+    failure modes (bad invocation, permission) aren't a confident answer."""
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+
+    def _fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, returncode=2, stdout="", stderr="usage error")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    result = await process_alive(agent)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_process_alive_result_is_cached(monkeypatch):
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    call_count = {"n": 0}
+
+    def _fake_run(argv, **kwargs):
+        call_count["n"] += 1
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    first = await process_alive(agent)
+    second = await process_alive(agent)
+
+    assert first is True
+    assert second is True
+    assert call_count["n"] == 1  # second call served from the ~30s cache
+
+
+@pytest.mark.asyncio
+async def test_process_alive_cache_expires_after_ttl(monkeypatch):
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    call_count = {"n": 0}
+
+    def _fake_run(argv, **kwargs):
+        call_count["n"] += 1
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    fake_now = {"t": 1_800_000_000.0}
+    monkeypatch.setattr(pane_state.time, "time", lambda: fake_now["t"])
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await process_alive(agent)
+    fake_now["t"] += 31  # past the 30s TTL
+    await process_alive(agent)
+
+    assert call_count["n"] == 2

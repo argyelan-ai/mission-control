@@ -722,6 +722,130 @@ async def test_effort_capabilities_other_host_agent_cannot_switch():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# services/agent_chat_input.py — slash_command_capabilities
+#
+# Skills are discovered from <claude-config>/skills/*/SKILL.md — the SAME
+# per-agent directory plugin_manager.sync_agent_skills_to_disk populates for
+# both plain custom skills and resolved plugin-provided symlinks, scanned
+# via plugin_manager.list_skills_in_dir (reused, not reimplemented). Every
+# test here clears the module-level ~60s cache first (keyed by slug) so
+# results can't leak across tests.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _write_skill(skills_dir, name: str, description: str | None) -> None:
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True)
+    if description is None:
+        (skill_dir / "SKILL.md").write_text("# no frontmatter here\njust prose\n")
+    else:
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\nbody\n"
+        )
+
+
+async def test_slash_command_capabilities_docker_merges_builtins_and_skills(monkeypatch, tmp_path):
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_slash_commands_cache", {})
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "mc-debug", "Debug MC issues systematically")
+    _write_skill(skills_dir, "mc-review-geben", "Give a structured code review")
+    monkeypatch.setattr(agent_chat_input, "_agent_skills_dir", lambda slug: skills_dir)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.slash_command_capabilities(agent)
+
+    names = [c["name"] for c in caps["slashCommands"]]
+    assert names == [
+        "model", "effort", "clear", "compact", "context", "status", "help", "resume",
+        "mc-debug", "mc-review-geben",
+    ]
+    skill_entries = {c["name"]: c["description"] for c in caps["slashCommands"][8:]}
+    assert skill_entries == {
+        "mc-debug": "Debug MC issues systematically",
+        "mc-review-geben": "Give a structured code review",
+    }
+
+
+async def test_slash_command_capabilities_missing_skills_dir_builtins_only(monkeypatch, tmp_path):
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_slash_commands_cache", {})
+    monkeypatch.setattr(
+        agent_chat_input, "_agent_skills_dir", lambda slug: tmp_path / "does-not-exist"
+    )
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.slash_command_capabilities(agent)
+
+    assert caps == {"slashCommands": list(agent_chat_input._BUILTIN_SLASH_COMMANDS)}
+
+
+async def test_slash_command_capabilities_malformed_skill_md_included_with_no_description(monkeypatch, tmp_path):
+    """A SKILL.md with no parseable description: line doesn't break
+    discovery or get dropped — it shows up with description=None, and a
+    sibling well-formed skill in the same dir is discovered normally."""
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_slash_commands_cache", {})
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "broken-skill", None)
+    _write_skill(skills_dir, "good-skill", "A perfectly normal skill")
+    # A directory entry with no SKILL.md at all must be silently excluded.
+    (skills_dir / "not-a-skill").mkdir(parents=True)
+    monkeypatch.setattr(agent_chat_input, "_agent_skills_dir", lambda slug: skills_dir)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.slash_command_capabilities(agent)
+
+    skill_entries = {c["name"]: c["description"] for c in caps["slashCommands"][8:]}
+    assert skill_entries == {
+        "broken-skill": None,
+        "good-skill": "A perfectly normal skill",
+    }
+
+
+async def test_slash_command_capabilities_host_agent_skips_skill_scan_entirely(monkeypatch, tmp_path):
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_slash_commands_cache", {})
+
+    def _boom(slug):
+        raise AssertionError("skills scan must not be attempted for a host agent")
+
+    monkeypatch.setattr(agent_chat_input, "_agent_skills_dir", _boom)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    caps = await agent_chat_input.slash_command_capabilities(agent)
+
+    assert caps == {"slashCommands": list(agent_chat_input._BUILTIN_SLASH_COMMANDS)}
+
+
+async def test_discover_skill_commands_result_is_cached(monkeypatch, tmp_path):
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_slash_commands_cache", {})
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "mc-debug", "Debug MC issues")
+    call_count = {"n": 0}
+
+    real_list_skills_in_dir = agent_chat_input.list_skills_in_dir
+
+    def _counting_list_skills_in_dir(d):
+        call_count["n"] += 1
+        return real_list_skills_in_dir(d)
+
+    monkeypatch.setattr(agent_chat_input, "list_skills_in_dir", _counting_list_skills_in_dir)
+    monkeypatch.setattr(agent_chat_input, "_agent_skills_dir", lambda slug: skills_dir)
+
+    await agent_chat_input._discover_skill_commands("rex")
+    await agent_chat_input._discover_skill_commands("rex")
+
+    assert call_count["n"] == 1  # second call served from the ~60s cache
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Router: /agents/{id}/chat/input
 # ══════════════════════════════════════════════════════════════════════════
 

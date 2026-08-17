@@ -13,6 +13,12 @@ adapter (parser stays pure, capture is the only I/O):
   reach this module (no transcript dir at all — see
   ``transcript_chat.resolve_transcript_dir``); Boss/host capture is out of
   scope for v1 and always returns ``None``, matching a plain `host` runtime.
+- ``process_alive`` — a second, independent I/O probe (``docker exec ...
+  pgrep -x claude``) used by ``transcript_chat.resolve_aliveness`` to tell
+  "the CLI process is provably gone" apart from "just quiet for a while" —
+  a stale pane's tmux window can still be capturable after the process
+  inside it died, so pane text alone can't answer this. Cached ~30s per
+  agent slug; same Boss/host `None` scoping as ``capture_pane``.
 
 Ready-signal glyphs mirrored from ``docker_agent_sync._wait_for_window_ready``
 (``╭─`` / ``❯`` / ``> `` / ``$ ``) — that function already established what a
@@ -25,6 +31,7 @@ import asyncio
 import logging
 import re
 import subprocess
+import time
 from typing import Any
 
 logger = logging.getLogger("mc.pane_state")
@@ -269,3 +276,60 @@ async def capture_pane(agent) -> str | None:
 
     lines = (result.stdout or "").splitlines()
     return "\n".join(lines[-_PANE_TAIL_LINES:])
+
+
+_PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
+_process_alive_cache: dict[str, tuple[float, bool]] = {}
+
+
+async def process_alive(agent) -> bool | None:
+    """Cheap liveness probe independent of pane TEXT: is the agent's actual
+    ``claude`` process still running? ``docker exec ... pgrep -x claude``
+    against the agent's own container — a tmux window/pane can outlive the
+    process it used to run (e.g. it crashed and dropped to a bare shell), so
+    a successful ``capture_pane`` alone isn't proof of this; ``pgrep`` is.
+    Cached ~30s per agent slug (this is polled far more often than a
+    process genuinely starts/dies, and each check is still a real
+    docker-exec round trip).
+
+    Returns:
+    - ``True``: pgrep found a matching process (rc=0).
+    - ``False``: pgrep ran cleanly and found nothing (rc=1) — the process
+      is PROVABLY gone (container reachable, no claude running).
+    - ``None``: no process channel for this runtime (Boss/host — mirrors
+      ``capture_pane``'s own v1 scope), or the check itself failed/timed
+      out (container gone, docker daemon hiccup, unexpected pgrep exit) —
+      genuinely unknown, not a confident "dead"."""
+    runtime = getattr(agent, "agent_runtime", None)
+    slug = getattr(agent, "slug", None)
+
+    if runtime != "cli-bridge" or not slug:
+        return None
+
+    now = time.time()
+    cached = _process_alive_cache.get(slug)
+    if cached is not None and (now - cached[0]) < _PROCESS_ALIVE_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", "claude"]
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, argv, capture_output=True, timeout=5
+        )
+    except Exception:
+        logger.warning("pane_state: process_alive check failed for slug=%s", slug, exc_info=True)
+        return None
+
+    if result.returncode not in (0, 1):
+        # pgrep's own failure modes (bad invocation, permission) — not a
+        # confident answer either way; don't cache an uncertain result.
+        logger.debug(
+            "pane_state: pgrep unexpected rc=%s for slug=%s: %s",
+            result.returncode, slug, result.stderr,
+        )
+        return None
+
+    alive = result.returncode == 0
+    _process_alive_cache[slug] = (now, alive)
+    return alive

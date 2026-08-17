@@ -414,9 +414,19 @@ class CustomSkill(BaseModel):
     path: str           # absoluter Pfad
 
 
-def list_custom_skills() -> list[CustomSkill]:
-    """Lists all custom skills from ~/.mc/skills/."""
-    skills_dir = _custom_skills_dir()
+def list_skills_in_dir(skills_dir: Path) -> list[CustomSkill]:
+    """Scans ``skills_dir`` for ``<skill-name>/SKILL.md`` entries and parses
+    each one's ``description:`` frontmatter line. Shared by
+    ``list_custom_skills`` (the central ``~/.mc/skills/`` library) and any
+    other caller that needs the same directory shape read the same way — a
+    per-agent synced skills dir (``claude-config/skills/``, see
+    ``sync_agent_skills_to_disk``) has this exact layout, since that
+    function copies both plain custom skills AND resolved plugin-provided
+    skill symlinks into it uniformly. Returns ``[]`` if ``skills_dir``
+    doesn't exist; a malformed/unreadable ``SKILL.md`` yields an empty
+    description rather than being skipped (matches the original
+    ``list_custom_skills`` behavior — name/path still come from the
+    directory entry itself, not the file content)."""
     if not skills_dir.exists():
         return []
 
@@ -446,6 +456,11 @@ def list_custom_skills() -> list[CustomSkill]:
         ))
 
     return result
+
+
+def list_custom_skills() -> list[CustomSkill]:
+    """Lists all custom skills from ~/.mc/skills/."""
+    return list_skills_in_dir(_custom_skills_dir())
 
 
 def sync_agent_skills_to_disk(agent_slug: str, cli_skills: list[str] | None) -> dict[str, bool]:

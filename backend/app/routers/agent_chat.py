@@ -28,11 +28,13 @@ from app.services.agent_chat_input import (
     send_keys,
     send_text,
     set_effort,
+    slash_command_capabilities,
 )
 from app.services.sse import _sse_generator
 from app.services.transcript_chat import (
     find_active_session,
     read_history,
+    resolve_aliveness,
     resolve_transcript_dir,
     tailer_manager,
     transcript_allowed,
@@ -106,19 +108,27 @@ async def get_chat_history(
     session: AsyncSession = Depends(get_session),
 ):
     """History page plus a ``capabilities`` block
-    (``{"effortLevels": [...], "canSwitchEffort": bool}``) so the composer's
-    effort chip can build itself from what this agent's harness actually
-    supports instead of a hardcoded level list — see
-    ``agent_chat_input.effort_capabilities`` for the derivation (docker/
-    cli-bridge gets the discovered level list, every other runtime gets an
-    empty list and ``canSwitchEffort=False``)."""
+    (``{"effortLevels": [...], "canSwitchEffort": bool, "slashCommands":
+    [...]}``) so the composer can build its effort chip and command palette
+    from what this agent's harness actually supports, instead of a
+    hardcoded list — see ``agent_chat_input.effort_capabilities`` /
+    ``slash_command_capabilities`` for the derivation. Also stamps
+    ``session.aliveness`` (``"active" | "idle" | "ended"`` —
+    ``transcript_chat.resolve_aliveness``): the old ``session.live`` alone
+    (mtime<60s) read an idle-but-still-running CLI as "ended" everywhere,
+    an operator-visible bug; ``live`` is kept unchanged for backward
+    compat (== ``aliveness == "active"``)."""
     resolved = await _resolve_transcript_path(agent_id, session)
     if isinstance(resolved, JSONResponse):
         return resolved
 
     agent, path = resolved
     history = read_history(path, limit=limit, before_uuid=before_uuid)
-    history["capabilities"] = effort_capabilities(agent)
+    history["session"]["aliveness"] = await resolve_aliveness(agent, path)
+    history["capabilities"] = {
+        **effort_capabilities(agent),
+        **await slash_command_capabilities(agent),
+    }
     return history
 
 

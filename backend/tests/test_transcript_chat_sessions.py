@@ -187,6 +187,109 @@ def test_find_active_session_meta_has_iso_mtime(tmp_path):
     assert "T" in meta["mtime"]  # ISO 8601
 
 
+# ── resolve_aliveness ─────────────────────────────────────────────────────────
+#
+# Fixes the old live-only semantics: mtime<60s was the ONLY signal, so an
+# idle-but-still-running CLI read as "ended" everywhere (operator-visible
+# bug). "live" itself (find_active_session/read_history) is untouched for
+# backward compat; aliveness is the new, richer "active"|"idle"|"ended"
+# classification layered on top.
+
+
+async def test_resolve_aliveness_active_when_recent_mtime(tmp_path):
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=5)
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+
+    assert await tc.resolve_aliveness(agent, f) == "active"
+
+
+async def test_resolve_aliveness_ended_on_rollover(tmp_path):
+    """A newer session file now exists in the same directory — this one was
+    superseded, regardless of what the process check would say."""
+    old = tmp_path / "session-old.jsonl"
+    new = tmp_path / "session-new.jsonl"
+    _touch(old, mtime_offset_seconds=300)
+    _touch(new, mtime_offset_seconds=1)
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+
+    assert await tc.resolve_aliveness(agent, old) == "ended"
+
+
+async def test_resolve_aliveness_idle_when_docker_process_alive(tmp_path, monkeypatch):
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=300)
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+
+    async def _fake_process_alive(a):
+        return True
+
+    monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
+
+    assert await tc.resolve_aliveness(agent, f) == "idle"
+
+
+async def test_resolve_aliveness_ended_when_docker_process_dead(tmp_path, monkeypatch):
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=300)
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+
+    async def _fake_process_alive(a):
+        return False
+
+    monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
+
+    assert await tc.resolve_aliveness(agent, f) == "ended"
+
+
+async def test_resolve_aliveness_idle_fallback_within_max_age_for_host_agent(tmp_path, monkeypatch):
+    """Boss/host: process_alive has no channel (returns None) — falls back
+    to the transcript-age heuristic. Recent enough (well under 12h) -> idle."""
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=300)
+    agent = SimpleNamespace(slug="boss", agent_runtime="host")
+
+    assert await tc.resolve_aliveness(agent, f) == "idle"
+
+
+async def test_resolve_aliveness_ended_fallback_beyond_max_age(tmp_path):
+    """Stale well beyond the 12h fallback window -> ended, whether that's
+    because there's no process channel (Boss/host) or the docker check
+    itself couldn't determine an answer."""
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=13 * 3600)
+    agent = SimpleNamespace(slug="boss", agent_runtime="host")
+
+    assert await tc.resolve_aliveness(agent, f) == "ended"
+
+
+async def test_resolve_aliveness_idle_fallback_when_docker_process_check_unknown(tmp_path, monkeypatch):
+    """process_alive returning None (check itself failed/timed out, not a
+    confident "dead") falls back to the same age heuristic as host — NOT a
+    confident "ended" just because the probe was inconclusive."""
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=300)
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+
+    async def _fake_process_alive(a):
+        return None
+
+    monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
+
+    assert await tc.resolve_aliveness(agent, f) == "idle"
+
+
+async def test_resolve_aliveness_ended_when_file_missing(tmp_path):
+    """A session file that's disappeared entirely (mtime stat fails) has no
+    live-window evidence at all — must not crash, resolves via the same
+    fallback chain (no newer file either -> falls through to process/age,
+    both of which report "gone" absent any mtime)."""
+    f = tmp_path / "does-not-exist.jsonl"
+    agent = SimpleNamespace(slug="boss", agent_runtime="host")
+
+    assert await tc.resolve_aliveness(agent, f) == "ended"
+
+
 # ── transcript_allowed ───────────────────────────────────────────────────────
 
 

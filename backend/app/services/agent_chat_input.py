@@ -79,16 +79,36 @@ success; on a verification timeout it re-checks busy-ness on a FRESH capture
 and only sends ``Escape`` as a cleanup safety net if that fresh check is
 clear, before raising ``EffortSwitchFailedError`` for the router to turn
 into 409 ``{"reason": "effort_switch_failed"}``.
+
+``slash_command_capabilities`` (composer command palette) merges a static
+built-in list (``model``, ``effort``, ``clear``, ``compact``, ``context``,
+``status``, ``help``, ``resume`` — Claude Code's well-known standard
+commands; ``model``/``effort``'s descriptions are live-verified from Phase-0
+discovery, the rest are generic) with this agent's installed skills, each
+one becoming a slash-command entry (Claude Code invokes a skill the same
+way a command is invoked — ``/<skill-name>``). Skills are discovered by
+scanning ``<claude-config>/skills/*/SKILL.md`` (the SAME per-agent directory
+``plugin_manager.sync_agent_skills_to_disk`` populates for BOTH plain custom
+skills and resolved plugin-provided skill symlinks — one scan covers both
+sources), reusing ``plugin_manager.list_skills_in_dir``'s frontmatter
+parsing rather than re-implementing it. Docker/cli-bridge only (no
+``claude-config`` mount to scan for any other runtime — builtins-only
+there); fail-silent (a broken/missing skills dir never breaks the response,
+just yields builtins alone) and cached ~60s per agent slug (real file I/O).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import subprocess
+import time
+from pathlib import Path
 
 import websockets as ws_client
 
 from app.services.pane_state import capture_pane, parse_pane_state
+from app.services.plugin_manager import list_skills_in_dir
+from app.services.token_harvester import _host_home
 
 logger = logging.getLogger("mc.agent_chat_input")
 
@@ -426,3 +446,69 @@ def effort_capabilities(agent) -> dict[str, object]:
     if kind == "docker":
         return {"effortLevels": list(ALLOWED_EFFORT_LEVELS), "canSwitchEffort": True}
     return {"effortLevels": [], "canSwitchEffort": False}
+
+
+# Built-in slash commands — static, not discovered (no CLI-side enumeration
+# API exists). "model"/"effort" descriptions are live-verified (Phase-0
+# discovery, exact CLI autocomplete text); the rest are Claude Code's
+# well-known standard commands, described generically since they weren't
+# individually probed live.
+_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str], ...] = (
+    {"name": "model", "description": "Set the AI model for Claude Code"},
+    {"name": "effort", "description": "Set effort level for model usage"},
+    {"name": "clear", "description": "Clear the conversation history"},
+    {"name": "compact", "description": "Compact the conversation to free up context"},
+    {"name": "context", "description": "Show context window usage"},
+    {"name": "status", "description": "Show session status"},
+    {"name": "help", "description": "Show available commands"},
+    {"name": "resume", "description": "Resume a previous session"},
+)
+
+_SLASH_COMMANDS_CACHE_TTL_SECONDS = 60
+_slash_commands_cache: dict[str, tuple[float, list[dict[str, str | None]]]] = {}
+
+
+def _agent_skills_dir(slug: str) -> Path:
+    return _host_home() / ".mc" / "agents" / slug / "claude-config" / "skills"
+
+
+async def _discover_skill_commands(slug: str) -> list[dict[str, str | None]]:
+    """Skills portion of ``slash_command_capabilities``, cached ~60s per
+    slug (the actual disk scan) — see the module docstring for the
+    directory/reuse rationale. Fail-silent: any exception during discovery
+    (permission error, race on a symlink resolving mid-scan, ...) logs and
+    yields an empty list rather than breaking the whole capabilities
+    response over one broken skill."""
+    now = time.time()
+    cached = _slash_commands_cache.get(slug)
+    if cached is not None and (now - cached[0]) < _SLASH_COMMANDS_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        skills = await asyncio.to_thread(list_skills_in_dir, _agent_skills_dir(slug))
+    except Exception:
+        logger.warning(
+            "slash commands: skill discovery failed for slug=%s", slug, exc_info=True
+        )
+        return []
+
+    discovered: list[dict[str, str | None]] = [
+        {"name": s.name, "description": s.description or None} for s in skills
+    ]
+    _slash_commands_cache[slug] = (now, discovered)
+    return discovered
+
+
+async def slash_command_capabilities(agent) -> dict[str, object]:
+    """``{"slashCommands": [{"name": str, "description": str|None}, ...]}``
+    — builtins merged with this agent's installed skills. Docker/cli-bridge
+    only: every other runtime gets builtins alone (no ``claude-config``
+    mount to scan for skills)."""
+    commands: list[dict[str, str | None]] = list(_BUILTIN_SLASH_COMMANDS)
+
+    slug = getattr(agent, "slug", None)
+    runtime = getattr(agent, "agent_runtime", None)
+    if runtime == "cli-bridge" and slug:
+        commands = commands + await _discover_skill_commands(slug)
+
+    return {"slashCommands": commands}

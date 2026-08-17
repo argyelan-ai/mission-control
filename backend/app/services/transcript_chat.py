@@ -52,7 +52,7 @@ from typing import Any
 
 from app.config import settings
 from app.services import sse
-from app.services.pane_state import capture_pane, parse_pane_state
+from app.services.pane_state import capture_pane, parse_pane_state, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
 
@@ -64,6 +64,11 @@ _TITLE_MAX_LEN = 80
 # Session-scan limits (find_active_session / transcript_allowed)
 _LIVE_WINDOW_SECONDS = 60
 _BOSS_SCAN_LINES = 20
+
+# resolve_aliveness's transcript-age fallback (host/boss agents, or a docker
+# agent whose process_alive check itself came back unknown): a transcript
+# this recent is plausibly still an ongoing session, one this stale is not.
+_ALIVENESS_IDLE_MAX_AGE_SECONDS = 12 * 3600  # 12 hours
 
 # Host-runtime slugs that resolve to the Boss's own ~/.claude session dir —
 # every other host agent (Hermes, Jarvis) has no transcript at all.
@@ -442,6 +447,54 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
         "live": (time.time() - newest_mtime) < _LIVE_WINDOW_SECONDS,
     }
     return newest_path, meta
+
+
+async def resolve_aliveness(agent, session_path: Path) -> str:
+    """Classifies a session's liveness for the history/tailer meta —
+    ``"active" | "idle" | "ended"``. Fixes the old live-only semantics
+    (mtime<60s == the ONLY signal, so an idle-but-still-running CLI read as
+    "beendet"/ended everywhere — an operator-visible bug, since a session
+    with nothing new to say for a few minutes is completely normal, not
+    dead). ``live`` stays on the history/find_active_session meta unchanged
+    for backward compat (== ``aliveness == "active"``); this is the new,
+    richer signal alongside it.
+
+    Priority order:
+    1. Written within ``_LIVE_WINDOW_SECONDS`` -> ``"active"``.
+    2. A NEWER session file now exists in the same directory (this one was
+       rolled over / superseded) -> ``"ended"``. Checked via
+       ``find_active_session`` again — cheap (one directory glob).
+    3. ``pane_state.process_alive`` (docker cli-bridge, cached ~30s): the
+       CLI process is confirmed running -> ``"idle"``; confirmed gone ->
+       ``"ended"``.
+    4. Otherwise (Boss/host — no process channel at all — or the docker
+       check itself came back unknown): a transcript-age fallback. Within
+       ``_ALIVENESS_IDLE_MAX_AGE_SECONDS`` -> ``"idle"``; older -> ``"ended"``.
+    """
+    try:
+        mtime = session_path.stat().st_mtime
+    except OSError:
+        mtime = None
+
+    if mtime is not None and (time.time() - mtime) < _LIVE_WINDOW_SECONDS:
+        return "active"
+
+    try:
+        active = await asyncio.to_thread(find_active_session, session_path.parent)
+    except OSError:
+        active = None
+    if active is not None and active[0] != session_path:
+        return "ended"
+
+    alive = await process_alive(agent)
+    if alive is True:
+        return "idle"
+    if alive is False:
+        return "ended"
+
+    if mtime is not None and (time.time() - mtime) < _ALIVENESS_IDLE_MAX_AGE_SECONDS:
+        return "idle"
+    return "ended"
 
 
 def _extract_cwd_and_branch(path: Path) -> tuple[str, str | None]:
@@ -908,7 +961,17 @@ class ChatTailerManager:
                             tool_events_by_id = {}
                             seen_uuids = set()
                             last_pane_state = None
-                            await sse.broadcast(channel, "chat_event", {"kind": "session_changed"})
+                            # aliveness is hardcoded "active" here rather than
+                            # a fresh resolve_aliveness() call: a rollover
+                            # only fires for a file find_active_session JUST
+                            # confirmed is the newest, freshly written — by
+                            # construction its mtime is within the live
+                            # window, so an extra async round trip would only
+                            # re-derive what's already known for free.
+                            await sse.broadcast(
+                                channel, "chat_event",
+                                {"kind": "session_changed", "aliveness": "active"},
+                            )
                             continue
 
                     try:
@@ -993,18 +1056,28 @@ class ChatTailerManager:
         parses a captured pane snapshot or falls back to the mtime-only
         heuristic for Boss/host agents — which, per the design brief, must
         never report ``permission_prompt`` since there's no pane text to
-        have found one in."""
+        have found one in. Also stamps ``aliveness`` (``resolve_aliveness``)
+        into the result — cheap to add here since it rides the same already-
+        throttled probe tick (``STATE_PROBE_EVERY_N_TICKS``) rather than
+        polling on its own cadence, and its own docker-side check
+        (``pane_state.process_alive``) is itself cached ~30s."""
         try:
             mtime = await asyncio.to_thread(lambda: current_path.stat().st_mtime)
             transcript_active = (time.time() - mtime) < self.STATE_ACTIVE_WINDOW_SECONDS
         except OSError:
             transcript_active = False
 
+        aliveness = await resolve_aliveness(agent, current_path)
+
         pane_text = await capture_pane(agent)
         if pane_text is None:
-            return {"status": "working" if transcript_active else "idle", "prompt": None}
+            return {
+                "status": "working" if transcript_active else "idle",
+                "prompt": None,
+                "aliveness": aliveness,
+            }
 
-        return parse_pane_state(pane_text, transcript_active)
+        return {**parse_pane_state(pane_text, transcript_active), "aliveness": aliveness}
 
 
 def _read_new_chunk(path: Path, offset: int) -> tuple[int, bytes | None]:

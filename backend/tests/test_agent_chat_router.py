@@ -52,8 +52,23 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     (tdir / "sess1.jsonl").write_text(_user_line("hello from fixture") + "\n")
 
     import app.routers.agent_chat as agent_chat_mod
+    import app.services.agent_chat_input as agent_chat_input_mod
 
     monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    # This test is about the transcript page + effort capabilities, not skill
+    # discovery — point the skills scan at a dir that doesn't exist so the
+    # result is deterministic (builtins only) regardless of whatever real
+    # skills happen to be synced for this agent slug on the host running the
+    # test suite (real skills DID leak in here once — "rex" is a real fleet
+    # agent slug with a real ~/.mc/agents/rex/claude-config/skills/ dir).
+    # The cache is ALSO cleared — it's keyed by slug and a previous test run
+    # within the same pytest process could have cached "rex"'s real skills
+    # before this monkeypatch even applies, since a cache hit short-circuits
+    # before _agent_skills_dir is ever called again.
+    monkeypatch.setattr(
+        agent_chat_input_mod, "_agent_skills_dir", lambda slug: tmp_path / "no-skills-dir"
+    )
+    monkeypatch.setattr(agent_chat_input_mod, "_slash_commands_cache", {})
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
@@ -63,17 +78,25 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     assert len(body["events"]) == 1
     assert body["events"][0]["kind"] == "message"
     assert body["events"][0]["text"] == "hello from fixture"
+    # session.live stays backward-compatible; aliveness is the new signal
+    # (the fixture file was just written -> both agree it's "active").
+    assert body["session"]["live"] is True
+    assert body["session"]["aliveness"] == "active"
     # Dynamic effort-level capabilities (docker/cli-bridge agent): the
-    # discovered 6-level list, switching allowed.
+    # discovered 6-level list, switching allowed. slashCommands: builtins
+    # only (skills dir monkeypatched to not exist, see above).
     assert body["capabilities"] == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
     }
 
 
 async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
     """Boss (host runtime) has no pane probe — capabilities must say so
-    explicitly rather than the frontend guessing from agent_runtime alone."""
+    explicitly rather than the frontend guessing from agent_runtime alone.
+    slashCommands still shows the builtins (those aren't docker-gated),
+    just no skill discovery (host has no claude-config mount to scan)."""
     agent = await make_agent(name="Boss", agent_runtime="host", slug="boss")
 
     tdir = tmp_path / "boss-transcripts"
@@ -81,6 +104,7 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     (tdir / "sess1.jsonl").write_text(_user_line("hi from boss") + "\n")
 
     import app.routers.agent_chat as agent_chat_mod
+    import app.services.agent_chat_input as agent_chat_input_mod
 
     monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
     # Only the capabilities derivation is under test here — bypass the A2
@@ -91,7 +115,11 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["capabilities"] == {"effortLevels": [], "canSwitchEffort": False}
+    assert resp.json()["capabilities"] == {
+        "effortLevels": [],
+        "canSwitchEffort": False,
+        "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
+    }
 
 
 async def test_history_404_no_transcript_for_host_agent_without_dir(auth_client: AsyncClient, make_agent):
