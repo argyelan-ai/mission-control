@@ -100,12 +100,13 @@ describe("Composer", () => {
   // Stop appears whenever working cannot be DISPROVED and there is nothing to
   // send: confirmed "working", or a pane the probe couldn't classify at all.
   //
-  // KNOWN GAP, deliberate: this still does not cover Boss. For host agents
-  // `capture_pane` returns None, so the backend reports a confident
+  // Host agents (Boss, Hermes, Jarvis) are covered via `paneObservable={false}`:
+  // `capture_pane` returns None for them, so the backend reports a confident
   // `working`/`idle` from transcript mtime alone and never `unknown`
-  // (transcript_chat.py:1285-1291) — a Boss thinking without writing reads as
-  // `idle` and offers the disabled Send. Interrupting him goes through the
-  // Terminal view until that is closed via the runtime, not via this flag.
+  // (transcript_chat.py:1285-1291) — a Boss thinking without writing read as
+  // `idle` and offered a disabled Send, i.e. no way to interrupt at all. The
+  // accepted cost (operator decision 18.08.2026) is a Stop that stays visible
+  // while such an agent rests.
 
   it("morphs to Stop while the agent works and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
@@ -149,6 +150,48 @@ describe("Composer", () => {
     const stop = screen.getByTestId("stop-button-prominent");
     expect(stop.className).toContain("animate-pulse");
     expect(stop).toHaveAttribute("data-reason", "working");
+  });
+
+  it("keeps Stop reachable for an agent whose pane cannot be read at all", () => {
+    // Boss idles on the transcript clock even while thinking — without this the
+    // only control on offer was a disabled Send.
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
+    );
+    const stop = screen.getByTestId("stop-button-prominent");
+    expect(stop).toHaveAttribute("data-reason", "unobservable");
+    expect(stop).not.toHaveClass("animate-pulse"); // kein Puls: Aktivitaet ist nicht bestaetigt
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+  });
+
+  it("still calls onStop for an unobservable agent", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={onStop} paneObservable={false} />
+    );
+    await user.click(screen.getByTestId("stop-button-prominent"));
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets text win over the unobservable Stop — steering stays possible", async () => {
+    const user = userEvent.setup();
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
+    );
+    await user.type(screen.getByPlaceholderText(/Nachricht/), "mach bitte X");
+    expect(screen.getByTestId("send-button")).toBeEnabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it("does NOT change readable agents: idle cli-bridge keeps the ghost Send", () => {
+    // Sabotage-Gegenprobe zum Fix: paneObservable=true (Default) darf sich exakt
+    // wie vorher verhalten, sonst haetten wir den Stop app-weit eingeschaltet.
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable />
+    );
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
   });
 
   it("still yields to Send once there is text on an unknown pane", async () => {

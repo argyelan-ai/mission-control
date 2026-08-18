@@ -139,6 +139,13 @@ interface ComposerProps {
    *  `true` so a caller that hasn't wired the real value yet keeps a usable
    *  composer instead of silently losing its only control. */
   sessionLive?: boolean;
+  /** Kann MC den Bildschirm des Agenten lesen? Nur fuer `cli-bridge` (Docker+tmux)
+   *  liefert `capture_pane` echten Text. Bei Host-Agenten (Boss, Hermes, Jarvis)
+   *  gibt es diesen Kanal nicht: `_compute_pane_state` leitet dort `working`/`idle`
+   *  allein aus der Transkript-mtime ab und ist sich dabei IMMER sicher — ein Boss,
+   *  der denkt ohne zu schreiben, liest sich als `idle`. Genau dann fehlte bisher
+   *  der Stop-Knopf, obwohl er der einzige noetige Griff ist. */
+  paneObservable?: boolean;
   /** Server-derived harness capabilities. Drives the effort chip: no
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
    *  read-only rather than as a picker that cannot work. */
@@ -162,7 +169,7 @@ interface ComposerProps {
  * `search` state simply stayed empty forever and every item was shown
  * unfiltered — the bug this component was rewritten to fix.
  */
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true }: ComposerProps) {
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -190,7 +197,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    *  pane — treating it as unknown would flash a Stop on every mount. */
   const statusUnknown = state?.status === "unknown";
   /** Empty input leaves nothing to send, so the button carries the interrupt. */
-  const showStop = !hasText && (isWorking || statusUnknown);
+  /* Stop wird angeboten, sobald "arbeitet" nicht widerlegbar ist: bestaetigtes
+   * `working`, ein unlesbares Pane (`unknown`) — und neu auch jeder Agent, dessen
+   * Pane wir grundsaetzlich nicht lesen koennen. Ein deaktivierter Senden-Knopf
+   * behauptet dort eine Ruhe, die wir nie festgestellt haben. */
+  const showStop = !hasText && (isWorking || statusUnknown || !paneObservable);
   const effortLevels = resolveEffortLevels(capabilities);
   const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
   const modelOptions = resolveModelOptions(capabilities?.modelOptions);
@@ -736,12 +747,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               Nothing at all once the session has ended — neither sending nor
               interrupting can reach a session that is over.
 
-              NOTE this does NOT cover Boss. For host agents `capture_pane`
-              returns None, so `_compute_pane_state` reports a confident
-              `working`/`idle` from transcript mtime alone and never `unknown`
-              (transcript_chat.py:1285-1291) — a Boss that thinks without
-              writing reads as `idle` and offers the disabled Send. Closing that
-              needs the runtime, not this flag. */}
+              Host agents (Boss, Hermes, Jarvis) are covered via
+              `paneObservable={false}`: `capture_pane` returns None for them, so
+              `_compute_pane_state` reports a confident `working`/`idle` from
+              transcript mtime alone and never `unknown`
+              (transcript_chat.py:1285-1291) — a Boss that thinks without writing
+              read as `idle` and left no way to interrupt. The cost is a Stop that
+              is also visible while such an agent rests; operator-decided
+              (18.08.2026): a control that is missing when you need it is worse
+              than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
             {sessionLive && (
               !showStop ? (
@@ -772,7 +786,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-label="Stop"
                   title="Unterbrechen (ESC)"
                   data-testid="stop-button-prominent"
-                  data-reason={isWorking ? "working" : "unknown"}
+                  data-reason={isWorking ? "working" : !paneObservable ? "unobservable" : "unknown"}
                   /* The pulse is a claim of live activity, so it only runs when
                      the probe actually confirmed "working". On an unreadable
                      pane the control is offered without animating something we
