@@ -359,28 +359,6 @@ services:
     env_file:
       - docker/.env.shared
       - docker/.env.agents
-  mc-agent-dev:
-    <<: *claude-agent-base
-    container_name: mc-agent-dev
-    env_file:
-      - docker/.env.shared
-      - docker/.env.agents
-    environment:
-      - AGENT_NAME=dev
-      - MC_API_URL=${MC_API_URL:-http://backend:8000}
-      - MC_TOKEN=${MC_TOKEN_DEV}
-      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
-      - AGENT_VAULT_PATH=/vault/agents/dev
-      - AGENT_VAULT_INBOX=/vault/_inbox
-      - AGENT_SLUG=dev
-    volumes:
-      - ${HOME}/.mc/agents/dev/claude-config:/home/agent/.claude
-      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
-      - ${HOME}/.mc/workspaces/dev:/workspace
-      - ${HOME}/.mc/deliverables/dev:/deliverables
-      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
-      - ${HOME}/.mc/vault:/vault:rw
-
 networks:
   mission-control_default:
     external: true  # Created by main docker-compose.yml — start main stack first: docker compose up -d
