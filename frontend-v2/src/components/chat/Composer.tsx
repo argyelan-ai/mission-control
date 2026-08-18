@@ -225,6 +225,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   /* Fuellstand der Saeule im Brain-Knopf: Anteil der aktuellen Stufe an der
    * Stufenleiter des Harness. +1, damit schon "low" sichtbar gefuellt ist —
    * eine leere Saeule ist fuer "unbekannt/auto" reserviert. */
+  /* Leiter fuer die reine ANZEIGE — unabhaengig vom Schaltrecht. resolveEffortLevels
+   * gated bewusst auf canSwitchEffort (der Regler darf nur Schaltbares anbieten);
+   * die Saeule des read-only-Chips braucht die Leiter trotzdem. */
+  const displayLevels = (capabilities?.effortLevels ?? [])
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const staticFillPct = (() => {
+    const idx = currentEffort ? displayLevels.indexOf(currentEffort) : -1;
+    return idx >= 0 && displayLevels.length > 0 ? ((idx + 1) / displayLevels.length) * 100 : 0;
+  })();
+
   const effortFillPct =
     currentEffortIndex >= 0 && effortLevels.length > 0
       ? ((currentEffortIndex + 1) / effortLevels.length) * 100
@@ -366,7 +377,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     textareaRef.current?.focus();
   }
 
-  const modelLabel = usage?.model ?? "—";
+  /* Modell-Label: laufende Session > persistierter Standard aus settings.json
+   * (capabilities.model) > "—". Gleiche Kette wie beim Effort — vorher zeigte
+   * jede frische Session "—", obwohl das Modell laengst feststand (Operator-
+   * Befund 18.08.2026). Steht dort ein Kurz-Alias ("sonnet"), zeigen wir das
+   * Label des passenden Dropdown-Eintrags ("Sonnet"); eine volle ID bleibt
+   * verbatim. */
+  const currentModel = usage?.model ?? capabilities?.model ?? null;
+  const modelLabel = currentModel
+    ? modelOptions.find((m) => m.name === currentModel)?.label ?? currentModel
+    : "—";
   // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
   const win = usage?.contextWindow;
   const hasWin = typeof win === "number" && win > 0;
@@ -557,13 +577,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                     key={m.name}
                     type="button"
                     role="option"
-                    aria-selected={m.name === usage?.model}
+                    aria-selected={m.name === currentModel}
                     data-model={m.name}
                     onClick={() => selectModel(m.name)}
                     className="w-full flex items-center gap-3 text-left px-2 py-1.5 text-[12px] font-mono rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                     style={{
-                      color: m.name === usage?.model ? C.accent : C.textPrimary,
-                      backgroundColor: m.name === usage?.model ? C.accentSubtle : "transparent",
+                      color: m.name === currentModel ? C.accent : C.textPrimary,
+                      backgroundColor: m.name === currentModel ? C.accentSubtle : "transparent",
                     }}
                   >
                     <span className="min-w-0 truncate">{m.label}</span>
@@ -807,7 +827,39 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   </div>
                 )}
               </div>
+            ) : displayLevels.length > 0 ? (
+              /* Read-only-Variante des Brain-Chips (Operator-Wunsch 18.08.2026:
+                 Boss zeigte das nackte Alt-Label). Gleiche Optik wie der
+                 schaltbare Knopf — Gehirn + Saeule — aber als span ohne Aktion:
+                 die Leiter kommt vom Backend (canSwitchEffort=false heisst
+                 "kennt der Harness", nicht "darfst du druecken"), die Stufe aus
+                 dem usage-Ereignis. Der Tooltip sagt ehrlich, warum hier nichts
+                 zu klicken ist. */
+              <span
+                data-testid="effort-chip-static"
+                data-level={currentEffort ?? "auto"}
+                aria-label={`Effort-Stufe: ${currentEffort ?? "auto"} (nicht umschaltbar)`}
+                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
+                <span
+                  aria-hidden="true"
+                  className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
+                  style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+                >
+                  <span
+                    data-testid="effort-gauge-fill-static"
+                    className="absolute bottom-0 left-0 right-0 rounded-full"
+                    style={{ height: `${staticFillPct}%`, backgroundColor: STATUS.online }}
+                  />
+                </span>
+              </span>
             ) : (
+              /* Aeltere Backends ohne Stufenleiter in den Capabilities: ohne
+                 Leiter waere jede Saeulen-Fuellung geraten — dann lieber der
+                 ehrliche Text. */
               <span
                 data-testid="effort-chip-static"
                 title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."

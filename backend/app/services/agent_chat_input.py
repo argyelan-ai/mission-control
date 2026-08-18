@@ -649,6 +649,20 @@ async def effort_capabilities(agent) -> dict[str, object]:
             # session-only-Stufen max/ultracode, die nie in der Datei landen).
             "effort": effort,
         }
+
+    # Host-Agenten mit Claude-Code-Harness (Boss): SCHALTEN geht nicht (kein
+    # Pane-Verify-Kanal — dieselbe v1-Grenze wie set_effort selbst), aber die
+    # STUFENLEITER des Harness ist bekannt und gehoert in die Antwort: das
+    # Frontend braucht sie, um die Fuellstands-Saeule des (read-only)
+    # Brain-Chips korrekt zu proportionieren (Operator-Befund 18.08.2026:
+    # Boss zeigte das nackte Alt-Label statt der neuen Anzeige). Liste ohne
+    # Schaltrecht = "das kennt der Harness", nicht "das darfst du druecken".
+    if getattr(agent, "harness", None) == "claude":
+        return {
+            "effortLevels": list(ALLOWED_EFFORT_LEVELS),
+            "canSwitchEffort": False,
+            "effort": None,
+        }
     return {"effortLevels": [], "canSwitchEffort": False, "effort": None}
 
 
@@ -693,6 +707,29 @@ def _persisted_effort_level(slug: str) -> str | None:
     except Exception:
         return None
     return level if level in ALLOWED_EFFORT_LEVELS else None
+
+
+def _persisted_model(slug: str) -> str | None:
+    """Das im ``settings.json`` des Agenten hinterlegte Modell — der Standard,
+    mit dem jede neue Session startet. Gleiche Rolle wie
+    ``_persisted_effort_level`` (Operator-Befund 18.08.2026 abends): das
+    Modell-Label im Composer hing allein am usage-Ereignis, eine frische
+    Session zeigte darum "—" statt des tatsaechlich eingestellten Modells.
+
+    Der Wert kommt in ZWEI Gestalten vor, beide echt beobachtet in der Flotte:
+    als Kurz-Alias ("sonnet", von ``/model sonnet`` geschrieben) oder als volle
+    Modell-ID ("claude-sonnet-5", vom Config-Renderer). Beide werden verbatim
+    durchgereicht — die Zuordnung zum Dropdown-Eintrag macht das Frontend
+    (Alias == command; volle ID via settings.model_aliases hier NICHT
+    aufloesen, sonst behaupten wir eine Zuordnung, die der Renderer nie
+    getroffen hat). Fail-silent: fehlt/kaputt/leer -> None."""
+    try:
+        path = _host_home() / ".mc" / "agents" / slug / "claude-config" / "settings.json"
+        with open(path) as f:
+            model = json.load(f).get("model")
+    except Exception:
+        return None
+    return model if isinstance(model, str) and model.strip() else None
 
 
 def _agent_skills_dir(slug: str) -> Path:
@@ -786,4 +823,9 @@ async def model_options_capabilities(agent) -> dict[str, object]:
             "label": row["label"],
             "contextWindow": resolve_context_window(model_id, observed),
         })
-    return {"modelOptions": options}
+    slug = getattr(agent, "slug", None) or ""
+    model = await asyncio.to_thread(_persisted_model, slug) if slug else None
+    # Startwert fuers Modell-Label, solange die Session noch kein usage-Ereignis
+    # geschrieben hat — ein spaeteres usage gewinnt immer (es kennt das Modell
+    # des laufenden Zuges, nicht nur den persistierten Standard).
+    return {"modelOptions": options, "model": model}

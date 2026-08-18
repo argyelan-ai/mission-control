@@ -193,6 +193,12 @@ export interface ChatCapabilities {
    *  backends, where the switcher falls back to its static list and shows no
    *  window sizes at all — better than printing a number we made up. */
   modelOptions?: ChatModelOption[] | null;
+  /** Das im settings.json des Agenten hinterlegte Modell — Startwert fuers
+   *  Composer-Label, solange die Session noch kein usage-Ereignis hat (vorher
+   *  stand dort "—"). Kommt als Kurz-Alias ("sonnet") ODER volle ID
+   *  ("claude-sonnet-5") — beide Gestalten existieren real in der Flotte.
+   *  usage.model gewinnt immer. */
+  model?: string | null;
 }
 
 export interface ChatSlashCommand {

@@ -327,7 +327,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByRole("button", { name: /sonnet/ }));
+      await user.click(screen.getByRole("button", { name: /sonnet/i }));
 
       expect(modelRow("Sonnet")).toHaveTextContent("200k");
       expect(modelRow("Opus")).toHaveTextContent("1M");
@@ -354,7 +354,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByRole("button", { name: /custom/ }));
+      await user.click(screen.getByRole("button", { name: /custom/i }));
 
       expect(modelRow("Custom").textContent?.trim()).toBe("Custom");
       expect(modelRow("Broken").textContent?.trim()).toBe("Broken");
@@ -377,7 +377,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByRole("button", { name: /sonnet/ }));
+      await user.click(screen.getByRole("button", { name: /sonnet/i }));
       await user.click(modelRow("Opus 5"));
 
       expect(onSend).toHaveBeenCalledWith("/model opus-5");
@@ -533,7 +533,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={mkUsage({ model: "sonnet" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    await user.click(screen.getByRole("button", { name: /sonnet/ }));
+    await user.click(screen.getByRole("button", { name: /sonnet/i }));
     expect(screen.getByRole("option", { name: "Sonnet" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("option", { name: "Opus" })).toHaveAttribute("aria-selected", "false");
   });
@@ -677,6 +677,29 @@ describe("Composer", () => {
       );
       expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
       expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+    });
+
+    it("renders Boss's chip in the same brain look, read-only with a filled gauge", () => {
+      // Boss-Shape seit 18.08.2026: das Backend liefert die Stufenleiter des
+      // Claude-Harness auch ohne Schaltrecht — vorher stand bei Boss das nackte
+      // Alt-Label "high" ohne Aktion (Operator-Befund).
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{ effortLevels: CAPS.effortLevels, canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-level", "high");
+      // Gleiche Proportion wie der schaltbare Chip: high = 3/6 = 50%.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("50%");
+      // Read-only: kein interaktiver Chip, kein Regler aufrufbar.
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
     });
 
     it("shows the level read-only when the backend reports no capabilities", () => {

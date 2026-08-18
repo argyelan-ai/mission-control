@@ -1046,6 +1046,23 @@ async def test_effort_capabilities_ignores_unusable_settings(monkeypatch, tmp_pa
     assert (await agent_chat_input.effort_capabilities(agent))["effort"] == "low"
 
 
+async def test_effort_capabilities_host_claude_gets_ladder_but_no_switch():
+    """Boss-Gestalt (host + harness=claude, 18.08.2026): die Stufenleiter des
+    Harness kommt mit, das Schaltrecht nicht — das Frontend proportioniert
+    damit die Saeule des read-only Brain-Chips statt Boss das nackte
+    Alt-Label zu zeigen."""
+    from app.services import agent_chat_input
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    agent.harness = "claude"
+    caps = await agent_chat_input.effort_capabilities(agent)
+    assert caps == {
+        "effortLevels": list(agent_chat_input.ALLOWED_EFFORT_LEVELS),
+        "canSwitchEffort": False,
+        "effort": None,
+    }
+
+
 async def test_effort_capabilities_boss_cannot_switch():
     from app.services import agent_chat_input
 
@@ -1175,13 +1192,18 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def _patch_model_options_deps(monkeypatch, agent_chat_input, *, catalog, observed):
+async def _patch_model_options_deps(monkeypatch, agent_chat_input, *, catalog, observed, model=None):
     monkeypatch.setattr(
         agent_chat_input, "discover_model_catalog", _async_return(catalog)
     )
     monkeypatch.setattr(
         agent_chat_input, "get_observed_model_windows", _async_return(observed)
     )
+    # "rex" ist ein echter Fleet-Slug: ohne dieses Patch laese der neue
+    # capabilities.model-Zweig die settings.json des LAUFENDEN Agenten vom Host
+    # (Real-Host-Leak, dritte Sichtung heute — gleiche Klasse wie bei den
+    # gemockten Subprozessen und den Effort-Tests).
+    monkeypatch.setattr(agent_chat_input, "_persisted_model", lambda slug: model)
 
 
 def _async_return(value):
@@ -1230,6 +1252,7 @@ async def test_model_options_capabilities_unknown_model_id_yields_null_window(mo
     caps = await agent_chat_input.model_options_capabilities(agent)
 
     assert caps == {
+        "model": None,
         "modelOptions": [
             {"command": "mystery", "label": "Mystery", "contextWindow": None},
         ]
