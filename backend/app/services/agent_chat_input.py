@@ -823,8 +823,22 @@ async def model_options_capabilities(agent) -> dict[str, object]:
             "label": row["label"],
             "contextWindow": resolve_context_window(model_id, observed),
         })
+    # Persistiertes Modell NUR fuer docker/cli-bridge lesen: nur dort IST
+    # ~/.mc/agents/<slug>/claude-config die effektive Config. Boss (host)
+    # unsetzt CLAUDE_CONFIG_DIR und liest ~/.claude/ — sein alter
+    # ~/.mc/agents/boss-Ordner liegt seit April brach und lieferte beim
+    # ersten Live-Test prompt ein Geister-Modell ("glm-5.1:cloud"), das Boss
+    # nie faehrt. Lieber ehrliches None als eine falsche Behauptung.
+    try:
+        kind = _target_kind(agent)
+    except InputNotSupportedError:
+        kind = None
     slug = getattr(agent, "slug", None) or ""
-    model = await asyncio.to_thread(_persisted_model, slug) if slug else None
+    model = (
+        await asyncio.to_thread(_persisted_model, slug)
+        if slug and kind == "docker"
+        else None
+    )
     # Startwert fuers Modell-Label, solange die Session noch kein usage-Ereignis
     # geschrieben hat — ein spaeteres usage gewinnt immer (es kennt das Modell
     # des laufenden Zuges, nicht nur den persistierten Standard).

@@ -1239,6 +1239,32 @@ async def test_model_options_capabilities_falls_back_to_static_aliases_when_cata
     assert options["default"]["contextWindow"] == 1_000_000
 
 
+async def test_model_options_capabilities_host_agent_never_reads_stale_config(monkeypatch, tmp_path):
+    """Live-Fund direkt nach dem Deploy (18.08.2026): Boss' capabilities.model
+    war "glm-5.1:cloud" — aus ~/.mc/agents/boss/claude-config, einem seit
+    April brachliegenden Ordner, den Boss (host, CLAUDE_CONFIG_DIR unset)
+    nie liest. Persistiertes Modell darf NUR fuer docker/cli-bridge gelesen
+    werden; fuer Host-Agenten ist None die einzige ehrliche Antwort."""
+    from app.services import agent_chat_input
+
+    # BEWUSST nicht _patch_model_options_deps: das wuerde _persisted_model
+    # stubben — und genau dessen echtes Verhalten ist hier der Pruefling.
+    # (Erste Fassung dieses Tests tappte in die Falle: der "Restore" der
+    # echten Funktion griff den bereits gesetzten Stub — Sabotage-Probe
+    # bestand nicht. Darum nur die beiden Discovery-Abhaengigkeiten stubben.)
+    monkeypatch.setattr(agent_chat_input, "discover_model_catalog", _async_return([]))
+    monkeypatch.setattr(agent_chat_input, "get_observed_model_windows", _async_return({}))
+    # Geister-Config anlegen — sie DARF nicht gelesen werden.
+    cfg = tmp_path / ".mc" / "agents" / "boss" / "claude-config"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text('{"model": "glm-5.1:cloud"}')
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+    assert caps["model"] is None
+
+
 async def test_model_options_capabilities_unknown_model_id_yields_null_window(monkeypatch):
     from app.services import agent_chat_input
     from app.config import settings
