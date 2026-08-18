@@ -688,7 +688,9 @@ async def test_set_effort_accepts_all_six_discovered_levels(monkeypatch):
     for level in agent_chat_input.ALLOWED_EFFORT_LEVELS:
         calls = await _patch_effort_deps(
             monkeypatch, agent_chat_input,
-            pane_sequence=[f"  ⎿  Set effort level to {level} (...)"],
+            # Mit Kommando-Echo wie im echten Pane: seit dem Stale-Zeilen-Fix
+            # (18.08.2026) zaehlt eine Bestaetigung nur HINTER dem eigenen Echo.
+            pane_sequence=[f"❯ /effort {level}\n  ⎿  Set effort level to {level} (...)"],
         )
         agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
         await agent_chat_input.set_effort(agent, level)
@@ -778,7 +780,7 @@ async def test_set_effort_preflight_allows_idle_pane(monkeypatch):
 
     calls = await _patch_effort_deps(
         monkeypatch, agent_chat_input,
-        pane_sequence=[_IDLE_PANE, "  ⎿  Set effort level to low (saved as your default for new sessions): ..."],
+        pane_sequence=[_IDLE_PANE, "❯ /effort low\n  ⎿  Set effort level to low (saved as your default for new sessions): ..."],
     )
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
@@ -835,6 +837,70 @@ async def test_set_effort_verification_timeout_working_pane_skips_escape(monkeyp
     assert len(calls) == 2
     assert calls[0][-3:] == ["-l", "--", "/effort high"]
     assert calls[1][-1] == "Enter"
+
+
+async def test_set_effort_ignores_stale_rejection_from_earlier_attempt(monkeypatch):
+    """Operator-Live-Bug (18.08.2026 abends): eine "Kept effort level as
+    auto"-Zeile eines FRUEHEREN Versuchs stand noch sichtbar im Pane. Der
+    Verify-Poll durchsuchte den GANZEN Pane und meldete jeden neuen Versuch
+    sofort als abgelehnt — jeder "Erneut versuchen"-Klick scheiterte
+    identisch. Die Auswertung darf nur lesen, was hinter dem Echo des
+    EIGENEN Kommandos steht."""
+    from app.services import agent_chat_input
+
+    # Exakt die Bug-Form: die alte Ablehnung steht sichtbar da, die Antwort
+    # auf UNSER Kommando ist noch nicht gerendert. Der ungescopte Poll las
+    # hier sofort "abgelehnt" — noch bevor die CLI ueberhaupt antworten
+    # konnte. Erst der Folge-Poll bringt die echte Bestaetigung.
+    stale_pending = (
+        "❯ /effort low\n"
+        "  ⎿  Kept effort level as auto\n"        # Leiche des alten Versuchs
+        "❯ /effort low"                             # UNSER Echo, noch unbeantwortet
+    )
+    answered = stale_pending + "\n  ⎿  Set effort level to low (saved as your default for new sessions): ..."
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[stale_pending, stale_pending, answered],
+    )
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "low")  # darf NICHT ablehnen
+    assert len(calls) == 2  # kein Escape — normaler Erfolg
+
+
+async def test_set_effort_ignores_stale_confirmation_from_earlier_attempt(monkeypatch):
+    """Gegenprobe zum Stale-Fix: auch eine ALTE Bestaetigung derselben Stufe
+    darf keinen sofortigen Falsch-Erfolg liefern. Erst wenn hinter dem
+    letzten Echo wirklich die Bestaetigung erscheint, gilt der Wechsel."""
+    from app.services import agent_chat_input
+
+    stale_conf_only = (
+        "❯ /effort high\n"
+        "  ⎿  Set effort level to high (saved as your default for new sessions): ...\n"
+        "❯ /effort high"                            # neuer Versuch, noch ohne Antwort
+    )
+    real_conf = stale_conf_only + "\n  ⎿  Set effort level to high (saved as your default for new sessions): ..."
+    polls = {"n": 0}
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        polls["n"] += 1
+        # Poll 1 = Preflight (busy-Check), Poll 2 = Verify sieht nur das alte
+        # Ergebnis + unser unbeantwortetes Echo, Poll 3 = echte Bestaetigung.
+        return stale_conf_only if polls["n"] <= 2 else real_conf
+
+    async def _fake_sleep(delay):
+        pass
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "high")
+    # Poll 2 durfte den alten Erfolg NICHT zaehlen -> es brauchte Poll 3.
+    assert polls["n"] == 3
 
 
 async def test_set_effort_explicit_rejection_raises_distinct_error_no_escape(monkeypatch):

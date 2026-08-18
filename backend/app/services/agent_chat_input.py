@@ -540,14 +540,28 @@ async def _verify_effort_applied(agent, level: str) -> bool:
     the module that needs a real success/failure signal instead of the
     usual "log a warning and move on" contract."""
     marker = f"effort level to {level}"
+    command_echo = f"/effort {level}"
     for _ in range(_EFFORT_VERIFY_ATTEMPTS):
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
         pane = await capture_pane(agent)
         if not pane:
             continue
-        if marker in pane:
+        # NUR hinter dem Echo DIESES Kommandos lesen (Operator-Live-Bug
+        # 18.08.2026 abends): der Pane zeigt Verlauf. Eine "Kept effort
+        # level as <X>"-Zeile eines FRUEHEREN Versuchs blieb sichtbar und
+        # liess jeden neuen Versuch sofort als abgelehnt enden — jeder
+        # "Erneut versuchen"-Klick scheiterte identisch, bis die Zeile
+        # zufaellig aus dem Fenster scrollte. rfind nimmt das LETZTE Echo:
+        # das ist unseres, auch wenn ein aelterer Versuch derselben Stufe
+        # weiter oben steht. Solange das Echo noch nicht gerendert ist,
+        # gibt es nichts auszuwerten -> weiter pollen.
+        echo_idx = pane.rfind(command_echo)
+        if echo_idx < 0:
+            continue
+        tail = pane[echo_idx + len(command_echo):]
+        if marker in tail:
             return True
-        rejected = _EFFORT_REJECTED_RE.search(pane)
+        rejected = _EFFORT_REJECTED_RE.search(tail)
         if rejected is not None:
             # The CLI answered definitively (just not with what was asked
             # for) — stop polling immediately rather than burning the rest
