@@ -37,6 +37,38 @@ else
     # Aeltere Installation ohne ensure-checkout.sh: alter Pfad als Fallback.
     REPO="${MC_REPO_PATH:-$HOME/Workspace/Projects/mission-control}"
 fi
+# Trust-Dialog fuer Boss' Arbeitsverzeichnis pre-akzeptieren (Vorfall 18.08.2026).
+# Boss unsetzt CLAUDE_CONFIG_DIR (start-claude.sh: OAuth-Keychain liegt unter
+# ~/.claude/) und liest darum die Operator-Config ~/.claude.json. Stand dort fuer
+# den gepinnten Checkout kein akzeptierter Trust-Eintrag, blieb Boss nach JEDEM
+# Neustart im interaktiven "Is this a project you trust?"-Dialog stehen — ohne
+# Transkript, ohne Modell, ohne Poll. Nur dieses eine Flag setzen, Rest der Datei
+# unangetastet, atomarer Write (der Operator arbeitet in derselben Datei).
+MC_TRUST_REPO="$REPO" python3 - <<'PY' || echo "[entrypoint] warn: konnte Trust-Dialog nicht pre-akzeptieren"
+import json, os, tempfile
+
+repo = os.environ["MC_TRUST_REPO"]
+p = os.path.expanduser("~/.claude.json")
+try:
+    with open(p) as f:
+        d = json.load(f)
+except Exception:
+    d = {}
+e = d.setdefault("projects", {}).setdefault(repo, {})
+if e.get("hasTrustDialogAccepted") is True:
+    print("[entrypoint] trust already accepted for " + repo)
+else:
+    e["hasTrustDialogAccepted"] = True
+    for k, v in (("history", []), ("allowedTools", []), ("mcpServers", {}),
+                 ("enabledMcpjsonServers", []), ("disabledMcpjsonServers", [])):
+        e.setdefault(k, v)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p))
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f, indent=2)
+    os.replace(tmp, p)
+    print("[entrypoint] trust-dialog pre-accepted for " + repo)
+PY
+
 POLL_SH="$REPO/docker/shared/poll.sh"
 LOG_DIR="$BASE/logs"
 TMUX_SOCKET="$BASE/.tmux.sock"
