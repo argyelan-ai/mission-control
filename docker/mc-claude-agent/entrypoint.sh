@@ -144,31 +144,47 @@ fi
 # Ohne das zeigt claude-code beim ersten Start einen interaktiven Trust-Prompt
 # ("Is this a project you trust?") der die Session blockiert — ein Agent kann
 # das nicht mit Enter beantworten. Muss VOR dem ersten `claude`-Aufruf passieren.
-CLAUDE_JSON="/home/agent/.claude.json"
+# WICHTIG (Vorfall 18.08.2026): claude-code liest seine Config aus
+# $CLAUDE_CONFIG_DIR/.claude.json, sobald CLAUDE_CONFIG_DIR gesetzt ist (bei uns
+# /home/agent/.claude/). Der frueher hier hartkodierte Pfad /home/agent/.claude.json
+# wurde dadurch NIE gelesen — der Trust-Dialog kam bei JEDEM Neustart wieder und
+# blockierte die Session (betroffen: Downloader, Installer, Dev, Kimi; Boss auf dem
+# Host aus dem gleichen Grund, dort in ~/.claude.json). Darum: in die effektive
+# Config schreiben, die Legacy-Datei zusaetzlich mitnehmen (schadet nicht, deckt
+# den Fall ab, dass CLAUDE_CONFIG_DIR spaeter wegfaellt).
 python3 - <<'PY' || echo "[entrypoint] warn: konnte Trust-Dialog nicht pre-akzeptieren"
 import json, os
-p = "/home/agent/.claude.json"
-d = {}
-if os.path.exists(p):
-    try:
-        with open(p) as f:
-            d = json.load(f)
-    except Exception:
-        d = {}
-projects = d.setdefault("projects", {})
-for path in ("/home/agent", "/workspace"):
-    e = projects.setdefault(path, {})
-    e["hasTrustDialogAccepted"] = True
-    e.setdefault("history", [])
-    e.setdefault("allowedTools", [])
-    e.setdefault("mcpServers", {})
-    e.setdefault("enabledMcpjsonServers", [])
-    e.setdefault("disabledMcpjsonServers", [])
-    e.setdefault("hasClaudeMdExternalIncludesApproved", False)
-    e.setdefault("hasClaudeMdExternalIncludesWarningShown", False)
-with open(p, "w") as f:
-    json.dump(d, f, indent=2)
-print("[entrypoint] trust-dialog pre-accepted for /home/agent + /workspace")
+
+cfg_dir = os.environ.get("CLAUDE_CONFIG_DIR") or "/home/agent"
+targets = []
+for base in (cfg_dir, "/home/agent"):
+    p = os.path.normpath(os.path.join(base, ".claude.json"))
+    if p not in targets:
+        targets.append(p)
+
+for p in targets:
+  d = {}
+  os.makedirs(os.path.dirname(p), exist_ok=True)
+  if os.path.exists(p):
+      try:
+          with open(p) as f:
+              d = json.load(f)
+      except Exception:
+          d = {}
+  projects = d.setdefault("projects", {})
+  for path in ("/home/agent", "/workspace"):
+      e = projects.setdefault(path, {})
+      e["hasTrustDialogAccepted"] = True
+      e.setdefault("history", [])
+      e.setdefault("allowedTools", [])
+      e.setdefault("mcpServers", {})
+      e.setdefault("enabledMcpjsonServers", [])
+      e.setdefault("disabledMcpjsonServers", [])
+      e.setdefault("hasClaudeMdExternalIncludesApproved", False)
+      e.setdefault("hasClaudeMdExternalIncludesWarningShown", False)
+  with open(p, "w") as f:
+      json.dump(d, f, indent=2)
+  print("[entrypoint] trust-dialog pre-accepted for /home/agent + /workspace in " + p)
 PY
 
 # tmux config — wird automatisch beim server start geladen
