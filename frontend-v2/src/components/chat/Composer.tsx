@@ -65,7 +65,12 @@ export function resolveEffortLevels(capabilities: ChatCapabilities | null | unde
 export function resolveSlashCommands(
   reported: ChatSlashCommand[] | null | undefined,
 ): SlashCommand[] {
-  if (!reported || reported.length === 0) return SLASH_COMMANDS;
+  // null/undefined = aelteres Backend ohne das Feld -> statische Claude-Liste.
+  // Ein EXPLIZIT leeres Array ist dagegen eine Aussage: dieser Harness (kimi,
+  // omp) hat diese Kommandos nicht — dann darf die Palette nichts Falsches
+  // versprechen (kritischer Test-Durchgang 18.08.2026).
+  if (reported == null) return SLASH_COMMANDS;
+  if (reported.length === 0) return [];
   const normalized = reported
     .filter((cmd): cmd is ChatSlashCommand => typeof cmd?.name === "string" && cmd.name.trim().length > 0)
     .map((cmd) => {
@@ -73,7 +78,7 @@ export function resolveSlashCommands(
       return { command: `/${bare}`, description: cmd.description?.trim() || "" };
     })
     .filter((cmd) => cmd.command.length > 1);
-  return normalized.length > 0 ? normalized : SLASH_COMMANDS;
+  return normalized;
 }
 
 /** One row of the model switcher, after normalization. */
@@ -98,7 +103,11 @@ export function resolveModelOptions(
   reported: ChatModelOption[] | null | undefined,
 ): ModelChoice[] {
   const fallback = CLAUDE_MODELS.map((m) => ({ name: m.name, label: m.label, contextWindow: null }));
-  if (!reported || reported.length === 0) return fallback;
+  // Gleiche Unterscheidung wie bei den Slash-Kommandos: fehlendes Feld =
+  // altes Backend -> Fallback; explizit leer = dieser Harness kennt unsere
+  // /model-Aliasse nicht -> nichts anbieten.
+  if (reported == null) return fallback;
+  if (reported.length === 0) return [];
   const normalized = reported
     .map((option) => {
       const name = (option.command ?? option.name ?? "").trim();
@@ -108,7 +117,7 @@ export function resolveModelOptions(
       return { name, label: option.label?.trim() || name, contextWindow: window };
     })
     .filter((option) => option.name.length > 0);
-  return normalized.length > 0 ? normalized : fallback;
+  return normalized;
 }
 
 type RingThreshold = "normal" | "warning" | "error";
@@ -173,6 +182,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const modelBoxRef = useRef<HTMLDivElement | null>(null);
+  const effortBoxRef = useRef<HTMLDivElement | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
   /** Vorschau-Position des Reglers waehrend des Ziehens; `null` = zeige den
@@ -214,6 +225,34 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * genau das, was die CLI ohne Override tut. Vorher hing der GANZE Chip an
    * usage?.effort — ohne usage war der Effort schlicht nicht schaltbar
    * (Operator-Befund 18.08.2026). */
+  /* Popovers schliessen wie ueberall sonst im System: Klick daneben oder
+   * Escape. Vorher blieben Modell-Dropdown und Effort-Regler offen, bis man
+   * den Chip erneut traf (kritischer Test-Durchgang 18.08.2026). Escape
+   * verwirft beim Regler auch die Zieh-Vorschau, damit der anschliessende
+   * blur-Commit nichts Ungewolltes sendet (draftIndex zuerst nullen). */
+  useEffect(() => {
+    if (!modelOpen && !effortOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (modelBoxRef.current?.contains(t) || effortBoxRef.current?.contains(t)) return;
+      setDraftIndex(null);
+      setModelOpen(false);
+      setEffortOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setDraftIndex(null);
+      setModelOpen(false);
+      setEffortOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [modelOpen, effortOpen]);
+
   const currentEffort = usage?.effort ?? capabilities?.effort ?? null;
 
   /* Position des Reglers: waehrend des Ziehens die Vorschau, sonst der aktuelle
@@ -539,7 +578,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         />
 
         <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1.5">
-          <div className="relative">
+          <div className="relative" ref={modelBoxRef}>
+            {modelOptions.length === 0 ? (
+              /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
+                 /model-Aliasse — dann ist der Chip ein ehrliches Label statt
+                 eines Dropdowns, das Kauderwelsch in die TUI tippen wuerde. */
+              <span
+                data-testid="model-chip-static"
+                className="inline-flex items-center font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                {modelLabel}
+              </span>
+            ) : (
             <button
               type="button"
               onClick={() => setModelOpen((v) => !v)}
@@ -562,7 +613,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 style={{ transform: modelOpen ? "rotate(180deg)" : undefined }}
               />
             </button>
-            {modelOpen && (
+            )}
+            {modelOptions.length > 0 && modelOpen && (
               <div
                 role="listbox"
                 className="absolute bottom-full left-0 mb-1.5 w-36 rounded-lg overflow-hidden z-20 p-1"
@@ -714,7 +766,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             // Agent umschalten, gehoert der Chip hin — auch bevor die Session
             // ihr erstes usage-Ereignis geschrieben hat.
             (effortSupported && effortLevels.length > 0 ? (
-              <div className="relative">
+              <div className="relative" ref={effortBoxRef}>
                 <button
                   type="button"
                   onClick={() => setEffortOpen((v) => !v)}
@@ -788,7 +840,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                          Regler fuenf Umschalt-Befehle in die TUI. */
                       onChange={(e) => setDraftIndex(Number(e.target.value))}
                       onPointerUp={commitSlider}
-                      onKeyUp={commitSlider}
+                      /* Tastatur: Pfeiltasten sind VORSCHAU — sonst schickt
+                         jede einzelne Pfeiltaste einen Umschalt-Befehl in die
+                         TUI. Bestaetigt wird mit Enter (oder implizit beim
+                         Verlassen des Reglers); Escape verwirft (siehe
+                         Dokument-Listener oben, der draftIndex zuerst nullt). */
+                      onKeyUp={(e) => { if (e.key === "Enter") commitSlider(); }}
                       onBlur={commitSlider}
                       className="w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-wait"
                     />

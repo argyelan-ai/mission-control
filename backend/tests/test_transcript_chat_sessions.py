@@ -367,3 +367,89 @@ def test_transcript_allowed_non_boss_host_agent_fails_closed(tmp_path):
     agent = SimpleNamespace(slug="hermes", agent_runtime="host")
 
     assert tc.transcript_allowed(agent, f) is False
+
+
+# ── Turn-Ende-Erkennung (Operator-Befund 18.08.2026: Arbeits-Verben drehten
+#    nach Turn-Ende ~20s weiter, weil nur die mtime zaehlte) ─────────────────
+
+def _mk_line(entry: dict) -> str:
+    import json as _json
+    return _json.dumps(entry) + "\n"
+
+
+def test_turn_ended_on_plain_assistant_answer(tmp_path):
+    from app.services.transcript_chat import ChatTailerManager
+    f = tmp_path / "s.jsonl"
+    f.write_text(
+        _mk_line({"type": "user", "message": {"content": "mach was"}})
+        + _mk_line({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fertig."}]}})
+    )
+    assert ChatTailerManager._transcript_suggests_turn_ended(f) is True
+
+
+def test_turn_not_ended_while_tool_use_pending(tmp_path):
+    from app.services.transcript_chat import ChatTailerManager
+    f = tmp_path / "s.jsonl"
+    f.write_text(
+        _mk_line({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Ich schaue nach."},
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+        ]}})
+    )
+    assert ChatTailerManager._transcript_suggests_turn_ended(f) is False
+
+
+def test_turn_not_ended_on_user_or_tool_result_line(tmp_path):
+    from app.services.transcript_chat import ChatTailerManager
+    f = tmp_path / "s.jsonl"
+    f.write_text(_mk_line({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+    ]}}))
+    assert ChatTailerManager._transcript_suggests_turn_ended(f) is False
+
+
+def test_turn_end_detection_fails_silent(tmp_path):
+    from app.services.transcript_chat import ChatTailerManager
+    missing = tmp_path / "nicht-da.jsonl"
+    assert ChatTailerManager._transcript_suggests_turn_ended(missing) is False
+    broken = tmp_path / "kaputt.jsonl"
+    broken.write_text("{ kein json")
+    assert ChatTailerManager._transcript_suggests_turn_ended(broken) is False
+
+
+async def test_state_probe_reports_idle_right_after_final_answer(tmp_path, monkeypatch):
+    """End-to-End der Bug-Form: Datei ist SEKUNDENFRISCH (mtime-Fenster offen),
+    Pane zeigt den nackten Prompt — vor dem Fix hiess das bis zu 20s
+    "working" (drehende Arbeits-Verben nach Turn-Ende), jetzt entscheidet
+    die Abschluss-Antwort im Transkript."""
+    from app.services import transcript_chat as tc
+
+    f = tmp_path / "s.jsonl"
+    f.write_text(
+        _mk_line({"type": "user", "message": {"content": "mach was"}})
+        + _mk_line({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fertig."}]}})
+    )
+
+    async def _fake_pane(agent):
+        return "⏺ Fertig.\n\n❯ \n"
+
+    async def _fake_aliveness(agent, path):
+        return "active"
+
+    monkeypatch.setattr(tc, "capture_pane", _fake_pane)
+    monkeypatch.setattr(tc, "resolve_aliveness", _fake_aliveness)
+
+    mgr = tc.ChatTailerManager()
+
+    class _A:
+        slug = "rex"; agent_runtime = "cli-bridge"
+
+    state = await mgr._compute_pane_state(_A(), f)
+    assert state["status"] == "idle"
+
+    # Gegenprobe: haengt der Zug noch an einem Werkzeug, bleibt es working.
+    f.write_text(_mk_line({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}
+    ]}}))
+    state = await mgr._compute_pane_state(_A(), f)
+    assert state["status"] == "working"

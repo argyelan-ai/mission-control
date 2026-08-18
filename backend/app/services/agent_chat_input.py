@@ -482,6 +482,10 @@ async def set_effort(agent, level: str) -> None:
     kind = _target_kind(agent)
     if kind != "docker":
         raise InputNotSupportedError()
+    if getattr(agent, "harness", None) != "claude":
+        # Spiegel des Capabilities-Gates: selbst wenn ein Client den Endpoint
+        # direkt trifft, tippen wir kein /effort in eine fremde CLI.
+        raise InputNotSupportedError()
     slug = agent.slug
 
     if await _pane_is_busy(agent):
@@ -637,6 +641,13 @@ async def effort_capabilities(agent) -> dict[str, object]:
     except InputNotSupportedError:
         kind = None
 
+    if kind == "docker" and getattr(agent, "harness", None) != "claude":
+        # Fremde CLI im Container (kimi, omp): /effort ist ein Claude-Kommando.
+        # Weder Leiter noch Schaltrecht behaupten — sonst tippt ein Klick
+        # Kauderwelsch in eine TUI, die es nicht versteht (kritischer
+        # Test-Durchgang 18.08.2026).
+        return {"effortLevels": [], "canSwitchEffort": False, "effort": None}
+
     if kind == "docker":
         await _check_effort_levels_version_drift(agent)
         slug = getattr(agent, "slug", None) or ""
@@ -768,6 +779,12 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     — builtins merged with this agent's installed skills. Docker/cli-bridge
     only: every other runtime gets builtins alone (no ``claude-config``
     mount to scan for skills)."""
+    # Die Builtins sind Claude-Code-Vokabular (/effort, /model, /compact, …).
+    # Fuer eine fremde CLI (kimi, omp) sind sie falsche Versprechen — dort
+    # bleibt die Liste leer, bis deren Harness eigene Kommandos meldet.
+    if getattr(agent, "harness", None) != "claude":
+        return {"slashCommands": []}
+
     commands: list[dict[str, str | None]] = list(_BUILTIN_SLASH_COMMANDS)
 
     slug = getattr(agent, "slug", None)
@@ -802,6 +819,12 @@ async def model_options_capabilities(agent) -> dict[str, object]:
     ``model_aliases`` fallback every agent gets when its catalog is
     unavailable. Never raises — catalog discovery is fully fail-silent on
     its own (see ``harness_catalog``)."""
+    if getattr(agent, "harness", None) != "claude":
+        # Claude-Aliasse ("/model sonnet") in einer fremden CLI sind
+        # Kauderwelsch — lieber gar keine Auswahl anbieten. Das persistierte
+        # Modell wird unten trotzdem nur fuer docker+claude gelesen.
+        return {"modelOptions": [], "model": None}
+
     catalog = await discover_model_catalog(agent)
     observed = await get_observed_model_windows()
 

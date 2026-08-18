@@ -552,6 +552,82 @@ describe("Composer", () => {
 
   // ── Effort switching ──────────────────────────────────────────────────────
 
+  describe("foreign-CLI shape (kimi/omp): explicitly empty capabilities", () => {
+    const FOREIGN = { effortLevels: [], canSwitchEffort: false, slashCommands: [], modelOptions: [], model: null, effort: null };
+
+    it("shows a read-only model label instead of a dropdown of Claude aliases", () => {
+      render(
+        <Composer agentId="a1" usage={mkUsage({ model: "kimi-code/k3", effort: null })} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(screen.getByTestId("model-chip-static")).toHaveTextContent("kimi-code/k3");
+      expect(screen.queryByRole("button", { name: /kimi-code/ })).not.toBeInTheDocument();
+    });
+
+    it("offers no slash palette — Claude builtins would be a false promise", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={null} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
+    });
+
+    it("shows no effort control at all", () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("popover dismissal", () => {
+    const CAPS6 = { effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true };
+
+    it("closes the effort popover on an outside click without committing", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ effort: "medium" })} capabilities={CAPS6} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      // Vorschau verschieben, dann daneben klicken: nichts darf gesendet werden.
+      fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "5" } });
+      await user.click(screen.getByPlaceholderText(/Nachricht/));
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+      expect(mockSetEffort).not.toHaveBeenCalled();
+    });
+
+    it("closes on Escape and discards the drag preview", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ effort: "medium" })} capabilities={CAPS6} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "0" } });
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+      expect(mockSetEffort).not.toHaveBeenCalled();
+    });
+
+    it("arrow keys only preview — a switch is sent on Enter, once", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ effort: "low" })} capabilities={CAPS6} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      const slider = screen.getByTestId("effort-slider");
+      // Drei Pfeil-Schritte = drei change+keyup-Zyklen — frueher drei Requests.
+      for (const v of ["1", "2", "3"]) {
+        fireEvent.change(slider, { target: { value: v } });
+        fireEvent.keyUp(slider, { key: "ArrowRight" });
+      }
+      expect(mockSetEffort).not.toHaveBeenCalled();
+      fireEvent.keyUp(slider, { key: "Enter" });
+      expect(mockSetEffort).toHaveBeenCalledTimes(1);
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "xhigh");
+    });
+  });
+
   describe("effort chip", () => {
     // The real capability block a docker/cli-bridge agent reports
     // (ALLOWED_EFFORT_LEVELS in agent_chat_input.py).
@@ -1275,12 +1351,17 @@ describe("Composer", () => {
       expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
     });
 
-    it("falls back rather than rendering blank rows for a malformed list", async () => {
+    it("renders no rows for a list of blanks — and never the static Claude list", async () => {
+      // Seit dem Harness-Gate (18.08.2026) ist eine gemeldete-aber-unbrauchbare
+      // Liste KEIN Grund mehr, auf die statischen Claude-Kommandos zu fallen:
+      // fuer eine fremde CLI (kimi, omp) waeren die ein falsches Versprechen.
+      // Nur ein FEHLENDES Feld (aelteres Backend) faellt noch zurueck.
       const user = userEvent.setup();
       withCommands([{ name: "" }, { name: "   " }]);
       await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
 
-      expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
+      expect(screen.queryByTestId("slash-item-/model")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
     });
   });
 

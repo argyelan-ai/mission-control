@@ -45,7 +45,7 @@ def _user_line(text: str, msg_uuid: str = "u1", ts: str = "2026-08-13T00:00:00Z"
 
 
 async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     tdir = tmp_path / "rex-transcripts"
     tdir.mkdir()
@@ -179,7 +179,7 @@ async def test_history_404_no_transcript_for_host_agent_without_dir(auth_client:
 
 
 async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -195,7 +195,7 @@ async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: A
 
 
 async def test_history_requires_auth(client: AsyncClient, make_agent):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     resp = await client.get(f"/api/v1/agents/{agent.id}/chat/history")
 

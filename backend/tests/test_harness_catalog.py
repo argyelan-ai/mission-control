@@ -95,8 +95,16 @@ async def test_parse_model_picker_empty_pane_yields_empty_list():
 
 
 async def test_harness_for_docker_agent():
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert hc.harness_for(agent) == "claude"
+
+
+async def test_harness_for_foreign_cli_returns_none():
+    """Kimi/Sparky sind cli-bridge, aber kein Claude — der Katalog darf ihre
+    TUI nie mit einem /model-Picker-Probe anfassen (Gate 18.08.2026)."""
+    for harness in ("kimi", "omp", None):
+        agent = SimpleNamespace(slug="kimi", agent_runtime="cli-bridge", harness=harness)
+        assert hc.harness_for(agent) is None
 
 
 async def test_harness_for_host_agent_returns_none():
@@ -116,7 +124,7 @@ async def test_resolve_cli_version_parses_real_output_format(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert await hc.resolve_cli_version(agent) == "2.1.234"
 
 
@@ -131,7 +139,7 @@ async def test_resolve_cli_version_none_on_nonzero_exit(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert await hc.resolve_cli_version(agent) is None
 
 
@@ -141,7 +149,7 @@ async def test_resolve_cli_version_none_on_subprocess_exception(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert await hc.resolve_cli_version(agent) is None
 
 
@@ -168,7 +176,7 @@ async def test_discover_model_catalog_no_harness_returns_empty_without_any_io(re
 
 
 async def test_discover_model_catalog_no_version_returns_empty(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _no_version(a):
         return None
@@ -179,7 +187,7 @@ async def test_discover_model_catalog_no_version_returns_empty(monkeypatch, redi
 
 
 async def test_discover_model_catalog_cache_hit_skips_discovery(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -199,7 +207,7 @@ async def test_discover_model_catalog_cache_hit_skips_discovery(monkeypatch, red
 async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_versions(monkeypatch, redis_env):
     """A cached catalog for version 2.1.233 must NOT answer a request for
     2.1.234 — a CLI upgrade invalidates the catalog automatically."""
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -225,7 +233,7 @@ async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_v
 
 
 async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -244,7 +252,7 @@ async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monk
 
 
 async def test_discover_model_catalog_discovery_failure_returns_empty_not_raises(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -263,7 +271,7 @@ async def test_discover_model_catalog_concurrent_request_skips_when_lock_held(mo
     not both spin up a throwaway discovery window — the second one gets []
     (falls back to the static alias list for that one request) rather than
     piling on."""
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"

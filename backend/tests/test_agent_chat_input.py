@@ -28,9 +28,13 @@ class _StubAgent:
     ``agent.slug`` / ``agent.agent_runtime`` contract ``_target_kind`` reads,
     same convention as ``transcript_chat.resolve_transcript_dir``'s tests."""
 
-    def __init__(self, slug: str, agent_runtime: str):
+    def __init__(self, slug: str, agent_runtime: str, harness: str = "claude"):
+        # harness default "claude" = der Flotten-Mainstream; die Harness-Gates
+        # (18.08.2026: kein /effort//model in fremde CLIs) testen Abweichler
+        # explizit mit harness="kimi"/"omp".
         self.slug = slug
         self.agent_runtime = agent_runtime
+        self.harness = harness
 
 
 class _FakeWSConn:
@@ -1046,6 +1050,25 @@ async def test_effort_capabilities_ignores_unusable_settings(monkeypatch, tmp_pa
     assert (await agent_chat_input.effort_capabilities(agent))["effort"] == "low"
 
 
+async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
+    """Kimi/Sparky sind cli-bridge, aber KEIN Claude: /effort- und
+    /model-Vokabular darf dort weder angeboten noch getippt werden
+    (kritischer Test-Durchgang 18.08.2026 — vorher galt jeder
+    cli-bridge-Agent als Claude)."""
+    from app.services import agent_chat_input
+
+    for harness in ("kimi", "omp"):
+        agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness=harness)
+        caps = await agent_chat_input.effort_capabilities(agent)
+        assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None}
+        slash = await agent_chat_input.slash_command_capabilities(agent)
+        assert slash == {"slashCommands": []}
+        models = await agent_chat_input.model_options_capabilities(agent)
+        assert models == {"modelOptions": [], "model": None}
+        with pytest.raises(agent_chat_input.InputNotSupportedError):
+            await agent_chat_input.set_effort(agent, "high")
+
+
 async def test_effort_capabilities_host_claude_gets_ladder_but_no_switch():
     """Boss-Gestalt (host + harness=claude, 18.08.2026): die Stufenleiter des
     Harness kommt mit, das Schaltrecht nicht — das Frontend proportioniert
@@ -1063,10 +1086,13 @@ async def test_effort_capabilities_host_claude_gets_ladder_but_no_switch():
     }
 
 
-async def test_effort_capabilities_boss_cannot_switch():
+async def test_effort_capabilities_host_without_claude_harness_gets_nothing():
+    """Host-Agent OHNE Claude-Harness (unset/legacy): weder Leiter noch
+    Schaltrecht — der Boss-Fall mit harness=claude bekommt die Leiter
+    (eigener Test oben)."""
     from app.services import agent_chat_input
 
-    agent = _StubAgent(slug="boss", agent_runtime="host")
+    agent = _StubAgent(slug="boss", agent_runtime="host", harness=None)
     caps = await agent_chat_input.effort_capabilities(agent)
 
     assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None}
@@ -1075,7 +1101,7 @@ async def test_effort_capabilities_boss_cannot_switch():
 async def test_effort_capabilities_other_host_agent_cannot_switch():
     from app.services import agent_chat_input
 
-    agent = _StubAgent(slug="hermes", agent_runtime="host")
+    agent = _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
     caps = await agent_chat_input.effort_capabilities(agent)
 
     assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None}

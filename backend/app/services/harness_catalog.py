@@ -84,10 +84,17 @@ def harness_for(agent) -> str | None:
     """Which harness catalog applies to this agent, or ``None`` if none
     does. v1: docker/cli-bridge only — same boundary
     ``agent_chat_input.effort_capabilities``/``slash_command_capabilities``
-    already enforce (no pane/tmux to discover from for any other runtime)."""
+    already enforce (no pane/tmux to discover from for any other runtime).
+
+    Kritischer Zusatz (18.08.2026, kritischer Test-Durchgang): NUR fuer
+    harness=claude. Vorher galt JEDER cli-bridge-Agent als Claude — Kimi
+    (kimi-CLI) und Sparky (omp) haetten damit einen /model-Picker-Probe in
+    eine fremde TUI bekommen und canSwitchEffort=true gemeldet, worauf ein
+    Klick /effort-Kommandos in eine CLI getippt haette, die sie nicht kennt.
+    Eine fremde CLI ist kein defekter Claude, sondern ein anderes Gerät."""
     runtime = getattr(agent, "agent_runtime", None)
     slug = getattr(agent, "slug", None)
-    if runtime == "cli-bridge" and slug:
+    if runtime == "cli-bridge" and slug and getattr(agent, "harness", None) == "claude":
         return "claude"
     return None
 

@@ -1261,6 +1261,46 @@ class ChatTailerManager:
             # from the outside — make every exit visible.
             logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
 
+    @staticmethod
+    def _transcript_suggests_turn_ended(path: Path) -> bool:
+        """True, wenn die LETZTE Transkript-Zeile eine reine Text-Antwort des
+        Agenten ist — dann ist der Zug vorbei, egal wie frisch die Datei ist.
+
+        Operator-Befund (18.08.2026 nachts): nach Turn-Ende drehte die
+        Statuszeile noch bis zu ~20s die Arbeits-Verben weiter, weil die
+        working/idle-Disambiguierung allein am Datei-Alter hing
+        (STATE_ACTIVE_WINDOW_SECONDS) — die frische mtime stammte aber genau
+        von der ABSCHLUSS-Antwort. Das Transkript selbst traegt das Ende:
+        eine assistant-Zeile OHNE tool_use-Block heisst "Antwort steht, kein
+        Werkzeug mehr ausstehend". Alles andere (user/tool_result, assistant
+        MIT tool_use, Metadaten, unlesbare Riesenzeile) laesst bewusst das
+        alte mtime-Verhalten gelten — nur der eine falsche Nachlauf wird
+        entfernt, die Redraw-Luecken-Absicherung bleibt.
+
+        Synchron und billig (ein Tail-Read von max 256KB pro Probe-Tick);
+        Aufrufer wrappt in asyncio.to_thread. Fail-silent -> False."""
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as f:
+                f.seek(max(0, size - 262_144))
+                tail = f.read()
+            lines = [ln for ln in tail.split(b"\n") if ln.strip()]
+            if not lines:
+                return False
+            # Bei abgeschnittenem Chunk ist lines[0] ein Zeilenrest — relevant
+            # ist ohnehin nur die letzte vollstaendige Zeile.
+            entry = json.loads(lines[-1].decode("utf-8", errors="replace"))
+            if entry.get("type") != "assistant":
+                return False
+            content = (entry.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                return False
+            return not any(
+                isinstance(b, dict) and b.get("type") == "tool_use" for b in content
+            )
+        except Exception:
+            return False
+
     async def _compute_pane_state(self, agent: Any, current_path: Path) -> dict[str, Any]:
         """One probe tick's worth of state classification (A6). Computes
         ``transcript_active`` from the current session file's mtime (used
@@ -1278,6 +1318,17 @@ class ChatTailerManager:
             mtime = await asyncio.to_thread(lambda: current_path.stat().st_mtime)
             transcript_active = (time.time() - mtime) < self.STATE_ACTIVE_WINDOW_SECONDS
         except OSError:
+            transcript_active = False
+
+        # Frische mtime allein heisst nicht "arbeitet": direkt nach dem Zug
+        # stammt sie von der Abschluss-Antwort selbst. Endet das Transkript
+        # mit einer reinen Text-Antwort, ist der Zug vorbei (Details im
+        # Helper) — das nimmt sowohl dem Pane-Parser die falsche
+        # working-Aufloesung als auch dem pane-losen Boss-Zweig den
+        # 20s-Nachlauf.
+        if transcript_active and await asyncio.to_thread(
+            self._transcript_suggests_turn_ended, current_path
+        ):
             transcript_active = False
 
         aliveness = await resolve_aliveness(agent, current_path)
