@@ -700,11 +700,12 @@ describe("ChatView", () => {
     renderChatView();
 
     await user.click(screen.getByTestId("effort-chip"));
-    expect(screen.getAllByRole("option").map((o) => o.getAttribute("data-level"))).toEqual([
-      "low",
-      "high",
-      "max",
-    ]);
+    // Der Regler bekommt die Stufen des Servers 1:1 — Endpunkte und Spannweite
+    // beweisen das, ohne die Bedienung nachzubauen (die testet Composer selbst).
+    const slider = screen.getByTestId("effort-slider");
+    expect(slider).toHaveAttribute("max", "2");
+    expect(screen.getByTestId("effort-menu")).toHaveTextContent("low");
+    expect(screen.getByTestId("effort-menu")).toHaveTextContent("max");
   });
 
   // ── Queued / starting echoes ──────────────────────────────────────────────

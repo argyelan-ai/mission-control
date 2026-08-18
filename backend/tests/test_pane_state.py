@@ -57,6 +57,22 @@ IDLE_PROMPT = """\
   ? for shortcuts
 """
 
+# Echter FreeCode-Pane vom 18.08.2026 (docker exec tmux capture-pane), Claude
+# Code 2.1.234 MIT Statuszeile. Unter der Eingabezeile stehen inzwischen DREI
+# Zeilen: Trennlinie, Statuszeile (Modell) und Bypass-Hinweis. Mit dem alten
+# "letzte 3 nicht-leere Zeilen"-Fenster fiel "❯" heraus -> "unknown" -> das
+# Readiness-Gate in send_text lehnte jede Chat-Nachricht mit 409 agent_starting
+# ab. Genau dieser Text ist der Grund fuer _PROMPT_WINDOW_LINES.
+IDLE_PROMPT_WITH_STATUSLINE_FOOTER = """\
+⏺ Fertig.
+
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  Sonnet 5
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+"""
+
 GARBAGE_OUTPUT = """\
 some random log line
 another line with no markers at all
@@ -476,3 +492,31 @@ async def test_process_alive_cache_expires_after_ttl(monkeypatch):
     await process_alive(agent)
 
     assert call_count["n"] == 2
+
+
+def test_idle_prompt_survives_multi_line_statusline_footer():
+    """Regression (Operator-Befund 18.08.2026): Chat-Nachrichten kamen bei
+    Container-Agenten nicht an. Der Pane war voellig normal — nur stand die
+    Eingabezeile wegen der gewachsenen Fusszeilen nicht mehr unter den letzten
+    drei nicht-leeren Zeilen, und ein ruhender Agent galt als bootend."""
+    assert parse_pane_state(IDLE_PROMPT_WITH_STATUSLINE_FOOTER, transcript_active=False) == {
+        "status": "idle",
+        "prompt": None,
+    }
+    assert parse_pane_state(IDLE_PROMPT_WITH_STATUSLINE_FOOTER, transcript_active=True) == {
+        "status": "working",
+        "prompt": None,
+    }
+
+
+def test_quoted_line_in_output_is_not_mistaken_for_a_prompt():
+    """Gegenprobe zum groesseren Fenster: der Marker muss am ZEILENANFANG
+    stehen. Sonst macht ein Zitat oder Diff in der Ausgabe aus einem
+    unlesbaren Pane einen scheinbar ruhenden — und das Readiness-Gate wuerde
+    genau in die bootende TUI tippen, die es verhindern soll."""
+    pane = """\
+irgendeine Ausgabe mit einem Zitat > so sieht das aus
+und noch eine Zeile darunter
+und eine dritte
+"""
+    assert parse_pane_state(pane, transcript_active=False)["status"] == "unknown"

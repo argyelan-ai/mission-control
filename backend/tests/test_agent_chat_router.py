@@ -107,6 +107,9 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     assert body["capabilities"] == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        # Startwert fuer den Composer-Chip, solange die Session noch kein
+        # usage-Ereignis hat. Der Fixture-Agent hat keine settings.json -> None.
+        "effort": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
             "modelOptions"
@@ -140,6 +143,7 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     assert resp.json()["capabilities"] == {
         "effortLevels": [],
         "canSwitchEffort": False,
+        "effort": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         # modelOptions: Boss has no harness (host runtime) -> catalog is
         # empty, no subprocess attempted at all -> static-alias fallback,

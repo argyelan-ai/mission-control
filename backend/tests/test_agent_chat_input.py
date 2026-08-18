@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import uuid
 
+import json
+
 import pytest
 from httpx import AsyncClient
 
@@ -900,7 +902,7 @@ async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeyp
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch):
+async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch, tmp_path):
     from app.services import agent_chat_input
 
     # Docker agent -> triggers the version-drift check -> resolve_cli_version
@@ -910,6 +912,8 @@ async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch
         return None
 
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    # Siehe unten: "rex" existiert wirklich — nie gegen das echte ~/.mc lesen.
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     caps = await agent_chat_input.effort_capabilities(agent)
@@ -917,9 +921,63 @@ async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch
     assert caps == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        # Kein settings.json im tmp-Home -> ehrliches None statt Ratewert.
+        "effort": None,
     }
     # Same single-source constant set_effort validates against — no drift.
     assert caps["effortLevels"] == list(agent_chat_input.ALLOWED_EFFORT_LEVELS)
+
+
+async def test_effort_capabilities_reports_persisted_default(monkeypatch, tmp_path):
+    """Der Chip im Composer hing frueher allein am usage-Ereignis des
+    Transkripts — eine frisch gestartete Session hat noch keines, also fehlte das
+    Bedienelement komplett und der Effort war nicht schaltbar (Operator-Befund
+    18.08.2026). Die settings.json des Agenten ist die ehrliche Zweitquelle."""
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+
+    cfg = tmp_path / ".mc" / "agents" / "rex" / "claude-config"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "xhigh", "model": "opus"}))
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+
+    caps = await agent_chat_input.effort_capabilities(_StubAgent(slug="rex", agent_runtime="cli-bridge"))
+    assert caps["effort"] == "xhigh"
+
+
+async def test_effort_capabilities_ignores_unusable_settings(monkeypatch, tmp_path):
+    """Fail-silent statt Behauptung: fehlende Datei, kaputtes JSON und ein
+    unbekannter Wert muessen alle None ergeben — das UI zeigt dann `auto`."""
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+
+    # 1) Datei fehlt ganz
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] is None
+
+    cfg = tmp_path / ".mc" / "agents" / "rex" / "claude-config"
+    cfg.mkdir(parents=True)
+
+    # 2) kaputtes JSON
+    (cfg / "settings.json").write_text("{ das ist kein json")
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] is None
+
+    # 3) Wert, den set_effort nie akzeptieren wuerde
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "turbo"}))
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] is None
+
+    # 4) gueltiger Wert -> kommt durch
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "low"}))
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] == "low"
 
 
 async def test_effort_capabilities_boss_cannot_switch():
@@ -928,7 +986,7 @@ async def test_effort_capabilities_boss_cannot_switch():
     agent = _StubAgent(slug="boss", agent_runtime="host")
     caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert caps == {"effortLevels": [], "canSwitchEffort": False}
+    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None}
 
 
 async def test_effort_capabilities_other_host_agent_cannot_switch():
@@ -937,7 +995,7 @@ async def test_effort_capabilities_other_host_agent_cannot_switch():
     agent = _StubAgent(slug="hermes", agent_runtime="host")
     caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert caps == {"effortLevels": [], "canSwitchEffort": False}
+    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1026,6 +1084,11 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
         return "2.9.999"
 
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _newer_version)
+    # "rex" ist ein echter Fleet-Slug: ohne dieses Patch liest der Test die
+    # settings.json des LAUFENDEN Agenten vom Host und wird von dessen aktueller
+    # Effort-Stufe abhaengig (gleiche Real-Host-Leak-Klasse wie die gemockten
+    # Subprozess-Aufrufe weiter oben).
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     caps = await agent_chat_input.effort_capabilities(agent)
@@ -1033,6 +1096,7 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
     assert caps == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        "effort": None,
     }
 
 

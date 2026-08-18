@@ -10,6 +10,8 @@
  * this never guesses a plausible-looking status. It says so and points at
  * the terminal, the one place that can't lie.
  */
+import { useEffect, useRef, useState } from "react";
+
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
 
@@ -33,6 +35,61 @@ interface StatusDisplay {
   textColor: string;
   label: string;
   pulse: boolean;
+}
+
+/**
+ * Wechselnde Verben fuer den Arbeits-Zustand (Operator-Wunsch 18.08.2026, nach
+ * dem Vorbild der Claude-Code-CLI). Ein starres "Arbeitet…" ueber Minuten sieht
+ * aus wie ein eingefrorenes UI; ein Wort, das sich alle paar Sekunden aendert,
+ * zeigt Leben — ohne etwas zu behaupten, das wir nicht wissen. Deshalb sind alle
+ * Begriffe bewusst inhaltsleer: sie beschreiben NICHT, was der Agent tut (das
+ * wuesste nur er selbst), sondern nur DASS er laeuft. Der pulsierende Punkt
+ * bleibt das eigentliche Signal.
+ */
+export const WORKING_WORDS = [
+  "Arbeitet",
+  "Denkt nach",
+  "Gruebelt",
+  "Bruetet",
+  "Werkelt",
+  "Tueftelt",
+  "Rechnet",
+  "Sinniert",
+  "Knobelt",
+  "Feilt",
+  "Sortiert",
+  "Kombiniert",
+  "Verdichtet",
+  "Spuert nach",
+  "Waelzt Ideen",
+  "Zieht Faeden",
+] as const;
+
+/** Wie lange ein Wort stehen bleibt. Kurz genug, dass es lebendig wirkt, lang
+ *  genug, dass man es zu Ende lesen kann, bevor es wechselt. */
+export const WORKING_WORD_INTERVAL_MS = 4000;
+
+/** Liefert das aktuelle Arbeits-Verb und rotiert es, solange gearbeitet wird.
+ *  Der Startpunkt wird bei jedem NEUEN Arbeitsabschnitt neu gewuerfelt, damit
+ *  nicht jeder Zug mit demselben Wort beginnt; steht der Agent still, laeuft
+ *  kein Timer (kein Rendern im Ruhezustand). */
+function useWorkingWord(active: boolean): string {
+  const [tick, setTick] = useState(0);
+  const seed = useRef(0);
+  const wasActive = useRef(false);
+
+  if (active && !wasActive.current) {
+    seed.current = Math.floor(Math.random() * WORKING_WORDS.length);
+  }
+  wasActive.current = active;
+
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setTick((t) => t + 1), WORKING_WORD_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [active]);
+
+  return WORKING_WORDS[(seed.current + tick) % WORKING_WORDS.length];
 }
 
 const UNKNOWN_DISPLAY: StatusDisplay = {
@@ -69,6 +126,7 @@ function resolveDisplay(
   connected: boolean,
   aliveness: ChatAliveness,
   sending: boolean,
+  workingWord: string,
 ): StatusDisplay {
   // Outranks the pane probe on purpose: right after a send the probe still
   // reports the PREVIOUS state (idle), and showing "Bereit" one frame after the
@@ -85,7 +143,7 @@ function resolveDisplay(
 
   switch (state.status) {
     case "working":
-      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: "Arbeitet…", pulse: true };
+      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: `${workingWord}…`, pulse: true };
     case "waiting_input":
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: "Wartet auf dich", pulse: false };
     case "permission_prompt":
@@ -101,7 +159,10 @@ export function StatusLine({
   aliveness = "active",
   sending = false,
 }: StatusLineProps) {
-  const display = resolveDisplay(state, connected, aliveness, sending);
+  // Der Hook muss VOR jedem fruehen Return laufen (Regeln der Hooks); er ist nur
+  // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
+  const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
+  const display = resolveDisplay(state, connected, aliveness, sending, workingWord);
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status

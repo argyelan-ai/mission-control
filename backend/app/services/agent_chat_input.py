@@ -107,6 +107,7 @@ just yields builtins alone) and cached ~60s per agent slug (real file I/O).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import subprocess
@@ -624,8 +625,17 @@ async def effort_capabilities(agent) -> dict[str, object]:
 
     if kind == "docker":
         await _check_effort_levels_version_drift(agent)
-        return {"effortLevels": list(ALLOWED_EFFORT_LEVELS), "canSwitchEffort": True}
-    return {"effortLevels": [], "canSwitchEffort": False}
+        slug = getattr(agent, "slug", None) or ""
+        effort = await asyncio.to_thread(_persisted_effort_level, slug) if slug else None
+        return {
+            "effortLevels": list(ALLOWED_EFFORT_LEVELS),
+            "canSwitchEffort": True,
+            # Startwert fuer den Chip, solange die Session noch kein usage-Ereignis
+            # geschrieben hat. Ein spaeteres usage gewinnt immer (es kennt auch die
+            # session-only-Stufen max/ultracode, die nie in der Datei landen).
+            "effort": effort,
+        }
+    return {"effortLevels": [], "canSwitchEffort": False, "effort": None}
 
 
 # Built-in slash commands — static, not discovered (no CLI-side enumeration
@@ -646,6 +656,29 @@ _BUILTIN_SLASH_COMMANDS: tuple[dict[str, str], ...] = (
 
 _SLASH_COMMANDS_CACHE_TTL_SECONDS = 60
 _slash_commands_cache: dict[str, tuple[float, list[dict[str, str | None]]]] = {}
+
+
+def _persisted_effort_level(slug: str) -> str | None:
+    """Die im ``settings.json`` des Agenten hinterlegte Effort-Stufe — der
+    Standard, mit dem JEDE neue Session startet.
+
+    Warum das hier gebraucht wird (Operator-Befund 18.08.2026): Der Effort-Chip
+    im Composer hing allein am ``usage``-Ereignis aus dem Transkript. Eine frisch
+    gestartete Session hat noch keines — also fehlte das Bedienelement komplett,
+    und der Effort war schlicht nicht schaltbar, bis der Agent zufaellig einmal
+    gearbeitet hatte. Die Datei ist die ehrliche Zweitquelle: was in ihr steht,
+    gilt bis eine Session es ueberschreibt (``max``/``ultracode`` tun das nur
+    fuer sich selbst und stehen darum korrekt NICHT in der Datei).
+
+    Fail-silent: fehlende Datei, kaputtes JSON oder ein unbekannter Wert geben
+    ``None`` — das UI zeigt dann ``auto``, statt etwas zu behaupten."""
+    try:
+        path = _host_home() / ".mc" / "agents" / slug / "claude-config" / "settings.json"
+        with open(path) as f:
+            level = json.load(f).get("effortLevel")
+    except Exception:
+        return None
+    return level if level in ALLOWED_EFFORT_LEVELS else None
 
 
 def _agent_skills_dir(slug: str) -> Path:

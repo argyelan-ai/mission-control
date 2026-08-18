@@ -176,6 +176,13 @@ export function resolveAliveness(session: ChatSession | null | undefined): ChatA
 export interface ChatCapabilities {
   effortLevels: string[];
   canSwitchEffort: boolean;
+  /** Die im `settings.json` des Agenten hinterlegte Effort-Stufe: der Standard,
+   *  mit dem jede neue Session startet. Dient dem Composer als Startwert,
+   *  solange die laufende Session noch kein `usage`-Ereignis geschrieben hat —
+   *  vorher fehlte der Chip in genau diesem Fenster komplett. Ein spaeteres
+   *  `usage.effort` gewinnt immer (nur es kennt die session-only-Stufen
+   *  `max`/`ultracode`). `null`/absent = unbekannt, der Chip zeigt dann `auto`. */
+  effort?: string | null;
   /** Every slash command this harness actually offers — built-ins AND the
    *  agent's skills. Absent on older backends, where the composer falls back to
    *  its own short static list. `name` may or may not carry the leading slash
