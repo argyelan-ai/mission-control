@@ -641,18 +641,23 @@ describe("SessionsPage — islands sit a step above the page ground", () => {
     vi.restoreAllMocks();
   });
 
-  const BG_DEEP = "rgb(10, 10, 10)";
   const BG_SURFACE = "rgb(23, 23, 23)";
 
-  it("keeps the page ground dark and lifts the chat island above it", async () => {
+  it("lifts the chat island above a ground it does NOT paint itself", async () => {
     renderPage();
     await screen.findAllByText("Agent One");
 
     const chat = screen.getByTestId("chat-column");
     expect(chat.style.backgroundColor).toBe(BG_SURFACE);
 
+    // Operator-Befund 18.08.2026: der Seiten-Grund darf keine eigene deckende
+    // Flaeche malen. Tat er es (bgDeep), uebermalte er den App-Hintergrund samt
+    // AmbientBackground-Verlauf und stand als hartes Schwarz rund um die Inseln.
+    // Der Grund bleibt transparent, die Insel behaelt ihren Tonschritt.
     const ground = chat.parentElement?.parentElement as HTMLElement;
-    expect(ground.style.background).toBe(BG_DEEP);
+    expect(ground.style.background).toBe("");
+    expect(ground.style.backgroundColor).toBe("");
+    expect(ground.className).not.toMatch(/bg-(deep|dark|base|black)/);
   });
 
   it("gives the mobile list and chat screens the same tone (no jump on switch)", async () => {

@@ -280,10 +280,14 @@ function SessionsPageContent() {
           resources, and the composer belongs on the floor directly above the
           app's bottom tab bar. These negative margins reclaim that padding
           below md (leaving 0.5rem above the header) and nothing above it. */}
-      <div
-        className="flex flex-col flex-1 overflow-hidden -mx-4 -mb-4 -mt-4 md:mx-0 md:mb-0 md:mt-0"
-        style={{ background: C.bgDeep }}
-      >
+      {/* Kein eigener Seiten-Grund mehr (Operator-Befund 18.08.2026): ein
+          deckendes bgDeep hier malte den App-Hintergrund zu — inklusive des
+          AmbientBackground-Verlaufs, der jede andere Seite oben leicht aufhellt.
+          Sichtbar wurde das als harte, komplett schwarze Flaeche rund um die
+          Inseln, die nicht zum Rest der App passte. Ohne die Uebermalung liegen
+          die Inseln (bg-surface) auf genau demselben Grund wie ueberall sonst;
+          der Tonschritt Insel-zu-Grund bleibt unveraendert erhalten. */}
+      <div className="flex flex-col flex-1 overflow-hidden -mx-4 -mb-4 -mt-4 md:mx-0 md:mb-0 md:mt-0">
         {isError && (
           <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
