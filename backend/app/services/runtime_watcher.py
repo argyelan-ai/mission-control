@@ -67,7 +67,7 @@ from app.services.runtime_grace import (
     clear_switching,
     get_switching,
 )
-from app.services.runtime_manager import DOCKER_ENGINE_TYPES
+from app.services.runtime_manager import DOCKER_ENGINE_TYPES, SSH_PROCESS_TYPE
 from app.services.runtime_model_resolver import (
     invalidate_cached_model,
     session_scope,
@@ -339,7 +339,27 @@ class RuntimeWatcher:
             served_context_len=served_ctx,
             consecutive_failures=0,
         )
-        if served != (runtime.model_identifier or ""):
+        model_would_change = served != (runtime.model_identifier or "")
+        ctx_would_change = served_ctx is not None and self._context_would_change(
+            runtime, served_ctx
+        )
+        if model_would_change or ctx_would_change:
+            # Probe-Guard (Paket 2, live-belegt 15.08.26): mehrere Zeilen können
+            # sich einen Endpoint teilen (Spark-Konvention: alle exklusiven
+            # Motoren auf :8000). Die Antwort von /v1/models sagt nur, was der
+            # PORT serviert — nicht, DASS es dieser Eintrag ist. Eine Zeile mit
+            # eigenem Anker (Container/Prozess) bekommt ihre Identität nur
+            # geschrieben, wenn der Anker wirklich läuft; sonst gehört die
+            # Antwort dem fremden Motor, der den Port gerade hält (so bekamen
+            # ds4 und omp-qwen das Qwen-Modell samt 1M-Fenster verpasst).
+            if not await self._served_answer_is_own(session, runtime):
+                logger.info(
+                    "runtime %s: drift ignored — own anchor not running, the "
+                    "shared-endpoint answer (%r) belongs to another engine",
+                    runtime.slug, served,
+                )
+                return
+        if model_would_change:
             await self._handle_drift(session, redis, runtime, served)
         # Context drift is checked independently of model drift: an engine can
         # be restarted with a different --max-model-len while serving the same
@@ -348,6 +368,78 @@ class RuntimeWatcher:
         # refreshed the row above, so the comparison here sees current values.
         if served_ctx is not None:
             await self._handle_context_drift(session, redis, runtime, served_ctx)
+
+    @staticmethod
+    def _context_would_change(runtime: Runtime, served_ctx: int) -> bool:
+        """Mirror of ``_handle_context_drift``'s no-op guard, evaluated BEFORE
+        the ownership check so a row that matches the served window anyway
+        never pays for an SSH round trip."""
+        old_max = runtime.max_context_len
+        old_preferred = runtime.preferred_context_len
+        return not (
+            old_max == served_ctx
+            and (old_preferred is None or old_preferred <= served_ctx)
+        )
+
+    async def _served_answer_is_own(
+        self, session: AsyncSession, runtime: Runtime
+    ) -> bool:
+        """Does the /v1/models answer actually come from THIS row's engine?
+
+        Anchor rules:
+        - docker engines → ``container_name`` must be ``running``,
+        - ``ssh_process`` → ``process_name`` (fallback ``container_name``)
+          must be alive per ``pgrep -x``,
+        - rows WITHOUT an anchor (omp & friends — deliberately "switchbar"
+          pointers at whatever the box serves) keep following the engine:
+          for them drift IS the feature, not the bug.
+
+        Unknown state (host unresolvable, non-SSH host, SSH failing — e.g.
+        the box mid-stall like 15.08.) counts as NOT own: rewriting a row's
+        identity on evidence we could not verify is exactly the poisoning
+        this guard exists to stop. The next healthy tick re-evaluates.
+        """
+        from shlex import quote as shlex_quote
+
+        container = (runtime.container_name or "").strip()
+        process = (runtime.process_name or "").strip()
+        if runtime.runtime_type in DOCKER_ENGINE_TYPES:
+            anchor, mode = container, "docker"
+        elif runtime.runtime_type == SSH_PROCESS_TYPE:
+            anchor, mode = (process or container), ("process" if process else "docker")
+        else:
+            return True
+        if not anchor:
+            return True
+
+        try:
+            host = await resolve_host_for_runtime(session, runtime)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("probe-guard: host resolution failed for %s: %s",
+                         runtime.slug, exc)
+            return False
+        if host is None or host.kind != "ssh":
+            return False
+
+        from app.services.runtime_manager import _ssh_run  # noqa: SLF001
+
+        try:
+            if mode == "docker":
+                out, _, ec = await _ssh_run(
+                    f'docker inspect --format "{{{{.State.Status}}}}" '
+                    f"{shlex_quote(anchor)} 2>/dev/null",
+                    host=host, timeout=20,
+                )
+                return ec == 0 and out.strip() == "running"
+            _, _, ec = await _ssh_run(
+                f"pgrep -x {shlex_quote(anchor)} > /dev/null 2>&1",
+                host=host, timeout=20,
+            )
+            return ec == 0
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("probe-guard: anchor check failed for %s (%s): %s",
+                         runtime.slug, anchor, exc)
+            return False
 
     async def _handle_drift(
         self, session: AsyncSession, redis, runtime: Runtime, served: str
@@ -449,11 +541,17 @@ class RuntimeWatcher:
 
         from app.services.runtime_manager import _ssh_run  # noqa: SLF001
 
-        stdout, _, exit_code = await _ssh_run(
-            f'docker inspect --format "{{{{.RestartCount}}}} {{{{.State.StartedAt}}}}" {container}',
-            host=host,
-            timeout=20,
-        )
+        try:
+            stdout, _, exit_code = await _ssh_run(
+                f'docker inspect --format "{{{{.RestartCount}}}} {{{{.State.StartedAt}}}}" {container}',
+                host=host,
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001 — a stalling box (SSH reset/
+            # banner timeout, live 15.08.26) is "cannot tell", not a crash loop.
+            logger.debug("crash-loop: inspect unreachable for %s: %s",
+                         runtime.slug, exc)
+            return False
         if exit_code != 0:
             # Container gone — that is the auto-recovery case, not this one.
             await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
@@ -482,11 +580,16 @@ class RuntimeWatcher:
             f"{delta} Neustarts im Startfenster"
         )
 
-        await _ssh_run(f"docker update --restart=no {container}", host=host, timeout=20)
-        _, stop_err, stop_code = await _ssh_run(
-            f"docker stop {container}", host=host, timeout=60
-        )
-        stopped = stop_code == 0
+        try:
+            await _ssh_run(f"docker update --restart=no {container}", host=host, timeout=20)
+            _, stop_err, stop_code = await _ssh_run(
+                f"docker stop {container}", host=host, timeout=60
+            )
+            stopped = stop_code == 0
+        except Exception as exc:  # noqa: BLE001 — the loop is confirmed either
+            # way; report it with stopped=False instead of losing the event.
+            logger.warning("crash-loop: stop failed for %s: %s", runtime.slug, exc)
+            stop_err, stopped = str(exc), False
 
         logger.error(
             "runtime %s: crash loop detected (restarts %s→%s, pattern=%r) — "
@@ -809,10 +912,14 @@ class RuntimeWatcher:
         Same host scoping as ``runtime_manager._ensure_exclusive_host``: NULL
         ``host_id`` means the settings-fallback box, so two NULLs are the
         same box.
-        """
-        if not runtime.exclusive_memory:
-            return None
 
+        Deliberately NOT gated on ``runtime.exclusive_memory`` (the 15.08.26
+        incident): a parked, non-exclusive row was auto-recovered while the
+        exclusive vLLM engine held the same box — two engines loading at
+        once, box frozen for 10 minutes. An active exclusive resident claims
+        the WHOLE box; what kind of row wants to be revived next to it makes
+        no difference.
+        """
         statement = select(Runtime).where(
             Runtime.enabled == True,  # noqa: E712
             Runtime.exclusive_memory == True,  # noqa: E712

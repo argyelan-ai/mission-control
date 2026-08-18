@@ -241,16 +241,15 @@ async def _container_runs_vllm_server(
 
     Returns ``(is_vllm_server, endpoint)``. Endpoint is empty when the
     process is missing or the port can't be parsed.
+
+    Raises when the SSH transport itself fails (Paket 2): "I could not look"
+    must stay distinguishable from "I looked and there is no process" — the
+    launch verification treats the former as *unknown*, never as a confirmed
+    failure. Callers that only need a best-effort answer wrap the call.
     """
-    try:
-        stdout, _, exit_code = await _ssh_run(
-            f"docker top {container_name} -o cmd 2>/dev/null", host=host
-        )
-    except Exception as e:
-        logger.warning(
-            "docker top %s fehlgeschlagen: %s", container_name, e
-        )
-        return False, ""
+    stdout, _, exit_code = await _ssh_run(
+        f"docker top {container_name} -o cmd 2>/dev/null", host=host
+    )
     if exit_code != 0:
         return False, ""
     for line in stdout.splitlines():
@@ -297,7 +296,12 @@ async def list_vllm_containers(host: ResolvedHost | None = None) -> list[dict]:
         endpoint = _derive_vllm_endpoint(data.get("Ports") or "", host=host)
         if not endpoint:
             # Host-network or no port binding — probe processes inside.
-            is_vllm, endpoint = await _container_runs_vllm_server(name, host=host)
+            try:
+                is_vllm, endpoint = await _container_runs_vllm_server(name, host=host)
+            except Exception as exc:  # noqa: BLE001 — best-effort discovery:
+                # an unreadable container is simply not listed this round.
+                logger.warning("docker top %s fehlgeschlagen: %s", name, exc)
+                is_vllm, endpoint = False, ""
             if not is_vllm:
                 logger.info(
                     "Discovery skipped non-vllm container %s (image=%s, no vllm serve process)",
@@ -376,9 +380,30 @@ async def _ssh_run(
         )
 
 
+def join_probe_url(endpoint: str, healthcheck_path: str) -> str:
+    """Joins runtime endpoint + healthcheck path without duplicating "/v1".
+
+    Registry endpoints are OpenAI-compatible base URLs and are conventionally
+    stored *with* the version segment (".../v1"), while the default healthcheck
+    path is "/v1/models". Concatenating them yields ".../v1/v1/models" — a 404
+    that makes a perfectly healthy runtime report as stopped. Observed live on
+    the Spark runtime, whose engine logged a steady stream of
+    `GET /v1/v1/models 404` while serving fine.
+
+    Mirrors the normalization in agent_runtime_switch.probe_runtime_model.
+    """
+    base = endpoint.rstrip("/")
+    path = healthcheck_path or "/v1/models"
+    if not path.startswith("/"):
+        path = "/" + path
+    if base.endswith("/v1") and (path == "/v1" or path.startswith("/v1/")):
+        path = path[len("/v1"):] or "/models"
+    return base + path
+
+
 async def _probe_http(endpoint: str, healthcheck_path: str) -> bool:
     """Checks whether the runtime's HTTP endpoint responds."""
-    url = endpoint.rstrip("/") + healthcheck_path
+    url = join_probe_url(endpoint, healthcheck_path)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url)
@@ -515,7 +540,7 @@ async def _labelled_containers(
     return sorted({x for x in out.splitlines() if x.strip()})
 
 
-def _eviction_discovery_script(slug: str | None) -> str:
+def _eviction_discovery_script(slug: str | None, container_name: str | None = None) -> str:
     """One remote script reporting, in marked sections: how many containers
     are running on the box in total, and the ids each matcher found — label,
     solo-name, manual-name, compose-project. One SSH round trip for all four,
@@ -535,22 +560,29 @@ def _eviction_discovery_script(slug: str | None) -> str:
         else "true"
     )
     project_fmt = '{{.ID}}|{{.Label "' + _COMPOSE_PROJECT_LABEL + '"}}'
+    # Task #29 (2× live gebissen): a recipe container without the
+    # ``mc.runtime.slug`` label patch is invisible to the label matcher, but
+    # the runtime ROW knows its exact name — list id|name pairs and match the
+    # exact name client-side (`docker ps --filter name=` is substring-ish and
+    # would over-match e.g. `my-engine-2` for `my-engine`).
     script = (
         "echo __TOTAL__; docker ps -q | wc -l; "
         f"echo __LABEL__; {label_cmd}; "
         f"echo __SOLO__; docker ps -q --filter {shlex_quote(_SOLO_NAME_FILTER)}; "
         f"echo __MANUAL__; docker ps -q --filter {shlex_quote(_MANUAL_NAME_FILTER)}; "
         f"echo __PROJECT__; docker ps --filter label={_COMPOSE_PROJECT_LABEL} "
-        f"--format {shlex_quote(project_fmt)}"
+        f"--format {shlex_quote(project_fmt)}; "
+        "echo __NAME__; docker ps --format '{{.ID}}|{{.Names}}'"
     )
     return f"bash -o pipefail -c {shlex_quote(script)}"
 
 
-def _parse_eviction_discovery(out: str) -> dict:
+def _parse_eviction_discovery(out: str, container_name: str | None = None) -> dict:
     """Parses ``_eviction_discovery_script`` output into per-matcher id lists
     plus the box-wide total — the raw material for both the stop decision and
     the P3 diagnostics logging."""
-    markers = ("__TOTAL__", "__LABEL__", "__SOLO__", "__MANUAL__", "__PROJECT__")
+    markers = ("__TOTAL__", "__LABEL__", "__SOLO__", "__MANUAL__", "__PROJECT__",
+               "__NAME__")
     sections: dict[str, list[str]] = {m: [] for m in markers}
     current: str | None = None
     for raw_line in out.splitlines():
@@ -577,10 +609,21 @@ def _parse_eviction_discovery(out: str) -> dict:
         if cid and runtime_ownership.COMPOSE_PROJECT_NAME_PATTERN.search(project):
             project_ids.append(cid)
 
+    name_ids: list[str] = []
+    wanted = (container_name or "").strip()
+    if wanted:
+        for entry in sections["__NAME__"]:
+            cid, _, cname = entry.partition("|")
+            cid, cname = cid.strip(), cname.strip()
+            # Exact match only — `my-engine` must not sweep `my-engine-2`.
+            if cid and cname == wanted:
+                name_ids.append(cid)
+
     label_ids = sorted({x for x in sections["__LABEL__"] if x})
     solo_ids = sorted({x for x in sections["__SOLO__"] if x})
     manual_ids = sorted({x for x in sections["__MANUAL__"] if x})
     project_ids = sorted(set(project_ids))
+    name_ids = sorted(set(name_ids))
 
     return {
         "total": total,
@@ -588,7 +631,11 @@ def _parse_eviction_discovery(out: str) -> dict:
         "solo": solo_ids,
         "manual": manual_ids,
         "project": project_ids,
-        "all": sorted(set(label_ids) | set(solo_ids) | set(manual_ids) | set(project_ids)),
+        "name": name_ids,
+        "all": sorted(
+            set(label_ids) | set(solo_ids) | set(manual_ids)
+            | set(project_ids) | set(name_ids)
+        ),
     }
 
 
@@ -630,6 +677,7 @@ async def _emit_ownership_blocked_event(slug: str | None, blocked: list[dict]) -
 async def evict_spark_runtime_containers(
     slug: str | None,
     *,
+    container_name: str | None = None,
     host: ResolvedHost | None = None,
     timeout: float = 30.0,
 ) -> dict:
@@ -678,7 +726,7 @@ async def evict_spark_runtime_containers(
 
     try:
         discovery_out, discovery_err, discovery_ec = await _ssh_run(
-            _eviction_discovery_script(safe), host=host, timeout=20
+            _eviction_discovery_script(safe, container_name), host=host, timeout=20
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("evict: discovery raised for %s: %s", slug, exc)
@@ -691,10 +739,12 @@ async def evict_spark_runtime_containers(
             "stopped": [],
         }
 
-    found = _parse_eviction_discovery(discovery_out)
+    found = _parse_eviction_discovery(discovery_out, container_name)
     logger.info(
-        "evict: discovery for %s — total_on_box=%s label=%s solo=%s manual=%s compose_project=%s",
-        slug, found["total"], found["label"], found["solo"], found["manual"], found["project"],
+        "evict: discovery for %s — total_on_box=%s label=%s solo=%s manual=%s "
+        "compose_project=%s name=%s",
+        slug, found["total"], found["label"], found["solo"], found["manual"],
+        found["project"], found["name"],
     )
 
     if not found["all"]:
@@ -845,8 +895,8 @@ async def verify_spark_vllm_process_started(
     slug: str,
     *,
     host: ResolvedHost | None = None,
-    timeout: float = 25.0,
-) -> bool:
+    timeout: float = 90.0,
+) -> str:
     """Poll for an actual ``vllm serve`` process inside the labelled container.
 
     ``verify_spark_container_started`` only proves the container exists —
@@ -860,11 +910,24 @@ async def verify_spark_vllm_process_started(
     reuses the same ``docker top`` process-scan ``_container_runs_vllm_server``
     already does for discovery, but polls briefly (not the full 2-5 min model
     warmup) right after launch so a dead-on-arrival process is caught early.
+
+    Returns a tri-state instead of a bool (Paket 2, live-belegt 15.08.26 —
+    beide Launches meldeten "kein vllm-Prozess", während die Box unter Last
+    stand und SSH nur stockte):
+
+    - ``"serving"`` — the process was seen,
+    - ``"absent"``  — at least one CLEAN read happened (SSH answered, docker
+      answered) and the process never showed inside ``timeout``: the
+      confirmed ADR-059 failure,
+    - ``"unknown"`` — every read inside the window errored (SSH reset, box
+      stalling): *not verifiable* is not the same claim as *dead*. Callers
+      report the start optimistically and leave the verdict to the watcher.
     """
     import asyncio
 
     safe = _sanitize_slug(slug)
     deadline = asyncio.get_running_loop().time() + timeout
+    saw_clean_read = False
     while True:
         try:
             out, _, ec = await _ssh_run(
@@ -876,16 +939,21 @@ async def verify_spark_vllm_process_started(
             logger.warning("verify-process: container lookup raised for %s: %s", slug, exc)
             out, ec = "", -1
         container_id = next((x for x in out.splitlines() if x.strip()), None)
-        if ec == 0 and container_id:
-            try:
-                is_vllm, _ = await _container_runs_vllm_server(container_id, host=host)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("verify-process: docker top raised for %s: %s", slug, exc)
-                is_vllm = False
-            if is_vllm:
-                return True
+        if ec == 0:
+            if container_id:
+                try:
+                    is_vllm, _ = await _container_runs_vllm_server(container_id, host=host)
+                    saw_clean_read = True
+                    if is_vllm:
+                        return "serving"
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("verify-process: docker top raised for %s: %s", slug, exc)
+            else:
+                # The box answered and there is (still/yet) no labelled
+                # container — a clean observation, it just isn't a process hit.
+                saw_clean_read = True
         if asyncio.get_running_loop().time() >= deadline:
-            return False
+            return "absent" if saw_clean_read else "unknown"
         if _verify_poll_interval:
             await asyncio.sleep(_verify_poll_interval)
 
@@ -905,14 +973,14 @@ async def _container_runs_llamacpp_server(
     ps output", reproduced 2026-08-05 on macOS/ARM64) while the bare form
     prints a CMD column on every platform. Matching the substring on any
     output line is safe — the header row is ``UID PID PPID …  CMD``.
+
+    Raises on SSH transport failure (Paket 2) — same contract as
+    ``_container_runs_vllm_server``: "could not look" must not read as
+    "looked, nothing there".
     """
-    try:
-        stdout, _, exit_code = await _ssh_run(
-            f"docker top {shlex_quote(container_name)} 2>/dev/null", host=host
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("docker top %s fehlgeschlagen: %s", container_name, e)
-        return False
+    stdout, _, exit_code = await _ssh_run(
+        f"docker top {shlex_quote(container_name)} 2>/dev/null", host=host
+    )
     if exit_code != 0:
         return False
     return any("llama-server" in line for line in stdout.splitlines())
@@ -922,8 +990,8 @@ async def verify_llamacpp_process_started(
     slug: str,
     *,
     host: ResolvedHost | None = None,
-    timeout: float = 25.0,
-) -> bool:
+    timeout: float = 90.0,
+) -> str:
     """Poll for a live ``llama-server`` process inside the labelled container.
 
     The llamacpp counterpart to ``verify_spark_vllm_process_started`` (which
@@ -940,11 +1008,16 @@ async def verify_llamacpp_process_started(
     AND load, and false exactly in the case worth catching: the container is up
     but the server died (bad flags, missing GGUF, OOM) — the same 0.4 s
     exit-on-bad-quant we reproduced locally.
+
+    Same tri-state contract as ``verify_spark_vllm_process_started`` (Paket
+    2): ``"serving"`` / ``"absent"`` (confirmed by clean reads) /
+    ``"unknown"`` (every read inside the window errored).
     """
     import asyncio
 
     safe = _sanitize_slug(slug)
     deadline = asyncio.get_running_loop().time() + timeout
+    saw_clean_read = False
     while True:
         try:
             out, _, ec = await _ssh_run(
@@ -956,11 +1029,20 @@ async def verify_llamacpp_process_started(
             logger.warning("verify-llamacpp: container lookup raised for %s: %s", slug, exc)
             out, ec = "", -1
         container_id = next((x for x in out.splitlines() if x.strip()), None)
-        if ec == 0 and container_id:
-            if await _container_runs_llamacpp_server(container_id, host=host):
-                return True
+        if ec == 0:
+            if container_id:
+                try:
+                    if await _container_runs_llamacpp_server(container_id, host=host):
+                        return "serving"
+                    saw_clean_read = True
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "verify-llamacpp: docker top raised for %s: %s", slug, exc
+                    )
+            else:
+                saw_clean_read = True
         if asyncio.get_running_loop().time() >= deadline:
-            return False
+            return "absent" if saw_clean_read else "unknown"
         if _verify_poll_interval:
             await asyncio.sleep(_verify_poll_interval)
 
@@ -1384,13 +1466,9 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
         )
         if not await _porsche_reachable(control_url):
             return {"state": "stopped", "http_reachable": False, "container_status": "asleep"}
-        # Defensive: avoid a double "/v1" — endpoint ".../v1" + healthcheck
-        # "/v1/models" would probe ".../v1/v1/models" (404). Mirror the
-        # normalization in agent_runtime_switch.probe_runtime_model.
-        hp = healthcheck_path or "/v1/models"
-        if endpoint.rstrip("/").endswith("/v1") and hp.startswith("/v1"):
-            hp = hp[len("/v1"):] or "/models"
-        reachable = await _probe_http(endpoint, hp)
+        # The double-"/v1" guard now lives in join_probe_url(), applied by
+        # _probe_http() for every runtime type — not just this branch.
+        reachable = await _probe_http(endpoint, healthcheck_path)
         return {
             "state": "ready" if reachable else "stopped",
             "http_reachable": reachable,
@@ -1502,7 +1580,11 @@ async def _ensure_exclusive_host(
 
         logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
         if other.runtime_type in DOCKER_ENGINE_TYPES:
-            result = await evict_spark_runtime_containers(other.slug, host=other_host)
+            result = await evict_spark_runtime_containers(
+                other.slug,
+                container_name=(other.container_name or None),
+                host=other_host,
+            )
         elif other.runtime_type == SSH_PROCESS_TYPE:
             result = await stop_ssh_process(other_dict, host=other_host)
         else:
@@ -1781,7 +1863,7 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                             "vllm-serve",
                             "falsche tp/Flags oder Crash",
                         )
-                    if not serving:
+                    if serving == "absent":
                         logger.error(
                             "Runtime %s: container appeared but no %s process "
                             "found inside it (%s). Log: %s",
@@ -1793,6 +1875,26 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                                 f"{runtime['display_name']}: Container erschien, aber "
                                 f"kein {process_label}-Prozess gestartet (wahrscheinlich "
                                 f"{likely_cause}). Logs: {log_path}"
+                            ),
+                        }
+                    if serving == "unknown":
+                        # Paket 2 — "nicht feststellbar" ist kein Fehlschlag:
+                        # beide Live-Launches am 15.08. wurden fälschlich als
+                        # tot gemeldet, weil die Box unter Last stand und SSH
+                        # nur stockte. Optimistisch melden; der Watcher (Grace,
+                        # Crash-Loop, Unreachable) übernimmt das Urteil.
+                        logger.warning(
+                            "Runtime %s: %s-Prozess nicht verifizierbar "
+                            "(SSH/Box unter Last) — Start optimistisch gemeldet, "
+                            "Watcher übernimmt. Log: %s",
+                            runtime["id"], process_label, log_path,
+                        )
+                        return {
+                            "ok": True,
+                            "message": (
+                                f"{runtime['display_name']} wird gestartet; "
+                                f"Verifikation gerade nicht möglich (Box unter "
+                                f"Last) — der Watcher prüft weiter. Logs: {log_path}"
                             ),
                         }
                 logger.info(
