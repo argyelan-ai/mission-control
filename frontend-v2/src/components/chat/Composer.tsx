@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Square, ArrowUp, Check, ChevronDown } from "lucide-react";
+import { Brain, Square, ArrowUp, ChevronDown } from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -221,6 +221,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * der Regler auf der ersten — angezeigt wird trotzdem, was wirklich gilt. */
   const currentEffortIndex = currentEffort ? effortLevels.indexOf(currentEffort) : -1;
   const sliderIndex = draftIndex ?? (currentEffortIndex >= 0 ? currentEffortIndex : 0);
+
+  /* Fuellstand der Saeule im Brain-Knopf: Anteil der aktuellen Stufe an der
+   * Stufenleiter des Harness. +1, damit schon "low" sichtbar gefuellt ist —
+   * eine leere Saeule ist fuer "unbekannt/auto" reserviert. */
+  const effortFillPct =
+    currentEffortIndex >= 0 && effortLevels.length > 0
+      ? ((currentEffortIndex + 1) / effortLevels.length) * 100
+      : 0;
 
   const commitSlider = () => {
     if (draftIndex == null) return;
@@ -578,121 +586,6 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             )}
           </div>
 
-          {(currentEffort || (effortSupported && effortLevels.length > 0)) &&
-            // A picker needs levels to offer. No capabilities, `canSwitchEffort:
-            // false`, or an empty list all mean the same thing here: show the
-            // level, don't pretend it can be changed. Umgekehrt gilt: kann der
-            // Agent umschalten, gehoert der Chip hin — auch bevor die Session
-            // ihr erstes usage-Ereignis geschrieben hat.
-            (effortSupported && effortLevels.length > 0 ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setEffortOpen((v) => !v)}
-                  aria-haspopup="listbox"
-                  aria-expanded={effortOpen}
-                  aria-label="Effort-Stufe"
-                  data-testid="effort-chip"
-                  data-pending={pendingEffort != null}
-                  disabled={pendingEffort != null}
-                  className="inline-flex items-center gap-1 font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors disabled:cursor-wait"
-                  style={{
-                    backgroundColor: effortOpen ? C.bgHover : "transparent",
-                    color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
-                    border: `1px solid ${C.border}`,
-                    opacity: pendingEffort != null ? 0.6 : 1,
-                  }}
-                >
-                  {currentEffort ?? "auto"}
-                  <ChevronDown
-                    size={11}
-                    className="transition-transform duration-150"
-                    style={{ transform: effortOpen ? "rotate(180deg)" : undefined }}
-                  />
-                </button>
-                {effortOpen && (
-                  /* Schieberegler statt Liste (Operator-Wunsch 18.08.2026, nach
-                     dem Vorbild der Claude-Desktop-App). Die Stufen sind eine
-                     ECHTE Reihenfolge — von sparsam nach gruendlich — und ein
-                     Regler zeigt diese Ordnung, wo eine Liste sie nur behauptet.
-                     Die Stufen kommen weiterhin ausschliesslich aus den
-                     Capabilities des Harness, nichts davon steht hier fest. */
-                  <div
-                    data-testid="effort-menu"
-                    className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg z-20 p-3"
-                    style={{
-                      backgroundColor: C.bgElevated,
-                      border: `1px solid ${C.border}`,
-                      boxShadow: "var(--shadow-elevated)",
-                    }}
-                  >
-                    <input
-                      type="range"
-                      min={0}
-                      max={effortLevels.length - 1}
-                      step={1}
-                      value={sliderIndex}
-                      list="effort-ticks"
-                      data-testid="effort-slider"
-                      aria-label="Effort-Stufe"
-                      aria-valuetext={effortLevels[sliderIndex]}
-                      disabled={pendingEffort != null}
-                      autoFocus
-                      /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
-                         Loslassen — sonst schickt ein einziger Zug ueber den
-                         Regler fuenf Umschalt-Befehle in die TUI. */
-                      onChange={(e) => setDraftIndex(Number(e.target.value))}
-                      onPointerUp={commitSlider}
-                      onKeyUp={commitSlider}
-                      onBlur={commitSlider}
-                      className="w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-wait"
-                    />
-                    <div className="flex justify-between mt-1 font-mono text-[10px]" style={{ color: C.textMuted }}>
-                      <span>{effortLevels[0]}</span>
-                      <span>{effortLevels[effortLevels.length - 1]}</span>
-                    </div>
-                    <div className="mt-2 flex items-baseline gap-2">
-                      <span
-                        data-testid="effort-slider-value"
-                        className="font-mono text-xs"
-                        style={{ color: C.accent }}
-                      >
-                        {effortLevels[sliderIndex]}
-                      </span>
-                      {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
-                          schreiben den persistierten Standard des Agenten um,
-                          max/ultracode gelten nur fuer die laufende Session
-                          (CLI-Design, empirisch belegt in agent_chat_input.py).
-                          Genau diese Frage — "ueberlebt das meine Session?" —
-                          muss am gewaehlten Wert stehen, nicht im Kleingedruckten. */}
-                      <span className="text-[10px]" style={{ color: C.textMuted }}>
-                        {isSessionOnlyEffort(effortLevels[sliderIndex])
-                          ? "nur diese Session"
-                          : "wird Standard"}
-                      </span>
-                      {pendingEffort != null && (
-                        /* "…" solange der Wechsel unterwegs ist. Ein Haken
-                           erscheint nie vorab — bestaetigt wird erst, was das
-                           Transkript meldet. */
-                        <span className="ml-auto text-[10px]" style={{ color: C.textMuted }}>
-                          wird gesetzt …
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <span
-                data-testid="effort-chip-static"
-                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
-                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
-                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-              >
-                {currentEffort}
-              </span>
-            ))}
-
           {usage && pct != null && (
             // The ring stays the compact indicator and the tooltip stays the
             // quick glance; the click opens the breakdown — "how full" and
@@ -794,6 +687,136 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
+          {(currentEffort || (effortSupported && effortLevels.length > 0)) &&
+            // A picker needs levels to offer. No capabilities, `canSwitchEffort:
+            // false`, or an empty list all mean the same thing here: show the
+            // level, don't pretend it can be changed. Umgekehrt gilt: kann der
+            // Agent umschalten, gehoert der Chip hin — auch bevor die Session
+            // ihr erstes usage-Ereignis geschrieben hat.
+            (effortSupported && effortLevels.length > 0 ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setEffortOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={effortOpen}
+                  aria-label={`Effort-Stufe: ${currentEffort ?? "auto"}`}
+                  data-testid="effort-chip"
+                  data-level={currentEffort ?? "auto"}
+                  data-pending={pendingEffort != null}
+                  disabled={pendingEffort != null}
+                  className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-pointer transition-colors disabled:cursor-wait"
+                  style={{
+                    backgroundColor: effortOpen ? C.bgHover : "transparent",
+                    color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
+                    border: `1px solid ${C.border}`,
+                    opacity: pendingEffort != null ? 0.6 : 1,
+                  }}
+                >
+                  <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
+                  {/* Fuellstands-Saeule (Vorbild Claude-Desktop-App): die Hoehe
+                      des gruenen Segments IST die Stufe — von unten gefuellt,
+                      low = kleiner Rest, ultracode = voll. Ohne bekannte Stufe
+                      ("auto") bleibt die Saeule leer: nichts behaupten. Der
+                      exakte Wert steht beim Oeffnen am Regler und fuer
+                      Screenreader im aria-label. */}
+                  <span
+                    aria-hidden="true"
+                    className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
+                    style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+                  >
+                    <span
+                      data-testid="effort-gauge-fill"
+                      className="absolute bottom-0 left-0 right-0 rounded-full transition-[height] duration-200"
+                      style={{
+                        height: `${effortFillPct}%`,
+                        backgroundColor: STATUS.online,
+                      }}
+                    />
+                  </span>
+                </button>
+                {effortOpen && (
+                  /* Schieberegler statt Liste (Operator-Wunsch 18.08.2026, nach
+                     dem Vorbild der Claude-Desktop-App). Die Stufen sind eine
+                     ECHTE Reihenfolge — von sparsam nach gruendlich — und ein
+                     Regler zeigt diese Ordnung, wo eine Liste sie nur behauptet.
+                     Die Stufen kommen weiterhin ausschliesslich aus den
+                     Capabilities des Harness, nichts davon steht hier fest. */
+                  <div
+                    data-testid="effort-menu"
+                    className="absolute bottom-full right-0 mb-1.5 w-64 rounded-lg z-20 p-3"
+                    style={{
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                    }}
+                  >
+                    <input
+                      type="range"
+                      min={0}
+                      max={effortLevels.length - 1}
+                      step={1}
+                      value={sliderIndex}
+                      list="effort-ticks"
+                      data-testid="effort-slider"
+                      aria-label="Effort-Stufe"
+                      aria-valuetext={effortLevels[sliderIndex]}
+                      disabled={pendingEffort != null}
+                      autoFocus
+                      /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
+                         Loslassen — sonst schickt ein einziger Zug ueber den
+                         Regler fuenf Umschalt-Befehle in die TUI. */
+                      onChange={(e) => setDraftIndex(Number(e.target.value))}
+                      onPointerUp={commitSlider}
+                      onKeyUp={commitSlider}
+                      onBlur={commitSlider}
+                      className="w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-wait"
+                    />
+                    <div className="flex justify-between mt-1 font-mono text-[10px]" style={{ color: C.textMuted }}>
+                      <span>{effortLevels[0]}</span>
+                      <span>{effortLevels[effortLevels.length - 1]}</span>
+                    </div>
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span
+                        data-testid="effort-slider-value"
+                        className="font-mono text-xs"
+                        style={{ color: C.accent }}
+                      >
+                        {effortLevels[sliderIndex]}
+                      </span>
+                      {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
+                          schreiben den persistierten Standard des Agenten um,
+                          max/ultracode gelten nur fuer die laufende Session
+                          (CLI-Design, empirisch belegt in agent_chat_input.py).
+                          Genau diese Frage — "ueberlebt das meine Session?" —
+                          muss am gewaehlten Wert stehen, nicht im Kleingedruckten. */}
+                      <span className="text-[10px]" style={{ color: C.textMuted }}>
+                        {isSessionOnlyEffort(effortLevels[sliderIndex])
+                          ? "nur diese Session"
+                          : "wird Standard"}
+                      </span>
+                      {pendingEffort != null && (
+                        /* "…" solange der Wechsel unterwegs ist. Ein Haken
+                           erscheint nie vorab — bestaetigt wird erst, was das
+                           Transkript meldet. */
+                        <span className="ml-auto text-[10px]" style={{ color: C.textMuted }}>
+                          wird gesetzt …
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <span
+                data-testid="effort-chip-static"
+                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                {currentEffort}
+              </span>
+            ))}
             {sessionLive && (
               !showStop ? (
                 <button

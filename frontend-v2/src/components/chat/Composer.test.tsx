@@ -594,6 +594,25 @@ describe("Composer", () => {
       fireEvent.pointerUp(slider());
     };
 
+    it("fills the gauge proportionally to the level — the bar IS the display", () => {
+      // Brain-Knopf nach Marks Vorbild (Claude-Desktop-App): keine Text-Stufe
+      // mehr, die Hoehe des gruenen Segments traegt die Information.
+      renderWithEffort("high"); // Index 2 von 6 -> (2+1)/6 = 50%
+      expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("50%");
+    });
+
+    it("keeps the gauge empty when the level is unknown — nothing is claimed", () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("0%");
+    });
+
+    it("fills the gauge completely on the top level", () => {
+      renderWithEffort("ultracode"); // Index 5 von 6 -> 100%
+      expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("100%");
+    });
+
     it("offers the picker even before the session wrote its first usage event", () => {
       // Operator-Befund 18.08.2026: Der Chip hing an usage?.effort. Eine frisch
       // gestartete Session hat noch keines — der Effort war damit schlicht nicht
@@ -609,7 +628,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      expect(screen.getByTestId("effort-chip")).toHaveTextContent("high");
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "high");
       expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
     });
 
@@ -624,7 +643,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      expect(screen.getByTestId("effort-chip")).toHaveTextContent("auto");
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "auto");
     });
 
     it("lets the running session override the persisted default", () => {
@@ -640,7 +659,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      expect(screen.getByTestId("effort-chip")).toHaveTextContent("max");
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "max");
     });
 
     it("stays hidden when the agent can neither switch nor report a level", () => {
@@ -793,8 +812,8 @@ describe("Composer", () => {
       pick(CAPS.effortLevels, "high");
 
       const chip = screen.getByTestId("effort-chip");
-      // No fake instant flip: the label is still what the agent last reported.
-      expect(chip).toHaveTextContent("medium");
+      // No fake instant flip: the gauge still shows what the agent last reported.
+      expect(chip).toHaveAttribute("data-level", "medium");
       expect(chip).toHaveAttribute("data-pending", "true");
       expect(chip).toBeDisabled();
 
@@ -885,7 +904,7 @@ describe("Composer", () => {
         "Effort-Wechsel nicht bestätigt — im Terminal prüfen"
       ));
       const chip = screen.getByTestId("effort-chip");
-      expect(chip).toHaveTextContent("medium");
+      expect(chip).toHaveAttribute("data-level", "medium");
       expect(chip).toHaveAttribute("data-pending", "false");
     });
 
@@ -906,10 +925,8 @@ describe("Composer", () => {
       // size is off the documented ramp, so this catches the next off-ramp step
       // too — and leaves no literal off-ramp size in the file to grep for.
       const arbitraryFontSize = /text-\[\d+px\]/;
-      const effortChip = screen.getByTestId("effort-chip").className;
-      expect(effortChip).toContain("text-xs");
-      expect(effortChip).not.toMatch(arbitraryFontSize);
-
+      // Der Effort-Knopf ist seit dem Brain-Umbau Icon+Saeule ohne Text —
+      // die Mono-Stufen-Regel greift nur noch fuer textführende Chips.
       const modelChip = screen.getByRole("button", { name: /claude-sonnet-4-6/ }).className;
       expect(modelChip).toContain("text-xs");
       expect(modelChip).not.toMatch(arbitraryFontSize);
