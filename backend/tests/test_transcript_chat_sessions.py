@@ -378,11 +378,17 @@ def _mk_line(entry: dict) -> str:
 
 
 def test_turn_ended_on_plain_assistant_answer(tmp_path):
+    """Exakt die live gesehene Datei-Gestalt: NACH der Antwort schreibt die
+    CLI noch system-Zeilen (Stop-Hook, Zug-Dauer) — die erste Fassung des
+    Fixes las nur die letzte Zeile und scheiterte genau daran (Messlauf
+    18.08.2026: status blieb die vollen 20s working)."""
     from app.services.transcript_chat import ChatTailerManager
     f = tmp_path / "s.jsonl"
     f.write_text(
         _mk_line({"type": "user", "message": {"content": "mach was"}})
         + _mk_line({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fertig."}]}})
+        + _mk_line({"type": "system", "hookCount": 2, "hookErrors": []})
+        + _mk_line({"type": "system", "durationMs": 2300, "messageCount": 4})
     )
     assert ChatTailerManager._transcript_suggests_turn_ended(f) is True
 
@@ -428,6 +434,7 @@ async def test_state_probe_reports_idle_right_after_final_answer(tmp_path, monke
     f.write_text(
         _mk_line({"type": "user", "message": {"content": "mach was"}})
         + _mk_line({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fertig."}]}})
+        + _mk_line({"type": "system", "durationMs": 2300, "messageCount": 4})
     )
 
     async def _fake_pane(agent):

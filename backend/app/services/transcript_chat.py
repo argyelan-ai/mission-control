@@ -1287,17 +1287,32 @@ class ChatTailerManager:
             lines = [ln for ln in tail.split(b"\n") if ln.strip()]
             if not lines:
                 return False
-            # Bei abgeschnittenem Chunk ist lines[0] ein Zeilenrest — relevant
-            # ist ohnehin nur die letzte vollstaendige Zeile.
-            entry = json.loads(lines[-1].decode("utf-8", errors="replace"))
-            if entry.get("type") != "assistant":
-                return False
-            content = (entry.get("message") or {}).get("content")
-            if not isinstance(content, list):
-                return False
-            return not any(
-                isinstance(b, dict) and b.get("type") == "tool_use" for b in content
-            )
+            # Rueckwaerts bis zur letzten INHALTLICHEN Zeile: nach der Antwort
+            # schreibt Claude Code noch system-Zeilen (Stop-Hook-Protokoll,
+            # Zug-Dauer-Metadaten mit durationMs/messageCount — live gesehen
+            # beim ersten Messlauf dieses Fixes, der genau daran scheiterte).
+            # Nur user/assistant tragen die Zug-Semantik; alles andere wird
+            # uebersprungen. Scan begrenzt — irgendwo in den letzten 50 Zeilen
+            # liegt die Semantik immer, sonst gilt konservativ das
+            # mtime-Verhalten. lines[0] kann ein abgeschnittener Zeilenrest
+            # sein (Chunk-Grenze): unparseabar -> einfach aeltere Zeile, stop.
+            for raw in list(reversed(lines))[:50]:
+                try:
+                    entry = json.loads(raw.decode("utf-8", errors="replace"))
+                except Exception:
+                    return False
+                etype = entry.get("type")
+                if etype not in ("user", "assistant"):
+                    continue
+                if etype != "assistant":
+                    return False
+                content = (entry.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    return False
+                return not any(
+                    isinstance(b, dict) and b.get("type") == "tool_use" for b in content
+                )
+            return False
         except Exception:
             return False
 
