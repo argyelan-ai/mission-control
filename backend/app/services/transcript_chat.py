@@ -369,6 +369,13 @@ def _parse_assistant_entry(
 
     sidechain = bool(d.get("isSidechain", False))
     model = message.get("model")
+    if model == "<synthetic>":
+        # Claude Codes Marker fuer intern erzeugte Nachrichten (z.B.
+        # Fehler-Hinweise) — kein echtes Modell, kein API-Aufruf. Ungefiltert
+        # landete er woertlich als Modell-Label im Composer (live gesehen am
+        # Researcher, 18.08.2026: Chip zeigte "<synthetic>"). None laesst die
+        # Anzeige ehrlich auf den persistierten Standard zurueckfallen.
+        model = None
     events: list[dict[str, Any]] = []
 
     for block in content:
