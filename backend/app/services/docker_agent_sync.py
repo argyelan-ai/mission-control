@@ -423,7 +423,8 @@ async def sync_docker_agent_files(
     # plugin_manager.sync_agent_plugins_to_disk(). That's the single-source-
     # of-truth path (ADR-006): template `cli_agent_settings.json.j2` + DB state
     # -> file. Writes parent settings.json + claude-config mirror +
-    # installed_plugins.json + known_marketplaces.json — all consistent.
+    # installed_plugins.json + known_marketplaces.json + statusline-mc.sh
+    # (claude harness only) — all consistent.
     #
     # Self-check: if soul_md < 1000 characters, the DB row is probably
     # incomplete (freshly seeded, template fail). In that case do NOT
@@ -455,9 +456,11 @@ async def sync_docker_agent_files(
                 agent.soul_md,
                 runtime.model_identifier,
                 agent.cli_plugins,
-                # W2.1 turn-signal hooks only for the claude harness; openclaude
-                # must not receive the unknown `hooks` key (is_anthropic above).
+                # W2.1 turn-signal hooks + the statusLine hook are both
+                # claude-only — openclaude must not receive either unknown
+                # settings.json key (is_anthropic above).
                 turn_signal_hooks=is_anthropic,
+                status_line=is_anthropic,
             )
             if written.get("settings.json"):
                 results["settings.json"] = (

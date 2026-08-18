@@ -98,3 +98,6 @@ docker/mc-playwright/templates/bench/fonts/embedded-fonts.css
 
 # Operator-specific SOUL addendum (private overlay) — never commit here.
 backend/templates/SOUL.operator.md.j2
+
+# Impeccable design-hook cache (config.json bleibt getrackt)
+.impeccable/hook.cache.json

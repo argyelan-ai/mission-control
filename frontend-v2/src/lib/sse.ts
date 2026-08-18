@@ -24,7 +24,7 @@ const NAMED_EVENTS = [
   "job.started", "job.completed",
   "meeting.scheduled", "meeting.started", "meeting.completed", "meeting.failed",
   "meeting.cancelled", "meeting.topic_started", "meeting.agent_thinking", "meeting.message_received",
-  "chat.message", "memory.created", "project.updated", "system.alert",
+  "chat.message", "chat_event", "memory.created", "project.updated", "system.alert",
   "system.rpc_disconnected", "system.rpc_reconnected", "system.slow_response", "system.component_down",
 ] as const;
 

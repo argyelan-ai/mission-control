@@ -473,6 +473,38 @@ class Settings(BaseSettings):
     # comment) — the rest of ~/.hermes/ holds secrets (.env, auth.json).
     hermes_state_db_path: str = "~/.hermes/state.db"
 
+    # Sessions Chat (A5 follow-up) — model name -> context window (tokens),
+    # stamped onto usage events (transcript_chat.resolve_context_window) so
+    # the frontend needs no hardcoded model map. Override/extend via
+    # CONTEXT_WINDOWS as a JSON object in .env, e.g.
+    # CONTEXT_WINDOWS={"claude-opus-5":1000000}. pydantic-settings parses
+    # dict-typed env vars as JSON automatically (no custom parsing needed).
+    context_windows: dict[str, int] = {
+        "claude-opus-5": 1_000_000,
+        "claude-sonnet-5": 1_000_000,
+        "claude-fable-5": 1_000_000,
+        "claude-sonnet-4-6": 200_000,
+        "claude-sonnet-4-5": 200_000,
+        "claude-haiku-4-5": 200_000,
+    }
+
+    # Model-switcher alias -> model id (single config-driven source — the
+    # composer's model dropdown builds itself from this + context_windows
+    # above via agent_chat_input.model_options_capabilities, no hardcoded
+    # map on the frontend). "default" is just another alias here, not a
+    # special case — whichever model id the fleet's default effectively
+    # resolves to. Override/extend via MODEL_ALIASES as a JSON object in
+    # .env, same auto-JSON-decode pattern as CONTEXT_WINDOWS above.
+    # NOTE (harness-catalog follow-up round): this static map is the
+    # fallback path only — the primary source becomes a per-agent CLI
+    # discovery, cached, keyed by cli_version. Demoted, not deleted.
+    model_aliases: dict[str, str] = {
+        "default": "claude-sonnet-5",
+        "opus": "claude-opus-5",
+        "sonnet": "claude-sonnet-5",
+        "haiku": "claude-haiku-4-5",
+    }
+
 
 settings = Settings()
 

@@ -125,6 +125,7 @@ def render_agent_settings(
     cli_plugins: list[str] | None,
     *,
     turn_signal_hooks: bool = True,
+    status_line: bool = True,
 ) -> str:
     """Renders settings.json for a CLI-bridge agent.
 
@@ -135,6 +136,12 @@ def render_agent_settings(
     callers pass False for openclaude agents — its tolerance to an unknown
     top-level `hooks` key is unproven, so we eliminate the key rather than
     rely on it. Default True (claude is the fleet majority).
+
+    status_line: render the `statusLine` command entry (see
+    docker/shared/statusline-mc.sh) that mirrors Claude Code's own live
+    context-window accounting to disk for transcript_chat.read_statusline_state.
+    Same claude-only reasoning as turn_signal_hooks — callers pass False for
+    openclaude agents. Default True.
     """
     available = {p.key for p in list_available_plugins()}
 
@@ -169,6 +176,7 @@ def render_agent_settings(
         enabled_plugins=enabled_plugins,
         extra_marketplaces=needed_marketplaces,
         turn_signal_hooks=turn_signal_hooks,
+        status_line=status_line,
     )
 
 
@@ -193,6 +201,18 @@ def render_agent_installed_plugins(cli_plugins: list[str] | None) -> str:
     return json.dumps({"version": 2, "plugins": filtered}, indent=2)
 
 
+def _statusline_script_source() -> Path:
+    """Path to the shared statusline script this repo ships
+    (docker/shared/statusline-mc.sh). Mirrors the settings.mc_repo_path
+    pattern used elsewhere (cli_versions.py, compose_renderer.py) — docker/
+    is live-mounted into the backend container at the same absolute host
+    path (see docker-compose.yml), so this resolves correctly both in dev
+    and inside the container."""
+    from app.config import settings as _settings
+
+    return Path(_settings.mc_repo_path) / "docker" / "shared" / "statusline-mc.sh"
+
+
 def sync_agent_plugins_to_disk(
     agent_slug: str,
     system_prompt: str,
@@ -200,11 +220,17 @@ def sync_agent_plugins_to_disk(
     cli_plugins: list[str] | None,
     *,
     turn_signal_hooks: bool = True,
+    status_line: bool = True,
 ) -> dict[str, bool]:
     """Writes settings.json + installed_plugins.json for an agent to disk.
 
     turn_signal_hooks: forwarded to render_agent_settings — False for
     openclaude agents so no `hooks` key is emitted (see render_agent_settings).
+
+    status_line: forwarded to render_agent_settings (no `statusLine` key for
+    openclaude agents) and additionally gates whether statusline-mc.sh itself
+    gets copied into claude-config/ below — no point shipping the script to
+    a container whose settings.json never references it.
     """
     agent_dir = _agents_dir() / agent_slug
     written = {}
@@ -221,6 +247,7 @@ def sync_agent_plugins_to_disk(
         content = render_agent_settings(
             agent_slug, system_prompt, model, cli_plugins,
             turn_signal_hooks=turn_signal_hooks,
+            status_line=status_line,
         )
         settings_file.write_text(content)
         if mirror_file.is_symlink():
@@ -231,6 +258,24 @@ def sync_agent_plugins_to_disk(
     except Exception as e:
         logger.error("Fehler beim Schreiben von settings.json fuer %s: %s", agent_slug, e)
         written["settings.json"] = False
+
+    # statusline-mc.sh — the script settings.json's `statusLine.command`
+    # invokes above. Lives directly in claude-config/ (mounted 1:1 to
+    # /home/agent/.claude/), matching the literal path in that command:
+    # "bash /home/agent/.claude/statusline-mc.sh".
+    if status_line:
+        script_dst = mirror_file.parent / "statusline-mc.sh"
+        try:
+            script_src = _statusline_script_source()
+            script_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(script_src, script_dst)
+            script_dst.chmod(0o755)
+            written["statusline-mc.sh"] = True
+        except Exception as e:
+            logger.error(
+                "Fehler beim Kopieren von statusline-mc.sh fuer %s: %s", agent_slug, e
+            )
+            written["statusline-mc.sh"] = False
 
     # Agent-specific installed_plugins.json
     ipj_file = agent_dir / "claude-config" / "plugins" / "installed_plugins.json"
@@ -369,9 +414,19 @@ class CustomSkill(BaseModel):
     path: str           # absoluter Pfad
 
 
-def list_custom_skills() -> list[CustomSkill]:
-    """Lists all custom skills from ~/.mc/skills/."""
-    skills_dir = _custom_skills_dir()
+def list_skills_in_dir(skills_dir: Path) -> list[CustomSkill]:
+    """Scans ``skills_dir`` for ``<skill-name>/SKILL.md`` entries and parses
+    each one's ``description:`` frontmatter line. Shared by
+    ``list_custom_skills`` (the central ``~/.mc/skills/`` library) and any
+    other caller that needs the same directory shape read the same way — a
+    per-agent synced skills dir (``claude-config/skills/``, see
+    ``sync_agent_skills_to_disk``) has this exact layout, since that
+    function copies both plain custom skills AND resolved plugin-provided
+    skill symlinks into it uniformly. Returns ``[]`` if ``skills_dir``
+    doesn't exist; a malformed/unreadable ``SKILL.md`` yields an empty
+    description rather than being skipped (matches the original
+    ``list_custom_skills`` behavior — name/path still come from the
+    directory entry itself, not the file content)."""
     if not skills_dir.exists():
         return []
 
@@ -401,6 +456,11 @@ def list_custom_skills() -> list[CustomSkill]:
         ))
 
     return result
+
+
+def list_custom_skills() -> list[CustomSkill]:
+    """Lists all custom skills from ~/.mc/skills/."""
+    return list_skills_in_dir(_custom_skills_dir())
 
 
 def sync_agent_skills_to_disk(agent_slug: str, cli_skills: list[str] | None) -> dict[str, bool]:

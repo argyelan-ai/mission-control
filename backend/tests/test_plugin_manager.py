@@ -325,6 +325,57 @@ def test_sync_copies_all_cache_when_cli_plugins_none(tmp_path):
     assert (plugin_out / "cache" / "thedotmack").exists()
 
 
+def test_sync_copies_statusline_script_by_default(tmp_path):
+    """status_line defaults True — statusline-mc.sh must land in claude-config/
+    at the exact path settings.json's statusLine.command references."""
+    plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(tmp_path)
+    script_src = tmp_path / "statusline-mc.sh"
+    script_src.write_text("#!/bin/bash\necho hi\n")
+
+    with patch("app.services.plugin_manager._plugins_dir", return_value=plugins_dir), \
+         patch("app.services.plugin_manager._agents_dir", return_value=agents_dir), \
+         patch("app.services.plugin_manager._templates_dir", return_value=tmpl_dir), \
+         patch("app.services.plugin_manager._statusline_script_source", return_value=script_src):
+        result = sync_agent_plugins_to_disk("testbot", "prompt", "model", [])
+
+    assert result.get("statusline-mc.sh") is True
+    dst = agents_dir / "testbot" / "claude-config" / "statusline-mc.sh"
+    assert dst.read_text() == script_src.read_text()
+    assert dst.stat().st_mode & 0o777 == 0o755
+
+
+def test_sync_skips_statusline_script_when_status_line_false(tmp_path):
+    """openclaude agents: no statusLine key in settings.json, so the script
+    isn't copied either — nothing to invoke it."""
+    plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(tmp_path)
+    script_src = tmp_path / "statusline-mc.sh"
+    script_src.write_text("#!/bin/bash\necho hi\n")
+
+    with patch("app.services.plugin_manager._plugins_dir", return_value=plugins_dir), \
+         patch("app.services.plugin_manager._agents_dir", return_value=agents_dir), \
+         patch("app.services.plugin_manager._templates_dir", return_value=tmpl_dir), \
+         patch("app.services.plugin_manager._statusline_script_source", return_value=script_src):
+        result = sync_agent_plugins_to_disk("testbot", "prompt", "model", [], status_line=False)
+
+    assert "statusline-mc.sh" not in result
+    assert not (agents_dir / "testbot" / "claude-config" / "statusline-mc.sh").exists()
+
+
+def test_sync_statusline_script_copy_failure_does_not_break_settings_write(tmp_path):
+    """A missing source script must not take settings.json down with it."""
+    plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(tmp_path)
+    missing_src = tmp_path / "does-not-exist" / "statusline-mc.sh"
+
+    with patch("app.services.plugin_manager._plugins_dir", return_value=plugins_dir), \
+         patch("app.services.plugin_manager._agents_dir", return_value=agents_dir), \
+         patch("app.services.plugin_manager._templates_dir", return_value=tmpl_dir), \
+         patch("app.services.plugin_manager._statusline_script_source", return_value=missing_src):
+        result = sync_agent_plugins_to_disk("testbot", "prompt", "model", [])
+
+    assert result.get("statusline-mc.sh") is False
+    assert result.get("settings.json") is True
+
+
 def test_sync_replaces_cache_symlink(tmp_path):
     """Existing cache symlink is replaced by a real directory."""
     plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(tmp_path)

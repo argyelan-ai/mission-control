@@ -88,11 +88,60 @@ class RedisKeys:
         return f"mc:ratelimit:agent:{agent_id}:api"
 
     @staticmethod
+    def agent_chat_channel(agent_id: str) -> str:
+        """Per-agent Redis pub/sub channel for the live transcript-tail chat
+        view (Sessions Chat View, Task A4). Every SSE frame published here
+        carries the wire event type ``chat_event`` — mirrors the naming
+        convention of ``agent_runtime_switch.terminal_remount_channel``."""
+        return f"mc:agent:{agent_id}:chat"
+
+    @staticmethod
     def bench_entry_rerender_cooldown(entry_id: str) -> str:
         """Per-entry rerender rate limit (SET NX EX) — bench_studio's
         per-video rerender button. Prevents double-click/spam fan-out of
         overlapping render+compose runs for the same entry."""
         return f"mc:bench:entry:{entry_id}:rerender-cooldown"
+
+    @staticmethod
+    def model_window_observations() -> str:
+        """Hash: model id -> context_window_size, one field per model ever
+        seen in a FRESH statusline-state read across the whole fleet
+        (harness_catalog.observe_model_window) — newest write always wins
+        (plain HSET, no versioning). Read by
+        harness_catalog.get_observed_model_windows() as the middle tier of
+        resolve_context_window's precedence chain (current-session
+        statusline > this observed map > the static config seed > None).
+        No TTL — an observation stays valid until overwritten; the whole
+        hash is small (one field per distinct model id, not per agent)."""
+        return "mc:catalog:model-windows"
+
+    @staticmethod
+    def model_catalog(harness: str, cli_version: str) -> str:
+        """JSON-encoded list of {"command","label"} rows discovered from a
+        harness's own /model picker (harness_catalog.discover_model_catalog)
+        — keyed by (harness, cli_version) so a CLI upgrade invalidates the
+        old catalog automatically instead of serving stale rows forever.
+        TTL is set by the writer (24h — see harness_catalog)."""
+        return f"mc:catalog:models:{harness}:{cli_version}"
+
+    @staticmethod
+    def model_catalog_discovery_lock(harness: str, cli_version: str) -> str:
+        """SET NX EX lock so concurrent cache-miss requests for the same
+        (harness, cli_version) don't each spin up their own throwaway
+        discovery window at once."""
+        return f"mc:catalog:models:{harness}:{cli_version}:discovery-lock"
+
+    @staticmethod
+    def effort_levels_drift_logged(cli_version: str) -> str:
+        """SET NX EX dedup so the ALLOWED_EFFORT_LEVELS version-drift
+        warning (agent_chat_input._check_effort_levels_version_drift) logs
+        ONCE per CLI version across the whole fleet/all workers, not once
+        per request. Never auto-triggers re-discovery — /effort argument
+        commands persist to the agent's settings.json, so an unattended
+        reprobe would silently change a real agent's default effort level;
+        this is purely an observability signal for a manual re-verification
+        pass."""
+        return f"mc:catalog:effort-levels:{cli_version}:drift-logged"
 
     @staticmethod
     def bench_challenge_run_claim(challenge_id: str) -> str:

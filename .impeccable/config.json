@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font-size",
+        "value": "13px",
+        "createdAt": "2026-08-16T18:08:56.863Z",
+        "reason": "DESIGN.md v4 Typografie: 'UI-Detailtext oft 11-13px' + Dichte-Regel nennt 13px explizit — dokumentierter Ramp-Bereich"
+      }
+    ]
+  }
+}
