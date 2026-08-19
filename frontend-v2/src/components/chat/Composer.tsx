@@ -870,7 +870,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       <span className="text-[10px]" style={{ color: C.textMuted }}>
                         {isSessionOnlyEffort(effortLevels[sliderIndex])
                           ? "nur diese Session"
-                          : "wird Standard"}
+                          : capabilities?.effortShared
+                            ? "wird Standard — auch für deine lokalen Claude-Sessions (geteilte Config)"
+                            : "wird Standard"}
                       </span>
                       {pendingEffort != null && (
                         /* "…" solange der Wechsel unterwegs ist. Ein Haken

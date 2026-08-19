@@ -183,6 +183,11 @@ export interface ChatCapabilities {
    *  `usage.effort` gewinnt immer (nur es kennt die session-only-Stufen
    *  `max`/`ultracode`). `null`/absent = unbekannt, der Chip zeigt dann `auto`. */
   effort?: string | null;
+  /** True bei Boss: er nutzt Marks eigene ~/.claude/settings.json — eine
+   *  persistierende Stufe (low..xhigh) aendert damit auch den Standard der
+   *  lokalen Claude-Sessions des Operators. Der Regler-Hinweis muss das am
+   *  Wert sagen, nicht verschweigen. */
+  effortShared?: boolean;
   /** Every slash command this harness actually offers — built-ins AND the
    *  agent's skills. Absent on older backends, where the composer falls back to
    *  its own short static list. `name` may or may not carry the leading slash

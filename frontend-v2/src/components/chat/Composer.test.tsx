@@ -581,6 +581,27 @@ describe("Composer", () => {
     });
   });
 
+  describe("shared-config hint (Boss)", () => {
+    it("warns that a persisting level also rewrites the operator's own sessions", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{ effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true, effortShared: true }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      expect(screen.getByTestId("effort-menu").textContent).toContain("geteilte Config");
+      // Session-only-Stufen bleiben harmlos beschriftet:
+      fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "4" } });
+      expect(screen.getByTestId("effort-menu").textContent).toContain("nur diese Session");
+    });
+  });
+
   describe("popover dismissal", () => {
     const CAPS6 = { effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true };
 

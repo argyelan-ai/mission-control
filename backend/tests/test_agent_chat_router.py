@@ -114,6 +114,7 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
         # Startwerte fuer den Composer, solange die Session noch kein
         # usage-Ereignis hat. Der Fixture-Agent hat keine settings.json -> None.
         "effort": None,
+        "effortShared": False,
         "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
@@ -148,14 +149,20 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     # settings.json des LAUFENDEN Agenten vom Host lesen (Real-Host-Leak).
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path: None)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["capabilities"] == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
-        "canSwitchEffort": False,
+        # Seit 19.08.2026 schaltbar: die Bridge tippt, das Transkript
+        # verifiziert. effortShared sagt dem UI, dass eine persistierende
+        # Stufe auch die lokalen Claude-Sessions des Operators umstellt
+        # (geteilte ~/.claude/settings.json).
+        "canSwitchEffort": True,
         "effort": None,
+        "effortShared": True,
         "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         # modelOptions: Boss has no harness (host runtime) -> catalog is

@@ -176,8 +176,15 @@ ALLOWED_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 # Polling budget for _verify_effort_applied: a docker-exec capture-pane round
 # trip is fast (<100ms typically) but not instant, and the CLI needs a brief
 # moment to render its confirmation line after processing the /effort command.
-_EFFORT_VERIFY_ATTEMPTS = 5
-_EFFORT_VERIFY_DELAY_SECONDS = 0.2
+# 12 x 0.5s = 6s Budget (Boss-Transkriptpfad: x2 = 12s). Die erste Fassung
+# (5 x 0.2s = 1s!) gab regelmaessig auf, BEVOR die CLI ihre Bestaetigung
+# gerendert hatte — Operator-Befund 19.08.2026 am Tester: Wechsel angewendet
+# (Pane zeigte "Set effort level to medium"), Toast meldete trotzdem "Nicht
+# bestaetigt" — und der Timeout-Pfad tippte obendrein ein aufraeumendes
+# Escape in eine voellig gesunde TUI. Ein Pane-Capture ist billig; lieber
+# 6s geduldig pollen als einen gelungenen Wechsel als Fehlschlag melden.
+_EFFORT_VERIFY_ATTEMPTS = 12
+_EFFORT_VERIFY_DELAY_SECONDS = 0.5
 
 
 class InputNotSupportedError(Exception):
@@ -395,7 +402,14 @@ async def send_text(agent, text: str) -> None:
 
     if kind == "docker":
         await _touch_recycler_marker(slug)
-        await _wait_for_send_readiness(agent)
+        if getattr(agent, "harness", None) == "claude":
+            # Das Gate liest den Pane mit CLAUDE-Regeln (Prompt-Marker,
+            # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — Sparky
+            # war dadurch dauerhaft unerreichbar (jeder Send: 409
+            # agent_starting; Operator-Befund 19.08.2026). Fuer fremde
+            # Harnesses gilt wieder blindes Zustellen wie vor dem Gate: keine
+            # Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung.
+            await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
             await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted))
@@ -480,12 +494,15 @@ async def set_effort(agent, level: str) -> None:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
     kind = _target_kind(agent)
-    if kind != "docker":
-        raise InputNotSupportedError()
     if getattr(agent, "harness", None) != "claude":
         # Spiegel des Capabilities-Gates: selbst wenn ein Client den Endpoint
         # direkt trifft, tippen wir kein /effort in eine fremde CLI.
         raise InputNotSupportedError()
+
+    if kind == "boss":
+        await _set_effort_boss(agent, level)
+        return
+
     slug = agent.slug
 
     if await _pane_is_busy(agent):
@@ -498,6 +515,85 @@ async def set_effort(agent, level: str) -> None:
         if not await _pane_is_busy(agent):
             await _run_docker_exec(_docker_argv(slug, "Escape"))
         raise EffortSwitchFailedError()
+
+
+async def _set_effort_boss(agent, level: str) -> None:
+    """Boss-Variante von ``set_effort`` (19.08.2026, Operator: Chip bei Boss
+    ohne Funktion). Kein Pane-Kanal — darum:
+
+    - PREFLIGHT ueber das Transkript statt den Pane: mtime frisch UND der Zug
+      laeuft noch (letzte inhaltliche Zeile ist keine reine Antwort) -> busy.
+      In eine arbeitende TUI getippt wuerde /effort nur als Muell-Prompt
+      queuen — exakt die Docker-Preflight-Begruendung.
+    - TIPPEN ueber die WS-Bridge (gleiche Frame-Trennung wie send_text).
+    - VERIFY ueber das TRANSKRIPT: /effort schreibt seine Bestaetigung als
+      local-command-stdout-Zeile in die Session-Datei (R12b, gleiche CLI).
+      Gelesen wird NUR was nach der vorab notierten Dateigroesse dazukommt —
+      dieselbe Stale-Zeilen-Lektion wie beim Pane-Verify (18.08.).
+    - KEIN Escape bei Timeout: ohne Pane ist "safe to Escape" nicht
+      feststellbar, und ein Escape in Marks arbeitenden Boss wuerde echte
+      Arbeit abbrechen. Ein evtl. gequeutes /effort ist das kleinere Uebel.
+    """
+    from app.services.transcript_chat import (  # lazy: Import-Zyklus vermeiden
+        ChatTailerManager, find_active_session, resolve_transcript_dir,
+    )
+
+    tdir = resolve_transcript_dir(agent)
+    if tdir is None:
+        raise InputNotSupportedError()
+    active = await asyncio.to_thread(find_active_session, tdir)
+    baseline_path, baseline_size = (None, 0)
+    if active is not None:
+        baseline_path = active[0]
+        try:
+            baseline_size = await asyncio.to_thread(
+                lambda: baseline_path.stat().st_size
+            )
+            mtime = await asyncio.to_thread(lambda: baseline_path.stat().st_mtime)
+            fresh = (time.time() - mtime) < 20
+            ended = await asyncio.to_thread(
+                ChatTailerManager._transcript_suggests_turn_ended, baseline_path
+            )
+            if fresh and not ended:
+                raise AgentBusyError()
+        except OSError:
+            baseline_size = 0
+
+    await _send_boss_bytes(
+        f"/effort {level}".encode(), b"\r",
+        delay_before_last=_BOSS_ENTER_DELAY_SECONDS,
+    )
+
+    marker = f"effort level to {level}"
+    for _ in range(_EFFORT_VERIFY_ATTEMPTS * 2):  # Transkript ist traeger als der Pane
+        await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
+        try:
+            current = await asyncio.to_thread(find_active_session, tdir)
+        except OSError:
+            continue
+        if current is None:
+            continue
+        path = current[0]
+        try:
+            if baseline_path is not None and path == baseline_path:
+                def _read_new() -> str:
+                    with open(path, "rb") as f:
+                        f.seek(baseline_size)
+                        return f.read().decode("utf-8", errors="replace")
+                fresh_text = await asyncio.to_thread(_read_new)
+            else:
+                # Rollover mitten im Wechsel: neue Datei komplett ist "neu".
+                fresh_text = await asyncio.to_thread(
+                    lambda: path.read_text(errors="replace")
+                )
+        except OSError:
+            continue
+        if marker in fresh_text:
+            return
+        rejected = _EFFORT_REJECTED_RE.search(fresh_text)
+        if rejected is not None:
+            raise EffortSwitchRejectedError(rejected.group(0))
+    raise EffortSwitchFailedError()
 
 
 async def _pane_is_busy(agent) -> bool:
@@ -646,7 +742,7 @@ async def effort_capabilities(agent) -> dict[str, object]:
         # Weder Leiter noch Schaltrecht behaupten — sonst tippt ein Klick
         # Kauderwelsch in eine TUI, die es nicht versteht (kritischer
         # Test-Durchgang 18.08.2026).
-        return {"effortLevels": [], "canSwitchEffort": False, "effort": None}
+        return {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
 
     if kind == "docker":
         await _check_effort_levels_version_drift(agent)
@@ -659,22 +755,32 @@ async def effort_capabilities(agent) -> dict[str, object]:
             # geschrieben hat. Ein spaeteres usage gewinnt immer (es kennt auch die
             # session-only-Stufen max/ultracode, die nie in der Datei landen).
             "effort": effort,
+            # Container-Agenten haben ihre EIGENE settings.json — ein
+            # persistierender Wechsel bleibt beim Agenten.
+            "effortShared": False,
         }
 
-    # Host-Agenten mit Claude-Code-Harness (Boss): SCHALTEN geht nicht (kein
-    # Pane-Verify-Kanal — dieselbe v1-Grenze wie set_effort selbst), aber die
-    # STUFENLEITER des Harness ist bekannt und gehoert in die Antwort: das
-    # Frontend braucht sie, um die Fuellstands-Saeule des (read-only)
-    # Brain-Chips korrekt zu proportionieren (Operator-Befund 18.08.2026:
-    # Boss zeigte das nackte Alt-Label statt der neuen Anzeige). Liste ohne
-    # Schaltrecht = "das kennt der Harness", nicht "das darfst du druecken".
+    # Host-Agenten mit Claude-Code-Harness (Boss): seit 19.08.2026 SCHALTBAR
+    # (Operator: "klicke drauf, passiert nichts"). Kanal: die WS-Bridge tippt,
+    # verifiziert wird ueber das TRANSKRIPT statt ueber den Pane (den es hier
+    # nicht gibt) — /effort schreibt seine Bestaetigung als local-command-
+    # stdout-Zeile in die Session-Datei (R12b-Befund, gleiche CLI).
+    #
+    # effortShared=True traegt die WICHTIGE Eigenheit dieses Setups: Boss
+    # unsetzt CLAUDE_CONFIG_DIR und nutzt Marks eigene ~/.claude/settings.json.
+    # Eine persistierende Stufe (low..xhigh) aendert damit auch den Standard
+    # von Marks EIGENEN Claude-Sessions — das UI muss das am Wert sagen,
+    # nicht verschweigen.
     if getattr(agent, "harness", None) == "claude":
+        effort = await asyncio.to_thread(_persisted_effort_level_at,
+                                         _host_home() / ".claude" / "settings.json")
         return {
             "effortLevels": list(ALLOWED_EFFORT_LEVELS),
-            "canSwitchEffort": False,
-            "effort": None,
+            "canSwitchEffort": True,
+            "effort": effort,
+            "effortShared": True,
         }
-    return {"effortLevels": [], "canSwitchEffort": False, "effort": None}
+    return {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
 
 
 # Built-in slash commands — static, not discovered (no CLI-side enumeration
@@ -695,6 +801,18 @@ _BUILTIN_SLASH_COMMANDS: tuple[dict[str, str], ...] = (
 
 _SLASH_COMMANDS_CACHE_TTL_SECONDS = 60
 _slash_commands_cache: dict[str, tuple[float, list[dict[str, str | None]]]] = {}
+
+
+def _persisted_effort_level_at(path: Path) -> str | None:
+    """Wie ``_persisted_effort_level``, aber fuer einen expliziten Pfad —
+    Boss' effektive Config ist ~/.claude/settings.json (geteilt mit dem
+    Operator), nicht das mc-Agenten-Muster. Fail-silent -> None."""
+    try:
+        with open(path) as f:
+            level = json.load(f).get("effortLevel")
+    except Exception:
+        return None
+    return level if level in ALLOWED_EFFORT_LEVELS else None
 
 
 def _persisted_effort_level(slug: str) -> str | None:
