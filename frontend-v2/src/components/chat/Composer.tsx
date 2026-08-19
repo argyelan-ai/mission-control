@@ -52,6 +52,37 @@ export function resolveEffortLevels(capabilities: ChatCapabilities | null | unde
   );
 }
 
+/** Der Standardtext des read-only Brain-Chips — er galt bisher fuer JEDEN
+ *  nicht schaltbaren Fall und stimmt nur fuer Host-Runtimes ohne Terminal. */
+const EFFORT_REASON_FALLBACK =
+  "Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal.";
+
+/**
+ * Warum der Regler fehlt, in einem Satz — aus dem `effortReason` des Backends.
+ *
+ * Der haeufigste Fall ist neu und war vorher unsichtbar: bei openclaude
+ * haengen die Effort-Stufen am MODELL, nicht am Harness. Ein Agent auf einem
+ * eigenen/lokalen Modell bekommt darum keinen Regler, obwohl seine CLI
+ * `/effort` sehr wohl kennt. Ohne diesen Satz sieht man nur, dass etwas
+ * fehlt — und sucht den Fehler bei sich.
+ */
+export function effortReasonText(
+  capabilities: ChatCapabilities | null | undefined,
+  model: string | null | undefined,
+): string {
+  switch (capabilities?.effortReason) {
+    case "model_no_effort":
+      return model
+        ? `Das Modell ${model} kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.`
+        : "Das aktuelle Modell kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.";
+    case "foreign_harness":
+      return "Diese CLI kennt kein /effort — es gibt hier keine Stufen zum Umschalten.";
+    case "no_pane":
+    default:
+      return EFFORT_REASON_FALLBACK;
+  }
+}
+
 /**
  * The palette's command list: everything the harness reports (built-ins plus
  * the agent's own skills), falling back to the short static list only while the
@@ -928,7 +959,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
-          {(currentEffort || (effortSupported && effortLevels.length > 0)) &&
+          {(currentEffort ||
+            (effortSupported && effortLevels.length > 0) ||
+            /* Neu: der Chip erscheint AUCH ohne bekannte Stufe, sobald das
+               Backend einen Grund mitliefert. Genau dieser Fall — openclaude
+               auf einem Modell ohne Effort-Stufen — hatte vorher weder Wert
+               noch Regler und verschwand damit spurlos; der Tooltip ist die
+               einzige Stelle, an der die Erklaerung ueberhaupt ankommt. */
+            (capabilities?.effortReason && displayLevels.length > 0)) &&
             // A picker needs levels to offer. No capabilities, `canSwitchEffort:
             // false`, or an empty list all mean the same thing here: show the
             // level, don't pretend it can be changed. Umgekehrt gilt: kann der
@@ -1066,8 +1104,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               <span
                 data-testid="effort-chip-static"
                 data-level={currentEffort ?? "auto"}
-                aria-label={`Effort-Stufe: ${currentEffort ?? "auto"} (nicht umschaltbar)`}
-                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                aria-label={`Effort-Stufe: ${currentEffort ?? "auto"} (nicht umschaltbar) — ${effortReasonText(capabilities, currentModel)}`}
+                title={effortReasonText(capabilities, currentModel)}
+                data-reason={capabilities?.effortReason ?? "unspecified"}
                 className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
@@ -1090,7 +1129,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                  ehrliche Text. */
               <span
                 data-testid="effort-chip-static"
-                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                title={effortReasonText(capabilities, currentModel)}
+                data-reason={capabilities?.effortReason ?? "unspecified"}
                 className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >

@@ -802,6 +802,78 @@ describe("Composer", () => {
       expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
     });
 
+    it("erklaert am Chip, WARUM der Regler fehlt, wenn das Modell keine Stufen kennt", () => {
+      // openclaude-Fall (19.08.2026): die CLI kennt /effort sehr wohl, aber das
+      // Modell des Agenten nicht — der Picker sagt es selbst
+      // ("Effort not supported for <modell>"). Vorher verschwand der Chip
+      // spurlos: keine Stufe, kein Regler, keine Erklaerung. Jetzt bleibt er
+      // sichtbar und traegt den Grund, sonst sucht der Operator den Fehler bei
+      // sich.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effortReason: "model_no_effort",
+            model: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "model_no_effort");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      // Keine Stufe bekannt -> leere Saeule. Nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+    });
+
+    it("nennt bei einer fremden CLI den Harness als Grund, nicht die Runtime", () => {
+      // Gegenprobe: derselbe leere Chip-Zustand, ein anderer Grund — der Text
+      // darf nicht pauschal "Runtime hat kein Terminal" behaupten, wo die
+      // Runtime sehr wohl eines hat.
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{
+            effortLevels: ["low", "medium", "high"],
+            canSwitchEffort: false,
+            effortReason: "foreign_harness",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("/effort");
+      expect(chip.getAttribute("title")).not.toContain("Runtime");
+    });
+
+    it("bleibt ohne Grund und ohne Stufen unsichtbar", () => {
+      // Der Chip erscheint NUR, wenn es etwas zu zeigen gibt: eine Stufe, ein
+      // Schaltrecht oder eine Erklaerung. Ein Grund ohne Stufenleiter reicht
+      // nicht — die Saeule waere dann eine Behauptung ueber eine Leiter, die
+      // wir gar nicht kennen.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{ effortLevels: [], canSwitchEffort: false, effortReason: "no_pane" }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+    });
+
     it("shows the level read-only when the backend reports no capabilities", () => {
       render(
         <Composer
