@@ -118,10 +118,7 @@ export default function CommandPalette() {
               }}
             >
               {/* Search input */}
-              <div
-                className="flex items-center gap-3 px-4"
-                style={{ borderBottom: "1px solid var(--color-border)" }}
-              >
+              <div className="palette-input-row flex items-center gap-3 px-4">
                 <Search
                   size={15}
                   style={{ color: "var(--color-text-muted)", flexShrink: 0 }}

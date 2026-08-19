@@ -244,9 +244,16 @@ export default function Sidebar() {
         padding: sidebarCollapsed ? "10px 0" : "10px",
       }}
     >
-      {/* Zone 1 — where am I */}
-      <div className={sidebarCollapsed ? "px-2.5" : ""}>
-        <BoardPicker collapsed={sidebarCollapsed} />
+      {/* Zone 1 — where am I, and the voice assistant.
+          The mic used to sit inside the search field, where it read as "search
+          by voice" — it starts Jarvis and has nothing to do with search. */}
+      <div className={sidebarCollapsed ? "px-2.5" : "flex items-center gap-2"}>
+        <div className={sidebarCollapsed ? "" : "flex-1 min-w-0"}>
+          <BoardPicker collapsed={sidebarCollapsed} />
+        </div>
+        {!sidebarCollapsed && (
+          <VoiceButton size={34} variant="sidebar" enforceTouchTarget={false} />
+        )}
       </div>
 
       {/* Zone 2 — search / jump */}
@@ -265,10 +272,9 @@ export default function Sidebar() {
         </div>
       ) : (
         <div
-          className="flex items-center gap-2 mt-2 shrink-0"
+          className="flex items-center mt-2 shrink-0"
           style={{
             height: 36,
-            padding: "0 4px 0 12px",
             borderRadius: "12px",
             backgroundColor: "var(--color-p2-inset)",
             border: "1px solid var(--color-p2-line2)",
@@ -276,7 +282,7 @@ export default function Sidebar() {
         >
           <button
             onClick={() => setCommandPaletteOpen(true)}
-            className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer text-left"
+            className="flex items-center gap-2 flex-1 min-w-0 h-full cursor-pointer text-left px-3"
             style={{ ...MONO, fontSize: "11.5px", color: "var(--color-p2-faint)" }}
           >
             <Search size={13} className="shrink-0" />
@@ -293,7 +299,6 @@ export default function Sidebar() {
               ⌘K
             </kbd>
           </button>
-          <VoiceButton size={28} variant="sidebar" enforceTouchTarget={false} />
         </div>
       )}
 

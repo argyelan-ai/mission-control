@@ -329,6 +329,23 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* The command palette's input is the panel's only field and is focused the
+   moment the panel opens, so a 2px ring around the whole row shouts without
+   telling the user anything new. Focus moves to the divider underneath — still
+   visible, far quieter. Note this rule sits outside @layer utilities on
+   purpose: so does the ring above, and layer-less rules beat any utility
+   regardless of specificity, which is why `outline-none` alone did nothing. */
+.palette-input-row {
+  border-bottom: 1px solid var(--color-border);
+  transition: border-color 160ms ease;
+}
+.palette-input-row:focus-within {
+  border-bottom-color: var(--color-accent);
+}
+.palette-input-row [cmdk-input]:focus-visible {
+  outline: none;
+}
+
 /* ============================================================
    Keyframe Animations
    ============================================================ */
