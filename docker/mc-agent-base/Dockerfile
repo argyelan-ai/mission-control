@@ -16,7 +16,13 @@ RUN apk add --no-cache \
     openssh-client \
     tmux \
     github-cli \
-    pandoc
+    pandoc \
+    # poppler-utils: das `Read`-Werkzeug der CLIs rendert PDF-Seiten mit
+    # `pdftoppm`. Ohne das Paket bricht jedes mehrseitige PDF mit
+    # "pdftoppm is not installed" ab — und der naheliegende Ausweg (macOS
+    # `sips`) rendert nur Seite 1, ein mehrseitiges Dokument bleibt also
+    # unlesbar. Aufgefallen 19.08.2026 am ersten PDF-Anhang im Sessions-Chat.
+    poppler-utils
 
 # Python-Libraries fuer Office-Formate (Word/Excel/PowerPoint). Pure Python,
 # ARM-neutral. Anthropic document-skills (pdf/docx/xlsx/pptx) sind bereits
