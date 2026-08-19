@@ -237,7 +237,10 @@ export default function Sidebar() {
       className="flex flex-col h-full overflow-hidden shrink-0"
       style={{
         backgroundColor: "var(--color-p2-pan)",
-        borderRight: "1px solid var(--color-p2-line2)",
+        // A card rather than a full-bleed column: the rows inside are rounded,
+        // so a hard-edged container around them reads as unfinished.
+        border: "1px solid var(--color-p2-line2)",
+        borderRadius: "16px",
         padding: sidebarCollapsed ? "10px 0" : "10px",
       }}
     >

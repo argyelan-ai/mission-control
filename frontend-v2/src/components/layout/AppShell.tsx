@@ -86,7 +86,7 @@ export default function AppShell({
       {/* Desktop: one column carries board, search, navigation and status
           (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar
           folded into it — see components/layout/Sidebar.tsx. */}
-      <div className="hidden md:flex h-full relative z-10">
+      <div className="hidden md:flex h-full relative z-10 p-2 pr-0">
         <Sidebar />
       </div>
 

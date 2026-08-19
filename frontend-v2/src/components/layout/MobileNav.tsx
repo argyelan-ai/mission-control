@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { NAV_TREE, type NavGroup } from "@/lib/nav";
+import { NAV_TREE, CHROME_ITEMS, navItem, type NavGroup } from "@/lib/nav";
 import { useTranslations } from "next-intl";
 import { clearToken, api } from "@/lib/api";
 import { useRouter } from "next/navigation";
@@ -485,6 +485,32 @@ export default function MobileNav() {
                       </div>
                     </div>
                   )}
+                  {/* Settings sits with the account, not in a nav group — the
+                      desktop column puts the same gear in its footer. */}
+                  {CHROME_ITEMS.map((href) => {
+                    const item = navItem(href);
+                    if (!item) return null;
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={href}
+                        href={href}
+                        className="flex items-center gap-2 w-full px-2 cursor-pointer"
+                        style={{
+                          minHeight: "44px",
+                          ...MONO,
+                          fontSize: "12.5px",
+                          fontWeight: isTabActive(pathname, href) ? 700 : 400,
+                          color: isTabActive(pathname, href)
+                            ? "var(--color-p2-txt)"
+                            : "var(--color-p2-dim)",
+                        }}
+                      >
+                        <Icon size={15} strokeWidth={1.75} className="shrink-0" />
+                        {t(item.labelKey) || item.label}
+                      </Link>
+                    );
+                  })}
                   <button
                     onClick={handleLogout}
                     className="flex items-center w-full px-2 cursor-pointer"

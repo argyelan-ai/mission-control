@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   NAV_ITEMS,
   NAV_TREE,
+  CHROME_ITEMS,
   DEFAULT_PINS,
   resolveNav,
   isActiveRoute,
@@ -15,13 +16,23 @@ describe("nav model", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
-  it("puts every flat destination into exactly one group", () => {
+  it("puts every flat destination into exactly one group, or marks it chrome-level", () => {
     for (const item of NAV_ITEMS) {
       const groups = NAV_TREE.filter((g) =>
         g.children.some((c) => c.href === item.href)
       );
-      expect(groups, `${item.href} must live in exactly one group`).toHaveLength(1);
+      const expected = CHROME_ITEMS.includes(item.href) ? 0 : 1;
+      expect(groups, `${item.href} must appear in exactly ${expected} group(s)`).toHaveLength(expected);
     }
+  });
+
+  it("keeps chrome-level destinations out of every group so they never show twice", () => {
+    const inGroups = NAV_TREE.flatMap((g) => g.children.map((c) => c.href));
+    for (const href of CHROME_ITEMS) expect(inGroups).not.toContain(href);
+  });
+
+  it("still lists chrome-level destinations in the flat model, so search finds them", () => {
+    for (const href of CHROME_ITEMS) expect(navItem(href)).toBeDefined();
   });
 
   it("has no group child that is missing from the flat list", () => {
@@ -50,6 +61,7 @@ describe("resolveNav", () => {
     const reachable = new Set([
       ...pinned.map((i) => i.href),
       ...groups.flatMap((g) => g.children.map((c) => c.href)),
+      ...CHROME_ITEMS, // reachable from the user area, not from a group
     ]);
     for (const item of NAV_ITEMS) {
       expect(reachable.has(item.href), `${item.href} unreachable`).toBe(true);
@@ -72,13 +84,17 @@ describe("resolveNav", () => {
     // State persisted by an older build has no pinnedNav at all.
     const { pinned, groups } = resolveNav(undefined);
     expect(pinned).toHaveLength(0);
-    expect(groups.flatMap((g) => g.children)).toHaveLength(NAV_ITEMS.length);
+    expect(groups.flatMap((g) => g.children)).toHaveLength(
+      NAV_ITEMS.length - CHROME_ITEMS.length
+    );
   });
 
   it("shows the full tree when nothing is pinned", () => {
     const { pinned, groups } = resolveNav([]);
     expect(pinned).toHaveLength(0);
-    expect(groups.flatMap((g) => g.children)).toHaveLength(NAV_ITEMS.length);
+    expect(groups.flatMap((g) => g.children)).toHaveLength(
+      NAV_ITEMS.length - CHROME_ITEMS.length
+    );
   });
 });
 

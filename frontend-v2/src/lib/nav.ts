@@ -141,9 +141,17 @@ export const NAV_TREE: NavGroup[] = [
     label: "SYSTEM",
     labelKey: "groupSystem",
     rowLabelKey: "navGroupSystem",
-    children: pick(["/runtimes", "/loops", "/schedule", "/settings"]),
+    children: pick(["/runtimes", "/loops", "/schedule"]),
   },
 ];
+
+/**
+ * Chrome-level destinations: reachable from the shell's user area rather than
+ * from a navigation group. Settings is account-level, not a place you work —
+ * listing it in a group as well would put the same gear in the column twice.
+ * Still part of NAV_ITEMS, so the palette and deep links find it.
+ */
+export const CHROME_ITEMS: string[] = ["/settings"];
 
 /** Startbelegung — overridable per user, persisted in the app store. */
 export const DEFAULT_PINS: string[] = [
