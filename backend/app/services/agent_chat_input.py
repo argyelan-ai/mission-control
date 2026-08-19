@@ -241,6 +241,11 @@ _BUSY_PANE_STATUSES = frozenset({"working", "permission_prompt"})
 # respawn's previous write, and an earlier ping lost entirely into a
 # still-booting CLI. ~20s at 1s steps mirrors the fleet's own boot/respawn
 # timing (docker_agent_sync's own window-ready wait is in the same range).
+# Harnesses mit einer eigenen Pane-Sonde (``transcript_adapters``). Nur fuer
+# sie darf das Bereitschafts-Tor unten laufen — ein Harness ohne Sonde liefert
+# fuer JEDEN Pane ``unknown`` und wuerde damit jede Nachricht ablehnen.
+_GATED_HARNESSES = frozenset({"claude", "omp"})
+
 _SEND_READINESS_POLL_ATTEMPTS = 20
 _SEND_READINESS_POLL_INTERVAL_SECONDS = 1.0
 
@@ -378,10 +383,16 @@ async def _wait_for_send_readiness(agent) -> None:
     resolves to ``"working"`` vs ``"idle"`` — and this gate treats both
     identically anyway, so the choice is moot here beyond staying
     consistent with the rest of the module."""
+    from app.services.transcript_adapters import adapter_for
+
+    # Die Pane-Regeln des jeweiligen Harness — Claude-Glyphen erkennen die
+    # omp-TUI nicht (und umgekehrt).
+    read_state = adapter_for(agent).parse_pane_state
+
     for _ in range(_SEND_READINESS_POLL_ATTEMPTS):
         pane = await capture_pane(agent)
         if pane is not None:
-            status = parse_pane_state(pane, transcript_active=False)["status"]
+            status = read_state(pane, False)["status"]
             if status != "unknown":
                 return
         await asyncio.sleep(_SEND_READINESS_POLL_INTERVAL_SECONDS)
@@ -416,13 +427,14 @@ async def send_text(agent, text: str) -> None:
 
     if kind == "docker":
         await _touch_recycler_marker(slug)
-        if getattr(agent, "harness", None) == "claude":
-            # Das Gate liest den Pane mit CLAUDE-Regeln (Prompt-Marker,
-            # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — Sparky
-            # war dadurch dauerhaft unerreichbar (jeder Send: 409
-            # agent_starting; Operator-Befund 19.08.2026). Fuer fremde
-            # Harnesses gilt wieder blindes Zustellen wie vor dem Gate: keine
-            # Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung.
+        if getattr(agent, "harness", None) in _GATED_HARNESSES:
+            # Das Gate liest den Pane mit den Regeln DIESES Harness. Solange
+            # es nur Claude-Regeln gab, erfuellte eine fremde TUI sie nie —
+            # Sparky war dadurch dauerhaft unerreichbar (jeder Send: 409
+            # agent_starting; Operator-Befund 19.08.2026). Seit es einen
+            # omp-Adapter gibt, gilt das Gate auch dort. Fuer Harnesses OHNE
+            # eigenen Adapter (kimi) bleibt es aus: keine Aussage ueber
+            # Bereitschaft ist besser als eine falsche Ablehnung.
             await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"

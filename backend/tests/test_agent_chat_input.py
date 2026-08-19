@@ -1215,24 +1215,69 @@ async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
     assert sent == []
 
 
-async def test_send_text_skips_readiness_gate_for_foreign_cli(monkeypatch):
-    """Sparky-Befund (19.08.2026): das Readiness-Gate liest mit Claude-Regeln —
-    eine omp/kimi-TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
-    Fuer fremde Harnesses wird blind zugestellt."""
+async def test_send_text_skips_readiness_gate_for_a_harness_without_a_pane_probe(monkeypatch):
+    """Sparky-Befund (19.08.2026): das Readiness-Gate las mit Claude-Regeln —
+    eine fremde TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
+    Fuer einen Harness OHNE eigene Pane-Sonde (kimi) bleibt es deshalb aus:
+    keine Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung."""
     from app.services import agent_chat_input
 
     calls: list[list[str]] = []
     async def _fake_run(argv): calls.append(argv)
     async def _fake_marker(slug): pass
     async def _boom(agent):
-        raise AssertionError("readiness gate darf fuer fremde CLIs nicht laufen")
+        raise AssertionError("readiness gate darf ohne eigene Pane-Sonde nicht laufen")
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
     monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
     monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _boom)
 
+    agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness="kimi")
+    await agent_chat_input.send_text(agent, "hallo kimi")
+    assert any("hallo kimi" in " ".join(c) for c in calls)
+
+
+async def test_send_text_runs_the_readiness_gate_for_omp(monkeypatch):
+    """Seit es eine omp-Pane-Sonde gibt, gilt das Tor auch dort — sonst
+    landet eine Nachricht wieder in einer bootenden TUI (genau der Befund,
+    fuer den das Tor ueberhaupt gebaut wurde)."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    gated: list[object] = []
+    async def _fake_run(argv): calls.append(argv)
+    async def _fake_marker(slug): pass
+    async def _gate(agent): gated.append(agent)
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
+    monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _gate)
+
     agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
     await agent_chat_input.send_text(agent, "hallo sparky")
+    assert gated == [agent]
     assert any("hallo sparky" in " ".join(c) for c in calls)
+    # Text und das absendende Enter sind ZWEI getrennte send-keys-Aufrufe —
+    # die Separate-Enter-Regel gilt fuer jeden Transportpfad einzeln.
+    assert calls[-1][-1] == "Enter"
+    assert "Enter" not in calls[-2]
+
+
+async def test_readiness_gate_uses_the_omp_pane_rules(monkeypatch):
+    """Der Kern des Befunds: derselbe Pane heisst fuer Claude ``unknown``
+    (-> 409) und fuer omp ``idle`` (-> durchlassen)."""
+    from app.services import agent_chat_input
+    from tests.test_omp_chat import PANE_IDLE
+
+    async def _capture(agent): return PANE_IDLE
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    omp_agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input._wait_for_send_readiness(omp_agent)  # kein Fehler
+
+    claude_agent = _StubAgent(slug="davinci", agent_runtime="cli-bridge", harness="claude")
+    monkeypatch.setattr(agent_chat_input, "_SEND_READINESS_POLL_ATTEMPTS", 1)
+    monkeypatch.setattr(agent_chat_input, "_SEND_READINESS_POLL_INTERVAL_SECONDS", 0)
+    with pytest.raises(agent_chat_input.AgentStartingError):
+        await agent_chat_input._wait_for_send_readiness(claude_agent)
 
 
 async def test_effort_capabilities_host_without_claude_harness_gets_nothing():

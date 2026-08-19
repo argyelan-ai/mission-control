@@ -221,7 +221,7 @@ async def test_resolve_aliveness_idle_when_docker_process_alive(tmp_path, monkey
     _touch(f, mtime_offset_seconds=300)
     agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
 
-    async def _fake_process_alive(a):
+    async def _fake_process_alive(a, process_name="claude"):
         return True
 
     monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
@@ -234,7 +234,7 @@ async def test_resolve_aliveness_ended_when_docker_process_dead(tmp_path, monkey
     _touch(f, mtime_offset_seconds=300)
     agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
 
-    async def _fake_process_alive(a):
+    async def _fake_process_alive(a, process_name="claude"):
         return False
 
     monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
@@ -271,7 +271,7 @@ async def test_resolve_aliveness_idle_fallback_when_docker_process_check_unknown
     _touch(f, mtime_offset_seconds=300)
     agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
 
-    async def _fake_process_alive(a):
+    async def _fake_process_alive(a, process_name="claude"):
         return None
 
     monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
@@ -440,7 +440,7 @@ async def test_state_probe_reports_idle_right_after_final_answer(tmp_path, monke
     async def _fake_pane(agent):
         return "⏺ Fertig.\n\n❯ \n"
 
-    async def _fake_aliveness(agent, path):
+    async def _fake_aliveness(agent, path, adapter=None):
         return "active"
 
     monkeypatch.setattr(tc, "capture_pane", _fake_pane)

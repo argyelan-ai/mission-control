@@ -14,11 +14,20 @@ adapter (parser stays pure, capture is the only I/O):
   ``transcript_chat.resolve_transcript_dir``); Boss/host capture is out of
   scope for v1 and always returns ``None``, matching a plain `host` runtime.
 - ``process_alive`` — a second, independent I/O probe (``docker exec ...
-  pgrep -x claude``) used by ``transcript_chat.resolve_aliveness`` to tell
-  "the CLI process is provably gone" apart from "just quiet for a while" —
-  a stale pane's tmux window can still be capturable after the process
+  pgrep -x <process_name>``) used by ``transcript_chat.resolve_aliveness`` to
+  tell "the CLI process is provably gone" apart from "just quiet for a while"
+  — a stale pane's tmux window can still be capturable after the process
   inside it died, so pane text alone can't answer this. Cached ~30s per
-  agent slug; same Boss/host `None` scoping as ``capture_pane``.
+  (agent slug, process name); same Boss/host `None` scoping as
+  ``capture_pane``. The process name comes from the harness adapter
+  (``transcript_adapters``) — it is ``claude`` for Claude Code and ``omp``
+  for Sparky.
+
+``parse_pane_state`` here is the CLAUDE CODE probe. A foreign TUI has its own
+(``omp_chat.parse_pane_state``); the adapter registry picks which one runs.
+Feeding an omp pane to this one produced ``unknown`` for every state — which
+is exactly why the send-readiness gate had to be switched off for foreign
+harnesses before that adapter existed.
 
 Ready-signal glyphs mirrored from ``docker_agent_sync._wait_for_window_ready``
 (``╭─`` / ``❯`` / ``> `` / ``$ ``) — that function already established what a
@@ -322,18 +331,25 @@ async def capture_pane(agent) -> str | None:
 
 
 _PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
-_process_alive_cache: dict[str, tuple[float, bool]] = {}
+_process_alive_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
 
-async def process_alive(agent) -> bool | None:
+async def process_alive(agent, process_name: str = "claude") -> bool | None:
     """Cheap liveness probe independent of pane TEXT: is the agent's actual
-    ``claude`` process still running? ``docker exec ... pgrep -x claude``
+    CLI process still running? ``docker exec ... pgrep -x <process_name>``
     against the agent's own container — a tmux window/pane can outlive the
     process it used to run (e.g. it crashed and dropped to a bare shell), so
     a successful ``capture_pane`` alone isn't proof of this; ``pgrep`` is.
-    Cached ~30s per agent slug (this is polled far more often than a
-    process genuinely starts/dies, and each check is still a real
-    docker-exec round trip).
+    Cached ~30s per (agent slug, process name) — this is polled far more
+    often than a process genuinely starts/dies, and each check is still a
+    real docker-exec round trip.
+
+    ``process_name`` (omp-Runde) kommt aus dem Harness-Adapter
+    (``transcript_adapters.TranscriptAdapter.process_name``). Der frueher
+    fest verdrahtete Wert ``claude`` machte jede omp-Sitzung „beendet":
+    ``pgrep -x claude`` findet im omp-Container nichts, rc=1 heisst aber
+    „nachweislich weg" — der Container faehrt ``omp`` (live geprueft:
+    ``ps`` in ``mc-agent-sparky``).
 
     Returns:
     - ``True``: pgrep found a matching process (rc=0).
@@ -350,11 +366,12 @@ async def process_alive(agent) -> bool | None:
         return None
 
     now = time.time()
-    cached = _process_alive_cache.get(slug)
+    cache_key = (slug, process_name)
+    cached = _process_alive_cache.get(cache_key)
     if cached is not None and (now - cached[0]) < _PROCESS_ALIVE_CACHE_TTL_SECONDS:
         return cached[1]
 
-    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", "claude"]
+    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", process_name]
 
     try:
         result = await asyncio.to_thread(
@@ -374,5 +391,5 @@ async def process_alive(agent) -> bool | None:
         return None
 
     alive = result.returncode == 0
-    _process_alive_cache[slug] = (now, alive)
+    _process_alive_cache[cache_key] = (now, alive)
     return alive
