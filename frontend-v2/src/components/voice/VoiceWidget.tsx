@@ -238,9 +238,19 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 interface VoiceButtonProps {
   size?: number;
   variant?: "header" | "sidebar";
+  enforceTouchTarget?: boolean;
 }
 
-export function VoiceButton({ size = 36, variant = "header" }: VoiceButtonProps) {
+export function VoiceButton({
+  size = 36,
+  variant = "header",
+  /**
+   * Pointer-precise surfaces (desktop sidebar) may opt out of the 44px touch
+   * target — it otherwise forces the button past the height of the row it
+   * sits in. Touch surfaces keep it.
+   */
+  enforceTouchTarget = true,
+}: VoiceButtonProps) {
   const { active, connecting, anchorRef, toggleButton } = useVoiceContext();
 
   return (
@@ -253,8 +263,8 @@ export function VoiceButton({ size = 36, variant = "header" }: VoiceButtonProps)
       style={{
         width: size,
         height: size,
-        minWidth: 44,
-        minHeight: 44,
+        minWidth: enforceTouchTarget ? 44 : size,
+        minHeight: enforceTouchTarget ? 44 : size,
         backgroundColor: active
           ? "var(--color-accent-subtle, rgba(235,232,222,0.10))"
           : variant === "sidebar"

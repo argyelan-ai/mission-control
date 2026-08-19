@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { NAV_GROUPS } from "./Sidebar";
+import { NAV_TREE, type NavGroup } from "@/lib/nav";
 import { useTranslations } from "next-intl";
 import { clearToken, api } from "@/lib/api";
 import { useRouter } from "next/navigation";
@@ -324,11 +324,11 @@ export default function MobileNav() {
               </div>
 
               <nav className="flex-1 py-3 overflow-y-auto">
-                {NAV_GROUPS.map((group) => {
-                  const items = group.items;
+                {NAV_TREE.map((group: NavGroup) => {
+                  const items = group.children;
                   if (items.length === 0) return null;
                   return (
-                    <div key={group.label} className="px-3">
+                    <div key={group.key} className="px-3">
                       <div
                         className="px-2 pt-3 pb-1 select-none"
                         style={{
