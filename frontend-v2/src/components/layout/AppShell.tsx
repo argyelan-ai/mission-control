@@ -18,9 +18,25 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 export default function AppShell({
   children,
   fullHeight = false,
+  mobileChromeless = false,
 }: {
   children: React.ReactNode;
   fullHeight?: boolean;
+  /** Auf dem Handy die App-Leiste UND die Tab-Leiste zurücktreten lassen,
+   *  weil der Bildschirm seine eigene Kopfzeile mitbringt (Sessions-Chat).
+   *
+   *  Vorher stapelten sich dort drei Leisten übereinander plus eine
+   *  88-px-Polsterung, die nur die App-Leiste freihalten sollte — zusammen
+   *  rund 140 px, auf einem Handy über ein Sechstel des Bildes. Die
+   *  Claude-App macht es mit EINER Leiste, und der Chat-Kopf kann genau das
+   *  sein: er trägt Zurück-Pfeil, Namen und Optionen bereits.
+   *
+   *  Der Preis ist bewusst in Kauf genommen (Operator-Entscheid 19.08.2026):
+   *  Aus dem Chat kommt man nur über den Zurück-Pfeil in einen anderen
+   *  Bereich — genauso wie in jeder Handy-App mit einer geschobenen Ansicht.
+   *  Auf dem Desktop ändert sich nichts: dort trägt keine der beiden Leisten
+   *  überhaupt etwas bei (`md:hidden`). */
+  mobileChromeless?: boolean;
 }) {
   const router = useRouter();
   const { setCurrentUser } = useAppStore();
@@ -68,7 +84,7 @@ export default function AppShell({
       <AmbientBackground />
 
       {/* Mobile navigation */}
-      <MobileNav />
+      {!mobileChromeless && <MobileNav />}
 
       {/* Desktop: WorkspaceSwitcher + Sidebar */}
       <div className="hidden md:flex h-full relative z-10">
@@ -87,7 +103,14 @@ export default function AppShell({
           // (scrolling) layout. The wrap also gives flex-col + flex-1 so
           // the graph canvas can partition the remaining vertical space.
           <main
-            className="flex-1 overflow-hidden flex flex-col main-content-pt main-content-pb px-4 md:px-6 lg:px-8"
+            className={`flex-1 overflow-hidden flex flex-col main-content-pb px-4 md:px-6 lg:px-8 ${
+              // Die Polsterung MUSS mitverschwinden: sie hält nur die fixe
+              // App-Leiste frei. Bliebe sie stehen, wäre statt der Leiste ein
+              // gleich grosses Loch da — die Seite wäre kürzer statt höher.
+              // `md:pt-6` hält den Desktop-Abstand, den main-content-pt dort
+              // beisteuert (1.5rem), unverändert.
+              mobileChromeless ? "pt-0 md:pt-6" : "main-content-pt"
+            }`}
           >
             <div className="mx-auto w-full max-w-[1600px] flex flex-col flex-1 min-h-0">
               {children}
@@ -108,7 +131,7 @@ export default function AppShell({
             wo der Viewport-Bezug von `fixed` unzuverlässig ist. StatusBar ist
             auf Mobil ausgeblendet (hidden md:flex), die Tab-Leiste auf Desktop
             (md:hidden) — sie schliessen sich also gegenseitig aus. */}
-        <MobileTabBar />
+        {!mobileChromeless && <MobileTabBar />}
       </div>
 
       {/* Global Command Palette */}

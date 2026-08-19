@@ -379,7 +379,12 @@ export function ChatView({
           `md:hidden`, the desktop toolbar carries `hidden md:flex`. Rendering
           two headers would duplicate the agent name in the DOM for no gain. */}
       <div
-        className="flex items-center gap-2 pl-1 pr-2 md:px-4 py-1.5 md:py-2.5 border-b shrink-0"
+        data-testid="chat-header"
+        // pt-safe-top: auf dem Handy liegt ueber dieser Zeile nichts mehr
+        // (AppShell blendet die App-Leiste auf dem Chat-Schirm aus), also muss
+        // sie den Notch selbst freihalten — sonst sitzt der Agentenname unter
+        // der Uhrzeit des Telefons.
+        className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-1.5 md:py-2.5 pt-safe-top md:pt-2.5 border-b shrink-0"
         style={{ borderColor: C.border }}
       >
         {onBack && (
@@ -387,29 +392,58 @@ export function ChatView({
             type="button"
             onClick={onBack}
             aria-label="Zurück zur Sessionliste"
-            className="flex md:hidden items-center justify-center w-10 h-10 shrink-0 rounded-lg cursor-pointer"
-            style={{ color: C.textSecondary }}
+            // Rund statt eckig (Operator-Wunsch 19.08.2026, Vorbild
+            // Claude-App): ein runder Knopf liest sich als Navigation, ein
+            // eckiger als Schaltflaeche im Inhalt.
+            className="relative z-10 flex md:hidden items-center justify-center w-9 h-9 shrink-0 rounded-full cursor-pointer"
+            style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
           >
-            <ChevronLeft size={20} />
+            <ChevronLeft size={19} />
           </button>
         )}
 
-        <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-baseline md:gap-2 pl-2 md:pl-0">
-          <span className="text-[14px] md:text-[13px] font-semibold md:font-medium truncate shrink-0" style={{ color: C.textPrimary }}>
+        {/* EIN Titel-Block, der nur seine Anordnung wechselt — nicht zwei
+            Bloecke mit `md:hidden`/`hidden md:`. Zwei waeren derselbe Name
+            zweimal im Dokument: Vorleseprogramme lesen ihn doppelt, und jede
+            Suche nach dem Namen findet zwei Treffer (genau daran ist der
+            erste Versuch hier aufgelaufen).
+
+            Auf dem Handy liegt er ABSOLUT in der Mitte, nicht im Fluss
+            zwischen den Knoepfen: im Fluss haenge seine Position davon ab,
+            wie breit links und rechts gerade sind (Badge da oder nicht) — der
+            Name wuerde je nach Zustand wandern. `px-14` haelt ihn von den
+            beiden runden Knoepfen frei, `pointer-events-none` aus ihrem Weg.
+
+            Ab md kehrt er in den Fluss zurueck: dort ist der Kopf eine
+            Werkzeugleiste, kein Bildschirmtitel, und ein mittiger Name haette
+            neben den Schaltern rechts keinen Bezugspunkt. */}
+        <div
+          data-testid="chat-header-title"
+          className="absolute inset-x-0 px-14 flex flex-col items-center justify-center text-center pointer-events-none
+                     md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline md:gap-2
+                     md:text-left md:pointer-events-auto"
+        >
+          <span
+            className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate max-w-full md:shrink-0"
+            style={{ color: C.textPrimary }}
+          >
             {agent.name}
           </span>
-          {/* What this session is currently about. Stacked under the name on a
-              phone (where the header is the screen title), inline beside it on
-              desktop — the desktop header had no answer to "what is this agent
-              working on" at all, and the sidebar row that does is easy to lose
-              once the rail is collapsed. */}
           {contextLine && (
-            <span className="text-xs truncate min-w-0" style={{ color: C.textMuted }}>
+            <span
+              className="text-[11px] md:text-xs truncate max-w-full leading-tight md:min-w-0"
+              style={{ color: C.textMuted }}
+            >
               {contextLine}
             </span>
           )}
         </div>
 
+        {/* Rechte Gruppe: EIN ml-auto buendelt Badge und "…" am rechten Rand.
+            Zwei getrennte auto-Margins wuerden den freien Platz unter sich
+            aufteilen und das Badge in die Naehe der Mitte schieben — genau
+            dorthin, wo der Titel liegt. */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
         {/* Three states, three treatments — and only ONE of them is a claim
             about the session being over. The old two-way badge read `live`,
             which is mtime-based and therefore false for any CLI that is running
@@ -420,7 +454,7 @@ export function ChatView({
           <span
             data-testid="session-badge"
             data-aliveness={aliveness}
-            className="text-[10px] font-medium px-1.5 py-0.5 rounded font-mono shrink-0"
+            className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded font-mono shrink-0"
             style={{
               background: aliveness === "active" ? `${C.online}1A` : C.bgHover,
               color: aliveness === "active" ? C.online : C.textMuted,
@@ -435,7 +469,7 @@ export function ChatView({
             data-testid="session-badge"
             data-aliveness="idle"
             title="Session läuft, wartet am Prompt"
-            className="w-1.5 h-1.5 rounded-full shrink-0"
+            className="relative z-10 w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: C.textDim }}
             aria-label="Session läuft, wartet am Prompt"
           />
@@ -446,13 +480,14 @@ export function ChatView({
           onClick={() => setOptionsOpen(true)}
           aria-label="Chat-Optionen"
           aria-expanded={optionsOpen}
-          className="flex md:hidden items-center justify-center w-10 h-10 shrink-0 rounded-lg cursor-pointer"
-          style={{ color: C.textSecondary }}
+          className="relative z-10 flex md:hidden items-center justify-center w-9 h-9 shrink-0 rounded-full cursor-pointer"
+          style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
         >
-          <MoreHorizontal size={19} />
+          <MoreHorizontal size={18} />
         </button>
+        </div>
 
-        <div className="ml-auto hidden md:flex items-center gap-2 shrink-0">
+        <div className="hidden md:flex items-center gap-2 shrink-0">
           {effectiveView === "chat" && (
             <div
               className="flex items-center rounded-md overflow-hidden"

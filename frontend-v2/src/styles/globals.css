@@ -234,6 +234,13 @@
      Das +1px ist die border-bottom der Kopfleiste — ohne sie bleibt eine
      1px-Lichtkante zwischen Leiste und Overlay stehen (live nachgemessen). */
   --mobile-appbar-h: calc(env(safe-area-inset-top) + 4rem + 1px);
+  /* Hoehe des CHAT-Kopfes (Safe-Area + 6px + 36px Knopf + 6px + 1px Linie).
+     Die Handy-Blaetter im Chat (Optionen, Kontext) richten sich hieran aus und
+     NICHT mehr an --mobile-appbar-h: auf dem Chat-Bildschirm gibt es die
+     App-Leiste nicht mehr (AppShell `mobileChromeless`), dort ist der Chat-Kopf
+     die einzige Leiste. Mit dem alten Wert blieb ueber dem Blatt ein Streifen
+     Gespraech sichtbar, der zu nichts gehoerte. */
+  --mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem);
 
   /* Status-Text — AA-sichere Stufen für Fliesstext (mirrors colors.ts STATUS_TEXT) */
   --color-status-error-text: #fa4942;
@@ -712,6 +719,35 @@ option {
    Die Leiste liegt jetzt als Flex-Kind der App-Shell im Fluss und beansprucht
    ihren Platz selbst (inkl. safe-area-inset-bottom) — ein Ausgleich wäre
    doppelt. Desktop hatte nie einen Ausgleich und bleibt unverändert bei 1rem. */
+/* ── Safe-Area-Helfer ────────────────────────────────────────────────────
+   Auf dem Chat-Bildschirm blendet AppShell die App-Leiste aus (siehe
+   `mobileChromeless`). Damit liegt der Chat-Kopf direkt unter der Statusleiste
+   des Telefons und muss den Notch selbst freihalten. Ueber md verschwindet der
+   Zuschlag wieder — dort gibt es keine Safe-Area und der Kopf ist eine
+   gewoehnliche Werkzeugleiste. */
+/* ACHTUNG Kaskade: Diese Regeln sind UNGESCHICHTETES CSS und schlagen damit
+   jede Tailwind-Utility aus `@layer utilities` — auch `md:pt-2.5`, egal wie
+   spezifisch die aussieht (dieselbe Falle, an der `focus-visible:outline-none`
+   im Composer schon einmal wirkungslos blieb). Ein `md:`-Gegenstueck in der
+   Klassenliste wuerde hier also NICHT greifen. Darum ist der Geltungsbereich
+   direkt in die Regel gebaut: unterhalb von md, sonst gar nicht. */
+@media (max-width: 767px) {
+  .pt-safe-top {
+    padding-top: calc(env(safe-area-inset-top) + 0.375rem);
+  }
+}
+
+/* Der Composer soll den reservierten Streifen unter sich MITBENUTZEN statt
+   darueber zu schweben (Operator-Wunsch 19.08.2026, iPhone 15): die Pille
+   laeuft in die Home-Balken-Zone hinein, die Rundung wird mitgezogen. Der
+   Zuschlag sitzt darum am Container, nicht an der Pille — so faerbt der
+   Hintergrund bis zur Kante durch und die Pille behaelt ihren Abstand. */
+@media (max-width: 767px) {
+  .pb-safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+  }
+}
+
 .main-content-pb {
   padding-bottom: 1rem;
 }

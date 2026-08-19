@@ -919,4 +919,42 @@ describe("ChatView", () => {
     );
     expect(screen.getByText("Wähle eine Session in der Seitenleiste.")).toBeInTheDocument();
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Handy-Kopfzeile — mittiger Name, runde Knöpfe (19.08.2026)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe("Handy-Kopfzeile", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("legt den Namen in einen eigenen, mittigen Block", () => {
+      renderChatView({ onBack: vi.fn() });
+      const title = screen.getByTestId("chat-header-title");
+      // Absolut zentriert, damit der Name wirklich in der Bildmitte steht und
+      // nicht davon abhängt, wie breit Zurück-Pfeil und "…" gerade sind.
+      expect(title.className).toContain("absolute");
+      expect(title.className).toContain("text-center");
+    });
+
+    it("hält oben den Notch frei, weil keine App-Leiste mehr darüber liegt", () => {
+      renderChatView({ onBack: vi.fn() });
+      const header = screen.getByTestId("chat-header");
+      expect(header.className).toContain("pt-safe-top");
+    });
+
+    it("gibt Zurück und Optionen eine runde Form", () => {
+      renderChatView({ onBack: vi.fn() });
+      expect(screen.getByLabelText("Zurück zur Sessionliste").className).toContain("rounded-full");
+      expect(screen.getByLabelText("Chat-Optionen").className).toContain("rounded-full");
+    });
+
+    it("zeigt die Aufgaben-Zeile mittig unter dem Namen", () => {
+      renderChatView({ onBack: vi.fn(), contextLine: "Login reparieren" });
+      const title = screen.getByTestId("chat-header-title");
+      expect(title.textContent).toContain("Login reparieren");
+    });
+  });
+
 });

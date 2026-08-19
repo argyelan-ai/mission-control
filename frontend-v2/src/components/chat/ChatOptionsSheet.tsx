@@ -73,9 +73,9 @@ export function ChatOptionsSheet({
             transition={{ duration: 0.18 }}
             // Top edge at the app bar, not at 0: this lives inside the content
             // column's z-10 stacking context and can never paint over the
-            // z-40 header (see --mobile-appbar-h). Stopping there is honest;
+            // z-40 header (see --mobile-chat-topbar-h). Stopping there is honest;
             // pretending to cover it would just leave a bright strip.
-            className="fixed inset-x-0 bottom-0 top-[var(--mobile-appbar-h)] z-40 md:hidden"
+            className="fixed inset-x-0 bottom-0 top-[var(--mobile-chat-topbar-h)] z-40 md:hidden"
             // Scrim derived from the palette's deepest neutral (bg-deep at
             // 75%), not the warm near-black the older MobileNav drawer uses —
             // v4 off-blacks are neutral by doctrine.

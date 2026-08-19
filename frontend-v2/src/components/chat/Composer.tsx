@@ -540,7 +540,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       // safe-area padding here — on mobile the app's bottom tab bar sits
       // below this and already owns `env(safe-area-inset-bottom)`; adding it
       // again would double the gap.
-      className="relative px-3 pt-2 pb-3 md:pb-4 md:px-4"
+      // pb-safe-bottom (nur Handy): iOS reserviert unten ~34 px fuer den
+      // Home-Balken. Bisher endete der Composer DARUEBER und der Streifen
+      // blieb tote Flaeche. Jetzt traegt der Container den Zuschlag, die
+      // Pille laeuft mit ihrer Rundung bis an die Kante heran statt darueber
+      // zu schweben (Operator-Wunsch 19.08.2026, iPhone 15). Der Zuschlag
+      // sitzt bewusst am Container und nicht an der Pille — sonst wuerde die
+      // Pille selbst hoeher, statt naeher an den Rand zu ruecken.
+      className="relative px-3 pt-2 pb-safe-bottom md:pb-4 md:px-4"
     >
       {paletteVisible && (
         <div
