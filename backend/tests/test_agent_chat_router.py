@@ -773,3 +773,131 @@ async def test_tailer_boss_state_from_mtime_never_permission_prompt(manager, fak
         await manager.release("agent-1")
 
     assert not any(d.get("status") == "permission_prompt" for _, _, d in fake_broadcast)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Router: /agents/{id}/chat/attachment  (Chat-Anhänge, 19.08.2026)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def attachment_root(tmp_path, monkeypatch):
+    """Anhang-Root nach tmp_path — nie in den echten ~/.mc schreiben."""
+    import app.services.chat_attachments as ca
+    target = tmp_path / "references"
+    monkeypatch.setattr(ca, "_references_root", lambda: str(target))
+    return target
+
+
+async def test_attachment_upload_returns_the_absolute_path(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("foto.png", b"\x89PNG-bytes", "image/png")},
+    )
+
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["name"] == "foto.png"
+    assert body["isImage"] is True
+    assert body["bytes"] == len(b"\x89PNG-bytes")
+    assert body["path"].startswith(str(attachment_root))
+    assert "/chat/rex/" in body["path"]
+
+
+async def test_attachment_accepts_any_file_type(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Operator-Entscheid 19.08.2026: keine Typen-Liste. Ob der Agent die
+    Datei lesen kann, ist nicht unsere Zusage."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    for name, mime in (("a.heic", "image/heic"), ("b.mov", "video/quicktime"),
+                       ("c.html", "text/html"), ("d.xyz", "application/x-unknown")):
+        res = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/chat/attachment",
+            files={"file": (name, b"payload", mime)},
+        )
+        assert res.status_code == 201, f"{name}: {res.text}"
+
+
+async def test_attachment_works_for_every_harness(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Operator-Entscheid 19.08.2026: alle Agenten, nicht nur Claude."""
+    for harness in ("claude", "openclaude", "omp", "kimi"):
+        agent = await make_agent(
+            name=f"A-{harness}", agent_runtime="cli-bridge", harness=harness
+        )
+        res = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/chat/attachment",
+            files={"file": ("x.png", b"x", "image/png")},
+        )
+        assert res.status_code == 201, f"{harness}: {res.text}"
+
+
+async def test_attachment_413_when_too_large(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    import app.services.chat_attachments as ca
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("gross.bin", b"x" * (ca.MAX_BYTES + 1), "application/octet-stream")},
+    )
+
+    assert res.status_code == 413
+    # Die Meldung muss die Grenze nennen — stilles Verschlucken war der
+    # ausdrückliche Abnahme-Punkt.
+    assert "25" in res.json()["detail"]
+
+
+async def test_attachment_409_for_agents_that_cannot_receive_input(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Hermes ist ein Host-Agent ausserhalb der Boss-Allowlist — er nimmt
+    ueberhaupt keinen Chat-Text an. Dann ist auch ein Anhang sinnlos, und das
+    UI erfaehrt den Grund statt einer Datei, die nie jemand liest."""
+    agent = await make_agent(name="Hermes", agent_runtime="host", harness="hermes")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("x.png", b"x", "image/png")},
+    )
+
+    assert res.status_code == 409
+    assert res.json()["reason"] == "input_not_supported"
+
+
+async def test_attachment_422_on_traversal_name(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("../../etc/passwd", b"x", "text/plain")},
+    )
+
+    assert res.status_code == 422
+
+
+async def test_attachment_requires_auth(client: AsyncClient, make_agent, attachment_root):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    res = await client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("x.png", b"x", "image/png")},
+    )
+    assert res.status_code == 401
+
+
+async def test_attachment_404_for_unknown_agent(auth_client: AsyncClient, attachment_root):
+    res = await auth_client.post(
+        f"/api/v1/agents/{uuid.uuid4()}/chat/attachment",
+        files={"file": ("x.png", b"x", "image/png")},
+    )
+    assert res.status_code == 404

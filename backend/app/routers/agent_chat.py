@@ -6,11 +6,12 @@ plus a live SSE tail. Parsing/session-resolution lives in
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -26,12 +27,18 @@ from app.services.agent_chat_input import (
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
+    can_receive_input,
     effort_capabilities,
     model_options_capabilities,
     send_keys,
     send_text,
     set_effort,
     slash_command_capabilities,
+)
+from app.services.chat_attachments import (
+    ChatAttachmentError,
+    cleanup_old_attachments,
+    store_attachment,
 )
 from app.services.harness_catalog import get_observed_model_windows
 from app.services.sse import _sse_generator
@@ -44,6 +51,8 @@ from app.services.transcript_chat import (
     transcript_allowed,
 )
 from app.services.workspace_diff import NoWorkspaceError, resolve_workspace_path, workspace_diff
+
+logger = logging.getLogger("mc.agent_chat")
 
 router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 
@@ -243,6 +252,62 @@ async def post_chat_input(
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:
         return JSONResponse(status_code=409, content=_AGENT_STARTING)
+
+
+@router.post("/agents/{agent_id}/chat/attachment", status_code=201)
+async def post_chat_attachment(
+    agent_id: uuid.UUID,
+    file: UploadFile = File(...),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Nimmt eine Datei entgegen und gibt den absoluten Pfad zurueck, unter
+    dem der Agent sie lesen kann.
+
+    Der Composer haengt diesen Pfad danach an die Nachricht — die CLI liest
+    die Datei selbst. Es gibt bewusst KEINE Typen-Beschraenkung
+    (Operator-Entscheid 19.08.2026): ob ein Agent eine Datei versteht, ist
+    seine Sache, das UI legt nur ab. Gefaehrlich ist das nicht — aktive
+    Inhalte liefert ``fs_service.read_stream`` grundsaetzlich als Download
+    aus, nie inline.
+
+    409 ``{"reason":"input_not_supported"}`` fuer Agenten, die ueberhaupt
+    keinen Chat-Text annehmen (Host-Agenten ausser Boss): dort waere die
+    Datei nur Platte ohne Empfaenger. 413 wenn zu gross, 422 bei einem
+    unbrauchbaren Dateinamen."""
+    agent = await _load_agent_or_404(agent_id, session)
+
+    if not can_receive_input(agent):
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+
+    contents = await file.read()
+    slug = getattr(agent, "slug", None) or ""
+
+    try:
+        stored = await asyncio.to_thread(
+            store_attachment, slug=slug, filename=file.filename or "", contents=contents
+        )
+    except ChatAttachmentError as exc:
+        # Zu gross ist die einzige Ablehnung, die der Nutzer beim Auswaehlen
+        # nicht sehen konnte — sie bekommt darum ihren eigenen Status, damit
+        # das UI sie als Hinweis statt als Fehler zeigen kann.
+        status = 413 if "maximal" in str(exc) else 422
+        raise HTTPException(status_code=status, detail=str(exc))
+
+    # Beilaeufig aufraeumen: kein Cron, kein Dienst, keine zusaetzliche
+    # bewegliche Teile — der Ordner wird genau dann geprueft, wenn er auch
+    # waechst. Fehler hier duerfen den Upload nie scheitern lassen.
+    try:
+        await asyncio.to_thread(cleanup_old_attachments)
+    except Exception:
+        logger.warning("chat attachment cleanup failed", exc_info=True)
+
+    return {
+        "path": stored.path,
+        "name": stored.name,
+        "bytes": stored.bytes,
+        "isImage": stored.is_image,
+    }
 
 
 @router.post("/agents/{agent_id}/chat/keys", status_code=204)
