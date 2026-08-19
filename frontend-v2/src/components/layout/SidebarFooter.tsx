@@ -1,0 +1,169 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
+import { Settings, LogOut } from "lucide-react";
+import { useAppStore } from "@/lib/store";
+import { api, clearToken } from "@/lib/api";
+
+const MONO = { fontFamily: "var(--font-p2-mono)" };
+
+/**
+ * SidebarFooter — Shell v4 zone 5. Replaces the full-width cyan StatusBar:
+ * one dot for system health in plain words, plus the user.
+ * Same data source as the old bar (system.status), a fraction of the noise.
+ */
+export default function SidebarFooter({ collapsed = false }: { collapsed?: boolean }) {
+  const t = useTranslations("shell");
+  const tNav = useTranslations("nav");
+  const router = useRouter();
+  const { currentUser } = useAppStore();
+
+  const { data: status, isError } = useQuery({
+    queryKey: ["system-status"],
+    queryFn: api.system.status,
+    refetchInterval: 30_000,
+  });
+
+  // Gateway was retired (ADR-039) — health now reflects the core dependencies.
+  const dbOk = status?.components?.database?.status === "ok";
+  const redisOk = status?.components?.redis?.status === "ok";
+
+  let tone: "ok" | "warn" | "err";
+  let health: string;
+  if (isError || (status && !dbOk && !redisOk)) {
+    tone = "err";
+    health = t("systemNoContact");
+  } else if (!status) {
+    tone = "warn";
+    health = t("systemChecking");
+  } else if (dbOk && redisOk) {
+    tone = "ok";
+    health = t("systemOk");
+  } else {
+    tone = "warn";
+    health = !dbOk ? t("systemDbDegraded") : t("systemRedisDegraded");
+  }
+
+  const toneColor =
+    tone === "ok"
+      ? "var(--color-p2-ok)"
+      : tone === "warn"
+        ? "var(--color-p2-wrn)"
+        : "var(--color-p2-err)";
+
+  const initial = (currentUser?.name?.[0] ?? "?").toUpperCase();
+
+  function handleLogout() {
+    clearToken();
+    router.replace("/login");
+  }
+
+  if (collapsed) {
+    return (
+      <div
+        className="mt-auto shrink-0 flex flex-col items-center gap-2.5 pt-2.5"
+        style={{ borderTop: "1px solid var(--color-p2-line2)" }}
+      >
+        <span
+          title={health}
+          style={{ width: 7, height: 7, borderRadius: "999px", backgroundColor: toneColor }}
+        />
+        <Link
+          href="/settings"
+          aria-label={t("settings")}
+          className="grid place-items-center"
+          style={{ width: 30, height: 30, borderRadius: "999px", color: "var(--color-p2-dim)" }}
+        >
+          <Settings size={14} />
+        </Link>
+        <div
+          title={currentUser?.name ?? ""}
+          className="grid place-items-center"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: "999px",
+            backgroundColor: "var(--color-p2-amb)",
+            color: "var(--color-p2-inv)",
+            fontFamily: "var(--font-p2-mono)",
+            fontWeight: 700,
+            fontSize: "12.5px",
+          }}
+        >
+          {initial}
+        </div>
+        <button
+          onClick={handleLogout}
+          aria-label={tNav("logout")}
+          className="grid place-items-center cursor-pointer mb-1"
+          style={{ width: 30, height: 30, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        >
+          <LogOut size={13} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mt-auto shrink-0 flex items-center gap-2.5 pt-2.5 px-1.5"
+      style={{ borderTop: "1px solid var(--color-p2-line2)" }}
+    >
+      <div
+        className="grid place-items-center shrink-0"
+        style={{
+          width: 30,
+          height: 30,
+          borderRadius: "999px",
+          backgroundColor: "var(--color-p2-amb)",
+          color: "var(--color-p2-inv)",
+          fontFamily: "var(--font-p2-mono)",
+          fontWeight: 700,
+          fontSize: "12.5px",
+        }}
+      >
+        {initial}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div
+          className="truncate"
+          style={{ ...MONO, fontSize: "11.5px", fontWeight: 700, color: "var(--color-p2-txt)" }}
+        >
+          {currentUser?.name ?? "—"}
+        </div>
+        <div className="flex items-center gap-1.5" style={{ ...MONO, fontSize: "9.5px", color: "var(--color-p2-dim)" }}>
+          <span
+            aria-hidden
+            style={{ width: 7, height: 7, borderRadius: "999px", backgroundColor: toneColor, flexShrink: 0 }}
+          />
+          <span className="truncate">{health}</span>
+        </div>
+      </div>
+
+      <Link
+        href="/settings"
+        aria-label={t("settings")}
+        className="grid place-items-center shrink-0"
+        style={{ width: 28, height: 28, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)")}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
+      >
+        <Settings size={14} />
+      </Link>
+      <button
+        onClick={handleLogout}
+        aria-label={tNav("logout")}
+        className="grid place-items-center shrink-0 cursor-pointer"
+        style={{ width: 28, height: 28, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-err)")}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
+      >
+        <LogOut size={13} />
+      </button>
+    </div>
+  );
+}
