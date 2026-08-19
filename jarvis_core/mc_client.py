@@ -51,7 +51,7 @@ _client = httpx.AsyncClient(
 # Deutsche + englische Stoppwörter, die der Operator beim Sprechen reinwirft aber
 # die in der Vault FTS5-Suche nichts beitragen. Bewusst klein gehalten —
 # wir wollen NICHT semantisch wichtige Wörter rauswerfen (z.B. "morgen"
-# ist hier drin, aber "Morgen-Briefing" hat den Bindestrich-Token "morgen"
+# ist hier drin, aber "Morgen-Briefing" hat den Bindblueprint-Token "morgen"
 # der INHALT ist; die Heuristik unten behandelt den Spezialfall: wenn die
 # Query nach dem Filtern leer wird, geben wir die Original-Query zurück).
 _STOPWORDS = frozenset({
@@ -98,7 +98,7 @@ def _smart_query(q: str) -> tuple[str, bool]:
     AND-Semantik dann 0 Treffer liefert wenn auch nur ein irrelevantes
     Wort (z.B. "heutiges") nirgends im Vault steht. Heuristik:
 
-    1. Lowercase + auf Wort-Tokens splitten (alpha + Bindestrich/Underscore).
+    1. Lowercase + auf Wort-Tokens splitten (alpha + Bindblueprint/Underscore).
     2. Stoppwörter wegfiltern.
     3. Falls ≥ 2 Tokens übrigbleiben → Wörter mit Komma trennen (FTS5
        bekommt sie als getrennte Phrasen, der index.search-Sanitizer
@@ -112,7 +112,7 @@ def _smart_query(q: str) -> tuple[str, bool]:
     raw = (q or "").strip()
     if not raw:
         return raw, False
-    # Tokens: alphanumeric + Bindestrich/Underscore (so dass "morgen-briefing"
+    # Tokens: alphanumeric + Bindblueprint/Underscore (so dass "morgen-briefing"
     # ein Token bleibt). Punkte/Kommas etc. fliegen raus.
     tokens = re.findall(r"[\wäöüÄÖÜß][\wäöüÄÖÜß\-_]*", raw, flags=re.UNICODE)
     if not tokens:

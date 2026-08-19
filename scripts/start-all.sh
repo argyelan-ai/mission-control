@@ -38,6 +38,23 @@ until docker compose ps backend --format "{{.Health}}" 2>/dev/null | grep -q hea
     sleep 1
 done
 
+# 1c. Eigene Agenten-Datei anlegen, falls sie fehlt (frischer Klon).
+# docker/docker-compose.agents.yml liegt NICHT in der Versionsverwaltung: sie
+# wird zur Laufzeit fortgeschrieben und beschreibt die eigene Flotte
+# (Agentennamen, Projektbezuege, Mount-Pfade). Ausgeliefert wird die leere
+# Vorlage; ab hier gehoert die Kopie dem Betreiber. Mission Control traegt
+# jeden neu angelegten Agenten selbst ein.
+AGENTS_YML="docker/docker-compose.agents.yml"
+AGENTS_EXAMPLE="docker/docker-compose.agents.example.yml"
+if [ ! -f "$AGENTS_YML" ]; then
+    if [ -f "$AGENTS_EXAMPLE" ]; then
+        cp "$AGENTS_EXAMPLE" "$AGENTS_YML"
+        echo "  [1c]  Eigene Agenten-Datei aus der Vorlage angelegt (noch keine Agenten)"
+    else
+        echo "  [1c]  WARNUNG: weder $AGENTS_YML noch $AGENTS_EXAMPLE gefunden" >&2
+    fi
+fi
+
 # 2. Agent-Tokens aus Vault generieren (falls vorhanden)
 ENV_AGENTS="docker/.env.agents"
 GENERATED=$(docker compose exec -T backend python3 -c "

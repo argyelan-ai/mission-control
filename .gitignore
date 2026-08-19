@@ -101,3 +101,12 @@ backend/templates/SOUL.operator.md.j2
 
 # Impeccable design-hook cache (config.json bleibt getrackt)
 .impeccable/hook.cache.json
+
+# Die eigene Agenten-Flotte. Diese Datei wird zur Laufzeit fortgeschrieben
+# (backend/app/services/compose_renderer.py) und beschreibt die Maschine ihres
+# Besitzers — Agentennamen, Projekt-/Kundenbezuege, Mount-Pfade. Laege sie in
+# der Versionsverwaltung, veroeffentlichte jeder Commit die Flotte des Autors.
+# Ausgeliefert wird stattdessen die leere Vorlage
+# docker/docker-compose.agents.example.yml; scripts/start-all.sh legt beim
+# ersten Start die persoenliche Kopie an.
+docker/docker-compose.agents.yml

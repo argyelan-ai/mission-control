@@ -13,7 +13,7 @@ das bisher aus dem **Namen** abgeleitet wurde: `mc_token_{agent.name.lower()}`
 - **Rename verwaist den Key.** Ein einfacher PATCH-Rename rotiert den Token
   nicht und rendert Compose nicht neu — das Etikett zeigt weiter auf den alten
   Namen. `delete_agent` musste in PR #99 deshalb um zwei Key-Varianten
-  (Bindestrich + Leerzeichen) herumbauen, um Orphans zu treffen.
+  (Bindblueprint + Leerzeichen) herumbauen, um Orphans zu treffen.
 - **Leerzeichen brechen Parsing.** Ein mehrwortiger Agent („Host Testpilot")
   erzeugte `mc_token_host testpilot`. `start-all.sh` generierte daraus eine
   Env-Zeile `MC_TOKEN_HOST TESTPILOT=…`, die `docker/.env.agents` zerbrach
@@ -22,7 +22,7 @@ das bisher aus dem **Namen** abgeleitet wurde: `mc_token_{agent.name.lower()}`
   Consumer) — Drift-Gefahr.
 
 `Agent.slug` (gesetzt beim Insert via `_agent_fill_slug`, **nie** bei Rename,
-nur `[a-z0-9-]`, Leerzeichen→Bindestrich) ist bereits die stabile Identität für
+nur `[a-z0-9-]`, Leerzeichen→Bindblueprint) ist bereits die stabile Identität für
 Workspace-/Deliverable-Pfade und den Compose-Envkey. Der Token-Vault war das
 letzte namensbasierte Stück.
 

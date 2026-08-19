@@ -817,10 +817,22 @@ def _insert_new_agent_blocks(
     # that starts with a non-space, non-comment character and ends with ``:``.
     # We start scanning from the line after ``services:`` until we find a
     # sibling top-level key.
+    # ``services: {}`` wird mitgelesen, nicht nur ``services:``. Grund: die
+    # ausgelieferte Vorlage (docker-compose.agents.example.yml) enthaelt
+    # bewusst KEINE Agenten — sonst wuerde jede Installation mit der Flotte
+    # ihres Autors starten. Ein blankes ``services:`` waere aber ungueltiges
+    # Compose ("services must be a mapping", live geprueft), also steht dort
+    # die leere Abbildung. Ohne diesen Zweig faende der Renderer die Sektion
+    # nicht und haengte den ersten Agenten ans DATEIENDE — hinter
+    # ``networks:``/``volumes:``, wo er als top-level Schluessel landet und
+    # die Datei zerstoert.
     services_header_idx: int | None = None
+    services_header_is_empty_map = False
     for i, line in enumerate(lines):
-        if re.match(r"^services:\s*$", line):
+        m = re.match(r"^services:\s*(\{\s*\})?\s*$", line)
+        if m:
             services_header_idx = i
+            services_header_is_empty_map = m.group(1) is not None
             break
 
     # Default: insert at end of file content.
@@ -847,6 +859,12 @@ def _insert_new_agent_blocks(
 
     if not blocks_to_insert:
         return content
+
+    # Erster Agent in einer leeren Vorlage: die leere Abbildung muss weg,
+    # sonst stuende ``services: {}`` ueber echten Eintraegen — YAML nimmt dann
+    # die leere Abbildung und ignoriert alles darunter.
+    if services_header_is_empty_map and services_header_idx is not None:
+        lines[services_header_idx] = "services:"
 
     # Insert all blocks at the computed position, each preceded by a blank line.
     insert_text = "\n" + "\n\n".join(blocks_to_insert) + "\n"
