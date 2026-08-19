@@ -1068,8 +1068,12 @@ export interface AiProviderSettingsResponse {
   state: {
     hf_token_set: boolean;
     ollama_api_key_set: boolean;
-    /** A cloud provider is selected — without a key those calls get a 401. */
+    embeddings_api_key_set: boolean;
+    embeddings_cloud_api_key_set: boolean;
+    /** Ollama Cloud drives insights — without a key those calls get a 401. */
     ollama_key_required: boolean;
+    /** The cloud embeddings arm is selected — it needs its own key. */
+    embeddings_cloud_key_required: boolean;
   };
 }
 

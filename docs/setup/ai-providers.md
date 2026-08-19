@@ -38,30 +38,60 @@ default. You only fill in what should differ.
 
 ## The providers
 
-| Provider | Means | Needs a key |
-|---|---|---|
-| `spark` | **Your own GPU box** — any OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp). The default. | No — it's your machine |
-| `ollama_cloud` | **ollama.com**, the hosted Ollama service | Yes, an Ollama Cloud key |
-| `off` | Insights only: no report is generated | — |
+| Provider | Function | Means | Needs a key |
+|---|---|---|---|
+| `spark` (shown as *Self-hosted*) | Embeddings + Insights | **Your own machine** — any OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp's `llama-server`). The default. | Optional — only if your endpoint sits behind auth |
+| `cloud` | Embeddings | **Any hosted OpenAI-compatible** `/v1/embeddings` (Together, DeepInfra, Fireworks, …) | Yes, that host's API key |
+| `ollama_cloud` | Insights | **ollama.com**, the hosted Ollama service | Yes, an Ollama Cloud key |
+| `off` | Insights | No report is generated | — |
 
 > **Ollama Cloud means ollama.com, not a local Ollama.** Running Ollama
 > locally next to MC is deliberately not an option here. On Apple Silicon it
 > competes with Docker for the same unified memory and can take the whole
 > machine down. If you want local inference, run it on a separate box and
-> point `spark` at it — that is exactly what the `spark` provider is for.
+> point the self-hosted provider at it.
+>
+> Ollama Cloud is an **insights** arm only: ollama.com hosts chat models but
+> no embedding models, and it has no OpenAI-compatible `/v1/embeddings` path.
+> For hosted embeddings use the `cloud` provider with a host that actually
+> serves your embedding model.
 
 ## 1. Embeddings
 
-Pick the provider, and optionally pin an endpoint and a model:
+Two arms, and **each arm keeps its own endpoint and model** — that is what
+makes the provider select a real one-click switch. Flipping between
+self-hosted and cloud never drags a URL from the other side along.
+
+**Self-hosted** (the default):
 
 ```
-AI_EMBEDDINGS_PROVIDER=spark        # spark | ollama_cloud
-AI_EMBEDDINGS_URL=                  # empty = the provider's default
-AI_EMBEDDINGS_MODEL=                # empty = the provider's default
+AI_EMBEDDINGS_PROVIDER=spark        # spark = self-hosted | cloud
+AI_EMBEDDINGS_URL=                  # empty = SPARK_EMBEDDING_URL from .env
+AI_EMBEDDINGS_MODEL=                # empty = SPARK_EMBEDDING_MODEL from .env
 ```
 
-With `spark` and both overrides empty, MC uses `SPARK_EMBEDDING_URL` and
-`SPARK_EMBEDDING_MODEL` — i.e. exactly what it did before this page existed.
+Point it at whatever OpenAI-compatible server you run — LM Studio, vLLM, or a
+tiny `llama-server` (from llama.cpp) with an embedding GGUF. If your endpoint
+requires a bearer token, store the optional *Self-hosted key* on the settings
+page.
+
+A **fresh install ships with no endpoint configured**. That is a deliberate
+state, not an oversight: MC saves memories without a vector, attempts no
+network call, and the settings page tells you what to fill in. (Earlier
+versions shipped a placeholder IP as the default — which meant every memory
+insert hammered a dead address. Don't recreate that: point the URL at a real
+server or leave it empty.)
+
+**Cloud**:
+
+```
+AI_EMBEDDINGS_CLOUD_URL=            # e.g. https://api.together.xyz/v1/embeddings
+AI_EMBEDDINGS_CLOUD_MODEL=          # e.g. nomic-ai/nomic-embed-text-v1.5
+```
+
+Pick a host that serves the **same embedding model** as your self-hosted side
+and store its API key as the *Cloud embeddings key*. Same model, same
+vectors — you can switch back and forth freely.
 
 **One thing to watch: vector size.** MC's vector store is built for 768
 dimensions. A model that returns a different size does not simply perform
@@ -104,13 +134,15 @@ cannot download.
 
 ## Keys
 
-Both keys are stored encrypted in MC's vault, never in `.env`, and are only
+All keys are stored encrypted in MC's vault, never in `.env`, and are only
 ever read by the functions above:
 
 | Key | Used by |
 |---|---|
 | `hf_token` | Model browser (search, files, download) |
-| `ollama_api_key` | Embeddings and/or insights, when set to `ollama_cloud` |
+| `embeddings_api_key` | Self-hosted embeddings — optional, only if your endpoint requires auth |
+| `embeddings_cloud_api_key` | The `cloud` embeddings arm |
+| `ollama_api_key` | Insights, when set to `ollama_cloud` |
 
 > **These keys never reach your agents.** MC deliberately does not hand a
 > stored key to an agent runtime as a fallback (ADR-056): a runtime that gets
@@ -125,15 +157,20 @@ ollama.com would reject those calls with a 401.
 
 ```
 # Which provider serves MC's own AI functions.
-AI_EMBEDDINGS_PROVIDER=spark
+AI_EMBEDDINGS_PROVIDER=spark        # spark = self-hosted | cloud
 AI_EMBEDDINGS_URL=
 AI_EMBEDDINGS_MODEL=
+AI_EMBEDDINGS_CLOUD_URL=
+AI_EMBEDDINGS_CLOUD_MODEL=
 AI_INSIGHTS_PROVIDER=spark
 AI_INSIGHTS_MODEL=
 
-# Ollama Cloud (ollama.com) — only used when a provider above is ollama_cloud.
+# Self-hosted embeddings default (empty = not configured, no network call).
+SPARK_EMBEDDING_URL=
+SPARK_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
+
+# Ollama Cloud (ollama.com) — insights only.
 OLLAMA_CLOUD_URL=https://ollama.com
-OLLAMA_CLOUD_EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_CLOUD_INSIGHTS_MODEL=qwen3-coder:480b-cloud
 ```
 
@@ -145,7 +182,9 @@ in a file.
 | Symptom | Check |
 |---|---|
 | Memory search returns keyword-ish results | **Test embeddings**. If the box is unreachable, new memories are still saved — they just have no vector until the retry loop drains. |
+| Test says "no endpoint configured" | Fresh install: fill in the self-hosted URL (or switch to `cloud` with URL + key). Memories saved meanwhile get vectors on the next backfill. |
 | Test reports the wrong dimension | Your model is not a 768-dim model. Either pick one that is, or plan to rebuild the existing vectors. |
 | No daily insights report | Provider on `off`? Otherwise check that at least three tasks finished in the window — there is a minimum before MC bothers to summarise. |
 | Model browser cannot find a model you can see on the website | It is gated. Accept the licence on huggingface.co, then store a read token here. |
-| `401` from ollama.com | A cloud provider is selected but no `ollama_api_key` is stored. |
+| `401` from ollama.com | Insights runs on `ollama_cloud` but no `ollama_api_key` is stored. |
+| `401` from the embeddings cloud host | The `cloud` arm is selected but no `embeddings_cloud_api_key` is stored. |

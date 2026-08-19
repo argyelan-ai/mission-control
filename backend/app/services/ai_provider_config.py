@@ -14,8 +14,9 @@ is the security boundary, exactly as in ``channel_config``.
 
 ── Warum die Keys NICHT auf das Settings-Singleton wandern ────────────────
 Channel config applies Telegram tokens onto ``settings`` because dozens of
-call sites read ``settings.telegram_bot_token``. The two keys here
-(``hf_token``, ``ollama_api_key``) must NOT get that treatment: ADR-056
+call sites read ``settings.telegram_bot_token``. The keys here (``hf_token``,
+``ollama_api_key``, ``embeddings_api_key``, ``embeddings_cloud_api_key``)
+must NOT get that treatment: ADR-056
 Finding 5 removed the global ``ollama_api_key`` fallback because ANY
 openai-protocol runtime — including keyless local vLLM/LM Studio — silently
 inherited a paid cloud key as its Bearer token. Putting the key on a global
@@ -49,7 +50,14 @@ logger = logging.getLogger("mc.ai_provider_config")
 # Providers per function. "off" exists only for insights: embeddings without a
 # provider is not a mode, it is a broken memory system — the caller already
 # degrades fail-soft when the endpoint is unreachable.
-EMBEDDING_PROVIDERS: tuple[str, ...] = ("spark", "ollama_cloud")
+#
+# Embeddings: "spark" is the self-hosted arm (any OpenAI-compatible URL on
+# your own hardware; the key predates the generalization), "cloud" is any
+# hosted OpenAI-compatible /v1/embeddings. The former "ollama_cloud" arm was
+# removed 2026-08-19: ollama.com hosts no embedding model and no
+# /v1/embeddings path (live-verified) — a stored legacy row degrades to
+# "spark" via the allowlist, exactly like any other stale value.
+EMBEDDING_PROVIDERS: tuple[str, ...] = ("spark", "cloud")
 INSIGHTS_PROVIDERS: tuple[str, ...] = ("spark", "ollama_cloud", "off")
 
 # key -> allowed values (None = free text). Every key must exist on Settings.
@@ -57,6 +65,8 @@ AI_PROVIDER_SETTING_FIELDS: dict[str, tuple[str, ...] | None] = {
     "ai_embeddings_provider": EMBEDDING_PROVIDERS,
     "ai_embeddings_url": None,
     "ai_embeddings_model": None,
+    "ai_embeddings_cloud_url": None,
+    "ai_embeddings_cloud_model": None,
     "ai_insights_provider": INSIGHTS_PROVIDERS,
     "ai_insights_model": None,
 }
@@ -64,6 +74,10 @@ AI_PROVIDER_SETTING_FIELDS: dict[str, tuple[str, ...] | None] = {
 # Secrets read by the named MC-function consumers below — never by a runtime.
 HF_TOKEN_SECRET_KEY = "hf_token"
 OLLAMA_API_KEY_SECRET_KEY = "ollama_api_key"
+# Optional bearer for the self-hosted embeddings endpoint (auth proxy, LM
+# Studio with key, ...) and the required bearer for the cloud embeddings arm.
+EMBEDDINGS_API_KEY_SECRET_KEY = "embeddings_api_key"
+EMBEDDINGS_CLOUD_API_KEY_SECRET_KEY = "embeddings_cloud_api_key"
 
 
 async def stored_overrides(session: AsyncSession) -> dict[str, str]:
@@ -165,12 +179,26 @@ async def hf_auth_headers() -> dict[str, str]:
 
 
 async def get_ollama_api_key() -> str | None:
-    """The Ollama Cloud key, for the ollama_cloud arm of embeddings/insights.
+    """The Ollama Cloud key, for the ollama_cloud arm of INSIGHTS only
+    (ollama.com hosts no embedding models — the embeddings arm is "cloud").
 
     This is the explicit consumer ADR-056 Finding 5 left room for: a named
     function asks for the key by name. It is never handed to a runtime.
     """
     return await _secret(OLLAMA_API_KEY_SECRET_KEY)
+
+
+async def get_embeddings_api_key() -> str | None:
+    """Optional bearer for the SELF-HOSTED embeddings endpoint. Empty = the
+    keyless behaviour every install had before this existed. Same ADR-056
+    boundary as the other named consumers: never handed to a runtime."""
+    return await _secret(EMBEDDINGS_API_KEY_SECRET_KEY)
+
+
+async def get_embeddings_cloud_api_key() -> str | None:
+    """Bearer for the cloud embeddings arm (Together/DeepInfra/Fireworks/...).
+    Same ADR-056 boundary: never handed to a runtime."""
+    return await _secret(EMBEDDINGS_CLOUD_API_KEY_SECRET_KEY)
 
 
 # ── Resolution: which endpoint does a function actually talk to? ──────────
@@ -189,24 +217,25 @@ def insights_provider_key() -> str:
 def embeddings_url() -> str:
     """Full POST URL for the embeddings call of the ACTIVE provider.
 
-    Override wins; otherwise the provider's own default — for spark that is
-    ``spark_embedding_url``, the value this function used to read directly.
+    Config is PER ARM: the self-hosted fields never leak into the cloud arm
+    and vice versa, so flipping the provider select is always a complete
+    switch — no half-applied URL from the other side (that trap is why the
+    former provider-agnostic override could poison a switch).
+
+    "" means "not configured": the provider raises before any network call
+    instead of hammering a dead default.
     """
+    if embeddings_provider_key() == "cloud":
+        return (getattr(settings, "ai_embeddings_cloud_url", "") or "").strip()
     override = (getattr(settings, "ai_embeddings_url", "") or "").strip()
-    if override:
-        return override
-    if embeddings_provider_key() == "ollama_cloud":
-        return f"{settings.ollama_cloud_url.rstrip('/')}/v1/embeddings"
-    return settings.spark_embedding_url
+    return override or settings.spark_embedding_url
 
 
 def embeddings_model() -> str:
+    if embeddings_provider_key() == "cloud":
+        return (getattr(settings, "ai_embeddings_cloud_model", "") or "").strip()
     override = (getattr(settings, "ai_embeddings_model", "") or "").strip()
-    if override:
-        return override
-    if embeddings_provider_key() == "ollama_cloud":
-        return settings.ollama_cloud_embedding_model
-    return settings.spark_embedding_model
+    return override or settings.spark_embedding_model
 
 
 def insights_model_override() -> str:

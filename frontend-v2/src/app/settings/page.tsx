@@ -37,6 +37,7 @@ import {
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
 import type {
+  AiProviderSettingsResponse,
   IntelligenceConfig,
   ProviderTemplate,
   SecretEntry,
@@ -796,10 +797,21 @@ function AutonomySection() {
 
 // ── Intelligence Section (Admin only) ─────────────────────────────────────────
 
-function IntelligenceSection() {
+function IntelligenceSection({
+  onNavigateToAiProviders,
+}: {
+  onNavigateToAiProviders: () => void;
+}) {
   const t = useTranslations("settings.intelligence");
   const queryClient = useQueryClient();
   const [config, setConfig] = useState<IntelligenceConfig | null>(null);
+  // WHICH provider/model writes the report is decided on the AI-providers
+  // page (single edit surface, ADR-055 pattern) — shown here read-only so
+  // the operator sees the effective target without a second place to edit it.
+  const { data: aiProviders } = useQuery<AiProviderSettingsResponse>({
+    queryKey: ["ai-provider-settings"],
+    queryFn: () => api.aiProviders.getSettings(),
+  });
   const [success, setSuccess] = useState(false);
   const [triggerSuccess, setTriggerSuccess] = useState(false);
   const [error, setError] = useState("");
@@ -909,18 +921,42 @@ function IntelligenceSection() {
           </div>
         </div>
 
-        {/* Ollama / LLM */}
+        {/* Insights LLM — generation behaviour only. WHICH provider/model
+            writes the report is configured on the AI-providers page; showing
+            an editable model field here as well was two knobs on one engine
+            (same dedup as the GitHub card in API Keys, ADR-055). */}
         <div className="mc-card p-5 space-y-4" style={cardStyle}>
           <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            {t("ollama")}
+            {t("insightsLlm")}
           </h3>
-          <div>
-            <FieldLabel>{t("model")}</FieldLabel>
-            <InputField
-              value={config.ollama_model}
-              onChange={(v) => update({ ollama_model: v })}
-              placeholder="qwen2.5-coder:14b"
-            />
+          <div
+            className="flex items-center justify-between gap-4 rounded-lg px-3 py-2.5"
+            style={{ backgroundColor: C.bgDeep, border: "1px solid var(--color-border)" }}
+          >
+            <div className="min-w-0">
+              <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                {t("insightsLlmManaged")}
+              </span>
+              <p
+                data-testid="insights-llm-effective"
+                className="text-sm font-mono truncate"
+                style={{ color: "var(--color-text-primary)" }}
+              >
+                {aiProviders
+                  ? `${aiProviders.values.ai_insights_provider ?? "spark"} · ${
+                      aiProviders.values.ai_insights_model || t("insightsLlmModelAuto")
+                    }`
+                  : "…"}
+              </p>
+            </div>
+            <button
+              onClick={onNavigateToAiProviders}
+              className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+              style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+            >
+              {t("goToAiProviders")}
+              <ExternalLink size={12} />
+            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -2294,7 +2330,11 @@ function SettingsContent() {
               {activeSection === "profile" && <ProfileSection />}
               {activeSection === "security" && <SecuritySection />}
               {activeSection === "autonomy" && isAdmin && <AutonomySection />}
-              {activeSection === "intelligence" && isAdmin && <IntelligenceSection />}
+              {activeSection === "intelligence" && isAdmin && (
+                <IntelligenceSection
+                  onNavigateToAiProviders={() => setActiveSection("ai-providers")}
+                />
+              )}
               {activeSection === "apikeys" && isAdmin && (
                 <ApiKeysSection
                   onNavigateToGithub={() => setActiveSection("github")}

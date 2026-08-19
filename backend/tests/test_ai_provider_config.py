@@ -24,8 +24,11 @@ AI_KEYS = [
     "ai_embeddings_provider",
     "ai_embeddings_url",
     "ai_embeddings_model",
+    "ai_embeddings_cloud_url",
+    "ai_embeddings_cloud_model",
     "ai_insights_provider",
     "ai_insights_model",
+    "spark_embedding_url",
 ]
 
 
@@ -67,15 +70,21 @@ async def test_defaults_are_todays_behaviour():
 
 @pytest.mark.asyncio
 async def test_saved_provider_overrides_the_running_config():
+    """Cloud arm: switching the provider AND its own URL/model — the
+    self-hosted fields stay untouched, so switching back is one click."""
     async with await _session() as s:
         await ai_provider_config.save_ai_provider_settings(
-            s, {"ai_embeddings_provider": "ollama_cloud"}
+            s,
+            {
+                "ai_embeddings_provider": "cloud",
+                "ai_embeddings_cloud_url": "https://api.example.com/v1/embeddings",
+                "ai_embeddings_cloud_model": "nomic-ai/nomic-embed-text-v1.5",
+            },
         )
-    assert settings.ai_embeddings_provider == "ollama_cloud"
-    assert ai_provider_config.embeddings_provider_key() == "ollama_cloud"
-    # The URL follows the provider without the operator naming one.
-    assert ai_provider_config.embeddings_url().startswith("https://ollama.com")
-    assert ai_provider_config.embeddings_model() == settings.ollama_cloud_embedding_model
+    assert settings.ai_embeddings_provider == "cloud"
+    assert ai_provider_config.embeddings_provider_key() == "cloud"
+    assert ai_provider_config.embeddings_url() == "https://api.example.com/v1/embeddings"
+    assert ai_provider_config.embeddings_model() == "nomic-ai/nomic-embed-text-v1.5"
 
 
 @pytest.mark.asyncio
@@ -90,6 +99,31 @@ async def test_explicit_url_and_model_beat_the_provider_default():
         )
     assert ai_provider_config.embeddings_url() == "http://192.0.2.77:1234/v1/embeddings"
     assert ai_provider_config.embeddings_model() == "my-own-embed"
+
+
+@pytest.mark.asyncio
+async def test_arm_fields_do_not_leak_into_the_other_arm():
+    """Per-arm config is the whole point of the cleanup: a self-hosted URL on
+    the cloud arm (or vice versa) would silently poison a provider switch."""
+    settings.spark_embedding_url = "http://mini:8090/v1/embeddings"
+    settings.ai_embeddings_cloud_url = "https://api.example.com/v1/embeddings"
+
+    settings.ai_embeddings_provider = "spark"
+    assert ai_provider_config.embeddings_url() == "http://mini:8090/v1/embeddings"
+
+    settings.ai_embeddings_provider = "cloud"
+    assert ai_provider_config.embeddings_url() == "https://api.example.com/v1/embeddings"
+
+
+@pytest.mark.asyncio
+async def test_legacy_ollama_cloud_embeddings_row_degrades_to_self_hosted():
+    """ollama.com hosts no embedding models — the retired arm's stored row
+    must degrade to the self-hosted default instead of breaking startup."""
+    async with await _session() as s:
+        s.add(AppSetting(key="ai_embeddings_provider", value="ollama_cloud"))
+        await s.commit()
+        await ai_provider_config.apply_ai_provider_overrides(s)
+    assert ai_provider_config.embeddings_provider_key() == "spark"
 
 
 @pytest.mark.asyncio
@@ -180,6 +214,23 @@ async def test_ollama_key_reaches_its_named_consumer():
 
 
 @pytest.mark.asyncio
+async def test_embedding_keys_reach_their_named_consumers():
+    """Both embeddings keys (optional self-hosted bearer, cloud bearer) follow
+    the same ADR-056 pattern: absent = None, stored = the named accessor."""
+    from app.services.secrets_helper import upsert_secret_by_key
+
+    assert await ai_provider_config.get_embeddings_api_key() is None
+    assert await ai_provider_config.get_embeddings_cloud_api_key() is None
+    async with await _session() as s:
+        await upsert_secret_by_key(s, key="embeddings_api_key", value="emb-TESTONLY")
+        await upsert_secret_by_key(
+            s, key="embeddings_cloud_api_key", value="cloud-TESTONLY"
+        )
+    assert await ai_provider_config.get_embeddings_api_key() == "emb-TESTONLY"
+    assert await ai_provider_config.get_embeddings_cloud_api_key() == "cloud-TESTONLY"
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_credentials_never_see_the_new_keys(async_session):
     """ADR-056 Finding 5 boundary, asserted from the other side: with BOTH new
     secrets stored, a keyless openai-protocol runtime still gets nothing.
@@ -226,8 +277,9 @@ async def test_get_settings_returns_values_and_choices(auth_client: AsyncClient)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["values"]["ai_embeddings_provider"] == "spark"
+    assert body["choices"]["ai_embeddings_provider"] == ["spark", "cloud"]
     assert body["choices"]["ai_insights_provider"] == ["spark", "ollama_cloud", "off"]
-    assert [p["key"] for p in body["embedding_providers"]] == ["spark", "ollama_cloud"]
+    assert [p["key"] for p in body["embedding_providers"]] == ["spark", "cloud"]
 
 
 @pytest.mark.asyncio
@@ -244,7 +296,10 @@ async def test_get_settings_never_carries_key_material(auth_client: AsyncClient)
     assert resp.json()["state"] == {
         "hf_token_set": True,
         "ollama_api_key_set": True,
+        "embeddings_api_key_set": False,
+        "embeddings_cloud_api_key_set": False,
         "ollama_key_required": False,
+        "embeddings_cloud_key_required": False,
     }
 
 

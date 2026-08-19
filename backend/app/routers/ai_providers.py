@@ -31,6 +31,9 @@ from app.services.ai_provider_config import (
     HF_TOKEN_SECRET_KEY,
     INSIGHTS_PROVIDERS,
     OLLAMA_API_KEY_SECRET_KEY,
+    embeddings_provider_key,
+    get_embeddings_api_key,
+    get_embeddings_cloud_api_key,
     get_hf_token,
     get_ollama_api_key,
     insights_provider_key,
@@ -74,12 +77,13 @@ async def get_ai_provider_settings(
         "state": {
             "hf_token_set": bool(await get_hf_token()),
             "ollama_api_key_set": bool(await get_ollama_api_key()),
-            # The one combination that silently cannot work: cloud provider
-            # selected, no key stored. Surfaced as state, not as an error.
-            "ollama_key_required": (
-                settings.ai_embeddings_provider == "ollama_cloud"
-                or insights_provider_key() == "ollama_cloud"
-            ),
+            "embeddings_api_key_set": bool(await get_embeddings_api_key()),
+            "embeddings_cloud_api_key_set": bool(await get_embeddings_cloud_api_key()),
+            # Combinations that silently cannot work, surfaced as state, not
+            # as an error: Ollama Cloud (insights-only arm) without its key,
+            # and the cloud embeddings arm without its key.
+            "ollama_key_required": insights_provider_key() == "ollama_cloud",
+            "embeddings_cloud_key_required": embeddings_provider_key() == "cloud",
         },
     }
 

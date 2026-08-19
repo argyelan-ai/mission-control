@@ -61,24 +61,35 @@ function renderPage() {
   );
 }
 
+const DEFAULT_STATE: AiProviderSettingsResponse["state"] = {
+  hf_token_set: false,
+  ollama_api_key_set: false,
+  embeddings_api_key_set: false,
+  embeddings_cloud_api_key_set: false,
+  ollama_key_required: false,
+  embeddings_cloud_key_required: false,
+};
+
 const DEFAULTS: AiProviderSettingsResponse = {
   values: {
     ai_embeddings_provider: "spark",
     ai_embeddings_url: "",
     ai_embeddings_model: "",
+    ai_embeddings_cloud_url: "",
+    ai_embeddings_cloud_model: "",
     ai_insights_provider: "spark",
     ai_insights_model: "",
   },
   overridden: [],
   choices: {
-    ai_embeddings_provider: ["spark", "ollama_cloud"],
+    ai_embeddings_provider: ["spark", "cloud"],
     ai_insights_provider: ["spark", "ollama_cloud", "off"],
   },
   embedding_providers: [
     { key: "spark", label: "GPU box", active: true, url: "http://box:1234/v1/embeddings", model: "nomic" },
-    { key: "ollama_cloud", label: "Ollama Cloud", active: false, url: null, model: null },
+    { key: "cloud", label: "Cloud", active: false, url: null, model: null },
   ],
-  state: { hf_token_set: false, ollama_api_key_set: false, ollama_key_required: false },
+  state: DEFAULT_STATE,
 };
 
 const HF_ANONYMOUS: HfConnectionResult = {
@@ -147,8 +158,59 @@ describe("AiProvidersTab (Settings)", () => {
       "spark", "ollama_cloud", "off",
     ]);
     expect(Array.from((embeddings as HTMLSelectElement).options).map((o) => o.value)).toEqual([
-      "spark", "ollama_cloud",
+      "spark", "cloud",
     ]);
+  });
+
+  it("shows each arm only its own fields — switching is a complete switch", async () => {
+    const { unmount } = renderPage();
+
+    // Self-hosted active: its url/model fields, no cloud fields.
+    expect(await screen.findByTestId("ai_embeddings_url")).toBeInTheDocument();
+    expect(screen.queryByTestId("ai_embeddings_cloud_url")).not.toBeInTheDocument();
+    unmount();
+
+    // Cloud active: ONLY the cloud fields — a self-hosted URL leaking into
+    // the cloud arm is the trap this layout exists to prevent.
+    vi.spyOn(api.aiProviders, "getSettings").mockResolvedValue({
+      ...DEFAULTS,
+      values: { ...DEFAULTS.values, ai_embeddings_provider: "cloud" },
+      state: { ...DEFAULT_STATE, embeddings_cloud_key_required: true, embeddings_cloud_api_key_set: true },
+    });
+    renderPage();
+    expect(await screen.findByTestId("ai_embeddings_cloud_url")).toBeInTheDocument();
+    expect(screen.getByTestId("ai_embeddings_cloud_model")).toBeInTheDocument();
+    expect(screen.queryByTestId("ai_embeddings_url")).not.toBeInTheDocument();
+  });
+
+  it("warns when the cloud embeddings arm has no stored key", async () => {
+    vi.spyOn(api.aiProviders, "getSettings").mockResolvedValue({
+      ...DEFAULTS,
+      values: { ...DEFAULTS.values, ai_embeddings_provider: "cloud" },
+      state: { ...DEFAULT_STATE, embeddings_cloud_key_required: true },
+    });
+    renderPage();
+
+    expect(await screen.findByTestId("cloud-emb-key-warning")).toBeInTheDocument();
+  });
+
+  it("saves the self-hosted embeddings key under the embeddings provider", async () => {
+    const create = vi.spyOn(api.secrets, "create").mockResolvedValue(HF_SECRET);
+    renderPage();
+
+    const field = await screen.findByLabelText("Self-hosted — key (optional)");
+    await userEvent.type(field, "emb-TESTONLY");
+    await userEvent.click(
+      within(field.closest("div.mc-card") as HTMLElement).getAllByRole("button", {
+        name: "Save",
+      })[1]
+    );
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        key: "embeddings_api_key", value: "emb-TESTONLY", provider: "embeddings",
+      })
+    );
   });
 
   it("saves a provider change through the settings endpoint", async () => {
@@ -167,12 +229,13 @@ describe("AiProvidersTab (Settings)", () => {
   it("marks a pinned value as overridden so the operator sees where it comes from", async () => {
     vi.spyOn(api.aiProviders, "getSettings").mockResolvedValue({
       ...DEFAULTS,
-      values: { ...DEFAULTS.values, ai_embeddings_provider: "ollama_cloud" },
+      values: { ...DEFAULTS.values, ai_embeddings_provider: "cloud" },
       overridden: ["ai_embeddings_provider"],
+      state: { ...DEFAULT_STATE, embeddings_cloud_key_required: true, embeddings_cloud_api_key_set: true },
     });
     renderPage();
 
-    expect(await screen.findByTestId("ai_embeddings_provider")).toHaveValue("ollama_cloud");
+    expect(await screen.findByTestId("ai_embeddings_provider")).toHaveValue("cloud");
     expect(await screen.findAllByTestId("overridden-badge")).toHaveLength(1);
   });
 
@@ -265,12 +328,12 @@ describe("AiProvidersTab (Settings)", () => {
     expect(await screen.findByTestId("embeddings-error")).toHaveTextContent("1024");
   });
 
-  it("warns when a cloud provider is selected without a stored key", async () => {
+  it("warns when insights runs on Ollama Cloud without a stored key", async () => {
     vi.spyOn(api.aiProviders, "getSettings").mockResolvedValue({
       ...DEFAULTS,
-      values: { ...DEFAULTS.values, ai_embeddings_provider: "ollama_cloud" },
-      overridden: ["ai_embeddings_provider"],
-      state: { hf_token_set: false, ollama_api_key_set: false, ollama_key_required: true },
+      values: { ...DEFAULTS.values, ai_insights_provider: "ollama_cloud" },
+      overridden: ["ai_insights_provider"],
+      state: { ...DEFAULT_STATE, ollama_key_required: true },
     });
     renderPage();
 
@@ -280,7 +343,7 @@ describe("AiProvidersTab (Settings)", () => {
   it("hides the warning once the key is stored", async () => {
     vi.spyOn(api.aiProviders, "getSettings").mockResolvedValue({
       ...DEFAULTS,
-      state: { hf_token_set: false, ollama_api_key_set: true, ollama_key_required: true },
+      state: { ...DEFAULT_STATE, ollama_api_key_set: true, ollama_key_required: true },
     });
     renderPage();
 

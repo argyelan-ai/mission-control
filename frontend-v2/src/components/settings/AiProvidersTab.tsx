@@ -20,6 +20,15 @@ import { StatusDot } from "@/components/shared/StatusDot";
 // and services/ai_provider_config.AI_PROVIDER_SETTING_FIELDS).
 const HF_TOKEN_KEY = "hf_token";
 const OLLAMA_KEY = "ollama_api_key";
+const EMB_KEY = "embeddings_api_key";
+const EMB_CLOUD_KEY = "embeddings_cloud_api_key";
+
+const SECRET_PROVIDER: Record<string, string> = {
+  [HF_TOKEN_KEY]: "huggingface",
+  [OLLAMA_KEY]: "ollama",
+  [EMB_KEY]: "embeddings",
+  [EMB_CLOUD_KEY]: "embeddings",
+};
 
 const cardStyle = {
   background: C.bgSurface,
@@ -400,7 +409,7 @@ export function AiProvidersTab() {
         : api.secrets.create({
             key,
             value,
-            provider: key === HF_TOKEN_KEY ? "huggingface" : "ollama",
+            provider: SECRET_PROVIDER[key] ?? "ollama",
           });
     },
     onMutate: ({ key }) => setSavingKey(key),
@@ -439,6 +448,10 @@ export function AiProvidersTab() {
   const needsOllamaKey =
     (providerSettings?.state.ollama_key_required ?? false) &&
     !(providerSettings?.state.ollama_api_key_set ?? false);
+  const activeEmbProvider = strOf("ai_embeddings_provider", "spark");
+  const needsCloudEmbKey =
+    (providerSettings?.state.embeddings_cloud_key_required ?? false) &&
+    !(providerSettings?.state.embeddings_cloud_api_key_set ?? false);
 
   return (
     <motion.div
@@ -510,33 +523,72 @@ export function AiProvidersTab() {
           <ProviderSelect
             label={t("embeddingsProviderLabel")}
             hint={t("embeddingsProviderHint")}
-            value={strOf("ai_embeddings_provider", "spark")}
+            value={activeEmbProvider}
             choices={embeddingChoices}
             overridden={overridden.has("ai_embeddings_provider")}
             saving={savingSetting === "ai_embeddings_provider"}
             testId="ai_embeddings_provider"
             onChange={(value) => saveSetting.mutate({ key: "ai_embeddings_provider", value })}
           />
-          <OverrideTextField
-            label={t("embeddingsUrlLabel")}
-            hint={t("embeddingsUrlHint")}
-            value={strOf("ai_embeddings_url")}
-            placeholder={t("inheritPlaceholder")}
-            overridden={overridden.has("ai_embeddings_url")}
-            saving={savingSetting === "ai_embeddings_url"}
-            testId="ai_embeddings_url"
-            onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_url", value })}
-          />
-          <OverrideTextField
-            label={t("embeddingsModelLabel")}
-            hint={t("embeddingsModelHint")}
-            value={strOf("ai_embeddings_model")}
-            placeholder={t("inheritPlaceholder")}
-            overridden={overridden.has("ai_embeddings_model")}
-            saving={savingSetting === "ai_embeddings_model"}
-            testId="ai_embeddings_model"
-            onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_model", value })}
-          />
+          {/* Per-arm fields: each provider keeps its OWN url/model, so the
+              select above is always a complete one-click switch — no field
+              from the other arm can leak into the active one. */}
+          {activeEmbProvider === "cloud" ? (
+            <>
+              <OverrideTextField
+                label={t("embeddingsCloudUrlLabel")}
+                hint={t("embeddingsCloudUrlHint")}
+                value={strOf("ai_embeddings_cloud_url")}
+                placeholder="https://api.together.xyz/v1/embeddings"
+                overridden={overridden.has("ai_embeddings_cloud_url")}
+                saving={savingSetting === "ai_embeddings_cloud_url"}
+                testId="ai_embeddings_cloud_url"
+                onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_cloud_url", value })}
+              />
+              <OverrideTextField
+                label={t("embeddingsCloudModelLabel")}
+                hint={t("embeddingsModelHint")}
+                value={strOf("ai_embeddings_cloud_model")}
+                placeholder="nomic-ai/nomic-embed-text-v1.5"
+                overridden={overridden.has("ai_embeddings_cloud_model")}
+                saving={savingSetting === "ai_embeddings_cloud_model"}
+                testId="ai_embeddings_cloud_model"
+                onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_cloud_model", value })}
+              />
+              {needsCloudEmbKey && (
+                <p
+                  data-testid="cloud-emb-key-warning"
+                  className="text-xs"
+                  style={{ color: STATUS_TEXT.warning, maxWidth: "72ch" }}
+                >
+                  {t("cloudEmbKeyMissing")}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <OverrideTextField
+                label={t("embeddingsUrlLabel")}
+                hint={t("embeddingsUrlHint")}
+                value={strOf("ai_embeddings_url")}
+                placeholder={t("inheritPlaceholder")}
+                overridden={overridden.has("ai_embeddings_url")}
+                saving={savingSetting === "ai_embeddings_url"}
+                testId="ai_embeddings_url"
+                onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_url", value })}
+              />
+              <OverrideTextField
+                label={t("embeddingsModelLabel")}
+                hint={t("embeddingsModelHint")}
+                value={strOf("ai_embeddings_model")}
+                placeholder={t("inheritPlaceholder")}
+                overridden={overridden.has("ai_embeddings_model")}
+                saving={savingSetting === "ai_embeddings_model"}
+                testId="ai_embeddings_model"
+                onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_model", value })}
+              />
+            </>
+          )}
 
           <div style={{ borderTop: `1px solid ${C.border}` }} className="pt-4 space-y-4">
             <ProviderSelect
@@ -577,6 +629,24 @@ export function AiProvidersTab() {
             existing={byKey.get(HF_TOKEN_KEY)}
             saving={savingKey === HF_TOKEN_KEY}
             onSave={(value) => saveToken.mutate({ key: HF_TOKEN_KEY, value })}
+          />
+          <TokenField
+            label={t("embKeyLabel")}
+            secretKey={EMB_KEY}
+            hint={t("embKeyHint")}
+            placeholder={t("embKeyPlaceholder")}
+            existing={byKey.get(EMB_KEY)}
+            saving={savingKey === EMB_KEY}
+            onSave={(value) => saveToken.mutate({ key: EMB_KEY, value })}
+          />
+          <TokenField
+            label={t("embCloudKeyLabel")}
+            secretKey={EMB_CLOUD_KEY}
+            hint={t("embCloudKeyHint")}
+            placeholder={t("embKeyPlaceholder")}
+            existing={byKey.get(EMB_CLOUD_KEY)}
+            saving={savingKey === EMB_CLOUD_KEY}
+            onSave={(value) => saveToken.mutate({ key: EMB_CLOUD_KEY, value })}
           />
           <TokenField
             label={t("ollamaKeyLabel")}
