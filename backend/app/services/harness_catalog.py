@@ -163,13 +163,14 @@ async def discover_model_catalog(agent) -> list[dict[str, str]]:
     harness = harness_for(agent)
     if harness is None:
         return []
+    slug = agent.slug
 
     cli_version = await resolve_cli_version(agent)
     if cli_version is None:
         return []
 
     redis = await get_redis()
-    cache_key = RedisKeys.model_catalog(harness, cli_version)
+    cache_key = RedisKeys.model_catalog(harness, cli_version, slug)
     try:
         cached = await redis.get(cache_key)
     except Exception:
@@ -180,7 +181,7 @@ async def discover_model_catalog(agent) -> list[dict[str, str]]:
         except (json.JSONDecodeError, ValueError):
             pass  # fall through to a fresh discovery — corrupt cache entry
 
-    lock_key = RedisKeys.model_catalog_discovery_lock(harness, cli_version)
+    lock_key = RedisKeys.model_catalog_discovery_lock(harness, cli_version, slug)
     try:
         acquired = await redis.set(lock_key, "1", nx=True, ex=_DISCOVERY_LOCK_TTL_SECONDS)
     except Exception:

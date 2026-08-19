@@ -199,7 +199,7 @@ async def test_discover_model_catalog_cache_hit_skips_discovery(monkeypatch, red
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _boom)
 
     cached = [{"command": "opus", "label": "Opus"}]
-    await redis_env.set(hc.RedisKeys.model_catalog("claude", "2.1.234"), json.dumps(cached))
+    await redis_env.set(hc.RedisKeys.model_catalog("claude", "2.1.234", "rex"), json.dumps(cached))
 
     assert await hc.discover_model_catalog(agent) == cached
 
@@ -222,7 +222,7 @@ async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_v
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _discover)
 
     await redis_env.set(
-        hc.RedisKeys.model_catalog("claude", "2.1.233"),
+        hc.RedisKeys.model_catalog("claude", "2.1.233", "rex"),
         json.dumps([{"command": "opus", "label": "Opus"}]),
     )
 
@@ -247,7 +247,7 @@ async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monk
     result = await hc.discover_model_catalog(agent)
     assert result == [{"command": "opus", "label": "Opus"}]
 
-    cached = await redis_env.get(hc.RedisKeys.model_catalog("claude", "2.1.234"))
+    cached = await redis_env.get(hc.RedisKeys.model_catalog("claude", "2.1.234", "rex"))
     assert json.loads(cached) == [{"command": "opus", "label": "Opus"}]
 
 
@@ -287,7 +287,7 @@ async def test_discover_model_catalog_concurrent_request_skips_when_lock_held(mo
 
     # Simulate another request already holding the lock.
     await redis_env.set(
-        hc.RedisKeys.model_catalog_discovery_lock("claude", "2.1.234"), "1", ex=60
+        hc.RedisKeys.model_catalog_discovery_lock("claude", "2.1.234", "rex"), "1", ex=60
     )
 
     assert await hc.discover_model_catalog(agent) == []
@@ -362,3 +362,35 @@ async def test_resolve_context_window_none_observed_behaves_like_before():
 
 async def test_resolve_context_window_observed_does_not_match_unrelated_model():
     assert resolve_context_window("totally-unknown-model", observed={"claude-opus-5": 1}) is None
+
+
+async def test_catalog_cache_is_per_agent_not_fleet_wide(redis_env, monkeypatch):
+    """Operator-Befund 19.08.2026: FreeCodes lokal erkanntes Qwen stand bei
+    JEDEM Claude-Agenten im Modell-Dropdown. Ursache: der Katalog-Cache war
+    nur nach (harness, cli_version) geschluesselt — der /model-Picker ist
+    aber PRO AGENT verschieden (lokal erkannte OpenAI-kompatible Modelle des
+    jeweiligen Containers). Zwei Agenten duerfen sich keinen Eintrag teilen."""
+    import json
+    from types import SimpleNamespace
+
+    async def _version(agent):
+        return "2.1.234"
+    monkeypatch.setattr(hc, "resolve_cli_version", _version)
+
+    freecode_rows = [{"command": "sonnet", "label": "Sonnet"},
+                     {"command": "Qwen/Qwen3.6-35B-A3B-FP8", "label": "Qwen/Qwen3.6-35B-A3B-FP8"}]
+    await redis_env.set(
+        hc.RedisKeys.model_catalog("claude", "2.1.234", "freecode"), json.dumps(freecode_rows)
+    )
+
+    freecode = SimpleNamespace(slug="freecode", agent_runtime="cli-bridge", harness="claude")
+    assert await hc.discover_model_catalog(freecode) == freecode_rows
+
+    # Davinci hat KEINEN Cache-Eintrag — er darf FreeCodes Qwen nicht erben.
+    # (Discovery selbst schlaegt hier kontrolliert fehl -> [].)
+    async def _no_discovery(*a, **k):
+        raise RuntimeError("kein Fenster im Test")
+    monkeypatch.setattr(hc, "_discover_via_throwaway_window", _no_discovery)
+    davinci = SimpleNamespace(slug="davinci", agent_runtime="cli-bridge", harness="claude")
+    result = await hc.discover_model_catalog(davinci)
+    assert "Qwen/Qwen3.6-35B-A3B-FP8" not in json.dumps(result)
