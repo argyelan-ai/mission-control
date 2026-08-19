@@ -839,6 +839,51 @@ async def test_set_effort_verification_timeout_working_pane_skips_escape(monkeyp
     assert calls[1][-1] == "Enter"
 
 
+async def test_set_effort_confirms_cached_conversation_dialog(monkeypatch):
+    """Sessions mit gecachtem Verlauf fragen zurueck ("Change effort level?",
+    Option "Yes" vorgewaehlt) — gefunden 19.08.2026 am Boss, erklaert auch das
+    R12b-Raetsel: "Kept effort level as X" ist die Antwort auf ein verneintes
+    Dialogfeld. Der Verify bestaetigt den Dialog EINMAL per Enter und pollt
+    dann normal weiter."""
+    from app.services import agent_chat_input
+
+    dialog = (
+        "❯ /effort low\n"
+        "   Change effort level?\n"
+        "   ❯ 1. Yes, switch to low\n"
+        "     2. No, go back"
+    )
+    confirmed = dialog + "\n  ⎿  Set effort level to low (saved as your default for new sessions): ..."
+    polls = {"n": 0}
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    idle = "⏺ ok\n\n❯ \n"
+
+    async def _fake_capture_pane(agent):
+        polls["n"] += 1
+        # Poll 1 = Preflight (ruhiger Prompt — der Dialog erscheint erst als
+        # ANTWORT auf unser /effort); Poll 2 sieht den Dialog; nach dem
+        # Enter (Poll 3) steht die Bestaetigung.
+        if polls["n"] == 1:
+            return idle
+        return dialog if polls["n"] == 2 else confirmed
+
+    async def _sleep(d): pass
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "low")
+    # /effort low + Enter + genau EIN Dialog-Enter
+    enters = [c for c in calls if c[-1] == "Enter"]
+    assert len(enters) == 2
+    assert len(calls) == 3
+
+
 async def test_set_effort_ignores_stale_rejection_from_earlier_attempt(monkeypatch):
     """Operator-Live-Bug (18.08.2026 abends): eine "Kept effort level as
     auto"-Zeile eines FRUEHEREN Versuchs stand noch sichtbar im Pane. Der
@@ -1143,8 +1188,9 @@ async def test_set_effort_boss_ignores_stale_confirmation(monkeypatch, tmp_path)
     agent = _StubAgent(slug="boss", agent_runtime="host")
     with pytest.raises(agent_chat_input.EffortSwitchFailedError):
         await agent_chat_input.set_effort(agent, "max")
-    # nur Kommando + Enter, KEIN Escape-Byte
+    # Kommando + Enter + EIN blinder Dialog-Enter — aber KEIN Escape-Byte
     assert b"\x1b" not in b"".join(sent)
+    assert sent.count(b"\r") == 2  # Submit-Enter + einmalige Dialog-Bestaetigung
 
 
 async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):

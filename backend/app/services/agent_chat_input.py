@@ -249,6 +249,8 @@ _SEND_READINESS_POLL_INTERVAL_SECONDS = 1.0
 # apply-confirmation wording ("Set effort level to <level>"). Captures the
 # CLI's whole response line so the operator sees exactly what it said.
 _EFFORT_REJECTED_RE = re.compile(r"Kept effort level as \S+")
+# Bestaetigungsdialog bei Sessions mit gecachtem Verlauf (s. _verify_effort_applied).
+_EFFORT_CONFIRM_DIALOG_MARKER = "Change effort level?"
 
 
 def _docker_argv(slug: str, *tail: str) -> list[str]:
@@ -445,8 +447,15 @@ async def send_keys(agent, keys: list[str]) -> None:
                 await _run_docker_exec(_docker_argv(slug, "-l", "--", ALLOWED_KEYS[key]))
         return
 
-    # kind == "boss"
-    await _send_boss_bytes(*(ALLOWED_KEYS[key].encode() for key in keys))
+    # kind == "boss" — delay_before_last wirkt auch bei EINEM Frame: connect,
+    # kurz setzen lassen, dann schreiben. Ohne den Settle-Moment verpufft ein
+    # einzelnes Byte im Attach-Handshake der Bridge (live gesehen 19.08.2026:
+    # Enter auf den Effort-Bestaetigungsdialog kam nie an, waehrend Text+Enter
+    # mit Frame-Abstand immer funktionierte).
+    await _send_boss_bytes(
+        *(ALLOWED_KEYS[key].encode() for key in keys),
+        delay_before_last=_BOSS_ENTER_DELAY_SECONDS,
+    )
 
 
 async def set_effort(agent, level: str) -> None:
@@ -565,8 +574,21 @@ async def _set_effort_boss(agent, level: str) -> None:
     )
 
     marker = f"effort level to {level}"
-    for _ in range(_EFFORT_VERIFY_ATTEMPTS * 2):  # Transkript ist traeger als der Pane
+    confirmed_dialog = False
+    for attempt in range(_EFFORT_VERIFY_ATTEMPTS * 2):  # Transkript ist traeger als der Pane
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
+        if attempt == 2 and not confirmed_dialog:
+            # Ohne Pane ist der Bestaetigungsdialog (s. _verify_effort_applied)
+            # nicht sichtbar — nach ~1.5s ohne Transkript-Bestaetigung wird er
+            # EINMAL blind mit Enter beantwortet (Option "Yes" ist vorgewaehlt).
+            # Ist kein Dialog da, ist das Enter auf leerem Eingabefeld ein
+            # No-Op. Restrisiko, dokumentiert: ein im Terminal halb getippter
+            # Entwurf wuerde abgeschickt — akzeptiert, weil der Operator den
+            # Wechsel gerade selbst ausgeloest hat und das Eingabefeld dafuer
+            # ohnehin frei sein muss.
+            confirmed_dialog = True
+            await _send_boss_bytes(b"\r", delay_before_last=_BOSS_ENTER_DELAY_SECONDS)
+            continue
         try:
             current = await asyncio.to_thread(find_active_session, tdir)
         except OSError:
@@ -641,10 +663,23 @@ async def _verify_effort_applied(agent, level: str) -> bool:
     usual "log a warning and move on" contract."""
     marker = f"effort level to {level}"
     command_echo = f"/effort {level}"
+    confirmed_dialog = False
     for _ in range(_EFFORT_VERIFY_ATTEMPTS):
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
         pane = await capture_pane(agent)
         if not pane:
+            continue
+        # Sessions MIT gecachtem Verlauf fragen zurueck ("Change effort
+        # level? … 1. Yes, switch … 2. No, go back", Option 1 vorgewaehlt) —
+        # auf frischen Wegwerf-Sessions erschien der Dialog nie, weshalb die
+        # R12b-Reproduktion scheiterte und "Kept effort level as X" raetselhaft
+        # blieb: das IST die Antwort der CLI, wenn der Dialog verneint wird
+        # (gefunden 19.08.2026 am Boss). Der Operator hat den Wechsel bereits
+        # im Regler entschieden — der Dialog wird EINMAL bestaetigt, dann
+        # normal weiter verifiziert.
+        if not confirmed_dialog and _EFFORT_CONFIRM_DIALOG_MARKER in pane:
+            confirmed_dialog = True
+            await _run_docker_exec(_docker_argv(agent.slug, "Enter"))
             continue
         # NUR hinter dem Echo DIESES Kommandos lesen (Operator-Live-Bug
         # 18.08.2026 abends): der Pane zeigt Verlauf. Eine "Kept effort
