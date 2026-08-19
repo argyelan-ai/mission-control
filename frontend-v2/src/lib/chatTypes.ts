@@ -243,6 +243,17 @@ export function isSessionOnlyEffort(level: string): boolean {
   return SESSION_ONLY_EFFORT_LEVELS.has(level);
 }
 
+/** Eine hochgeladene Datei, wie sie der Anhang-Endpunkt zurueckgibt.
+ *  `path` ist absolut und gilt auf dem Host wie im Container gleichermassen —
+ *  genau dieser String wird der Nachricht angehaengt, damit die CLI die Datei
+ *  selbst liest. */
+export interface ChatAttachment {
+  path: string;
+  name: string;
+  bytes: number;
+  isImage: boolean;
+}
+
 export interface ChatHistoryResponse {
   events: ChatEvent[];
   session: ChatSession;

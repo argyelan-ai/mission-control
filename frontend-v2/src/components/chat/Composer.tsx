@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Brain, Square, ArrowUp, ChevronDown } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import {
+  type ChatAttachment,
   extractErrorMessage,
   isAgentBusyError,
   isEffortSwitchFailedError,
@@ -318,10 +319,82 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, [text]);
 
+  // ── Anhänge ─────────────────────────────────────────────────────────────
+  //
+  // Der Weg ist bewusst simpel: Datei hoch, absoluten Pfad zurück, Pfad an
+  // die Nachricht hängen — die CLI liest die Datei selbst. Kein neues
+  // Protokoll, keine Bild-Kodierung im Prompt.
+  //
+  // Hochgeladen wird SOFORT beim Anhängen, nicht erst beim Senden: sonst
+  // steht man nach dem Tippen vor einer Wartezeit, deren Grund man nicht
+  // sieht, und ein Fehlschlag käme genau dann, wenn man ihn am wenigsten
+  // gebrauchen kann.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setUploading((n) => n + files.length);
+      for (const file of files) {
+        try {
+          const stored = await api.chat.uploadAttachment(agentId, file);
+          setAttachments((prev) => [...prev, stored]);
+        } catch (err) {
+          // Sichtbar, nicht still: "zu gross" ist die eine Ablehnung, die
+          // beim Auswählen niemand sehen konnte.
+          notify.error(err instanceof Error ? err.message : "Anhang fehlgeschlagen");
+        } finally {
+          setUploading((n) => Math.max(0, n - 1));
+        }
+      }
+    },
+    [agentId],
+  );
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    // Marks realer Weg: Cmd+Shift+4, dann Cmd+V ins Feld. Nur wenn wirklich
+    // Dateien im Zwischenspeicher liegen — sonst bliebe normales Text-
+    // Einfügen auf der Strecke.
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addFiles(files);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    setDragging(false);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addFiles(files);
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    setDragging(true);
+  }
+
+  function removeAttachment(path: string) {
+    // Nur aus dem Composer nehmen — die Datei auf der Platte bleibt liegen
+    // und fällt nach 30 Tagen weg. Ein Löschen-Aufruf hier würde eine Datei
+    // entfernen, die eine bereits gesendete Nachricht noch referenzieren
+    // kann.
+    setAttachments((prev) => prev.filter((a) => a.path !== path));
+  }
+
   function send() {
-    if (text.trim().length === 0) return;
-    onSend(text);
+    // Ein Anhang allein ist eine vollwertige Nachricht ("schau dir das an") —
+    // Text ist dann nicht nötig.
+    if (text.trim().length === 0 && attachments.length === 0) return;
+    const lines = attachments.map((a) => `[Anhang: ${a.path}]`);
+    const body = [text.trim(), ...lines].filter(Boolean).join("\n");
+    onSend(body);
     setText("");
+    setAttachments([]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -535,20 +608,76 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           against the pill — perceivable per WCAG 2.4.11 without being a halo,
           and unmistakably grey rather than white). */}
       <div
-        className="flex flex-col transition-colors"
+        data-testid="composer-dropzone"
+        onDragOver={handleDragOver}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        className="flex flex-col transition-colors relative"
         // One step above the island tone: the panel is bg-surface, so the
         // control lifts to bg-elevated rather than sinking into it.
         style={{
           backgroundColor: C.bgElevated,
           borderRadius: "var(--radius-xl)",
-          border: `1px solid ${focused ? C.textMuted : C.border}`,
+          // Beim Ziehen tritt derselbe Rahmen in die Akzentfarbe — kein
+          // zusaetzliches Overlay, das die Pille verdeckt und beim Loslassen
+          // flackert. Die Pille SELBST ist das Ziel, das sagt sie damit.
+          border: `1px solid ${dragging ? C.accent : focused ? C.textMuted : C.border}`,
         }}
       >
+        {(attachments.length > 0 || uploading > 0) && (
+          /* Kacheln ueber dem Textfeld, innerhalb der Pille: der Anhang
+             gehoert sichtbar zur Nachricht, die man gerade schreibt — nicht
+             in eine eigene Leiste daneben. */
+          <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+            {attachments.map((a) => (
+              <div
+                key={a.path}
+                data-testid="attachment-tile"
+                className="group flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-lg max-w-[200px]"
+                style={{ backgroundColor: C.bgHover, border: `1px solid ${C.border}` }}
+              >
+                {a.isImage ? (
+                  <span
+                    aria-hidden
+                    className="w-6 h-6 rounded shrink-0 flex items-center justify-center text-[10px]"
+                    style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+                  >
+                    IMG
+                  </span>
+                ) : (
+                  <FileText size={14} className="shrink-0" style={{ color: C.textMuted }} />
+                )}
+                <span className="text-[11px] truncate min-w-0" style={{ color: C.textPrimary }}>
+                  {a.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.path)}
+                  aria-label={`Anhang ${a.name} entfernen`}
+                  className="shrink-0 w-5 h-5 flex items-center justify-center rounded cursor-pointer"
+                  style={{ color: C.textMuted }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            {uploading > 0 && (
+              <div
+                data-testid="attachment-uploading"
+                className="flex items-center px-2 py-1 rounded-lg text-[11px]"
+                style={{ backgroundColor: C.bgHover, color: C.textMuted }}
+              >
+                {uploading === 1 ? "lädt…" : `${uploading} laden…`}
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           rows={1}
@@ -578,6 +707,39 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         />
 
         <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1.5">
+          {/* Anhaengen — ganz links, nur Symbol. Die Stelle, an der WhatsApp,
+              Slack und die Claude-App ihn haben (Operator-Entscheid
+              19.08.2026, Vorbild-Screenshot): man sucht ihn dort nicht, man
+              greift hin.
+
+              KEIN `accept`-Filter und KEIN `capture`: beides schneidet auf
+              dem Handy Wege ab. Ohne sie zeigt iOS von selbst die Auswahl
+              "Fotomediathek · Aufnehmen · Datei waehlen" — ein Knopf, alle
+              drei Faelle. Und jeder Dateityp ist ohnehin erlaubt; ob der
+              Agent ihn liest, ist seine Sache, nicht das Versprechen des UI. */}
+          <input
+            ref={fileInputRef}
+            data-testid="attachment-input"
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              void addFiles(Array.from(e.target.files ?? []));
+              // Zuruecksetzen, sonst loest dieselbe Datei beim zweiten Mal
+              // kein change-Ereignis aus.
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Datei anhängen"
+            title="Datei anhängen"
+            className="shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            style={{ color: C.textSecondary }}
+          >
+            <Paperclip size={15} />
+          </button>
           <div className="relative" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
