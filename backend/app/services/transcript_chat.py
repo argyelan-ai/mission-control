@@ -129,6 +129,51 @@ _LOCAL_COMMAND_STDERR_RE = re.compile(
 )
 
 
+# Teamkollegen-Nachricht (Operator-Befund 19.08.2026): Startet ein Agent
+# Subagenten, schreibt Claude Code deren Rueckmeldungen als gewoehnliche
+# USER-Turns ins Transkript. Der Chat zeigte sie darum als Nachrichten des
+# Operators an — inklusive eines langen Sicherheits-Hinweises, der sich an das
+# MODELL richtet und in jeder solchen Nachricht identisch ist.
+#
+# Bewusst ENG gefasst: der Text muss mit der Einleitungszeile beginnen UND den
+# Umschlag tragen. Eine echte Nachricht, die zufaellig ueber Teamkollegen
+# spricht, darf nicht still verschwinden.
+_TEAMMATE_MESSAGE_RE = re.compile(
+    r"^Another Claude session sent a message:\s*"
+    r"<teammate-message(?P<attrs>[^>]*)>\s*"
+    r"(?P<payload>.*?)\s*"
+    r"</teammate-message>",
+    re.DOTALL,
+)
+_TEAMMATE_ID_RE = re.compile(r'teammate_id="(?P<id>[^"]*)"')
+
+
+def _parse_teammate_message(
+    text: str, msg_uuid: str, ts: str, sidechain: bool
+) -> dict[str, Any] | None:
+    """Erkennt eine eingespeiste Teamkollegen-Nachricht und macht daraus ein
+    Ereignis mit eigener Rolle. ``None`` = keine solche Nachricht, der Aufrufer
+    behandelt die Zeile normal weiter.
+
+    Behalten wird, was der Operator wissen will: WER geschrieben hat und WAS.
+    Der Boilerplate-Absatz danach faellt weg — er ist Anweisung an das Modell,
+    kein Gespraechsinhalt, und in jeder Nachricht identisch."""
+    m = _TEAMMATE_MESSAGE_RE.match(text)
+    if m is None:
+        return None
+    id_match = _TEAMMATE_ID_RE.search(m.group("attrs") or "")
+    return {
+        "kind": "message",
+        "uuid": msg_uuid,
+        "ts": ts,
+        "role": "teammate",
+        "teammate": id_match.group("id") if id_match else None,
+        "text": m.group("payload").strip(),
+        "model": None,
+        "sidechain": sidechain,
+    }
+
+
 def _parse_local_command_wrapper(
     text: str, msg_uuid: str, ts: str, parent_uuid: str | None
 ) -> list[dict[str, Any]] | None:
@@ -311,7 +356,10 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
             text = block.get("text")
             if text is None:
                 continue
-            if text.startswith("/") and "\n" not in text:
+            teammate_ev = _parse_teammate_message(text, msg_uuid, ts, sidechain)
+            if teammate_ev is not None:
+                events.append(teammate_ev)
+            elif text.startswith("/") and "\n" not in text:
                 events.append(
                     {
                         "kind": "command",

@@ -166,3 +166,33 @@ describe("ChatMessage — Anhänge", () => {
     expect(screen.queryByTestId("attachment-card")).toBeNull();
   });
 });
+
+describe("ChatMessage — Teamkollegen-Nachricht", () => {
+  function mkTeammate(text: string, teammate: string | null = "qwen-research") {
+    return { kind: "message", role: "teammate", teammate, uuid: "t1",
+             ts: "2026-08-19T10:00:00Z", text, model: null, sidechain: false } as never;
+  }
+
+  it("sieht nicht aus wie eine Nachricht des Operators", () => {
+    render(<ChatMessage ev={mkTeammate("fertig")} />);
+    // Die rechtsbuendige Blase ist dem Operator vorbehalten.
+    expect(screen.queryByText("Du")).toBeNull();
+    expect(screen.getByTestId("teammate-row")).toBeTruthy();
+  });
+
+  it("nennt den Absender", () => {
+    render(<ChatMessage ev={mkTeammate("fertig")} />);
+    expect(screen.getByText(/qwen-research/)).toBeTruthy();
+  });
+
+  it("behauptet keinen Absender, wenn keiner da war", () => {
+    render(<ChatMessage ev={mkTeammate("fertig", null)} />);
+    expect(screen.getByTestId("teammate-row")).toBeTruthy();
+    expect(screen.queryByText(/qwen-research/)).toBeNull();
+  });
+
+  it("zeigt den Inhalt", () => {
+    render(<ChatMessage ev={mkTeammate("Recherche fertig: 128 GB")} />);
+    expect(screen.getByText(/128 GB/)).toBeTruthy();
+  });
+});

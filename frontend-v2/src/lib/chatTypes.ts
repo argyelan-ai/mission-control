@@ -10,10 +10,17 @@ export interface MessageEvent {
   kind: "message";
   uuid: string;
   ts: string;
-  role: "user" | "assistant";
+  /** `teammate` = Rückmeldung eines Subagenten/einer anderen Sitzung. Claude
+   *  Code schreibt die als gewöhnlichen USER-Turn ins Transkript — ohne diese
+   *  dritte Rolle erschiene sie als Nachricht des Operators, die er nie
+   *  getippt hat (Operator-Befund 19.08.2026). */
+  role: "user" | "assistant" | "teammate";
   text: string;
   model: string | null;
   sidechain: boolean;
+  /** Nur bei `role: "teammate"`: wer geschrieben hat. `null`, wenn die
+   *  Nachricht keinen Absender trug — dann wird nichts behauptet. */
+  teammate?: string | null;
 }
 
 export interface ToolEvent {
