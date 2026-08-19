@@ -351,9 +351,13 @@ describe("ChatView", () => {
   });
 
   it("shows the detail-level switcher in chat mode", () => {
+    // Seit 19.08.2026 ist der Umschalter EIN Knopf mit Klappliste statt drei
+    // Segmenten (Operator-Wunsch, Kopfzeile entlasten). Die Stufen sind erst
+    // nach dem Klick da — die Abdeckung dafuer steht in
+    // "Desktop-Kopfzeile — Detailgrad eingeklappt".
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView({ centerView: "chat" });
-    expect(screen.getByRole("button", { name: "Kompakt" })).toBeInTheDocument();
+    expect(screen.getByTestId("detail-level-trigger")).toBeInTheDocument();
   });
 
   it("no-transcript agents force terminal mode and disable the Chat segment", () => {
@@ -433,7 +437,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onDetailLevelChange: onChange });
 
-    await user.click(screen.getByRole("button", { name: "Ausführlich" }));
+    await user.click(screen.getByTestId("detail-level-trigger"));
+    await user.click(screen.getByRole("option", { name: "Ausführlich" }));
     expect(onChange).toHaveBeenCalledWith("verbose");
   });
 
@@ -924,6 +929,57 @@ describe("ChatView", () => {
   // Handy-Kopfzeile — mittiger Name, runde Knöpfe (19.08.2026)
   // ══════════════════════════════════════════════════════════════════════════
 
+
+  describe("Desktop-Kopfzeile — Detailgrad eingeklappt", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("zeigt statt drei Segmenten einen Knopf mit dem aktuellen Wert", () => {
+      // Operator-Wunsch 19.08.2026: "diese viele buttons und switche rechts
+      // oben irgendwie verpacken". Der Detailgrad wird einmal eingestellt und
+      // selten angefasst — Chat/Terminal dagegen staendig, das bleibt offen.
+      renderChatView({ detailLevel: "normal" });
+      const trigger = screen.getByTestId("detail-level-trigger");
+      expect(trigger.textContent).toContain("Normal");
+      // Die anderen Stufen sind erst nach dem Klick da.
+      expect(screen.queryByRole("option", { name: "Kompakt" })).toBeNull();
+    });
+
+    it("oeffnet die Liste erst auf Klick und meldet die Wahl", async () => {
+      const onDetailLevelChange = vi.fn();
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "normal", onDetailLevelChange });
+
+      await user.click(screen.getByTestId("detail-level-trigger"));
+      await user.click(screen.getByRole("option", { name: "Ausführlich" }));
+
+      expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
+    });
+
+    it("markiert die aktive Stufe fuer Vorleseprogramme", async () => {
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "compact" });
+
+      await user.click(screen.getByTestId("detail-level-trigger"));
+
+      expect(screen.getByRole("option", { name: "Kompakt" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Normal" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("gibt es im Terminal-Modus gar nicht", () => {
+      // Der Detailgrad betrifft nur die geparste Chat-Ansicht.
+      renderChatView({ centerView: "terminal" });
+      expect(screen.queryByTestId("detail-level-trigger")).toBeNull();
+    });
+
+    it("laesst Chat/Terminal sichtbar", () => {
+      renderChatView({});
+      expect(screen.getByRole("button", { name: "Terminal" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+    });
+  });
+
   describe("Handy-Kopfzeile", () => {
     beforeEach(() => {
       mockUseChatStream.mockReturnValue(mkStream());
@@ -948,6 +1004,17 @@ describe("ChatView", () => {
       renderChatView({ onBack: vi.fn() });
       expect(screen.getByLabelText("Zurück zur Sessionliste").className).toContain("rounded-full");
       expect(screen.getByLabelText("Chat-Optionen").className).toContain("rounded-full");
+    });
+
+    it("zentriert den Namen NUR auf dem Handy, nicht auf dem Desktop", () => {
+      // Operator-Befund 19.08.2026 (Screenshot): auf dem Desktop stand "Boss"
+      // weiterhin mittig. Ursache: fuer md war zwar `items-baseline` gesetzt,
+      // aber `justify-center` aus der Handy-Anordnung blieb stehen — der Block
+      // sass links und zentrierte seinen Inhalt trotzdem.
+      renderChatView({ onBack: vi.fn() });
+      const title = screen.getByTestId("chat-header-title");
+      expect(title.className).toContain("justify-center");
+      expect(title.className).toContain("md:justify-start");
     });
 
     it("zeigt die Aufgaben-Zeile mittig unter dem Namen", () => {

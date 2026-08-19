@@ -19,7 +19,7 @@
  * orthogonal to this toggle.
  */
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -246,6 +246,8 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailBoxRef = useRef<HTMLDivElement | null>(null);
   // Chunked first paint: a full Boss transcript is ~200 events of ReactMarkdown,
   // and rendering all of it in one commit blocked the main thread long enough
   // that the page stopped answering (measured: repeated >5s stalls, 741ms LCP
@@ -256,6 +258,25 @@ export function ChatView({
   const [renderAll, setRenderAll] = useState(false);
 
   const streamEnabled = hasTranscript && !!agent;
+  // Klick daneben oder Escape schliesst die Detailgrad-Liste. Ohne das bliebe
+  // sie offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
+  // wie beim Modell-Waehler im Composer.
+  useEffect(() => {
+    if (!detailOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (!detailBoxRef.current?.contains(e.target as Node)) setDetailOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setDetailOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [detailOpen]);
+
   const stream = useChatStream(agent?.id ?? null, streamEnabled);
 
   const streamStatus = stream.state?.status ?? null;
@@ -420,8 +441,8 @@ export function ChatView({
         <div
           data-testid="chat-header-title"
           className="absolute inset-x-0 px-14 flex flex-col items-center justify-center text-center pointer-events-none
-                     md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline md:gap-2
-                     md:text-left md:pointer-events-auto"
+                     md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline
+                     md:justify-start md:gap-2 md:text-left md:pointer-events-auto"
         >
           <span
             className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate max-w-full md:shrink-0"
@@ -488,27 +509,67 @@ export function ChatView({
         </div>
 
         <div className="hidden md:flex items-center gap-2 shrink-0">
+          {/* Detailgrad: EIN Knopf mit Klappliste statt drei Segmenten
+              (Operator-Wunsch 19.08.2026: "diese viele buttons und switche
+              rechts oben irgendwie verpacken"). Die Wahl der Bedienform folgt
+              der Benutzungshaeufigkeit — den Detailgrad stellt man einmal ein,
+              Chat/Terminal schaltet man staendig. Darum klappt genau dieser
+              ein und der Umschalter daneben bleibt offen. */}
           {effectiveView === "chat" && (
-            <div
-              className="flex items-center rounded-md overflow-hidden"
-              style={{ border: `1px solid ${C.border}` }}
-            >
-              {DETAIL_LEVELS.map(({ key, label }) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => onDetailLevelChange(key)}
-                  aria-pressed={detailLevel === key}
-                  className="px-2.5 py-1.5 text-[10px] font-medium transition-colors cursor-pointer whitespace-nowrap"
+            <div className="relative" ref={detailBoxRef}>
+              <button
+                type="button"
+                data-testid="detail-level-trigger"
+                aria-haspopup="listbox"
+                aria-expanded={detailOpen}
+                aria-label={`Detailgrad: ${DETAIL_LEVELS.find((d) => d.key === detailLevel)?.label ?? ""}`}
+                onClick={() => setDetailOpen((v) => !v)}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-medium rounded-md cursor-pointer transition-colors whitespace-nowrap"
+                style={{
+                  border: `1px solid ${C.border}`,
+                  background: detailOpen ? C.bgHover : "transparent",
+                  color: detailOpen ? C.textPrimary : C.textMuted,
+                }}
+              >
+                {DETAIL_LEVELS.find((d) => d.key === detailLevel)?.label}
+                <ChevronDown
+                  size={10}
+                  className="transition-transform duration-150"
+                  style={{ transform: detailOpen ? "rotate(180deg)" : undefined }}
+                />
+              </button>
+              {detailOpen && (
+                <div
+                  role="listbox"
+                  aria-label="Detailgrad"
+                  className="absolute top-full right-0 mt-1 w-32 rounded-lg overflow-hidden z-20 p-1"
                   style={{
-                    background: detailLevel === key ? C.accentSubtle : "transparent",
-                    color: detailLevel === key ? C.accent : C.textMuted,
-                    borderRight: key !== "verbose" ? `1px solid ${C.border}` : undefined,
+                    backgroundColor: C.bgElevated,
+                    border: `1px solid ${C.border}`,
+                    boxShadow: "var(--shadow-elevated)",
                   }}
                 >
-                  {label}
-                </button>
-              ))}
+                  {DETAIL_LEVELS.map(({ key, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="option"
+                      aria-selected={detailLevel === key}
+                      onClick={() => {
+                        onDetailLevelChange(key);
+                        setDetailOpen(false);
+                      }}
+                      className="w-full text-left px-2 py-1.5 text-[11px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                      style={{
+                        color: detailLevel === key ? C.accent : C.textPrimary,
+                        backgroundColor: detailLevel === key ? C.accentSubtle : "transparent",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
