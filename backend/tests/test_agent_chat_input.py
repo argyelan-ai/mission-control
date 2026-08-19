@@ -1415,6 +1415,30 @@ async def test_model_options_capabilities_falls_back_to_static_aliases_when_cata
     assert options["default"]["contextWindow"] == 1_000_000
 
 
+async def test_model_options_capabilities_boss_reads_shared_operator_config(monkeypatch, tmp_path):
+    """Boss liest ~/.claude/settings.json (CLAUDE_CONFIG_DIR unset). Ohne
+    diesen Zweig stand nach /clear ein "—" im Composer, bis die erste
+    Nachricht ein usage-Ereignis erzeugte (Operator-Screenshot 19.08.2026).
+    Gegenstueck zum Geister-Modell-Test darunter: DIESER Pfad ist der
+    richtige, das mc-Agenten-Muster der falsche."""
+    import json as _json
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "discover_model_catalog", _async_return([]))
+    monkeypatch.setattr(agent_chat_input, "get_observed_model_windows", _async_return({}))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(_json.dumps({"model": "opus"}))
+    # Geister-Config im mc-Muster daneben — darf NICHT gewinnen.
+    ghost = tmp_path / ".mc" / "agents" / "boss" / "claude-config"
+    ghost.mkdir(parents=True)
+    (ghost / "settings.json").write_text(_json.dumps({"model": "glm-5.1:cloud"}))
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+    assert caps["model"] == "opus"
+
+
 async def test_model_options_capabilities_host_agent_never_reads_stale_config(monkeypatch, tmp_path):
     """Live-Fund direkt nach dem Deploy (18.08.2026): Boss' capabilities.model
     war "glm-5.1:cloud" — aus ~/.mc/agents/boss/claude-config, einem seit

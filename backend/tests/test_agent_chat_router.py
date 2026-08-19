@@ -150,6 +150,7 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 

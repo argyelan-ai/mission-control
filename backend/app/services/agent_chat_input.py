@@ -873,6 +873,18 @@ def _persisted_effort_level(slug: str) -> str | None:
     return level if level in ALLOWED_EFFORT_LEVELS else None
 
 
+def _persisted_model_at(path: Path) -> str | None:
+    """Wie ``_persisted_model``, aber fuer einen expliziten Pfad — Boss'
+    effektive Config ist ~/.claude/settings.json (geteilt mit dem Operator).
+    Fail-silent -> None."""
+    try:
+        with open(path) as f:
+            model = json.load(f).get("model")
+    except Exception:
+        return None
+    return model if isinstance(model, str) and model.strip() else None
+
+
 def _persisted_model(slug: str) -> str | None:
     """Das im ``settings.json`` des Agenten hinterlegte Modell — der Standard,
     mit dem jede neue Session startet. Gleiche Rolle wie
@@ -1010,11 +1022,19 @@ async def model_options_capabilities(agent) -> dict[str, object]:
     except InputNotSupportedError:
         kind = None
     slug = getattr(agent, "slug", None) or ""
-    model = (
-        await asyncio.to_thread(_persisted_model, slug)
-        if slug and kind == "docker"
-        else None
-    )
+    if kind == "docker" and slug:
+        model = await asyncio.to_thread(_persisted_model, slug)
+    elif kind == "boss":
+        # Boss liest ~/.claude/settings.json (CLAUDE_CONFIG_DIR unset) — NICHT
+        # das mc-Agenten-Muster, aus dem frueher ein Geister-Modell kam.
+        # Ohne diesen Zweig stand nach /clear ein "—" im Composer, bis die
+        # erste Nachricht ein usage-Ereignis erzeugte (Operator-Befund
+        # 19.08.2026, Screenshot).
+        model = await asyncio.to_thread(
+            _persisted_model_at, _host_home() / ".claude" / "settings.json"
+        )
+    else:
+        model = None
     # Startwert fuers Modell-Label, solange die Session noch kein usage-Ereignis
     # geschrieben hat — ein spaeteres usage gewinnt immer (es kennt das Modell
     # des laufenden Zuges, nicht nur den persistierten Standard).
