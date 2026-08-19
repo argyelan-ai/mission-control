@@ -64,11 +64,17 @@ async def get_ai_provider_settings(
     keys the operator has pinned via this page (everything else is env/default).
     Keys never appear here — they live behind the secrets API, masked.
     """
+    from app.services.intelligence import effective_insights_model
+
     values = {key: getattr(settings, key, None) for key in AI_PROVIDER_SETTING_FIELDS}
     overridden = sorted((await stored_overrides(session)).keys())
     return {
         "values": values,
         "overridden": overridden,
+        # What the next distillation would ACTUALLY use — includes the legacy
+        # Redis model field the Intelligence tab no longer edits. null =
+        # resolved at call time from the box (spark auto) / provider off.
+        "insights_effective_model": await effective_insights_model(),
         "choices": {
             "ai_embeddings_provider": list(EMBEDDING_PROVIDERS),
             "ai_insights_provider": list(INSIGHTS_PROVIDERS),

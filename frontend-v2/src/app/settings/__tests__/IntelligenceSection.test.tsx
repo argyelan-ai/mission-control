@@ -69,6 +69,7 @@ const AI_SETTINGS: AiProviderSettingsResponse = {
     ai_insights_model: "qwen3-coder:480b-cloud",
   },
   overridden: ["ai_insights_provider", "ai_insights_model"],
+  insights_effective_model: "qwen3-coder:480b-cloud",
   choices: {
     ai_embeddings_provider: ["spark", "cloud"],
     ai_insights_provider: ["spark", "ollama_cloud", "off"],

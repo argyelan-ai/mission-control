@@ -81,6 +81,7 @@ const DEFAULTS: AiProviderSettingsResponse = {
     ai_insights_model: "",
   },
   overridden: [],
+  insights_effective_model: null,
   choices: {
     ai_embeddings_provider: ["spark", "cloud"],
     ai_insights_provider: ["spark", "ollama_cloud", "off"],
@@ -181,6 +182,36 @@ describe("AiProvidersTab (Settings)", () => {
     expect(await screen.findByTestId("ai_embeddings_cloud_url")).toBeInTheDocument();
     expect(screen.getByTestId("ai_embeddings_cloud_model")).toBeInTheDocument();
     expect(screen.queryByTestId("ai_embeddings_url")).not.toBeInTheDocument();
+  });
+
+  it("does not leak an unsaved draft into the other arm's field", async () => {
+    // Same-position, same-type fields across the two arms: without a key=
+    // per arm, React keeps the unsaved draft state through the switch and a
+    // typed self-hosted URL surfaces as the cloud endpoint draft.
+    const cloudActive: AiProviderSettingsResponse = {
+      ...DEFAULTS,
+      values: { ...DEFAULTS.values, ai_embeddings_provider: "cloud" },
+      state: { ...DEFAULT_STATE, embeddings_cloud_key_required: true, embeddings_cloud_api_key_set: true },
+    };
+    let switched = false;
+    vi.spyOn(api.aiProviders, "getSettings").mockImplementation(async () =>
+      switched ? cloudActive : DEFAULTS
+    );
+    vi.spyOn(api.aiProviders, "updateSettings").mockImplementation(async () => {
+      switched = true;
+      return { ok: true, applied: ["ai_embeddings_provider"] };
+    });
+    renderPage();
+
+    const selfHostedUrl = await screen.findByTestId("ai_embeddings_url");
+    await userEvent.type(selfHostedUrl, "http://192.0.2.50:8090/v1/embeddings");
+
+    await userEvent.selectOptions(
+      screen.getByTestId("ai_embeddings_provider"), "cloud"
+    );
+
+    const cloudUrl = await screen.findByTestId("ai_embeddings_cloud_url");
+    expect(cloudUrl).toHaveValue("");
   });
 
   it("warns when the cloud embeddings arm has no stored key", async () => {

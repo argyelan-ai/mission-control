@@ -81,12 +81,25 @@ EMBEDDINGS_CLOUD_API_KEY_SECRET_KEY = "embeddings_cloud_api_key"
 
 
 async def stored_overrides(session: AsyncSession) -> dict[str, str]:
-    """The operator's saved decisions. Unknown keys are skipped with a warning
-    (an old row must never break startup)."""
+    """The operator's saved decisions — only the ones that are still VALID.
+
+    Value validation happens here, not only in apply: a legacy row with a
+    retired value (e.g. ai_embeddings_provider='ollama_cloud') is not an
+    override anymore — reporting it as one made GET /settings show a pinned
+    badge on a value that was actually the env default. Skipped rows are
+    logged once per read; they stay in the DB and heal on the next save."""
     rows = (await session.exec(select(AppSetting))).all()
     out: dict[str, str] = {}
     for row in rows:
+        allowed = AI_PROVIDER_SETTING_FIELDS.get(row.key)
         if row.key not in AI_PROVIDER_SETTING_FIELDS:
+            continue
+        if allowed is not None and row.value not in allowed:
+            logger.warning(
+                "app_settings: %r=%r ist kein gueltiger Wert mehr (%s) — "
+                "ignoriert; einmal neu speichern raeumt die Zeile auf",
+                row.key, row.value, ", ".join(allowed),
+            )
             continue
         out[row.key] = row.value
     return out

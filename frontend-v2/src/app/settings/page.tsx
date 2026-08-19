@@ -944,7 +944,7 @@ function IntelligenceSection({
               >
                 {aiProviders
                   ? `${aiProviders.values.ai_insights_provider ?? "spark"} · ${
-                      aiProviders.values.ai_insights_model || t("insightsLlmModelAuto")
+                      aiProviders.insights_effective_model || t("insightsLlmModelAuto")
                     }`
                   : "…"}
               </p>

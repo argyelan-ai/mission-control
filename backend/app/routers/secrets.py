@@ -52,6 +52,26 @@ PROVIDER_TEMPLATES = [
         "placeholder": "oll-...",
     },
     {
+        "provider": "embeddings",
+        "key": "embeddings_api_key",
+        "label": "Self-hosted Embeddings Key (optional)",
+        "description": (
+            "Bearer for your own embedding server (Settings -> AI providers), "
+            "only if it sits behind auth. Empty/absent = unauthenticated."
+        ),
+        "placeholder": "sk-...",
+    },
+    {
+        "provider": "embeddings",
+        "key": "embeddings_cloud_api_key",
+        "label": "Cloud Embeddings Key",
+        "description": (
+            "API key of the hosted embeddings endpoint (Together, DeepInfra, "
+            "Fireworks, ...) configured under Settings -> AI providers."
+        ),
+        "placeholder": "sk-...",
+    },
+    {
         "provider": "huggingface",
         "key": "hf_token",
         "label": "HuggingFace Access Token",

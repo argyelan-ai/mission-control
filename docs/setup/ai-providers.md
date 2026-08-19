@@ -182,7 +182,7 @@ in a file.
 | Symptom | Check |
 |---|---|
 | Memory search returns keyword-ish results | **Test embeddings**. If the box is unreachable, new memories are still saved — they just have no vector until the retry loop drains. |
-| Test says "no endpoint configured" | Fresh install: fill in the self-hosted URL (or switch to `cloud` with URL + key). Memories saved meanwhile get vectors on the next backfill. |
+| Test says "no endpoint configured" | Fresh install: fill in the self-hosted URL (or switch to `cloud` with URL + key). Memories saved meanwhile stay vector-less until you run the backfill once: `docker compose exec backend python -m scripts.backfill_memory_embeddings` — there is no automatic backfill. |
 | Test reports the wrong dimension | Your model is not a 768-dim model. Either pick one that is, or plan to rebuild the existing vectors. |
 | No daily insights report | Provider on `off`? Otherwise check that at least three tasks finished in the window — there is a minimum before MC bothers to summarise. |
 | Model browser cannot find a model you can see on the website | It is gated. Accept the licence on huggingface.co, then store a read token here. |

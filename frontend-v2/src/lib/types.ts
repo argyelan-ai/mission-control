@@ -1060,6 +1060,9 @@ export interface AiProviderSettingsResponse {
   values: Record<string, string | null>;
   /** Keys the operator pinned via the settings page (rest = env default). */
   overridden: string[];
+  /** What the next insights distillation would actually use — includes the
+   *  legacy Redis model field. null = resolved from the box at call time. */
+  insights_effective_model: string | null;
   choices: {
     ai_embeddings_provider: string[];
     ai_insights_provider: string[];

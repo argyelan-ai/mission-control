@@ -191,6 +191,16 @@ services:
       # ADR-023 ultrareview / ADR-006 SSoT: nur `.env`-Vars mit Defaults,
       # keine Hardcodes in compose. `.env.example` dokumentiert die Keys.
       SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-}
+      SPARK_EMBEDDING_MODEL: ${SPARK_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      # MC's own AI functions (docs/setup/ai-providers.md) — without this
+      # passthrough the documented AI_* .env block never reaches the container.
+      AI_EMBEDDINGS_PROVIDER: ${AI_EMBEDDINGS_PROVIDER:-spark}
+      AI_EMBEDDINGS_URL: ${AI_EMBEDDINGS_URL:-}
+      AI_EMBEDDINGS_MODEL: ${AI_EMBEDDINGS_MODEL:-}
+      AI_EMBEDDINGS_CLOUD_URL: ${AI_EMBEDDINGS_CLOUD_URL:-}
+      AI_EMBEDDINGS_CLOUD_MODEL: ${AI_EMBEDDINGS_CLOUD_MODEL:-}
+      AI_INSIGHTS_PROVIDER: ${AI_INSIGHTS_PROVIDER:-spark}
+      AI_INSIGHTS_MODEL: ${AI_INSIGHTS_MODEL:-}
       SPARK_LLM_URL: ${SPARK_LLM_URL:-http://192.0.2.10:8000/v1}
       DGX_SSH_HOST: ${DGX_SSH_HOST:-}
       DGX_SSH_USER: ${DGX_SSH_USER:-}

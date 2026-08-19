@@ -118,12 +118,15 @@ async def test_arm_fields_do_not_leak_into_the_other_arm():
 @pytest.mark.asyncio
 async def test_legacy_ollama_cloud_embeddings_row_degrades_to_self_hosted():
     """ollama.com hosts no embedding models — the retired arm's stored row
-    must degrade to the self-hosted default instead of breaking startup."""
+    must degrade to the self-hosted default instead of breaking startup, AND
+    it must not be reported as an override: a pinned badge on a value that is
+    actually the env default would lie to the operator."""
     async with await _session() as s:
         s.add(AppSetting(key="ai_embeddings_provider", value="ollama_cloud"))
         await s.commit()
         await ai_provider_config.apply_ai_provider_overrides(s)
-    assert ai_provider_config.embeddings_provider_key() == "spark"
+        assert ai_provider_config.embeddings_provider_key() == "spark"
+        assert "ai_embeddings_provider" not in await ai_provider_config.stored_overrides(s)
 
 
 @pytest.mark.asyncio
@@ -232,8 +235,9 @@ async def test_embedding_keys_reach_their_named_consumers():
 
 @pytest.mark.asyncio
 async def test_agent_runtime_credentials_never_see_the_new_keys(async_session):
-    """ADR-056 Finding 5 boundary, asserted from the other side: with BOTH new
-    secrets stored, a keyless openai-protocol runtime still gets nothing.
+    """ADR-056 Finding 5 boundary, asserted from the other side: with ALL
+    MC-function secrets stored (hf, ollama, both embeddings keys), a keyless
+    openai-protocol runtime still gets nothing.
 
     tests/test_provider_credentials.py pins the same law by mocking the
     lookups; this one pins it against a real vault so a future 'convenience'
@@ -246,6 +250,12 @@ async def test_agent_runtime_credentials_never_see_the_new_keys(async_session):
 
     await upsert_secret_by_key(async_session, key="hf_token", value="hf_TESTONLY")
     await upsert_secret_by_key(async_session, key="ollama_api_key", value="oll-TESTONLY")
+    await upsert_secret_by_key(
+        async_session, key="embeddings_api_key", value="emb-TESTONLY"
+    )
+    await upsert_secret_by_key(
+        async_session, key="embeddings_cloud_api_key", value="cloud-TESTONLY"
+    )
 
     runtime = Runtime(
         id=uuid.uuid4(), slug="local-vllm", display_name="local",
@@ -460,6 +470,23 @@ async def test_embeddings_test_reports_the_dimension_mismatch(
     assert body["connected"] is True
     assert body["dimension"] == 1024 and body["expected_dimension"] == 768
     assert "1024" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_embeddings_test_reports_not_configured_as_guided_state(
+    auth_client: AsyncClient,
+):
+    """THE fresh-install state: no URL anywhere. The test button must answer
+    200 with a guided message — never a 500 — and url must be empty proof
+    that no endpoint was even attempted."""
+    settings.spark_embedding_url = ""
+    settings.ai_embeddings_url = ""
+    resp = await auth_client.post("/api/v1/ai-providers/embeddings/test-connection")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["connected"] is False
+    assert body["url"] == ""
+    assert "keinen Endpunkt konfiguriert" in (body["error"] or "")
 
 
 @pytest.mark.asyncio

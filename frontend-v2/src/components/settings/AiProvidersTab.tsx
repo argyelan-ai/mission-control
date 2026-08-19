@@ -533,9 +533,13 @@ export function AiProvidersTab() {
           {/* Per-arm fields: each provider keeps its OWN url/model, so the
               select above is always a complete one-click switch — no field
               from the other arm can leak into the active one. */}
+          {/* key= per arm: React would otherwise keep the unsaved draft state
+              of a same-position field across the provider switch — a typed
+              self-hosted URL would surface as the cloud endpoint draft. */}
           {activeEmbProvider === "cloud" ? (
             <>
               <OverrideTextField
+                key="ai_embeddings_cloud_url"
                 label={t("embeddingsCloudUrlLabel")}
                 hint={t("embeddingsCloudUrlHint")}
                 value={strOf("ai_embeddings_cloud_url")}
@@ -546,6 +550,7 @@ export function AiProvidersTab() {
                 onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_cloud_url", value })}
               />
               <OverrideTextField
+                key="ai_embeddings_cloud_model"
                 label={t("embeddingsCloudModelLabel")}
                 hint={t("embeddingsModelHint")}
                 value={strOf("ai_embeddings_cloud_model")}
@@ -568,6 +573,7 @@ export function AiProvidersTab() {
           ) : (
             <>
               <OverrideTextField
+                key="ai_embeddings_url"
                 label={t("embeddingsUrlLabel")}
                 hint={t("embeddingsUrlHint")}
                 value={strOf("ai_embeddings_url")}
@@ -578,6 +584,7 @@ export function AiProvidersTab() {
                 onSave={(value) => saveSetting.mutate({ key: "ai_embeddings_url", value })}
               />
               <OverrideTextField
+                key="ai_embeddings_model"
                 label={t("embeddingsModelLabel")}
                 hint={t("embeddingsModelHint")}
                 value={strOf("ai_embeddings_model")}
