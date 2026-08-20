@@ -11,6 +11,10 @@ interface SSEOptions {
 
 // Named SSE events forwarded to consumers
 const NAMED_EVENTS = [
+  // Keepalive des Backends (services/sse.py). Traegt keine Nutzlast, ist auf
+  // einem ruhenden Agenten aber der einzige Beweis, dass die Verbindung
+  // steht — ohne ihn meldete die Chat-Statuszeile dauerhaft "Status unklar".
+  "ping",
   "task.created", "task.updated", "task.deleted",
   "task.status_changed", "task.assigned", "task.commented",
   "agent.status_changed", "agent.context_warning", "agent.metrics_updated", "agent.reset", "agent.chat.reply",
