@@ -195,6 +195,24 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   /** The level asked for, while the request is in flight. Never used as the
    *  chip's label — the label stays transcript truth. */
   const [pendingEffort, setPendingEffort] = useState<string | null>(null);
+  /** Die Stufe, die das Backend zuletzt BESTAETIGT hat — zusammen mit dem
+   *  usage-Ereignis, das in dem Moment galt.
+   *
+   *  Warum es das braucht (Review 20.08.2026): `capabilities` kommt aus
+   *  historyQuery.data und wird nur bei `session_changed` neu geholt. Eine
+   *  frische Sitzung hat noch kein usage-Ereignis, der Chip stand also auf dem
+   *  persistierten Standard — und blieb dort, auch nachdem der Operator
+   *  umgeschaltet hatte und das Backend den Wechsel an der CLI verifiziert
+   *  hatte. Ein ruhender Agent schickt evtl. NIE ein usage; die Saeule blieb
+   *  dann die ganze Sitzung falsch, und der Weg zurueck auf den alten Wert
+   *  wurde von `level === currentEffort` stumm verschluckt.
+   *
+   *  Keine optimistische Umbenennung: gesetzt wird erst NACH dem 204, das das
+   *  Backend nur gibt, wenn die CLI ihre eigene Bestaetigungszeile geschrieben
+   *  hat. Und es gewinnt nur, solange kein NEUERES usage-Ereignis da ist —
+   *  das kennt den laufenden Zug und damit auch die session-only-Stufen. */
+  const [confirmedEffort, setConfirmedEffort] =
+    useState<{ level: string; usageAt: UsageEvent | null } | null>(null);
   /** Flips to false the first time the backend answers `input_not_supported`
    *  (host agents have no pane to drive). Only the backend knows, so the chip
    *  starts interactive and demotes itself to a labelled read-only value —
@@ -256,7 +274,20 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     };
   }, [modelOpen, effortOpen]);
 
-  const currentEffort = usage?.effort ?? capabilities?.effort ?? null;
+  /* Reihenfolge der Wahrheit: ein usage-Ereignis, das NACH unserer letzten
+   * Bestaetigung kam > unsere eigene bestaetigte Stufe > der persistierte
+   * Standard aus settings.json. `usageAt` haelt fest, welches usage bei der
+   * Bestaetigung galt; kommt ein anderes, ist es das juengere Wissen. */
+  const confirmedIsNewest = confirmedEffort != null && confirmedEffort.usageAt === usage;
+  const currentEffort =
+    (confirmedIsNewest ? confirmedEffort!.level : null) ?? usage?.effort ?? capabilities?.effort ?? null;
+
+  /* Der Agent im Composer kann wechseln, ohne dass die Komponente neu
+   * montiert wird — eine Bestaetigung fuer den vorigen Agenten darf dann
+   * nicht stehenbleiben. */
+  useEffect(() => {
+    setConfirmedEffort(null);
+  }, [agentId]);
 
   /* Position des Reglers: waehrend des Ziehens die Vorschau, sonst der aktuelle
    * Wert. Kennt der Agent noch keine Stufe (frische Session, kein usage), steht
@@ -458,9 +489,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     setPendingEffort(level);
     try {
       await api.chat.setEffort(agentId, level);
-      // Deliberately no optimistic relabel: the next transcript turn reports
-      // the level the agent is actually running, and that is the only figure
-      // the chip is allowed to show.
+      // Keine optimistische Umbenennung — aber eine BESTAETIGTE ist keine
+      // Behauptung: das Backend antwortet erst 204, nachdem es die eigene
+      // Bestaetigungszeile der CLI gelesen hat. Bis ein neueres
+      // usage-Ereignis etwas anderes sagt, ist das die ehrlichste Zahl, die
+      // wir haben (s. confirmedEffort).
+      setConfirmedEffort({ level, usageAt: usage });
     } catch (err) {
       if (isInputNotSupportedError(err)) {
         setEffortSupported(false);
