@@ -351,7 +351,7 @@ describe("ChatView", () => {
 
     expect(screen.getByTestId("terminal-panel-stub")).toHaveTextContent("Terminal-Panel: Cody");
     expect(screen.queryByText("Hallo!")).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("Nachricht an den Agenten…")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Message the agent…")).not.toBeInTheDocument();
   });
 
   it("switching back to Chat calls onCenterViewChange('chat')", async () => {
@@ -367,7 +367,7 @@ describe("ChatView", () => {
   it("hides the detail-level switcher while in terminal mode", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView({ centerView: "terminal" });
-    expect(screen.queryByRole("button", { name: "Kompakt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
   });
 
   it("shows the detail-level switcher in chat mode", () => {
@@ -458,7 +458,7 @@ describe("ChatView", () => {
     renderChatView({ onDetailLevelChange: onChange });
 
     await user.click(screen.getByTestId("detail-level-trigger"));
-    await user.click(screen.getByRole("option", { name: "Ausführlich" }));
+    await user.click(screen.getByRole("option", { name: "Verbose" }));
     expect(onChange).toHaveBeenCalledWith("verbose");
   });
 
@@ -518,8 +518,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "Hi");
-    await user.click(screen.getByRole("button", { name: "Senden" }));
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "Hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
     expect(api.chat.sendText).toHaveBeenCalledWith("agent-1", "Hi");
   });
 
@@ -648,7 +648,7 @@ describe("ChatView", () => {
   it("shows no back chevron when the caller has no list to go back to (desktop)", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView();
-    expect(screen.queryByRole("button", { name: "Zurück zur Sessionliste" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to sessions" })).not.toBeInTheDocument();
   });
 
   it("the back chevron reports the intent to return to the list", async () => {
@@ -657,7 +657,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onBack });
 
-    await user.click(screen.getByRole("button", { name: "Zurück zur Sessionliste" }));
+    await user.click(screen.getByRole("button", { name: "Back to sessions" }));
     expect(onBack).toHaveBeenCalled();
   });
 
@@ -673,7 +673,7 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.queryByTestId("chat-options-sheet")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
+    await user.click(screen.getByRole("button", { name: "Chat options" }));
     expect(screen.getByTestId("chat-options-sheet")).toBeInTheDocument();
   });
 
@@ -682,7 +682,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ hasTranscript: false, centerView: "chat" });
 
-    await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
+    await user.click(screen.getByRole("button", { name: "Chat options" }));
     expect(screen.getByRole("radio", { name: /Chat/ })).toBeDisabled();
     expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
   });
@@ -705,8 +705,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "los gehts");
-    await user.click(screen.getByRole("button", { name: "Senden" }));
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "los gehts");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(sendResolved).toBe(true);
   });
@@ -718,8 +718,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "geht nicht");
-    await user.click(screen.getByRole("button", { name: "Senden" }));
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "geht nicht");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     // A bubble that outlived a failed send would claim a delivery that never
     // happened — worse than the delay it was meant to hide.
@@ -765,7 +765,7 @@ describe("ChatView", () => {
     );
     renderChatView();
 
-    expect(screen.queryByText("Noch keine Nachrichten")).not.toBeInTheDocument();
+    expect(screen.queryByText("No messages yet")).not.toBeInTheDocument();
     expect(screen.getByTestId("echo-bubble")).toBeInTheDocument();
   });
 
@@ -854,7 +854,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "start doch");
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "start doch");
     await user.click(screen.getByTestId("send-button"));
 
     await waitFor(() => expect(echoAgentStarting).toHaveBeenCalled());
@@ -874,7 +874,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "nochmal");
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "nochmal");
     await user.click(screen.getByTestId("send-button"));
     await waitFor(() => expect(retryFn).not.toBeNull());
 
@@ -987,14 +987,14 @@ describe("ChatView", () => {
     mockUseChatStream.mockReturnValue(mkStream({ loading: true }));
     renderChatView();
     expect(screen.getByTestId("timeline-skeleton")).toBeInTheDocument();
-    expect(screen.getByText("Transkript wird geladen…")).toBeInTheDocument();
+    expect(screen.getByText("Loading transcript…")).toBeInTheDocument();
   });
 
   it("names both ways forward in the empty state instead of just reporting emptiness", () => {
     mockUseChatStream.mockReturnValue(mkStream({ loading: false }));
     renderChatView();
-    expect(screen.getByText("Noch keine Nachrichten")).toBeInTheDocument();
-    expect(screen.getByText(/Schreib unten die erste Nachricht an Cody/)).toBeInTheDocument();
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
+    expect(screen.getByText(/Write the first message to Cody/)).toBeInTheDocument();
     expect(screen.queryByTestId("timeline-skeleton")).not.toBeInTheDocument();
   });
 
@@ -1017,7 +1017,7 @@ describe("ChatView", () => {
         onCenterViewChange={noop}
       />
     );
-    expect(screen.getByText("Wähle eine Session in der Seitenleiste.")).toBeInTheDocument();
+    expect(screen.getByText("Pick a session in the sidebar.")).toBeInTheDocument();
   });
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1038,7 +1038,23 @@ describe("ChatView", () => {
       const trigger = screen.getByTestId("detail-level-trigger");
       expect(trigger.textContent).toContain("Normal");
       // Die anderen Stufen sind erst nach dem Klick da.
-      expect(screen.queryByRole("option", { name: "Kompakt" })).toBeNull();
+      expect(screen.queryByRole("option", { name: "Compact" })).toBeNull();
+    });
+
+    it("beschriftet Knopf und Liste aus dem Katalog, nicht deutsch fest verdrahtet", async () => {
+      // Der Review-Befund zu PR #331: `aria-label="Detailgrad"` stand deutsch
+      // in der englischen Standard-Oberflaeche. Vorleseprogramme lesen genau
+      // dieses Label vor — es muss durch t() laufen wie jeder andere UI-Text
+      // (docs/i18n.md). Der Test rendert gegen messages/en.json.
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "verbose" });
+
+      expect(screen.getByTestId("detail-level-trigger")).toHaveAttribute(
+        "aria-label",
+        "Detail level: Verbose"
+      );
+      await user.click(screen.getByTestId("detail-level-trigger"));
+      expect(screen.getByRole("listbox")).toHaveAttribute("aria-label", "Detail level");
     });
 
     it("oeffnet die Liste erst auf Klick und meldet die Wahl", async () => {
@@ -1047,7 +1063,7 @@ describe("ChatView", () => {
       renderChatView({ detailLevel: "normal", onDetailLevelChange });
 
       await user.click(screen.getByTestId("detail-level-trigger"));
-      await user.click(screen.getByRole("option", { name: "Ausführlich" }));
+      await user.click(screen.getByRole("option", { name: "Verbose" }));
 
       expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
     });
@@ -1058,7 +1074,7 @@ describe("ChatView", () => {
 
       await user.click(screen.getByTestId("detail-level-trigger"));
 
-      expect(screen.getByRole("option", { name: "Kompakt" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Compact" })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByRole("option", { name: "Normal" })).toHaveAttribute("aria-selected", "false");
     });
 
@@ -1099,8 +1115,8 @@ describe("ChatView", () => {
       renderChatView({ onBack: vi.fn() });
       // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
       // der ist die (groessere, unsichtbare) Trefferflaeche, siehe unten.
-      expect(circleOf("Zurück zur Sessionliste").className).toContain("rounded-full");
-      expect(circleOf("Chat-Optionen").className).toContain("rounded-full");
+      expect(circleOf("Back to sessions").className).toContain("rounded-full");
+      expect(circleOf("Chat options").className).toContain("rounded-full");
     });
 
     it("gibt beiden Knöpfen eine Trefferfläche von mindestens 44px", () => {
@@ -1111,7 +1127,7 @@ describe("ChatView", () => {
       // <button> nicht: `min-w-touch`/`min-h-touch` sind die WCAG-Utilities
       // aus globals.css, der Kreis liegt als Kind mittig darin.
       renderChatView({ onBack: vi.fn() });
-      for (const label of ["Zurück zur Sessionliste", "Chat-Optionen"]) {
+      for (const label of ["Back to sessions", "Chat options"]) {
         const btn = screen.getByLabelText(label);
         expect(btn.className).toContain("min-w-touch");
         expect(btn.className).toContain("min-h-touch");
@@ -1131,7 +1147,7 @@ describe("ChatView", () => {
       // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
       // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
       renderChatView({ onBack: vi.fn() });
-      for (const label of ["Zurück zur Sessionliste", "Chat-Optionen"]) {
+      for (const label of ["Back to sessions", "Chat options"]) {
         expect(screen.getByLabelText(label).className).toContain("-m-1");
       }
       expect(GLOBALS_CSS).toContain(

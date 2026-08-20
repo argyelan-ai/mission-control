@@ -15,6 +15,7 @@
  * reports intent.
  */
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { Check, GitCompare, Globe, MonitorPlay, MessagesSquare, X } from "lucide-react";
 import { C } from "@/lib/colors";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
@@ -62,6 +63,7 @@ export function ChatOptionsSheet({
   onDetailLevelChange,
   onOpenPanel,
 }: ChatOptionsSheetProps) {
+  const t = useTranslations("sessions");
   return (
     <AnimatePresence>
       {open && (
@@ -86,7 +88,7 @@ export function ChatOptionsSheet({
           <motion.div
             role="dialog"
             aria-modal="true"
-            aria-label="Chat-Optionen"
+            aria-label={t("chatOptions")}
             data-testid="chat-options-sheet"
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
@@ -104,12 +106,12 @@ export function ChatOptionsSheet({
           >
             <div className="flex items-center justify-between pt-3 pb-1">
               <span className="text-[16px] font-semibold" style={{ color: C.textPrimary }}>
-                Optionen
+                {t("options")}
               </span>
               <button
                 type="button"
                 onClick={onClose}
-                aria-label="Optionen schliessen"
+                aria-label={t("closeOptions")}
                 className="flex items-center justify-center w-10 h-10 rounded-lg cursor-pointer"
                 style={{ color: C.textMuted }}
               >
@@ -117,9 +119,9 @@ export function ChatOptionsSheet({
               </button>
             </div>
 
-            <SectionLabel>Ansicht</SectionLabel>
-            <div role="radiogroup" aria-label="Ansicht" className="flex flex-col">
-              {CENTER_VIEWS.map(({ key, label }) => {
+            <SectionLabel>{t("sectionView")}</SectionLabel>
+            <div role="radiogroup" aria-label={t("sectionView")} className="flex flex-col">
+              {CENTER_VIEWS.map(({ key, labelKey }) => {
                 const Icon = VIEW_ICON[key];
                 const active = centerView === key;
                 const disabled = key === "chat" && !canChat;
@@ -130,7 +132,7 @@ export function ChatOptionsSheet({
                     role="radio"
                     aria-checked={active}
                     disabled={disabled}
-                    title={disabled ? "Kein Transkript verfügbar" : undefined}
+                    title={disabled ? t("noTranscript") : undefined}
                     onClick={() => {
                       onCenterViewChange(key);
                       onClose();
@@ -139,7 +141,7 @@ export function ChatOptionsSheet({
                     style={{ color: active ? C.textPrimary : C.textSecondary }}
                   >
                     <Icon size={16} style={{ color: active ? C.accent : C.textMuted }} aria-hidden="true" />
-                    <span className="flex-1 text-[14px]">{label}</span>
+                    <span className="flex-1 text-[14px]">{t(labelKey)}</span>
                     {active && <Check size={15} style={{ color: C.accent }} aria-hidden="true" />}
                   </button>
                 );
@@ -148,7 +150,7 @@ export function ChatOptionsSheet({
 
             {onOpenPanel && (
               <>
-                <SectionLabel>Panels</SectionLabel>
+                <SectionLabel>{t("sectionPanels")}</SectionLabel>
                 <div className="flex flex-col">
                   {PANELS.map(({ key, label, icon: Icon }) => (
                     <button
@@ -171,14 +173,14 @@ export function ChatOptionsSheet({
 
             {centerView === "chat" && (
               <>
-                <SectionLabel>Detailgrad</SectionLabel>
+                <SectionLabel>{t("detailLevel")}</SectionLabel>
                 <div
                   role="radiogroup"
-                  aria-label="Detailgrad"
+                  aria-label={t("detailLevel")}
                   className="flex items-center rounded-lg overflow-hidden mb-3"
                   style={{ border: `1px solid ${C.border}` }}
                 >
-                  {DETAIL_LEVELS.map(({ key, label }, i) => (
+                  {DETAIL_LEVELS.map(({ key, labelKey }, i) => (
                     <button
                       key={key}
                       type="button"
@@ -193,7 +195,7 @@ export function ChatOptionsSheet({
                         borderLeft: i > 0 ? `1px solid ${C.border}` : undefined,
                       }}
                     >
-                      {label}
+                      {t(labelKey)}
                     </button>
                   ))}
                 </div>

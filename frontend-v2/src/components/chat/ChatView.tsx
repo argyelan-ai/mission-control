@@ -19,6 +19,7 @@
  * orthogonal to this toggle.
  */
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -178,6 +179,7 @@ export function modelBadgeUuids(events: TimelineChatEvent[]): Set<string> {
  *  paragraphs and a tool row), rather than a spinner parked mid-content. The
  *  pulse is reduced-motion aware via globals.css. */
 function TimelineSkeleton() {
+  const t = useTranslations("sessions");
   const rows = [
     ["88%", "96%", "62%"],
     ["44%"],
@@ -196,7 +198,7 @@ function TimelineSkeleton() {
           ))}
         </div>
       ))}
-      <span className="sr-only">Transkript wird geladen…</span>
+      <span className="sr-only">{t("transcriptLoading")}</span>
     </div>
   );
 }
@@ -263,6 +265,7 @@ export function ChatView({
   contextLine,
   onOpenPanel,
 }: ChatViewProps) {
+  const t = useTranslations("sessions");
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -415,25 +418,25 @@ export function ChatView({
         return;
       }
       stream.echoFailed(text);
-      notify.error("Senden fehlgeschlagen");
+      notify.error(t("sendFailed"));
     });
   }
 
   function handleStop() {
     if (!agent) return;
-    api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error("Stop fehlgeschlagen"));
+    api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error(t("stopActionFailed")));
   }
 
   function handleAnswer(key: string) {
     if (!agent) return;
     // Digit alone, no trailing Enter — numbered pickers accept the bare key.
-    api.chat.sendKeys(agent.id, [key]).catch(() => notify.error("Antwort fehlgeschlagen"));
+    api.chat.sendKeys(agent.id, [key]).catch(() => notify.error(t("answerFailed")));
   }
 
   if (!agent) {
     return (
       <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
-        Wähle eine Session in der Seitenleiste.
+        {t("pickSession")}
       </div>
     );
   }
@@ -447,6 +450,12 @@ export function ChatView({
   // a missing server field must never be read as "ended".
   const aliveness = resolveAliveness(stream.session);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
+  // Die Beschriftung der aktuellen Stufe kommt aus dem Katalog, nicht aus der
+  // Liste selbst (chatOptions.ts fuehrt nur Schluessel) — sonst stuende hier
+  // wieder ein deutsches Wort in der englischen Oberflaeche.
+  const currentDetailLabel = t(
+    DETAIL_LEVELS.find((d) => d.key === detailLevel)?.labelKey ?? "detailNormal"
+  );
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -467,13 +476,13 @@ export function ChatView({
           <button
             type="button"
             onClick={onBack}
-            aria-label="Zurück zur Sessionliste"
+            aria-label={t("backToSessions")}
             // Rund statt eckig (Operator-Wunsch 19.08.2026, Vorbild
             // Claude-App): ein runder Knopf liest sich als Navigation, ein
             // eckiger als Schaltflaeche im Inhalt.
             //
             // Sichtbarer Kreis 36px, TREFFERFLAECHE 44px (DESIGN.md/WCAG
-            // 2.5.5) — siehe `TOUCH_TARGET` unten fuer die Rechnung, warum der
+            // 2.5.5) — siehe `TOUCH_TARGET` oben fuer die Rechnung, warum der
             // Kopf davon nicht hoeher wird.
             className={`relative z-10 flex md:hidden items-center justify-center shrink-0 cursor-pointer ${TOUCH_TARGET}`}
           >
@@ -552,17 +561,17 @@ export function ChatView({
           <span
             data-testid="session-badge"
             data-aliveness="idle"
-            title="Session läuft, wartet am Prompt"
+            title={t("sessionWaitingAtPrompt")}
             className="relative z-10 w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: C.textDim }}
-            aria-label="Session läuft, wartet am Prompt"
+            aria-label={t("sessionWaitingAtPrompt")}
           />
         )}
 
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}
-          aria-label="Chat-Optionen"
+          aria-label={t("chatOptions")}
           aria-expanded={optionsOpen}
           className={`relative z-10 flex md:hidden items-center justify-center shrink-0 cursor-pointer ${TOUCH_TARGET}`}
         >
@@ -589,7 +598,7 @@ export function ChatView({
                 data-testid="detail-level-trigger"
                 aria-haspopup="listbox"
                 aria-expanded={detailOpen}
-                aria-label={`Detailgrad: ${DETAIL_LEVELS.find((d) => d.key === detailLevel)?.label ?? ""}`}
+                aria-label={t("detailLevelCurrent", { level: currentDetailLabel })}
                 onClick={() => setDetailOpen((v) => !v)}
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-medium rounded-md cursor-pointer transition-colors whitespace-nowrap"
                 style={{
@@ -598,7 +607,7 @@ export function ChatView({
                   color: detailOpen ? C.textPrimary : C.textMuted,
                 }}
               >
-                {DETAIL_LEVELS.find((d) => d.key === detailLevel)?.label}
+                {currentDetailLabel}
                 <ChevronDown
                   size={10}
                   className="transition-transform duration-150"
@@ -608,7 +617,7 @@ export function ChatView({
               {detailOpen && (
                 <div
                   role="listbox"
-                  aria-label="Detailgrad"
+                  aria-label={t("detailLevel")}
                   className="absolute top-full right-0 mt-1 w-32 rounded-lg overflow-hidden z-20 p-1"
                   style={{
                     backgroundColor: C.bgElevated,
@@ -616,7 +625,7 @@ export function ChatView({
                     boxShadow: "var(--shadow-elevated)",
                   }}
                 >
-                  {DETAIL_LEVELS.map(({ key, label }) => (
+                  {DETAIL_LEVELS.map(({ key, labelKey }) => (
                     <button
                       key={key}
                       type="button"
@@ -632,7 +641,7 @@ export function ChatView({
                         backgroundColor: detailLevel === key ? C.accentSubtle : "transparent",
                       }}
                     >
-                      {label}
+                      {t(labelKey)}
                     </button>
                   ))}
                 </div>
@@ -644,7 +653,7 @@ export function ChatView({
             className="flex items-center rounded-md overflow-hidden"
             style={{ border: `1px solid ${C.border}` }}
           >
-            {CENTER_VIEWS.map(({ key, label }) => {
+            {CENTER_VIEWS.map(({ key, labelKey }) => {
               const disabled = key === "chat" && !canChat;
               return (
                 <button
@@ -653,7 +662,7 @@ export function ChatView({
                   disabled={disabled}
                   onClick={() => onCenterViewChange(key)}
                   aria-pressed={effectiveView === key}
-                  title={disabled ? "Kein Transkript verfügbar" : undefined}
+                  title={disabled ? t("noTranscript") : undefined}
                   className="px-2.5 py-1.5 text-[10px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap"
                   style={{
                     background: effectiveView === key ? C.accentSubtle : "transparent",
@@ -661,7 +670,7 @@ export function ChatView({
                     borderRight: key !== "terminal" ? `1px solid ${C.border}` : undefined,
                   }}
                 >
-                  {label}
+                  {t(labelKey)}
                 </button>
               );
             })}
@@ -695,11 +704,10 @@ export function ChatView({
                 <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
                   <MessagesSquare size={20} style={{ color: C.textDim }} aria-hidden="true" />
                   <span className="text-[13px] font-medium" style={{ color: C.textSecondary }}>
-                    Noch keine Nachrichten
+                    {t("noMessagesYet")}
                   </span>
                   <span className="text-[12px] max-w-[42ch]" style={{ color: C.textMuted }}>
-                    Schreib unten die erste Nachricht an {agent.name} — oder öffne das Terminal,
-                    um die rohe Sitzung zu sehen.
+                    {t("noMessagesHint", { name: agent.name })}
                   </span>
                 </div>
               )
