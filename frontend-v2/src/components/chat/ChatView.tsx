@@ -52,6 +52,17 @@ export type { CenterView, DetailLevel };
 const SCROLL_LOCK_THRESHOLD_PX = 48;
 
 /**
+ * Wie lange eine Scroll-Geste nachwirkt (ms).
+ *
+ * Grosszuegig, weil iOS nach dem Loslassen bis zu rund zwei Sekunden
+ * weiterscrollt, ohne dass ein weiteres Geraete-Ereignis kommt; jeder Scroll
+ * innerhalb des Fensters verlaengert es. Entscheidend ist nicht die Laenge,
+ * sondern DASS die Bewaffnung ueberhaupt verfaellt: vorher galt sie unbegrenzt
+ * weiter, und ein spaetes Bild-/Schrift-Reflow erbte sie.
+ */
+const GESTURE_TTL_MS = 2500;
+
+/**
  * Trefferflaeche der beiden runden Handy-Knoepfe in der Kopfzeile.
  *
  * `min-*-touch` sind die 44px-Utilities aus globals.css (DESIGN.md
@@ -384,6 +395,9 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
+    // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
+    // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
+    lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
   }, [stream.events, stickToBottom, renderAll]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
@@ -410,6 +424,7 @@ export function ChatView({
     const observer = new ResizeObserver(() => {
       if (!stickToBottom) return;
       el.scrollTop = el.scrollHeight;
+      lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -433,28 +448,78 @@ export function ChatView({
   // Ein Scroll-Ereignis kann diese Frage grundsaetzlich nicht beantworten:
   // Layout-Umbrueche und Nutzer-Gesten erzeugen dasselbe Ereignis. Also wird
   // die Absicht dort gelesen, wo sie eindeutig ist — am Eingabegeraet.
-  const userDrivingRef = useRef(false);
+  // Zwei Loecher im ersten Anlauf (Review 20.08.2026), beide hier behoben:
+  //
+  // 1. `onPointerDown` bewaffnete die Geste bei JEDEM Antippen — Nachricht
+  //    antippen zum Kopieren, "Mehr anzeigen", Fehlgriff. Abgeraeumt wurde nur
+  //    im `atBottom`-Zweig. Einmal bewaffnet, galt der naechste layoutbedingte
+  //    Scroll wieder als Geste. Jetzt zaehlt erst eine BEWEGUNG bei gedruecktem
+  //    Zeiger, und die Bewaffnung VERFAELLT.
+  // 2. Ein Scroll OHNE Geste liess das Mitlaufen an — auch wenn die Ansicht
+  //    dabei wirklich woanders hinsprang (Seitensuche im Browser,
+  //    `scrollIntoView`, wiederhergestellte Scroll-Position). Beim naechsten
+  //    Ereignis wurde der Operator vom Text weggerissen, den er gerade las.
+  //
+  // Der zweite Punkt ist ohne Eingabegeraet entscheidbar, und zwar sicherer als
+  // ueber Gesten: ein Layout-Umbruch aendert die HOEHE (der Inhalt waechst
+  // oberhalb, `scrollTop` bleibt stehen), eine verschobene Ansicht aendert den
+  // SCROLLTOP bei gleicher Hoehe. Nur waehrend laufender Ausgabe aendert sich
+  // beides gleichzeitig — dort entscheidet weiterhin die Geste.
+  const userDrivingUntilRef = useRef(0);
+  const pointerDraggingRef = useRef(false);
+  const lastMetricsRef = useRef<{ top: number; height: number } | null>(null);
 
   function markUserDriving() {
-    userDrivingRef.current = true;
+    userDrivingUntilRef.current = Date.now() + GESTURE_TTL_MS;
+  }
+
+  // Nur gedrueckte Bewegung ist eine Scroll-Absicht. Ein Antippen erzeugt
+  // `pointerdown` ohne nennenswerte Bewegung und darf nichts bewaffnen; die
+  // Rollbalken-Geste mit der Maus erzeugt weder `wheel` noch `touchmove` und
+  // muss trotzdem zaehlen.
+  function handlePointerDown() {
+    pointerDraggingRef.current = true;
+  }
+  function handlePointerMove(e: React.PointerEvent) {
+    if (pointerDraggingRef.current && e.buttons !== 0) markUserDriving();
+  }
+  function handlePointerUp() {
+    pointerDraggingRef.current = false;
   }
 
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const top = el.scrollTop;
+    const height = el.scrollHeight;
+    const previous = lastMetricsRef.current;
+    lastMetricsRef.current = { top, height };
+
+    const distanceFromBottom = height - top - el.clientHeight;
     const atBottom = distanceFromBottom < SCROLL_LOCK_THRESHOLD_PX;
 
     // Zurueck ans Ende gilt immer — egal wodurch. Wer unten steht, will
     // mitlaufen, und die Geste ist damit beendet.
     if (atBottom) {
-      userDrivingRef.current = false;
+      userDrivingUntilRef.current = 0;
       setStickToBottom(true);
       return;
     }
-    // Weg vom Ende zaehlt nur nach einer echten Geste. Ohne sie war es das
-    // Layout, und dann bleibt das Mitlaufen bestehen.
-    if (userDrivingRef.current) setStickToBottom(false);
+
+    const gesture = Date.now() < userDrivingUntilRef.current;
+    if (gesture) {
+      // Nachlauf: iOS scrollt nach dem Loslassen bis zu ~2s weiter, ohne dass
+      // ein weiteres Geraete-Ereignis kommt. Jeder Scroll waehrend einer noch
+      // gueltigen Geste haelt sie am Leben.
+      markUserDriving();
+      setStickToBottom(false);
+      return;
+    }
+
+    // Ohne Geste: nur eine verschobene ANSICHT zaehlt, kein Hoehensprung.
+    const heightChanged = previous != null && previous.height !== height;
+    const viewMoved = previous != null && previous.top !== top;
+    if (viewMoved && !heightChanged) setStickToBottom(false);
   }
 
   function handleSend(text: string) {
@@ -796,7 +861,10 @@ export function ChatView({
             onWheel={markUserDriving}
             onTouchMove={markUserDriving}
             onKeyDown={markUserDriving}
-            onPointerDown={markUserDriving}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
             className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
           >
             {items.length === 0 && stream.pendingEchoes.length === 0 ? (

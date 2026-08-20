@@ -562,7 +562,9 @@ describe("ChatView", () => {
   // Die Regel lautet jetzt: Mitlaufen wird NUR durch eine echte Geste beendet.
   // Hilfsmittel: die ResizeObserver-Rueckmeldung ist der reale "naechste
   // Anlass", bei dem die Ansicht wieder ans Ende springt, wenn sie mitlaeuft.
-  function mitBeobachter(fn: (el: HTMLElement, ausloesen: () => void) => void) {
+  function mitBeobachter(
+    fn: (el: HTMLElement, ausloesen: () => void, setzeHoehe: (h: number) => void) => void
+  ) {
     const original = window.ResizeObserver;
     const observed: Element[] = [];
     let fire: (() => void) | null = null;
@@ -581,22 +583,146 @@ describe("ChatView", () => {
       const el = observed[0] as HTMLElement;
       Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
       Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
-      fn(el, () => fire!());
+      fn(el, () => fire!(), (h: number) =>
+        Object.defineProperty(el, "scrollHeight", { value: h, configurable: true })
+      );
     } finally {
       window.ResizeObserver = original;
     }
   }
 
   it("bleibt am Ende, wenn der Inhalt oberhalb waechst (kein Nutzer-Scroll)", () => {
-    mitBeobachter((el, ausloesen) => {
-      // Genau der Umbruch: Hoehe springt, scrollTop bleibt klein, Browser
-      // feuert dafuer ein Scroll-Ereignis. OHNE Geste.
-      el.scrollTop = 350;
+    mitBeobachter((el, ausloesen, setzeHoehe) => {
+      // Genau der Umbruch — und zwar so, wie er im Browser wirklich aussieht:
+      // die HOEHE springt (hier 950 -> 6000), `scrollTop` bleibt stehen, der
+      // Browser feuert dafuer ein Scroll-Ereignis. OHNE Geste.
+      //
+      // Frueher stand hier stattdessen `el.scrollTop = 350` bei
+      // gleichbleibender Hoehe. Das ist aber das Bild einer verschobenen
+      // ANSICHT (Seitensuche, scrollIntoView), nicht das eines Layout-Umbruchs
+      // — die Nachstellung traf den Fehler also gar nicht.
+      setzeHoehe(950);
+      el.scrollTop = 350; // am Ende: 950 - 350 - 600 = 0
+      fireEvent.scroll(el);
+
+      setzeHoehe(6000);
       fireEvent.scroll(el);
 
       ausloesen();
       expect(el.scrollTop).toBe(6000);
     });
+  });
+
+  // ── Loecher im ersten Anlauf (Review 20.08.2026) ───────────────────────────
+
+  it("ein Antippen im Verlauf ist keine Scroll-Absicht", () => {
+    mitBeobachter((el, ausloesen, setzeHoehe) => {
+      // Nachricht antippen zum Kopieren, "Mehr anzeigen", Fehlgriff: der erste
+      // Anlauf bewaffnete die Geste schon beim blossen Aufsetzen des Fingers
+      // (`onPointerDown`) und raeumte sie nur im `atBottom`-Zweig wieder ab.
+      // Einmal bewaffnet, galt der naechste layoutbedingte Scroll (spaetes
+      // Markdown-/Bild-/Schrift-Reflow) wieder als Geste — also genau der
+      // Fehler, den der Fix beheben sollte.
+      setzeHoehe(950);
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      fireEvent.pointerDown(el, { buttons: 1 });
+      fireEvent.pointerUp(el);
+
+      setzeHoehe(6000); // spaetes Reflow
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(6000);
+    });
+  });
+
+  it("ein Ziehen im Verlauf ist eine Scroll-Absicht", () => {
+    mitBeobachter((el, ausloesen) => {
+      // Die Rollbalken-Geste mit der Maus erzeugt weder `wheel` noch
+      // `touchmove` — nur gedrueckte Zeigerbewegung. Die muss weiterhin zaehlen.
+      fireEvent.pointerDown(el, { buttons: 1 });
+      fireEvent.pointerMove(el, { buttons: 1 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(350);
+    });
+  });
+
+  it("eine verschobene Ansicht ohne Geste beendet das Mitlaufen auch", () => {
+    mitBeobachter((el, ausloesen) => {
+      // Spiegelfall: Seitensuche im Browser, `scrollIntoView`, wiederhergestellte
+      // Scroll-Position. Kein Eingabegeraet meldet sich, die Hoehe bleibt
+      // gleich — trotzdem steht die Ansicht jetzt woanders. Wer sie beim
+      // naechsten Ereignis nach unten reisst, hat den Text weggezogen, den der
+      // Operator gerade liest.
+      el.scrollTop = 6000 - 600; // am Ende, Mitlaufen an
+      fireEvent.scroll(el);
+
+      el.scrollTop = 350; // Sprung nach oben, Hoehe UNVERAENDERT
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(350);
+    });
+  });
+
+  it("eine Geste ueberlebt den Nachlauf", () => {
+    // iOS scrollt nach dem Loslassen bis zu rund zwei Sekunden weiter, ohne
+    // dass ein weiteres Geraete-Ereignis kommt. Verfiele die Bewaffnung sofort,
+    // wuerde der Verlauf mitten im Nachlauf wieder ans Ende gerissen.
+    vi.useFakeTimers();
+    try {
+      mitBeobachter((el, ausloesen, setzeHoehe) => {
+        setzeHoehe(950);
+        el.scrollTop = 350;
+        fireEvent.scroll(el);
+
+        fireEvent.touchMove(el); // Wisch nach oben
+        setzeHoehe(6000);
+        el.scrollTop = 300;
+        fireEvent.scroll(el);
+
+        vi.advanceTimersByTime(800);
+        el.scrollTop = 250;
+        fireEvent.scroll(el); // Nachlauf, dieselbe Geste
+
+        ausloesen();
+        expect(el.scrollTop).toBe(250);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("eine Geste, auf die kein Scroll folgt, verfaellt", () => {
+    // Das eigentliche Leck: eine Geste, die NICHTS scrollt — Wisch am unteren
+    // Anschlag, Wisch auf einem nicht scrollenden Bereich. Sie bewaffnete das
+    // Flag, und weil kein Scroll-Ereignis folgte, raeumte auch der
+    // `atBottom`-Zweig es nie wieder ab. Das naechste Reflow, Minuten spaeter,
+    // erbte die Bewaffnung und schaltete das Mitlaufen ab.
+    vi.useFakeTimers();
+    try {
+      mitBeobachter((el, ausloesen, setzeHoehe) => {
+        setzeHoehe(950);
+        el.scrollTop = 350;
+        fireEvent.scroll(el); // am Ende, Mitlaufen an
+
+        fireEvent.wheel(el, { deltaY: -400 }); // Geste ohne Wirkung
+        vi.advanceTimersByTime(60_000);
+
+        setzeHoehe(6000); // spaetes Reflow
+        fireEvent.scroll(el);
+
+        ausloesen();
+        expect(el.scrollTop).toBe(6000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("beendet das Mitlaufen, wenn der Nutzer wirklich hochscrollt", () => {
