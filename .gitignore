@@ -14,7 +14,12 @@ __pycache__/
 venv/
 
 # Node
-node_modules/
+# Ohne Schraegstrich, mit Absicht: `node_modules/` trifft nur ein
+# VERZEICHNIS. Wer mit git worktrees arbeitet, legt sich die Abhaengigkeiten
+# oft als Symlink dorthin — und der wurde bisher NICHT ignoriert, sondern
+# landete mit seinem absoluten Host-Pfad im Commit (vom Leak-Gate gestoppt,
+# 20.08.2026). Ohne Schraegstrich sind Verzeichnis und Symlink gedeckt.
+node_modules
 .next/
 out/
 .turbo/
