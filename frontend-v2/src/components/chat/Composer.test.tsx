@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
-import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
+import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -1537,6 +1537,87 @@ describe("Composer", () => {
     expect(palette.className).toContain("right-3");
     expect(palette.className).toContain("min-w-[320px]");
   });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * Review 20.08.2026 — Befund 7: capabilities.effort wurde nach einem
+   * Wechsel nie aufgefrischt. `capabilities` kommt aus historyQuery.data und
+   * wird nur bei `session_changed` neu geholt; `selectEffort` macht bewusst
+   * keine optimistische Umbenennung. Frische Sitzung ohne usage-Ereignis:
+   * Chip steht auf 'medium', der Operator zieht auf 'xhigh', das Backend
+   * bestaetigt — und der Chip blieb die GANZE Sitzung auf 'medium' (ein
+   * ruhender Agent schickt evtl. nie ein usage). Schlimmer: der Weg ZURUECK
+   * auf 'medium' wurde von `if (level === currentEffort) return;` stumm
+   * verschluckt.
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe("effort chip nach einem bestaetigten Wechsel", () => {
+    const CAPS_MED = {
+      effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+      canSwitchEffort: true,
+      effort: "medium",
+    };
+    const chipLevel = () => screen.getByTestId("effort-chip").getAttribute("data-level");
+    const pick = async (index: string) => {
+      await userEvent.setup().click(screen.getByTestId("effort-chip"));
+      const slider = screen.getByTestId("effort-slider");
+      fireEvent.change(slider, { target: { value: index } });
+      fireEvent.pointerUp(slider);
+    };
+
+    it("zeigt die vom Backend bestaetigte Stufe und laesst den Weg zurueck zu", async () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(chipLevel()).toBe("medium");
+
+      await pick("3"); // xhigh
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "xhigh");
+
+      // Und zurueck: darf NICHT stumm verschluckt werden.
+      await pick("1"); // medium
+      await waitFor(() => expect(mockSetEffort).toHaveBeenCalledTimes(2));
+      expect(mockSetEffort).toHaveBeenLastCalledWith("a1", "medium");
+      await waitFor(() => expect(chipLevel()).toBe("medium"));
+    });
+
+    it("laesst ein spaeteres usage-Ereignis wieder gewinnen", async () => {
+      const { rerender } = render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+
+      // Der naechste Zug meldet, was der Agent WIRKLICH faehrt — das gewinnt
+      // immer, auch gegen unsere eigene Bestaetigung.
+      rerender(
+        <Composer agentId="a1" usage={mkUsage({ effort: "low" })} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(chipLevel()).toBe("low");
+    });
+
+    it("vergisst die Bestaetigung beim Agentenwechsel", async () => {
+      const { rerender } = render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+
+      rerender(
+        <Composer agentId="a2" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await waitFor(() => expect(chipLevel()).toBe("medium"));
+    });
+
+    it("uebernimmt nichts, wenn das Backend den Wechsel abgelehnt hat", async () => {
+      mockSetEffort.mockRejectedValueOnce(new Error("kaputt"));
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalled());
+      expect(chipLevel()).toBe("medium");
+    });
+  });
 });
 
 
@@ -1548,9 +1629,19 @@ function mkFile(name = "foto.png", type = "image/png") {
   return new File(["bytes"], name, { type });
 }
 
-function mkAttachment(over: Partial<{ path: string; name: string; bytes: number; isImage: boolean }> = {}) {
-  return { path: "/Users/x/.mc/references/chat/rex/2026-08/ab12-foto.png",
-           name: "foto.png", bytes: 5, isImage: true, ...over };
+function mkAttachment(over: Partial<ChatAttachment> = {}): ChatAttachment {
+  // So, wie der Endpunkt antwortet: Anhaenge liegen als AGENTEN-Referenzen
+  // (reference_files.agent_id), und root/subpath kommen mit, damit das UI sie
+  // nicht aus dem absoluten Pfad zurueckrechnen muss.
+  return {
+    path: "/Users/x/.mc/references/agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    name: "foto.png",
+    bytes: 5,
+    isImage: true,
+    root: "references",
+    subpath: "agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    ...over,
+  };
 }
 
 describe("Composer — Anhänge", () => {
@@ -1561,7 +1652,7 @@ describe("Composer — Anhänge", () => {
 
   it("zeigt den Anhängen-Knopf links in der Steuerzeile", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.getByLabelText("Datei anhängen")).toBeTruthy();
+    expect(screen.getByLabelText("Attach file")).toBeTruthy();
   });
 
   it("lädt eine gewählte Datei hoch und zeigt eine Kachel", async () => {
@@ -1607,7 +1698,7 @@ describe("Composer — Anhänge", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
     const sent = onSend.mock.calls[0][0] as string;
     expect(sent).toContain("Was siehst du?");
-    expect(sent).toContain("/Users/x/.mc/references/chat/rex/2026-08/ab12-foto.png");
+    expect(sent).toContain(mkAttachment().path);
   });
 
   it("kann ohne Text gesendet werden, wenn ein Anhang dranhängt", async () => {
@@ -1639,7 +1730,7 @@ describe("Composer — Anhänge", () => {
     fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
     await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
 
-    fireEvent.click(screen.getByLabelText("Anhang foto.png entfernen"));
+    fireEvent.click(screen.getByLabelText("Remove attachment foto.png"));
 
     await waitFor(() => expect(screen.queryByTestId("attachment-tile")).toBeNull());
   });

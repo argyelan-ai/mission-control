@@ -330,11 +330,46 @@ export function ChatView({
     return () => observer.disconnect();
   }, [stickToBottom]);
 
+  // Das Mitlaufen wird NUR durch eine echte Geste beendet — nie durch ein
+  // Scroll-Ereignis allein (Operator-Befund 20.08.2026: "beginnt ganz am
+  // Anfang des Gespraechs").
+  //
+  // Warum die Unterscheidung noetig ist: Zuerst rendern nur die letzten
+  // ``INITIAL_RENDER_WINDOW`` Eintraege, einen Frame spaeter mounten ALLE —
+  // und zwar OBERHALB des Sichtfensters. Die Hoehe springt dabei von ein paar
+  // hundert auf mehrere tausend Pixel, ``scrollTop`` bleibt stehen, und der
+  // Browser feuert fuer diesen Umbruch ein ``scroll``-Ereignis. Das sah
+  // vorher exakt aus wie "der Nutzer hat hochgescrollt": der Abstand zum Ende
+  // war riesig, das Mitlaufen wurde abgeschaltet, und der Effekt, der ans Ende
+  // gesprungen waere, fand es bereits aus vor. Ergebnis: die Ansicht stand am
+  // Anfang einer langen Historie. Ein Wettlauf — darum trat er bei kurzen
+  // Verlaeufen nie auf und wurde mit jedem gewachsenen Gespraech schlimmer.
+  //
+  // Ein Scroll-Ereignis kann diese Frage grundsaetzlich nicht beantworten:
+  // Layout-Umbrueche und Nutzer-Gesten erzeugen dasselbe Ereignis. Also wird
+  // die Absicht dort gelesen, wo sie eindeutig ist — am Eingabegeraet.
+  const userDrivingRef = useRef(false);
+
+  function markUserDriving() {
+    userDrivingRef.current = true;
+  }
+
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setStickToBottom(distanceFromBottom < SCROLL_LOCK_THRESHOLD_PX);
+    const atBottom = distanceFromBottom < SCROLL_LOCK_THRESHOLD_PX;
+
+    // Zurueck ans Ende gilt immer — egal wodurch. Wer unten steht, will
+    // mitlaufen, und die Geste ist damit beendet.
+    if (atBottom) {
+      userDrivingRef.current = false;
+      setStickToBottom(true);
+      return;
+    }
+    // Weg vom Ende zaehlt nur nach einer echten Geste. Ohne sie war es das
+    // Layout, und dann bleibt das Mitlaufen bestehen.
+    if (userDrivingRef.current) setStickToBottom(false);
   }
 
   function handleSend(text: string) {
@@ -609,6 +644,13 @@ export function ChatView({
           <div
             ref={scrollRef}
             onScroll={handleScroll}
+            // Die Geste, nicht ihre Folge: Rad, Finger und die Navigations-
+            // tasten sagen eindeutig, dass der Mensch scrollt. Ein
+            // ``scroll``-Ereignis allein sagt das nicht (siehe handleScroll).
+            onWheel={markUserDriving}
+            onTouchMove={markUserDriving}
+            onKeyDown={markUserDriving}
+            onPointerDown={markUserDriving}
             className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
           >
             {items.length === 0 && stream.pendingEchoes.length === 0 ? (
