@@ -447,6 +447,10 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
+      # NOTFALL-DEFAULT, nicht die Steuerung (ADR-074): welcher Anbieter
+      # tatsaechlich spricht, steht als Runtime-Bindung am Jarvis-Agenten in MC
+      # und wird pro Anruf geholt. Diese Werte greifen nur, wenn das Backend
+      # nicht antwortet oder (noch) nichts gebunden ist.
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
       # Jarvis Intelligence (ADR-062): frontier model + gate for the ask_frontier
@@ -457,7 +461,12 @@ services:
       # Siehe Backend-Service: Anzeigename des Operators + Proxy-Schalter.
       JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
       MC_BACKEND_URL: http://backend:8000
-      VOICE_VOICE_ID: ${VOICE_VOICE_ID:-}
+      # Stimme PRO ARM: die Namen der beiden Anbieter sind vollstaendig
+      # verschieden ("marin"/"cedar" bei OpenAI, "ara"/"eve"/… bei xAI). Eine
+      # geteilte Variable hiess, dass eine gesetzte Stimme den jeweils anderen
+      # Arm beim Verbinden zerlegt — leer lassen nimmt den Default des Arms.
+      VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
+      VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
 
   # Dedicated CDP-exposing Chromium for the agent browser workflow. Replaces
   # playwright-mcp's internal browser so MC can attach a SECOND CDP session to
