@@ -408,6 +408,17 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
   /* Live-Zeilen, die vor der ersten Historien-Antwort eintreffen — siehe
      `seedSequence`. */
   const liveBufferRef = useRef<TimelineChatEvent[]>([]);
+  /* Laufende Wiederhol-Timer (agent_starting), damit sie beim Verlassen
+     sterben statt an den vorigen Agenten zu senden. */
+  const retryTimersRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    const timers = retryTimersRef.current;
+    return () => {
+      timers.forEach((h) => window.clearTimeout(h));
+      timers.clear();
+    };
+  }, []);
 
   const queryEnabled = enabled && !!agentId;
 
@@ -479,10 +490,16 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
       return alreadyRetried ? prev : markEchoStarting(prev, text);
     });
     if (alreadyRetried) return;
-    window.setTimeout(() => {
+    /* Der Handle wird gemerkt und beim Verlassen geloescht. Ohne das lief der
+       Timer nach einem Agentenwechsel weiter (ChatView ist auf die Agenten-ID
+       gekeyt, montiert also neu) und schickte 10 s spaeter doch noch an den
+       VORIGEN Agenten — samt Fehler-Toast ohne sichtbaren Bezug. */
+    const handle = window.setTimeout(() => {
+      retryTimersRef.current.delete(handle);
       setPendingEchoes((prev) => markEchoRetried(prev, text));
       retry();
     }, ECHO_RETRY_DELAY_MS);
+    retryTimersRef.current.add(handle);
   }, []);
 
   /** Retires the echo this transcript message corresponds to. Prefers a text
