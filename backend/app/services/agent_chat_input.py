@@ -538,6 +538,32 @@ async def set_effort(agent, level: str) -> None:
         raise EffortSwitchFailedError()
 
 
+def _read_since(path: Path, offset: int | None) -> tuple[int, str]:
+    """Liest den ZUWACHS einer Transkript-Datei ab ``offset`` und gibt
+    ``(neuer_offset, text)`` zurueck. Blockierend — Aufrufer wrappt in
+    ``asyncio.to_thread``.
+
+    ``offset is None`` heisst "diese Datei zum ersten Mal gesehen, und wir
+    wissen nicht, wie gross sie beim Absenden des Kommandos war". Dann wird
+    der AKTUELLE Stand als Nullpunkt genommen und nichts gelesen: alles davor
+    koennte aus einem frueheren Wechsel stammen, und eine alte
+    "Set effort level to <X>"- oder "Kept effort level as <X>"-Zeile als
+    eigenes Ergebnis zu lesen ist der teurere Fehler (falsches 204 bzw.
+    falsche Ablehnung) als eine verpasste Bestaetigung — die faellt auf
+    409 zurueck, also auf die ehrliche Seite. Betrifft genau zwei Faelle:
+    Rollover mitten im Wechsel und den stat-Race beim Baseline-Read.
+    """
+    size = path.stat().st_size
+    if offset is None or offset > size:  # None = Erstsichtung; > = Datei gekuerzt
+        return size, ""
+    if size == offset:
+        return offset, ""
+    with open(path, "rb") as f:
+        f.seek(offset)
+        data = f.read()
+    return offset + len(data), data.decode("utf-8", errors="replace")
+
+
 async def _set_effort_boss(agent, level: str) -> None:
     """Boss-Variante von ``set_effort`` (19.08.2026, Operator: Chip bei Boss
     ohne Funktion). Kein Pane-Kanal — darum:
@@ -563,22 +589,27 @@ async def _set_effort_boss(agent, level: str) -> None:
     if tdir is None:
         raise InputNotSupportedError()
     active = await asyncio.to_thread(find_active_session, tdir)
-    baseline_path, baseline_size = (None, 0)
+    baseline_path: Path | None = None
+    # None heisst "Groesse unbekannt", NICHT 0 (Review 20.08.2026): frueher
+    # setzte der OSError-Zweig nur die Groesse auf 0 und liess den Pfad stehen —
+    # die Verify-Schleife las die Datei dann ab Byte 0 und hielt eine
+    # "Set effort level to <X>"-Zeile von vor einer Stunde fuer die eigene
+    # Bestaetigung (204 ohne Wirkung); umgekehrt loeste ein altes "Kept effort
+    # level as <X>" eine Ablehnung fuer einen Wechsel aus, der geklappt hat.
+    baseline_size: int | None = None
     if active is not None:
         baseline_path = active[0]
         try:
-            baseline_size = await asyncio.to_thread(
-                lambda: baseline_path.stat().st_size
-            )
-            mtime = await asyncio.to_thread(lambda: baseline_path.stat().st_mtime)
-            fresh = (time.time() - mtime) < 20
+            stat = await asyncio.to_thread(baseline_path.stat)
+            baseline_size = stat.st_size
+            fresh = (time.time() - stat.st_mtime) < 20
             ended = await asyncio.to_thread(
                 ChatTailerManager._transcript_suggests_turn_ended, baseline_path
             )
             if fresh and not ended:
                 raise AgentBusyError()
         except OSError:
-            baseline_size = 0
+            baseline_size = None
 
     await _send_boss_bytes(
         f"/effort {level}".encode(), b"\r",
@@ -587,6 +618,19 @@ async def _set_effort_boss(agent, level: str) -> None:
 
     marker = f"effort level to {level}"
     confirmed_dialog = False
+    # Pro Datei der Byte-Stand, bis zu dem schon gelesen wurde. Gelesen wird
+    # ausschliesslich der ZUWACHS und der wird aufsummiert — nie die ganze
+    # Datei (Review 20.08.2026): Boss' echtes Transkript-Verzeichnis hat 53
+    # Dateien / 981 MB, die groesste 124,9 MB. Ohne bekannten Baseline-Pfad
+    # lief frueher in JEDER der 24 Runden ein voller read_text, also ~3 GB
+    # Lesen und 24 aufeinanderfolgende ~125-MB-Allokationen in EINEM
+    # POST /chat/effort — auf einer Docker-VM mit 5 GB Deckel.
+    # Aufsummiert statt pro Runde geprueft, damit die Bestaetigungszeile auch
+    # dann gefunden wird, wenn sie zwischen zwei Polls zerschnitten wurde.
+    offsets: dict[Path, int] = {}
+    if baseline_path is not None and baseline_size is not None:
+        offsets[baseline_path] = baseline_size
+    fresh_parts: list[str] = []
     for attempt in range(_EFFORT_VERIFY_ATTEMPTS * 2):  # Transkript ist traeger als der Pane
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
         if attempt == 2 and not confirmed_dialog:
@@ -609,19 +653,14 @@ async def _set_effort_boss(agent, level: str) -> None:
             continue
         path = current[0]
         try:
-            if baseline_path is not None and path == baseline_path:
-                def _read_new() -> str:
-                    with open(path, "rb") as f:
-                        f.seek(baseline_size)
-                        return f.read().decode("utf-8", errors="replace")
-                fresh_text = await asyncio.to_thread(_read_new)
-            else:
-                # Rollover mitten im Wechsel: neue Datei komplett ist "neu".
-                fresh_text = await asyncio.to_thread(
-                    lambda: path.read_text(errors="replace")
-                )
+            offsets[path], zuwachs = await asyncio.to_thread(
+                _read_since, path, offsets.get(path)
+            )
         except OSError:
             continue
+        if zuwachs:
+            fresh_parts.append(zuwachs)
+        fresh_text = "".join(fresh_parts)
         if marker in fresh_text:
             return
         rejected = _EFFORT_REJECTED_RE.search(fresh_text)
@@ -689,10 +728,6 @@ async def _verify_effort_applied(agent, level: str) -> bool:
         # (gefunden 19.08.2026 am Boss). Der Operator hat den Wechsel bereits
         # im Regler entschieden — der Dialog wird EINMAL bestaetigt, dann
         # normal weiter verifiziert.
-        if not confirmed_dialog and _EFFORT_CONFIRM_DIALOG_MARKER in pane:
-            confirmed_dialog = True
-            await _run_docker_exec(_docker_argv(agent.slug, "Enter"))
-            continue
         # NUR hinter dem Echo DIESES Kommandos lesen (Operator-Live-Bug
         # 18.08.2026 abends): der Pane zeigt Verlauf. Eine "Kept effort
         # level as <X>"-Zeile eines FRUEHEREN Versuchs blieb sichtbar und
@@ -702,12 +737,25 @@ async def _verify_effort_applied(agent, level: str) -> bool:
         # das ist unseres, auch wenn ein aelterer Versuch derselben Stufe
         # weiter oben steht. Solange das Echo noch nicht gerendert ist,
         # gibt es nichts auszuwerten -> weiter pollen.
+        #
+        # Der Zuschnitt steht seit dem Review 20.08.2026 VOR dem Dialog-Zweig,
+        # nicht mehr danach: der suchte den GANZEN Pane und fiel damit auf
+        # exakt denselben Alt-Scrollback herein. Beim zweiten Wechsel
+        # innerhalb eines Scrollbacks feuerte er beim ERSTEN Poll auf die
+        # "Change effort level?"-Zeile des vorigen Wechsels — ein Streu-Enter
+        # ins LIVE-Fenster des Agenten (schickt ab, was der Operator gerade
+        # tippt), ``confirmed_dialog`` verbraucht, der ECHTE Dialog nie
+        # beantwortet, 409 nach Budget-Ablauf.
         echo_idx = pane.rfind(command_echo)
         if echo_idx < 0:
             continue
         tail = pane[echo_idx + len(command_echo):]
         if marker in tail:
             return True
+        if not confirmed_dialog and _EFFORT_CONFIRM_DIALOG_MARKER in tail:
+            confirmed_dialog = True
+            await _run_docker_exec(_docker_argv(agent.slug, "Enter"))
+            continue
         rejected = _EFFORT_REJECTED_RE.search(tail)
         if rejected is not None:
             # The CLI answered definitively (just not with what was asked
@@ -818,7 +866,16 @@ async def effort_capabilities(agent) -> dict[str, object]:
     # Eine persistierende Stufe (low..xhigh) aendert damit auch den Standard
     # von Marks EIGENEN Claude-Sessions — das UI muss das am Wert sagen,
     # nicht verschweigen.
-    if getattr(agent, "harness", None) == "claude":
+    # kind == "boss", NICHT bloss harness == "claude" (Review 20.08.2026):
+    # ``_target_kind`` liefert "boss" nur fuer host + einen Slug aus
+    # _BOSS_SLUGS, alles andere wirft InputNotSupportedError -> kind None.
+    # Migration 0163 setzt harness='claude' aber auf JEDEN Host-Agenten mit
+    # Anthropic-Runtime. Am Harness allein haette so ein Agent
+    # canSwitchEffort=true gemeldet, die PERSOENLICHE ~/.claude/settings.json
+    # des Operators fuer den Chip gelesen — und jeder Zug am Regler haette
+    # 409 input_not_supported gegeben: genau der "klicke drauf, passiert
+    # nichts"-Fehler, den diese Runde beheben sollte.
+    if kind == "boss" and getattr(agent, "harness", None) == "claude":
         effort = await asyncio.to_thread(_persisted_effort_level_at,
                                          _host_home() / ".claude" / "settings.json")
         return {
