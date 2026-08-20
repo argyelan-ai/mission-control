@@ -207,6 +207,15 @@ export interface ChatCapabilities {
    *  - `foreign_harness`: diese CLI kennt `/effort` gar nicht (kimi, omp).
    *  - `no_pane`: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis). */
   effortReason?: string | null;
+  /** Das MODELL, ueber das die CLI die Effort-Aussage gemacht hat — direkt aus
+   *  ihrer eigenen Picker-Zeile ("Effort not supported for <modell>"). Nur bei
+   *  `effortReason: "model_no_effort"` gesetzt.
+   *
+   *  Der Erklaertext muss dieses Modell nennen, nicht das gerade angezeigte:
+   *  die Messung ist zwischengespeichert, die Anzeige nicht. Sonst stand dort
+   *  schon "Das Modell X kennt keine Effort-Stufen" ueber ein Modell, das
+   *  Stufen sehr wohl kennt. */
+  effortModel?: string | null;
   /** Every slash command this harness actually offers — built-ins AND the
    *  agent's skills. Absent on older backends, where the composer falls back to
    *  its own short static list. `name` may or may not carry the leading slash

@@ -70,10 +70,16 @@ export function effortReasonText(
   capabilities: ChatCapabilities | null | undefined,
   model: string | null | undefined,
 ): string {
+  /* Das Modell, ueber das die CLI die Aussage gemacht hat, schlaegt das gerade
+     angezeigte: die Effort-Messung ist zwischengespeichert, das Modell-Label
+     nicht. Ohne diesen Vorrang benennt der Satz nach einem Modellwechsel das
+     FRISCHE Modell und behauptet ueber es etwas, das nur fuer das alte gemessen
+     wurde. */
+  const measured = capabilities?.effortModel ?? model;
   switch (capabilities?.effortReason) {
     case "model_no_effort":
-      return model
-        ? `Das Modell ${model} kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.`
+      return measured
+        ? `Das Modell ${measured} kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.`
         : "Das aktuelle Modell kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.";
     case "foreign_harness":
       return "Diese CLI kennt kein /effort — es gibt hier keine Stufen zum Umschalten.";
@@ -961,12 +967,20 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           <div className="ml-auto flex items-center gap-1.5">
           {(currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
-            /* Neu: der Chip erscheint AUCH ohne bekannte Stufe, sobald das
-               Backend einen Grund mitliefert. Genau dieser Fall — openclaude
-               auf einem Modell ohne Effort-Stufen — hatte vorher weder Wert
-               noch Regler und verschwand damit spurlos; der Tooltip ist die
-               einzige Stelle, an der die Erklaerung ueberhaupt ankommt. */
-            (capabilities?.effortReason && displayLevels.length > 0)) &&
+            /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend
+               einen Grund mitliefert. Genau dieser Fall — openclaude auf einem
+               Modell ohne Effort-Stufen — hatte vorher weder Wert noch Regler
+               und verschwand damit spurlos; der Tooltip ist die einzige Stelle,
+               an der die Erklaerung ueberhaupt ankommt.
+
+               OHNE Kopplung an `displayLevels`: das Backend liefert fuer
+               `foreign_harness` (kimi, omp) und `no_pane` (Hermes, Jarvis) hart
+               eine LEERE Stufenliste — die Bedingung schloss also ausgerechnet
+               zwei der drei Begruendungen aus, und sie erreichten die
+               Oberflaeche nie. Ein Grund ohne Stufen ist kein Widerspruch,
+               sondern der Normalfall: die Saeule bleibt dann leer (nichts
+               behaupten), der Satz steht trotzdem da. */
+            capabilities?.effortReason) &&
             // A picker needs levels to offer. No capabilities, `canSwitchEffort:
             // false`, or an empty list all mean the same thing here: show the
             // level, don't pretend it can be changed. Umgekehrt gilt: kann der
@@ -1093,14 +1107,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   </div>
                 )}
               </div>
-            ) : displayLevels.length > 0 ? (
+            ) : displayLevels.length > 0 || capabilities?.effortReason ? (
               /* Read-only-Variante des Brain-Chips (Operator-Wunsch 18.08.2026:
                  Boss zeigte das nackte Alt-Label). Gleiche Optik wie der
                  schaltbare Knopf — Gehirn + Saeule — aber als span ohne Aktion:
                  die Leiter kommt vom Backend (canSwitchEffort=false heisst
                  "kennt der Harness", nicht "darfst du druecken"), die Stufe aus
                  dem usage-Ereignis. Der Tooltip sagt ehrlich, warum hier nichts
-                 zu klicken ist. */
+                 zu klicken ist.
+
+                 Auch OHNE Stufenleiter (fremde CLI, Runtime ohne Terminal):
+                 dann bleibt die Saeule leer — `staticFillPct` ist 0, sobald
+                 keine Stufe zuzuordnen ist — und der Chip traegt nur noch den
+                 Grund. Das ist der ganze Zweck des Grundes. */
               <span
                 data-testid="effort-chip-static"
                 data-level={currentEffort ?? "auto"}

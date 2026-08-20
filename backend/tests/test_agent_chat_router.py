@@ -80,7 +80,7 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     # means this would hit an actual container on the host running the
     # suite. Force the empty-catalog (static-alias-fallback) path instead;
     # the catalog's own behavior is covered by test_harness_catalog.py.
-    async def _empty_catalog(agent):
+    async def _empty_catalog(agent, model=None):
         return []
 
     monkeypatch.setattr(agent_chat_input_mod, "discover_model_catalog", _empty_catalog)
@@ -95,7 +95,7 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     # jetzt den /model-Picker, ob das MODELL des Agenten Effort-Stufen kennt —
     # das oeffnet ohne Stub ein echtes Wegwerf-Fenster im Container von "rex".
     # ``supported=None`` = "nicht ermittelt", der bisherige Zustand.
-    async def _effort_unknown(agent):
+    async def _effort_unknown(agent, model=None):
         return {"supported": None, "model": None, "level": None}
 
     monkeypatch.setattr(agent_chat_input_mod, "discover_effort_support", _effort_unknown)

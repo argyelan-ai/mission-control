@@ -10,9 +10,13 @@ Two independent Redis-backed layers:
    ``pane_state``'s module docstrings for why a working session must never
    be disturbed; the same rule applies here even though this is a read-only
    discovery, not a switch — opening `/model` in a REAL session would leave
-   a picker open in front of the operator/agent). Cached in Redis keyed by
-   ``(harness, cli_version)`` so a CLI upgrade invalidates the old catalog
-   automatically instead of silently serving stale rows forever.
+   a picker open in front of the operator/agent). Das Wegwerf-Fenster
+   arbeitet ausserdem in ``_DISCOVERY_CWD``, damit seine eigene
+   Sitzungsdatei nicht im Projektordner des Agenten landet und dort das
+   echte Gespraech verdeckt. Cached in Redis keyed by ``(harness,
+   cli_version, slug, model)`` so a CLI upgrade ODER ein Modellwechsel den
+   alten Eintrag automatisch entwertet, statt stillschweigend veraltete
+   Zeilen (und eine veraltete Effort-Aussage) weiterzuliefern.
    ``app.config.settings.model_aliases`` is the FALLBACK ONLY — served when
    the catalog is empty (cold cache, discovery not finished yet, or
    discovery genuinely failed) — never the primary source once a catalog
@@ -89,14 +93,53 @@ _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 # darum NICHT als Cache-Schluessel.
 _HARNESS_BINARIES = {"claude": "claude", "openclaude": "openclaude"}
 
-# Wie oft Enter noetig ist, damit sich der ``/model``-Picker OEFFNET.
-# Claude Code: das erste Enter nimmt den Autocomplete-Vorschlag an, erst das
-# zweite oeffnet. openclaude: EIN Enter oeffnet — das zweite waehlt bereits
-# aus (live 19.08.2026 an ``/effort`` gesehen: Enter+Enter quittierte
-# prompt "Set effort level to auto"). Ein Fehlgriff hier waere teuer, denn
-# die Modellwahl persistiert ("Applies to this session and future OpenClaude
-# sessions").
-_PICKER_OPEN_ENTERS = {"claude": 2, "openclaude": 1}
+# Wie oft Enter noetig ist, damit sich der ``/model``-Picker OEFFNET, laesst
+# sich NICHT je Harness festverdrahten — und die feste Zahl war der teuerste
+# Fehler dieser Runde. Sie unterstellte, das erste Enter nehme nur die
+# Autovervollstaendigung an. Live widerlegt (Wegwerf-Fenster, 19.08.2026):
+# nach EINEM Enter steht der Picker offen, und seine Fusszeile lautet
+# woertlich ``Enter to set as default · s to use this session only · Esc to
+# cancel`` — ein zweites Enter SETZT also das markierte Modell als Standard.
+# Unentdeckt blieb es, weil der Picker auf dem AKTIVEN Modell steht und die
+# "Wahl" meist dasselbe wieder traf; 41 Sitzungsdateien bei 8 Agenten tragen
+# trotzdem "Set model to … and saved as your default".
+#
+# Darum jetzt: ein Enter senden, NACHSEHEN, und nur dann noch eines senden,
+# wenn der Picker noch nicht offen ist (``_open_picker``). Das haelt auch,
+# wenn die CLI ihr Verhalten wieder aendert — eine Zahl je Harness haelt
+# genau bis zum naechsten CLI-Update. Die Obergrenze ist reine Notbremse:
+# oeffnet sich nach so vielen Versuchen nichts, wird nicht endlos in eine
+# Eingabe getippt, die uns offenbar nicht versteht.
+_PICKER_OPEN_MAX_ENTERS = 2
+# Wie lange nach einem Enter auf den Picker gewartet wird, BEVOR ein weiteres
+# nachgelegt wird. Grosszuegig mit Absicht: ein zu frueh nachgelegtes Enter
+# IST der Schaden, den diese Runde behebt — lieber eine Sekunde laenger
+# warten als ein Modell setzen.
+_PICKER_OPEN_CONFIRM_SECONDS = 2.0
+# Woran der offene Picker erkannt wird — seine Kopfzeile, bei claude wie
+# openclaude identisch (beide Fixtures in test_openclaude_capabilities.py).
+_PICKER_OPEN_MARKER = "Select model"
+
+# Arbeitsverzeichnis des Wegwerf-Fensters. NICHT ``/home/agent``: die CLI legt
+# ihre Sitzungsdatei im Projektordner ihres cwd ab, und ``/home/agent`` ist
+# genau der Ordner, aus dem ``transcript_chat.resolve_transcript_dir`` die
+# Sitzung des Agenten liest. Jeder Erkennungslauf schob dort eine frische,
+# inhaltsleere Datei nach oben — der Chat zeigte danach die Probe statt des
+# echten Gespraechs (Operator-Befund 19.08.2026: researcher 10 Zeilen / 0
+# Antworten statt 218 / 65).
+#
+# ``/workspace`` ist die Arbeitszone jedes Agent-Containers: JEDER Dienst in
+# docker-compose.agents.yml mountet ``~/.mc/workspaces/<slug>`` dorthin, das
+# Verzeichnis existiert also immer (darum ohne Existenzpruefung — ein
+# zusaetzlicher docker-exec je Erkennung waere teurer als der Fall, den er
+# abdeckt). Und es ist von beiden Entrypoints (mc-agent-base,
+# mc-claude-agent) im Trust-Dialog VORAB bestaetigt — ohne das haengt die CLI
+# still in "Is this a project you trust?" und das Fenster wird nie bereit
+# (siehe Skill mc-container-lifecycle). Live gegengeprueft am 20.08.2026:
+# alle 10 claude/openclaude-Container tragen
+# ``projects["/workspace"].hasTrustDialogAccepted = true`` und haben das
+# Verzeichnis.
+_DISCOVERY_CWD = "/workspace"
 
 # Der Picker zeigt einen FESTEN Ausschnitt von ~10 Zeilen — auch in einem
 # 200x60-Fenster (live gegengeprueft). Geblaettert wird mit Down; die Liste
@@ -341,7 +384,7 @@ async def resolve_cli_version(agent) -> str | None:
     return m.group(0) if m else None
 
 
-async def discover_harness_capabilities(agent) -> dict[str, object]:
+async def discover_harness_capabilities(agent, model: str | None = None) -> dict[str, object]:
     """Der EINE Wegwerf-Lauf, aus dem beide Fragen beantwortet werden:
     ``{"models": [{"command","label"}, ...], "effort": {"supported","model",
     "level"}}``.
@@ -352,8 +395,16 @@ async def discover_harness_capabilities(agent) -> dict[str, object]:
     ``/effort``-Probelauf waere ein zweites Fenster fuer eine Information,
     die schon auf dem Schirm stand.
 
-    Redis-cached by ``(harness, cli_version, slug)``, frisch entdeckt
+    Redis-cached by ``(harness, cli_version, slug, model)``, frisch entdeckt
     (Wegwerf-Fenster, nie die eigene Session des Agenten) bei Cache-Miss.
+
+    ``model`` ist das aktuell eingestellte Modell des Agenten, wie der
+    Aufrufer es kennt (``agent_chat_input._persisted_model``). Es gehoert in
+    den Schluessel, weil die Effort-Aussage im Eintrag AM MODELL haengt: ohne
+    es meldete der Cache nach einem Modellwechsel bis zu 24h lang die
+    Antwort des alten Modells — mal "keine Stufen" fuer ein Modell, das
+    welche hat, mal einen aktiven Regler fuer eines, das die Stufe ignoriert.
+    ``None`` (unbekannt) ist ein eigener, gueltiger Schluesselwert.
     Liefert leere Modelle und ``supported=None``, wenn: die Runtime keinen
     Harness hat (Boss/Host), die CLI-Version nicht ermittelbar ist, ein
     anderer Request gerade entdeckt (Lock) oder die Entdeckung scheitert.
@@ -370,7 +421,7 @@ async def discover_harness_capabilities(agent) -> dict[str, object]:
         return empty
 
     redis = await get_redis()
-    cache_key = RedisKeys.model_catalog(harness, cli_version, slug)
+    cache_key = RedisKeys.model_catalog(harness, cli_version, slug, model)
     try:
         cached = await redis.get(cache_key)
     except Exception:
@@ -381,14 +432,14 @@ async def discover_harness_capabilities(agent) -> dict[str, object]:
         except (json.JSONDecodeError, ValueError):
             pass  # fall through to a fresh discovery — corrupt cache entry
 
-    lock_key = RedisKeys.model_catalog_discovery_lock(harness, cli_version, slug)
+    lock_key = RedisKeys.model_catalog_discovery_lock(harness, cli_version, slug, model)
     try:
         acquired = await redis.set(lock_key, "1", nx=True, ex=_DISCOVERY_LOCK_TTL_SECONDS)
     except Exception:
         acquired = False
     if not acquired:
         # Another request is already discovering this exact (harness,
-        # version, slug) triple — don't pile on a second throwaway window;
+        # version, slug, model) tuple — don't pile on a second throwaway window;
         # the caller falls back to the static alias list for this one
         # request.
         return empty
@@ -425,17 +476,18 @@ def _normalize_cached(cached) -> dict[str, object]:
     return {"models": [], "effort": dict(_UNKNOWN_EFFORT)}
 
 
-async def discover_model_catalog(agent) -> list[dict[str, str]]:
+async def discover_model_catalog(agent, model: str | None = None) -> list[dict[str, str]]:
     """Nur der Modell-Teil von ``discover_harness_capabilities`` — die Form,
     an der ``agent_chat_input.model_options_capabilities`` haengt."""
-    return (await discover_harness_capabilities(agent))["models"]  # type: ignore[return-value]
+    return (await discover_harness_capabilities(agent, model))["models"]  # type: ignore[return-value]
 
 
-async def discover_effort_support(agent) -> dict[str, object]:
+async def discover_effort_support(agent, model: str | None = None) -> dict[str, object]:
     """Nur der Effort-Teil: ``{"supported": bool|None, "model", "level"}``.
     Teilt sich Cache und Wegwerf-Lauf mit ``discover_model_catalog`` — wer
-    beides in einem Request braucht, zahlt trotzdem nur einmal."""
-    return (await discover_harness_capabilities(agent))["effort"]  # type: ignore[return-value]
+    beides in einem Request braucht, zahlt trotzdem nur einmal. ``model``
+    muss dabei derselbe Wert sein wie dort, sonst zahlt er zweimal."""
+    return (await discover_harness_capabilities(agent, model))["effort"]  # type: ignore[return-value]
 
 
 async def _discover_via_throwaway_window(agent) -> dict[str, object]:
@@ -445,29 +497,36 @@ async def _discover_via_throwaway_window(agent) -> dict[str, object]:
     success or failure (``finally``). NEVER touches the agent's own window 0
     or any other real session.
 
-    **Nie Enter im Picker.** Enter WAEHLT AUS, und die Wahl persistiert
-    ("Applies to this session and future OpenClaude sessions") — ein
-    Lese-Probe darf einen echten Agenten nicht umschalten. Abgebrochen wird
-    mit Escape; live gegengeprueft, dass das auch nach dem Blaettern nichts
-    veraendert (``⎿ Kept model as qwen38-27b-unsloth-nvfp4``, settings.json
-    md5 vorher==nachher)."""
+    **Kein Enter, sobald der Picker offen ist.** Enter WAEHLT dort aus, und
+    die Wahl persistiert als STANDARD ("Enter to set as default", Fusszeile
+    des offenen Pickers) — eine Lese-Probe darf einen echten Agenten nicht
+    umschalten. ``_open_picker`` schickt darum nur so lange Enter, bis der
+    Picker steht, und danach keines mehr. Abgebrochen wird mit Escape; live
+    gegengeprueft, dass das auch nach dem Blaettern nichts veraendert
+    (``⎿ Kept model as qwen38-27b-unsloth-nvfp4``, settings.json md5
+    vorher==nachher).
+
+    Das Fenster startet ausserdem in ``_DISCOVERY_CWD``, nicht im
+    Heimatverzeichnis — sonst landet die Sitzungsdatei der Probe im
+    Projektordner, aus dem der Chat das echte Gespraech des Agenten liest."""
     slug = agent.slug
     harness = getattr(agent, "harness", None) or "claude"
     binary = _HARNESS_BINARIES.get(harness, "claude")
     window = _DISCOVERY_WINDOW_NAME
 
-    await _tmux(slug, ["new-window", "-t", slug, "-n", window,
-                        f"{binary} --dangerously-skip-permissions"])
+    await _tmux(slug, ["new-window", "-t", slug, "-n", window, "-c", _DISCOVERY_CWD,
+                       f"{binary} --dangerously-skip-permissions"])
     try:
         if not await _wait_for_ready(slug, window):
+            logger.warning(
+                "harness_catalog: Wegwerf-Fenster wurde nicht bereit fuer slug=%s "
+                "(Arbeitsverzeichnis %s) — kein Katalog, kein Effort-Befund.",
+                slug, _DISCOVERY_CWD,
+            )
             return {"models": [], "effort": dict(_UNKNOWN_EFFORT)}
 
         await _send_literal(slug, window, "/model")
-        for _ in range(_PICKER_OPEN_ENTERS.get(harness, 2)):
-            await _send_enter(slug, window)
-            await asyncio.sleep(_DISCOVERY_POLL_INTERVAL_SECONDS)
-
-        pane_text = await _poll_for_picker(slug, window)
+        pane_text = await _open_picker(slug, window)
         if pane_text is None:
             await _send_key(slug, window, "Escape")
             return {"models": [], "effort": dict(_UNKNOWN_EFFORT)}
@@ -536,13 +595,42 @@ async def _wait_for_ready(slug: str, window: str) -> bool:
     return False
 
 
-async def _poll_for_picker(slug: str, window: str) -> str | None:
-    deadline = time.time() + _DISCOVERY_READY_TIMEOUT_SECONDS
-    while time.time() < deadline:
+async def _wait_for_picker(slug: str, window: str, budget_seconds: float) -> str | None:
+    """Pollt ``budget_seconds`` lang auf die Kopfzeile des offenen Pickers.
+    Tippt selbst NICHTS — das ist der ganze Punkt der Trennung von
+    ``_open_picker``."""
+    deadline = time.time() + budget_seconds
+    while True:
         pane = await _capture(slug, window)
-        if pane and "Select model" in pane:
+        if pane and _PICKER_OPEN_MARKER in pane:
             return pane
+        if time.time() >= deadline:
+            return None
         await asyncio.sleep(_DISCOVERY_POLL_INTERVAL_SECONDS)
+
+
+async def _open_picker(slug: str, window: str) -> str | None:
+    """Oeffnet den ``/model``-Picker und gibt die erste Aufnahme zurueck —
+    oder ``None``, wenn er sich nicht oeffnen liess.
+
+    Der Vertrag, an dem alles haengt: **nach dem Oeffnen wird kein Enter
+    mehr geschickt**. Vor jedem Enter wird der Pane angesehen; steht der
+    Picker schon, kehrt die Funktion sofort zurueck. Eine feste Enter-Zahl
+    je Harness (die Vorfassung) setzte genau darum echte Modelle als
+    Standard — die Fusszeile des offenen Pickers lautet ``Enter to set as
+    default``. Siehe ``_PICKER_OPEN_MAX_ENTERS``."""
+    deadline = time.time() + _DISCOVERY_READY_TIMEOUT_SECONDS
+    for _ in range(_PICKER_OPEN_MAX_ENTERS):
+        pane = await _capture(slug, window)
+        if pane and _PICKER_OPEN_MARKER in pane:
+            return pane  # schon offen -> NIE noch ein Enter
+        await _send_enter(slug, window)
+        budget = min(_PICKER_OPEN_CONFIRM_SECONDS, max(deadline - time.time(), 0.0))
+        pane = await _wait_for_picker(slug, window, budget)
+        if pane is not None:
+            return pane
+        if time.time() >= deadline:
+            break
     return None
 
 

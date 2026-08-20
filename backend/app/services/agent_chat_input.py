@@ -544,7 +544,11 @@ async def set_effort(agent, level: str) -> None:
 
     Validates ``level`` against ``ALLOWED_EFFORT_LEVELS`` before doing
     anything (raises ``ValueError``, matching ``send_keys``'s allowlist-first
-    convention), then a PREFLIGHT: refuses to send anything at all into a
+    convention), dann BEIDE Tore aus ``effort_capabilities`` gespiegelt —
+    kennt der Harness ``/effort``, und kennt das MODELL des Agenten Stufen?
+    Beide Male ``InputNotSupportedError`` (409), damit ein direkter
+    POST nicht tippen kann, was die Oberflaeche gar nicht anbietet. Dann ein
+    PREFLIGHT: refuses to send anything at all into a
     pane that's mid-turn (``working``) or showing an open
     ``permission_prompt`` — raises ``AgentBusyError`` untouched (wave-review
     I-1). ``Escape`` is this app's INTERRUPT key, not a neutral cleanup
@@ -597,6 +601,25 @@ async def set_effort(agent, level: str) -> None:
         return
 
     slug = agent.slug
+
+    # Zweiter Spiegel, seit 20.08.2026: das MODELL-Tor aus
+    # ``effort_capabilities``. Ohne ihn war der Docstring-Anspruch "Spiegel
+    # des Capabilities-Gates" nur halb wahr — ein direkter POST
+    # /chat/effort {"level":"high"} kam bei einem Agenten auf einem Modell
+    # ohne Effort-Stufen durch beide bisherigen Pruefungen und tippte
+    # ``/effort high`` in den Live-Pane. Die Stufe landet dann in der
+    # settings.json und das Modell ignoriert sie — genau die luegende
+    # Anzeige, gegen die das Tor gebaut wurde. Gleiche Quelle, gleicher
+    # Cache-Schluessel (Modell inklusive) wie im Capabilities-Pfad, also
+    # kein zusaetzliches Wegwerf-Fenster.
+    #
+    # ``supported is None`` (kalter Cache, Lock, Probe gescheitert) bleibt
+    # BEWUSST erlaubt — identisch zum Capabilities-Gate: "noch nicht
+    # ermittelt" ist kein Grund, einen funktionierenden Wechsel abzulehnen.
+    model = await asyncio.to_thread(_persisted_model, slug)
+    support = await discover_effort_support(agent, model)
+    if support.get("supported") is False:
+        raise InputNotSupportedError()
 
     if await _pane_is_busy(agent):
         raise AgentBusyError()
@@ -890,7 +913,13 @@ async def effort_capabilities(agent) -> dict[str, object]:
         # gpt-5.2-codex dagegen "Medium effort (default)". Die ehrliche
         # Quelle ist der Picker selbst — sie faellt beim Katalog-Lauf ab,
         # ohne zweites Wegwerf-Fenster.
-        support = await discover_effort_support(agent)
+        #
+        # Das eingestellte Modell geht MIT in den Cache-Schluessel: die
+        # Antwort gilt nur fuer dieses Modell, und ohne es servierte der
+        # 24h-Cache nach einem Wechsel weiter die Aussage des alten
+        # (Details in ``RedisKeys.model_catalog``).
+        model = await asyncio.to_thread(_persisted_model, slug) if slug else None
+        support = await discover_effort_support(agent, model)
         if support.get("supported") is False:
             # Mechanisch WUERDE ``/effort low`` hier sogar greifen (live
             # geprueft: die Stufe landete in der settings.json, obwohl der
@@ -901,9 +930,21 @@ async def effort_capabilities(agent) -> dict[str, object]:
             return {
                 "effortLevels": list(levels),
                 "canSwitchEffort": False,
-                "effort": effort,
+                # KEINE Stufe zurueckgeben, obwohl eine in der settings.json
+                # steht: das Frontend fuellt daraus die Saeule des Chips, und
+                # eine gefuellte Saeule fuer eine Stufe, die dieses Modell
+                # ignoriert, ist genau die luegende Anzeige, gegen die das Tor
+                # gebaut wurde (ein Agent mit "xhigh" in der Datei zeigte 100%).
+                # Leer heisst hier ehrlich "keine wirksame Stufe".
+                "effort": None,
                 "effortShared": False,
                 "effortReason": "model_no_effort",
+                # Das Modell, ueber das die CLI diese Aussage gemacht hat —
+                # aus der Picker-Zeile selbst. Das UI setzt es in den
+                # Erklaertext ein, statt das gerade angezeigte Modell zu
+                # nehmen: nur so kann der Satz nicht ueber ein anderes Modell
+                # sprechen als die Messung.
+                "effortModel": support.get("model"),
             }
         return {
             "effortLevels": list(levels),
@@ -955,10 +996,14 @@ def _no_effort(reason: str) -> dict[str, object]:
     Codes (maschinenlesbar, der Text gehoert ins Frontend):
     - ``foreign_harness``: diese CLI kennt ``/effort`` gar nicht (kimi, omp).
     - ``no_pane``: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis).
-    - ``model_no_effort``: Harness kann es, das MODELL des Agenten nicht."""
+    - ``model_no_effort``: Harness kann es, das MODELL des Agenten nicht.
+
+    ``effortModel`` ist hier immer ``None``: nur beim modellbedingten Fall
+    hat die CLI ueberhaupt ein Modell genannt. Das Feld steht trotzdem in
+    JEDER Antwort mit Grund, damit das Frontend eine feste Form hat."""
     return {
         "effortLevels": [], "canSwitchEffort": False, "effort": None,
-        "effortShared": False, "effortReason": reason,
+        "effortShared": False, "effortReason": reason, "effortModel": None,
     }
 
 
@@ -1174,7 +1219,36 @@ async def model_options_capabilities(agent) -> dict[str, object]:
         # Modell wird unten trotzdem nur fuer docker+bekannten Harness gelesen.
         return {"modelOptions": [], "model": None}
 
-    catalog = await discover_model_catalog(agent)
+    # Persistiertes Modell NUR fuer docker/cli-bridge lesen: nur dort IST
+    # ~/.mc/agents/<slug>/claude-config die effektive Config. Boss (host)
+    # unsetzt CLAUDE_CONFIG_DIR und liest ~/.claude/ — sein alter
+    # ~/.mc/agents/boss-Ordner liegt seit April brach und lieferte beim
+    # ersten Live-Test prompt ein Geister-Modell ("glm-5.1:cloud"), das Boss
+    # nie faehrt. Lieber ehrliches None als eine falsche Behauptung.
+    #
+    # Steht VOR dem Katalog-Aufruf, weil das Modell in dessen Cache-Schluessel
+    # gehoert — und weil es derselbe Wert sein muss wie in
+    # ``effort_capabilities``, sonst zahlt ein Request zwei Erkennungslaeufe.
+    try:
+        kind = _target_kind(agent)
+    except InputNotSupportedError:
+        kind = None
+    slug = getattr(agent, "slug", None) or ""
+    if kind == "docker" and slug:
+        model = await asyncio.to_thread(_persisted_model, slug)
+    elif kind == "boss":
+        # Boss liest ~/.claude/settings.json (CLAUDE_CONFIG_DIR unset) — NICHT
+        # das mc-Agenten-Muster, aus dem frueher ein Geister-Modell kam.
+        # Ohne diesen Zweig stand nach /clear ein "—" im Composer, bis die
+        # erste Nachricht ein usage-Ereignis erzeugte (Operator-Befund
+        # 19.08.2026, Screenshot).
+        model = await asyncio.to_thread(
+            _persisted_model_at, _host_home() / ".claude" / "settings.json"
+        )
+    else:
+        model = None
+
+    catalog = await discover_model_catalog(agent, model if kind == "docker" else None)
     observed = await get_observed_model_windows()
 
     if catalog:
@@ -1202,30 +1276,6 @@ async def model_options_capabilities(agent) -> dict[str, object]:
             "label": row["label"],
             "contextWindow": resolve_context_window(model_id, observed),
         })
-    # Persistiertes Modell NUR fuer docker/cli-bridge lesen: nur dort IST
-    # ~/.mc/agents/<slug>/claude-config die effektive Config. Boss (host)
-    # unsetzt CLAUDE_CONFIG_DIR und liest ~/.claude/ — sein alter
-    # ~/.mc/agents/boss-Ordner liegt seit April brach und lieferte beim
-    # ersten Live-Test prompt ein Geister-Modell ("glm-5.1:cloud"), das Boss
-    # nie faehrt. Lieber ehrliches None als eine falsche Behauptung.
-    try:
-        kind = _target_kind(agent)
-    except InputNotSupportedError:
-        kind = None
-    slug = getattr(agent, "slug", None) or ""
-    if kind == "docker" and slug:
-        model = await asyncio.to_thread(_persisted_model, slug)
-    elif kind == "boss":
-        # Boss liest ~/.claude/settings.json (CLAUDE_CONFIG_DIR unset) — NICHT
-        # das mc-Agenten-Muster, aus dem frueher ein Geister-Modell kam.
-        # Ohne diesen Zweig stand nach /clear ein "—" im Composer, bis die
-        # erste Nachricht ein usage-Ereignis erzeugte (Operator-Befund
-        # 19.08.2026, Screenshot).
-        model = await asyncio.to_thread(
-            _persisted_model_at, _host_home() / ".claude" / "settings.json"
-        )
-    else:
-        model = None
     # Startwert fuers Modell-Label, solange die Session noch kein usage-Ereignis
     # geschrieben hat — ein spaeteres usage gewinnt immer (es kennt das Modell
     # des laufenden Zuges, nicht nur den persistierten Standard).
