@@ -22,6 +22,26 @@ import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
 import type { MessageEvent, ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// jsdom rechnet kein Layout — eine Trefferflaeche laesst sich hier nur ueber
+// die Klassen UND die dahinterliegende CSS-Regel festhalten. Darum lesen die
+// Kopfzeilen-Tests globals.css als Text mit.
+// (Nicht `new URL(..., import.meta.url)`: genau diese Form schreibt Vite in
+// eine Asset-URL um, die dann kein file:-Pfad mehr ist.)
+const GLOBALS_CSS = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../styles/globals.css"),
+  "utf-8"
+);
+
+/** Der sichtbare Kreis IM Knopf (der Knopf selbst ist die Trefferflaeche). */
+function circleOf(label: string): HTMLElement {
+  const el = screen.getByLabelText(label).firstElementChild;
+  if (!(el instanceof HTMLElement)) throw new Error(`kein Kreis in "${label}"`);
+  return el;
+}
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
 vi.mock("@/lib/api", () => ({
@@ -1077,8 +1097,46 @@ describe("ChatView", () => {
 
     it("gibt Zurück und Optionen eine runde Form", () => {
       renderChatView({ onBack: vi.fn() });
-      expect(screen.getByLabelText("Zurück zur Sessionliste").className).toContain("rounded-full");
-      expect(screen.getByLabelText("Chat-Optionen").className).toContain("rounded-full");
+      // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
+      // der ist die (groessere, unsichtbare) Trefferflaeche, siehe unten.
+      expect(circleOf("Zurück zur Sessionliste").className).toContain("rounded-full");
+      expect(circleOf("Chat-Optionen").className).toContain("rounded-full");
+    });
+
+    it("gibt beiden Knöpfen eine Trefferfläche von mindestens 44px", () => {
+      // DESIGN.md („Mobile-Disziplin: Touch-Targets ≥44px", WCAG 2.5.5). Beim
+      // Umbau auf runde Knoepfe waren beide auf 36px geschrumpft — das ist die
+      // taegliche Bedienung des Betreibers auf dem Telefon.
+      // Der sichtbare Kreis darf klein bleiben (36px), die Trefferflaeche des
+      // <button> nicht: `min-w-touch`/`min-h-touch` sind die WCAG-Utilities
+      // aus globals.css, der Kreis liegt als Kind mittig darin.
+      renderChatView({ onBack: vi.fn() });
+      for (const label of ["Zurück zur Sessionliste", "Chat-Optionen"]) {
+        const btn = screen.getByLabelText(label);
+        expect(btn.className).toContain("min-w-touch");
+        expect(btn.className).toContain("min-h-touch");
+      }
+      // Zweite Haelfte der Zusicherung: die Utility muss auch wirklich 44px
+      // sein. Ohne diese Zeile koennte jemand `.min-h-touch` auf 36px setzen
+      // und alle Klassen-Pruefungen blieben gruen.
+      expect(GLOBALS_CSS).toMatch(/\.min-h-touch\s*\{\s*min-height:\s*44px/);
+      expect(GLOBALS_CSS).toMatch(/\.min-w-touch\s*\{\s*min-width:\s*44px/);
+    });
+
+    it("macht den Kopf durch die grössere Trefferfläche nicht höher", () => {
+      // Die 44px ragen ueber `-m-1` (je 4px) in die Polsterung der Kopfzeile
+      // hinein: Aussenmass bleibt 36px, der Kopf also
+      // safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem.
+      // Genau diesen Wert fuehrt --mobile-chat-topbar-h, und daran haengen die
+      // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
+      // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
+      renderChatView({ onBack: vi.fn() });
+      for (const label of ["Zurück zur Sessionliste", "Chat-Optionen"]) {
+        expect(screen.getByLabelText(label).className).toContain("-m-1");
+      }
+      expect(GLOBALS_CSS).toContain(
+        "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem)"
+      );
     });
 
     it("zentriert den Namen NUR auf dem Handy, nicht auf dem Desktop", () => {

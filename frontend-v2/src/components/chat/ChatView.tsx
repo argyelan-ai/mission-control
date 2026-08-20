@@ -49,6 +49,26 @@ export type { CenterView, DetailLevel };
 // view still counts as "at the bottom" — classic chat scroll-lock.
 const SCROLL_LOCK_THRESHOLD_PX = 48;
 
+/**
+ * Trefferflaeche der beiden runden Handy-Knoepfe in der Kopfzeile.
+ *
+ * `min-*-touch` sind die 44px-Utilities aus globals.css (DESIGN.md
+ * „Mobile-Disziplin: Touch-Targets >= 44px", WCAG 2.5.5). Der SICHTBARE Kreis
+ * bleibt 36px und liegt als Kind mittig darin — die zusaetzlichen 8px sind
+ * unsichtbar und trotzdem antippbar.
+ *
+ * `-m-1` (je 4px) ist der Grund, warum der Kopf davon nicht hoeher wird: das
+ * negative Aussenmass zieht den 44px-Knopf auf ein Aussenmass von 36px zurueck,
+ * die Trefferflaeche ragt in die Polsterung der Kopfzeile hinein statt sie
+ * aufzublaehen. Der Kopf bleibt damit bei
+ * safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem — genau der Wert von
+ * `--mobile-chat-topbar-h`, an dem die Handy-Blaetter (Optionen, Kontext) ihre
+ * Oberkante ausrichten. Waechst der Kopf, bleibt unter dem Blatt ein Streifen
+ * Gespraech stehen. Horizontal gilt dasselbe: der Kreis sitzt exakt dort, wo
+ * er vorher sass, die Flaeche reicht nur bis an den Bildschirmrand.
+ */
+const TOUCH_TARGET = "min-w-touch min-h-touch -m-1";
+
 function isSidechain(ev: TimelineChatEvent): boolean {
   // CommandEvent carries no `sidechain` field (chatTypes.ts) — narrow safely
   // instead of assuming every union member has the property.
@@ -451,10 +471,18 @@ export function ChatView({
             // Rund statt eckig (Operator-Wunsch 19.08.2026, Vorbild
             // Claude-App): ein runder Knopf liest sich als Navigation, ein
             // eckiger als Schaltflaeche im Inhalt.
-            className="relative z-10 flex md:hidden items-center justify-center w-9 h-9 shrink-0 rounded-full cursor-pointer"
-            style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
+            //
+            // Sichtbarer Kreis 36px, TREFFERFLAECHE 44px (DESIGN.md/WCAG
+            // 2.5.5) — siehe `TOUCH_TARGET` unten fuer die Rechnung, warum der
+            // Kopf davon nicht hoeher wird.
+            className={`relative z-10 flex md:hidden items-center justify-center shrink-0 cursor-pointer ${TOUCH_TARGET}`}
           >
-            <ChevronLeft size={19} />
+            <span
+              className="flex items-center justify-center w-9 h-9 rounded-full"
+              style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
+            >
+              <ChevronLeft size={19} />
+            </span>
           </button>
         )}
 
@@ -536,10 +564,14 @@ export function ChatView({
           onClick={() => setOptionsOpen(true)}
           aria-label="Chat-Optionen"
           aria-expanded={optionsOpen}
-          className="relative z-10 flex md:hidden items-center justify-center w-9 h-9 shrink-0 rounded-full cursor-pointer"
-          style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
+          className={`relative z-10 flex md:hidden items-center justify-center shrink-0 cursor-pointer ${TOUCH_TARGET}`}
         >
-          <MoreHorizontal size={18} />
+          <span
+            className="flex items-center justify-center w-9 h-9 rounded-full"
+            style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
+          >
+            <MoreHorizontal size={18} />
+          </span>
         </button>
         </div>
 
