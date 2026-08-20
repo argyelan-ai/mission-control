@@ -37,6 +37,15 @@ _OPENAI_TYPES = frozenset(
     }
 )
 
+#: Realtime voice runtimes → the provider name the voice-worker understands.
+#: The ONE place that decides which runtime rows Jarvis may bind to; the
+#: resolver, the seed check and the worker's allowlist all read from here, so
+#: adding a third arm (e.g. "voice_local") is one entry plus one seed row.
+VOICE_RUNTIME_TYPES: dict[str, str] = {
+    "voice_openai": "openai",
+    "voice_xai": "xai",
+}
+
 # HARNESS_PROTOCOLS intentionally covers "hermes" + "grok" too (ADR-064/066)
 # even though HARNESSES/HARNESS_LABELS stay cli-bridge-only: these are host-only
 # harnesses (see host_harness_adapter) that must still answer is_compatible()
@@ -66,6 +75,11 @@ HARNESS_PROTOCOLS: dict[str, frozenset[str]] = {
     "hermes": frozenset({"openai"}),
     "grok": frozenset({"grok"}),
     "kimi": frozenset({"kimi"}),
+    # jarvis is the voice concierge, not a CLI harness: it speaks realtime
+    # speech-to-speech to one cloud provider. Its runtime rows are display
+    # anchors that carry WHICH provider, nothing else — the voice-worker reads
+    # the binding per call and holds the API keys in its own env (ADR-074).
+    "jarvis": frozenset({"voice"}),
 }
 
 
@@ -94,6 +108,12 @@ def runtime_protocol(runtime: Runtime | None) -> str | None:
     # endpoint + per-agent OAuth files) — only the kimi harness accepts them.
     if (runtime.runtime_type or "").strip() == "kimi":
         return "kimi"
+    # Voice runtimes must be classified BEFORE the _OPENAI_TYPES check: the
+    # OpenAI voice arm talks to api.openai.com, but its wire protocol is the
+    # realtime speech socket, not chat completions. Letting it fall through
+    # would make every openai-speaking CLI harness look compatible with it.
+    if (runtime.runtime_type or "").strip() in VOICE_RUNTIME_TYPES:
+        return "voice"
     if (runtime.runtime_type or "").strip() in _OPENAI_TYPES:
         return "openai"
     return None
