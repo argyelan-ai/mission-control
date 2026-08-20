@@ -1798,6 +1798,31 @@ async def agent_post_thread_message(
             members = await group_service.group_member_agents(session, group_row)
             group_mentions = group_service.resolve_agent_mentions(members, body_text)
 
+            # Anti-Ping-Pong (ADR-075): Agent-zu-Agent-Ketten sind auf
+            # live_max_turns_per_impulse gedeckelt, gezählt seit der letzten
+            # User-/System-Nachricht. Ab dem Deckel werden die Mentions
+            # gestrichen — der Post bleibt im Protokoll (die Engine sammelt
+            # ihn ins nächste Brief-Delta), weckt aber niemanden mehr.
+            if group_mentions:
+                from app.models.thread import Message as _Msg
+
+                recent = (
+                    await session.exec(
+                        select(_Msg)
+                        .where(_Msg.thread_id == thread.id)
+                        .order_by(_Msg.seq.desc())  # type: ignore[union-attr]
+                        .limit(50)
+                    )
+                ).all()
+                chain = 0
+                for m in recent:
+                    if m.sender_type != "agent":
+                        break
+                    if m.mentions:
+                        chain += 1
+                if chain >= max(group_row.live_max_turns_per_impulse, 0):
+                    group_mentions = []
+
     message = await post_message(
         session,
         thread_id=thread.id,

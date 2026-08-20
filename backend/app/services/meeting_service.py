@@ -1,5 +1,10 @@
 """MeetingService — Structured agent discussions.
 
+DEPRECATED (ADR-075, 2026-08-20): nie produktiv gewesen — Nachfolger ist der
+Multi-Agent-Gruppenchat (services/group_runner.py). Nicht erweitern; die
+Tabellen (agent_meetings/agent_meeting_messages/agent_messages) fallen in
+einem eigenen DROP-PR.
+
 Flow:
 1. start_meeting() → background task starts the meeting
 2. Per agenda topic: agents are questioned sequentially

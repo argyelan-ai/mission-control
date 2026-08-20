@@ -150,6 +150,69 @@ async def test_group_post_never_mirrors_to_chat_channels(
 
 
 @pytest.mark.asyncio
+async def test_agent_mention_chain_is_capped(
+    client: AsyncClient, async_session: AsyncSession, sse_calls
+):
+    """Anti-Ping-Pong (Plan §4.3 Live-Verhalten): Agent-zu-Agent-Ketten sind
+    auf live_max_turns_per_impulse (Default 2) gedeckelt — gezählt seit der
+    letzten User-/System-Nachricht. Ab dem Deckel werden die Mentions des
+    Posts gestrichen (er landet im Protokoll, weckt aber niemanden mehr).
+    Eine neue User-/System-Nachricht setzt die Kette zurück."""
+    from app.services.messaging import post_message
+
+    alpha, alpha_token = await _make_member(async_session, "Alpha", "alpha")
+    beta, beta_token = await _make_member(async_session, "Beta", "beta")
+    _group, thread = await _make_group(async_session, [alpha, beta])
+
+    # Marks Impuls startet die Kette
+    await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="@beta was meinst du?", mentions=["beta"],
+        mirror_to_telegram=False,
+    )
+
+    async def _post(token: str, body: str):
+        return await client.post(
+            f"/api/v1/agent/threads/{thread.id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"body": body},
+        )
+
+    r1 = await _post(beta_token, "@alpha deine Meinung?")   # Kette 1 → erlaubt
+    r2 = await _post(alpha_token, "@beta einverstanden?")   # Kette 2 → erlaubt
+    r3 = await _post(beta_token, "@alpha und jetzt?")       # Kette 3 → gekappt
+    assert r1.status_code == r2.status_code == r3.status_code == 201
+
+    msgs = (
+        await async_session.exec(
+            select(Message)
+            .where(Message.thread_id == thread.id, Message.sender_type == "agent")
+            .order_by(Message.seq.asc())  # type: ignore[union-attr]
+        )
+    ).all()
+    assert msgs[0].mentions == ["alpha"]
+    assert msgs[1].mentions == ["beta"]
+    assert msgs[2].mentions == []  # gekappt — weckt niemanden
+
+    # Neue User-Nachricht → Kette beginnt von vorn
+    await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="@beta weiter bitte", mentions=["beta"],
+        mirror_to_telegram=False,
+    )
+    r4 = await _post(beta_token, "@alpha frisch gestartet")
+    assert r4.status_code == 201
+    fresh = (
+        await async_session.exec(
+            select(Message)
+            .where(Message.thread_id == thread.id, Message.sender_type == "agent")
+            .order_by(Message.seq.desc())  # type: ignore[union-attr]
+        )
+    ).first()
+    assert fresh.mentions == ["alpha"]
+
+
+@pytest.mark.asyncio
 async def test_task_thread_post_does_not_hit_group_channel(
     client: AsyncClient, async_session: AsyncSession, sse_calls
 ):
