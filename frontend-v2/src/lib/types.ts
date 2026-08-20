@@ -595,12 +595,13 @@ export const HARNESS_LABELS: Record<Harness, string> = {
 // HostHarnessAdapter registry, delivered as CompatMatrix.host_harnesses, and
 // it also contains "claude" (which lives in `Harness`). The agent wizard reads
 // the registry; nothing should enumerate host harnesses from here.
-export type HostHarness = "hermes" | "grok" | "kimi";
+export type HostHarness = "hermes" | "grok" | "kimi" | "jarvis";
 
 export const HOST_HARNESS_LABELS: Record<HostHarness, string> = {
   hermes: "Hermes",
   grok: "Grok Build",
   kimi: "Kimi Code",
+  jarvis: "Jarvis (Voice)",
 };
 
 // NOTE: the wire protocol of a host harness is NOT mirrored here any more.

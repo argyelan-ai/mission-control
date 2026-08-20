@@ -54,6 +54,16 @@ describe("groupRuntimes", () => {
     expect(g.unassigned).toEqual([]);
   });
 
+  // ADR-074 — the voice arms are hosted APIs with no box and no MC lifecycle.
+  // Landing in "unassigned" would read as "something is misconfigured".
+  it("routes the voice runtimes to cloud, not unassigned", () => {
+    const openaiVoice = makeRuntime({ slug: "voice-openai", runtime_type: "voice_openai", host: null });
+    const xaiVoice = makeRuntime({ slug: "voice-xai", runtime_type: "voice_xai", host: null });
+    const g = groupRuntimes([openaiVoice, xaiVoice], []);
+    expect(g.cloud.map((r) => r.slug)).toEqual(["voice-openai", "voice-xai"]);
+    expect(g.unassigned).toEqual([]);
+  });
+
   it("keeps a host group even when the host has no runtimes", () => {
     const g = groupRuntimes([], [spark]);
     expect(g.hosts).toHaveLength(1);
@@ -78,7 +88,9 @@ describe("groupRuntimes", () => {
 
 describe("CLOUD_TYPES", () => {
   it("contains exactly the hosted-API kinds", () => {
-    expect([...CLOUD_TYPES].sort()).toEqual(["cloud", "grok", "kimi", "openai_compatible"]);
+    expect([...CLOUD_TYPES].sort()).toEqual([
+      "cloud", "grok", "kimi", "openai_compatible", "voice_openai", "voice_xai",
+    ]);
   });
 });
 
