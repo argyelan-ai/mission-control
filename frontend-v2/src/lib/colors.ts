@@ -22,17 +22,17 @@
 
 export const C = {
   // Backgrounds — neutrale Off-Blacks (Stufung = Tiefe)
-  bgDeep: "#0A0A0A",
-  bgBase: "#101010",
-  bgSurface: "#171717",
-  bgElevated: "#222222",
-  bgHover: "#2C2C2C",
+  bgDeep: "#1C1C1C",
+  bgBase: "#181818",
+  bgSurface: "#262626",
+  bgElevated: "#313131",
+  bgHover: "#3A3A3A",
 
-  // Text — all body/label tones clear WCAG AA (≥4.5:1) on bg #0A0A0A–#222222.
-  textPrimary: "#EEEEEE",
-  textSecondary: "#BABABA",
-  textMuted: "#8F8F8F",
-  textDim: "#666666",       // decoration / inactive icons ONLY — never body text
+  // Text — all body/label tones clear WCAG AA (≥4.5:1) on bg #1C1C1C–#313131.
+  textPrimary: "#F2F2F2",
+  textSecondary: "#C9C9C9",
+  textMuted: "#A3A3A3",
+  textDim: "#8A8A8A",       // decoration / inactive icons ONLY — never body text
 
   // Borders — neutral (Basisfarbe #A8A8A8, bestehende Alpha-Stufen)
   borderSubtle: "rgba(168,168,168,0.05)",
@@ -57,8 +57,8 @@ export const C = {
   // Charts: Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
   chart: {
     cpu: "#EBE8DE",
-    ram: "#8F8F8F",
-    disk: "#666666",
+    ram: "#A3A3A3",
+    disk: "#8A8A8A",
   },
 } as const;
 
@@ -68,7 +68,7 @@ export const C = {
 export const STATUS: Record<string, string> = {
   online: C.online,        // #55A964
   busy: C.info,            // #5890CA — active work is an info state, not an accent
-  idle: C.textDim,         // #666666
+  idle: C.textDim,         // #8A8A8A
   offline: "#3A3A3A",
   error: C.error,          // #FA4942
   warning: C.warning,      // #A67F3E
@@ -90,12 +90,12 @@ export const LANE: Record<string, string> = {
 };
 
 // ── Status text — AA-safe tones for body text on dark surfaces ──────────────
-// Measured against bg-elevated #222222 (the brightest card surface):
+// Measured against bg-elevated #313131 (the brightest card surface):
 // online 5.49:1, error 4.62:1, info 4.74:1 all clear AA unchanged. Only the
 // warning ochre lands at 4.34:1, so body text gets a lifted tone.
 
 export const STATUS_TEXT = {
-  online: C.online,   // 5.49:1 on #222222 — usable unchanged
+  online: C.online,   // 5.49:1 on #313131 — usable unchanged
   warning: "#B98F4D", // 5.38:1 — lifted tone derived from C.warning (#A67F3E = 4.34:1)
   error: C.error,     // 4.62:1 — usable unchanged
   info: C.info,       // 4.74:1 — usable unchanged
@@ -148,19 +148,19 @@ export const BRAND: Record<string, string> = {
 // System A values as C, so shell and pages are one system again.
 export const P2 = {
   // Surfaces — neutrale Off-Blacks
-  bg: "#0A0A0A", // canvas
-  pan: "#171717", // raised panel
-  pan2: "#222222", // hover / higher elevation
-  inset: "#101010", // sunken (inputs, meters)
+  bg: "#1C1C1C", // canvas
+  pan: "#262626", // raised panel
+  pan2: "#313131", // hover / higher elevation
+  inset: "#181818", // sunken (inputs, meters)
 
   // Lines — Border-Basisfarbe #A8A8A8, gleiche Alpha-Stufen wie C
   line: "rgba(168,168,168,0.16)", // panel border
   line2: "rgba(168,168,168,0.08)", // hairline / dashed separators
 
   // Text — neutral, ≥4.5:1 on bg/pan
-  txt: "#EEEEEE",
-  dim: "#8F8F8F",
-  faint: "#666666", // decoration only — never body text
+  txt: "#F2F2F2",
+  dim: "#A3A3A3",
+  faint: "#8A8A8A", // decoration only — never body text
 
   // ONE accent — achromatisch; interaction/focus/selection only
   amb: "#EBE8DE",
@@ -182,12 +182,12 @@ export const P2 = {
 // exempt from System A's no-chroma rule; only the chrome (bg/fg/cursor/black)
 // follows the tokens.
 export const XTERM_THEME = {
-  background: "#101010",
-  foreground: "#EEEEEE",
+  background: "#181818",
+  foreground: "#F2F2F2",
   cursor: C.accent,
-  cursorAccent: "#101010",
-  black: "#222222",
-  brightBlack: "#666666",
+  cursorAccent: "#181818",
+  black: "#313131",
+  brightBlack: "#8A8A8A",
   red: "#FA4942",
   brightRed: "#FF7A74",
   green: "#55A964",
@@ -200,7 +200,7 @@ export const XTERM_THEME = {
   brightMagenta: "#D68CC8",
   cyan: "#4FA9B5",
   brightCyan: "#7FC9D3",
-  white: "#EEEEEE",
+  white: "#F2F2F2",
   brightWhite: "#FFFFFF",
 } as const;
 
