@@ -23,6 +23,7 @@ from app.services.omp_chat import (
     parse_pane_state,
     peek_entry_id,
     resolve_transcript_dir,
+    session_scan_root,
     transcript_allowed,
     transcript_suggests_turn_ended,
 )
@@ -68,6 +69,48 @@ CUSTOM_SESSION_EXIT_LINE = '{"type":"custom","customType":"session_exit","data":
 CUSTOM_MESSAGE_LINE = '{"type":"custom_message","customType":"async-result","content":"<system-notice>\\nHintergrund-Job bg_1 ist fertig.\\n</system-notice>","display":true,"details":{"jobs":[{"jobId":"bg_1","type":"bash"}]},"attribution":"agent","id":"b0e6c25b","parentId":"97948230","timestamp":"2026-07-23T08:49:44.991Z"}'
 
 CUSTOM_MESSAGE_HIDDEN_LINE = CUSTOM_MESSAGE_LINE.replace('"display":true', '"display":false')
+
+# Dieselbe Zeile OHNE das Feld ``display`` — „fehlt" ist nicht „ausgeblendet".
+CUSTOM_MESSAGE_NO_DISPLAY_LINE = CUSTOM_MESSAGE_LINE.replace('"display":true,', "")
+
+# Der Auftrag, den MC ueber ``bridge.py:inject_file`` einspielt: eine
+# Operating Card von 2069 Zeichen. Live in Sparkys Transkripten (33 solche
+# Zeilen) — sie war NIE etwas, das der Operator getippt hat.
+TASK_MENTION_LINE = json.dumps(
+    {
+        "type": "message",
+        "id": "78ba0374",
+        "parentId": "0241fc9e",
+        "timestamp": "2026-07-16T07:08:51.469Z",
+        "message": {
+            "role": "fileMention",
+            "files": [
+                {
+                    "path": "/home/agent/.omp/tasks/task-0000.md",
+                    "content": "[/home/agent/.omp/tasks/task-0000.md#BFF7]\n1:# Operating Card",
+                    "lineCount": 2,
+                }
+            ],
+            "timestamp": 1784827741325,
+        },
+    }
+)
+
+# Zwei Dateien in EINER Erwaehnung — dann gibt es keinen einzelnen Absender.
+TWO_FILE_MENTION_LINE = json.dumps(
+    {
+        "type": "message",
+        "id": "aabbccdd",
+        "timestamp": "2026-07-16T07:08:51.469Z",
+        "message": {
+            "role": "fileMention",
+            "files": [
+                {"path": "/home/agent/a.md", "content": "eins"},
+                {"path": "/home/agent/b.md", "content": "zwei"},
+            ],
+        },
+    }
+)
 
 # Ein Typ, den es heute nicht gibt — Transkript-Formate aendern sich ohne
 # Ankuendigung, der Parser muss ihn still ueberspringen statt zu sterben.
@@ -285,14 +328,34 @@ def test_tool_title_is_truncated():
 # ── Parser: eingespeiste Eingaben ───────────────────────────────────────────
 
 
-def test_file_mention_becomes_a_user_message():
-    """So spielt ``bridge.py`` jeden Auftrag ein. Es ist Eingabe ins
-    Gespraech, also Nutzer-Seite — nur nicht getippt."""
+def test_file_mention_is_not_a_message_of_the_operator():
+    """So spielt ``bridge.py`` jeden Auftrag und jeden Nudge ein — MC redet
+    hier mit dem Agenten, nicht Mark. Auf der Nutzer-Seite saehe es aus, als
+    haette er 2000 Zeichen Briefing selbst getippt (Befund 19.08.2026, exakt
+    die Fehlerklasse aus 0fd8542c). Also eigene Rolle, mit der Datei als
+    Absender."""
     (ev,) = parse(FILE_MENTION_LINE)
     assert ev["kind"] == "message"
-    assert ev["role"] == "user"
+    assert ev["role"] == "teammate"
+    assert ev["teammate"] == ".msg-nudge.msg"
     assert ev["text"].startswith("@/home/agent/.msg-nudge.msg\n")
     assert "mc inbox" in ev["text"]
+
+
+def test_task_briefing_is_not_a_message_of_the_operator():
+    """Der Fall, der live am haesslichsten aussah: die Operating Card."""
+    (ev,) = parse(TASK_MENTION_LINE)
+    assert ev["role"] == "teammate"
+    assert ev["teammate"] == "task-0000.md"
+    assert "Operating Card" in ev["text"]
+
+
+def test_file_mention_with_several_files_claims_no_sender():
+    """Kein einzelner Absender -> keiner wird behauptet."""
+    (ev,) = parse(TWO_FILE_MENTION_LINE)
+    assert ev["role"] == "teammate"
+    assert ev["teammate"] is None
+    assert "@/home/agent/a.md" in ev["text"] and "@/home/agent/b.md" in ev["text"]
 
 
 def test_file_mention_without_files_is_dropped():
@@ -308,10 +371,21 @@ def test_file_mention_without_files_is_dropped():
     assert parse(line) == []
 
 
-def test_custom_message_shown_by_omp_becomes_a_user_message():
+def test_custom_message_shown_by_omp_is_not_a_message_of_the_operator():
+    """``<system-notice>`` kommt von omp selbst, nicht vom Operator."""
     (ev,) = parse(CUSTOM_MESSAGE_LINE)
     assert ev["kind"] == "message"
-    assert ev["role"] == "user"
+    assert ev["role"] == "teammate"
+    assert ev["teammate"] == "async-result"
+    assert "Hintergrund-Job bg_1" in ev["text"]
+
+
+def test_custom_message_without_a_display_field_is_still_shown():
+    """``display`` FEHLT ist nicht ``display: false``. Das Format ist
+    versioniert und aendert sich ohne Ankuendigung — ein weggeworfener
+    Systemhinweis liesse die folgende Antwort grundlos dastehen."""
+    (ev,) = parse(CUSTOM_MESSAGE_NO_DISPLAY_LINE)
+    assert ev["kind"] == "message"
     assert "Hintergrund-Job bg_1" in ev["text"]
 
 
@@ -403,6 +477,43 @@ def test_find_active_session_looks_one_level_deep(tmp_path):
 def test_find_active_session_also_finds_a_flat_file(tmp_path):
     p = _make_session(tmp_path, ".", "flach.jsonl", 3_000_000)
     assert find_active_session(tmp_path)[0] == p
+
+
+# ── Rollover-Wurzel ─────────────────────────────────────────────────────────
+
+
+def test_session_scan_root_of_a_nested_file_is_the_sessions_root(tmp_path):
+    root = tmp_path / "agents" / "sparky" / "omp-sessions"
+    p = _make_session(root, "--workspace--", "a.jsonl", 1_000_000)
+    assert session_scan_root(p) == root
+
+
+def test_session_scan_root_of_a_flat_file_is_the_sessions_root(tmp_path):
+    """``find_active_session`` unterstuetzt flache Dateien (eigener Test) —
+    dann darf die Wurzel NICHT eine Ebene ueber ``omp-sessions`` landen.
+    Dort liegt ``claude-config/history.jsonl`` (real bei sparky, kimi und 11
+    weiteren Agenten): der Rollover-Scan haette die als „neuere Session"
+    gesehen und eine LEBENDE Sitzung als beendet gemeldet."""
+    root = tmp_path / "agents" / "sparky" / "omp-sessions"
+    p = _make_session(root, ".", "flach.jsonl", 1_000_000)
+    assert session_scan_root(p) == root
+
+
+def test_session_scan_root_never_escapes_above_the_file_directory(tmp_path):
+    """Pfad ohne ``omp-sessions``-Anteil (heute nur in Tests): dann lieber
+    den eigenen Ordner scannen als eine geratene Ebene hoeher."""
+    p = _make_session(tmp_path, "irgendwo", "a.jsonl", 1_000_000)
+    assert session_scan_root(p) == tmp_path / "irgendwo"
+
+
+def test_flat_session_next_to_a_foreign_transcript_stays_the_active_one(tmp_path):
+    """Die Wirkung des Fehlers, End-to-End nachgestellt: neben der
+    Sessions-Wurzel liegt ein fremdes, NEUERES ``history.jsonl``. Ueber der
+    falschen Wurzel gescannt gilt das als Rollover."""
+    root = tmp_path / "agents" / "sparky" / "omp-sessions"
+    p = _make_session(root, ".", "flach.jsonl", 1_000_000)
+    _make_session(root.parent, "claude-config", "history.jsonl", 9_000_000)
+    assert find_active_session(session_scan_root(p))[0] == p
 
 
 def test_find_active_session_on_missing_dir(tmp_path):
@@ -551,6 +662,19 @@ def test_pane_with_draft_text_reads_as_working():
     assert parse_pane_state(PANE_DRAFT, False)["status"] == "working"
 
 
+def test_pane_draft_made_of_border_glyphs_still_reads_as_working():
+    """Der Entwurf wird aus der Rahmenzeile geschaelt. Wird dabei eine
+    ZEICHENMENGE gestrippt statt Praefix/Suffix, verschwindet ein Entwurf,
+    der selbst aus solchen Zeichen besteht — ein eingereihter, nicht
+    abgeschickter Text gaelte dann als ruhender Agent."""
+    for draft in ("│", "╭╮", "── │ ──"):
+        pane = PANE_IDLE.replace(
+            "╰─                                                                            ─╯",
+            f"╰─ {draft}                                                                    ─╯",
+        )
+        assert parse_pane_state(pane, False)["status"] == "working", draft
+
+
 @pytest.mark.parametrize("pane", [PANE_BOOTING, "", "   \n  "])
 def test_pane_without_a_composer_is_unknown(pane):
     """``unknown`` ist ein vollwertiger Status — „Status unklar" ist ehrlicher
@@ -594,6 +718,26 @@ def test_stamp_usage_is_a_no_op(tmp_path):
     assert ev == {"kind": "usage", "inputTokens": 1, "outputTokens": 2}
 
 
+# ── History-Seite ueber den Adapter ─────────────────────────────────────────
+
+
+def test_read_history_with_the_omp_adapter_surfaces_the_omp_turns(tmp_path):
+    """Die Gegenprobe zu ``test_read_history_demands_an_adapter``: mit dem
+    RICHTIGEN Adapter liefert dieselbe Datei die Zuege, die drinstehen."""
+    from app.services.transcript_adapters import adapter_for
+    from app.services.transcript_chat import read_history
+
+    class _Agent:
+        harness = "omp"
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text("\n".join([SESSION_LINE, USER_LINE, ASSISTANT_LINE]) + "\n")
+
+    result = read_history(f, adapter_for(_Agent()), limit=200)
+    texts = [e["text"] for e in result["events"] if e["kind"] == "message"]
+    assert texts == ["hey", "Hallo."]
+
+
 # ── Vertrag: jedes Ereignis passt ins ChatEvent-Schema ──────────────────────
 
 _ALLOWED_KEYS = {
@@ -625,7 +769,13 @@ def test_no_event_invents_a_field_outside_the_frontend_contract():
         events += p(line)
     assert events
     for ev in events:
-        assert set(ev) == _ALLOWED_KEYS[ev["kind"]], ev
+        expected = set(_ALLOWED_KEYS[ev["kind"]])
+        # ``teammate`` gehoert zum Vertrag (``MessageEvent.teammate``), aber
+        # NUR zur dritten Rolle — eine Nutzer- oder Assistenz-Nachricht darf
+        # das Feld nicht mitschleppen.
+        if ev["kind"] == "message" and ev["role"] == "teammate":
+            expected.add("teammate")
+        assert set(ev) == expected, ev
         assert json.dumps(ev)  # JSON-serialisierbar, sonst bricht SSE
 
 

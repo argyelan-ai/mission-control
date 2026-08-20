@@ -254,6 +254,44 @@ def manager():
     return m
 
 
+async def test_tailer_seeds_the_parser_off_the_event_loop(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """``new_parser(initial_path)`` darf nicht auf der Schleife laufen.
+
+    Fuer omp ist das ``OmpLineParser.seed_from`` — es liest die GANZE
+    Sitzungsdatei mit ``open()``. Einmal je Agent beim ersten SSE-Verbinden,
+    und solange steht die komplette FastAPI-Schleife. Dieselbe Regel, die
+    ``_run`` weiter unten fuer ``transcript_allowed`` selbst formuliert
+    („same rule as every other disk read in this loop")."""
+    import dataclasses
+    import threading
+
+    import app.services.transcript_adapters as transcript_adapters
+
+    loop_thread = threading.get_ident()
+    seeded_in: list[int] = []
+    base = transcript_adapters.adapter_for(None)
+
+    def _spy_new_parser(session_path=None):
+        seeded_in.append(threading.get_ident())
+        return base.new_parser(session_path)
+
+    spy = dataclasses.replace(base, new_parser=_spy_new_parser)
+    monkeypatch.setattr(transcript_adapters, "adapter_for", lambda agent: spy)
+
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        assert await _wait_until(lambda: bool(seeded_in))
+    finally:
+        await manager.release("agent-1")
+
+    assert seeded_in and loop_thread not in seeded_in
+
+
 async def test_tailer_publishes_appended_line(manager, fake_broadcast, tmp_path):
     session_file = tmp_path / "sess1.jsonl"
     session_file.write_text("")

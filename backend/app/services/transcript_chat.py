@@ -878,18 +878,23 @@ _STATS_TOOLS = ("Edit", "Write")
 
 def read_history(
     path: Path,
+    adapter: Any,
     limit: int = 200,
     before_uuid: str | None = None,
     observed_windows: dict[str, int] | None = None,
-    adapter: Any | None = None,
 ) -> dict[str, Any]:
     """Reads a transcript file top-to-bottom and returns one page of chat
     events plus session metadata.
 
     ``adapter`` (omp round) is the harness-specific half —
-    ``transcript_adapters.adapter_for(agent)``. ``None`` keeps the Claude
-    Code behaviour, which is what every pre-existing caller and test
-    expects.
+    ``transcript_adapters.adapter_for(agent)`` — and it is REQUIRED. It used
+    to default to ``None`` -> ``adapter_for(None)``, i.e. the Claude Code
+    parser for whatever wrote ``path``. On a real omp transcript that
+    returned ZERO events with ``startedAt`` set: a session that looks
+    healthy and empty. That silent wrong answer is exactly what the adapter
+    round removes, so it must not survive as a default — the more so since
+    ``resolve_aliveness`` falls back the other way (``adapter_for(agent)``),
+    and two contradicting fallbacks are worse than none.
 
     ``observed_windows`` (harness-catalog round): a pre-fetched
     model->context-window map (``harness_catalog.get_observed_model_windows()``)
@@ -916,10 +921,6 @@ def read_history(
     that entry's start and excludes the whole entry from the page, never
     just part of it. An unknown ``before_uuid`` yields an empty page.
     """
-    if adapter is None:
-        from app.services.transcript_adapters import adapter_for
-
-        adapter = adapter_for(None)
     # Ohne Pfad: diese Funktion liest die Datei ohnehin von Zeile 1 an, ein
     # zustandsbehafteter Parser sammelt seinen Zustand also unterwegs selbst.
     # (Der Live-Tailer steigt am Dateiende ein und braucht deshalb die
@@ -1151,7 +1152,15 @@ class ChatTailerManager:
         # Dedup-Feld, Session-Suche, Pane-Regeln). ``agent`` ist nur in
         # Tests None — dann gilt der Claude-Adapter wie bisher.
         adapter = adapter_for(agent)
-        parse_line = adapter.new_parser(initial_path)
+        # ``new_parser`` darf die Sitzungsdatei LESEN, um seinen Anfangs-
+        # zustand zu laden (omp: ``seed_from`` liest die ganze Datei, damit
+        # der am Dateiende einsteigende Tailer die Effort-Stufe vom
+        # Session-ANFANG kennt). Das ist ein Platten-Lesevorgang wie jeder
+        # andere in dieser Schleife und gehoert deshalb in einen Thread —
+        # sonst steht die gesamte FastAPI-Schleife, waehrend ein langes
+        # Transkript eingelesen wird (einmal je Agent beim ersten
+        # SSE-Verbinden).
+        parse_line = await asyncio.to_thread(adapter.new_parser, initial_path)
         channel = RedisKeys.agent_chat_channel(agent_id)
         # omp legt seine Sessions eine Ebene tief in pro-cwd-Ordnern ab, der
         # Rollover-Scan muss also ueber der WURZEL laufen, nicht ueber dem

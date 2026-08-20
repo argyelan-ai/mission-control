@@ -74,7 +74,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.services.transcript_chat import (
@@ -169,13 +169,30 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
 def session_scan_root(session_path: Path) -> Path:
     """Von einer Session-Datei zurueck auf die Sessions-WURZEL.
 
-    Layout: ``<wurzel>/<kodiertes-cwd>/<datei>.jsonl`` — also zwei Ebenen
-    hoch. Genau ueber dieser Wurzel muss der Rollover-Scan laufen: wechselt
-    der Agent das Arbeitsverzeichnis, legt omp die neue Session in einem
-    ANDEREN Unterordner an, und ein Scan nur im alten Ordner wuerde den
-    Wechsel nie bemerken.
+    Genau ueber dieser Wurzel muss der Rollover-Scan laufen: wechselt der
+    Agent das Arbeitsverzeichnis, legt omp die neue Session in einem ANDEREN
+    Unterordner an, und ein Scan nur im alten Ordner wuerde den Wechsel nie
+    bemerken.
+
+    Die Wurzel wird am VERZEICHNISNAMEN erkannt (``_SESSIONS_DIRNAME``) —
+    demselben Namen, den ``resolve_transcript_dir`` baut — und nicht durch
+    Zaehlen von ``.parent``. Zwei Ebenen hoch stimmt nur fuer das uebliche
+    Layout ``<wurzel>/<kodiertes-cwd>/<datei>.jsonl``; fuer eine FLACHE
+    Datei direkt unter der Wurzel (``find_active_session`` unterstuetzt das
+    ausdruecklich, ``_SESSION_GLOBS``) landete man eine Ebene ZU HOCH — in
+    ``~/.mc/agents/<slug>``. Dort liegt ``claude-config/history.jsonl``, und
+    der Rollover-Scan haette dieses fremde Transkript als „neuere Session"
+    gesehen: ``resolve_aliveness`` meldet ``ended`` fuer eine LEBENDE
+    Sitzung, und der Tailer versucht jeden Tick einen Rollover dorthin.
+
+    Ohne ``omp-sessions`` im Pfad (heute nur in Tests) bleibt es beim
+    Ordner der Datei selbst — lieber einen cwd-Wechsel verpassen als in
+    einen fremden Baum hinauslaufen.
     """
-    return session_path.parent.parent
+    for parent in session_path.parents:
+        if parent.name == _SESSIONS_DIRNAME:
+            return parent
+    return session_path.parent
 
 
 def transcript_allowed(agent, path: Path) -> bool:
@@ -405,18 +422,34 @@ class OmpLineParser:
     def _parse_file_mention(
         entry_id: str, ts: str, message: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """``@datei``-Erwaehnung -> eine Nutzer-Nachricht.
+        """``@datei``-Erwaehnung -> eine Nachricht mit der Rolle ``teammate``.
 
-        So spielt die omp-Bruecke (``bridge.py:inject_file``) jeden Auftrag
-        und jede Nudge-Nachricht ein. Es ist echte Eingabe in das Gespraech,
-        also gehoert es auf die Nutzer-Seite — nur eben nicht getippt. Der
-        Dateiinhalt wird gekuerzt mitgezeigt, damit im Chat sichtbar ist,
-        WAS der Agent bekommen hat, statt nur eines nackten Pfades.
+        So spielt die omp-Bruecke (``bridge.py:inject_file``) jeden Auftrag,
+        jede gequeuete Nachricht und jeden Nudge ein. Es ist Eingabe ins
+        Gespraech — aber NICHT vom Operator: geschrieben hat sie Mission
+        Control selbst. Auf der Nutzer-Seite (so war es bis hierher) sah es
+        aus, als haette Mark 2000 Zeichen Briefing getippt; live in Sparkys
+        Transkripten sind das 33 Zeilen, darunter zwei Operating-Cards.
+
+        Das ist dieselbe Fehlerklasse, die ``0fd8542c`` fuer Claude Code
+        behoben hat, und sie bekommt dieselbe Behandlung: die dritte Rolle
+        ``teammate``, die das Frontend als ruhige, sichtbar fremde Zeile
+        rendert (``ChatMessage.tsx``).
+
+        Absender ist der Dateiname — der steht so in den Daten und sagt dem
+        Operator, WOHER es kam (``task-….md`` = Auftrag, ``.msg-nudge.msg``
+        = Anstoss, ``0000000N__….msg`` = zugestellte Nachricht). Bei
+        mehreren Dateien gibt es keinen einzelnen Absender, dann wird auch
+        keiner behauptet.
+
+        Der Dateiinhalt wird gekuerzt mitgezeigt, damit im Chat sichtbar
+        ist, WAS der Agent bekommen hat, statt nur eines nackten Pfades.
         """
         files = message.get("files")
         if not isinstance(files, list) or not files:
             return []
         parts: list[str] = []
+        paths: list[str] = []
         for entry in files:
             if not isinstance(entry, dict):
                 continue
@@ -424,15 +457,18 @@ class OmpLineParser:
             content = entry.get("content")
             body = str(content)[:_MENTION_TRUNCATE_LEN] if content else ""
             parts.append(f"@{path}\n{body}".rstrip())
+            paths.append(str(path))
         text = "\n\n".join(p for p in parts if p)
         if not text:
             return []
+        sender = PurePosixPath(paths[0]).name if len(paths) == 1 and paths[0] else None
         return [
             {
                 "kind": "message",
                 "uuid": entry_id,
                 "ts": ts,
-                "role": "user",
+                "role": "teammate",
+                "teammate": sender or None,
                 "text": text,
                 "model": None,
                 "sidechain": False,
@@ -577,26 +613,38 @@ class OmpLineParser:
         im Hintergrund gestarteten Bash-Jobs, das dem Modell als
         ``<system-notice>`` nachgereicht wird. Es hat den naechsten Zug
         ausgeloest, also gehoert es sichtbar in den Verlauf; ohne es
-        erschiene die Antwort des Agenten grundlos. Auf der Nutzer-Seite,
-        weil es EINGABE ist — der Agent hat es nicht gesagt, er hat es
-        bekommen.
+        erschiene die Antwort des Agenten grundlos.
+
+        Rolle ``teammate``, nicht ``user``: es ist zwar EINGABE — der Agent
+        hat es nicht gesagt, er hat es bekommen — aber getippt hat es
+        niemand. omp speist es selbst ein, und als Nachricht des Operators
+        angezeigt ist es schlicht falsch zugeordnet (dieselbe Fehlerklasse
+        wie bei ``_parse_file_mention``). Absender ist der ``customType``,
+        der einzige Hinweis auf die Herkunft, den die Zeile mitbringt.
 
         ``display: false`` heisst „omp zeigt das selbst nicht an" — dann
-        zeigen wir es auch nicht.
+        zeigen wir es auch nicht. Ein FEHLENDES ``display`` ist ausdruecklich
+        etwas anderes: das Format ist versioniert und aendert sich ohne
+        Ankuendigung; alle drei Live-Beispiele tragen das Feld, aber das ist
+        eine Beobachtung, keine Zusage. Ein weggeworfener Systemhinweis
+        liesse genau die Antwort grundlos dastehen, die dieser Docstring
+        ausschliesst — deshalb nur der explizite ``False``-Vergleich.
         """
-        if not d.get("display"):
+        if d.get("display") is False:
             return []
         entry_id = d.get("id")
         ts = d.get("timestamp")
         content = d.get("content")
         if not entry_id or not ts or not isinstance(content, str) or not content:
             return []
+        custom_type = d.get("customType")
         return [
             {
                 "kind": "message",
                 "uuid": entry_id,
                 "ts": ts,
-                "role": "user",
+                "role": "teammate",
+                "teammate": custom_type if isinstance(custom_type, str) and custom_type else None,
                 "text": content[:_RESULT_TRUNCATE_LEN],
                 "model": None,
                 "sidechain": False,
@@ -719,7 +767,24 @@ _WORKING_MARKER = "⟦esc⟧"
 #: ``bridge.py:_COMPOSER_BOTTOM_PREFIX`` — die dortige Regel laeuft seit
 #: 2026-07-12 in Produktion und entscheidet dort ueber Absende-Erfolg.
 _COMPOSER_BOTTOM_PREFIX = "╰─"
-_COMPOSER_BORDER_CHARS = "╰╯─│╭╮ "
+#: Rechtes Ende derselben Zeile — real: ``╰─ <entwurf> … ─╯``.
+_COMPOSER_BOTTOM_SUFFIX = "─╯"
+
+
+def _composer_draft(composer_line: str) -> str:
+    """Schaelt den Entwurfstext aus der unteren Rahmenzeile.
+
+    Nur PRAEFIX und SUFFIX werden entfernt, nicht eine Zeichenmenge: ein
+    ``strip("╰╯─│╭╮ ")`` frisst dieselben Glyphen auch mitten aus dem
+    Entwurf heraus. Ein Entwurf, der nur aus solchen Zeichen besteht,
+    schrumpfte damit auf ``""`` — der Agent haette eine eingereihte, nicht
+    abgeschickte Nachricht und wuerde als ``idle`` gemeldet.
+    """
+    line = composer_line.strip()
+    line = line.removeprefix(_COMPOSER_BOTTOM_PREFIX)
+    line = line.removesuffix(_COMPOSER_BOTTOM_SUFFIX)
+    return line.strip()
+
 
 _PANE_TAIL_LINES = 40
 
@@ -762,7 +827,7 @@ def parse_pane_state(pane_text: str, transcript_active: bool) -> dict[str, Any]:
     if composer_line is None:
         return {"status": "unknown", "prompt": None}
 
-    draft = composer_line.strip(_COMPOSER_BORDER_CHARS).strip()
+    draft = _composer_draft(composer_line)
     if draft or transcript_active:
         return {"status": "working", "prompt": None}
     return {"status": "idle", "prompt": None}

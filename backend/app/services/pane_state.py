@@ -334,7 +334,7 @@ _PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
 _process_alive_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
 
-async def process_alive(agent, process_name: str = "claude") -> bool | None:
+async def process_alive(agent, process_name: str) -> bool | None:
     """Cheap liveness probe independent of pane TEXT: is the agent's actual
     CLI process still running? ``docker exec ... pgrep -x <process_name>``
     against the agent's own container — a tmux window/pane can outlive the
@@ -345,16 +345,20 @@ async def process_alive(agent, process_name: str = "claude") -> bool | None:
     real docker-exec round trip.
 
     ``process_name`` (omp-Runde) kommt aus dem Harness-Adapter
-    (``transcript_adapters.TranscriptAdapter.process_name``). Der frueher
-    fest verdrahtete Wert ``claude`` machte jede omp-Sitzung „beendet":
-    ``pgrep -x claude`` findet im omp-Container nichts, rc=1 heisst aber
-    „nachweislich weg" — der Container faehrt ``omp`` (live geprueft:
-    ``ps`` in ``mc-agent-sparky``).
+    (``transcript_adapters.TranscriptAdapter.process_name``) und ist
+    PFLICHT — ohne Vorgabewert. Der frueher fest verdrahtete Wert ``claude``
+    machte jede omp-Sitzung „beendet": ``pgrep -x claude`` findet im
+    omp-Container nichts, rc=1 heisst aber „nachweislich weg" — der
+    Container faehrt ``omp`` (live geprueft: ``ps`` in ``mc-agent-sparky``).
+    Ein ``claude``-Standard in einem Modul, das gerade harness-generisch
+    geworden ist, waere genau dieselbe Falle noch einmal: ein Aufrufer, der
+    das Argument vergisst, sucht still den falschen Prozess. So wird daraus
+    ein TypeError beim Aufruf statt einer falschen Antwort im Chat.
 
     Returns:
     - ``True``: pgrep found a matching process (rc=0).
     - ``False``: pgrep ran cleanly and found nothing (rc=1) — the process
-      is PROVABLY gone (container reachable, no claude running).
+      is PROVABLY gone (container reachable, no such process running).
     - ``None``: no process channel for this runtime (Boss/host — mirrors
       ``capture_pane``'s own v1 scope), or the check itself failed/timed
       out (container gone, docker daemon hiccup, unexpected pgrep exit) —

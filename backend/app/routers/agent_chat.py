@@ -153,10 +153,10 @@ async def get_chat_history(
     observed_windows = await get_observed_model_windows()
     history = read_history(
         path,
+        adapter,
         limit=limit,
         before_uuid=before_uuid,
         observed_windows=observed_windows,
-        adapter=adapter,
     )
     history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
     history["capabilities"] = {

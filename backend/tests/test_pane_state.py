@@ -377,6 +377,18 @@ async def test_capture_pane_truncates_to_last_40_lines(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_alive_demands_a_process_name():
+    """Kein ``claude``-Standard mehr. Ein Aufrufer, der den Namen vergisst,
+    suchte sonst still den falschen Prozess — und rc=1 heisst „nachweislich
+    weg": eine laufende omp-Sitzung laese sich als ``ended``. Live geprueft
+    an ``mc-agent-sparky``: ``pgrep -x omp`` findet den Prozess,
+    ``pgrep -x claude`` nicht."""
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    with pytest.raises(TypeError):
+        await process_alive(agent)
+
+
+@pytest.mark.asyncio
 async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
     monkeypatch.setattr(pane_state, "_process_alive_cache", {})
     captured_argv: list[str] = []
@@ -388,7 +400,7 @@ async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert captured_argv == [
         "docker", "exec", "-u", "agent", "mc-agent-rex", "pgrep", "-x", "claude",
@@ -406,7 +418,7 @@ async def test_process_alive_false_when_pgrep_finds_nothing(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is False
 
@@ -415,7 +427,7 @@ async def test_process_alive_false_when_pgrep_finds_nothing(monkeypatch):
 async def test_process_alive_none_for_host_runtime():
     agent = _StubAgent(agent_runtime="host", slug="boss")
 
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is None
 
@@ -430,7 +442,7 @@ async def test_process_alive_none_on_subprocess_exception(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is None
 
@@ -447,7 +459,7 @@ async def test_process_alive_none_on_unexpected_returncode(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is None
 
@@ -464,8 +476,8 @@ async def test_process_alive_result_is_cached(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    first = await process_alive(agent)
-    second = await process_alive(agent)
+    first = await process_alive(agent, "claude")
+    second = await process_alive(agent, "claude")
 
     assert first is True
     assert second is True
@@ -487,9 +499,9 @@ async def test_process_alive_cache_expires_after_ttl(monkeypatch):
     monkeypatch.setattr(pane_state.time, "time", lambda: fake_now["t"])
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    await process_alive(agent)
+    await process_alive(agent, "claude")
     fake_now["t"] += 31  # past the 30s TTL
-    await process_alive(agent)
+    await process_alive(agent, "claude")
 
     assert call_count["n"] == 2
 
