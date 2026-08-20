@@ -672,10 +672,118 @@ def resolve_transcript_dir(agent) -> Path | None:
     return None
 
 
+# Wie viele Zeilen einer Sitzungsdatei hoechstens gelesen werden, um sie als
+# reine Kommando-Huelle zu erkennen. Echte Gespraeche zeigen ihren ersten
+# Inhalt in den ersten paar Zeilen (live nachgesehen: Zeile 8); wer bis hier
+# nichts gezeigt hat, gilt im Zweifel als echt — sichtbar bleiben ist die
+# ungefaehrliche Richtung.
+_PROBE_SCAN_MAX_LINES = 400
+# Memo, damit dieselbe Datei nicht bei jedem Poll neu gelesen wird. Schluessel
+# traegt mtime+size, ein Anwachsen der Datei verwirft den Eintrag also selbst.
+_probe_scan_memo: dict[tuple[str, float, int], bool] = {}
+_PROBE_SCAN_MEMO_MAX = 512
+
+
+def is_command_only_session(path: Path) -> bool:
+    """Hat diese Sitzungsdatei ueberhaupt ein Gespraech — oder nur
+    Kommando-Huellen?
+
+    ``True`` heisst: die Datei enthaelt mindestens eine
+    ``<command-name>``/``<local-command-stdout>``-Zeile, aber KEINE
+    Assistenten-Antwort und keine einzige echte Nutzer-Zeile. Genau die Form
+    hat eine Sitzung, die nur eine Sonde geoeffnet hat (die
+    ``/model``-Katalog-Erkennung tat das 41-mal ueber 8 Agenten hinweg) —
+    und weil sie die NEUESTE Datei im Ordner war, zeigte der Chat sie statt
+    des echten Gespraechs.
+
+    Warum genau dieses Kriterium und kein einfacheres: eine FRISCHE, noch
+    leere Sitzung sieht sonst identisch aus. Ihr fehlt aber die
+    Kommando-Zeile — sie besteht nur aus Kopf-Zeilen (``mode``,
+    ``attachment``, ``file-history-snapshot``, ``last-prompt``). Darum ist
+    das Vorhandensein einer Kommando-Huelle Teil der Bedingung und nicht nur
+    das Fehlen von Inhalt: eine frisch gestartete Sitzung bleibt sichtbar,
+    eine reine Sonden-Sitzung nicht.
+
+    Alles, was nicht sicher als Huelle erkennbar ist, gilt als echt
+    (Lesefehler, kaputte Zeilen, sehr lange Dateien) — eine faelschlich
+    versteckte Sitzung waere schlimmer als eine faelschlich gezeigte."""
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_mtime, stat.st_size)
+    except OSError:
+        return False
+    memo = _probe_scan_memo.get(key)
+    if memo is not None:
+        return memo
+
+    command_seen = False
+    content_seen = False
+    truncated = False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i >= _PROBE_SCAN_MAX_LINES:
+                    # Nicht zu Ende gelesen -> keine sichere Aussage. Eine
+                    # echte Sonden-Sitzung ist winzig (rund 10 Zeilen); wer
+                    # hier ankommt, ist keine.
+                    truncated = True
+                    break
+                if content_seen:
+                    break
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                kind = entry.get("type")
+                if kind == "assistant":
+                    content_seen = True
+                    break
+                if kind != "user":
+                    continue
+                message = entry.get("message")
+                text = (message or {}).get("content") if isinstance(message, dict) else None
+                if not isinstance(text, str):
+                    # Listen-Inhalt = Tool-Ergebnis o.ae. — echter Verlauf.
+                    content_seen = True
+                    break
+                if _LOCAL_COMMAND_CAVEAT_RE.match(text):
+                    continue  # Boilerplate, sagt weder Huelle noch Inhalt
+                if (
+                    _COMMAND_WRAPPER_RE.match(text)
+                    or _LOCAL_COMMAND_STDOUT_RE.match(text)
+                    or _LOCAL_COMMAND_STDERR_RE.match(text)
+                ):
+                    command_seen = True
+                    continue
+                content_seen = True
+                break
+    except OSError:
+        return False
+
+    result = command_seen and not content_seen and not truncated
+    if len(_probe_scan_memo) >= _PROBE_SCAN_MEMO_MAX:
+        _probe_scan_memo.clear()
+    _probe_scan_memo[key] = result
+    return result
+
+
 def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     """Finds the newest ``*.jsonl`` transcript directly under ``tdir`` (does
     NOT recurse into subdirectories — those hold sidechains/artifacts, not
     top-level sessions).
+
+    Sitzungen ohne jeden Gespraechsinhalt werden dabei UEBERSPRUNGEN
+    (``is_command_only_session``). Grund: die ``/model``-Katalog-Erkennung
+    hat monatelang Wegwerf-Sitzungen im Projektordner der Agenten
+    hinterlassen — als jeweils neueste Datei verdeckten sie das echte
+    Gespraech (Operator-Befund 19.08.2026: researcher zeigte 10 Zeilen / 0
+    Antworten statt seiner 218 Zeilen / 65 Antworten). Die Erkennung legt
+    dort inzwischen nichts mehr ab; diese Schicht heilt zusaetzlich die ~41
+    Dateien, die bereits auf der Platte liegen — geloescht wird nichts.
+    Bleibt danach nichts uebrig, gewinnt doch die neueste Datei: lieber eine
+    magere Sitzung zeigen als gar keine.
 
     Returns ``(path, meta)`` where ``meta`` is
     ``{"sessionId": <filename stem>, "mtime": <iso8601>, "live": <bool>}``
@@ -686,19 +794,23 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if not tdir.is_dir():
         return None
 
-    newest_path: Path | None = None
-    newest_mtime = -1.0
+    candidates: list[tuple[float, Path]] = []
     for candidate in tdir.glob("*.jsonl"):
         try:
-            mtime = candidate.stat().st_mtime
+            candidates.append((candidate.stat().st_mtime, candidate))
         except OSError:
             continue
-        if mtime > newest_mtime:
-            newest_mtime = mtime
-            newest_path = candidate
-
-    if newest_path is None:
+    if not candidates:
         return None
+
+    candidates.sort(key=lambda row: (row[0], str(row[1])), reverse=True)
+    newest_mtime, newest_path = candidates[0]
+    for mtime, candidate in candidates:
+        # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
+        # gewinnt, und im Normalfall ist das gleich der erste geprueft.
+        if not is_command_only_session(candidate):
+            newest_mtime, newest_path = mtime, candidate
+            break
 
     meta = {
         "sessionId": newest_path.stem,

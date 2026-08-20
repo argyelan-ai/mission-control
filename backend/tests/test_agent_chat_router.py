@@ -63,7 +63,7 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     # "rex" existiert wirklich in der Flotte — capabilities.model/effort nie
     # aus der LIVE settings.json des Hosts lesen (Real-Host-Leak).
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
-    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug, levels=(): None)
     # This test is about the transcript page + effort capabilities, not skill
     # discovery — point the skills scan at a dir that doesn't exist so the
     # result is deterministic (builtins only) regardless of whatever real
@@ -85,7 +85,7 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     # means this would hit an actual container on the host running the
     # suite. Force the empty-catalog (static-alias-fallback) path instead;
     # the catalog's own behavior is covered by test_harness_catalog.py.
-    async def _empty_catalog(agent):
+    async def _empty_catalog(agent, model=None):
         return []
 
     monkeypatch.setattr(agent_chat_input_mod, "discover_model_catalog", _empty_catalog)
@@ -96,6 +96,14 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
         return None
 
     monkeypatch.setattr(agent_chat_input_mod, "resolve_cli_version", _no_version)
+    # Dritter Weg in dieselbe Falle (19.08.2026): effort_capabilities fragt
+    # jetzt den /model-Picker, ob das MODELL des Agenten Effort-Stufen kennt —
+    # das oeffnet ohne Stub ein echtes Wegwerf-Fenster im Container von "rex".
+    # ``supported=None`` = "nicht ermittelt", der bisherige Zustand.
+    async def _effort_unknown(agent, model=None):
+        return {"supported": None, "model": None, "level": None}
+
+    monkeypatch.setattr(agent_chat_input_mod, "discover_effort_support", _effort_unknown)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
@@ -120,6 +128,8 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
         # usage-Ereignis hat. Der Fixture-Agent hat keine settings.json -> None.
         "effort": None,
         "effortShared": False,
+        # Schaltbar -> kein Grund noetig (openclaude-Runde 19.08.2026).
+        "effortReason": None,
         "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
@@ -153,8 +163,8 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     # Echte Fleet-Slugs — der capabilities.model/effort-Zweig darf nie die
     # settings.json des LAUFENDEN Agenten vom Host lesen (Real-Host-Leak).
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
-    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
-    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug, levels=(): None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path, levels=(): None)
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
@@ -169,6 +179,9 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
         "canSwitchEffort": True,
         "effort": None,
         "effortShared": True,
+        # Schaltbar -> kein Grund noetig. Das Feld traegt nur das WARUM,
+        # wenn nichts geht (openclaude-Runde 19.08.2026).
+        "effortReason": None,
         "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         # modelOptions: Boss has no harness (host runtime) -> catalog is

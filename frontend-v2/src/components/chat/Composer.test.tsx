@@ -802,6 +802,140 @@ describe("Composer", () => {
       expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
     });
 
+    it("erklaert am Chip, WARUM der Regler fehlt, wenn das Modell keine Stufen kennt", () => {
+      // openclaude-Fall (19.08.2026): die CLI kennt /effort sehr wohl, aber das
+      // Modell des Agenten nicht — der Picker sagt es selbst
+      // ("Effort not supported for <modell>"). Vorher verschwand der Chip
+      // spurlos: keine Stufe, kein Regler, keine Erklaerung. Jetzt bleibt er
+      // sichtbar und traegt den Grund, sonst sucht der Operator den Fehler bei
+      // sich.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effortReason: "model_no_effort",
+            model: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "model_no_effort");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      // Keine Stufe bekannt -> leere Saeule. Nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+    });
+
+    it("nennt bei einer fremden CLI den Harness als Grund, nicht die Runtime", () => {
+      // Gegenprobe: derselbe leere Chip-Zustand, ein anderer Grund — der Text
+      // darf nicht pauschal "Runtime hat kein Terminal" behaupten, wo die
+      // Runtime sehr wohl eines hat.
+      //
+      // Die Nutzlast ist EXAKT die, die das Backend fuer kimi/omp erzeugt
+      // (`_no_effort("foreign_harness")` -> leere Stufenliste). Die
+      // Vorfassung uebergab hier ["low","medium","high"] — eine Nutzlast, die
+      // es nie gibt; der Test segnete damit Verhalten ab, das nie lief,
+      // waehrend der Chip in Wahrheit gar nicht gerendert wurde.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "foreign_harness",
+            effortModel: null,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("/effort");
+      expect(chip.getAttribute("title")).not.toMatch(/runtime/i);
+      // Ohne Stufenleiter bleibt die Saeule leer — nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+    });
+
+    it("erklaert auch bei einer Runtime ohne Terminal, statt nichts zu zeigen", () => {
+      // Dritte Begruendung, ebenfalls mit leerer Stufenliste vom Backend
+      // (Hermes/Jarvis). Sie erreichte die Oberflaeche vorher nie.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "no_pane",
+            effortModel: null,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "no_pane");
+      expect(chip.getAttribute("title")).toMatch(/terminal/i);
+    });
+
+    it("bleibt ohne Grund, ohne Stufen und ohne Wert unsichtbar", () => {
+      // Der Chip erscheint NUR, wenn es etwas zu zeigen gibt: eine Stufe, ein
+      // Schaltrecht oder eine Erklaerung. Liefert das Backend nichts davon
+      // (aeltere Fassung ohne Grund-Feld), bleibt er weg.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{ effortLevels: [], canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+    });
+
+    it("nennt im Grund das GEMESSENE Modell, nicht das gerade angezeigte", () => {
+      // Die Effort-Messung liegt im Cache, das Modell-Label nicht. Ohne den
+      // Vorrang von `effortModel` stand nach einem Modellwechsel dort
+      // "Das Modell gpt-5.2-codex kennt keine Effort-Stufen" — eine falsche
+      // Aussage ueber ein Modell, das Stufen sehr wohl kennt.
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ model: "gpt-5.2-codex" })}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "model_no_effort",
+            effortModel: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      expect(chip.getAttribute("title")).not.toContain("gpt-5.2-codex");
+    });
+
     it("shows the level read-only when the backend reports no capabilities", () => {
       render(
         <Composer

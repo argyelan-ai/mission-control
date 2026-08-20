@@ -14,7 +14,7 @@ adapter (parser stays pure, capture is the only I/O):
   ``transcript_chat.resolve_transcript_dir``); Boss/host capture is out of
   scope for v1 and always returns ``None``, matching a plain `host` runtime.
 - ``process_alive`` — a second, independent I/O probe (``docker exec ...
-  pgrep -x claude``) used by ``transcript_chat.resolve_aliveness`` to tell
+  pgrep -x <harness process>``, siehe ``process_name_for``) used by ``transcript_chat.resolve_aliveness`` to tell
   "the CLI process is provably gone" apart from "just quiet for a while" —
   a stale pane's tmux window can still be capturable after the process
   inside it died, so pane text alone can't answer this. Cached ~30s per
@@ -341,11 +341,40 @@ async def capture_pane(agent) -> str | None:
 _PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
 _process_alive_cache: dict[str, tuple[float, bool]] = {}
 
+# Welcher PROZESSNAME gehoert zu welchem Harness. ``pgrep -x`` vergleicht den
+# Basenamen EXAKT — ``docker/mc-claude-agent/recycler.sh:12`` sagt es
+# woertlich: "pgrep -x claude (exact basename). openclaude matched NICHT".
+# ``docker/mc-agent-base/start-claude.sh`` startet genau dieses ``openclaude``.
+#
+# Ohne diese Tabelle bekam JEDE openclaude-Sitzung ``rc=1`` -> alive=False ->
+# ``resolve_aliveness`` == "ended", sobald sie 60s still war; das Frontend
+# gab ``sessionLive=false`` und der Composer blendete Senden UND Stop ganz
+# aus. Nach einer Minute Stille war der Agent also nicht mehr ansprechbar —
+# ausgerechnet in der Runde, die das Senden an openclaude erst moeglich
+# gemacht hat.
+#
+# Bewusst nur eine Tabelle mit Rueckfall, keine Adapter-Schicht: PR #336
+# macht ``process_alive`` harness-generisch ueber ``transcript_adapters``.
+# Bis dahin ist das hier der kleinste Eingriff, der openclaude richtig
+# behandelt und dort spurlos aufgeht.
+_HARNESS_PROCESS_NAMES = {"openclaude": "openclaude"}
+_DEFAULT_PROCESS_NAME = "claude"
+
+
+def process_name_for(agent) -> str:
+    """Der Prozessname, unter dem die CLI dieses Agenten laeuft. Unbekannter
+    oder fehlender Harness -> ``claude`` (der Stand vor dieser Tabelle)."""
+    return _HARNESS_PROCESS_NAMES.get(
+        getattr(agent, "harness", None) or "", _DEFAULT_PROCESS_NAME
+    )
+
 
 async def process_alive(agent) -> bool | None:
     """Cheap liveness probe independent of pane TEXT: is the agent's actual
-    ``claude`` process still running? ``docker exec ... pgrep -x claude``
-    against the agent's own container — a tmux window/pane can outlive the
+    CLI process still running? ``docker exec ... pgrep -x <process>``
+    against the agent's own container — der Prozessname kommt aus
+    ``process_name_for`` (openclaude heisst ``openclaude``, nicht ``claude``;
+    ``pgrep -x`` vergleicht exakt) — a tmux window/pane can outlive the
     process it used to run (e.g. it crashed and dropped to a bare shell), so
     a successful ``capture_pane`` alone isn't proof of this; ``pgrep`` is.
     Cached ~30s per agent slug (this is polled far more often than a
@@ -371,7 +400,8 @@ async def process_alive(agent) -> bool | None:
     if cached is not None and (now - cached[0]) < _PROCESS_ALIVE_CACHE_TTL_SECONDS:
         return cached[1]
 
-    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", "claude"]
+    process = process_name_for(agent)
+    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", process]
 
     try:
         result = await asyncio.to_thread(
