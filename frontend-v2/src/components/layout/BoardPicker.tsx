@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslations } from "next-intl";
@@ -28,6 +29,9 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
   const [color, setColor] = useState(BOARD_COLORS[0]);
   const [icon, setIcon] = useState(BOARD_ICONS[0]);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -59,7 +63,10 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
   useEffect(() => {
     if (!open) return;
     function onClick(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+      const t = e.target as Node;
+      const inside =
+        rootRef.current?.contains(t) || menuRef.current?.contains(t);
+      if (!inside) {
         setOpen(false);
         setCreating(false);
       }
@@ -78,6 +85,25 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
     };
   }, [open]);
 
+  // The sidebar clips its children (overflow:hidden keeps the rounded card and
+  // the scrolling nav honest), so the menu is rendered into the body and
+  // positioned from the trigger's rect instead of flowing inside the column.
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setAnchor(
+        collapsed
+          ? { top: r.top, left: r.right + 8, width: 210 }
+          : { top: r.bottom + 6, left: r.left, width: r.width }
+      );
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, collapsed]);
+
   const displayBoards = data ?? boards;
   const active = displayBoards.find((b) => b.id === activeBoardId) ?? displayBoards[0];
   const activeColor = active?.color ?? P2.amb;
@@ -90,6 +116,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
   return (
     <div ref={rootRef} className="relative shrink-0">
       <button
+        ref={triggerRef}
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -132,25 +159,27 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
         )}
       </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            role="listbox"
-            className="absolute z-50 p-1.5"
-            style={{
-              top: "calc(100% + 6px)",
-              left: collapsed ? "calc(100% + 8px)" : 0,
-              width: collapsed ? "200px" : "100%",
-              backgroundColor: "var(--color-p2-pan2)",
-              border: "1px solid var(--color-p2-line)",
-              borderRadius: "12px",
-              boxShadow: "var(--shadow-elevated)",
-            }}
-          >
+      {createPortal(
+        <AnimatePresence>
+          {open && anchor && (
+            <motion.div
+              ref={menuRef}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              role="listbox"
+              className="fixed z-[60] p-1.5"
+              style={{
+                top: anchor.top,
+                left: anchor.left,
+                width: anchor.width,
+                backgroundColor: "var(--color-p2-pan2)",
+                border: "1px solid var(--color-p2-line)",
+                borderRadius: "12px",
+                boxShadow: "var(--shadow-elevated)",
+              }}
+            >
             {displayBoards.map((board) => {
               const isActive = board.id === (active?.id ?? null);
               return (
@@ -290,9 +319,11 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                 </button>
               </div>
             )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }

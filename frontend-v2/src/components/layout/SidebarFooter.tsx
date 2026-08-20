@@ -118,23 +118,39 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
 
   return (
     <div
-      className="mt-auto shrink-0 flex items-center gap-2.5 pt-2.5 px-1.5"
+      className="mt-auto shrink-0 flex items-center gap-2 pt-2.5 px-1"
       style={{ borderTop: "1px solid var(--color-p2-line2)" }}
     >
-      <div
-        className="grid place-items-center shrink-0"
-        style={{
-          width: 30,
-          height: 30,
-          borderRadius: "999px",
-          backgroundColor: "var(--color-p2-amb)",
-          color: "var(--color-p2-inv)",
-          fontFamily: "var(--font-p2-mono)",
-          fontWeight: 700,
-          fontSize: "12.5px",
-        }}
-      >
-        {initial}
+      <div className="relative shrink-0" title={health}>
+        <div
+          className="grid place-items-center"
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: "999px",
+            backgroundColor: "var(--color-p2-amb)",
+            color: "var(--color-p2-inv)",
+            fontFamily: "var(--font-p2-mono)",
+            fontWeight: 700,
+            fontSize: "12.5px",
+          }}
+        >
+          {initial}
+        </div>
+        {/* System health rides the avatar, so the line below keeps its width */}
+        <span
+          aria-hidden
+          className="absolute"
+          style={{
+            right: -1,
+            bottom: -1,
+            width: 9,
+            height: 9,
+            borderRadius: "999px",
+            backgroundColor: toneColor,
+            border: "2px solid var(--color-p2-pan)",
+          }}
+        />
       </div>
 
       <div className="min-w-0 flex-1">
@@ -144,12 +160,11 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         >
           {currentUser?.name ?? "—"}
         </div>
-        <div className="flex items-center gap-1.5" style={{ ...MONO, fontSize: "9.5px", color: "var(--color-p2-dim)" }}>
-          <span
-            aria-hidden
-            style={{ width: 7, height: 7, borderRadius: "999px", backgroundColor: toneColor, flexShrink: 0 }}
-          />
-          <span className="truncate">{health}</span>
+        <div
+          className="truncate"
+          style={{ ...MONO, fontSize: "9.5px", color: "var(--color-p2-dim)" }}
+        >
+          {health}
         </div>
       </div>
 
@@ -158,7 +173,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         aria-label={t("collapseSidebar")}
         title={`${t("collapseSidebar")} · ⌘B`}
         className="grid place-items-center shrink-0 cursor-pointer"
-        style={{ width: 28, height: 28, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        style={{ width: 26, height: 26, borderRadius: "999px", color: "var(--color-p2-faint)" }}
         onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
       >
@@ -168,7 +183,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         href="/settings"
         aria-label={t("settings")}
         className="grid place-items-center shrink-0"
-        style={{ width: 28, height: 28, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        style={{ width: 26, height: 26, borderRadius: "999px", color: "var(--color-p2-faint)" }}
         onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
       >
@@ -178,7 +193,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         onClick={handleLogout}
         aria-label={tNav("logout")}
         className="grid place-items-center shrink-0 cursor-pointer"
-        style={{ width: 28, height: 28, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        style={{ width: 26, height: 26, borderRadius: "999px", color: "var(--color-p2-faint)" }}
         onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-err)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
       >

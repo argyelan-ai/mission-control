@@ -162,6 +162,13 @@ export const P2 = {
   dim: "#A3A3A3",
   faint: "#8A8A8A", // decoration only — never body text
 
+  // Glass — floating overlays that should let the page show through.
+  // Panel tone at ~70% so the blur behind it has something to work with;
+  // the old voice drawer hardcoded rgba(13,13,15,0.92), which was both a
+  // different (blue-tinted) family and barely transparent.
+  glass: "rgba(38, 38, 38, 0.70)",
+  glassLine: "rgba(255, 255, 255, 0.10)",
+
   // ONE accent — achromatisch; interaction/focus/selection only
   amb: "#EBE8DE",
   ambD: "#C1BEB2", // dimmed accent (borders, gradient start)

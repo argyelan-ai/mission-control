@@ -499,7 +499,7 @@ function VoiceDrawer({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             onClick={onClose}
-            style={{ background: "rgba(0,0,0,0.25)", backdropFilter: "blur(2px)" }}
+            style={{ background: "rgba(0,0,0,0.18)", backdropFilter: "blur(3px)" }}
           />
 
           {/* Glass Panel */}
@@ -511,12 +511,12 @@ function VoiceDrawer({
             transition={{ type: "spring", stiffness: 360, damping: 28 }}
             style={{
               ...panelStyle,
-              background: "rgba(13, 13, 15, 0.92)",
-              backdropFilter: "blur(20px) saturate(160%)",
-              WebkitBackdropFilter: "blur(20px) saturate(160%)",
-              border: "1px solid var(--color-border)",
+              background: "var(--color-p2-glass)",
+              backdropFilter: "blur(28px) saturate(150%)",
+              WebkitBackdropFilter: "blur(28px) saturate(150%)",
+              border: "1px solid var(--color-p2-glass-line)",
               boxShadow:
-                "0 24px 60px -16px rgba(0,0,0,0.7), 0 0 0 1px var(--color-accent-subtle), inset 0 1px 0 0 rgba(255,255,255,0.06)",
+                "0 24px 60px -16px rgba(0,0,0,0.55), inset 0 1px 0 0 rgba(255,255,255,0.08)",
             }}
           >
             {/* Edge highlight — subtler "rim" at the top edge */}
