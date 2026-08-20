@@ -320,7 +320,9 @@ export function RuntimeSwitchModal({
                       data-testid="restart-done-note"
                     >
                       <Check size={12} />
-                      Agent restarted automatically
+                      {isVoiceBinding
+                        ? "Active on the next call — nothing was restarted"
+                        : "Agent restarted automatically"}
                     </div>
                   )}
                   <button
@@ -503,7 +505,13 @@ export function RuntimeSwitchModal({
                     )}
 
                     {/* Image-switch banner */}
-                    {preview.image_switched && (
+                    {/* Voice binds no container image — MC starts nothing for
+                        these rows. The backend still reports image_switched on
+                        the first binding (it finds no image on either side),
+                        and the banner would promise a 30–90s container swap
+                        that never happens, right next to the correct "next
+                        call" hint. */}
+                    {preview.image_switched && !isVoiceBinding && (
                       <div
                         className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                         style={{

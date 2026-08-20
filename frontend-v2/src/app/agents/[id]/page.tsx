@@ -747,7 +747,11 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {isHostInplace ? (
-                <>{t("inplaceHint")}</>
+                // ADR-074 — voice binds without restarting anything, so the
+                // generic in-place wording ("host session restarts, current
+                // work is lost") would be plainly false here. This is the
+                // first line the operator reads under the selector.
+                <>{t(agent.harness === "jarvis" ? "voiceBindingHint" : "inplaceHint")}</>
               ) : (
                 <>
                   {t("dockerHintBefore")} <code className="font-mono">docker restart</code>{" "}

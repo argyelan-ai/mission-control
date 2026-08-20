@@ -36,6 +36,7 @@ from livekit.plugins import openai, xai
 from jarvis_core import frontier, mc_client, tools as jtools
 from jarvis_core.channels import VOICE
 from jarvis_core.persona import build_instructions
+from jarvis_core.voice_provider import resolve_voice_choice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
@@ -50,86 +51,33 @@ _TURN_DETECTION = {
 }
 
 
-#: Provider, die dieser Worker bauen kann. Die Allowlist wird auch auf das
-#: angewendet, was MC liefert — ein unbekannter Wert aus der DB darf nie als
-#: Provider-Name bei der Plugin-Factory landen.
-_PROVIDERS = ("openai", "xai")
-
-#: Default-Stimme je Arm. Bewusst GETRENNTE env-Variablen statt einer
-#: gemeinsamen VOICE_VOICE_ID: die Stimmnamen der beiden Anbieter sind
-#: vollstaendig disjunkt ("marin" gibt es bei xAI nicht, "ara" nicht bei
-#: OpenAI). Eine geteilte Variable hiess, dass eine gesetzte Stimme den jeweils
-#: anderen Arm beim Verbinden zerlegt.
-_VOICE_ENV = {"openai": "VOICE_OPENAI_VOICE_ID", "xai": "VOICE_XAI_VOICE_ID"}
-_VOICE_DEFAULT = {"openai": "marin", "xai": "ara"}
-
-
-def _has_key(provider: str) -> bool:
-    return bool(os.environ.get("OPENAI_API_KEY" if provider == "openai" else "XAI_API_KEY"))
-
-
 def _build_realtime_model(provider: str | None = None, model: str | None = None):
     """Baut das Realtime-LLM fuer diesen Anruf.
 
+    Die Entscheidung WAS gesprochen wird liegt in
+    ``jarvis_core.voice_provider.resolve_voice_choice`` — bewusst ohne
+    livekit-Import, damit sie im normalen Backend-Testlauf mitlaeuft. Hier
+    bleibt nur das Bauen des Plugin-Objekts.
+
     Quelle der Wahrheit ist die Runtime-Bindung in MC (ADR-074), die der
-    entrypoint pro Anruf holt und hier hereinreicht. Die env-Variablen
-    VOICE_PROVIDER/VOICE_MODEL bleiben als Notfall-Default fuer den Fall, dass
-    das Backend nicht antwortet.
-
-    Leitregel: **Jarvis wird nicht stumm.** Jeder unklare Zustand faellt auf
-    etwas Sprechfaehiges zurueck statt zu werfen — ein falscher Anbieter ist
-    ein Aergernis, ein toter Sprachassistent ist ein Ausfall. Nur wenn gar kein
-    Schluessel existiert, bleibt nichts zu retten.
+    entrypoint pro Anruf holt. Die env-Variablen sind der Notfall-Default.
     """
-    source = "mc" if provider else "env"
-    provider = (provider or os.environ.get("VOICE_PROVIDER", "openai")).strip().lower()
+    choice = resolve_voice_choice(provider=provider, model=model)
+    logger.info("%s", choice.as_log())
 
-    if provider not in _PROVIDERS:
-        from_env = (os.environ.get("VOICE_PROVIDER", "openai")).strip().lower()
-        fallback = from_env if from_env in _PROVIDERS else "openai"
-        logger.error(
-            "unknown voice provider %r (from %s) — falling back to %r",
-            provider, source, fallback,
-        )
-        provider, source = fallback, "env-fallback"
-
-    if not _has_key(provider):
-        other = next((p for p in _PROVIDERS if p != provider and _has_key(p)), None)
-        if other is None:
-            raise RuntimeError(
-                "Neither OPENAI_API_KEY nor XAI_API_KEY is set — the voice "
-                "worker cannot reach any realtime provider."
-            )
-        logger.error(
-            "voice provider %r has no API key — switching to %r so Jarvis stays "
-            "reachable. Set the missing key or rebind the runtime in MC.",
-            provider, other,
-        )
-        provider, source = other, "key-fallback"
-        model = None  # das Modell des anderen Arms ist hier nicht gueltig
-
-    voice = os.environ.get(_VOICE_ENV[provider]) or _VOICE_DEFAULT[provider]
-
-    if provider == "openai":
-        model = model or os.environ.get("VOICE_MODEL", "gpt-realtime-2.1")
-        logger.info(
-            "voice provider=%s model=%s voice=%s source=%s", provider, model, voice, source
-        )
+    if choice.provider == "openai":
         return openai.realtime.RealtimeModel(
-            model=model,
-            voice=voice,
+            model=choice.model,
+            voice=choice.voice,
             turn_detection=_TURN_DETECTION,
         )
 
     # xai: das installierte Plugin akzeptiert model= (grok-voice-think-fast-1.0
-    # / grok-voice-fast-1.0). Ohne Angabe bleibt der Plugin-Default.
-    logger.info(
-        "voice provider=%s model=%s voice=%s source=%s", provider, model or "<plugin-default>",
-        voice, source,
-    )
-    kwargs = {"voice": voice, "turn_detection": _TURN_DETECTION}
-    if model:
-        kwargs["model"] = model
+    # / grok-voice-fast-1.0). Ohne Angabe bleibt der Plugin-Default — NOT_GIVEN
+    # ist dort nicht dasselbe wie None, deshalb weglassen statt None uebergeben.
+    kwargs = {"voice": choice.voice, "turn_detection": _TURN_DETECTION}
+    if choice.model:
+        kwargs["model"] = choice.model
     return xai.realtime.RealtimeModel(**kwargs)
 
 

@@ -1773,7 +1773,12 @@ export type RuntimeType =
    *  at the type level while rendering fine at runtime. */
   | "omp"
   | "grok"
-  | "kimi";
+  | "kimi"
+  /** Jarvis' realtime voice arms (ADR-074). Not chat runtimes: both are reached
+   *  over a provider's realtime speech socket, and only the jarvis harness may
+   *  bind them. */
+  | "voice_openai"
+  | "voice_xai";
 
 export interface Runtime {
   // On the GET /runtimes (legacy JSON) response `id` is the slug.

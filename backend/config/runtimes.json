@@ -126,7 +126,7 @@
     "startup_notes": "Kein MC-Lifecycle — OpenAI betreibt den Endpoint, Start/Stop auf der Runtimes-Seite sind für diese Zeile wirkungslos (wie bei grok-cloud). Der voice-worker (compose-Profil 'voice') liest die Bindung pro Anruf über GET /api/v1/agent/voice/config; ein Wechsel wirkt ab dem nächsten Anruf, ohne Neustart.",
     "ui_order": 13,
     "enabled": true,
-    "single_instance": false
+    "single_instance": true
   },
   {
     "id": "voice-xai",
@@ -147,7 +147,7 @@
     "startup_notes": "Kein MC-Lifecycle — xAI betreibt den Endpoint. Stimme dieses Arms über VOICE_XAI_VOICE_ID (Default 'ara'); die Stimmnamen unterscheiden sich vollständig vom OpenAI-Arm, deshalb pro Arm getrennt. Wechsel wirkt ab dem nächsten Anruf.",
     "ui_order": 14,
     "enabled": true,
-    "single_instance": false
+    "single_instance": true
   },
   {
     "id": "anthropic-claude-opus",

@@ -108,13 +108,17 @@ def test_voice_display_names_are_protected_from_the_naming_rule(runtime_type: st
     assert runtime_type in CURATED_RUNTIME_TYPES
 
 
-def test_voice_rows_are_not_single_instance():
-    """single_instance would let only one agent hold the binding. Jarvis is
-    alone today, but the flag also drives a 422 on the create path — no reason
-    to inherit grok-cloud's constraint here."""
+def test_voice_rows_are_single_instance():
+    """The same guard grok-cloud and kimi-cloud use, and for the same reason.
+
+    The switch service hard-blocks binding a single_instance runtime unless the
+    agent switches in place (host + adapter). That keeps every cli-bridge agent
+    away from these rows without a single extra check. Jarvis itself is
+    host-in-place, so the block does not apply to him.
+    """
     for row in _seed_rows():
         if row["runtime_type"] in VOICE_RUNTIME_TYPES:
-            assert row.get("single_instance") is False
+            assert row.get("single_instance") is True, row["id"]
 
 
 # ── The adapter: Jarvis becomes switchable, but nothing is written ─────────

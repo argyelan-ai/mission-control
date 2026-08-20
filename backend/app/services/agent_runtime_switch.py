@@ -644,10 +644,29 @@ async def switch_agent_runtime(
         derive_harness,
         incompat_reason,
         is_compatible,
+        runtime_protocol,
     )
 
     effective_old_harness = agent.harness or derive_harness(old_runtime)
     effective_new_harness = new_harness or agent.harness or derive_harness(new_runtime)
+    # A voice runtime belongs to Jarvis and nothing else. derive_harness()
+    # returns None for it (as it does for grok/kimi), and the compatibility
+    # check below is skipped whenever the harness is unknown — so an agent with
+    # a NULL harness would slide straight through, report healthy, and only
+    # fail on its first task with nothing pointing at the cause. Checked
+    # explicitly rather than by teaching derive_harness to answer "jarvis",
+    # which would have the opposite effect: it would make the binding look
+    # legitimate for any harness-less agent.
+    if runtime_protocol(new_runtime) == "voice" and effective_new_harness != "jarvis":
+        raise RuntimeIncompatibleError(
+            f"Runtime '{new_runtime.slug}' ist eine Sprach-Bindung und gehört zum "
+            f"Jarvis-Agenten. Agent '{agent.name}' "
+            + (
+                f"fährt das Harness '{effective_new_harness}'."
+                if effective_new_harness
+                else "hat kein Harness gesetzt."
+            )
+        )
     if effective_new_harness is not None and not is_compatible(
         effective_new_harness, new_runtime
     ):

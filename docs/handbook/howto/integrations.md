@@ -137,7 +137,7 @@ LIVEKIT_API_SECRET=
 LIVEKIT_PUBLIC_URL=             # WS URL the browser connects to; empty = derived from origin
 LIVEKIT_NODE_IP=                # RTC candidate IP LiveKit advertises; 127.0.0.1 = local only
 VOICE_PROVIDER=openai           # FALLBACK ONLY — see below
-VOICE_MODEL=gpt-realtime-2.1    # FALLBACK ONLY — see below
+VOICE_MODEL=gpt-realtime-2.1    # FALLBACK ONLY, and only for the arm above
 VOICE_OPENAI_VOICE_ID=          # empty = "marin"
 VOICE_XAI_VOICE_ID=             # empty = "ara"
 OPENAI_API_KEY=                 # for the openai arm
@@ -159,6 +159,22 @@ whichever arm does not know the name.
 
 API keys stay in the container's environment. MC never stores or forwards them —
 the config endpoint returns the provider and model only.
+
+> **After deploying this change, rebuild the voice worker once.** The regular
+> deploy only rebuilds backend and frontend; the voice worker is a separate
+> image behind the `voice` compose profile, and its code is copied in, not
+> mounted. Skip it and the switch looks like it worked — MC reports success
+> while an old worker keeps talking to the previous provider and does not even
+> log which one:
+>
+> ```bash
+> docker compose -p mission-control --profile voice up -d --build voice-worker
+> ```
+>
+> Proof it landed: make a call, then
+> `docker compose -p mission-control logs --since 3m voice-worker | grep "voice provider"`.
+> The line must say `source=mc`. `source=env` means the worker never asked the
+> backend — usually the old image.
 
 The order matters for `JARVIS_AGENT_TOKEN`: create the agent in MC, then paste
 its token here. If you want voice reachable from a phone rather than only the

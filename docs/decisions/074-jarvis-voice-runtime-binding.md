@@ -106,6 +106,20 @@ existiert, wird geworfen; da ist nichts mehr zu retten.
 - Start/Stop auf der Runtimes-Seite bleibt für diese Zeilen wirkungslos — wie
   bei `grok-cloud`. In `startup_notes` dokumentiert.
 
+### Deploy-Pflichtschritt
+Der reguläre Deploy baut nur Backend und Frontend. Der `voice-worker` ist ein
+eigenes Image hinter dem compose-Profil `voice`, und sein Code wird
+hineinkopiert, nicht gemountet. Ohne einmaligen Rebuild ist der Schalter live
+wirkungslos — und zwar auf die unangenehmste Art: MC meldet Erfolg, das alte
+Image spricht weiter mit dem vorherigen Anbieter und loggt nicht einmal welchen.
+
+```bash
+docker compose -p mission-control --profile voice up -d --build voice-worker
+```
+
+Beleg, dass es angekommen ist: nach einem Anruf muss im Worker-Log
+`source=mc` stehen. `source=env` heisst, der Worker hat das Backend nie gefragt.
+
 ### Grenzen (wichtig gegen Missverständnisse)
 Der Schalter stellt **nur den Sprach-Kanal** um. Der Text-Kanal
 (`jarvis_core/brain.py`) und `ask_frontier` (`jarvis_core/frontier.py`) sprechen
