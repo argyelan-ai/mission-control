@@ -110,14 +110,16 @@ vi.mock("@/components/chat/ChatView", () => ({
       )}
     </div>
   ),
+  // Gleiche Form wie chatOptions.ts: Katalog-Schluessel, keine fertigen
+  // Beschriftungen — die Seite liest ohnehin nur `.key`.
   DETAIL_LEVELS: [
-    { key: "compact", label: "Kompakt" },
-    { key: "normal", label: "Normal" },
-    { key: "verbose", label: "Ausführlich" },
+    { key: "compact", labelKey: "detailCompact" },
+    { key: "normal", labelKey: "detailNormal" },
+    { key: "verbose", labelKey: "detailVerbose" },
   ],
   CENTER_VIEWS: [
-    { key: "chat", label: "Chat" },
-    { key: "terminal", label: "Terminal" },
+    { key: "chat", labelKey: "chat" },
+    { key: "terminal", labelKey: "terminal" },
   ],
 }));
 

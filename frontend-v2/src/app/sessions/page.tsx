@@ -292,7 +292,10 @@ function SessionsPageContent() {
           // Auf dem Chat-Schirm ist die Polsterung oben schon weg (AppShell,
           // `mobileChromeless`) — ein zusaetzliches -mt-4 wuerde den Chat-Kopf
           // unter die Statusleiste des Telefons ziehen.
-          onChatScreen ? "mt-0" : "-mt-4"
+          // Kein "mt-0" im Gegenzweig: Tailwinds Preflight setzt margin
+          // ohnehin auf 0, die Klasse waere reine Deko. (`md:mt-0` oben wird
+          // dagegen gebraucht — es hebt `-mt-4` ab md wieder auf.)
+          onChatScreen ? "" : "-mt-4"
         }`}
       >
         {isError && (

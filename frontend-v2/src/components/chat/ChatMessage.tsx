@@ -191,9 +191,6 @@ export function ChatMessage({
    *  message, which needs no qualifier. */
   echoStatus?: EchoStatus;
 }) {
-  const isUser = ev.role === "user";
-  const parsed = splitAttachments(ev.text);
-
   // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
   // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
   // als rechtsbuendige Blase, also als etwas, das der Operator selbst getippt
@@ -215,14 +212,35 @@ export function ChatMessage({
                 {ev.teammate}
               </span>
             )}
-            <span style={{ color: C.textSecondary }}>{ev.text}</span>
+            {/* Der Text stand hier in einem blanken <span>, und globals.css
+                hat keine globale Umbruch-Regel. In Chromium bei 390px
+                nachgemessen: ein wirklich unbrechbares Wort (122 Zeichen ohne
+                Satzzeichen) wird 947,9px breit und gibt der SEITE einen
+                waagerechten Rollbalken; mehrzeilige Nutzlasten kollabieren zu
+                einer Zeile. Das haeufigste JSON bricht Chromium an seinen
+                Kommata zwar von selbst um — Rueckmeldungen sind aber
+                beliebiger Text, und seit gebuendelte Bloecke einzeln
+                ankommen, sind mehrzeilige Nutzlasten der Normalfall. */}
+            <span
+              data-testid="teammate-text"
+              className="break-words whitespace-pre-wrap"
+              style={{ color: C.textSecondary }}
+            >
+              {ev.text}
+            </span>
           </div>
         </div>
       </div>
     );
   }
 
-  if (isUser) {
+  // `splitAttachments` steht bewusst HIER und nicht oben: gelesen wird sein
+  // Ergebnis nur in diesem Zweig. Oben lief es fuer jede Teamkollegen- und
+  // Assistenten-Zeile mit — voller `split("\n")`, Regex je Zeile, `join` — und
+  // wurde restlos weggeworfen. ChatMessage ist nicht memoisiert, das fiel also
+  // bei jedem Stream-Tick fuer jede sichtbare Zeile an.
+  if (ev.role === "user") {
+    const parsed = splitAttachments(ev.text);
     const unconfirmed = echoStatus === "unconfirmed";
     // Queued and starting are WAITS, not problems: the CLI genuinely holds a
     // message sent mid-turn until the turn ends, and a booting agent will get it

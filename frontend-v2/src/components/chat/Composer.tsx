@@ -53,10 +53,6 @@ export function resolveEffortLevels(capabilities: ChatCapabilities | null | unde
   );
 }
 
-/** Der Standardtext des read-only Brain-Chips — er galt bisher fuer JEDEN
- *  nicht schaltbaren Fall und stimmt nur fuer Host-Runtimes ohne Terminal. */
-const EFFORT_REASON_FALLBACK =
-  "Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal.";
 
 /**
  * Warum der Regler fehlt, in einem Satz — aus dem `effortReason` des Backends.
@@ -70,6 +66,7 @@ const EFFORT_REASON_FALLBACK =
 export function effortReasonText(
   capabilities: ChatCapabilities | null | undefined,
   model: string | null | undefined,
+  t: (key: string, values?: Record<string, string>) => string,
 ): string {
   /* Das Modell, ueber das die CLI die Aussage gemacht hat, schlaegt das gerade
      angezeigte: die Effort-Messung ist zwischengespeichert, das Modell-Label
@@ -80,13 +77,16 @@ export function effortReasonText(
   switch (capabilities?.effortReason) {
     case "model_no_effort":
       return measured
-        ? `Das Modell ${measured} kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.`
-        : "Das aktuelle Modell kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.";
+        ? t("effortLockedModelNoEffort", { model: measured })
+        : t("effortLockedModelNoEffortGeneric");
     case "foreign_harness":
-      return "Diese CLI kennt kein /effort — es gibt hier keine Stufen zum Umschalten.";
+      return t("effortLockedForeignHarness");
+    /* `no_pane` ist zugleich der Rueckfall: der Text nennt die fehlende
+       Terminal-Steuerung und ist damit fuer aeltere Backends ohne Grund-Feld
+       die einzige Aussage, die nicht raet. */
     case "no_pane":
     default:
-      return EFFORT_REASON_FALLBACK;
+      return t("effortLockedHint");
   }
 }
 
@@ -539,17 +539,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         // The backend refuses mid-turn rather than interrupting the agent
         // (its own preflight). Nothing failed — the moment was wrong — so this
         // is an info, not the red persistent toast a real failure gets.
-        notify.info("Agent arbeitet gerade — nach dem Zug erneut versuchen");
+        notify.info(t("effortAgentBusy"));
       } else if (isEffortSwitchRejectedError(err)) {
         // The CLI said no AND said why. Passing its own words through beats any
         // wording of ours: it names the actual constraint (a level the current
         // model doesn't support, for instance), which a generic failure hides.
         const reason = extractErrorMessage(err);
-        notify.error(reason ? `Effort abgelehnt: ${reason}` : "Effort-Wechsel abgelehnt");
+        notify.error(reason ? t("effortRejectedReason", { reason }) : t("effortRejected"));
       } else if (isEffortSwitchFailedError(err)) {
-        notify.error("Effort-Wechsel nicht bestätigt — im Terminal prüfen");
+        notify.error(t("effortUnconfirmed"));
       } else {
-        notify.error("Effort-Wechsel fehlgeschlagen");
+        notify.error(t("effortFailed"));
       }
     } finally {
       setPendingEffort(null);
@@ -597,22 +597,30 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
 
   const tokenDetail =
     usage && hasWin
-      ? `≈${formatCompactTokens(usage.inputTokens)}/${formatCompactTokens(win)} belegt. `
+      ? t("contextTokensUsed", {
+          used: formatCompactTokens(usage.inputTokens),
+          win: formatCompactTokens(win),
+        })
       : "";
-  const sourceLabel = pctSource === "estimate" ? "Schätzung" : "CLI";
+  // "CLI" ist in beiden Sprachen dasselbe Wort und bleibt darum ein Literal —
+  // uebersetzt wird nur die Alternative dazu.
+  const sourceLabel = pctSource === "estimate" ? t("contextSourceEstimate") : "CLI";
   const ringTitle =
     pct != null
-      ? `${tokenDetail}Quelle: ${sourceLabel}. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.`
+      ? t("contextRingTooltip", { detail: tokenDetail, source: sourceLabel })
       : undefined;
 
   return (
     <div
       data-testid={`composer-${agentId}`}
       // The composer is the app's own floor, not a strip bolted to the
-      // timeline: no top border, the pill inside carries the edge. No
-      // safe-area padding here — on mobile the app's bottom tab bar sits
-      // below this and already owns `env(safe-area-inset-bottom)`; adding it
-      // again would double the gap.
+      // timeline: no top border, the pill inside carries the edge.
+      //
+      // (Hier stand frueher "No safe-area padding here — the app's bottom tab
+      // bar already owns env(safe-area-inset-bottom)". Das gilt nicht mehr:
+      // auf dem Chat-Schirm blendet AppShell die Tab-Leiste aus, es gibt also
+      // nichts mehr, was den Streifen besitzt.)
+      //
       // pb-safe-bottom (nur Handy): iOS reserviert unten ~34 px fuer den
       // Home-Balken. Bisher endete der Composer DARUEBER und der Streifen
       // blieb tote Flaeche. Jetzt traegt der Container den Zuschlag, die
@@ -763,7 +771,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           rows={1}
-          placeholder="Nachricht an den Agenten…"
+          placeholder={t("messagePlaceholder")}
           // 16px on mobile is not a taste call: anything smaller makes iOS
           // Safari zoom the viewport on focus. The placeholder and caret are
           // themed explicitly — the browser's own placeholder (50% alpha of
@@ -917,7 +925,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 // button (the button's name wins), so the figure has to live in
                 // that name — otherwise a screen-reader user learns only that
                 // there is a breakdown, never how full the window is.
-                aria-label={`Kontext: ${Math.round(pct)}% belegt`}
+                aria-label={t("contextUsed", { pct: Math.round(pct) })}
                 onClick={() => setContextOpen((v) => !v)}
                 className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
               >
@@ -1031,7 +1039,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   onClick={() => setEffortOpen((v) => !v)}
                   aria-haspopup="listbox"
                   aria-expanded={effortOpen}
-                  aria-label={`Effort-Stufe: ${currentEffort ?? "auto"}`}
+                  aria-label={t("effortLevelCurrent", { level: currentEffort ?? "auto" })}
                   data-testid="effort-chip"
                   data-level={currentEffort ?? "auto"}
                   data-pending={pendingEffort != null}
@@ -1090,7 +1098,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       value={sliderIndex}
                       list="effort-ticks"
                       data-testid="effort-slider"
-                      aria-label="Effort-Stufe"
+                      aria-label={t("effortLevel")}
                       aria-valuetext={effortLevels[sliderIndex]}
                       disabled={pendingEffort != null}
                       autoFocus
@@ -1128,17 +1136,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                           muss am gewaehlten Wert stehen, nicht im Kleingedruckten. */}
                       <span className="text-[10px]" style={{ color: C.textMuted }}>
                         {isSessionOnlyEffort(effortLevels[sliderIndex])
-                          ? "nur diese Session"
+                          ? t("effortSessionOnly")
                           : capabilities?.effortShared
-                            ? "wird Standard — auch für deine lokalen Claude-Sessions (geteilte Config)"
-                            : "wird Standard"}
+                            ? t("effortBecomesDefaultShared")
+                            : t("effortBecomesDefault")}
                       </span>
                       {pendingEffort != null && (
                         /* "…" solange der Wechsel unterwegs ist. Ein Haken
                            erscheint nie vorab — bestaetigt wird erst, was das
                            Transkript meldet. */
                         <span className="ml-auto text-[10px]" style={{ color: C.textMuted }}>
-                          wird gesetzt …
+                          {t("effortApplying")}
                         </span>
                       )}
                     </div>
@@ -1161,8 +1169,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               <span
                 data-testid="effort-chip-static"
                 data-level={currentEffort ?? "auto"}
-                aria-label={`Effort-Stufe: ${currentEffort ?? "auto"} (nicht umschaltbar) — ${effortReasonText(capabilities, currentModel)}`}
-                title={effortReasonText(capabilities, currentModel)}
+                aria-label={`${t("effortLevelLocked", { level: currentEffort ?? "auto" })} — ${effortReasonText(capabilities, currentModel, t)}`}
+                title={effortReasonText(capabilities, currentModel, t)}
                 data-reason={capabilities?.effortReason ?? "unspecified"}
                 className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
@@ -1186,7 +1194,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                  ehrliche Text. */
               <span
                 data-testid="effort-chip-static"
-                title={effortReasonText(capabilities, currentModel)}
+                title={effortReasonText(capabilities, currentModel, t)}
                 data-reason={capabilities?.effortReason ?? "unspecified"}
                 className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
@@ -1199,7 +1207,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 <button
                   type="button"
                   onClick={send}
-                  aria-label="Senden"
+                  aria-label={t("send")}
                   disabled={!hasText}
                   data-empty={!hasText}
                   data-testid="send-button"
@@ -1220,8 +1228,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 <button
                   type="button"
                   onClick={onStop}
-                  aria-label="Stop"
-                  title="Unterbrechen (ESC)"
+                  aria-label={t("stop")}
+                  title={t("interruptEsc")}
                   data-testid="stop-button-prominent"
                   data-reason={isWorking ? "working" : !paneObservable ? "unobservable" : "unknown"}
                   /* The pulse is a claim of live activity, so it only runs when
