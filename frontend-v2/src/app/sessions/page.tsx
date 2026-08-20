@@ -14,6 +14,10 @@ import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVEL
 import { DiffPanel } from "@/components/chat/DiffPanel";
 import { PanelRail, type PanelKind } from "@/components/chat/PanelRail";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
+import { GroupChatView } from "@/components/groupchat/GroupChatView";
+import { CreateGroupModal } from "@/components/groupchat/CreateGroupModal";
+import { ResultDocPanel } from "@/components/groupchat/ResultDocPanel";
+import type { GroupDetail } from "@/lib/groupTypes";
 import type { StateEvent } from "@/lib/chatTypes";
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
@@ -44,7 +48,22 @@ const VIEW_STORAGE_KEY = "mc.chat.view";
 // Diff + Browser only — Terminal moved from the side panel to ChatView's own
 // center-view toggle (mc.chat.view). A stale "terminal" value from before
 // that change simply falls back to `null` here (not in this allow-list).
-const VALID_PANELS: PanelKind[] = ["diff", "browser"];
+const VALID_PANELS: PanelKind[] = ["diff", "browser", "doc"];
+// Gruppen merken sich wie Agenten, was zuletzt offen war (ADR-075).
+const LAST_GROUP_STORAGE_KEY = "mc-sessions-last-group";
+
+function loadLastGroupId(): string | null {
+  try {
+    return localStorage.getItem(LAST_GROUP_STORAGE_KEY);
+  } catch { return null; }
+}
+
+function saveLastGroupId(id: string | null) {
+  try {
+    if (id) localStorage.setItem(LAST_GROUP_STORAGE_KEY, id);
+    else localStorage.removeItem(LAST_GROUP_STORAGE_KEY);
+  } catch {}
+}
 const VALID_DETAIL_LEVELS = DETAIL_LEVELS.map((d) => d.key);
 const VALID_CENTER_VIEWS = CENTER_VIEWS.map((v) => v.key);
 
@@ -128,6 +147,11 @@ function SessionsPageContent() {
   const searchParams = useSearchParams();
   const { activeBoardId } = useAppStore();
   const [selected, setSelected] = useState<AgentWithState | null>(null);
+  // Gruppen-Auswahl liegt bewusst NEBEN der Agenten-Auswahl statt in einer
+  // Union: wer aus einer Gruppe zurück zu seinem Agenten springt, landet
+  // wieder in derselben Session statt in einer leeren Seite.
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
   // return-to-list action doesn't null `selected` (which would immediately
@@ -182,6 +206,23 @@ function SessionsPageContent() {
     queryKey: ["agents", "host-sessions"],
     queryFn: () => api.agents.listHostSessions(),
     refetchInterval: 5_000,
+  });
+
+  // Gruppen (ADR-075). Eigene Abfrage neben den Agenten — eine Gruppe hängt
+  // an keinem Board und keinem Agenten, sie ist ein eigener Raum.
+  const { data: groups = [] } = useQuery({
+    queryKey: ["groups"],
+    queryFn: () => api.groups.list(),
+    refetchInterval: 10_000,
+  });
+
+  const { data: selectedGroup = null } = useQuery({
+    queryKey: ["group", selectedGroupId],
+    queryFn: () => api.groups.get(selectedGroupId!),
+    enabled: !!selectedGroupId,
+    // Der Verlauf kommt live über SSE; diese Abfrage hält nur Kopfdaten
+    // (Status, Mitglieder, Budget) frisch, falls ein Ereignis verloren geht.
+    refetchInterval: 15_000,
   });
 
   const { data: tasks = [] } = useQuery({
@@ -259,14 +300,62 @@ function SessionsPageContent() {
     const agent = agents.find((a) => a.id === agentId);
     if (!agent) return;
     setSelected(agent);
+    setSelectedGroupId(null);
+    saveLastGroupId(null);
     setMobileView("chat");
+    // Das Ergebnis-Panel gehört zur Gruppe; beim Wechsel auf einen Agenten
+    // stünde es sonst leer daneben.
+    if (activePanel === "doc") setActivePanel(null);
   }
 
-  const panelTitle = activePanel === "diff" ? "Diff" : activePanel === "browser" ? "Browser" : "";
+  function handleSelectGroup(groupId: string) {
+    setSelectedGroupId(groupId);
+    saveLastGroupId(groupId);
+    setMobileView("chat");
+    if (activePanel === "diff" || activePanel === "browser") setActivePanel(null);
+  }
+
+  // Gruppen-Deep-Link (?group=<id>) und zuletzt geöffnete Gruppe. Der
+  // Deep-Link gewinnt — dieselbe Rangfolge wie bei ?agent=.
+  useEffect(() => {
+    if (groups.length === 0 || selectedGroupId) return;
+    const paramId = searchParams.get("group");
+    if (paramId && groups.some((g) => g.id === paramId)) {
+      setSelectedGroupId(paramId);
+      setMobileView("chat");
+      return;
+    }
+    const storedId = loadLastGroupId();
+    if (storedId && groups.some((g) => g.id === storedId)) setSelectedGroupId(storedId);
+  }, [groups, selectedGroupId, searchParams]);
+
+  // Eine gelöschte oder verschwundene Gruppe darf die Seite nicht leer lassen.
+  useEffect(() => {
+    if (selectedGroupId && groups.length > 0 && !groups.some((g) => g.id === selectedGroupId)) {
+      setSelectedGroupId(null);
+      saveLastGroupId(null);
+    }
+  }, [groups, selectedGroupId]);
+
+  function handleGroupChanged(updated: GroupDetail) {
+    qc.setQueryData(["group", updated.id], updated);
+    qc.invalidateQueries({ queryKey: ["groups"] });
+  }
+
+  const panelTitle =
+    activePanel === "diff"
+      ? "Diff"
+      : activePanel === "browser"
+        ? "Browser"
+        : activePanel === "doc"
+          ? t("groups.resultPanel")
+          : "";
 
   // Mobile stack navigation. Desktop (≥md) ignores all three: it always shows
   // list + chat side by side, so every branch below resolves via `md:` classes.
-  const onChatScreen = mobileView === "chat" && !!selectedLive;
+  // Auch eine Gruppe ist ein „Chat-Bildschirm" im Handy-Stapel — sonst
+  // tippt man eine Gruppe an und landet wieder in der Liste.
+  const onChatScreen = mobileView === "chat" && (!!selectedLive || !!selectedGroupId);
   const selectedTaskTitle = selectedLive?.current_task_id
     ? tasks.find((task) => task.id === selectedLive.current_task_id)?.title ?? null
     : null;
@@ -314,8 +403,12 @@ function SessionsPageContent() {
               agents={agents}
               tasks={tasks}
               projects={projects}
-              selectedId={selectedLive?.id ?? null}
+              selectedId={selectedGroupId ? null : selectedLive?.id ?? null}
               onSelect={handleSelect}
+              groups={groups}
+              selectedGroupId={selectedGroupId}
+              onSelectGroup={handleSelectGroup}
+              onCreateGroup={() => setCreateGroupOpen(true)}
               variant="list"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
             />
@@ -343,8 +436,12 @@ function SessionsPageContent() {
               agents={agents}
               tasks={tasks}
               projects={projects}
-              selectedId={selectedLive?.id ?? null}
+              selectedId={selectedGroupId ? null : selectedLive?.id ?? null}
               onSelect={handleSelect}
+              groups={groups}
+              selectedGroupId={selectedGroupId}
+              onSelectGroup={handleSelectGroup}
+              onCreateGroup={() => setCreateGroupOpen(true)}
               variant="rail"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
               collapsed={sidebarCollapsed}
@@ -362,7 +459,18 @@ function SessionsPageContent() {
             style={{ background: C.bgSurface }}
             data-testid="chat-column"
           >
-            {isLoading && !selectedLive ? null : (
+            {selectedGroupId && selectedGroup ? (
+              // Gruppenraum statt 1:1-Chat — gleiche Insel, andere Ansicht.
+              // `key` auf der Gruppen-id, damit ein Wechsel den Strom sauber
+              // neu aufbaut (gleiche Begründung wie beim Agenten unten).
+              <GroupChatView
+                key={selectedGroup.id}
+                group={selectedGroup}
+                onBack={() => setMobileView("list")}
+                onGroupChanged={handleGroupChanged}
+                onOpenResult={() => setActivePanel(activePanel === "doc" ? null : "doc")}
+              />
+            ) : isLoading && !selectedLive ? null : (
               // `key` stays on the id, not the object: re-keying on every
               // refetch would remount the chat (and drop its SSE subscription
               // and scroll position) ten times a minute.
@@ -387,7 +495,11 @@ function SessionsPageContent() {
               On mobile the same panels are reached from the chat header's
               options sheet; the rail used to be a `fixed bottom-0` bar there,
               which covered the app's own bottom tab bar. */}
-          <PanelRail active={activePanel} onSelect={setActivePanel} />
+          <PanelRail
+            active={activePanel}
+            onSelect={setActivePanel}
+            only={selectedGroupId ? ["doc"] : ["diff", "browser"]}
+          />
 
           {/* Panel content — desktop: its own island column; mobile: full-
               screen overlay with its own close button (single markup block,
@@ -428,11 +540,30 @@ function SessionsPageContent() {
                   <DiffPanel agentId={selectedLive.id} refreshHot={chatStatus === "working"} />
                 )}
                 {activePanel === "browser" && <BrowserLiveView />}
+                {activePanel === "doc" && selectedGroup && (
+                  <ResultDocPanel
+                    groupId={selectedGroup.id}
+                    latestVersion={selectedGroup.rounds_completed || null}
+                    updating={selectedGroup.status === "running"}
+                  />
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* Gruppe anlegen. Nichts startet dabei automatisch — die frische Gruppe
+          wird nur ausgewählt; die erste Runde löst Mark selbst aus. */}
+      <CreateGroupModal
+        open={createGroupOpen}
+        onClose={() => setCreateGroupOpen(false)}
+        onCreated={(group) => {
+          qc.invalidateQueries({ queryKey: ["groups"] });
+          qc.setQueryData(["group", group.id], group);
+          handleSelectGroup(group.id);
+        }}
+      />
     </AppShell>
   );
 }

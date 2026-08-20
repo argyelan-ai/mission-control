@@ -79,6 +79,43 @@ Ergebnis-Dokument ist V1 (nur der Lead schreibt, Datei unter
   bewusst: sonst verlöre ein frisches Mitglied Marks ersten Auftrag im
   5s-Fenster nach Gruppenerstellung).
 
+## Nachtrag PR B (gleicher Tag)
+
+- **Live-Verhalten vereinfacht (Abweichung vom Plan-Detail):** V1 legt KEINE
+  `GroupRound(kind="live_impulse")`-Zeilen an. Live-Mitchatten ist reine
+  mention-gefilterte Zustellung; Agent-zu-Agent-Ketten deckelt ein
+  Anti-Ping-Pong-Zähler im Antwort-Pfad (`live_max_turns_per_impulse`,
+  gezählt seit der letzten User-/System-Nachricht — ab dem Deckel werden die
+  Mentions gestrichen, der Post bleibt im Protokoll). Budget erfasst damit
+  nur autonome Runden; Live-Plauderei läuft über die globale
+  Nutzungs-Telemetrie. Das `kind`-Feld bleibt für eine spätere echte
+  Live-Runden-Erfassung bestehen.
+- **`approvals.board_id` nullable (Migration 0182):** group_gate-Approvals
+  gehören zu einer Gruppe, nicht zu einem Board. Die globale Pending-Liste
+  zeigt sie weiterhin; board-gescopte Listen filtern sie schlicht nicht ein.
+- **max_rounds zählt PRO LAUF:** `current_round_no` wird bei jedem frischen
+  Start genullt (Resume einer offenen Runde behält die Zähler);
+  `rounds_completed` bleibt Lebenszeit-Statistik.
+
+## Nachtrag PR C — UI (gleicher Tag)
+
+- **Kein Modus-Schalter in der Oberfläche.** Der Kopf zeigt ▶/⏸/⏹ und den
+  Rundenstand; ob die Gruppe gerade „live" oder „autonom" ist, liest man am
+  Status, nicht an einem Umschalter (Nutzerentscheid).
+- **Streng achromatische Sprecher** (Nutzerentscheid): Unterscheidung nur über
+  Avatar + Name. Farbe bleibt Zuständen vorbehalten.
+- **Runden-Trenner über `brief_seq`** statt Text-Parsing des Briefs — dafür
+  trägt die Runden-Antwort dieses Feld.
+- **Wahrhaftige Statuszeile:** Ist der SSE-Strom weg, sagt die Zeile das —
+  sie rät nie einen Zustand. `failed` bekam einen eigenen Zweig, weil es sonst
+  in den Else-Fall „Bereit" gefallen wäre (im Review gefunden).
+- **Zweisprachig:** alle Texte unter `sessions.groups` in `messages/de.json`
+  UND `messages/en.json` (76 Schlüssel, Parität geprüft) — MC ist
+  deutsch *und* englisch, hartcodierte Strings wären ein Rückschritt.
+- **Ein Markdown-Renderer:** `MarkdownContent` wurde aus `ChatMessage.tsx` in
+  ein eigenes Modul gezogen, damit Gruppenraum und 1:1-Chat nicht
+  auseinanderdriften (Verhalten unverändert, bestehende Tests grün).
+
 ## Referenzen
 
 - Betroffene Dateien: `app/models/group.py`, `alembic/versions/0181_agent_groups.py`,
