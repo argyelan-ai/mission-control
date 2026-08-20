@@ -10,7 +10,7 @@
  * this never guesses a plausible-looking status. It says so and points at
  * the terminal, the one place that can't lie.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
@@ -75,21 +75,28 @@ export const WORKING_WORD_INTERVAL_MS = 4000;
  *  kein Timer (kein Rendern im Ruhezustand). */
 function useWorkingWord(active: boolean): string {
   const [tick, setTick] = useState(0);
-  const seed = useRef(0);
-  const wasActive = useRef(false);
+  const [seed, setSeed] = useState(0);
 
-  if (active && !wasActive.current) {
-    seed.current = Math.floor(Math.random() * WORKING_WORDS.length);
-  }
-  wasActive.current = active;
-
+  // Gewuerfelt wird im Effekt, NICHT im Render (Review 20.08.2026). Vorher
+  // standen `seed.current = Math.random()…` und `wasActive.current = active`
+  // im Render-Koerper — beides verbietet React, und beides hatte eine echte
+  // Folge: der Server-Render wuerfelte ein anderes Verb als der Client beim
+  // Hydrieren (Hydration-Mismatch, im Test durch zwei ungleiche
+  // renderToStaticMarkup-Ausgaben belegt), und unter Concurrent Rendering
+  // liess ein verworfener Render `wasActive.current = true` stehen, womit der
+  // naechste Zug NICHT neu wuerfelte — genau das, was die Zufallsauswahl
+  // verhindern soll. Der Effekt haengt ohnehin an `active` und laeuft damit
+  // exakt einmal pro Arbeitsabschnitt. `tick` faengt dabei wieder bei 0 an,
+  // damit das erste Wort eines Zuges sein volles Intervall steht.
   useEffect(() => {
     if (!active) return;
+    setSeed(Math.floor(Math.random() * WORKING_WORDS.length));
+    setTick(0);
     const id = setInterval(() => setTick((t) => t + 1), WORKING_WORD_INTERVAL_MS);
     return () => clearInterval(id);
   }, [active]);
 
-  return WORKING_WORDS[(seed.current + tick) % WORKING_WORDS.length];
+  return WORKING_WORDS[(seed + tick) % WORKING_WORDS.length];
 }
 
 const UNKNOWN_DISPLAY: StatusDisplay = {

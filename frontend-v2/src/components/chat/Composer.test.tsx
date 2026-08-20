@@ -1400,4 +1400,85 @@ describe("Composer", () => {
     expect(palette.className).toContain("right-3");
     expect(palette.className).toContain("min-w-[320px]");
   });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * Review 20.08.2026 — Befund 7: capabilities.effort wurde nach einem
+   * Wechsel nie aufgefrischt. `capabilities` kommt aus historyQuery.data und
+   * wird nur bei `session_changed` neu geholt; `selectEffort` macht bewusst
+   * keine optimistische Umbenennung. Frische Sitzung ohne usage-Ereignis:
+   * Chip steht auf 'medium', der Operator zieht auf 'xhigh', das Backend
+   * bestaetigt — und der Chip blieb die GANZE Sitzung auf 'medium' (ein
+   * ruhender Agent schickt evtl. nie ein usage). Schlimmer: der Weg ZURUECK
+   * auf 'medium' wurde von `if (level === currentEffort) return;` stumm
+   * verschluckt.
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe("effort chip nach einem bestaetigten Wechsel", () => {
+    const CAPS_MED = {
+      effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+      canSwitchEffort: true,
+      effort: "medium",
+    };
+    const chipLevel = () => screen.getByTestId("effort-chip").getAttribute("data-level");
+    const pick = async (index: string) => {
+      await userEvent.setup().click(screen.getByTestId("effort-chip"));
+      const slider = screen.getByTestId("effort-slider");
+      fireEvent.change(slider, { target: { value: index } });
+      fireEvent.pointerUp(slider);
+    };
+
+    it("zeigt die vom Backend bestaetigte Stufe und laesst den Weg zurueck zu", async () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(chipLevel()).toBe("medium");
+
+      await pick("3"); // xhigh
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "xhigh");
+
+      // Und zurueck: darf NICHT stumm verschluckt werden.
+      await pick("1"); // medium
+      await waitFor(() => expect(mockSetEffort).toHaveBeenCalledTimes(2));
+      expect(mockSetEffort).toHaveBeenLastCalledWith("a1", "medium");
+      await waitFor(() => expect(chipLevel()).toBe("medium"));
+    });
+
+    it("laesst ein spaeteres usage-Ereignis wieder gewinnen", async () => {
+      const { rerender } = render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+
+      // Der naechste Zug meldet, was der Agent WIRKLICH faehrt — das gewinnt
+      // immer, auch gegen unsere eigene Bestaetigung.
+      rerender(
+        <Composer agentId="a1" usage={mkUsage({ effort: "low" })} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(chipLevel()).toBe("low");
+    });
+
+    it("vergisst die Bestaetigung beim Agentenwechsel", async () => {
+      const { rerender } = render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+
+      rerender(
+        <Composer agentId="a2" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await waitFor(() => expect(chipLevel()).toBe("medium"));
+    });
+
+    it("uebernimmt nichts, wenn das Backend den Wechsel abgelehnt hat", async () => {
+      mockSetEffort.mockRejectedValueOnce(new Error("kaputt"));
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalled());
+      expect(chipLevel()).toBe("medium");
+    });
+  });
 });

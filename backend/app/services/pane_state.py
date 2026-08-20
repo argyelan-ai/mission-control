@@ -43,7 +43,24 @@ _PROMPT_WINDOW_LINES = 8
 # manche CLI-Versionen den Prompt in eine Box zeichnen (``│ ❯   …   │``). Ein
 # "> " mitten in einer Ausgabe (Zitat, Diff, Log) ist dagegen keine
 # Eingabeaufforderung und darf den Ruhezustand nicht vortaeuschen.
-_PROMPT_LINE_RE = re.compile(r"^[\s│┃|>]*(?:❯|> )")
+#
+# ``>`` ist bewusst KEIN erlaubtes Praefix-Zeichen mehr und ``> `` allein kein
+# Marker mehr (Review 20.08.2026): das alte Muster traf jede Zeile, die mit
+# "> " BEGINNT — "> zitierte Zeile", "  > Blockquote", "> > verschachtelt",
+# "|> Pipe". Mit dem auf 8 Zeilen erweiterten Fenster stehen vier Zeilen echter
+# Ausgabe ueber der Eingabebox: ein bootender Pane, dessen Scrollback auf so
+# einer Zeile endet, galt als "idle" und das Readiness-Gate liess in die halb
+# gestartete TUI tippen.
+#
+# Wie die Eingabezeile in der Flotte WIRKLICH aussieht (20.08.2026 an den
+# laufenden Containern abgelesen):
+#   Claude Code / openclaude : "❯\xa0"              (nbsp, ohne Rahmen)
+#   kimi                     : " │ >            │"  (">" nur INNERHALB der Box)
+# Darum: "❯" darf hinter Einrueckung/Rahmen stehen, ">" nur hinter einem
+# echten Rahmenzeichen plus Abstand. Faellt eine kuenftige CLI mit blankem
+# "> "-Prompt durchs Raster, ist das Ergebnis "unknown" — das Readiness-Gate
+# haelt dann an, statt in einen ungelesenen Pane zu tippen.
+_PROMPT_LINE_RE = re.compile(r"^[\s│┃]*❯|^\s*[│┃|]\s+>")
 _QUESTION_LOOKBACK_LINES = 6
 _FOOTER_LOOKAHEAD_LINES = 6
 

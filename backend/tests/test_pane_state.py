@@ -520,3 +520,60 @@ und noch eine Zeile darunter
 und eine dritte
 """
     assert parse_pane_state(pane, transcript_active=False)["status"] == "unknown"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Review 20.08.2026 — Befund 6: _PROMPT_LINE_RE traf jede Zeile, die mit "> "
+# BEGINNT (Markdown-Zitat, verschachteltes Zitat, Pipe-Operator). Der
+# Kommentar behauptete das Gegenteil, und der Regressionstest darueber prueft
+# nur "> " MITTEN in einer Zeile. Mit dem auf 8 Zeilen erweiterten Fenster
+# werden vier Zeilen echter Ausgabe UEBER der Eingabebox mitgelesen: ein
+# bootender Pane, dessen Scrollback auf so einer Zeile endet, galt als "idle",
+# das Readiness-Gate liess durch, die Nachricht landete in einer halb
+# gestarteten TUI — der im PR selbst benannte Worst Case.
+#
+# Die echte Gestalt der Eingabezeile ist an der laufenden Flotte abgelesen
+# (20.08.2026, docker exec … tmux capture-pane):
+#   Claude Code / openclaude : "❯\xa0"            (nbsp, ohne Rahmen)
+#   kimi                     : " │ >           │" (">" NUR in einer Rahmenbox)
+# Ein blankes "> " am Zeilenanfang ohne Rahmen kommt in der Flotte nicht vor —
+# ein Markdown-Zitat dagegen staendig.
+
+def test_markdown_quote_lines_are_not_prompts():
+    from app.services.pane_state import _PROMPT_LINE_RE
+
+    for zeile in (
+        "> zitierte Markdown-Zeile",
+        "   > eingerueckter Blockquote",
+        "> > verschachteltes Zitat",
+        "|> Pipe-Operator",
+        ">>> Python-REPL-Ausgabe",
+    ):
+        assert _PROMPT_LINE_RE.match(zeile) is None, zeile
+
+
+def test_real_prompt_shapes_still_match():
+    from app.services.pane_state import _PROMPT_LINE_RE
+
+    for zeile in (
+        "❯ ",                     # Claude Code / openclaude, nbsp
+        "❯ Try \"fix lint errors\"",   # mit Platzhaltertext
+        "│ ❯            │",  # in einer Rahmenbox
+        " │ >                     │",  # kimi
+    ):
+        assert _PROMPT_LINE_RE.match(zeile) is not None, zeile
+
+
+def test_booting_pane_ending_on_a_quote_line_stays_unknown():
+    """Die Bug-Form am ganzen Parser: ein bootender Pane, dessen sichtbarer
+    Rest auf einem Markdown-Zitat endet. Muss "unknown" bleiben (das
+    Readiness-Gate haelt dann an), nicht "idle"."""
+    from app.services.pane_state import parse_pane_state
+
+    pane = """\
+Starte Sitzung…
+Aus der Anleitung:
+> Zuerst das Repo klonen
+> dann die Abhaengigkeiten installieren
+"""
+    assert parse_pane_state(pane, transcript_active=False)["status"] == "unknown"
