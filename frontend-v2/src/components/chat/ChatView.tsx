@@ -38,6 +38,7 @@ import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
+import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 
@@ -69,6 +70,67 @@ const SCROLL_LOCK_THRESHOLD_PX = 48;
  * er vorher sass, die Flaeche reicht nur bis an den Bildschirmrand.
  */
 const TOUCH_TARGET = "min-w-touch min-h-touch -m-1";
+
+/**
+ * Breiten der Handy-Kopfzeile in px, alle im Browser nachgemessen
+ * (Chromium, 390x844, echte JetBrains Mono) — nicht geschaetzt.
+ *
+ * `control` ist das AUSSENMASS eines runden Knopfes: 44px Trefferflaeche
+ * minus `-m-1` auf beiden Seiten (siehe `TOUCH_TARGET`).
+ */
+export const MOBILE_HEADER_METRICS = {
+  headerPaddingLeft: 4, // pl-1
+  headerPaddingRight: 8, // pr-2
+  control: 36, // Zurueck, Mikrofon, "…"
+  gap: 8, // gap-2
+  badgeDot: 6, // w-1.5
+  badgeLive: 38, // "live"
+  badgeEnded: 56, // "beendet"
+} as const;
+
+export type HeaderBadge = "none" | "dot" | "live" | "ended";
+
+/**
+ * Wie viel Platz die Kopfzeile links und rechts fuer ihre Knoepfe braucht.
+ *
+ * Vorher stand dort pauschal `px-14` (56px je Seite). Das war zu wenig: die
+ * rechte Gruppe belegt mit dem Abzeichen "beendet" 152px, und der Titel lief
+ * ihr entgegen — im Browser nachgemessen ragte die Aufgaben-Zeile 50px hinein.
+ * Das Abzeichen hat `relative z-10` samt deckendem Hintergrund und malte damit
+ * ueber den Namen.
+ *
+ * BEWUSSTER TAUSCH: die Reservierung ist ASYMMETRISCH, der Name sitzt also
+ * mittig im FREIEN Platz und nicht exakt in der Bildmitte. Symmetrisch
+ * (2x152px) blieben auf einem 390px-Telefon 86px fuer den Namen uebrig — dann
+ * waere "mc-sessions-explore" auf ein paar Zeichen zusammengeschnitten. Den
+ * Namen ganz lesen zu koennen wiegt schwerer als optisch exakte Mitte; wer die
+ * exakte Mitte will, muss dem Kopf Ballast nehmen (das Abzeichen ist mit bis
+ * zu 56px der breiteste Posten).
+ */
+export function headerSideReservation(opts: {
+  hasBack: boolean;
+  badge: HeaderBadge;
+}): { left: number; right: number } {
+  const M = MOBILE_HEADER_METRICS;
+  const badgeWidth =
+    opts.badge === "ended"
+      ? M.badgeEnded
+      : opts.badge === "live"
+        ? M.badgeLive
+        : opts.badge === "dot"
+          ? M.badgeDot
+          : 0;
+  return {
+    left: M.headerPaddingLeft + (opts.hasBack ? M.control : 0),
+    // Mikrofon + "…" stehen immer, das Abzeichen nur manchmal.
+    right:
+      M.headerPaddingRight +
+      M.control +
+      M.gap +
+      M.control +
+      (badgeWidth > 0 ? M.gap + badgeWidth : 0),
+  };
+}
 
 function isSidechain(ev: TimelineChatEvent): boolean {
   // CommandEvent carries no `sidechain` field (chatTypes.ts) — narrow safely
@@ -450,6 +512,16 @@ export function ChatView({
   // a missing server field must never be read as "ended".
   const aliveness = resolveAliveness(stream.session);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
+  // Welches Abzeichen die Kopfzeile gerade zeigt — dieselbe Bedingung wie
+  // unten im JSX, hier einmal als Wert, damit die Platzberechnung nicht raet.
+  const headerBadge: HeaderBadge = !(canChat && stream.session)
+    ? "none"
+    : aliveness === "idle"
+      ? "dot"
+      : aliveness === "active"
+        ? "live"
+        : "ended";
+  const titleSide = headerSideReservation({ hasBack: !!onBack, badge: headerBadge });
   // Die Beschriftung der aktuellen Stufe kommt aus dem Katalog, nicht aus der
   // Liste selbst (chatOptions.ts fuehrt nur Schluessel) — sonst stuende hier
   // wieder ein deutsches Wort in der englischen Oberflaeche.
@@ -512,9 +584,26 @@ export function ChatView({
             neben den Schaltern rechts keinen Bezugspunkt. */}
         <div
           data-testid="chat-header-title"
-          className="absolute inset-x-0 px-14 flex flex-col items-center justify-center text-center pointer-events-none
+          // Die Reservierung kommt als CSS-Variable herein, NICHT als
+          // Inline-Padding: ein Inline-Stil schlaegt jede Klasse, auch
+          // `md:px-0` — auf dem Desktop bliebe der Handy-Platzhalter stehen.
+          // Als Variable in einer Utility-Klasse gilt die md-Regel wieder.
+          style={
+            {
+              "--chat-title-l": `${titleSide.left}px`,
+              "--chat-title-r": `${titleSide.right}px`,
+            } as React.CSSProperties
+          }
+          // `items-center` IST die Zentrierung auf dem Handy: der Block ist
+          // eine Spalte, seine Kinder sind schmaler als er. `justify-center`
+          // und `text-center` standen hier frueher mit — beide wirkungslos
+          // (im Browser nachgemessen: Name identisch bei x=120.4/w=149.2),
+          // weil der Block `absolute` ohne `top`/`bottom` ist und seine Hoehe
+          // exakt dem Inhalt entspricht. Es gibt nichts zu verteilen.
+          className="absolute inset-x-0 pl-[var(--chat-title-l)] pr-[var(--chat-title-r)]
+                     flex flex-col items-center pointer-events-none
                      md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline
-                     md:justify-start md:gap-2 md:text-left md:pointer-events-auto"
+                     md:gap-2 md:pointer-events-auto"
         >
           <span
             className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate max-w-full md:shrink-0"
@@ -567,6 +656,22 @@ export function ChatView({
             aria-label={t("sessionWaitingAtPrompt")}
           />
         )}
+
+        {/* Sprachbedienung. Auf dem Chat-Schirm gibt es die App-Leiste nicht
+            mehr (AppShell `mobileChromeless`), und ihr Knopf war der EINZIGE
+            Zugang auf dem Handy: die Sidebar ist `hidden md:flex`, ein
+            Tastenkuerzel existiert nicht. Ohne diesen Ersatz waere die
+            Sprachbedienung auf dem Telefon ersatzlos weggefallen — ausgerechnet
+            dort, wo Sprechen am meisten bringt.
+
+            Warum in den Kopf und nicht ins Optionen-Blatt: Sprache ist ein
+            Griff fuer besetzte Haende. Zwei Antippen bis zum Mikrofon nehmen
+            ihm genau den Vorteil. Der Knopf bringt seine 44px-Trefferflaeche
+            selbst mit; `-m-1` am Rahmen haelt den Kopf auf seiner Hoehe,
+            dieselbe Rechnung wie bei `TOUCH_TARGET`. */}
+        <span className="flex md:hidden -m-1">
+          <VoiceButton size={36} />
+        </span>
 
         <button
           type="button"

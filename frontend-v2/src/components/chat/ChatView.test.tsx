@@ -17,7 +17,14 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ChatView, buildTimelineItems, modelBadgeUuids, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
+import {
+  ChatView,
+  buildTimelineItems,
+  modelBadgeUuids,
+  ACTIVITY_GROUP_MIN_SIZE,
+  headerSideReservation,
+  MOBILE_HEADER_METRICS,
+} from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
@@ -55,6 +62,17 @@ vi.mock("@/lib/api", () => ({
       setEffort: vi.fn().mockResolvedValue(undefined),
     },
   },
+}));
+// Die echte VoiceButton haengt an <VoiceProvider>, und der baut beim Mounten
+// einen LiveKit-Room auf — fuer einen Kopfzeilen-Test viel zu schwer. Der Stub
+// haelt genau das fest, was ChatView zu verantworten hat: dass auf dem Handy
+// ueberhaupt ein Zugang zur Sprachbedienung im Kopf steht.
+vi.mock("@/components/voice/VoiceWidget", () => ({
+  VoiceButton: () => (
+    <button type="button" aria-label="Start voice assistant">
+      mic
+    </button>
+  ),
 }));
 vi.mock("./TerminalPanel", async () => {
   const actual = await vi.importActual<typeof import("./TerminalPanel")>("./TerminalPanel");
@@ -1091,18 +1109,70 @@ describe("ChatView", () => {
     });
   });
 
+  // Reine Rechenfunktion — hier prueft der Test WIRKUNG, nicht Klassennamen.
+  // jsdom rechnet kein Layout, aber diese Zahlen entscheiden ueber die
+  // Ueberdeckung, und sie sind ohne Browser pruefbar.
+  describe("Handy-Kopfzeile — Platz fuer den Titel", () => {
+    const M = MOBILE_HEADER_METRICS;
+
+    it("reserviert rechts so viel, wie die Knopfgruppe wirklich braucht", () => {
+      // Vorher stand dort pauschal px-14 (56px). Im Browser gemessen
+      // (390x844): die rechte Gruppe belegt mit dem Abzeichen "beendet"
+      // 152px — die Aufgaben-Zeile lief 50px in sie hinein, und das Abzeichen
+      // hat `relative z-10` samt deckendem Hintergrund, malte also ueber den
+      // Namen.
+      const r = headerSideReservation({ hasBack: true, badge: "ended" });
+      expect(r.right).toBe(
+        M.headerPaddingRight + M.control + M.gap + M.control + M.gap + M.badgeEnded
+      );
+      expect(r.right).toBe(152);
+      expect(r.right).toBeGreaterThan(56);
+    });
+
+    it("gibt den Platz wieder frei, wenn das Abzeichen schrumpft", () => {
+      const ended = headerSideReservation({ hasBack: true, badge: "ended" });
+      const dot = headerSideReservation({ hasBack: true, badge: "dot" });
+      const none = headerSideReservation({ hasBack: true, badge: "none" });
+      expect(dot.right).toBeLessThan(ended.right);
+      expect(none.right).toBeLessThan(dot.right);
+      // Ohne Abzeichen bleiben genau Mikrofon + "…" plus Polster.
+      expect(none.right).toBe(M.headerPaddingRight + M.control + M.gap + M.control);
+    });
+
+    it("reserviert links nur, was der Zurück-Pfeil braucht", () => {
+      expect(headerSideReservation({ hasBack: true, badge: "none" }).left).toBe(
+        M.headerPaddingLeft + M.control
+      );
+      expect(headerSideReservation({ hasBack: false, badge: "none" }).left).toBe(
+        M.headerPaddingLeft
+      );
+    });
+
+    it("lässt auf einem 390px-Telefon im schlimmsten Fall noch Text übrig", () => {
+      // Der schlimmste Fall ist "beendet" + Zurück-Pfeil. Bliebe hier nichts
+      // uebrig, waere die Reservierung zwar ueberdeckungsfrei, aber nutzlos —
+      // der Name waere auf ein Ellipsen-Zeichen zusammengeschnitten.
+      const r = headerSideReservation({ hasBack: true, badge: "ended" });
+      expect(390 - r.left - r.right).toBeGreaterThanOrEqual(180);
+    });
+  });
+
   describe("Handy-Kopfzeile", () => {
     beforeEach(() => {
       mockUseChatStream.mockReturnValue(mkStream());
     });
 
-    it("legt den Namen in einen eigenen, mittigen Block", () => {
+    it("legt den Namen in einen eigenen Block, der aus dem Fluss genommen ist", () => {
       renderChatView({ onBack: vi.fn() });
       const title = screen.getByTestId("chat-header-title");
-      // Absolut zentriert, damit der Name wirklich in der Bildmitte steht und
-      // nicht davon abhängt, wie breit Zurück-Pfeil und "…" gerade sind.
+      // Absolut, damit die Knopfgruppen seine Position nicht verschieben; die
+      // Zentrierung traegt `items-center` (siehe eigener Test).
       expect(title.className).toContain("absolute");
-      expect(title.className).toContain("text-center");
+      expect(title.className).toContain("items-center");
+      // `text-center` stand hier frueher — tote Klasse: die beiden Spannen
+      // sind `whitespace`-frei umbruchlos und schrumpfen auf ihren Inhalt,
+      // eine Textausrichtung hat daran nichts auszurichten (nachgemessen).
+      expect(title.className).not.toContain("text-center");
     });
 
     it("hält oben den Notch frei, weil keine App-Leiste mehr darüber liegt", () => {
@@ -1157,13 +1227,34 @@ describe("ChatView", () => {
 
     it("zentriert den Namen NUR auf dem Handy, nicht auf dem Desktop", () => {
       // Operator-Befund 19.08.2026 (Screenshot): auf dem Desktop stand "Boss"
-      // weiterhin mittig. Ursache: fuer md war zwar `items-baseline` gesetzt,
-      // aber `justify-center` aus der Handy-Anordnung blieb stehen — der Block
-      // sass links und zentrierte seinen Inhalt trotzdem.
+      // weiterhin mittig. Der Test prueft jetzt den MECHANISMUS, der die
+      // Zentrierung wirklich traegt: auf dem Handy ist der Block eine Spalte
+      // mit `items-center`, ab md eine Zeile mit `md:items-baseline`.
+      //
+      // Frueher stand hier `justify-center`. Das war eine tote Klasse — im
+      // Browser nachgemessen (390x844): mit und ohne sie sitzt der Name bei
+      // exakt x=120.4/w=149.2. Der Block ist `absolute` ohne `top`/`bottom`,
+      // seine Hoehe ergibt sich aus dem Inhalt, es gibt nichts zu verteilen.
+      // Der Test waere also rot geworden, sobald jemand richtig aufgeraeumt
+      // haette.
       renderChatView({ onBack: vi.fn() });
       const title = screen.getByTestId("chat-header-title");
-      expect(title.className).toContain("justify-center");
-      expect(title.className).toContain("md:justify-start");
+      expect(title.className).toContain("items-center");
+      expect(title.className).toContain("md:items-baseline");
+      expect(title.className).not.toContain("justify-center");
+    });
+
+    it("behält auf dem Handy einen Zugang zur Sprachbedienung", () => {
+      // Der Chat-Schirm blendet die App-Leiste aus (AppShell `mobileChromeless`),
+      // und deren Knopf war der EINZIGE Zugang zur Sprachbedienung auf dem
+      // Handy — Sidebar ist `hidden md:flex`, ein Tastenkuerzel gibt es nicht.
+      // Ohne Ersatz war die Sprachbedienung auf dem Telefon schlicht weg.
+      renderChatView({ onBack: vi.fn() });
+      const mic = screen.getByLabelText("Start voice assistant");
+      expect(mic).toBeInTheDocument();
+      // Nur auf dem Handy: auf dem Desktop steht der Knopf in der Sidebar,
+      // zweimal derselbe Schalter waere ein Duplikat im Dokument.
+      expect(mic.parentElement?.className).toContain("md:hidden");
     });
 
     it("zeigt die Aufgaben-Zeile mittig unter dem Namen", () => {
