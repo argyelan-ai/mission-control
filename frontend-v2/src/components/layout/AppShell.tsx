@@ -108,8 +108,9 @@ export default function AppShell({
               // App-Leiste frei. Bliebe sie stehen, wäre statt der Leiste ein
               // gleich grosses Loch da — die Seite wäre kürzer statt höher.
               // `md:pt-6` hält den Desktop-Abstand, den main-content-pt dort
-              // beisteuert (1.5rem), unverändert.
-              mobileChromeless ? "pt-0 md:pt-6" : "main-content-pt"
+              // beisteuert (1.5rem), unverändert. Ein "pt-0" davor braucht es
+              // nicht — Tailwinds Preflight setzt padding ohnehin auf 0.
+              mobileChromeless ? "md:pt-6" : "main-content-pt"
             }`}
           >
             <div className="mx-auto w-full max-w-[1600px] flex flex-col flex-1 min-h-0">

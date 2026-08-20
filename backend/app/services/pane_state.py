@@ -350,7 +350,17 @@ async def capture_pane(agent) -> str | None:
 _PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
 _process_alive_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
-
+# Welcher PROZESSNAME gehoert zu welchem Harness. ``pgrep -x`` vergleicht den
+# Basenamen EXAKT — ``docker/mc-claude-agent/recycler.sh:12`` sagt es
+# woertlich: "pgrep -x claude (exact basename). openclaude matched NICHT".
+# ``docker/mc-agent-base/start-claude.sh`` startet genau dieses ``openclaude``.
+#
+# Ohne diese Tabelle bekam JEDE openclaude-Sitzung ``rc=1`` -> alive=False ->
+# ``resolve_aliveness`` == "ended", sobald sie 60s still war; das Frontend
+# gab ``sessionLive=false`` und der Composer blendete Senden UND Stop ganz
+# aus. Nach einer Minute Stille war der Agent also nicht mehr ansprechbar —
+# ausgerechnet in der Runde, die das Senden an openclaude erst moeglich
+# gemacht hat.
 async def process_alive(agent, process_name: str) -> bool | None:
     """Cheap liveness probe independent of pane TEXT: is the agent's actual
     CLI process still running? ``docker exec ... pgrep -x <process_name>``

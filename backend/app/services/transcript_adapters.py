@@ -40,6 +40,7 @@ from typing import Any, Callable
 #: (``None``, Alt-Datensaetze ohne Harness) faellt ebenfalls hierher — das war
 #: das Verhalten vor diesem Register und bleibt es.
 CLAUDE = "claude"
+OPENCLAUDE = "openclaude"
 OMP = "omp"
 
 
@@ -102,11 +103,23 @@ class TranscriptAdapter:
     process_name: str
 
 
-def _claude_adapter() -> TranscriptAdapter:
+def _claude_adapter(
+    name: str = CLAUDE, process_name: str = "claude"
+) -> TranscriptAdapter:
+    """Der Claude-Code-Adapter — und zugleich der von openclaude.
+
+    openclaude ist ein Fork von Claude Code: Transkript-Format, Pane-Marker
+    und Bereitschafts-Erkennung sind nachweislich dieselben (am echten Pane
+    gegengeprueft, nur gelesen). Verschieden ist einzig, wie der Prozess im
+    Container HEISST — ``pgrep -x`` vergleicht exakt, und eine Sitzung, die
+    unter ``openclaude`` laeuft, waere unter ``claude`` gesucht "beweisbar
+    beendet". Darum eine Fabrik mit zwei Registrierungen statt einer Kopie:
+    faellt am Format je etwas auseinander, ist hier die Stelle dafuer.
+    """
     from app.services import pane_state, transcript_chat
 
     return TranscriptAdapter(
-        name=CLAUDE,
+        name=name,
         resolve_transcript_dir=transcript_chat.resolve_transcript_dir,
         find_active_session=transcript_chat.find_active_session,
         session_scan_root=lambda session_path: session_path.parent,
@@ -122,7 +135,7 @@ def _claude_adapter() -> TranscriptAdapter:
             transcript_chat.ChatTailerManager._transcript_suggests_turn_ended
         ),
         parse_pane_state=pane_state.parse_pane_state,
-        process_name="claude",
+        process_name=process_name,
     )
 
 
@@ -146,8 +159,20 @@ def _omp_adapter() -> TranscriptAdapter:
 
 _BUILDERS: dict[str, Callable[[], TranscriptAdapter]] = {
     CLAUDE: _claude_adapter,
+    OPENCLAUDE: lambda: _claude_adapter(OPENCLAUDE, process_name=OPENCLAUDE),
     OMP: _omp_adapter,
 }
+
+#: Harnesses mit eigener Pane-Sonde — und damit die, bei denen ein
+#: Bereitschafts-Tor vor dem Senden ueberhaupt eine Aussage treffen kann.
+#:
+#: Abgeleitet aus der Registrierung, nicht von Hand gepflegt: wer einen
+#: Adapter ergaenzt, hat damit eine Sonde, und das Tor gilt sofort. Eine
+#: zweite, handgefuehrte Liste war genau der Fehler, den diese Zusammen-
+#: fuehrung aufgeraeumt hat — sie waere beim naechsten Harness still
+#: auseinandergelaufen, und ein Agent haette Nachrichten ungeprueft in eine
+#: womoeglich noch bootende TUI bekommen, ohne dass ein Test rot wird.
+PANE_PROBED_HARNESSES = frozenset(_BUILDERS)
 
 
 def adapter_for(agent: Any | None) -> TranscriptAdapter:
