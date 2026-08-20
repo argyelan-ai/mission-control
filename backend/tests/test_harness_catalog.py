@@ -216,7 +216,8 @@ async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_v
 
     async def _discover(a):
         discovery_calls["n"] += 1
-        return [{"command": "haiku", "label": "Haiku"}]
+        return {"models": [{"command": "haiku", "label": "Haiku"}],
+                "effort": {"supported": None, "model": None, "level": None}}
 
     monkeypatch.setattr(hc, "resolve_cli_version", _version)
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _discover)
@@ -239,7 +240,8 @@ async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monk
         return "2.1.234"
 
     async def _discover(a):
-        return [{"command": "opus", "label": "Opus"}]
+        return {"models": [{"command": "opus", "label": "Opus"}],
+                "effort": {"supported": None, "model": None, "level": None}}
 
     monkeypatch.setattr(hc, "resolve_cli_version", _version)
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _discover)
@@ -247,8 +249,10 @@ async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monk
     result = await hc.discover_model_catalog(agent)
     assert result == [{"command": "opus", "label": "Opus"}]
 
-    cached = await redis_env.get(hc.RedisKeys.model_catalog("claude", "2.1.234", "rex"))
-    assert json.loads(cached) == [{"command": "opus", "label": "Opus"}]
+    # Seit 19.08.2026 liegt ein Objekt im Cache (Modelle UND Effort-Aussage
+    # aus demselben Wegwerf-Lauf), nicht mehr die blanke Liste.
+    cached = json.loads(await redis_env.get(hc.RedisKeys.model_catalog("claude", "2.1.234", "rex")))
+    assert cached["models"] == [{"command": "opus", "label": "Opus"}]
 
 
 async def test_discover_model_catalog_discovery_failure_returns_empty_not_raises(monkeypatch, redis_env):
@@ -280,7 +284,8 @@ async def test_discover_model_catalog_concurrent_request_skips_when_lock_held(mo
 
     async def _discover(a):
         discovery_calls["n"] += 1
-        return [{"command": "opus", "label": "Opus"}]
+        return {"models": [{"command": "opus", "label": "Opus"}],
+                "effort": {"supported": None, "model": None, "level": None}}
 
     monkeypatch.setattr(hc, "resolve_cli_version", _version)
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _discover)

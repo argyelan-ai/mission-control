@@ -11,7 +11,14 @@ import json
 import os
 import time
 
+import pytest
+
+from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import read_history
+
+#: Der Claude-Adapter, den diese Datei durchgehend testet. ``read_history``
+#: verlangt ihn ausdruecklich — es gibt keinen stillen Vorgabewert mehr.
+CLAUDE = adapter_for(None)
 
 # ── Fixture builders ─────────────────────────────────────────────────────────
 
@@ -160,11 +167,28 @@ _EXPECTED_KIND_UUIDS = [
 # ── merge + dedup + session metadata ─────────────────────────────────────────
 
 
+def test_read_history_demands_an_adapter(tmp_path):
+    """Kein stiller Rueckfall auf Claude Code mehr.
+
+    Der frueher eingebaute ``adapter=None`` -> ``adapter_for(None)`` gab
+    JEDEM Pfad den Claude-Parser, egal welcher Harness ihn geschrieben hat.
+    Auf einem echten omp-Transkript lieferte das NULL Ereignisse bei
+    gesetztem ``startedAt`` — eine gesund aussehende, leere Sitzung. Genau
+    die stille Falschantwort, die dieser Umbau beseitigen soll.
+    ``resolve_aliveness`` entscheidet ausserdem umgekehrt
+    (``adapter_for(agent)``); zwei widerspruechliche Rueckfaelle sind
+    schlimmer als gar keiner."""
+    f = tmp_path / "s.jsonl"
+    _write_jsonl(f, [_user("u1", "2026-01-01T00:00:00Z", "hallo")])
+    with pytest.raises(TypeError):
+        read_history(f, limit=200)
+
+
 def test_read_history_merges_tool_result_and_dedups(tmp_path):
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     events = result["events"]
 
     # 8 lines in, 1 exact repeat deduped, 1 tool_result merged (not a
@@ -185,7 +209,7 @@ def test_read_history_internal_tool_result_never_in_output(tmp_path):
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
 
     assert all(e["kind"] != "_tool_result" for e in result["events"])
 
@@ -200,7 +224,7 @@ def test_read_history_tool_result_error_flips_status(tmp_path):
     ]
     _write_jsonl(f, lines)
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
     assert tool_event["status"] == "error"
@@ -216,7 +240,7 @@ def test_read_history_result_truncated_to_4000_chars(tmp_path):
     ]
     _write_jsonl(f, lines)
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
     assert len(tool_event["result"]) == 4000
@@ -227,7 +251,7 @@ def test_read_history_unmatched_tool_result_is_dropped_silently(tmp_path):
     lines = [_tool_result("o1", "2026-08-13T10:00:00Z", "no-such-tool", "orphan result")]
     _write_jsonl(f, lines)
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
 
     assert result["events"] == []
 
@@ -253,7 +277,7 @@ def test_read_history_parallel_tool_results_match_by_toolUseId(tmp_path):
     ]
     _write_jsonl(f, lines)
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     tools = {e["toolUseId"]: e for e in result["events"] if e["kind"] == "tool"}
 
     assert tools.keys() == {"pt1", "pt2"}
@@ -276,7 +300,7 @@ def test_read_history_edit_stats_computed_from_old_new_string(tmp_path):
     )
     _write_jsonl(f, [line])
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
     assert tool_event["stats"] == {"additions": 3, "deletions": 2}
@@ -289,7 +313,7 @@ def test_read_history_no_stats_for_non_edit_write_tools(tmp_path):
     )
     _write_jsonl(f, [line])
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
     assert tool_event["stats"] is None
@@ -307,7 +331,7 @@ def test_read_history_no_stats_when_write_has_no_old_new_string(tmp_path):
     )
     _write_jsonl(f, [line])
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
     assert tool_event["stats"] is None
@@ -320,7 +344,7 @@ def test_read_history_default_limit_returns_newest_and_sets_hasMore(tmp_path):
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=3)
+    result = read_history(f, limit=3, adapter=CLAUDE)
 
     assert [(e["kind"], e["uuid"]) for e in result["events"]] == [
         ("message", "h5"),
@@ -334,7 +358,7 @@ def test_read_history_before_uuid_pages_backward(tmp_path):
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=2, before_uuid="h6")
+    result = read_history(f, limit=2, before_uuid="h6", adapter=CLAUDE)
 
     assert [(e["kind"], e["uuid"]) for e in result["events"]] == [
         ("message", "h4"),
@@ -349,7 +373,7 @@ def test_read_history_before_uuid_excludes_whole_entry_not_just_first_event(tmp_
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=200, before_uuid="h2")
+    result = read_history(f, limit=200, before_uuid="h2", adapter=CLAUDE)
 
     assert [(e["kind"], e["uuid"]) for e in result["events"]] == [("message", "h1")]
     assert result["hasMore"] is False
@@ -359,7 +383,7 @@ def test_read_history_before_uuid_reaching_start_sets_hasMore_false(tmp_path):
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=200, before_uuid="h4")
+    result = read_history(f, limit=200, before_uuid="h4", adapter=CLAUDE)
 
     assert [(e["kind"], e["uuid"]) for e in result["events"]] == [
         ("message", "h1"),
@@ -373,7 +397,7 @@ def test_read_history_before_uuid_unknown_returns_empty_page(tmp_path):
     f = tmp_path / "session.jsonl"
     _write_jsonl(f, _history_lines())
 
-    result = read_history(f, limit=200, before_uuid="does-not-exist")
+    result = read_history(f, limit=200, before_uuid="does-not-exist", adapter=CLAUDE)
 
     assert result["events"] == []
     assert result["hasMore"] is False
@@ -388,7 +412,7 @@ def test_read_history_live_flag_recent(tmp_path):
     now = time.time()
     os.utime(f, (now, now))
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
 
     assert result["session"]["live"] is True
 
@@ -399,13 +423,13 @@ def test_read_history_live_flag_stale(tmp_path):
     old = time.time() - 300
     os.utime(f, (old, old))
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
 
     assert result["session"]["live"] is False
 
 
 def test_read_history_missing_file_returns_empty_session(tmp_path):
-    result = read_history(tmp_path / "does-not-exist.jsonl", limit=200)
+    result = read_history(tmp_path / "does-not-exist.jsonl", limit=200, adapter=CLAUDE)
 
     assert result == {
         "events": [],
@@ -429,7 +453,7 @@ def test_read_history_malformed_and_blank_lines_skipped(tmp_path):
         + "\n"
     )
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
 
     assert [(e["kind"], e["uuid"]) for e in result["events"]] == [
         ("message", "m1"),
@@ -452,7 +476,7 @@ def test_read_history_surfaces_string_content_user_turn(tmp_path):
     }
     _write_jsonl(f, [_user("m1", "2026-08-13T10:00:00Z", "hi"), string_content_line])
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
 
     assert [(e["kind"], e["uuid"], e.get("text")) for e in result["events"]] == [
         ("message", "m1", "hi"),
@@ -502,7 +526,7 @@ def test_read_history_usage_event_source_cli_when_statusline_fresh(tmp_path):
         )
     )
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     usage = next(e for e in result["events"] if e["kind"] == "usage")
 
     assert usage["usedPct"] == 37.5
@@ -517,7 +541,7 @@ def test_read_history_usage_event_source_estimate_when_no_statusline_state(tmp_p
     f, _claude_config_root = _session_file(tmp_path)
     _write_jsonl(f, [_assistant_usage("u1", "2026-08-13T10:00:00Z")])
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     usage = next(e for e in result["events"] if e["kind"] == "usage")
 
     assert usage["usedPct"] is None
@@ -546,7 +570,7 @@ def test_read_history_usage_event_source_estimate_when_statusline_stale(tmp_path
     stale = time.time() - 300
     os.utime(state_file, (stale, stale))
 
-    result = read_history(f, limit=200)
+    result = read_history(f, limit=200, adapter=CLAUDE)
     usage = next(e for e in result["events"] if e["kind"] == "usage")
 
     assert usage["source"] == "estimate"

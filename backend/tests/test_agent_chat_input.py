@@ -23,6 +23,25 @@ from httpx import AsyncClient
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _no_effort_probe(monkeypatch):
+    """``effort_capabilities`` fragt seit 19.08.2026 den ``/model``-Picker, ob
+    das MODELL des Agenten ueberhaupt Effort-Stufen kennt. Ohne Stub wuerde
+    jeder Test hier ein echtes ``docker exec`` absetzen (dieselbe
+    Real-Host-Klasse wie die gemockten Subprozess-Aufrufe weiter unten) —
+    und zwar fuer eine Frage, die keiner dieser Tests stellt.
+
+    ``supported=None`` ist die ehrliche Vorgabe: "nicht ermittelt" — genau
+    der Zustand, in dem der Regler wie bisher schaltbar bleibt. Die
+    modellabhaengigen Faelle stehen in tests/test_openclaude_capabilities.py."""
+    from app.services import agent_chat_input
+
+    async def _unknown(agent, model=None):
+        return {"supported": None, "model": None, "level": None}
+
+    monkeypatch.setattr(agent_chat_input, "discover_effort_support", _unknown)
+
+
 class _StubAgent:
     """Duck-typed stand-in for the DB-backed Agent row — mirrors the
     ``agent.slug`` / ``agent.agent_runtime`` contract ``_target_kind`` reads,
@@ -1035,6 +1054,9 @@ async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch
         # Kein settings.json im tmp-Home -> ehrliches None statt Ratewert.
         "effort": None,
         "effortShared": False,
+        # Schaltbar -> kein Grund noetig. Der Grund traegt nur den Fall
+        # "geht nicht, und zwar deswegen" (s. test_openclaude_capabilities).
+        "effortReason": None,
     }
     # Same single-source constant set_effort validates against — no drift.
     assert caps["effortLevels"] == list(agent_chat_input.ALLOWED_EFFORT_LEVELS)
@@ -1102,7 +1124,10 @@ async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
     for harness in ("kimi", "omp"):
         agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness=harness)
         caps = await agent_chat_input.effort_capabilities(agent)
-        assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+        assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None,
+                        "effortShared": False, "effortReason": caps["effortReason"],
+                        "effortModel": None}
+        assert caps["effortReason"] in ("foreign_harness", "no_pane")
         slash = await agent_chat_input.slash_command_capabilities(agent)
         assert slash == {"slashCommands": []}
         models = await agent_chat_input.model_options_capabilities(agent)
@@ -1129,6 +1154,7 @@ async def test_effort_capabilities_host_claude_gets_ladder_but_no_switch(monkeyp
         "canSwitchEffort": True,   # seit 19.08.2026: Bridge tippt, Transkript verifiziert
         "effort": None,
         "effortShared": True,      # Boss teilt ~/.claude/settings.json mit dem Operator
+        "effortReason": None,
     }
 
 
@@ -1215,24 +1241,69 @@ async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
     assert sent == []
 
 
-async def test_send_text_skips_readiness_gate_for_foreign_cli(monkeypatch):
-    """Sparky-Befund (19.08.2026): das Readiness-Gate liest mit Claude-Regeln —
-    eine omp/kimi-TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
-    Fuer fremde Harnesses wird blind zugestellt."""
+async def test_send_text_skips_readiness_gate_for_a_harness_without_a_pane_probe(monkeypatch):
+    """Sparky-Befund (19.08.2026): das Readiness-Gate las mit Claude-Regeln —
+    eine fremde TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
+    Fuer einen Harness OHNE eigene Pane-Sonde (kimi) bleibt es deshalb aus:
+    keine Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung."""
     from app.services import agent_chat_input
 
     calls: list[list[str]] = []
     async def _fake_run(argv): calls.append(argv)
     async def _fake_marker(slug): pass
     async def _boom(agent):
-        raise AssertionError("readiness gate darf fuer fremde CLIs nicht laufen")
+        raise AssertionError("readiness gate darf ohne eigene Pane-Sonde nicht laufen")
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
     monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
     monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _boom)
 
+    agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness="kimi")
+    await agent_chat_input.send_text(agent, "hallo kimi")
+    assert any("hallo kimi" in " ".join(c) for c in calls)
+
+
+async def test_send_text_runs_the_readiness_gate_for_omp(monkeypatch):
+    """Seit es eine omp-Pane-Sonde gibt, gilt das Tor auch dort — sonst
+    landet eine Nachricht wieder in einer bootenden TUI (genau der Befund,
+    fuer den das Tor ueberhaupt gebaut wurde)."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    gated: list[object] = []
+    async def _fake_run(argv): calls.append(argv)
+    async def _fake_marker(slug): pass
+    async def _gate(agent): gated.append(agent)
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
+    monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _gate)
+
     agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
     await agent_chat_input.send_text(agent, "hallo sparky")
+    assert gated == [agent]
     assert any("hallo sparky" in " ".join(c) for c in calls)
+    # Text und das absendende Enter sind ZWEI getrennte send-keys-Aufrufe —
+    # die Separate-Enter-Regel gilt fuer jeden Transportpfad einzeln.
+    assert calls[-1][-1] == "Enter"
+    assert "Enter" not in calls[-2]
+
+
+async def test_readiness_gate_uses_the_omp_pane_rules(monkeypatch):
+    """Der Kern des Befunds: derselbe Pane heisst fuer Claude ``unknown``
+    (-> 409) und fuer omp ``idle`` (-> durchlassen)."""
+    from app.services import agent_chat_input
+    from tests.test_omp_chat import PANE_IDLE
+
+    async def _capture(agent): return PANE_IDLE
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    omp_agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input._wait_for_send_readiness(omp_agent)  # kein Fehler
+
+    claude_agent = _StubAgent(slug="davinci", agent_runtime="cli-bridge", harness="claude")
+    monkeypatch.setattr(agent_chat_input, "_SEND_READINESS_POLL_ATTEMPTS", 1)
+    monkeypatch.setattr(agent_chat_input, "_SEND_READINESS_POLL_INTERVAL_SECONDS", 0)
+    with pytest.raises(agent_chat_input.AgentStartingError):
+        await agent_chat_input._wait_for_send_readiness(claude_agent)
 
 
 async def test_effort_capabilities_host_without_claude_harness_gets_nothing():
@@ -1244,7 +1315,13 @@ async def test_effort_capabilities_host_without_claude_harness_gets_nothing():
     agent = _StubAgent(slug="boss", agent_runtime="host", harness=None)
     caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None,
+                    "effortShared": False, "effortReason": caps["effortReason"],
+                    # ``effortModel`` steht in JEDER Antwort mit Grund, damit das
+                    # Frontend eine feste Form hat — genannt hat die CLI hier
+                    # aber kein Modell.
+                    "effortModel": None}
+    assert caps["effortReason"] in ("foreign_harness", "no_pane")
 
 
 async def test_effort_capabilities_other_host_agent_cannot_switch():
@@ -1253,7 +1330,13 @@ async def test_effort_capabilities_other_host_agent_cannot_switch():
     agent = _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
     caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None,
+                    "effortShared": False, "effortReason": caps["effortReason"],
+                    # ``effortModel`` steht in JEDER Antwort mit Grund, damit das
+                    # Frontend eine feste Form hat — genannt hat die CLI hier
+                    # aber kein Modell.
+                    "effortModel": None}
+    assert caps["effortReason"] in ("foreign_harness", "no_pane")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1273,7 +1356,7 @@ async def test_effort_capabilities_matching_version_does_not_log(monkeypatch, fa
     monkeypatch.setattr(redis_client_mod, "_redis", fake_redis)
 
     async def _matching_version(agent):
-        return agent_chat_input._EFFORT_LEVELS_VERIFIED_CLI_VERSION
+        return agent_chat_input._EFFORT_LEVELS_VERIFIED_CLI_VERSION["claude"]
 
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _matching_version)
 
@@ -1281,7 +1364,7 @@ async def test_effort_capabilities_matching_version_does_not_log(monkeypatch, fa
     with caplog.at_level("WARNING", logger="mc.agent_chat_input"):
         await agent_chat_input.effort_capabilities(agent)
 
-    assert "verified against" not in caplog.text
+    assert "Phase-0-Nachlauf" not in caplog.text
 
 
 async def test_effort_capabilities_version_drift_logs_once_per_version(monkeypatch, fake_redis, caplog):
@@ -1298,10 +1381,10 @@ async def test_effort_capabilities_version_drift_logs_once_per_version(monkeypat
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     with caplog.at_level("WARNING", logger="mc.agent_chat_input"):
         await agent_chat_input.effort_capabilities(agent)
-        first_count = caplog.text.count("verified against")
+        first_count = caplog.text.count("Phase-0-Nachlauf")
         caplog.clear()
         await agent_chat_input.effort_capabilities(agent)  # same version again
-        second_count = caplog.text.count("verified against")
+        second_count = caplog.text.count("Phase-0-Nachlauf")
 
     assert first_count == 1
     assert second_count == 0  # deduped via the Redis SET NX
@@ -1324,7 +1407,7 @@ async def test_effort_capabilities_no_version_does_not_log(monkeypatch, fake_red
     with caplog.at_level("WARNING", logger="mc.agent_chat_input"):
         caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert "verified against" not in caplog.text
+    assert "Phase-0-Nachlauf" not in caplog.text
     # Still returns the normal capability payload — the drift check is
     # purely observability, never affects the response.
     assert caps["canSwitchEffort"] is True
@@ -1356,6 +1439,7 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
         "canSwitchEffort": True,
         "effort": None,
         "effortShared": False,
+        "effortReason": None,
     }
 
 
@@ -2304,8 +2388,20 @@ async def test_effort_capabilities_non_boss_host_claude_agent_gets_no_switch(mon
 
     caps = await agent_chat_input.effort_capabilities(agent)
     assert caps == {
-        "effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False,
+        "effortLevels": [], "canSwitchEffort": False, "effort": None,
+        "effortShared": False,
+        # Seit der openclaude-Runde traegt die Antwort eine BEGRUENDUNG. Hier
+        # ist sie "no_pane" und nicht "foreign_harness": der Agent faehrt sehr
+        # wohl Claude Code — ihm fehlt der Kanal, nicht die CLI-Faehigkeit. Das
+        # UI kann das erklaeren, statt das Bedienelement wortlos wegzulassen.
+        "effortReason": "no_pane",
+        # Kein Modellname, weil hier kein Picker befragt wurde — behauptet
+        # wird nichts.
+        "effortModel": None,
     }
+    # Und die persoenliche settings.json des Operators wurde NICHT gelesen —
+    # der eigentliche Schaden des alten Verhaltens.
+    assert caps["effort"] is None
 
     # Und der Endpunkt haette ihn ohnehin abgewiesen — das Versprechen war leer.
     with pytest.raises(agent_chat_input.InputNotSupportedError):

@@ -14,11 +14,20 @@ adapter (parser stays pure, capture is the only I/O):
   ``transcript_chat.resolve_transcript_dir``); Boss/host capture is out of
   scope for v1 and always returns ``None``, matching a plain `host` runtime.
 - ``process_alive`` — a second, independent I/O probe (``docker exec ...
-  pgrep -x claude``) used by ``transcript_chat.resolve_aliveness`` to tell
-  "the CLI process is provably gone" apart from "just quiet for a while" —
-  a stale pane's tmux window can still be capturable after the process
+  pgrep -x <process_name>``) used by ``transcript_chat.resolve_aliveness`` to
+  tell "the CLI process is provably gone" apart from "just quiet for a while"
+  — a stale pane's tmux window can still be capturable after the process
   inside it died, so pane text alone can't answer this. Cached ~30s per
-  agent slug; same Boss/host `None` scoping as ``capture_pane``.
+  (agent slug, process name); same Boss/host `None` scoping as
+  ``capture_pane``. The process name comes from the harness adapter
+  (``transcript_adapters``) — it is ``claude`` for Claude Code and ``omp``
+  for Sparky.
+
+``parse_pane_state`` here is the CLAUDE CODE probe. A foreign TUI has its own
+(``omp_chat.parse_pane_state``); the adapter registry picks which one runs.
+Feeding an omp pane to this one produced ``unknown`` for every state — which
+is exactly why the send-readiness gate had to be switched off for foreign
+harnesses before that adapter existed.
 
 Ready-signal glyphs mirrored from ``docker_agent_sync._wait_for_window_ready``
 (``╭─`` / ``❯`` / ``> `` / ``$ ``) — that function already established what a
@@ -339,23 +348,44 @@ async def capture_pane(agent) -> str | None:
 
 
 _PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
-_process_alive_cache: dict[str, tuple[float, bool]] = {}
+_process_alive_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
-
-async def process_alive(agent) -> bool | None:
+# Welcher PROZESSNAME gehoert zu welchem Harness. ``pgrep -x`` vergleicht den
+# Basenamen EXAKT — ``docker/mc-claude-agent/recycler.sh:12`` sagt es
+# woertlich: "pgrep -x claude (exact basename). openclaude matched NICHT".
+# ``docker/mc-agent-base/start-claude.sh`` startet genau dieses ``openclaude``.
+#
+# Ohne diese Tabelle bekam JEDE openclaude-Sitzung ``rc=1`` -> alive=False ->
+# ``resolve_aliveness`` == "ended", sobald sie 60s still war; das Frontend
+# gab ``sessionLive=false`` und der Composer blendete Senden UND Stop ganz
+# aus. Nach einer Minute Stille war der Agent also nicht mehr ansprechbar —
+# ausgerechnet in der Runde, die das Senden an openclaude erst moeglich
+# gemacht hat.
+async def process_alive(agent, process_name: str) -> bool | None:
     """Cheap liveness probe independent of pane TEXT: is the agent's actual
-    ``claude`` process still running? ``docker exec ... pgrep -x claude``
+    CLI process still running? ``docker exec ... pgrep -x <process_name>``
     against the agent's own container — a tmux window/pane can outlive the
     process it used to run (e.g. it crashed and dropped to a bare shell), so
     a successful ``capture_pane`` alone isn't proof of this; ``pgrep`` is.
-    Cached ~30s per agent slug (this is polled far more often than a
-    process genuinely starts/dies, and each check is still a real
-    docker-exec round trip).
+    Cached ~30s per (agent slug, process name) — this is polled far more
+    often than a process genuinely starts/dies, and each check is still a
+    real docker-exec round trip.
+
+    ``process_name`` (omp-Runde) kommt aus dem Harness-Adapter
+    (``transcript_adapters.TranscriptAdapter.process_name``) und ist
+    PFLICHT — ohne Vorgabewert. Der frueher fest verdrahtete Wert ``claude``
+    machte jede omp-Sitzung „beendet": ``pgrep -x claude`` findet im
+    omp-Container nichts, rc=1 heisst aber „nachweislich weg" — der
+    Container faehrt ``omp`` (live geprueft: ``ps`` in ``mc-agent-sparky``).
+    Ein ``claude``-Standard in einem Modul, das gerade harness-generisch
+    geworden ist, waere genau dieselbe Falle noch einmal: ein Aufrufer, der
+    das Argument vergisst, sucht still den falschen Prozess. So wird daraus
+    ein TypeError beim Aufruf statt einer falschen Antwort im Chat.
 
     Returns:
     - ``True``: pgrep found a matching process (rc=0).
     - ``False``: pgrep ran cleanly and found nothing (rc=1) — the process
-      is PROVABLY gone (container reachable, no claude running).
+      is PROVABLY gone (container reachable, no such process running).
     - ``None``: no process channel for this runtime (Boss/host — mirrors
       ``capture_pane``'s own v1 scope), or the check itself failed/timed
       out (container gone, docker daemon hiccup, unexpected pgrep exit) —
@@ -367,11 +397,12 @@ async def process_alive(agent) -> bool | None:
         return None
 
     now = time.time()
-    cached = _process_alive_cache.get(slug)
+    cache_key = (slug, process_name)
+    cached = _process_alive_cache.get(cache_key)
     if cached is not None and (now - cached[0]) < _PROCESS_ALIVE_CACHE_TTL_SECONDS:
         return cached[1]
 
-    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", "claude"]
+    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", process_name]
 
     try:
         result = await asyncio.to_thread(
@@ -391,5 +422,5 @@ async def process_alive(agent) -> bool | None:
         return None
 
     alive = result.returncode == 0
-    _process_alive_cache[slug] = (now, alive)
+    _process_alive_cache[cache_key] = (now, alive)
     return alive
