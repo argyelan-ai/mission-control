@@ -5,6 +5,7 @@ import { Loader2, FileX, Download } from "lucide-react";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import { getToken } from "@/lib/api";
+import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C } from "@/lib/colors";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
 
@@ -64,45 +65,8 @@ function langForExt(ext: string): string {
 }
 
 // ── Authenticated Fetch Hooks ──────────────────────────────────────────────
-
-function useAuthBlob(url: string | null): { blobUrl: string | null; loading: boolean; error: boolean } {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    if (!url) return;
-    let active = true;
-    let objectUrl: string | null = null;
-    setLoading(true);
-    setError(false);
-
-    fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.blob();
-      })
-      .then((blob) => {
-        if (!active) return;
-        objectUrl = URL.createObjectURL(blob);
-        setBlobUrl(objectUrl);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!active) return;
-        setError(true);
-        setLoading(false);
-      });
-
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      setBlobUrl(null);
-    };
-  }, [url]);
-
-  return { blobUrl, loading, error };
-}
+// (useAuthBlob lebt jetzt in hooks/useAuthBlob.ts — auch die Chat-Anhaenge
+//  brauchen ihn.)
 
 function useAuthText(url: string | null): { text: string | null; loading: boolean; error: boolean } {
   const [text, setText] = useState<string | null>(null);

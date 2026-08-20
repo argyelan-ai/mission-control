@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { AlertTriangle, Clock } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
+import { splitAttachments } from "./attachments";
+import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import type { MessageEvent } from "@/lib/chatTypes";
 import type { EchoStatus } from "@/hooks/useChatStream";
 
@@ -174,6 +176,9 @@ function ClampedUserContent({ text }: { text: string }) {
  * visible "Du" label; it stays as screen-reader text, since alignment is not
  * information a screen reader can hear.
  */
+/** Anhang-Zeilen aus dem Text holen: im Verlauf soll eine Kachel stehen, kein
+ *  roher Pfad. Der Text bleibt die einzige Quelle — der Verlauf ist das
+ *  Transkript der CLI, nicht unsere Datenbank (siehe attachments.ts). */
 export function ChatMessage({
   ev,
   showModel = false,
@@ -187,6 +192,7 @@ export function ChatMessage({
   echoStatus?: EchoStatus;
 }) {
   const isUser = ev.role === "user";
+  const parsed = splitAttachments(ev.text);
 
   if (isUser) {
     const unconfirmed = echoStatus === "unconfirmed";
@@ -218,7 +224,14 @@ export function ChatMessage({
           }}
         >
           <span className="sr-only">Du</span>
-          <ClampedUserContent text={ev.text} />
+          {parsed.attachments.length > 0 && (
+            <div className="flex flex-col gap-1.5 mb-1.5">
+              {parsed.attachments.map((a) => (
+                <ChatAttachmentTile key={a.path} att={a} />
+              ))}
+            </div>
+          )}
+          {parsed.text && <ClampedUserContent text={parsed.text} />}
           {unconfirmed && (
             // Truthful, not reassuring: after the timeout we genuinely do not
             // know whether the CLI received this, so it says so and names the

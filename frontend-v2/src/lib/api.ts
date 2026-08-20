@@ -861,6 +861,36 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ level }),
       }),
+    /** Laedt eine Datei hoch und liefert den Pfad, unter dem der Agent sie
+     *  lesen kann. FormData setzt seine eigene multipart-Grenze, darum an
+     *  `request` vorbei (gleiches Muster wie references.upload).
+     *
+     *  Der Fehlertext wird durchgereicht statt geschluckt: "zu gross" ist
+     *  die eine Ablehnung, die der Nutzer beim Auswaehlen nicht sehen
+     *  konnte, und stilles Verschlucken war ausdruecklich nicht gewollt. */
+    uploadAttachment: async (
+      agentId: string,
+      file: File,
+    ): Promise<import("./chatTypes").ChatAttachment> => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${BASE_URL}/api/v1/agents/${agentId}/chat/attachment`, {
+        method: "POST",
+        body: fd,
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          detail = body?.detail ?? body?.reason ?? detail;
+        } catch {
+          /* kein JSON — der Statustext bleibt die beste Auskunft */
+        }
+        throw new Error(String(detail));
+      }
+      return res.json();
+    },
     diff: (agentId: string, scope: "worktree" | "last-commit" = "worktree") =>
       request<CommitDiff>(`/api/v1/agents/${agentId}/chat/diff?scope=${scope}`),
     streamUrl: (agentId: string) => sseUrls.chat(agentId),

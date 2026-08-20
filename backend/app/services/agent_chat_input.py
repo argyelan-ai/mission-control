@@ -336,6 +336,18 @@ def _target_kind(agent) -> str:
     raise InputNotSupportedError()
 
 
+def can_receive_input(agent) -> bool:
+    """Kann dieser Agent ueberhaupt Chat-Text empfangen? Oeffentliche,
+    ausnahmefreie Form von ``_target_kind`` — der Anhang-Endpunkt fragt das
+    vorab, weil eine Datei fuer einen Agenten, der nie eine Nachricht
+    bekommt, nur Platte kostet und ein leeres Versprechen ist."""
+    try:
+        _target_kind(agent)
+        return True
+    except InputNotSupportedError:
+        return False
+
+
 async def _wait_for_send_readiness(agent) -> None:
     """Readiness gate before typing into a docker agent's pane. Live
     measurement (wave-review) found a real send landing in a session file

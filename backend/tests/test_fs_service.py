@@ -99,6 +99,52 @@ def test_read_stream_inline_has_no_attachment(root, tmp_path):
     assert "attachment" not in resp.headers.get("content-disposition", "")
 
 
+# --- aktive Inhalte werden NIE inline ausgeliefert -------------------------
+#
+# Der Files-Browser liefert Dateien mit Endungs-MIME aus. Solange Uploads eine
+# MIME-Allowlist hatten, war das ungefaehrlich; seit Chat-Anhaenge JEDEN Typ
+# annehmen (Operator-Entscheid 19.08.2026) waere eine hochgeladene .html oder
+# .svg sonst ausfuehrbarer Code im App-Origin — genau der Review-Fund M1, nur
+# an einer neuen Tuer. Behoben wird er hier an der Wurzel, fuer ALLE Roots.
+
+@pytest.mark.parametrize(
+    "filename",
+    ["evil.html", "evil.htm", "evil.svg", "evil.xhtml", "evil.xml", "evil.js", "evil.mjs"],
+)
+def test_read_stream_forces_download_for_active_content(root, tmp_path, filename):
+    (tmp_path / filename).write_bytes(b"<svg onload=alert(1)>")
+    resp = fs_service.read_stream("test", filename, download=False)
+    assert resp.headers.get("content-disposition", "").startswith("attachment")
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["evil.HTML", "evil.SvG"],
+)
+def test_active_content_check_is_case_insensitive(root, tmp_path, filename):
+    (tmp_path / filename).write_bytes(b"<svg>")
+    resp = fs_service.read_stream("test", filename, download=False)
+    assert resp.headers.get("content-disposition", "").startswith("attachment")
+
+
+def test_active_content_is_never_served_with_its_own_mime(root, tmp_path):
+    """Nicht nur die Disposition zaehlt: mit text/html im Content-Type wuerde
+    ein Browser die Datei trotz Download-Header in manchen Kontexten noch als
+    HTML behandeln. Der Typ wird darum neutralisiert."""
+    (tmp_path / "evil.html").write_bytes(b"<script>alert(1)</script>")
+    resp = fs_service.read_stream("test", "evil.html", download=False)
+    assert resp.media_type == "application/octet-stream"
+
+
+def test_harmless_types_still_render_inline(root, tmp_path):
+    """Die Haertung darf die Vorschau nicht kaputtmachen — Bilder, PDFs und
+    Text bleiben inline sichtbar."""
+    for name, payload in (("a.png", b"\x89PNG"), ("b.pdf", b"%PDF"), ("c.txt", b"hi")):
+        (tmp_path / name).write_bytes(payload)
+        resp = fs_service.read_stream("test", name, download=False)
+        assert "attachment" not in resp.headers.get("content-disposition", "")
+
+
 def test_read_stream_directory_raises(root, tmp_path):
     (tmp_path / "d").mkdir()
     with pytest.raises(fs_service.FsNotFound):

@@ -112,16 +112,43 @@ def stat(root_key: str, subpath: str | None = None) -> FsEntry:
     return _entry_for(target)
 
 
+# Endungen, deren Inhalt ein Browser AUSFUEHREN wuerde. Sie werden nie inline
+# ausgeliefert — egal aus welchem Root, egal was der Aufrufer will.
+#
+# Warum das hier steht und nicht als Upload-Filter: Der Files-Browser served
+# mit Endungs-MIME aus dem App-Origin, eine .html oder .svg waere damit
+# Stored XSS (Review-Fund M1). Frueher schuetzte die MIME-Allowlist der
+# References-Uploads davor. Seit Chat-Anhaenge JEDEN Dateityp annehmen
+# (Operator-Entscheid 19.08.2026) traegt diese Annahme nicht mehr — also
+# sitzt die Abwehr jetzt an der Stelle, an der die Gefahr entsteht: beim
+# Ausliefern. Das deckt auch jeden kuenftigen Upload-Pfad ab, ohne dass ihn
+# jemand kennen muss.
+_ACTIVE_CONTENT_SUFFIXES = frozenset(
+    {".html", ".htm", ".xhtml", ".shtml", ".svg", ".xml", ".js", ".mjs", ".xsl", ".xslt"}
+)
+
+
 def read_stream(root_key: str, subpath: str, *, download: bool = False) -> FileResponse:
     """Stream a file's bytes live from disk.
 
     ``download=True`` sets ``Content-Disposition: attachment`` (save-as);
-    otherwise the file renders inline (preview).
+    otherwise the file renders inline (preview) — EXCEPT for active content
+    (see ``_ACTIVE_CONTENT_SUFFIXES``), which is always forced into a
+    download with a neutral content type. Both halves matter: the header
+    alone still leaves the browser a typed document to sniff, so the MIME is
+    neutralized too.
     """
     root = get_browsable_root(root_key)
     target = safe_join(root, subpath)
     if not target.exists() or not target.is_file():
         raise FsNotFound(str(target))
+    active = target.suffix.lower() in _ACTIVE_CONTENT_SUFFIXES
+    if active:
+        return FileResponse(
+            path=str(target),
+            media_type="application/octet-stream",
+            filename=target.name,
+        )
     mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
     return FileResponse(
         path=str(target),

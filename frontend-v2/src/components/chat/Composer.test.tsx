@@ -5,19 +5,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
-import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
+import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
 // The effort chip talks to the backend directly (it is the only control in the
 // composer that does), so both the client and the toast helper are stubbed.
-vi.mock("@/lib/api", () => ({ api: { chat: { setEffort: vi.fn() } } }));
+vi.mock("@/lib/api", () => ({
+  api: { chat: { setEffort: vi.fn(), uploadAttachment: vi.fn() } },
+}));
 vi.mock("@/lib/notify", () => ({
   notify: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
 const mockSetEffort = vi.mocked(api.chat.setEffort);
+const mockUpload = vi.mocked(api.chat.uploadAttachment);
 const mockNotifyError = vi.mocked(notify.error);
 const mockNotifyInfo = vi.mocked(notify.info);
 
@@ -1480,5 +1483,156 @@ describe("Composer", () => {
       await waitFor(() => expect(mockNotifyError).toHaveBeenCalled());
       expect(chipLevel()).toBe("medium");
     });
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// Anhänge — Knopf, Einfügen, Ziehen (Operator-Wunsch 19.08.2026)
+// ══════════════════════════════════════════════════════════════════════════
+
+function mkFile(name = "foto.png", type = "image/png") {
+  return new File(["bytes"], name, { type });
+}
+
+function mkAttachment(over: Partial<ChatAttachment> = {}): ChatAttachment {
+  // So, wie der Endpunkt antwortet: Anhaenge liegen als AGENTEN-Referenzen
+  // (reference_files.agent_id), und root/subpath kommen mit, damit das UI sie
+  // nicht aus dem absoluten Pfad zurueckrechnen muss.
+  return {
+    path: "/Users/x/.mc/references/agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    name: "foto.png",
+    bytes: 5,
+    isImage: true,
+    root: "references",
+    subpath: "agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    ...over,
+  };
+}
+
+describe("Composer — Anhänge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpload.mockResolvedValue(mkAttachment());
+  });
+
+  it("zeigt den Anhängen-Knopf links in der Steuerzeile", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByLabelText("Attach file")).toBeTruthy();
+  });
+
+  it("lädt eine gewählte Datei hoch und zeigt eine Kachel", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    const input = screen.getByTestId("attachment-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [mkFile()] } });
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledWith("a1", expect.any(File)));
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+    expect(screen.getByText("foto.png")).toBeTruthy();
+  });
+
+  it("nimmt ein Bild aus der Zwischenablage an (Marks Screenshot-Weg)", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    const textarea = screen.getByRole("textbox");
+    fireEvent.paste(textarea, { clipboardData: { files: [mkFile()], items: [], getData: () => "" } });
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+  });
+
+  it("nimmt eine gezogene Datei an", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    const zone = screen.getByTestId("composer-dropzone");
+    fireEvent.drop(zone, { dataTransfer: { files: [mkFile()], types: ["Files"] } });
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+  });
+
+  it("hängt den Pfad an die Nachricht an", async () => {
+    const onSend = vi.fn();
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    const textarea = screen.getByRole("textbox");
+    fireEvent.change(textarea, { target: { value: "Was siehst du?" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const sent = onSend.mock.calls[0][0] as string;
+    expect(sent).toContain("Was siehst du?");
+    expect(sent).toContain(mkAttachment().path);
+  });
+
+  it("kann ohne Text gesendet werden, wenn ein Anhang dranhängt", async () => {
+    const onSend = vi.fn();
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    expect(onSend).toHaveBeenCalled();
+  });
+
+  it("leert die Kacheln nach dem Senden", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    await waitFor(() => expect(screen.queryByTestId("attachment-tile")).toBeNull());
+  });
+
+  it("lässt eine Kachel einzeln entfernen", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Remove attachment foto.png"));
+
+    await waitFor(() => expect(screen.queryByTestId("attachment-tile")).toBeNull());
+  });
+
+  it("meldet einen abgelehnten Upload sichtbar statt still", async () => {
+    mockUpload.mockRejectedValue(new Error("Die Datei ist 31.0 MB — maximal 25 MB pro Anhang."));
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile("gross.bin")] } });
+
+    await waitFor(() => expect(mockNotifyError).toHaveBeenCalled());
+    expect(String(mockNotifyError.mock.calls[0][0])).toContain("25 MB");
+    expect(screen.queryByTestId("attachment-tile")).toBeNull();
+  });
+
+  it("nimmt jeden Dateityp an — die CLI entscheidet, nicht das UI", async () => {
+    mockUpload.mockResolvedValue(mkAttachment({ name: "clip.mov", isImage: false }));
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), {
+      target: { files: [mkFile("clip.mov", "video/quicktime")] },
+    });
+
+    await waitFor(() => expect(screen.getByText("clip.mov")).toBeTruthy());
+  });
+
+  it("erlaubt mehrere Anhänge gleichzeitig", async () => {
+    mockUpload
+      .mockResolvedValueOnce(mkAttachment({ name: "a.png", path: "/p/a.png" }))
+      .mockResolvedValueOnce(mkAttachment({ name: "b.png", path: "/p/b.png" }));
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), {
+      target: { files: [mkFile("a.png"), mkFile("b.png")] },
+    });
+
+    await waitFor(() => expect(screen.getAllByTestId("attachment-tile").length).toBe(2));
   });
 });

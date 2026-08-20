@@ -1038,6 +1038,22 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   Boss-WS: zwei Frames mit 150 ms Pause) — in einem Frame verschmolzen liest die
   Claude-TUI das als Paste und schluckt den Enter (live gefunden: Nachricht sass
   stundenlang unversendet in der Eingabebox).
+- **Anhänge** (`services/reference_ingest.py`, ADR-074): Bilder und Dateien
+  erreichen die CLI ohne neues Protokoll — der Upload landet als
+  **Agenten-Referenz** unter
+  `~/.mc/references/agent/<agent-id>/<prüfsumme>-<name>` und sein
+  **absoluter Pfad** wird der Nachricht als eigene Zeile `[Anhang: /pfad]`
+  angehängt; die CLI liest die Datei selbst. Es ist dieselbe Ablage wie beim
+  Slack-Datei-Ingest — die Besitz-Art `reference_files.agent_id` gibt es genau
+  dafür, und sie räumt beim Löschen des Agenten mit auf. Der Ordner ist in jeden Container
+  unter *demselben* absoluten Pfad gemountet, Host-Agenten lesen ihn direkt —
+  darum gilt ein Pfad überall, ohne Übersetzung pro Agent. Der Verlauf gewinnt
+  die Kacheln aus dem Text zurück (`frontend-v2/…/chat/attachments.ts`), damit
+  das Transkript die einzige Quelle bleibt. **Keine MIME-Allowlist und kein
+  20-Dateien-Deckel** für diesen einen Aufrufer (`allowed_mimes=None`,
+  `max_files=None`; bewusst, ADR-074) — References-Upload und Slack-Ingest
+  behalten beides. Dafür liefert `fs_service.read_stream` aktive Inhalte
+  (HTML/SVG/XML/JS) repo-weit **immer** als Download aus, nie inline.
 - **Pane-State-Sonde** (`services/pane_state.py`, alle ~2 Ticks auf den Tailer
   huckepack) liefert per `tmux capture-pane`-Heuristik, was das Transkript nicht
   enthält: Permission-Prompts, Modell-Picker, Ready/Working/Idle. Kein Treffer →

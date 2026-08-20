@@ -137,3 +137,32 @@ describe("ChatMessage", () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// Anhänge im Verlauf (19.08.2026)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("ChatMessage — Anhänge", () => {
+  function mkUserMsg(text: string) {
+    return { kind: "message", role: "user", uuid: "u1", ts: "2026-08-19T10:00:00Z", text } as never;
+  }
+
+  it("zeigt keinen rohen Pfad, sondern eine Kachel", () => {
+    render(<ChatMessage ev={mkUserMsg("Was siehst du?\n[Anhang: /Users/x/.mc/references/chat/rex/2026-08/abc-foto.pdf]")} />);
+
+    expect(screen.getByText("Was siehst du?")).toBeTruthy();
+    expect(screen.queryByText(/\[Anhang:/)).toBeNull();
+    expect(screen.getByTestId("attachment-card")).toBeTruthy();
+  });
+
+  it("zeigt eine Nachricht, die NUR aus einem Anhang besteht", () => {
+    render(<ChatMessage ev={mkUserMsg("[Anhang: /Users/x/.mc/references/chat/rex/2026-08/abc-plan.pdf]")} />);
+    expect(screen.getByTestId("attachment-card")).toBeTruthy();
+  });
+
+  it("lässt eine gewöhnliche Nachricht unverändert", () => {
+    render(<ChatMessage ev={mkUserMsg("ganz normaler Text")} />);
+    expect(screen.getByText("ganz normaler Text")).toBeTruthy();
+    expect(screen.queryByTestId("attachment-card")).toBeNull();
+  });
+});
