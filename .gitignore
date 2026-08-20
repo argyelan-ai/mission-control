@@ -14,11 +14,11 @@ __pycache__/
 venv/
 
 # Node
-# Ohne Schraegstrich, mit Absicht: `node_modules/` trifft nur ein
-# VERZEICHNIS. Wer mit git worktrees arbeitet, legt sich die Abhaengigkeiten
-# oft als Symlink dorthin — und der wurde bisher NICHT ignoriert, sondern
-# landete mit seinem absoluten Host-Pfad im Commit (vom Leak-Gate gestoppt,
-# 20.08.2026). Ohne Schraegstrich sind Verzeichnis und Symlink gedeckt.
+# No trailing slash, on purpose: `node_modules/` matches a DIRECTORY only.
+# Working in git worktrees (the norm here) usually means symlinking the deps
+# in from another worktree — and that symlink was NOT ignored: it landed in a
+# commit carrying its absolute host path (caught by the leak gate, 2026-08-20).
+# Without the slash both the directory and the symlink are covered.
 node_modules
 .next/
 out/
@@ -107,11 +107,15 @@ backend/templates/SOUL.operator.md.j2
 # Impeccable design-hook cache (config.json bleibt getrackt)
 .impeccable/hook.cache.json
 
-# Die eigene Agenten-Flotte. Diese Datei wird zur Laufzeit fortgeschrieben
-# (backend/app/services/compose_renderer.py) und beschreibt die Maschine ihres
-# Besitzers — Agentennamen, Projekt-/Kundenbezuege, Mount-Pfade. Laege sie in
-# der Versionsverwaltung, veroeffentlichte jeder Commit die Flotte des Autors.
-# Ausgeliefert wird stattdessen die leere Vorlage
-# docker/docker-compose.agents.example.yml; scripts/start-all.sh legt beim
-# ersten Start die persoenliche Kopie an.
+# Your own agent fleet. This file is rewritten at runtime
+# (backend/app/services/compose_renderer.py) and describes its owner's machine:
+# agent names, project/client references, mount paths. While it was in version
+# control, every commit published its author's fleet. Shipped instead is the
+# agent-free template docker/docker-compose.agents.example.yml; ./setup.sh
+# makes your copy from it on first run.
+# (It stays inside the repo folder rather than under ~/.mc/ as ADR-022 would
+# have it — a documented exception, see that ADR.)
 docker/docker-compose.agents.yml
+# And its sidecars: the renderer writes .tmp/.bak, the update migration writes
+# .pre-oss-split (scripts/migrate-agents-yml.sh). All carry the same fleet.
+docker/docker-compose.agents.yml.*
