@@ -1222,6 +1222,25 @@ describe("ChatView", () => {
       expect(screen.getByRole("option", { name: "Normal" })).toHaveAttribute("aria-selected", "false");
     });
 
+    it("lässt den Hover der Einträge wirklich durch", async () => {
+      // Inline-Stil schlaegt jede Klasse, auch `hover:`. Mit
+      // `backgroundColor: "transparent"` an jedem Eintrag war
+      // `hover:bg-[var(--color-bg-hover)]` ein Nichts — im Browser
+      // gegengeprueft: gehovert meldet getComputedStyle rgba(0,0,0,0) statt
+      // der Hover-Farbe, ohne Inline-Stil dagegen die Farbe.
+      // jsdom rechnet keine Kaskade, also wird hier die URSACHE geprueft:
+      // nicht gewaehlte Eintraege tragen gar keine Inline-Flaeche.
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "normal" });
+      await user.click(screen.getByTestId("detail-level-trigger"));
+
+      const gewaehlt = screen.getByRole("option", { name: "Normal" });
+      const andere = screen.getByRole("option", { name: "Compact" });
+      expect(andere.style.backgroundColor).toBe("");
+      // Die Auswahl muss dagegen immer sichtbar bleiben.
+      expect(gewaehlt.style.backgroundColor).not.toBe("");
+    });
+
     it("gibt es im Terminal-Modus gar nicht", () => {
       // Der Detailgrad betrifft nur die geparste Chat-Ansicht.
       renderChatView({ centerView: "terminal" });
@@ -1311,7 +1330,19 @@ describe("ChatView", () => {
     });
   });
 
-  describe("Handy-Kopfzeile", () => {
+  // ACHTUNG, Reichweite dieser Gruppe: jsdom rechnet KEIN Layout. Was hier
+  // steht, prueft den Aufbau — welche Klasse an welchem Element haengt, und
+  // (wo es geht) dass die zugehoerige Regel in globals.css wirklich das tut,
+  // was ihr Name verspricht. Was diese Tests NICHT sehen koennen: ob am Ende
+  // etwas etwas anderes ueberdeckt, wie hoch der Kopf wirklich ist, oder ob
+  // eine Kaskade eine Klasse aussticht.
+  //
+  // Genau dafuer gibt es zwei Ergaenzungen: die Gruppe "Platz fuer den Titel"
+  // weiter oben prueft die Ueberdeckung als reine Rechenfunktion, und die
+  // Zahlen darin sind in Chromium (390x844) nachgemessen und in den Kommentaren
+  // festgehalten. Wer hier etwas Sichtbares aendert, misst nach — gruene Tests
+  // in dieser Gruppe sind kein Beweis fuer das Aussehen.
+  describe("Handy-Kopfzeile — Aufbau (kein Layout-Beweis)", () => {
     beforeEach(() => {
       mockUseChatStream.mockReturnValue(mkStream());
     });
@@ -1333,6 +1364,14 @@ describe("ChatView", () => {
       renderChatView({ onBack: vi.fn() });
       const header = screen.getByTestId("chat-header");
       expect(header.className).toContain("pt-safe-top");
+      // Zweite Haelfte, sonst prueft der Test nur, dass eine Zeichenkette in
+      // einem Attribut steht: die Klasse muss es in globals.css auch geben,
+      // sie muss auf `env(safe-area-inset-top)` liegen, und sie darf nur
+      // unterhalb von md gelten (ueber md gibt es keinen Notch).
+      const mobileBlock = GLOBALS_CSS.split("@media (max-width: 767px)")
+        .find((chunk) => chunk.includes(".pt-safe-top"));
+      expect(mobileBlock).toBeDefined();
+      expect(mobileBlock).toMatch(/padding-top:\s*calc\(env\(safe-area-inset-top\)/);
     });
 
     it("gibt Zurück und Optionen eine runde Form", () => {

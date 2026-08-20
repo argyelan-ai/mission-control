@@ -806,9 +806,19 @@ export function ChatView({
                         setDetailOpen(false);
                       }}
                       className="w-full text-left px-2 py-1.5 text-[11px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                      // Die Flaeche der NICHT gewaehlten Eintraege bleibt
+                      // bewusst ohne Inline-Stil. Ein Inline-Stil schlaegt
+                      // jede Klasse, auch `hover:` — mit
+                      // `backgroundColor: "transparent"` war der Hover ein
+                      // Nichts (im Browser gegengeprueft: gehovert meldet
+                      // getComputedStyle rgba(0,0,0,0) statt der Hover-Farbe).
+                      // Genau die Falle, vor der der Kaskaden-Hinweis in
+                      // globals.css warnt.
                       style={{
                         color: detailLevel === key ? C.accent : C.textPrimary,
-                        backgroundColor: detailLevel === key ? C.accentSubtle : "transparent",
+                        ...(detailLevel === key
+                          ? { backgroundColor: C.accentSubtle }
+                          : null),
                       }}
                     >
                       {t(labelKey)}
