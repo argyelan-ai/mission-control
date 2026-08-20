@@ -1238,6 +1238,34 @@ describe("ChatView", () => {
   // Reine Rechenfunktion — hier prueft der Test WIRKUNG, nicht Klassennamen.
   // jsdom rechnet kein Layout, aber diese Zahlen entscheiden ueber die
   // Ueberdeckung, und sie sind ohne Browser pruefbar.
+  describe("Handy: Home-Balken", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("hält den Streifen auch im Terminal-Modus frei", () => {
+      // Die Tab-Leiste trug `paddingBottom: env(safe-area-inset-bottom)`.
+      // `mobileChromeless` nimmt sie weg, und der Ausgleich ging nur an den
+      // Composer — im Terminal-Modus rendert ChatView aber gar keinen
+      // Composer. Betrifft auch jeden Agenten ohne Transkript (Hermes/Jarvis
+      // erzwingen Terminal ueber `canChat`): die unterste Zeile lag unter dem
+      // Home-Balken.
+      renderChatView({ centerView: "terminal" });
+      const box = screen.getByTestId("terminal-safe-area");
+      expect(box.className).toContain("pb-safe-bottom");
+    });
+
+    it("und `pb-safe-bottom` reserviert wirklich den Systemstreifen", () => {
+      // Zweite Haelfte: ohne sie koennte die Klasse ein leerer Name sein.
+      // Der Zuschlag muss auf `env(safe-area-inset-bottom)` liegen und nur
+      // auf dem Handy gelten — auf dem Desktop gibt es keinen Home-Balken.
+      const mobileBlock = GLOBALS_CSS.split("@media (max-width: 767px)")
+        .find((chunk) => chunk.includes(".pb-safe-bottom"));
+      expect(mobileBlock).toBeDefined();
+      expect(mobileBlock).toMatch(/padding-bottom:\s*calc\(env\(safe-area-inset-bottom\)/);
+    });
+  });
+
   describe("Handy-Kopfzeile — Platz fuer den Titel", () => {
     const M = MOBILE_HEADER_METRICS;
 

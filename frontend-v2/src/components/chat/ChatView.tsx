@@ -849,7 +849,25 @@ export function ChatView({
       </div>
 
       {effectiveView === "terminal" ? (
-        <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent} />
+        // Home-Balken freihalten. Die Tab-Leiste trug den Zuschlag
+        // (`env(safe-area-inset-bottom)`); `mobileChromeless` nimmt sie weg,
+        // und der Ersatz sitzt im Composer — den es hier gar nicht gibt.
+        // Ohne diesen Rahmen liegt die unterste Terminal-Zeile unter dem
+        // Balken. Betrifft auch jeden Agenten ohne Transkript, der ueber
+        // `canChat` fest im Terminal steht (Hermes, Jarvis).
+        //
+        // Der Zuschlag sitzt hier und nicht am Chat-Container: der Composer
+        // soll den Streifen bewusst MITBENUTZEN (die Pille laeuft in ihn
+        // hinein), das Terminal darf es nicht.
+        //
+        // Gleiche Flaechenfarbe wie das Panel, sonst stuende unter dem
+        // Terminal ein andersfarbiger Streifen.
+        <div
+          data-testid="terminal-safe-area"
+          className="flex flex-col flex-1 min-h-0 overflow-hidden pb-safe-bottom bg-[var(--color-bg-surface)]"
+        >
+          <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent} />
+        </div>
       ) : (
         <>
           <div

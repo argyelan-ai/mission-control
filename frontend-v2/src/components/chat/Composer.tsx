@@ -577,10 +577,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     <div
       data-testid={`composer-${agentId}`}
       // The composer is the app's own floor, not a strip bolted to the
-      // timeline: no top border, the pill inside carries the edge. No
-      // safe-area padding here — on mobile the app's bottom tab bar sits
-      // below this and already owns `env(safe-area-inset-bottom)`; adding it
-      // again would double the gap.
+      // timeline: no top border, the pill inside carries the edge.
+      //
+      // (Hier stand frueher "No safe-area padding here — the app's bottom tab
+      // bar already owns env(safe-area-inset-bottom)". Das gilt nicht mehr:
+      // auf dem Chat-Schirm blendet AppShell die Tab-Leiste aus, es gibt also
+      // nichts mehr, was den Streifen besitzt.)
+      //
       // pb-safe-bottom (nur Handy): iOS reserviert unten ~34 px fuer den
       // Home-Balken. Bisher endete der Composer DARUEBER und der Streifen
       // blieb tote Flaeche. Jetzt traegt der Container den Zuschlag, die
