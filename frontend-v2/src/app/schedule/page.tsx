@@ -550,14 +550,14 @@ export default function SchedulePage() {
   return (
     <AppShell>
       <div className="flex flex-col h-full overflow-hidden">
-        {/* Tab switcher header */}
+        {/* Tab switcher header — no px here: AppShell's main already pads the
+            content column, and a second inset pushed the title 24px past the
+            left edge every other page starts at. */}
         <div
-          className="flex items-center gap-3 px-6 py-3 flex-shrink-0"
+          className="flex items-center gap-3 py-3 flex-shrink-0"
         >
-          <Clock
-            size={16}
-            style={{ color: C.accent }}
-          />
+          {/* No decorative icon before the title: no other page has one, and it
+              pushed the heading 28px past the shared left edge. */}
           <div>
             <div className="label-sys mb-1">{t("operationsSchedule")}</div>
             <h1

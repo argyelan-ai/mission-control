@@ -387,7 +387,7 @@ export default function SkillsPage() {
 
   return (
     <AppShell>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl">
 
         {/* ── Header ── */}
         <div className="flex items-start justify-between mb-6 gap-4">
