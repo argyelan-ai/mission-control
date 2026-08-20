@@ -12,7 +12,8 @@ const MONO = { fontFamily: "var(--font-p2-mono)" };
 
 /**
  * SidebarFooter — Shell v4 zone 5. Replaces the full-width cyan StatusBar:
- * one dot for system health in plain words, plus the user.
+ * one dot on the avatar for system health (plain words in its tooltip),
+ * plus the user and the shell's controls.
  * Same data source as the old bar (system.status), a fraction of the noise.
  */
 export default function SidebarFooter({ collapsed = false }: { collapsed?: boolean }) {
@@ -153,19 +154,13 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         />
       </div>
 
-      <div className="min-w-0 flex-1">
-        <div
-          className="truncate"
-          style={{ ...MONO, fontSize: "11.5px", fontWeight: 700, color: "var(--color-p2-txt)" }}
-        >
-          {currentUser?.name ?? "—"}
-        </div>
-        <div
-          className="truncate"
-          style={{ ...MONO, fontSize: "9.5px", color: "var(--color-p2-dim)" }}
-        >
-          {health}
-        </div>
+      {/* Name only. System health is the dot on the avatar — the spelled-out
+          line under the name was noise the operator read once and never again. */}
+      <div
+        className="min-w-0 flex-1 truncate"
+        style={{ ...MONO, fontSize: "11.5px", fontWeight: 700, color: "var(--color-p2-txt)" }}
+      >
+        {currentUser?.name ?? "—"}
       </div>
 
       <button
