@@ -74,6 +74,7 @@ from app.routers import (
     cli_terminal,
     consensus,
     credentials,
+    groups,
     deploy,
     discord as discord_router,
     hosts,
@@ -874,6 +875,7 @@ app.include_router(local_registry.router)  # /api/v1/local-registry — curated 
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
+app.include_router(groups.router)  # /api/v1/groups — Multi-Agent-Gruppenchat (V1)
 app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-054)
 app.include_router(prompt_templates.router)  # /api/v1/prompt-templates — Prompt Library (Benchmark Studio core, PR 2)
 app.include_router(runtime_schedules.router)

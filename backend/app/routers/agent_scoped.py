@@ -1777,6 +1777,27 @@ async def agent_post_thread_message(
         apply_ack_handshake(session, task, agent)
 
     body_text, attachment = _message_attachment(payload)
+
+    # Gruppen-Threads (Gruppenchat V1): @-Mentions im Body gegen die
+    # MITGLIEDER auflösen — nur so erreicht ein Agent einen anderen, denn die
+    # Zustellung ist mention-gefiltert (routers/agents._group_message_visible_to).
+    # Bewusst KEIN Lead-Default und kein "@alle" für Agenten (Sturm-Schutz):
+    # ein unaufgeforderter Post liegt im Protokoll, weckt aber niemanden.
+    group_row = None
+    group_mentions: list[str] | None = None
+    if thread.kind == "group":
+        from app.models.group import AgentGroup
+        from app.services import group_service
+
+        group_row = (
+            await session.exec(
+                select(AgentGroup).where(AgentGroup.thread_id == thread.id)
+            )
+        ).first()
+        if group_row is not None:
+            members = await group_service.group_member_agents(session, group_row)
+            group_mentions = group_service.resolve_agent_mentions(members, body_text)
+
     message = await post_message(
         session,
         thread_id=thread.id,
@@ -1785,8 +1806,27 @@ async def agent_post_thread_message(
         message_type=payload.message_type,
         body=body_text,
         reply_to=payload.reply_to,
+        mentions=group_mentions,
+        # Gruppen spiegeln in V1 nicht in die Chat-Kanäle (ADR-075) — eine
+        # autonome Runde würde Slack/Telegram fluten.
+        mirror_to_telegram=(thread.kind != "group"),
         attachment=attachment,
     )
+
+    # SSE für Marks Live-Ansicht des Gruppenraums (Kanal mc:events:group:{id}).
+    if group_row is not None:
+        from app.redis_client import RedisKeys
+        from app.routers.groups import _serialize_message as _serialize_group_message
+        from app.services import sse as sse_service
+
+        await sse_service.broadcast(
+            RedisKeys.group_events(str(group_row.id)),
+            "group.message_posted",
+            {
+                "group_id": str(group_row.id),
+                "message": _serialize_group_message(message),
+            },
+        )
 
     # An answer to a pending question clears its awaiting flag, so a question
     # does not stay "waiting" forever once it has been answered. (The task

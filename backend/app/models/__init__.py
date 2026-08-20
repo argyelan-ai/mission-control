@@ -12,6 +12,7 @@ from app.models.newsletter import NewsletterIssue
 from app.models.credential import Credential
 from app.models.deploy_history import DeployHistory
 from app.models.discord_config import DiscordConfig
+from app.models.group import AgentGroup, GroupMember, GroupRound
 from app.models.meeting import AgentMeeting, AgentMeetingMessage, AgentMessage
 from app.models.memory import BoardMemory
 from app.models.app_setting import AppSetting  # noqa: F401
