@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { Settings, LogOut } from "lucide-react";
+import { Settings, LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api, clearToken } from "@/lib/api";
 
@@ -19,7 +19,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
   const t = useTranslations("shell");
   const tNav = useTranslations("nav");
   const router = useRouter();
-  const { currentUser } = useAppStore();
+  const { currentUser, sidebarCollapsed, toggleSidebar } = useAppStore();
 
   const { data: status, isError } = useQuery({
     queryKey: ["system-status"],
@@ -67,6 +67,15 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         className="mt-auto shrink-0 flex flex-col items-center gap-2.5 pt-2.5"
         style={{ borderTop: "1px solid var(--color-p2-line2)" }}
       >
+        <button
+          onClick={toggleSidebar}
+          aria-label={t("expandSidebar")}
+          title={`${t("expandSidebar")} · ⌘B`}
+          className="grid place-items-center cursor-pointer"
+          style={{ width: 30, height: 30, borderRadius: "999px", color: "var(--color-p2-dim)" }}
+        >
+          <PanelLeftOpen size={14} />
+        </button>
         <span
           title={health}
           style={{ width: 7, height: 7, borderRadius: "999px", backgroundColor: toneColor }}
@@ -144,6 +153,17 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         </div>
       </div>
 
+      <button
+        onClick={toggleSidebar}
+        aria-label={t("collapseSidebar")}
+        title={`${t("collapseSidebar")} · ⌘B`}
+        className="grid place-items-center shrink-0 cursor-pointer"
+        style={{ width: 28, height: 28, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)")}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
+      >
+        {sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+      </button>
       <Link
         href="/settings"
         aria-label={t("settings")}

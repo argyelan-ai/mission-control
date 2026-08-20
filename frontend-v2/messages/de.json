@@ -654,7 +654,9 @@
     "systemDbDegraded": "Datenbank wackelt",
     "systemRedisDegraded": "Redis wackelt",
     "settings": "Einstellungen",
-    "boardPicker": "Board wählen"
+    "boardPicker": "Board wählen",
+    "collapseSidebar": "Leiste einklappen",
+    "expandSidebar": "Leiste ausklappen"
   },
   "login": {
     "consoleAccess": "Konsole · Zugang",

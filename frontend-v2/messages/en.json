@@ -654,7 +654,9 @@
     "systemDbDegraded": "Database struggling",
     "systemRedisDegraded": "Redis struggling",
     "settings": "Settings",
-    "boardPicker": "Choose board"
+    "boardPicker": "Choose board",
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar"
   },
   "login": {
     "consoleAccess": "Console · Access",
