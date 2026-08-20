@@ -109,9 +109,9 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
   return (
     <>
       {/* Mobile-only scrim. Anchored below the app bar for the same stacking
-          reason as the other sheets (see --mobile-appbar-h). */}
+          reason as the other sheets (see --mobile-chat-topbar-h). */}
       <div
-        className="fixed inset-x-0 bottom-0 top-[var(--mobile-appbar-h)] z-40 md:hidden"
+        className="fixed inset-x-0 bottom-0 top-[var(--mobile-chat-topbar-h)] z-40 md:hidden"
         style={{ background: "rgba(10,10,10,0.75)" }}
         aria-hidden="true"
       />

@@ -1,8 +1,16 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatMessage, USER_CLAMP_MAX_PX } from "./ChatMessage";
+import { splitAttachments } from "./attachments";
 import type { MessageEvent } from "@/lib/chatTypes";
+
+// Echte Umsetzung, nur mitgezaehlt: der Anhang-Parser darf ueberhaupt nicht
+// laufen, wo sein Ergebnis nie gelesen wird (siehe Test weiter unten).
+vi.mock("./attachments", async () => {
+  const actual = await vi.importActual<typeof import("./attachments")>("./attachments");
+  return { ...actual, splitAttachments: vi.fn(actual.splitAttachments) };
+});
 
 /** jsdom reports 0 for every layout metric, so the clamp can never see an
  *  overflow on its own. Standing in for scrollHeight is the only way to test
@@ -164,5 +172,78 @@ describe("ChatMessage — Anhänge", () => {
     render(<ChatMessage ev={mkUserMsg("ganz normaler Text")} />);
     expect(screen.getByText("ganz normaler Text")).toBeTruthy();
     expect(screen.queryByTestId("attachment-card")).toBeNull();
+  });
+});
+
+describe("ChatMessage — Teamkollegen-Nachricht", () => {
+  function mkTeammate(text: string, teammate: string | null = "qwen-research") {
+    return { kind: "message", role: "teammate", teammate, uuid: "t1",
+             ts: "2026-08-19T10:00:00Z", text, model: null, sidechain: false } as never;
+  }
+
+  it("sieht nicht aus wie eine Nachricht des Operators", () => {
+    render(<ChatMessage ev={mkTeammate("fertig")} />);
+    // Die rechtsbuendige Blase ist dem Operator vorbehalten.
+    expect(screen.queryByText("Du")).toBeNull();
+    expect(screen.getByTestId("teammate-row")).toBeTruthy();
+  });
+
+  it("nennt den Absender", () => {
+    render(<ChatMessage ev={mkTeammate("fertig")} />);
+    expect(screen.getByText(/qwen-research/)).toBeTruthy();
+  });
+
+  it("behauptet keinen Absender, wenn keiner da war", () => {
+    render(<ChatMessage ev={mkTeammate("fertig", null)} />);
+    expect(screen.getByTestId("teammate-row")).toBeTruthy();
+    expect(screen.queryByText(/qwen-research/)).toBeNull();
+  });
+
+  it("zeigt den Inhalt", () => {
+    render(<ChatMessage ev={mkTeammate("Recherche fertig: 128 GB")} />);
+    expect(screen.getByText(/128 GB/)).toBeTruthy();
+  });
+
+  it("bricht eine lange Nutzlast um, statt den Verlauf breit zu ziehen", () => {
+    // Der Text stand in einem blanken <span>, und globals.css hat keine
+    // globale Umbruch-Regel (nachgesehen: null Treffer). In Chromium bei 390px
+    // nachgemessen:
+    //
+    //   * ein wirklich unbrechbares Wort (122 Zeichen, keine Satzzeichen)
+    //     wird 947,9px breit — die SEITE bekommt einen waagerechten Rollbalken
+    //     (scrollWidth 998 statt 390). Mit `break-words`: 310px, drei Zeilen.
+    //   * mehrzeilige Nutzlasten kollabieren zu EINER Zeile. Mit
+    //     `whitespace-pre-wrap`: zwei Zeilen.
+    //
+    // Nicht betroffen ist ausgerechnet die haeufigste Nutzlast, das
+    // idle_notification-JSON: Chromium bricht sie an den Kommata von selbst um
+    // (262,8px, drei Zeilen). Der Umbruch ist trotzdem noetig — Rueckmeldungen
+    // sind beliebiger Text, und seit die gebuendelten Bloecke einzeln
+    // ankommen, sind mehrzeilige Nutzlasten der Normalfall.
+    render(<ChatMessage ev={mkTeammate("Zeile eins\nZeile zwei")} />);
+    const body = screen.getByTestId("teammate-text");
+    expect(body.className).toContain("break-words");
+    expect(body.className).toContain("whitespace-pre-wrap");
+  });
+
+  it("laesst den Anhang-Parser gar nicht erst laufen", () => {
+    // `splitAttachments` lief fuer JEDE Nachricht — voller split("\n"),
+    // Regex je Zeile, join. Gelesen wird das Ergebnis nur im Operator-Zweig.
+    // ChatMessage ist nicht memoisiert, das fiel also bei jedem Stream-Tick
+    // fuer jede sichtbare Zeile an.
+    const spy = vi.mocked(splitAttachments);
+    spy.mockClear();
+    render(<ChatMessage ev={mkTeammate("fertig")} />);
+    expect(spy).not.toHaveBeenCalled();
+
+    spy.mockClear();
+    render(<ChatMessage ev={mkEvent({ role: "assistant", text: "Antwort" })} />);
+    expect(spy).not.toHaveBeenCalled();
+
+    // Fuer den Operator-Zweig muss er weiterhin laufen — sonst verschwinden
+    // die Anhang-Kacheln.
+    spy.mockClear();
+    render(<ChatMessage ev={mkEvent({ role: "user", text: "Text" })} />);
+    expect(spy).toHaveBeenCalled();
   });
 });
