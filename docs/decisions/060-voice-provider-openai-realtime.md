@@ -1,6 +1,6 @@
 # ADR-060 — Voice-Provider-Switch zu OpenAI Realtime, env-basierter xAI-Fallback
 
-**Status:** Accepted
+**Status:** Superseded by ADR-074
 **Datum:** 2026-07-10
 **Scope:** Infra/Runtime (voice-worker), Backend/Config (env), Docs
 

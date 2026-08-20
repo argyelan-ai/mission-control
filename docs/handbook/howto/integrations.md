@@ -136,12 +136,29 @@ LIVEKIT_API_KEY=                # same pair, split, for backend token signing
 LIVEKIT_API_SECRET=
 LIVEKIT_PUBLIC_URL=             # WS URL the browser connects to; empty = derived from origin
 LIVEKIT_NODE_IP=                # RTC candidate IP LiveKit advertises; 127.0.0.1 = local only
-VOICE_PROVIDER=openai           # "openai" (default) or "xai"
-VOICE_MODEL=gpt-realtime-2.1    # only used when VOICE_PROVIDER=openai
-OPENAI_API_KEY=                 # for the default provider
-XAI_API_KEY=                    # for the xai provider
+VOICE_PROVIDER=openai           # FALLBACK ONLY — see below
+VOICE_MODEL=gpt-realtime-2.1    # FALLBACK ONLY — see below
+VOICE_OPENAI_VOICE_ID=          # empty = "marin"
+VOICE_XAI_VOICE_ID=             # empty = "ara"
+OPENAI_API_KEY=                 # for the openai arm
+XAI_API_KEY=                    # for the xai arm
 JARVIS_AGENT_TOKEN=             # create the Jarvis agent first, then paste its token
 ```
+
+**Picking the provider (ADR-074).** `VOICE_PROVIDER` and `VOICE_MODEL` are only
+the emergency default. The provider Jarvis actually speaks to is a *runtime
+binding*: open the Jarvis agent, use the runtime selector, pick "Jarvis Voice —
+OpenAI Realtime" or "Jarvis Voice — Grok (xAI)". The voice service reads that
+binding at the start of every call, so the change takes effect on the **next
+call** — no restart, and a call in progress is not cut off. The env values apply
+only when the backend does not answer or nothing is bound yet.
+
+The two arms keep separate voice variables because their voice names do not
+overlap: "cedar" exists at OpenAI, "ara" at xAI, and a shared value breaks
+whichever arm does not know the name.
+
+API keys stay in the container's environment. MC never stores or forwards them —
+the config endpoint returns the provider and model only.
 
 The order matters for `JARVIS_AGENT_TOKEN`: create the agent in MC, then paste
 its token here. If you want voice reachable from a phone rather than only the
