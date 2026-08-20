@@ -6,7 +6,6 @@ plus a live SSE tail. Parsing/session-resolution lives in
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 import uuid
 from pathlib import Path
@@ -36,12 +35,14 @@ from app.services.agent_chat_input import (
     set_effort,
     slash_command_capabilities,
 )
-from app.services.chat_attachments import (
-    ChatAttachmentError,
-    cleanup_old_attachments,
-    store_attachment,
-)
 from app.services.harness_catalog import get_observed_model_windows
+from app.services.reference_ingest import (
+    ReferenceIngestError,
+    ReferenceTooLargeError,
+    is_image_reference,
+    serialize_reference,
+    store_reference,
+)
 from app.services.sse import _sse_generator
 from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import (
@@ -50,8 +51,6 @@ from app.services.transcript_chat import (
     tailer_manager,
 )
 from app.services.workspace_diff import NoWorkspaceError, resolve_workspace_path, workspace_diff
-
-logger = logging.getLogger("mc.agent_chat")
 
 router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 
@@ -276,49 +275,69 @@ async def post_chat_attachment(
     """Nimmt eine Datei entgegen und gibt den absoluten Pfad zurueck, unter
     dem der Agent sie lesen kann.
 
-    Der Composer haengt diesen Pfad danach an die Nachricht — die CLI liest
-    die Datei selbst. Es gibt bewusst KEINE Typen-Beschraenkung
-    (Operator-Entscheid 19.08.2026): ob ein Agent eine Datei versteht, ist
-    seine Sache, das UI legt nur ab. Gefaehrlich ist das nicht — aktive
-    Inhalte liefert ``fs_service.read_stream`` grundsaetzlich als Download
-    aus, nie inline.
+    Abgelegt wird sie als Agenten-Referenz — dieselbe Ablage, die der
+    Slack-Datei-Ingest schon benutzt (``reference_files.agent_id``, Migration
+    0172). Das ist keine Bequemlichkeit, sondern der Grund, aus dem es die
+    Besitz-Art ueberhaupt gibt: eine Datei, die der Operator top-level im
+    Chat schickt, gehoert dem AGENTEN und keiner Aufgabe. Sie wird damit
+    automatisch mit ihm geloescht (``delete_references_for(agent_id=…)`` in
+    routers/agents.py) statt verwaist liegen zu bleiben.
+
+    Der Composer haengt den Pfad danach an die Nachricht — die CLI liest die
+    Datei selbst. Es gibt bewusst KEINE Typen-Beschraenkung und keinen
+    20er-Deckel (Operator-Entscheid 19.08.2026): ob ein Agent eine Datei
+    versteht, ist seine Sache, das UI legt nur ab. Gefaehrlich ist das nicht
+    — aktive Inhalte liefert ``fs_service.read_stream`` grundsaetzlich als
+    Download aus, nie inline.
 
     409 ``{"reason":"input_not_supported"}`` fuer Agenten, die ueberhaupt
     keinen Chat-Text annehmen (Host-Agenten ausser Boss): dort waere die
     Datei nur Platte ohne Empfaenger. 413 wenn zu gross, 422 bei einem
-    unbrauchbaren Dateinamen."""
+    unbrauchbaren oder leeren Upload."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not can_receive_input(agent):
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
 
     contents = await file.read()
-    slug = getattr(agent, "slug", None) or ""
+    if not contents:
+        # Frueh und eigenstaendig: eine leere Datei ist kein Ingest-Problem,
+        # sondern eine Auswahl, die niemandem nuetzt — der Agent bekaeme
+        # einen Pfad auf 0 Bytes.
+        raise HTTPException(status_code=422, detail="Die Datei ist leer.")
 
     try:
-        stored = await asyncio.to_thread(
-            store_attachment, slug=slug, filename=file.filename or "", contents=contents
+        ref = await store_reference(
+            session,
+            contents=contents,
+            filename=file.filename or "",
+            mime=file.content_type,
+            agent_id=agent.id,
+            uploaded_by="chat",
+            # Die zwei Huerden, die fuer einen laufenden Chat nicht passen.
+            allowed_mimes=None,
+            max_files=None,
         )
-    except ChatAttachmentError as exc:
+    except ReferenceTooLargeError as exc:
         # Zu gross ist die einzige Ablehnung, die der Nutzer beim Auswaehlen
         # nicht sehen konnte — sie bekommt darum ihren eigenen Status, damit
-        # das UI sie als Hinweis statt als Fehler zeigen kann.
-        status = 413 if "maximal" in str(exc) else 422
-        raise HTTPException(status_code=status, detail=str(exc))
-
-    # Beilaeufig aufraeumen: kein Cron, kein Dienst, keine zusaetzliche
-    # bewegliche Teile — der Ordner wird genau dann geprueft, wenn er auch
-    # waechst. Fehler hier duerfen den Upload nie scheitern lassen.
-    try:
-        await asyncio.to_thread(cleanup_old_attachments)
-    except Exception:
-        logger.warning("chat attachment cleanup failed", exc_info=True)
+        # das UI sie als Hinweis statt als Fehler zeigen kann. Eigene
+        # Fehlerklasse statt Textsuche: ein Umformulieren der Meldung darf
+        # den Status nie kippen.
+        raise HTTPException(status_code=413, detail=str(exc))
+    except ReferenceIngestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     return {
-        "path": stored.path,
-        "name": stored.name,
-        "bytes": stored.bytes,
-        "isImage": stored.is_image,
+        "path": serialize_reference(ref)["abs_path"],
+        "name": ref.original_name,
+        "bytes": ref.size,
+        "isImage": is_image_reference(ref.original_name),
+        # Root + Unterpfad direkt aus der Ablage: das Frontend holt die Bytes
+        # ueber den Files-Endpunkt und muss sie sonst aus dem absoluten Pfad
+        # zurueckrechnen (siehe ChatAttachmentTile.toFilesRef).
+        "root": "references",
+        "subpath": ref.rel_path,
     }
 
 

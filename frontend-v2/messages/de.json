@@ -491,7 +491,15 @@
     "connected": "verbunden",
     "disconnected": "getrennt",
     "agentsBack": "Agenten",
-    "selectAgent": "Agent auswählen"
+    "selectAgent": "Agent auswählen",
+    "attachFile": "Datei anhängen",
+    "removeAttachment": "Anhang {name} entfernen",
+    "attachmentUploadingOne": "lädt…",
+    "attachmentUploadingMany": "{count} laden…",
+    "attachmentFailed": "Anhang fehlgeschlagen",
+    "attachmentExpandImage": "Bild {name} vergrössern",
+    "attachmentCollapseImage": "Bild {name} verkleinern",
+    "attachmentUnavailable": "nicht mehr verfügbar"
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",

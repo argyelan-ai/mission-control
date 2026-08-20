@@ -15,7 +15,7 @@
  * verbatim move covered by its own future test surface / manual live-gate).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatView, buildTimelineItems, modelBadgeUuids, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
@@ -510,6 +510,81 @@ describe("ChatView", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]);
+  });
+
+  // Regression (Operator-Befund 20.08.2026): "wenn man den Chat wieder
+  // oeffnet, beginnt er ganz am Anfang des Gespraechs".
+  //
+  // Ursache war ein Wettlauf: Erst rendern nur die letzten 30 Eintraege, einen
+  // Frame spaeter mounten ALLE — oberhalb des Sichtfensters. Die Hoehe springt,
+  // `scrollTop` bleibt stehen, der Browser feuert dafuer ein Scroll-Ereignis,
+  // und `handleScroll` deutete das als "der Nutzer hat hochgescrollt" und
+  // schaltete das Mitlaufen ab. Danach sprang nichts mehr ans Ende.
+  //
+  // Die Regel lautet jetzt: Mitlaufen wird NUR durch eine echte Geste beendet.
+  // Hilfsmittel: die ResizeObserver-Rueckmeldung ist der reale "naechste
+  // Anlass", bei dem die Ansicht wieder ans Ende springt, wenn sie mitlaeuft.
+  function mitBeobachter(fn: (el: HTMLElement, ausloesen: () => void) => void) {
+    const original = window.ResizeObserver;
+    const observed: Element[] = [];
+    let fire: (() => void) | null = null;
+    class Capturing {
+      constructor(cb: ResizeObserverCallback) {
+        fire = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe(el: Element) { observed.push(el); }
+      unobserve() {}
+      disconnect() {}
+    }
+    window.ResizeObserver = Capturing as unknown as typeof ResizeObserver;
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+      const el = observed[0] as HTMLElement;
+      Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
+      fn(el, () => fire!());
+    } finally {
+      window.ResizeObserver = original;
+    }
+  }
+
+  it("bleibt am Ende, wenn der Inhalt oberhalb waechst (kein Nutzer-Scroll)", () => {
+    mitBeobachter((el, ausloesen) => {
+      // Genau der Umbruch: Hoehe springt, scrollTop bleibt klein, Browser
+      // feuert dafuer ein Scroll-Ereignis. OHNE Geste.
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(6000);
+    });
+  });
+
+  it("beendet das Mitlaufen, wenn der Nutzer wirklich hochscrollt", () => {
+    mitBeobachter((el, ausloesen) => {
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(350);
+    });
+  });
+
+  it("nimmt das Mitlaufen wieder auf, wenn der Nutzer ans Ende zurueckkehrt", () => {
+    mitBeobachter((el, ausloesen) => {
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      // Zurueck ans Ende gescrollt — Geste gilt damit als beendet.
+      el.scrollTop = 6000 - 600;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(6000);
+    });
   });
 
   // Regression: the mobile stack keeps the off-screen pane mounted with

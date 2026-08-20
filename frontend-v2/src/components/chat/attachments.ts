@@ -16,6 +16,12 @@ export interface ParsedAttachmentRef {
   path: string;
   name: string;
   isImage: boolean;
+  /** Der Ort in der Sprache des Files-Endpunkts, WENN er bekannt ist: der
+   *  Anhang-Endpunkt liefert ihn direkt mit. Aus dem Transkript zurueck-
+   *  gewonnene Anhaenge haben ihn nicht — dort steht nur der Pfad, den der
+   *  Agent gesehen hat. `ChatAttachmentTile` faellt dann darauf zurueck. */
+  root?: string;
+  subpath?: string;
 }
 
 export interface ParsedMessage {

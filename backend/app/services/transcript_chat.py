@@ -1370,19 +1370,40 @@ class ChatTailerManager:
 
     @staticmethod
     def _transcript_suggests_turn_ended(path: Path) -> bool:
-        """True, wenn die LETZTE Transkript-Zeile eine reine Text-Antwort des
-        Agenten ist — dann ist der Zug vorbei, egal wie frisch die Datei ist.
+        """True, wenn die letzte inhaltliche Transkript-Zeile die
+        ABSCHLUSS-Antwort des Agenten ist — dann ist der Zug vorbei, egal wie
+        frisch die Datei ist.
 
         Operator-Befund (18.08.2026 nachts): nach Turn-Ende drehte die
         Statuszeile noch bis zu ~20s die Arbeits-Verben weiter, weil die
         working/idle-Disambiguierung allein am Datei-Alter hing
         (STATE_ACTIVE_WINDOW_SECONDS) — die frische mtime stammte aber genau
-        von der ABSCHLUSS-Antwort. Das Transkript selbst traegt das Ende:
-        eine assistant-Zeile OHNE tool_use-Block heisst "Antwort steht, kein
-        Werkzeug mehr ausstehend". Alles andere (user/tool_result, assistant
-        MIT tool_use, Metadaten, unlesbare Riesenzeile) laesst bewusst das
-        alte mtime-Verhalten gelten — nur der eine falsche Nachlauf wird
-        entfernt, die Redraw-Luecken-Absicherung bleibt.
+        von der ABSCHLUSS-Antwort.
+
+        Die erste Fassung las "assistant-Zeile OHNE tool_use = Zug beendet".
+        Das war an einer erfundenen Datei-Gestalt gemessen. Echte Claude-Code-
+        Transkripte schreiben JEDEN Content-Block als EIGENE Zeile — nachgemessen
+        an zwei echten Dateien (20.08.2026): die Blocktyp-Mengen waren
+        ausschliesslich ('tool_use',)=119, ('thinking',)=101, ('text',)=89, NIE
+        gemischt. Damit galt jede thinking- und jede Zwischentext-Zeile als
+        Zug-Ende: 245 Urteile ueber beide Dateien, davon 182 falsch (die
+        naechste Zeile setzte denselben Zug fort). Live sichtbar als Springen
+        der Statuszeile zwischen "Bereit" und "Arbeitet", als "Nicht
+        bestaetigt"-Warnung im Chat — und, am teuersten, als ausgehebelte
+        Belegt-Vorpruefung von ``_set_effort_boss``, die dann /effort in einen
+        ARBEITENDEN Boss tippte.
+
+        Das echte Zug-Ende steht in ``message.stop_reason``: "tool_use"
+        solange es weitergeht, "end_turn" bei der letzten API-Antwort. Alle
+        Zeilen EINER Antwort tragen dasselbe stop_reason, darum reicht
+        end_turn allein nicht — verlangt wird zusaetzlich ein TEXT-Block, denn
+        die Antwort endet mit ihrem Text, nicht mit dem Denken davor. Gegen
+        dieselben zwei Dateien nachgemessen: 17 Urteile, 0 falsch.
+
+        Alles andere (user/tool_result, assistant MIT tool_use, Subagenten-
+        Zeilen, fehlendes stop_reason, Metadaten, unlesbare Riesenzeile) laesst
+        bewusst das alte mtime-Verhalten gelten — nur der falsche Nachlauf
+        wird entfernt, die Redraw-Luecken-Absicherung bleibt.
 
         Synchron und billig (ein Tail-Read von max 256KB pro Probe-Tick);
         Aufrufer wrappt in asyncio.to_thread. Fail-silent -> False."""
@@ -1413,12 +1434,20 @@ class ChatTailerManager:
                     continue
                 if etype != "assistant":
                     return False
-                content = (entry.get("message") or {}).get("content")
+                if entry.get("isSidechain"):
+                    # Ein Subagent beendet nur SEINEN Zug — ueber den Hauptzug
+                    # ist damit nichts bewiesen.
+                    return False
+                message = entry.get("message") or {}
+                content = message.get("content")
                 if not isinstance(content, list):
                     return False
-                return not any(
-                    isinstance(b, dict) and b.get("type") == "tool_use" for b in content
-                )
+                types = {b.get("type") for b in content if isinstance(b, dict)}
+                if "tool_use" in types:
+                    return False
+                if message.get("stop_reason") != "end_turn":
+                    return False
+                return "text" in types
             return False
         except Exception:
             return False
