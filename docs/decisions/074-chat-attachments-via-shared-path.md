@@ -29,9 +29,20 @@ Zwei weitere Anforderungen kamen vom Operator und sind bindend:
 
 ## Entscheidung
 
-Ein Anhang wird unter `~/.mc/references/chat/<agent>/<JJJJ-MM>/<prüfsumme>-<name>`
-abgelegt, und sein **absoluter Pfad** wird der Nachricht als eigene Zeile
-angehängt (`[Anhang: /pfad]`). Die CLI liest die Datei selbst.
+Ein Anhang wird als **Agenten-Referenz** unter
+`~/.mc/references/agent/<agent-id>/<prüfsumme>-<name>` abgelegt, und sein
+**absoluter Pfad** wird der Nachricht als eigene Zeile angehängt
+(`[Anhang: /pfad]`). Die CLI liest die Datei selbst.
+
+Abgelegt wird über `services/reference_ingest.py` — dieselbe Ablage, die der
+References-Upload und der Slack-Datei-Ingest benutzen. Die Besitz-Art
+`reference_files.agent_id` (Migration 0172) beschreibt exakt diesen Fall: eine
+Datei, die der Operator top-level im Chat schickt, gehört dem AGENTEN und
+keiner Aufgabe. Die zwei Regeln, die für einen laufenden Chat nicht passen,
+sind dort Parameter geworden statt ein Grund für eine zweite Ablage:
+`allowed_mimes=None` (alle Dateitypen) und `max_files=None` (kein 20er-Deckel).
+Die Voreinstellung bleibt streng — References-Upload und Slack-Ingest
+verhalten sich unverändert.
 
 Dieser Ordner wurde gewählt, weil er in **jeden** Agenten-Container unter *exakt
 demselben absoluten Pfad* gemountet ist (`${HOME}/.mc/references:${HOME}/.mc/references:ro`)
@@ -55,10 +66,18 @@ die der Chat nach einem Neuladen nicht mehr anzeigen könnte.
   in `fs_roots` eingetragen, existiert auf der Platte aber nicht und ist nirgends
   gemountet. Nutzbar erst nach einer Compose-Änderung und einem Neubau aller
   Container — Aufwand ohne Gegenwert, da `references` bereits überall liegt.
-- **`reference_ingest` wiederverwenden** → Verworfen für den Kern, übernommen für
-  die Härtung: Dessen DB-Zeile, sein 20-Dateien-Limit und seine MIME-Allowlist
-  passen für einen laufenden Chat nicht. Traversal-Guard, Prüfsummen-Präfix und
-  realpath-Gegenprobe sind von dort übernommen.
+- **Eine zweite Ablage neben `reference_ingest`** (`services/chat_attachments.py`,
+  der erste Entwurf dieser ADR) → Verworfen und zurückgebaut: Begründet war sie
+  mit dem 20-Dateien-Limit und der MIME-Allowlist — beides Hindernisse, die
+  Parameter sein mussten und keine Rechtfertigung für einen parallelen
+  Speicherpfad. Der Preis war real: Anhänge blieben beim Löschen ihres Agenten
+  verwaist liegen (`delete_references_for(agent_id=…)` räumt nur Referenzen ab),
+  es gab keine DB-Zeile, und der Traversal-Guard, das Prüfsummen-Präfix und die
+  realpath-Gegenprobe existierten doppelt. Umgekehrt hat der Rückbau dem
+  gemeinsamen Speicher etwas gebracht, das er noch nicht hatte: **atomares
+  Schreiben** (`.part` → `os.replace`) — vorher konnte ein Abbruch mitten im
+  Schreiben eine halbe Datei unter dem Zielnamen hinterlassen, die der Agent
+  ohne Fehlermeldung liest. Das gilt jetzt für alle drei Wege.
 
 ## Konsequenzen
 
@@ -81,9 +100,14 @@ die der Chat nach einem Neuladen nicht mehr anzeigen könnte.
   Files-Roots, nicht nur für den Chat. Das ist eine repo-weite
   Verhaltensänderung: Wer bisher eine SVG-Vorschau im Datei-Browser erwartet hat,
   bekommt nun einen Download.
-- Der Ordner wächst. Anhänge älter als 30 Tage fallen weg; das Aufräumen läuft
-  beiläufig beim Upload und ist strikt auf den `chat/`-Unterbaum begrenzt —
-  Task-Referenzen werden nie angefasst.
+- Der Ordner wächst. Es gibt **kein Alters-Fenster**: Anhänge verschwinden mit
+  ihrem Agenten (`delete_references_for(agent_id=…)` beim Löschen des Agenten),
+  so wie jede andere Referenz auch. Ein zusätzlicher 30-Tage-Lauf über denselben
+  Baum wäre eine zweite Aufräum-Regel für dieselben Dateien gewesen — und er
+  hätte Anhänge unter noch existierenden Nachrichten weggeräumt, deren Pfad im
+  Transkript stehenbleibt. Bewusst in Kauf genommen: Wer nie einen Agenten
+  löscht, sammelt Anhänge an; das ist im Files-Browser sichtbar und von Hand
+  löschbar.
 - Die Erkennung „ist das ein Bild?" existiert doppelt (Backend für die Antwort,
   Frontend für die Rückgewinnung aus dem Transkripttext). Beide Listen müssen
   zusammen gepflegt werden.
@@ -91,7 +115,8 @@ die der Chat nach einem Neuladen nicht mehr anzeigen könnte.
 
 ## Referenzen
 
-- Betroffene Dateien: `backend/app/services/chat_attachments.py`,
+- Betroffene Dateien: `backend/app/services/reference_ingest.py`
+  (`allowed_mimes` / `max_files` / atomares Schreiben / `is_image_reference`),
   `backend/app/routers/agent_chat.py` (`POST /agents/{id}/chat/attachment`),
   `backend/app/services/fs_service.py` (`read_stream`, aktive Inhalte),
   `frontend-v2/src/components/chat/Composer.tsx`,

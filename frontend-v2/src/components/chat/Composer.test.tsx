@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
-import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
+import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -1414,9 +1414,19 @@ function mkFile(name = "foto.png", type = "image/png") {
   return new File(["bytes"], name, { type });
 }
 
-function mkAttachment(over: Partial<{ path: string; name: string; bytes: number; isImage: boolean }> = {}) {
-  return { path: "/Users/x/.mc/references/chat/rex/2026-08/ab12-foto.png",
-           name: "foto.png", bytes: 5, isImage: true, ...over };
+function mkAttachment(over: Partial<ChatAttachment> = {}): ChatAttachment {
+  // So, wie der Endpunkt antwortet: Anhaenge liegen als AGENTEN-Referenzen
+  // (reference_files.agent_id), und root/subpath kommen mit, damit das UI sie
+  // nicht aus dem absoluten Pfad zurueckrechnen muss.
+  return {
+    path: "/Users/x/.mc/references/agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    name: "foto.png",
+    bytes: 5,
+    isImage: true,
+    root: "references",
+    subpath: "agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    ...over,
+  };
 }
 
 describe("Composer — Anhänge", () => {
@@ -1427,7 +1437,7 @@ describe("Composer — Anhänge", () => {
 
   it("zeigt den Anhängen-Knopf links in der Steuerzeile", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.getByLabelText("Datei anhängen")).toBeTruthy();
+    expect(screen.getByLabelText("Attach file")).toBeTruthy();
   });
 
   it("lädt eine gewählte Datei hoch und zeigt eine Kachel", async () => {
@@ -1473,7 +1483,7 @@ describe("Composer — Anhänge", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
     const sent = onSend.mock.calls[0][0] as string;
     expect(sent).toContain("Was siehst du?");
-    expect(sent).toContain("/Users/x/.mc/references/chat/rex/2026-08/ab12-foto.png");
+    expect(sent).toContain(mkAttachment().path);
   });
 
   it("kann ohne Text gesendet werden, wenn ein Anhang dranhängt", async () => {
@@ -1505,7 +1515,7 @@ describe("Composer — Anhänge", () => {
     fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
     await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
 
-    fireEvent.click(screen.getByLabelText("Anhang foto.png entfernen"));
+    fireEvent.click(screen.getByLabelText("Remove attachment foto.png"));
 
     await waitFor(() => expect(screen.queryByTestId("attachment-tile")).toBeNull());
   });

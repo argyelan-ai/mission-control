@@ -246,12 +246,18 @@ export function isSessionOnlyEffort(level: string): boolean {
 /** Eine hochgeladene Datei, wie sie der Anhang-Endpunkt zurueckgibt.
  *  `path` ist absolut und gilt auf dem Host wie im Container gleichermassen —
  *  genau dieser String wird der Nachricht angehaengt, damit die CLI die Datei
- *  selbst liest. */
+ *  selbst liest.
+ *
+ *  `root`/`subpath` sind derselbe Ort in der Sprache des Files-Endpunkts, aus
+ *  dem das UI die Bytes holt. Sie kommen direkt aus der Ablage, damit das
+ *  Frontend sie nicht aus dem absoluten Pfad zurueckrechnen muss. */
 export interface ChatAttachment {
   path: string;
   name: string;
   bytes: number;
   isImage: boolean;
+  root: string;
+  subpath: string;
 }
 
 export interface ChatHistoryResponse {

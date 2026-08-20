@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -180,6 +181,7 @@ interface ComposerProps {
  * unfiltered — the bug this component was rewritten to fix.
  */
 export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true }: ComposerProps) {
+  const t = useTranslations("sessions");
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -345,13 +347,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         } catch (err) {
           // Sichtbar, nicht still: "zu gross" ist die eine Ablehnung, die
           // beim Auswählen niemand sehen konnte.
-          notify.error(err instanceof Error ? err.message : "Anhang fehlgeschlagen");
+          notify.error(err instanceof Error ? err.message : t("attachmentFailed"));
         } finally {
           setUploading((n) => Math.max(0, n - 1));
         }
       }
     },
-    [agentId],
+    [agentId, t],
   );
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -379,10 +381,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   }
 
   function removeAttachment(path: string) {
-    // Nur aus dem Composer nehmen — die Datei auf der Platte bleibt liegen
-    // und fällt nach 30 Tagen weg. Ein Löschen-Aufruf hier würde eine Datei
-    // entfernen, die eine bereits gesendete Nachricht noch referenzieren
-    // kann.
+    // Nur aus dem Composer nehmen — die Datei auf der Platte bleibt liegen.
+    // Ein Löschen-Aufruf hier würde eine Datei entfernen, die eine bereits
+    // gesendete Nachricht noch referenzieren kann. Sie gehört dem Agenten und
+    // verschwindet mit ihm (`delete_references_for(agent_id=…)`).
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   }
 
@@ -653,7 +655,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 <button
                   type="button"
                   onClick={() => removeAttachment(a.path)}
-                  aria-label={`Anhang ${a.name} entfernen`}
+                  aria-label={t("removeAttachment", { name: a.name })}
                   className="shrink-0 w-5 h-5 flex items-center justify-center rounded cursor-pointer"
                   style={{ color: C.textMuted }}
                 >
@@ -667,7 +669,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 className="flex items-center px-2 py-1 rounded-lg text-[11px]"
                 style={{ backgroundColor: C.bgHover, color: C.textMuted }}
               >
-                {uploading === 1 ? "lädt…" : `${uploading} laden…`}
+                {uploading === 1
+                  ? t("attachmentUploadingOne")
+                  : t("attachmentUploadingMany", { count: uploading })}
               </div>
             )}
           </div>
@@ -733,8 +737,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            aria-label="Datei anhängen"
-            title="Datei anhängen"
+            aria-label={t("attachFile")}
+            title={t("attachFile")}
             className="shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
             style={{ color: C.textSecondary }}
           >
