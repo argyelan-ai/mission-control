@@ -1,0 +1,102 @@
+# ADR-074 — Chat-Anhänge über einen gemeinsamen Pfad statt über ein neues Protokoll
+
+**Status:** Accepted
+**Datum:** 2026-08-19
+**Scope:** Backend/Services · Backend/API · Frontend/Pages · Security
+
+## Kontext
+
+Die Sessions-Chat-Ansicht (ADR-073) konnte ausschliesslich Text zustellen: Die
+Eingabe tippt in die laufende TUI (tmux `send-keys`, bei Host-Agenten die
+WS-Brücke). Der Operator wollte Bilder und Dateien senden können — sein realer
+Arbeitsweg ist ein Screenshot mit `Cmd+Shift+4`, dann `Cmd+V`, und auf dem Handy
+ein Foto aus der Galerie oder frisch aus der Kamera.
+
+Ein Anhang muss also bei einer CLI ankommen, die nur eine Zeile Text
+entgegennimmt. Naheliegend wäre ein Nebenkanal gewesen — ein eigener Endpunkt,
+der Bilddaten an den Agenten schiebt. Den kennt aber keine der vier Harnesses:
+Wir treiben interaktive CLIs fern, wir ersetzen sie nicht (ADR-072).
+
+Die entscheidende Beobachtung: Alle Harnesses **lesen Dateien über Pfade**. Es
+braucht also keinen neuen Transportweg, sondern nur einen Pfad, der auf beiden
+Seiten derselbe ist.
+
+Zwei weitere Anforderungen kamen vom Operator und sind bindend:
+
+1. **Alle Agenten, alle Dateitypen.** Ob ein Agent eine Datei versteht, ist nicht
+   die Zusage des UI. Keine Harness-Gates, keine MIME-Liste.
+2. Der Weg muss auf **Desktop und Handy** funktionieren.
+
+## Entscheidung
+
+Ein Anhang wird unter `~/.mc/references/chat/<agent>/<JJJJ-MM>/<prüfsumme>-<name>`
+abgelegt, und sein **absoluter Pfad** wird der Nachricht als eigene Zeile
+angehängt (`[Anhang: /pfad]`). Die CLI liest die Datei selbst.
+
+Dieser Ordner wurde gewählt, weil er in **jeden** Agenten-Container unter *exakt
+demselben absoluten Pfad* gemountet ist (`${HOME}/.mc/references:${HOME}/.mc/references:ro`)
+und Host-Agenten ihn ohnehin direkt lesen. Ein Pfad gilt damit überall — es gibt
+keine Übersetzung pro Agent und keine Kopie.
+
+Der Verlauf gewinnt die Kacheln aus dem Text zurück (`attachments.ts`). Das
+Transkript der CLI bleibt die einzige Quelle: Ein Nebenkanal wäre eine Quelle,
+die der Chat nach einem Neuladen nicht mehr anzeigen könnte.
+
+## Alternativen
+
+- **Eigener Anhang-Kanal zur CLI** (Bilddaten direkt an den Agenten) → Verworfen:
+  Keine der vier Harnesses hat einen solchen Eingang. Es hätte bedeutet, die CLI
+  zu ersetzen statt sie fernzusteuern — die Grenze, die ADR-072 zieht.
+- **Ablage unter `~/.mc/workspaces/<slug>/uploads/`** (der erste Entwurf) →
+  Verworfen: Der Workspace-Mount heisst im Container `/workspace`, auf dem Host
+  aber anders. Das hätte eine Pfad-Übersetzung pro Agent gebraucht — und für
+  Host-Agenten wie Boss, die keinen solchen Mount haben, gar nicht funktioniert.
+- **Ablage unter dem registrierten `attachments`-Root** → Verworfen: Der Root ist
+  in `fs_roots` eingetragen, existiert auf der Platte aber nicht und ist nirgends
+  gemountet. Nutzbar erst nach einer Compose-Änderung und einem Neubau aller
+  Container — Aufwand ohne Gegenwert, da `references` bereits überall liegt.
+- **`reference_ingest` wiederverwenden** → Verworfen für den Kern, übernommen für
+  die Härtung: Dessen DB-Zeile, sein 20-Dateien-Limit und seine MIME-Allowlist
+  passen für einen laufenden Chat nicht. Traversal-Guard, Prüfsummen-Präfix und
+  realpath-Gegenprobe sind von dort übernommen.
+
+## Konsequenzen
+
+### Positiv
+
+- Kein neues Protokoll, kein Nebenkanal, keine Änderung an den CLIs.
+- Ein Pfad für alle Harnesses **und** für Host-Agenten.
+- Der Verlauf bleibt vollständig aus dem Transkript rekonstruierbar.
+- Live bewiesen vor dem Bau: Testbild abgelegt, der Agent hat den Bildinhalt
+  korrekt wiedergegeben.
+
+### Negativ
+
+- **Die Freigabe aller Dateitypen zog eine Sicherheitsänderung nach sich.** Der
+  Files-Browser lieferte bisher jede Datei inline mit Endungs-MIME aus; geschützt
+  war das allein durch die MIME-Allowlist der References-Uploads (Review-Fund M1,
+  Stored XSS im App-Origin). Mit freien Uploads trägt diese Annahme nicht mehr.
+  `fs_service.read_stream` liefert aktive Inhalte (HTML/SVG/XML/JS) darum ab
+  jetzt **immer** als Download mit neutralem Content-Type aus — für **alle**
+  Files-Roots, nicht nur für den Chat. Das ist eine repo-weite
+  Verhaltensänderung: Wer bisher eine SVG-Vorschau im Datei-Browser erwartet hat,
+  bekommt nun einen Download.
+- Der Ordner wächst. Anhänge älter als 30 Tage fallen weg; das Aufräumen läuft
+  beiläufig beim Upload und ist strikt auf den `chat/`-Unterbaum begrenzt —
+  Task-Referenzen werden nie angefasst.
+- Die Erkennung „ist das ein Bild?" existiert doppelt (Backend für die Antwort,
+  Frontend für die Rückgewinnung aus dem Transkripttext). Beide Listen müssen
+  zusammen gepflegt werden.
+- Ob ein Agent den Anhang wirklich lesen kann, verspricht das UI bewusst nicht.
+
+## Referenzen
+
+- Betroffene Dateien: `backend/app/services/chat_attachments.py`,
+  `backend/app/routers/agent_chat.py` (`POST /agents/{id}/chat/attachment`),
+  `backend/app/services/fs_service.py` (`read_stream`, aktive Inhalte),
+  `frontend-v2/src/components/chat/Composer.tsx`,
+  `frontend-v2/src/components/chat/attachments.ts`,
+  `frontend-v2/src/components/chat/ChatAttachmentTile.tsx`,
+  `frontend-v2/src/hooks/useAuthBlob.ts`
+- Verwandte ADRs: ADR-072 (Adapter-Kontrakt), ADR-073 (Transkript-Tailing),
+  ADR-053 (Referenz-Dateien), ADR-022 (`~/.mc`-Layout)

@@ -1038,6 +1038,17 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   Boss-WS: zwei Frames mit 150 ms Pause) — in einem Frame verschmolzen liest die
   Claude-TUI das als Paste und schluckt den Enter (live gefunden: Nachricht sass
   stundenlang unversendet in der Eingabebox).
+- **Anhänge** (`services/chat_attachments.py`, ADR-074): Bilder und Dateien
+  erreichen die CLI ohne neues Protokoll — der Upload landet unter
+  `~/.mc/references/chat/<agent>/<JJJJ-MM>/<prüfsumme>-<name>` und sein
+  **absoluter Pfad** wird der Nachricht als eigene Zeile `[Anhang: /pfad]`
+  angehängt; die CLI liest die Datei selbst. Der Ordner ist in jeden Container
+  unter *demselben* absoluten Pfad gemountet, Host-Agenten lesen ihn direkt —
+  darum gilt ein Pfad überall, ohne Übersetzung pro Agent. Der Verlauf gewinnt
+  die Kacheln aus dem Text zurück (`frontend-v2/…/chat/attachments.ts`), damit
+  das Transkript die einzige Quelle bleibt. **Keine MIME-Allowlist** (bewusst,
+  ADR-074) — dafür liefert `fs_service.read_stream` aktive Inhalte
+  (HTML/SVG/XML/JS) repo-weit **immer** als Download aus, nie inline.
 - **Pane-State-Sonde** (`services/pane_state.py`, alle ~2 Ticks auf den Tailer
   huckepack) liefert per `tmux capture-pane`-Heuristik, was das Transkript nicht
   enthält: Permission-Prompts, Modell-Picker, Ready/Working/Idle. Kein Treffer →
