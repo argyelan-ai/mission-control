@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.services.harness_compat import (
     VOICE_RUNTIME_TYPES,
@@ -114,3 +115,85 @@ def test_voice_rows_are_not_single_instance():
     for row in _seed_rows():
         if row["runtime_type"] in VOICE_RUNTIME_TYPES:
             assert row.get("single_instance") is False
+
+
+# ── The adapter: Jarvis becomes switchable, but nothing is written ─────────
+
+
+def test_jarvis_is_switchable_as_a_host_agent():
+    """The whole point of registering the adapter.
+
+    Explicit rather than relying on the parametrised sweep in
+    test_runtime_switchable_field.py: that one iterates HOST_ADAPTERS, so it
+    would still pass if "jarvis" were never added. This one fails.
+
+    agent_runtime must be passed explicitly — the Agent default is cli-bridge,
+    and a cli-bridge agent is switchable for entirely different reasons, which
+    would make this a green test that proves nothing.
+    """
+    from app.services.host_harness_adapter import HOST_ADAPTERS, is_host_inplace
+
+    assert "jarvis" in HOST_ADAPTERS
+    agent = Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+
+    assert agent.runtime_switchable is True
+    assert agent.runtime_switch_blocked_reason is None
+    assert is_host_inplace(agent) is True
+
+
+@pytest.mark.asyncio
+async def test_switching_a_voice_runtime_writes_no_agent_env(tmp_path, monkeypatch):
+    """A voice switch must not touch the filesystem.
+
+    sync_host_agent_model() writes the provider model into the host agent's
+    agent.env. For voice that file does not exist and must not be created:
+    writing one would put an OPENAI_BASE_URL next to Jarvis' token for a
+    process that never reads it — the ADR-056 Finding 5 shape of accident.
+    """
+    from app.services import host_harness_adapter as hha
+
+    monkeypatch.setattr(hha, "_home_host", lambda: tmp_path, raising=False)
+    monkeypatch.setattr(
+        "app.services.agent_bootstrap._home_host", lambda: tmp_path, raising=False
+    )
+
+    agent = Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+    runtime = _rt("voice_openai", slug="voice-openai")
+
+    await hha.sync_host_agent_model(agent, runtime, session=None)
+
+    assert not (tmp_path / ".mc" / "agents" / "jarvis" / "agent.env").exists()
+    assert list(tmp_path.rglob("agent.env")) == []
+
+
+@pytest.mark.asyncio
+async def test_reload_does_not_restart_anything():
+    """Restarting the voice container mid-call would hang up on Mark.
+
+    The no-op is the design (the worker re-reads per call), so it is asserted
+    rather than left implicit.
+    """
+    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+    result = await HOST_ADAPTERS["jarvis"].reload(
+        Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+    )
+
+    assert result["ok"] is True
+    assert result["restarted"] is False
+    assert result["note"].strip()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_refuses_with_a_useful_message():
+    """MC does not provision Jarvis — compose does. The refusal must say so,
+    and must not read like the switch is broken."""
+    from fastapi import HTTPException
+
+    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+    with pytest.raises(HTTPException) as excinfo:
+        await HOST_ADAPTERS["jarvis"].bootstrap(None, Agent(name="Jarvis", slug="jarvis"), None)
+
+    assert excinfo.value.status_code == 422
+    assert "compose" in str(excinfo.value.detail).lower()

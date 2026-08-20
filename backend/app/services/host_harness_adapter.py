@@ -7,12 +7,15 @@ config, and reloading the agent in place. Shared bootstrap/lifecycle code
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Protocol, runtime_checkable
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -357,6 +360,82 @@ class OmpHostAdapter(_GenericStagedHostAdapter):
     protocol = "openai"
 
 
+class JarvisVoiceAdapter:
+    """Jarvis' voice channel as a host harness (ADR-074).
+
+    Jarvis is not a CLI. It is the voice concierge: a docker-compose service
+    (profile "voice") that joins a LiveKit room and speaks realtime
+    speech-to-speech with ONE cloud provider. It runs no tasks, stages no
+    files, and owns no agent.env.
+
+    It is registered here for exactly one reason: this registry is the single
+    source of truth for "may MC switch this agent's runtime?" (see
+    runtime_switch_availability below). Without an entry the picker stays
+    locked and the provider remains an env-only secret of the container.
+
+    Everything else is deliberately inert:
+
+    * ``build_agent_env`` returns {} and ``sync_host_agent_model`` never gets
+      this far — it returns early for any protocol outside openai/anthropic,
+      and ours is "voice". So no file on disk is touched by a switch, and the
+      API keys stay where they belong: in the container's own env.
+    * ``reload`` is a no-op ON PURPOSE. Restarting the container would cut off
+      a call in progress, and it is not needed: the worker pulls its binding
+      from the backend at the start of every call, so a switch takes effect on
+      the next one.
+    * ``bootstrap`` refuses. MC does not provision this agent; docker compose
+      does. ``singleton_slug`` already blocks the same harness on any other
+      agent, so this only fires for Jarvis itself.
+
+    ``supports_bootstrap`` stays True even though bootstrap() refuses: setting
+    it False makes routers/agents.py drop the adapter and fall through to the
+    generic staging path, which dies with a much less helpful "unknown
+    harness" deep inside host_provisioning.
+    """
+
+    harness = "jarvis"
+    label = "Jarvis (Voice)"
+    protocol = "voice"
+    singleton_slug = "jarvis"
+    supports_bootstrap = True
+
+    def env_dir(self, agent: Agent) -> str:
+        # Never actually used (nothing writes an agent.env for voice), but the
+        # protocol requires it and a wrong answer here would be worse than a
+        # boring one.
+        return agent.slug or "jarvis"
+
+    async def build_agent_env(
+        self, agent: Agent, runtime: Runtime, token: str, *, session: AsyncSession
+    ) -> dict[str, str]:
+        return {}
+
+    async def bootstrap(self, session, agent, runtime):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Jarvis läuft als docker-compose-Dienst (Profil 'voice') und wird "
+                "nicht über MC provisioniert. Der Runtime-Wechsel funktioniert "
+                "trotzdem: er ändert nur, mit welchem Anbieter der Sprach-Dienst "
+                "beim nächsten Anruf spricht."
+            ),
+        )
+
+    async def reload(self, agent: Agent) -> dict[str, Any]:
+        logger.info(
+            "jarvis voice runtime rebound for agent %s — no restart; the "
+            "voice-worker picks this up on the next call",
+            agent.slug or agent.name,
+        )
+        return {
+            "ok": True,
+            "restarted": False,
+            "note": "Wirkt beim nächsten Anruf — der Sprach-Dienst liest die Bindung pro Gespräch.",
+        }
+
+
 HOST_ADAPTERS: dict[str, "HostHarnessAdapter"] = {
     "hermes": HermesAdapter(),
     "grok": GrokAdapter(),
@@ -364,6 +443,7 @@ HOST_ADAPTERS: dict[str, "HostHarnessAdapter"] = {
     "claude": ClaudeHostAdapter(),
     "openclaude": OpenClaudeHostAdapter(),
     "omp": OmpHostAdapter(),
+    "jarvis": JarvisVoiceAdapter(),
 }
 
 # INVARIANT (asserted in tests/test_host_harness_catalog.py): every cli-bridge
