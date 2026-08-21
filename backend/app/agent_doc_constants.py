@@ -70,6 +70,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "ask": "Ask a thread-native question — --blocking pauses on the answer.",
     "msg": "Post a plain message/status/decision on the task thread (no questions — use `mc ask`).",
     "inbox": "Pull new thread messages and ack them (on 📬 nudge).",
+    "group-doc": "Write your group's living result document — lead only (ADR-075).",
     "thread": "Re-read your own task thread — read-only, consumes nothing.",
     "checklist": "Manage the task checklist (add/done/skip/list).",
     "question": "Ask the operator a clarifying question.",
@@ -128,6 +129,9 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "comment": "tasks:write",
     "ask": "chat:write",
     "msg": "chat:write",
+    # Der Endpoint prueft zusaetzlich, dass der Aufrufer der LEAD der
+    # Gruppe ist — der Scope allein oeffnet also nichts Fremdes.
+    "group-doc": "chat:write",
     "inbox": None,  # GET /agent/me/inbox — require_agent only (Nudge+Pull)
     "thread": "tasks:read",  # GET /agent/me/thread — require_scope(TASKS_READ)
     "checklist": "tasks:write",

@@ -48,6 +48,10 @@ class GroupCreate(BaseModel):
 class GroupUpdate(BaseModel):
     name: str | None = None
     goal: str | None = None
+    # Der Lead muss wechselbar sein: fällt er aus (hängendes CLI, archiviert),
+    # steckt die Gruppe sonst fest — er ist nicht entfernbar, und nur er darf
+    # urteilen und das Ergebnis-Dokument schreiben. Live-Befund 21.08.2026.
+    lead_agent_id: uuid.UUID | None = None
     max_rounds: int | None = None
     max_duration_minutes: int | None = None
     budget_usd: float | None = None
@@ -168,13 +172,32 @@ async def list_groups(
     ).all()
     out = []
     for group in groups:
-        member_count = len(
-            (
-                await session.exec(
-                    select(GroupMember.agent_id).where(GroupMember.group_id == group.id)
-                )
-            ).all()
-        )
+        members = await _members_with_agents(session, group)
+        # Vorschau der letzten Nachricht + Avatare: die Sidebar-Zeile zeigt
+        # beides (Hermes-Vorbild), soll dafür aber nicht pro Gruppe einen
+        # zweiten Request brauchen.
+        last = (
+            await session.exec(
+                select(Message)
+                .where(Message.thread_id == group.thread_id)
+                .order_by(Message.seq.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )
+        ).first()
+        agent_names = {str(a.id): a.name for _m, a in members}
+        last_preview = None
+        if last is not None:
+            sender = "System"
+            if last.sender_type == "user":
+                sender = "Operator"
+            elif last.sender_id is not None:
+                sender = agent_names.get(str(last.sender_id), "Agent")
+            body = (last.body or "").strip().replace("\n", " ")
+            last_preview = {
+                "body": body[:160] + ("…" if len(body) > 160 else ""),
+                "sender": sender,
+                "created_at": last.created_at.isoformat() if last.created_at else None,
+            }
         out.append(
             {
                 "id": str(group.id),
@@ -183,7 +206,11 @@ async def list_groups(
                 "goal": group.goal,
                 "status": group.status,
                 "lifecycle": group.lifecycle,
-                "member_count": member_count,
+                "member_count": len(members),
+                "member_avatars": [
+                    {"id": str(a.id), "emoji": a.emoji, "name": a.name} for _m, a in members
+                ],
+                "last_message": last_preview,
                 "rounds_completed": group.rounds_completed,
                 "current_round_no": group.current_round_no,
                 "max_rounds": group.max_rounds,
@@ -242,6 +269,25 @@ async def update_group(
         raise HTTPException(status_code=422, detail="goal darf nicht leer werden")
     if "max_rounds" in changes and (changes["max_rounds"] or 0) < 1:
         raise HTTPException(status_code=422, detail="max_rounds muss >= 1 sein")
+
+    new_lead = changes.pop("lead_agent_id", None)
+    if new_lead is not None and new_lead != group.lead_agent_id:
+        member = await session.get(GroupMember, (group.id, new_lead))
+        if member is None:
+            raise HTTPException(
+                status_code=422, detail="Der neue Lead muss Mitglied der Gruppe sein"
+            )
+        # Rollen mitziehen: es gibt genau einen Lead, und der alte fällt auf
+        # „member" zurück — sonst trüge die Mitgliederliste zwei Leads.
+        if group.lead_agent_id is not None:
+            old = await session.get(GroupMember, (group.id, group.lead_agent_id))
+            if old is not None and old.role == "lead":
+                old.role = "member"
+                session.add(old)
+        member.role = "lead"
+        session.add(member)
+        group.lead_agent_id = new_lead
+
     for key, value in changes.items():
         setattr(group, key, value)
     session.add(group)
@@ -337,15 +383,146 @@ async def post_group_message(
     return serialized
 
 
-@router.get("/groups/{group_id}/document")
-async def group_document(
+@router.get("/groups/{group_id}/stream")
+async def group_stream(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
+    """SSE-Strom eines Gruppenraums (Kanal `mc:events:group:{id}`).
+
+    Trägt group.message_posted / round_started / turn_started /
+    round_completed / doc_updated / gate_requested / status_changed /
+    member_changed — die Live-Ansicht im Frontend hängt hier dran.
+    """
+    from app.services.sse import make_sse_response
+
+    await _get_group_or_404(session, group_id)
+    return make_sse_response([RedisKeys.group_events(str(group_id))])
+
+
+@router.post("/groups/{group_id}/start")
+async def start_group_endpoint(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    from app.services import group_runner as runner_service
+
+    group = await _get_group_or_404(session, group_id)
+    try:
+        group = await runner_service.start_group(session, group)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return await _serialize_group(session, group)
+
+
+@router.post("/groups/{group_id}/pause")
+async def pause_group_endpoint(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    from app.services import group_runner as runner_service
+
+    group = await _get_group_or_404(session, group_id)
+    try:
+        group = await runner_service.pause_group(session, group)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return await _serialize_group(session, group)
+
+
+@router.post("/groups/{group_id}/stop")
+async def stop_group_endpoint(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    from app.services import group_runner as runner_service
+
+    group = await _get_group_or_404(session, group_id)
+    group = await runner_service.stop_group(session, group)
+    return await _serialize_group(session, group)
+
+
+@router.get("/groups/{group_id}/rounds")
+async def group_rounds(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    from app.models.group import GroupRound
+
+    group = await _get_group_or_404(session, group_id)
+    rounds = (
+        await session.exec(
+            select(GroupRound)
+            .where(GroupRound.group_id == group.id)
+            .order_by(GroupRound.created_at.asc())  # type: ignore[union-attr]
+        )
+    ).all()
+    return {
+        "rounds": [
+            {
+                "id": str(r.id),
+                "round_no": r.round_no,
+                "kind": r.kind,
+                # Die UI setzt den Runden-Trenner exakt an diese seq — ohne
+                # das Feld müsste sie den Brief-Text parsen (fragil).
+                "brief_seq": r.brief_seq,
+                "outcome": r.outcome,
+                "report": r.report,
+                "pending_speakers": r.pending_speakers,
+                "has_doc_snapshot": r.doc_snapshot is not None,
+                "tokens_used": r.tokens_used,
+                "cost_usd": r.cost_usd,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            }
+            for r in rounds
+        ]
+    }
+
+
+@router.get("/groups/{group_id}/document")
+async def group_document(
+    group_id: uuid.UUID,
+    version: int | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Aktuelles Ergebnis-Dokument (Datei) — oder mit ?version=n der
+    Snapshot der Runde n (Versions-Blätterer im UI)."""
+    from app.models.group import GroupRound
+
     group = await _get_group_or_404(session, group_id)
     if not group.result_doc_rel_path:
         raise HTTPException(status_code=404, detail="Gruppe hat kein Ergebnis-Dokument")
+
+    if version is not None:
+        snap = (
+            await session.exec(
+                select(GroupRound)
+                .where(
+                    GroupRound.group_id == group.id,
+                    GroupRound.round_no == version,
+                    GroupRound.doc_snapshot != None,  # noqa: E711
+                )
+                .order_by(GroupRound.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )
+        ).first()
+        if snap is None:
+            raise HTTPException(
+                status_code=404, detail=f"Kein Dokument-Snapshot für Runde {version}"
+            )
+        return {
+            "rel_path": group.result_doc_rel_path,
+            "content": snap.doc_snapshot,
+            "version": version,
+        }
+
     abs_path = os.path.join(
         reference_ingest.references_root(), group.result_doc_rel_path
     )
@@ -359,5 +536,6 @@ async def group_document(
     return {
         "rel_path": group.result_doc_rel_path,
         "content": content,
+        "version": None,
         "mtime": os.path.getmtime(abs_path),
     }

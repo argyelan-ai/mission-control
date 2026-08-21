@@ -146,6 +146,11 @@ async def test_post_user_message_resolves_mentions(async_session: AsyncSession):
     msg = await post_user_message(async_session, group, "@alle Status bitte")
     assert sorted(msg.mentions) == ["alpha", "free-code"]
 
+    # MC ist zweisprachig: die englische Oberfläche schickt "@all". Ohne
+    # diesen Fall ginge die Nachricht still nur an den Lead.
+    msg = await post_user_message(async_session, group, "@all status please")
+    assert sorted(msg.mentions) == ["alpha", "free-code"]
+
     # Keine Mention → Lead (sonst erreicht die Nachricht niemanden)
     msg = await post_user_message(async_session, group, "wie sieht es aus?")
     assert msg.mentions == ["alpha"]

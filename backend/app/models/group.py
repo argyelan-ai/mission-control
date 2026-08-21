@@ -175,7 +175,7 @@ class GroupRound(SQLModel, table=True):
             Uuid, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
         ),
     )
-    outcome: str | None = None  # goal_reached | continue | ask_mark | failed | stopped
+    outcome: str | None = None  # goal_reached | continue | ask_operator | failed | stopped
     report: str | None = None  # kompakter Runden-Report (Brief-Historie, Muster Loop)
     # Snapshot des Ergebnis-Dokuments nach dem Lead-Turn (Cap 64 KB) —
     # Versions-Verlauf fürs UI ohne Git-Maschinerie.

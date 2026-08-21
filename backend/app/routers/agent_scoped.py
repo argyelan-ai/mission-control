@@ -1730,6 +1730,63 @@ async def agent_post_message(
 # back over Slack without this handler knowing that Slack exists.
 
 
+class GroupDocumentWrite(BaseModel):
+    content: str
+
+
+@router.put("/groups/{group_id}/document")
+async def agent_write_group_document(
+    group_id: uuid.UUID,
+    payload: GroupDocumentWrite,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
+):
+    """Der Lead schreibt das lebende Ergebnis-Dokument seiner Gruppe (ADR-075).
+
+    Warum über die API und nicht über die Datei: Der References-Mount ist in
+    den Agenten-Containern **read-only** (live belegt am 21.08.2026 — der
+    Lead suchte die Datei, fand sie, und scheiterte am Schreiben). Der
+    ursprünglich gedachte Weg „Lead editiert mit seinen Datei-Tools" war
+    damit unmöglich; das Backend hat den Schreibzugriff, der Agent nicht.
+
+    Nebeneffekt und eigentlicher Gewinn: „nur der Lead schreibt" ist jetzt
+    eine serverseitig durchgesetzte Regel statt einer Bitte im Prompt.
+    """
+    import os as _os
+
+    from app.models.group import AgentGroup
+    from app.services import reference_ingest
+
+    group = await session.get(AgentGroup, group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Gruppe nicht gefunden")
+    if group.lead_agent_id != agent.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Nur der Lead dieser Gruppe darf das Ergebnis-Dokument schreiben.",
+        )
+    if not group.result_doc_rel_path:
+        raise HTTPException(status_code=404, detail="Gruppe hat kein Ergebnis-Dokument")
+
+    abs_path = _os.path.join(
+        reference_ingest.references_root(), group.result_doc_rel_path
+    )
+    _os.makedirs(_os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "w", encoding="utf-8") as fh:
+        fh.write(payload.content)
+
+    from app.redis_client import RedisKeys
+    from app.services import sse as sse_service
+
+    await sse_service.broadcast(
+        RedisKeys.group_events(str(group.id)),
+        "group.doc_updated",
+        {"group_id": str(group.id), "version": group.current_round_no},
+    )
+    logger.info("Group-Doc: %s schreibt %s", agent.name, group.result_doc_rel_path)
+    return {"ok": True, "rel_path": group.result_doc_rel_path, "bytes": len(payload.content)}
+
+
 @router.post("/threads/{thread_id}/messages", status_code=status.HTTP_201_CREATED)
 async def agent_post_thread_message(
     thread_id: uuid.UUID,
@@ -1797,6 +1854,31 @@ async def agent_post_thread_message(
         if group_row is not None:
             members = await group_service.group_member_agents(session, group_row)
             group_mentions = group_service.resolve_agent_mentions(members, body_text)
+
+            # Anti-Ping-Pong (ADR-075): Agent-zu-Agent-Ketten sind auf
+            # live_max_turns_per_impulse gedeckelt, gezählt seit der letzten
+            # User-/System-Nachricht. Ab dem Deckel werden die Mentions
+            # gestrichen — der Post bleibt im Protokoll (die Engine sammelt
+            # ihn ins nächste Brief-Delta), weckt aber niemanden mehr.
+            if group_mentions:
+                from app.models.thread import Message as _Msg
+
+                recent = (
+                    await session.exec(
+                        select(_Msg)
+                        .where(_Msg.thread_id == thread.id)
+                        .order_by(_Msg.seq.desc())  # type: ignore[union-attr]
+                        .limit(50)
+                    )
+                ).all()
+                chain = 0
+                for m in recent:
+                    if m.sender_type != "agent":
+                        break
+                    if m.mentions:
+                        chain += 1
+                if chain >= max(group_row.live_max_turns_per_impulse, 0):
+                    group_mentions = []
 
     message = await post_message(
         session,

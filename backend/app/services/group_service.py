@@ -36,6 +36,14 @@ from app.services.messaging import post_message
 from app.utils import slugify
 
 
+# Rundfunk-Handles: "@alle" adressiert die ganze Gruppe. MC ist zweisprachig
+# (deutsche und englische Oberfläche) und liegt öffentlich — wer die englische
+# UI benutzt, tippt "@all". Ein einsprachiger Vergleich hätte diese Nachricht
+# still nur an den Lead geschickt statt an alle: kein Fehler, keine Meldung,
+# einfach die halbe Gruppe nicht erreicht.
+BROADCAST_HANDLES = frozenset({"alle", "all", "everyone"})
+
+
 class GroupValidationError(ValueError):
     """Ungültige Eingabe — der Router antwortet 422."""
 
@@ -71,6 +79,11 @@ _Noch keine Runde gelaufen._
 def _canonical_handle(agent: Agent) -> str:
     """Der Slug ist die kanonische Anrede; Fallback: Name in Slug-Form."""
     return agent.slug or slugify(agent.name or "") or str(agent.id)
+
+
+# Öffentlicher Alias — die Runden-Engine (group_runner) braucht dieselbe
+# kanonische Anrede für pending_speakers/mentions.
+canonical_handle = _canonical_handle
 
 
 async def _load_capable_agents(
@@ -223,11 +236,11 @@ def resolve_user_mentions(
 ) -> list[str]:
     """Mentions einer Operator-Nachricht → kanonische Mitglieds-Slugs.
 
-    "@alle" schlägt alles. Kein Treffer → der Lead (die Nachricht muss
-    IRGENDWEN erreichen — Zustellung ist mention-gefiltert).
+    Der Rundfunk-Handle schlägt alles. Kein Treffer → der Lead (die Nachricht
+    muss IRGENDWEN erreichen — Zustellung ist mention-gefiltert).
     """
     hits, explicit = _member_mention_hits(members, text)
-    if any(_fold(h) == "alle" for h in explicit):
+    if any(_fold(h) in BROADCAST_HANDLES for h in explicit):
         return [_canonical_handle(a) for a in members]
     if hits:
         return hits

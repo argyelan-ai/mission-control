@@ -10,7 +10,12 @@ class Approval(SQLModel, table=True):
     __tablename__ = "approvals"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    board_id: uuid.UUID = Field(foreign_key="boards.id", index=True)
+    # Nullable seit Migration 0182: group_gate-Approvals (ADR-075) gehören zu
+    # einer Gruppe, nicht zu einem Board — Gruppen sind bewusst board-frei.
+    # Die globale Pending-Liste (GET /approvals) zeigt sie weiterhin.
+    board_id: uuid.UUID | None = Field(
+        default=None, foreign_key="boards.id", nullable=True, index=True
+    )
     task_id: uuid.UUID | None = Field(
         default=None, foreign_key="tasks.id", nullable=True
     )
