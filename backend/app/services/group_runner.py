@@ -376,19 +376,17 @@ class GroupRunnerService:
             "## Deine Pflichten — in DIESER Reihenfolge",
             "**Zuerst das Urteil, dann das Dokument.** Scheitert das Dokument-Update, poste trotzdem dein Urteil — eine Runde ohne Urteil zählt als Fehlrunde und die Gruppe verliert eine von wenigen Runden.",
             (
-                "2. Aktualisiere das Ergebnis-Dokument. Lesen kannst du es unter "
-                f"`{doc_abs}`; SCHREIBEN geht nur über die API (der Mount ist "
+                "2. Aktualisiere das Ergebnis-Dokument — schreib den vollstaendigen neuen "
+                "Stand, die Datei wird ersetzt. Lesen kannst du es unter "
+                f"`{doc_abs}`; SCHREIBEN geht nur ueber das CLI (der Mount ist "
                 "read-only):\n"
                 "```\n"
-                "curl -sS -X PUT \"$MC_API_URL/api/v1/agent/groups/"
-                f"{group.id}/document\" \\\n"
-                "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
-                "  -H 'Content-Type: application/json' \\\n"
-                "  -d \"$(python3 -c 'import json,sys; "
-                "print(json.dumps({\\\"content\\\": open(\\\"/tmp/result.md\\\").read()}))')\"\n"
+                "cat > /tmp/result.md <<'EOF'\n"
+                "# … dein Dokument …\n"
+                "EOF\n"
+                f"mc group-doc {group.id} --file /tmp/result.md\n"
                 "```\n"
-                "   Schreib den vollständigen neuen Stand (die Datei wird ersetzt): "
-                "halte Quellen UND Dissens fest, glätte nichts."
+                "   Halte Quellen UND Dissens fest, glaette nichts."
                 if doc_abs else
                 "2. (Kein Ergebnis-Dokument konfiguriert.)"
             ),
