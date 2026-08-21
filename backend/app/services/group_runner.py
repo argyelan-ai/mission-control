@@ -373,9 +373,10 @@ class GroupRunnerService:
             body_parts += ["", "Übersprungen (Timeout): " + ", ".join(f"@{s}" for s in skipped)]
         body_parts += [
             "",
-            "## Deine Pflichten",
+            "## Deine Pflichten — in DIESER Reihenfolge",
+            "**Zuerst das Urteil, dann das Dokument.** Scheitert das Dokument-Update, poste trotzdem dein Urteil — eine Runde ohne Urteil zählt als Fehlrunde und die Gruppe verliert eine von wenigen Runden.",
             (
-                "1. Aktualisiere das Ergebnis-Dokument. Lesen kannst du es unter "
+                "2. Aktualisiere das Ergebnis-Dokument. Lesen kannst du es unter "
                 f"`{doc_abs}`; SCHREIBEN geht nur über die API (der Mount ist "
                 "read-only):\n"
                 "```\n"
@@ -389,9 +390,9 @@ class GroupRunnerService:
                 "   Schreib den vollständigen neuen Stand (die Datei wird ersetzt): "
                 "halte Quellen UND Dissens fest, glätte nichts."
                 if doc_abs else
-                "1. (Kein Ergebnis-Dokument konfiguriert.)"
+                "2. (Kein Ergebnis-Dokument konfiguriert.)"
             ),
-            f"2. Antworte mit `mc msg --thread {group.thread_id}` und beginne dein "
+            f"1. Antworte mit `mc msg --thread {group.thread_id}` und beginne dein "
             "Urteil mit GENAU EINEM Marker:",
             "   - `ZIEL ERREICHT: <Synthese mit Quellen + Dissens>`",
             "   - `WEITER: <was noch offen ist>`",
