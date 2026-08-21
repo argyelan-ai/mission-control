@@ -28,6 +28,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
+from app.models.group import AgentGroup, GroupMember
 from app.models.task import Task
 from app.models.thread import Thread
 
@@ -70,12 +71,30 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
         )
     )
     dm_pairs = [(th, None) for th in dm_res.all()]
+    # Gruppen-Threads (Gruppenchat V1): Teilnahme steht in group_members, nicht
+    # in Thread.agent_id (der bleibt NULL — eine Gruppe gehört niemandem allein).
+    # Geschlossene Gruppen (closed_at) fallen raus wie beendete Gespräche.
+    # Second tuple entry None wie bei dm/chat: kein Task, kein Fast-Forward.
+    group_res = await session.exec(
+        select(Thread)
+        .join(AgentGroup, AgentGroup.thread_id == Thread.id)  # type: ignore[arg-type]
+        .join(GroupMember, GroupMember.group_id == AgentGroup.id)  # type: ignore[arg-type]
+        .where(
+            GroupMember.agent_id == agent.id,
+            Thread.closed_at.is_(None),  # type: ignore[union-attr]
+        )
+    )
+    group_pairs = [(th, None) for th in group_res.all()]
     if not tasks_by_thread:
-        return dm_pairs
+        return dm_pairs + group_pairs
     threads_res = await session.exec(
         select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
     )
-    return [(th, tasks_by_thread[th.id]) for th in threads_res.all()] + dm_pairs
+    return (
+        [(th, tasks_by_thread[th.id]) for th in threads_res.all()]
+        + dm_pairs
+        + group_pairs
+    )
 
 
 async def thread_agent_may_write_to(

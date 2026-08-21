@@ -1305,6 +1305,8 @@ Alle ADRs in `docs/decisions/`:
 | Sessions-Chat: neuer CLI-Harness anbinden | `backend/app/services/transcript_chat.py` (Parser+Tailer), `pane_state.py` (Sonde), `agent_chat_input.py` (Eingabe) | ADR-073 — Pflicht-Discovery zuerst: `~/.claude/skills/mc-chat-cli-adapter/SKILL.md`; SSE-Kern/Frontend-Reducer nie CLI-spezifisch anfassen |
 | Sessions-Chat: Event-Schema / Parsing-Regel | `backend/app/services/transcript_chat.py::parse_transcript_line` | Frontend `lib/chatTypes.ts` synchron halten (Event-Shapes gespiegelt) |
 | Sessions-Chat: Eingabe-Kanal / Recycler-Marker | `backend/app/services/agent_chat_input.py` | Separater Enter-Frame pro Transport ist Pflicht (ADR-073) — nie Text+Enter in einem Frame |
+| Gruppenchat: Gruppe/Mitglieder/Config | `backend/app/models/group.py` + `services/group_service.py` + `routers/groups.py` (Migration 0181) | ADR-075 — Verlauf liegt als Messages auf `Thread(kind="group")`, KEIN eigenes Nachrichtensystem; goal ist Pflicht, Mitglieder nur comm_v2 |
+| Gruppenchat: Zustellung/Sichtbarkeit | `services/thread_scope.py` (Group-Join) + `routers/agents.py::_group_message_visible_to` (Mention-Filter) | ADR-075 — eine Scope-Regel für Zustellung UND Antwort-Recht; Agenten-Posts ohne Mention wecken strukturell NIEMANDEN (Sturm-Schutz) — nie aufweichen |
 | Frontend-Page | `frontend-v2/src/app/{page}/page.tsx` | Ggf. `lib/api.ts` + types |
 | Browsebare Datei-Wurzel hinzufügen/ändern | `backend/app/services/fs_roots.py` (Registry, SSoT) | Nie `secrets`/Token-Config browsebar machen (ADR-040) |
 | Datei-Zugriff (list/stat/stream) | `backend/app/services/fs_service.py` (einziger Containment-Guard) | Nie an `fs_service` vorbei os.listdir/open |
@@ -1329,6 +1331,14 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-08-20** — **Multi-Agent-Gruppenchat V1, Fundament (ADR-075, PR A):** Eine Gruppe =
+  `Thread(kind="group")` + `agent_groups` + `group_members` (Migration 0181). Scope über
+  `thread_scope` (Mitglied hört UND antwortet, eine Regel), Zustellung mention-gefiltert
+  (Sturm-Schutz strukturell), Agenten-@-Mentions werden im Antwort-Pfad gegen die
+  Mitglieder aufgelöst, SSE-Kanal `mc:events:group:{id}`. Neu: `services/group_service.py`,
+  `routers/groups.py` (CRUD, Nachrichten, Ergebnis-Dokument, eligible-members).
+  Ergebnis-Dokument-Skelett unter `references/groups/<slug>/result.md` (ReferenceFile beim
+  Lead). Runden-Engine folgt als PR B (`group_runner`), UI als PR C.
 - **2026-08-16** — **Sessions-Chat-View: read-only Transkript-Tailing + tmux-Eingabe als
   zweite Surface (ADR-073):** `/sessions` bekommt eine Codex/Claude-Code-Web-artige
   Chat-Ansicht **neben** der unveränderten interaktiven TUI, statt sie zu ersetzen. Neu:
