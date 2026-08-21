@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { GroupMessage } from "./GroupMessage";
 import type { GroupMessage as GroupMessageData } from "@/lib/groupTypes";
 
@@ -113,12 +114,15 @@ describe("GroupMessage — system register", () => {
     expect(el).toHaveTextContent("Ergebnis aktualisiert.");
   });
 
-  it("renders a long system letter in full rather than clamping it", () => {
+  it("folds a long system letter away instead of walling the transcript", () => {
+    // Verhalten bewusst geaendert (Operator-Wunsch 21.08.2026): frueher lief
+    // der Rundenbrief in voller Laenge zwischen den Beitraegen — auf dem
+    // Handy mehrere Bildschirme Maschinen-Text. Nichts geht verloren: der
+    // Knopf traegt die erste Zeile, ein Klick zeigt alles.
     const long = `Runde 3\n\n${"Sehr ausführlicher Rundenbrief. ".repeat(40)}ENDE`;
     renderMessage(mkMessage({ sender_type: "system", sender_id: null, body: long }));
-    const el = screen.getByTestId("group-message-system");
-    expect(el).toHaveTextContent(/ENDE$/);
-    expect(el.style.maxHeight).toBe("");
+    expect(screen.getByTestId("group-system-toggle")).toHaveTextContent("Runde 3");
+    expect(screen.getByTestId("group-message-system")).not.toHaveTextContent(/ENDE$/);
   });
 
   it("shows no speaker name for a system line", () => {
@@ -142,5 +146,66 @@ describe("GroupMessage — pending", () => {
     const bubble = screen.getByTestId("group-message-user");
     expect(bubble.style.opacity).toBe("");
     expect(bubble).not.toHaveAttribute("title");
+  });
+});
+
+describe("GroupMessage — lange System-Nachrichten", () => {
+  const longBody = [
+    "# Gruppe: Spark-Standard — Runde 2/3",
+    "",
+    "## Ziel",
+    "Entscheide, ob DFlash2 Standard wird.",
+    "",
+    "## Deine Aufgabe",
+    "x".repeat(400),
+  ].join("\n");
+
+  it("collapses a round brief and shows its first line as the label", () => {
+    render(
+      <GroupMessage
+        message={mkMessage({ sender_type: "system", sender_id: null, body: longBody })}
+        senderName={null}
+        senderEmoji={null}
+        isOwn={false}
+      />,
+    );
+    expect(screen.getByTestId("group-system-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Gruppe: Spark-Standard — Runde 2/3")).toBeInTheDocument();
+    expect(screen.queryByTestId("group-system-body")).not.toBeInTheDocument();
+  });
+
+  it("reveals the full text on click and hides it again", async () => {
+    const user = userEvent.setup({ delay: null });
+    render(
+      <GroupMessage
+        message={mkMessage({ sender_type: "system", sender_id: null, body: longBody })}
+        senderName={null}
+        senderEmoji={null}
+        isOwn={false}
+      />,
+    );
+    await user.click(screen.getByTestId("group-system-toggle"));
+    expect(screen.getByTestId("group-system-body")).toHaveTextContent("Entscheide, ob DFlash2 Standard wird.");
+    expect(screen.getByTestId("group-system-toggle")).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(screen.getByTestId("group-system-toggle"));
+    expect(screen.queryByTestId("group-system-body")).not.toBeInTheDocument();
+  });
+
+  it("keeps a short system note open — a timeout line is only useful unbidden", () => {
+    render(
+      <GroupMessage
+        message={mkMessage({
+          sender_type: "system",
+          sender_id: null,
+          body: "⏳ Timeout — übersprungen: @rex (keine Antwort nach 600s).",
+        })}
+        senderName={null}
+        senderEmoji={null}
+        isOwn={false}
+      />,
+    );
+    expect(screen.queryByTestId("group-system-toggle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("group-message-system")).toHaveTextContent("übersprungen: @rex");
   });
 });

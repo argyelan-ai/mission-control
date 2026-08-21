@@ -100,6 +100,7 @@ export function useGroupStream(groupId: string | null): UseGroupStreamResult {
       .messages(groupId, { limit: PAGE_LIMIT })
       .then((res) => {
         if (cancelled) return;
+        setConnected(true);
         applyIncoming(res.messages);
         setHasMoreBefore(res.messages.length >= PAGE_LIMIT);
       })
@@ -114,8 +115,16 @@ export function useGroupStream(groupId: string | null): UseGroupStreamResult {
     if (!groupId) return;
     api.groups
       .messages(groupId, { sinceSeq: latestSeq.current })
-      .then((res) => applyIncoming(res.messages))
-      .catch(() => {});
+      .then((res) => {
+        // Ein geglückter Abruf IST der Beweis, dass die Ansicht aktuell ist —
+        // egal ob der SSE-Strom oder das Netz darunter sie geliefert hat.
+        // Vorher hing `connected` allein an eingetroffenen Gruppen-Ereignissen;
+        // in einer ruhigen Gruppe kam nie eines, und die Statuszeile behauptete
+        // „Verbindung verloren", während alles lief (Operator-Befund 21.08.).
+        setConnected(true);
+        applyIncoming(res.messages);
+      })
+      .catch(() => setConnected(false));
   }, [groupId, applyIncoming]);
 
   // SSE: Nachrichten kommen direkt mit; Runden-/Gate-/Doc-Ereignisse pflegen

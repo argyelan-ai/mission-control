@@ -137,7 +137,14 @@ export function GroupChatView({
     group.status === "waiting_gate" ? stream.state.gateQuestion ?? group.goal : null;
 
   return (
-    <div className="flex flex-col h-full min-h-0" data-testid="group-chat-view">
+    // `flex-1 min-h-0 overflow-hidden` wie ChatView — NICHT `h-full`: sonst
+    // wächst die Spalte über die Bildschirmhöhe hinaus, die ganze Seite
+    // scrollt statt nur des Verlaufs, und der Kopf wandert auf dem iPhone
+    // unter die Statusleiste (Operator-Befund 21.08.2026, iPhone 15).
+    <div
+      className="flex flex-col flex-1 min-h-0 overflow-hidden"
+      data-testid="group-chat-view"
+    >
       {/* Kopf — mobil mit Zurück-Chevron, Titel mittig (Muster aus dem
           Handy-Chat), darunter das Ziel als Kontextzeile: eine Gruppe ohne
           sichtbares Ziel wäre nur ein Haufen Agenten. */}
