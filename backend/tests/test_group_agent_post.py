@@ -246,3 +246,43 @@ async def test_task_thread_post_does_not_hit_group_channel(
     )
     assert resp.status_code == 201
     assert [c for c in sse_calls if c[0].startswith("mc:events:group:")] == []
+
+
+@pytest.mark.asyncio
+async def test_lead_writes_the_result_document_via_api(
+    client: AsyncClient, async_session: AsyncSession, tmp_path, monkeypatch
+):
+    """Der Lead pflegt das Ergebnis-Dokument über die API — NICHT über die
+    Datei. Live-Befund 21.08.2026: der References-Mount ist in den
+    Agenten-Containern read-only; der als 'Lead editiert mit seinen
+    Datei-Tools' gedachte Weg war schlicht unmöglich."""
+    monkeypatch.setattr(
+        "app.services.reference_ingest.references_root", lambda: str(tmp_path)
+    )
+    from app.services import group_service
+
+    lead, lead_token = await _make_member(async_session, "Alpha", "alpha")
+    other, other_token = await _make_member(async_session, "Beta", "beta")
+    group = await group_service.create_group(
+        async_session, name="G", goal="Ziel",
+        member_ids=[lead.id, other.id], lead_agent_id=lead.id,
+    )
+
+    resp = await client.put(
+        f"/api/v1/agent/groups/{group.id}/document",
+        headers={"Authorization": f"Bearer {lead_token}"},
+        json={"content": "# Ergebnis\n\nDFlash2 gewinnt. Quelle: https://x.org\n"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    doc = (tmp_path / group.result_doc_rel_path).read_text()
+    assert "DFlash2 gewinnt" in doc
+
+    # Nur der Lead — ein anderes Mitglied darf das Dokument nicht überschreiben.
+    resp = await client.put(
+        f"/api/v1/agent/groups/{group.id}/document",
+        headers={"Authorization": f"Bearer {other_token}"},
+        json={"content": "gekapert"},
+    )
+    assert resp.status_code == 403
+    assert "gekapert" not in (tmp_path / group.result_doc_rel_path).read_text()

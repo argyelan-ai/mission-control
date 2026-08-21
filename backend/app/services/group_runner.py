@@ -353,6 +353,10 @@ class GroupRunnerService:
             contrib_parts += [f"### @{slug}", _short(m.body, 2000)]
         skipped = [s for s in (round_row.pending_speakers or []) if s not in seen]
 
+        # Lesen darf der Agent die Datei (Mount ist da), SCHREIBEN nicht —
+        # der References-Mount ist in den Agenten-Containern read-only (live
+        # belegt 21.08.2026). Deshalb nennt der Auftrag beide Wege getrennt:
+        # Pfad zum Lesen, API zum Schreiben.
         doc_abs = ""
         if group.result_doc_rel_path:
             doc_abs = os.path.join(
@@ -371,8 +375,19 @@ class GroupRunnerService:
             "",
             "## Deine Pflichten",
             (
-                f"1. Aktualisiere das Ergebnis-Dokument: `{doc_abs}` — nur du "
-                "schreibst es; halte Quellen UND Dissens fest, glätte nichts."
+                "1. Aktualisiere das Ergebnis-Dokument. Lesen kannst du es unter "
+                f"`{doc_abs}`; SCHREIBEN geht nur über die API (der Mount ist "
+                "read-only):\n"
+                "```\n"
+                "curl -sS -X PUT \"$MC_API_URL/api/v1/agent/groups/"
+                f"{group.id}/document\" \\\n"
+                "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
+                "  -H 'Content-Type: application/json' \\\n"
+                "  -d \"$(python3 -c 'import json,sys; "
+                "print(json.dumps({\\\"content\\\": open(\\\"/tmp/result.md\\\").read()}))')\"\n"
+                "```\n"
+                "   Schreib den vollständigen neuen Stand (die Datei wird ersetzt): "
+                "halte Quellen UND Dissens fest, glätte nichts."
                 if doc_abs else
                 "1. (Kein Ergebnis-Dokument konfiguriert.)"
             ),
