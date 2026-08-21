@@ -186,13 +186,16 @@ export const P2 = {
 // the Leitstand palette — and magenta is magenta, not the banned AI-violet.
 // NOTE: the ANSI slots below (incl. `cyan`) are terminal CONTENT fidelity, not
 // UI accent — programs emit ANSI 6/14 and expect a cyan. They are deliberately
-// exempt from System A's no-chroma rule; only the chrome (bg/fg/cursor/black)
-// follows the tokens.
+// exempt from System A's no-chroma rule.
+// The background does NOT track the UI surfaces either: a terminal is content,
+// and it reads as a terminal because it is near-black. When the surfaces were
+// lifted for daylight legibility this got dragged along to #181818 and the
+// pane came out grey — it stays dark on purpose.
 export const XTERM_THEME = {
-  background: "#181818",
+  background: "#0E0E0E",
   foreground: "#F2F2F2",
   cursor: C.accent,
-  cursorAccent: "#181818",
+  cursorAccent: "#0E0E0E",
   black: "#313131",
   brightBlack: "#8A8A8A",
   red: "#FA4942",

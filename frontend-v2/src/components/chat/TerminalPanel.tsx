@@ -315,7 +315,13 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
         </div>
       </div>
       {/* Body */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      {/* The pane carries the terminal's own ground, not the page surface:
+          xterm paints only the cells it owns, so a lighter panel tone showed
+          through around and below them and the terminal read as grey. */}
+      <div
+        className="flex-1 min-h-0 flex flex-col overflow-hidden"
+        style={{ backgroundColor: XTERM_THEME.background }}
+      >
         <div className="flex-1 min-h-0 relative flex">
           <div ref={outerRef} className="absolute inset-0 overflow-auto">
             <div
