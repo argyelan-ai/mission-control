@@ -113,7 +113,11 @@ export function MobileTabBar() {
       aria-label="Hauptnavigation"
       className="md:hidden shrink-0"
       style={{
-        backgroundColor: "rgba(10,10,10,0.95)",
+        // Panel tone, matching the desktop column — was a hardcoded
+        // rgba(10,10,10,.95) that stayed on the old near-black after the
+        // surfaces were lifted, so the phone chrome no longer matched its
+        // own content. Opaque on purpose (see the header note below).
+        backgroundColor: "var(--color-p2-pan)",
         borderTop: "1px solid var(--color-p2-line)",
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
@@ -297,7 +301,7 @@ export default function MobileNav() {
         style={{
           paddingBottom: "0.5rem",
           minHeight: "calc(env(safe-area-inset-top) + 3.5rem)",
-          backgroundColor: "rgba(10,10,10,0.92)",
+          backgroundColor: "var(--color-p2-pan)",
           borderBottom: "1px solid var(--color-p2-line2)",
         }}
       >

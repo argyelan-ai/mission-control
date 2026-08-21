@@ -399,7 +399,7 @@ export function VaultGraphPage({
             onChange={(e) => setColorMode(e.target.value as "type" | "community")}
             className="text-xs font-mono uppercase bg-transparent border border-white/10 px-2 py-1 rounded"
             style={{
-              background: "rgba(10,10,10,0.85)",
+              background: "var(--color-p2-glass)",
               color: "var(--color-text-secondary)",
               backdropFilter: "blur(6px)",
             }}
