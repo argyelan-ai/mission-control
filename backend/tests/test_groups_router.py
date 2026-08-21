@@ -322,3 +322,49 @@ async def test_eligible_members_only_comm_v2_unarchived(
     assert resp.status_code == 200
     slugs = {a["slug"] for a in resp.json()}
     assert slugs == {"alpha"}
+
+
+@pytest.mark.asyncio
+async def test_lead_can_be_switched_to_another_member(
+    auth_client: AsyncClient, async_session
+):
+    """Fällt der Lead aus (hängendes CLI, archiviert), muss die Gruppe einen
+    neuen bekommen — sonst steckt sie für immer fest: der alte Lead ist nicht
+    entfernbar, und niemand sonst darf urteilen. Live-Befund vom 21.08.2026."""
+    from app.models.group import AgentGroup, GroupMember
+
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    body = await _create_group(auth_client, [a.id, b.id], lead_agent_id=str(a.id))
+    gid = body["id"]
+
+    resp = await auth_client.patch(
+        f"/api/v1/groups/{gid}", json={"lead_agent_id": str(b.id)}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["lead_agent_id"] == str(b.id)
+
+    roles = {m["slug"]: m["role"] for m in resp.json()["members"]}
+    assert roles == {"alpha": "member", "beta": "lead"}
+
+    group = await async_session.get(AgentGroup, uuid.UUID(gid))
+    await async_session.refresh(group)
+    assert str(group.lead_agent_id) == str(b.id)
+
+    # Der neue Lead ist jetzt der Unentfernbare, der alte darf gehen.
+    assert (await auth_client.delete(f"/api/v1/groups/{gid}/members/{b.id}")).status_code == 422
+    assert (await auth_client.delete(f"/api/v1/groups/{gid}/members/{a.id}")).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_lead_switch_rejects_a_non_member(auth_client: AsyncClient, async_session):
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    outsider = await _make_agent(async_session, "Gamma")
+    body = await _create_group(auth_client, [a.id, b.id], lead_agent_id=str(a.id))
+
+    resp = await auth_client.patch(
+        f"/api/v1/groups/{body['id']}", json={"lead_agent_id": str(outsider.id)}
+    )
+    assert resp.status_code == 422
+    assert "Mitglied" in resp.json()["detail"]

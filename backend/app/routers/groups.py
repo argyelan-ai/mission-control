@@ -48,6 +48,10 @@ class GroupCreate(BaseModel):
 class GroupUpdate(BaseModel):
     name: str | None = None
     goal: str | None = None
+    # Der Lead muss wechselbar sein: fällt er aus (hängendes CLI, archiviert),
+    # steckt die Gruppe sonst fest — er ist nicht entfernbar, und nur er darf
+    # urteilen und das Ergebnis-Dokument schreiben. Live-Befund 21.08.2026.
+    lead_agent_id: uuid.UUID | None = None
     max_rounds: int | None = None
     max_duration_minutes: int | None = None
     budget_usd: float | None = None
@@ -265,6 +269,25 @@ async def update_group(
         raise HTTPException(status_code=422, detail="goal darf nicht leer werden")
     if "max_rounds" in changes and (changes["max_rounds"] or 0) < 1:
         raise HTTPException(status_code=422, detail="max_rounds muss >= 1 sein")
+
+    new_lead = changes.pop("lead_agent_id", None)
+    if new_lead is not None and new_lead != group.lead_agent_id:
+        member = await session.get(GroupMember, (group.id, new_lead))
+        if member is None:
+            raise HTTPException(
+                status_code=422, detail="Der neue Lead muss Mitglied der Gruppe sein"
+            )
+        # Rollen mitziehen: es gibt genau einen Lead, und der alte fällt auf
+        # „member" zurück — sonst trüge die Mitgliederliste zwei Leads.
+        if group.lead_agent_id is not None:
+            old = await session.get(GroupMember, (group.id, group.lead_agent_id))
+            if old is not None and old.role == "lead":
+                old.role = "member"
+                session.add(old)
+        member.role = "lead"
+        session.add(member)
+        group.lead_agent_id = new_lead
+
     for key, value in changes.items():
         setattr(group, key, value)
     session.add(group)
