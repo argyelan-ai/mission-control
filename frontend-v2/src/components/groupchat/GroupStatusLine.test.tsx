@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { GroupStatusLine } from "./GroupStatusLine";
 import { EMPTY_GROUP_STREAM_STATE } from "@/lib/groupTypes";
 import type { GroupStreamState } from "@/lib/groupTypes";
@@ -122,16 +123,17 @@ describe("GroupStatusLine", () => {
     render(
       <GroupStatusLine status="idle" state={mkState()} connected spentUsd={0.4} budgetUsd={2} />
     );
-    // C.textDim #666666
-    expect(screen.getByText("0.40 / 2.00 USD")).toHaveStyle({ color: "rgb(102, 102, 102)" });
+    // Gegen den TOKEN prüfen, nie gegen einen abgeschriebenen Hex-Wert:
+    // die Palette wurde im Shell-v4-Umbau aufgehellt, ein hartcodiertes
+    // #666666 hätte den Test grundlos rot gemacht.
+    expect(screen.getByText("0.40 / 2.00 USD")).toHaveStyle({ color: C.textDim });
   });
 
   it("turns the cost to the warning tone from 85% of the budget", () => {
     render(
       <GroupStatusLine status="idle" state={mkState()} connected spentUsd={1.7} budgetUsd={2} />
     );
-    // STATUS_TEXT.warning #B98F4D
-    expect(screen.getByText("1.70 / 2.00 USD")).toHaveStyle({ color: "rgb(185, 143, 77)" });
+    expect(screen.getByText("1.70 / 2.00 USD")).toHaveStyle({ color: STATUS_TEXT.warning });
   });
 
   it("announces itself politely so a screen reader picks up status changes", () => {
