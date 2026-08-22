@@ -144,9 +144,14 @@ export function ResultDocPanel({ groupId, latestVersion, updating = false }: Res
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* ── Kopfzeile: was ist das, und welche Fassung sehe ich ── */}
+      {/* Kopfzeile nur am Schreibtisch: auf dem Handy trägt das Sheet bereits
+          eine Titelzeile „Ergebnis" — die zweite darunter sagte dasselbe noch
+          einmal und kostete ~120px Höhe auf einem Bildschirm, auf dem Höhe das
+          knappe Gut ist (Befund im Handy-Screenshot 22.08.2026). Der
+          Umschreib-Hinweis wandert deshalb in die Kopfzone, wo ihn beide
+          Geräte sehen. */}
       <div
-        className="flex items-center gap-2 px-3 py-2 border-b shrink-0"
+        className="hidden md:flex items-center gap-2 px-3 py-2 border-b shrink-0"
         style={{ borderColor: C.border }}
       >
         <span
@@ -155,11 +160,6 @@ export function ResultDocPanel({ groupId, latestVersion, updating = false }: Res
         >
           {t("resultPanel")}
         </span>
-        {updating && (
-          <span className="text-[11px] animate-pulse" style={{ color: C.textMuted }} aria-live="polite">
-            {t("resultUpdating")}
-          </span>
-        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -176,10 +176,15 @@ export function ResultDocPanel({ groupId, latestVersion, updating = false }: Res
                 will EINE Sache wissen: wo steht die Gruppe. */}
             <div className="px-4 pt-4 pb-3 border-b" style={{ borderColor: C.borderSubtle }}>
               <div
-                className="text-[11px] font-mono uppercase tracking-wider mb-1.5"
+                className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider mb-1.5"
                 style={{ color: C.textMuted }}
               >
                 {t("resultVerdictLabel")}
+                {updating && (
+                  <span className="normal-case tracking-normal animate-pulse" aria-live="polite">
+                    {t("resultUpdating")}
+                  </span>
+                )}
               </div>
               <p
                 data-testid="result-verdict"

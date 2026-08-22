@@ -498,6 +498,13 @@ function SessionsPageContent() {
                 onBack={() => setMobileView("list")}
                 onGroupChanged={handleGroupChanged}
                 onOpenResult={() => setActivePanel(activePanel === "doc" ? null : "doc")}
+                onGroupGone={() => {
+                  // Erst die Auswahl raeumen, dann neu laden: sonst rendert die
+                  // Seite fuer einen Frame den Raum einer geloeschten Gruppe.
+                  setSelectedGroupId(null);
+                  setActivePanel(null);
+                  qc.invalidateQueries({ queryKey: ["groups"] });
+                }}
               />
             ) : isLoading && !selectedLive ? null : (
               // `key` stays on the id, not the object: re-keying on every

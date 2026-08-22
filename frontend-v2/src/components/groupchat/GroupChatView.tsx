@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ChevronLeft, FileText, Pause, Play, Square, Users } from "lucide-react";
+import { CheckCircle2, ChevronLeft, FileText, Pause, Play, Square, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
@@ -28,6 +28,7 @@ import { GroupGateCard } from "@/components/groupchat/GroupGateCard";
 import { GroupMessage } from "@/components/groupchat/GroupMessage";
 import { GroupStatusLine } from "@/components/groupchat/GroupStatusLine";
 import { RoundDivider } from "@/components/groupchat/RoundDivider";
+import { FinishGroupDialog } from "@/components/groupchat/FinishGroupDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface GroupChatViewProps {
@@ -35,6 +36,9 @@ interface GroupChatViewProps {
   onBack?: () => void;
   onGroupChanged: (group: GroupDetail) => void;
   onOpenResult?: () => void;
+  /** Die Gruppe wurde vollstaendig geloescht — die Seite muss ihre Auswahl
+   *  raeumen, sonst zeigt sie den Raum einer Gruppe, die es nicht mehr gibt. */
+  onGroupGone?: () => void;
 }
 
 export function GroupChatView({
@@ -42,12 +46,14 @@ export function GroupChatView({
   onBack,
   onGroupChanged,
   onOpenResult,
+  onGroupGone,
 }: GroupChatViewProps) {
   const t = useTranslations("sessions.groups");
   const stream = useGroupStream(group.id);
   const [rounds, setRounds] = useState<GroupRoundInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [finishOpen, setFinishOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -261,6 +267,21 @@ export function GroupChatView({
               <Square size={15} />
             </button>
           )}
+          {/* Abschliessen: erst wenn nichts mehr laeuft. Waehrend einer Runde
+              waere der Knopf eine Falle — Loeschen ist dann ohnehin gesperrt. */}
+          {!running && (
+            <button
+              type="button"
+              onClick={() => setFinishOpen(true)}
+              aria-label={t("finishTitle")}
+              title={t("finishTitle")}
+              data-testid="group-finish"
+              className="flex items-center justify-center w-9 h-9 rounded-lg cursor-pointer"
+              style={{ color: C.textMuted }}
+            >
+              <CheckCircle2 size={16} />
+            </button>
+          )}
           {onOpenResult && (
             <button
               type="button"
@@ -357,6 +378,20 @@ export function GroupChatView({
           roundRunning={running}
         />
       </div>
+
+      {finishOpen && (
+        <FinishGroupDialog
+          open={finishOpen}
+          group={group}
+          messageCount={stream.messages.length}
+          onClose={() => setFinishOpen(false)}
+          onChanged={onGroupChanged}
+          onGone={() => {
+            setFinishOpen(false);
+            onGroupGone?.();
+          }}
+        />
+      )}
 
       {confirmStop && (
         <ConfirmDialog

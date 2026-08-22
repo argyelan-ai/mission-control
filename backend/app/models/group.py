@@ -111,6 +111,13 @@ class AgentGroup(SQLModel, table=True):
     finished_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
+    # Archiv ≠ Status. `status` sagt, was die Engine tut (läuft, wartet,
+    # fertig); `archived_at` sagt, was der Operator noch sehen will. In einer
+    # Spalte vermischt hätte eine archivierte Gruppe ihren Ausgang vergessen.
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
+    )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
