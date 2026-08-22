@@ -26,10 +26,16 @@ chain. By default that chain uses the OpenAI cloud; with this server it runs
 ./setup.sh
 ```
 
-Idempotent. Creates the venv, installs deps, registers + starts the launchd
-service `com.mc.stt`, waits for the model (first run downloads ~2 GB), then
-runs a **self-test**: synthesises a German sentence with `say` and checks the
-server transcribes it.
+Idempotent. Copies itself to `~/.mc/stt-server`, creates the venv there,
+installs deps, registers + starts the launchd service `com.mc.stt`, waits for
+the model (first run downloads ~2 GB), then runs a **self-test**: synthesises a
+German sentence with `say` and checks the server transcribes it.
+
+The service deliberately runs from `~/.mc/stt-server`, never from the git
+checkout. A launchd job pointed at a working tree dies silently the moment that
+path changes — a pruned worktree once left this service retrying 7527 times
+while local dictation was simply gone, with nothing reporting it. Before
+deleting any worktree: `grep -rl mc-worktrees ~/Library/LaunchAgents/`.
 
 Then point MC at it — in the MC `.env`:
 

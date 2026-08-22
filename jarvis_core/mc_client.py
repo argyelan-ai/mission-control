@@ -392,6 +392,38 @@ async def get_operator() -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+#: Wie lange der Sitzungsstart hoechstens auf die Provider-Bindung wartet.
+#: Bewusst viel kuerzer als das Client-Default von 15 s: dieser Aufruf liegt
+#: im Pfad zwischen "Mark drueckt Anrufen" und "Jarvis sagt Hallo". Ein
+#: haengendes Backend darf den Gespraechsbeginn nicht um 15 s verzoegern — nach
+#: 3 s faehrt der Worker mit seinen env-Defaults weiter.
+VOICE_CONFIG_TIMEOUT_SECONDS = 3.0
+
+
+async def voice_config() -> dict[str, Any]:
+    """GET /api/v1/agent/voice/config — welcher Sprach-Anbieter gebunden ist (ADR-074).
+
+    Wird zu Beginn JEDES Anrufs gerufen; nur so wirkt ein Wechsel in MC ohne
+    Container-Neustart.
+
+    Fail-soft wie get_operator, aber mit eigenem kurzen Timeout: jeder Fehler
+    wird zu {"ok": False}, der Aufrufer faellt dann auf die env-Defaults
+    zurueck. Jarvis stumm zu lassen waere schlimmer als Jarvis mit dem
+    vorherigen Anbieter sprechen zu lassen.
+    """
+    try:
+        resp = await _client.get(
+            "/api/v1/agent/voice/config", timeout=VOICE_CONFIG_TIMEOUT_SECONDS
+        )
+        if resp.status_code != 200:
+            logger.warning("voice_config: HTTP %s", resp.status_code)
+            return {"ok": False, "status": resp.status_code}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001 — fail-soft, env-Default traegt
+        logger.warning("voice_config failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 async def vault_briefing() -> dict[str, Any]:
     """Fetch pre-session briefing JSON from MC backend.
 

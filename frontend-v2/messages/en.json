@@ -290,6 +290,7 @@
       "fallbackOption": "— Fallback (docker-compose env) —",
       "runtimeDisabled": "disabled",
       "inplaceHint": "In-place switch — no parallel container. The runtime binding is rewritten and the host session restarts briefly (short session restart, current work is lost).",
+      "voiceBindingHint": "Voice binding — nothing is restarted. The voice service reads this when a call starts, so it applies from the next call on; a call in progress keeps its provider. This changes the voice channel only (text chat and ask_frontier stay on OpenAI).",
       "dockerHintBefore": "Switching triggers",
       "dockerHintAfter": "(~5s) — for cross-image switches, a container rebuild (~30–90s). Compatibility check + warnings appear in the confirm modal.",
       "switchButton": "Switch…",
@@ -2364,6 +2365,11 @@
       "sectionTitle": "Cloud — who's using what",
       "collapseRow": "{n} models without an agent — show all",
       "bindCta": "bind ›"
+    },
+    "voiceSection": {
+      "title": "Voice",
+      "hint": "What Jarvis speaks with. No model to load, no start/stop — a change takes effect on the next call. Affects speech only, not Jarvis' text replies.",
+      "standby": "standby"
     },
     "slotPage": {
       "subtitle": "What's occupying the GPU — and who's working with it",

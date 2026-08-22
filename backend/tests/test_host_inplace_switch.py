@@ -117,3 +117,85 @@ async def test_host_switch_busy_raises_409(async_session, fake_redis):
     with patch.object(sw, "get_redis", _fake_get_redis(fake_redis)):
         with pytest.raises(sw.AgentBusyError):
             await sw.switch_agent_runtime(async_session, agent, ollama.id)
+
+
+# ── Jarvis: the voice binding actually goes through (ADR-074) ──────────────
+
+
+async def _mk_jarvis(session, rt=None):
+    agent = Agent(name="Jarvis", role="assistant", agent_runtime="host",
+                  harness="jarvis", runtime_id=rt.id if rt else None, slug="jarvis")
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_jarvis_binds_a_voice_runtime_without_touching_disk(
+    async_session, fake_redis, tmp_path, monkeypatch
+):
+    """The happy path — the one the other voice tests do not cover.
+
+    They assert properties and rejections; none drives a real switch. Three
+    things have to hold at once here, and each has bitten this project before:
+
+    * the binding lands in the DB (otherwise the picker is decoration),
+    * NO agent.env is written — voice keys live in the container's env, and a
+      file appearing next to Jarvis' token would be the ADR-056 Finding 5 shape
+      of accident,
+    * nothing is restarted, because the worker re-reads per call and a restart
+      would cut off a conversation in progress.
+    """
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    openai_arm = await _mk_runtime(
+        async_session, slug="voice-openai", rtype="voice_openai", single=True,
+        endpoint="https://api.openai.com", model="gpt-realtime-2.1",
+    )
+    xai_arm = await _mk_runtime(
+        async_session, slug="voice-xai", rtype="voice_xai", single=True,
+        endpoint="https://api.x.ai", model="grok-voice-think-fast-1.0",
+    )
+    agent = await _mk_jarvis(async_session, openai_arm)
+
+    with (
+        patch.object(sw, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        result = await sw.switch_agent_runtime(async_session, agent, xai_arm.id)
+
+    await async_session.refresh(agent)
+    assert agent.runtime_id == xai_arm.id
+    assert result.new_runtime["slug"] == "voice-xai"
+    assert result.harness == "jarvis"
+    # Not one byte on disk for a voice switch.
+    assert list(tmp_path.rglob("agent.env")) == []
+
+
+@pytest.mark.asyncio
+async def test_jarvis_switch_back_also_works(async_session, fake_redis, tmp_path, monkeypatch):
+    """Both directions, on the same agent — the house rule for any runtime
+    switch, because a one-way switch has shipped here before."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    openai_arm = await _mk_runtime(
+        async_session, slug="voice-openai", rtype="voice_openai", single=True,
+        endpoint="https://api.openai.com", model="gpt-realtime-2.1",
+    )
+    xai_arm = await _mk_runtime(
+        async_session, slug="voice-xai", rtype="voice_xai", single=True,
+        endpoint="https://api.x.ai", model="grok-voice-think-fast-1.0",
+    )
+    agent = await _mk_jarvis(async_session, openai_arm)
+
+    with (
+        patch.object(sw, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        await sw.switch_agent_runtime(async_session, agent, xai_arm.id)
+        await async_session.refresh(agent)
+        assert agent.runtime_id == xai_arm.id
+
+        await sw.switch_agent_runtime(async_session, agent, openai_arm.id)
+
+    await async_session.refresh(agent)
+    assert agent.runtime_id == openai_arm.id

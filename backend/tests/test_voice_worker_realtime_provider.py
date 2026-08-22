@@ -1,30 +1,39 @@
-"""Tests for voice_worker/main.py `_build_realtime_model()` — ADR-060.
+"""voice_worker/main.py::_build_realtime_model — plugin construction only.
 
-Covers the env-based provider switch (OpenAI Realtime default, xAI Realtime
-fallback): correct plugin selected, voice defaults per provider,
-VOICE_VOICE_ID override, VOICE_MODEL override, and fail-fast when the
-relevant API key is missing. The livekit plugin constructors are mocked so
-no real API calls happen and no network/key is required to run the suite.
+The DECISION (which provider/model/voice, and all the never-go-silent
+fallbacks) lives in jarvis_core/voice_provider.py and is covered by
+test_voice_provider_choice.py, which runs in the ordinary backend job.
+
+What is left here is the part that genuinely needs livekit: that the chosen arm
+reaches the right plugin constructor with the right arguments. Those tests skip
+where livekit is absent — including CI. That is acceptable now precisely
+because the rules are tested elsewhere; it was not acceptable when this file
+held the rules too (ten tests, skipped, reported green).
+
+Run them against the voice image:
+
+    docker run --rm \
+      -v "$PWD/voice_worker:/w/voice_worker:ro" \
+      -v "$PWD/jarvis_core:/w/jarvis_core:ro" \
+      -v "$PWD/backend/tests/test_voice_worker_realtime_provider.py:\
+/w/backend/tests/test_voice_worker_realtime_provider.py:ro" \
+      -w /w mission-control-voice-worker \
+      sh -c "pip -q install pytest; python -m pytest backend/tests -q -rs -p no:cacheprovider"
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-
-# Make the voice_worker package importable in the backend test env. The
-# repo layout has voice_worker/ at the top level, sibling to backend/.
 VOICE_DIR = Path(__file__).resolve().parents[2] / "voice_worker"
 if str(VOICE_DIR) not in sys.path:
     sys.path.insert(0, str(VOICE_DIR))
 
 
 def _import_main():
-    """Lazy import — livekit deps might not be installed in CI; skip
-    cleanly if they're absent (same pattern as test_voice_worker_deliver)."""
     try:
         import main as voice_main  # type: ignore
     except ImportError as exc:
@@ -32,167 +41,79 @@ def _import_main():
     return voice_main
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Provider selection + defaults
-# ────────────────────────────────────────────────────────────────────────
-
-
-def test_default_provider_is_openai(monkeypatch):
-    """No VOICE_PROVIDER set → defaults to openai (ADR-060)."""
-    voice = _import_main()
-    monkeypatch.delenv("VOICE_PROVIDER", raising=False)
-    monkeypatch.delenv("VOICE_VOICE_ID", raising=False)
-    monkeypatch.delenv("VOICE_MODEL", raising=False)
+@pytest.fixture
+def clean_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-
-    fake_model = MagicMock(name="RealtimeModel-instance")
-    with patch.object(voice.openai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        result = voice._build_realtime_model()
-
-    assert result is fake_model
-    ctor.assert_called_once_with(
-        model="gpt-realtime-2.1",
-        voice="marin",
-        turn_detection=voice._TURN_DETECTION,
-    )
-
-
-def test_openai_provider_explicit(monkeypatch):
-    voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.delenv("VOICE_VOICE_ID", raising=False)
-    monkeypatch.delenv("VOICE_MODEL", raising=False)
-
-    fake_model = MagicMock()
-    with patch.object(voice.openai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        voice._build_realtime_model()
-
-    ctor.assert_called_once_with(
-        model="gpt-realtime-2.1",
-        voice="marin",
-        turn_detection=voice._TURN_DETECTION,
-    )
-
-
-def test_openai_provider_voice_override(monkeypatch):
-    """VOICE_VOICE_ID overrides the openai default voice ('marin')."""
-    voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("VOICE_VOICE_ID", "cedar")
-    monkeypatch.delenv("VOICE_MODEL", raising=False)
-
-    fake_model = MagicMock()
-    with patch.object(voice.openai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        voice._build_realtime_model()
-
-    ctor.assert_called_once_with(
-        model="gpt-realtime-2.1",
-        voice="cedar",
-        turn_detection=voice._TURN_DETECTION,
-    )
-
-
-def test_openai_provider_model_override(monkeypatch):
-    """VOICE_MODEL overrides the default 'gpt-realtime-2.1'."""
-    voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("VOICE_MODEL", "gpt-realtime")
-    monkeypatch.delenv("VOICE_VOICE_ID", raising=False)
-
-    fake_model = MagicMock()
-    with patch.object(voice.openai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        voice._build_realtime_model()
-
-    ctor.assert_called_once_with(
-        model="gpt-realtime",
-        voice="marin",
-        turn_detection=voice._TURN_DETECTION,
-    )
-
-
-def test_xai_provider_fallback(monkeypatch):
-    """VOICE_PROVIDER=xai keeps the pre-ADR-060 behaviour unchanged."""
-    voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "xai")
     monkeypatch.setenv("XAI_API_KEY", "xai-test")
-    monkeypatch.delenv("VOICE_VOICE_ID", raising=False)
-
-    fake_model = MagicMock()
-    with patch.object(voice.xai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        result = voice._build_realtime_model()
-
-    assert result is fake_model
-    ctor.assert_called_once_with(
-        voice="ara",
-        turn_detection=voice._TURN_DETECTION,
-    )
+    for var in (
+        "VOICE_PROVIDER", "VOICE_MODEL",
+        "VOICE_OPENAI_VOICE_ID", "VOICE_XAI_VOICE_ID",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    return monkeypatch
 
 
-def test_xai_provider_voice_override(monkeypatch):
+def test_openai_arm_reaches_the_openai_plugin(clean_env):
     voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "xai")
-    monkeypatch.setenv("XAI_API_KEY", "xai-test")
-    monkeypatch.setenv("VOICE_VOICE_ID", "Eve")
 
-    fake_model = MagicMock()
-    with patch.object(voice.xai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        voice._build_realtime_model()
+    with patch.object(voice.openai.realtime, "RealtimeModel") as openai_ctor, \
+            patch.object(voice.xai.realtime, "RealtimeModel") as xai_ctor:
+        voice._build_realtime_model(provider="openai")
 
-    ctor.assert_called_once_with(
-        voice="Eve",
-        turn_detection=voice._TURN_DETECTION,
-    )
+    xai_ctor.assert_not_called()
+    assert openai_ctor.call_args.kwargs == {
+        "model": "gpt-realtime-2.1",
+        "voice": "marin",
+        "turn_detection": voice._TURN_DETECTION,
+    }
 
 
-def test_provider_case_insensitive(monkeypatch):
+def test_xai_arm_reaches_the_xai_plugin(clean_env):
     voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "OpenAI")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.delenv("VOICE_VOICE_ID", raising=False)
-    monkeypatch.delenv("VOICE_MODEL", raising=False)
 
-    fake_model = MagicMock()
-    with patch.object(voice.openai.realtime, "RealtimeModel", return_value=fake_model) as ctor:
-        voice._build_realtime_model()
+    with patch.object(voice.openai.realtime, "RealtimeModel") as openai_ctor, \
+            patch.object(voice.xai.realtime, "RealtimeModel") as xai_ctor:
+        voice._build_realtime_model(provider="xai", model="grok-voice-fast-1.0")
 
-    ctor.assert_called_once()
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Fail-fast without key
-# ────────────────────────────────────────────────────────────────────────
+    openai_ctor.assert_not_called()
+    assert xai_ctor.call_args.kwargs == {
+        "model": "grok-voice-fast-1.0",
+        "voice": "ara",
+        "turn_detection": voice._TURN_DETECTION,
+    }
 
 
-def test_openai_missing_key_fails_fast(monkeypatch):
+def test_xai_without_a_model_omits_the_argument(clean_env):
+    """The plugin's default is NOT_GIVEN, which is not the same as None —
+    passing None explicitly would override the default with nothing."""
     voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "openai")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    with patch.object(voice.openai.realtime, "RealtimeModel") as ctor:
-        with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-            voice._build_realtime_model()
-
-    ctor.assert_not_called()
-
-
-def test_xai_missing_key_fails_fast(monkeypatch):
-    voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "xai")
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
 
     with patch.object(voice.xai.realtime, "RealtimeModel") as ctor:
-        with pytest.raises(RuntimeError, match="XAI_API_KEY"):
-            voice._build_realtime_model()
+        voice._build_realtime_model(provider="xai")
 
-    ctor.assert_not_called()
+    assert "model" not in ctor.call_args.kwargs
 
 
-def test_unknown_provider_fails_fast(monkeypatch):
+def test_the_binding_from_mc_decides_which_plugin_is_built(clean_env):
+    """End-to-end through the real module: env says openai, MC says xai."""
     voice = _import_main()
-    monkeypatch.setenv("VOICE_PROVIDER", "elevenlabs")
+    clean_env.setenv("VOICE_PROVIDER", "openai")
 
-    with pytest.raises(RuntimeError, match="Unknown VOICE_PROVIDER"):
-        voice._build_realtime_model()
+    with patch.object(voice.openai.realtime, "RealtimeModel") as openai_ctor, \
+            patch.object(voice.xai.realtime, "RealtimeModel") as xai_ctor:
+        voice._build_realtime_model(provider="xai")
+
+    xai_ctor.assert_called_once()
+    openai_ctor.assert_not_called()
+
+
+def test_session_start_logs_the_choice(clean_env, caplog):
+    """The live gate greps for this line."""
+    voice = _import_main()
+
+    with caplog.at_level("INFO"):
+        with patch.object(voice.openai.realtime, "RealtimeModel"):
+            voice._build_realtime_model(provider="openai", model="gpt-realtime-2.1")
+
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "provider=openai" in text and "model=gpt-realtime-2.1" in text and "source=mc" in text

@@ -4,7 +4,16 @@ import type { Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 // endpoint with no bound host is a hosted API like Claude/Grok/Kimi, not an
 // orphaned box runtime. A host-bound openai_compatible runtime still routes
 // into its host group as normal (groupRuntimes checks rt.host first).
-export const CLOUD_TYPES = new Set<string>(["cloud", "grok", "kimi", "openai_compatible"]);
+export const CLOUD_TYPES = new Set<string>([
+  "cloud", "grok", "kimi", "openai_compatible",
+]);
+
+// Voice is its own category, not a cloud row (ADR-074). Both arms are hosted
+// APIs, so they LOOK like cloud — but the cloud section answers "which agent
+// is bound to which chat model", and a realtime speech socket has no chat
+// model, no context window and no token usage to compare. Listed among them
+// they read as a chat runtime nobody uses. They get their own section instead.
+export const VOICE_TYPES = new Set<string>(["voice_openai", "voice_xai"]);
 
 const ACTIVE_STATES = new Set(["ready", "starting", "warming"]);
 
@@ -16,6 +25,7 @@ export interface HostGroup {
 export interface RuntimeGroups {
   hosts: HostGroup[];
   cloud: Runtime[];
+  voice: Runtime[];
   unassigned: Runtime[];
 }
 
@@ -35,11 +45,17 @@ function sortGroup(runtimes: Runtime[]): Runtime[] {
 export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups {
   const byHost = new Map<string, Runtime[]>();
   const cloud: Runtime[] = [];
+  const voice: Runtime[] = [];
   const unassigned: Runtime[] = [];
 
   for (const rt of runtimes) {
     const ref = rt.host;
-    if (ref) {
+    // Voice is checked before the host bucket on purpose: even if someone ever
+    // pins a voice row to a box, it is still the voice channel and belongs in
+    // its own section, not on a slot stage that shows model load states.
+    if (VOICE_TYPES.has(rt.runtime_type)) {
+      voice.push(rt);
+    } else if (ref) {
       const key = ref.id;
       byHost.set(key, [...(byHost.get(key) ?? []), rt]);
     } else if (CLOUD_TYPES.has(rt.runtime_type)) {
@@ -73,6 +89,7 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
   return {
     hosts: hostGroups,
     cloud: sortGroup(cloud),
+    voice: sortGroup(voice),
     unassigned: sortGroup(unassigned),
   };
 }

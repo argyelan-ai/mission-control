@@ -22,6 +22,7 @@ from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.services.agent_runtime_switch import (
     RuntimeIncompatibleError,
+    RuntimeSwitchError,
     SwitchHealthCheckFailed,
     switch_agent_runtime,
 )
@@ -291,3 +292,69 @@ async def test_openclaude_same_image_switch_keeps_respawn(async_session):
     assert calls, "restart_docker_agent_container was not called"
     assert calls[-1]["respawn_window_only"] is True
     assert calls[-1]["force_recreate"] is False
+
+
+# ── Voice runtimes belong to Jarvis alone (ADR-074) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_voice_runtime_refuses_a_cli_bridge_agent(async_session):
+    """Voice rows belong to Jarvis alone. A cli-bridge agent is stopped by the
+    single_instance hard-block — the same guard grok-cloud and kimi-cloud rely
+    on, which is why the seed rows carry the flag."""
+    rt = await _mk_runtime(async_session, slug="voice-openai", runtime_type="voice_openai")
+    rt.single_instance = True
+    async_session.add(rt)
+    await async_session.commit()
+    agent = await _mk_agent(async_session, cli_plugins=[])
+    agent.harness = None
+
+    with pytest.raises(RuntimeSwitchError):
+        await switch_agent_runtime(async_session, agent, rt.id)
+
+
+@pytest.mark.asyncio
+async def test_voice_runtime_refuses_a_harnessless_agent_without_single_instance(async_session):
+    """The layer the explicit voice guard actually adds.
+
+    single_instance carries the defence today — removing the guard breaks no
+    other test, which is why this one exists. It pins the case that would slip
+    through if the flag were ever dropped from a voice row: derive_harness()
+    returns None for a voice runtime, and the compatibility check below it only
+    runs when a harness is known, so a harness-less agent would bind silently
+    and fail on its first task with nothing pointing at the cause.
+    """
+    rt = await _mk_runtime(async_session, slug="voice-openai-open", runtime_type="voice_openai")
+    rt.single_instance = False
+    async_session.add(rt)
+    await async_session.commit()
+    agent = await _mk_agent(async_session, cli_plugins=[])
+    agent.harness = None
+
+    with pytest.raises(RuntimeIncompatibleError, match="Jarvis"):
+        await switch_agent_runtime(async_session, agent, rt.id)
+
+
+@pytest.mark.asyncio
+async def test_voice_runtime_refuses_another_host_harness(async_session):
+    """The case single_instance does NOT cover: a host agent with an adapter
+    switches in place, so the hard-block is skipped by design. Boss (claude on
+    host) would otherwise reach a voice row.
+    """
+    rt = await _mk_runtime(async_session, slug="voice-xai", runtime_type="voice_xai")
+    agent = await _mk_agent(async_session, agent_runtime="host", cli_plugins=[])
+    agent.harness = "claude"
+
+    with pytest.raises(RuntimeIncompatibleError):
+        await switch_agent_runtime(async_session, agent, rt.id)
+
+
+@pytest.mark.asyncio
+async def test_jarvis_may_not_bind_a_chat_runtime(async_session):
+    """The reverse direction — Jarvis cannot run a chat model."""
+    rt = await _mk_runtime(async_session, slug="some-cloud", runtime_type="cloud")
+    agent = await _mk_agent(async_session, agent_runtime="host", cli_plugins=[])
+    agent.harness = "jarvis"
+
+    with pytest.raises(RuntimeIncompatibleError):
+        await switch_agent_runtime(async_session, agent, rt.id)
