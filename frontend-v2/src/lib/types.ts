@@ -670,6 +670,10 @@ export interface Agent {
   // intentionally outside the cli-bridge-facing `Harness` union so HARNESS_LABELS
   // stays cli-bridge-only. Labels for host harnesses live in HOST_HARNESS_LABELS.
   harness?: Harness | HostHarness | null;
+  /** Backend-derived: do the host process actions apply (restart-process,
+   *  orphan sweep)? False for a host agent with no launchd job — Jarvis is a
+   *  docker-compose service. Read it, never re-derive from agent_runtime. */
+  host_process_managed?: boolean;
   // Derived by the backend (no DB column) from the SAME function the switch
   // endpoint guards with — services/host_harness_adapter.py::
   // runtime_switch_availability, surfaced as pydantic computed fields on the

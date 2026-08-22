@@ -2030,7 +2030,13 @@ export default function AgentDetailPage() {
                 />
               )}
 
-              {agent.agent_runtime === "host" && (
+              {/* Not `agent_runtime === "host"`: Jarvis is a host agent with no
+                  launchd job, so this button could only ever fail with
+                  'Could not find service "com.mc.agent.jarvis"'. The backend
+                  derives the answer (host_process_managed) — the UI reads it.
+                  Older payloads omit the field, so undefined keeps today's
+                  behaviour rather than hiding the button fleet-wide. */}
+              {agent.agent_runtime === "host" && agent.host_process_managed !== false && (
                 <ActionButton
                   icon={RefreshCw}
                   label={t("detail.restartProcess")}

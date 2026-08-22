@@ -37,6 +37,12 @@ class HostHarnessAdapter(Protocol):
     # the generic wizard staging path instead of calling bootstrap(). See
     # ClaudeHostAdapter for the one case where this matters.
     supports_bootstrap: bool
+    # False = there is no launchd process behind this agent, so the host
+    # process actions (restart-process, orphan sweep) do not apply. Read via
+    # `manages_host_process()`, never by comparing harness names in the UI —
+    # that is exactly how the old hardcoded `harness === "hermes"` check went
+    # stale and locked every later host harness out of the switch.
+    manages_host_process: bool
 
     def env_dir(self, agent: Agent) -> str:
         """Directory name under ``~/.mc/agents/`` holding this agent's agent.env.
@@ -398,6 +404,11 @@ class JarvisVoiceAdapter:
     protocol = "voice"
     singleton_slug = "jarvis"
     supports_bootstrap = True
+    # No launchd job exists for Jarvis — it is a docker-compose service under
+    # the "voice" profile. The host process actions must not be offered: the
+    # restart button fails with 'Could not find service "com.mc.agent.jarvis"',
+    # which reads like a broken agent rather than a button that never applied.
+    manages_host_process = False
 
     def env_dir(self, agent: Agent) -> str:
         # Never actually used (nothing writes an agent.env for voice), but the
@@ -485,6 +496,29 @@ def is_host_inplace(agent: Agent) -> bool:
         getattr(agent, "agent_runtime", None) == "host"
         and get_adapter(getattr(agent, "harness", None)) is not None
     )
+
+
+def manages_host_process(agent: Agent) -> bool:
+    """True when a launchd process exists behind this agent.
+
+    Host agents historically all had one, so the UI gated its process actions
+    on ``agent_runtime == "host"`` alone. Jarvis breaks that assumption: it is
+    a host agent by binding, but a docker-compose service by nature, and the
+    restart button fails with 'Could not find service "com.mc.agent.jarvis"' —
+    which reads like a broken agent rather than an inapplicable button.
+
+    Adapters declare this, so a future host harness without a launchd job is
+    one attribute away rather than another name comparison in the frontend.
+    Non-host agents answer False: there is no host process to manage.
+    """
+    if getattr(agent, "agent_runtime", None) != "host":
+        return False
+    adapter = get_adapter(getattr(agent, "harness", None))
+    if adapter is None:
+        # A host agent with no adapter is managed outside MC — the process
+        # actions were its only handle, so keep offering them.
+        return True
+    return getattr(adapter, "manages_host_process", True)
 
 
 def runtime_switch_availability(agent: Agent) -> tuple[bool, str | None]:

@@ -279,6 +279,19 @@ class Agent(SQLModel, table=True):
 
         return runtime_switch_availability(self)[1]
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def host_process_managed(self) -> bool:
+        """Whether the host process actions apply (restart-process, orphans).
+
+        Same rule as the fields above: derived once here, read by the UI, never
+        re-implemented there. Jarvis is the case that forced it — a host agent
+        with no launchd job, whose restart button could only ever fail.
+        """
+        from app.services.host_harness_adapter import manages_host_process
+
+        return manages_host_process(self)
+
 
 @event.listens_for(Agent, "before_insert")
 def _agent_fill_slug(mapper, connection, target: "Agent") -> None:

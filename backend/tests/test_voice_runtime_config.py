@@ -201,3 +201,45 @@ async def test_bootstrap_refuses_with_a_useful_message():
 
     assert excinfo.value.status_code == 422
     assert "compose" in str(excinfo.value.detail).lower()
+
+
+# ── Host process actions must not be offered for Jarvis ───────────────────
+
+
+def test_jarvis_has_no_host_process():
+    """The restart button on the agent page could only ever fail for Jarvis.
+
+    It is gated on agent_runtime == "host", which Jarvis is by binding — but it
+    is a docker-compose service under the "voice" profile, with no launchd job.
+    Pressing it returns 'Could not find service "com.mc.agent.jarvis"', which
+    reads like a broken agent rather than an inapplicable button. (Live report
+    from Mark, 22.08.)
+    """
+    from app.services.host_harness_adapter import manages_host_process
+
+    jarvis = Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+
+    assert manages_host_process(jarvis) is False
+    assert jarvis.host_process_managed is False
+
+
+@pytest.mark.parametrize("harness", ["hermes", "grok", "kimi", "claude"])
+def test_other_host_harnesses_keep_their_process_actions(harness: str):
+    """The fix must not hide the button fleet-wide — those agents really do
+    have a launchd job, and it is their only handle."""
+    from app.services.host_harness_adapter import manages_host_process
+
+    assert manages_host_process(Agent(name="X", agent_runtime="host", harness=harness)) is True
+
+
+def test_host_agent_without_adapter_keeps_process_actions():
+    """Managed outside MC — the process actions are all it has."""
+    from app.services.host_harness_adapter import manages_host_process
+
+    assert manages_host_process(Agent(name="X", agent_runtime="host", harness=None)) is True
+
+
+def test_cli_bridge_agents_have_no_host_process():
+    from app.services.host_harness_adapter import manages_host_process
+
+    assert manages_host_process(Agent(name="X", agent_runtime="cli-bridge", harness="claude")) is False
