@@ -508,7 +508,7 @@
       "resultDownload": "Als .md laden",
       "finishTitle": "Gruppe abschliessen",
       "cancel": "Abbrechen",
-      "finishSummary": "{rounds} Runden · {messages} Beiträge",
+      "finishSummary": "{rounds, plural, one {# Runde} other {# Runden}} · {messages, plural, one {# Beitrag} other {# Beiträge}}",
       "finishMemorize": "Ergebnis ins Memory übernehmen",
       "finishMemorizeHint": "Bleibt erhalten, auch wenn du alles löschst.",
       "finishMemoryTitle": "Titel im Memory",

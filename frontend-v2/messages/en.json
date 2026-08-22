@@ -508,7 +508,7 @@
       "resultDownload": "Download as .md",
       "finishTitle": "Finish group",
       "cancel": "Cancel",
-      "finishSummary": "{rounds} rounds · {messages} contributions",
+      "finishSummary": "{rounds, plural, one {# round} other {# rounds}} · {messages, plural, one {# contribution} other {# contributions}}",
       "finishMemorize": "Save the result to memory",
       "finishMemorizeHint": "Kept even if you delete everything.",
       "finishMemoryTitle": "Title in memory",
