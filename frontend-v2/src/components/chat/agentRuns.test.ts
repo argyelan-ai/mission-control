@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { matchRuns, isAgentSpawn } from "./agentRuns";
-import type { SubagentRun, ToolEvent } from "@/lib/chatTypes";
+import { matchRuns, isAgentSpawn, notificationsByTool } from "./agentRuns";
+import type { ChatEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
 
 function spawn(
   toolUseId: string,
@@ -157,5 +157,39 @@ describe("matchRuns", () => {
     expect(isAgentSpawn(spawn("t1"))).toBe(true);
     expect(isAgentSpawn({ ...spawn("t1"), name: "Task" } as ToolEvent)).toBe(true);
     expect(isAgentSpawn({ ...spawn("t1"), name: "Bash" } as ToolEvent)).toBe(false);
+  });
+});
+
+describe("notificationsByTool", () => {
+  function notice(toolUseId: string | null, status: string, uuid = "n1") {
+    return {
+      kind: "notification", uuid, ts: "2026-08-22T10:00:00Z",
+      taskId: "t", toolUseId, status, summary: `etwas ${status}`,
+    } as ChatEvent;
+  }
+
+  it("ordnet eine Meldung ihrem Werkzeugaufruf zu", () => {
+    const m = notificationsByTool([notice("t1", "completed")]);
+    expect(m.get("t1")?.status).toBe("completed");
+  });
+
+  it("laesst eine Meldung ohne Werkzeugaufruf aussen vor", () => {
+    // 11 von 77 gemessenen Meldungen haben keine tool-use-id. Sie gehoeren
+    // dann zu keinem Aufruf und bleiben eine eigene Zeile.
+    expect(notificationsByTool([notice(null, "completed")]).size).toBe(0);
+  });
+
+  it("nimmt bei mehreren Meldungen die spaetere", () => {
+    // Die CLI sagt in ihrer eigenen Meldung, dass derselbe Vorgang mehrfach
+    // melden kann. Der spaetere Stand ist der wahre.
+    const m = notificationsByTool([
+      notice("t1", "completed", "n1"),
+      notice("t1", "failed", "n2"),
+    ]);
+    expect(m.get("t1")?.status).toBe("failed");
+  });
+
+  it("ignoriert alles, was keine Meldung ist", () => {
+    expect(notificationsByTool([spawn("t1", { name: "x" })]).size).toBe(0);
   });
 });

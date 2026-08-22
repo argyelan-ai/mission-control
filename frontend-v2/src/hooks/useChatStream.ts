@@ -312,6 +312,7 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
     case "tool":
     case "thinking":
     case "command":
+    case "notification":
       return pushOrReplace(state, event);
     default:
       return state;
@@ -580,7 +581,8 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
          sofort: sie ordnen nichts ein, sie ersetzen ein Anzeigefach. */
       const isTimeline =
         ev.kind === "message" || ev.kind === "tool" ||
-        ev.kind === "thinking" || ev.kind === "command";
+        ev.kind === "thinking" || ev.kind === "command" ||
+        ev.kind === "notification";
       if (isTimeline && !hasSeededRef.current) {
         liveBufferRef.current.push(ev);
       } else {

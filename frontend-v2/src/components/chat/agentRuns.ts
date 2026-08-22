@@ -37,7 +37,7 @@
  * gestartet haben (`spawnDepth >= 1` in 359 von 754 Steckbriefen).
  */
 
-import type { ChatEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
+import type { ChatEvent, NotificationEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
 
 /** `agent_id: <name>@<teamName>` aus dem Ergebnis des Agent-Aufrufs.
  *  Der Text drumherum wird NIE angezeigt — er traegt Spawn-Metadaten und
@@ -108,5 +108,31 @@ export function matchRuns(
     }
   }
 
+  return out;
+}
+
+/**
+ * Die Hintergrund-Meldungen, geschluesselt auf den Werkzeugaufruf, zu dem sie
+ * gehoeren.
+ *
+ * Damit bekommt eine Agent-Karte ihren Zustand aus einer BEOBACHTUNG statt aus
+ * einer Vermutung: bisher hiess "kein Ergebnis" gleich "laeuft noch", was nach
+ * einem Abbruch dauerhaft falsch stehen blieb. Und die Meldung wird an genau
+ * einer Stelle gezeigt — in der Karte — statt zusaetzlich als eigene Zeile
+ * daneben.
+ *
+ * Ohne `toolUseId` (11 von 77 gemessenen Meldungen) bleibt sie eine eigene
+ * Zeile: sie gehoert dann zu einem Hintergrund-Befehl, nicht zu einer Karte.
+ */
+export function notificationsByTool(
+  events: readonly ChatEvent[],
+): Map<string, NotificationEvent> {
+  const out = new Map<string, NotificationEvent>();
+  for (const ev of events) {
+    if (ev.kind !== "notification" || !ev.toolUseId) continue;
+    // Die letzte gewinnt: derselbe Vorgang kann mehrfach melden (die CLI sagt
+    // das in ihrer Meldung selbst), und der spaetere Stand ist der wahre.
+    out.set(ev.toolUseId, ev);
+  }
   return out;
 }

@@ -121,6 +121,25 @@ export interface SessionChangedEvent {
   kind: "session_changed";
 }
 
+/** Eine Hintergrund-Meldung der CLI: ein Subagent oder ein Hintergrund-Befehl
+ *  ist fertig. Sie steht im Transkript als Nachricht mit der Rolle `user` —
+ *  ungedeutet stand sie darum als Nachricht des Operators im Chat, samt
+ *  Kennungen und Host-Pfaden. Der Pfad (`output-file`) kommt bewusst gar
+ *  nicht erst vom Backend.
+ *
+ *  `toolUseId` verbindet sie mit dem Werkzeugaufruf, der den Vorgang gestartet
+ *  hat — bei einem Subagenten also mit seiner Karte. Nicht garantiert: über
+ *  400 Transkripte gemessen trägt sie 66 von 77 Meldungen. */
+export interface NotificationEvent {
+  kind: "notification";
+  uuid: string;
+  ts: string;
+  taskId: string | null;
+  toolUseId: string | null;
+  status: string | null;
+  summary: string | null;
+}
+
 export type ChatEvent =
   | MessageEvent
   | ToolEvent
@@ -128,12 +147,18 @@ export type ChatEvent =
   | CommandEvent
   | UsageEvent
   | StateEvent
+  | NotificationEvent
   | SessionChangedEvent;
 
 /** The subset of ChatEvent kinds that carry a `uuid` and belong in the
  *  scrollable timeline list, as opposed to `state`/`usage` (side slots) or
  *  `session_changed` (a reset signal, never rendered itself). */
-export type TimelineChatEvent = MessageEvent | ToolEvent | ThinkingEvent | CommandEvent;
+export type TimelineChatEvent =
+  | MessageEvent
+  | ToolEvent
+  | ThinkingEvent
+  | CommandEvent
+  | NotificationEvent;
 
 /**
  * How alive the underlying CLI session is.

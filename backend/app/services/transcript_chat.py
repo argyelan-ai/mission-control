@@ -413,8 +413,14 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
             text = block.get("text")
             if text is None:
                 continue
-            teammate_evs = _parse_teammate_message(text, msg_uuid, ts, sidechain)
-            if teammate_evs is not None:
+            notification_evs = _parse_task_notification(text, msg_uuid, ts)
+            teammate_evs = (
+                None if notification_evs is not None
+                else _parse_teammate_message(text, msg_uuid, ts, sidechain)
+            )
+            if notification_evs is not None:
+                events.extend(notification_evs)
+            elif teammate_evs is not None:
                 events.extend(teammate_evs)
             elif text.startswith("/") and "\n" not in text:
                 events.append(
@@ -886,6 +892,53 @@ def _subagent_started_at(path: Path) -> str | None:
     except OSError:
         return None
     return None
+
+
+#: Die Hintergrund-Meldung der CLI. Sie traegt die Rolle ``user`` und stand
+#: darum ungedeutet als NACHRICHT DES OPERATORS im Chat — eine Wand aus
+#: Kennungen und Host-Pfaden, die niemand getippt hat.
+#:
+#: Bewusst streng verankert (``\A`` … ``\Z`` auf dem getrimmten Text): Eine
+#: echte Nachricht, die ueber Hintergrund-Meldungen SPRICHT, darf nicht
+#: verschluckt werden. Text des Operators verlieren ist der teurere Fehler.
+_TASK_NOTIFICATION_RE = re.compile(
+    r"\A<task-notification>(?P<body>.*?)</task-notification>\Z", re.S
+)
+_NOTIFICATION_FIELD_RE = re.compile(r"<(?P<tag>[a-z-]+)>(?P<value>.*?)</(?P=tag)>", re.S)
+
+#: Was aus der Meldung ueberhaupt herausgereicht wird. ``output-file`` steht
+#: mit Absicht NICHT hier: das ist ein Pfad auf der Maschine des Operators,
+#: er hilft in der Oberflaeche niemandem, und dieses Repo ist oeffentlich.
+_NOTIFICATION_KEEP = {"task-id": "taskId", "tool-use-id": "toolUseId",
+                      "status": "status", "summary": "summary"}
+
+
+def _parse_task_notification(
+    text: str, msg_uuid: str, ts: str
+) -> list[dict[str, Any]] | None:
+    """``<task-notification>…</task-notification>`` -> ein ``notification``-
+    Ereignis, oder ``None``, wenn der Text keine (vollstaendige) Meldung ist.
+
+    Die Felder sind nicht garantiert: ueber 400 Transkripte gemessen traegt
+    ``tool-use-id`` 66 von 77 Meldungen, ``status`` und ``summary``
+    durchgaengig. Fehlendes wird ``None``, nicht erfunden.
+    """
+    match = _TASK_NOTIFICATION_RE.match(text.strip())
+    if match is None:
+        return None
+
+    felder = {
+        m.group("tag"): m.group("value").strip()
+        for m in _NOTIFICATION_FIELD_RE.finditer(match.group("body"))
+    }
+    if not felder:
+        return None
+
+    ereignis: dict[str, Any] = {"kind": "notification", "uuid": msg_uuid, "ts": ts}
+    for tag, name in _NOTIFICATION_KEEP.items():
+        wert = felder.get(tag)
+        ereignis[name] = wert or None
+    return [ereignis]
 
 
 #: Der EINZIGE Ordner, in dem je eine Wegwerf-Sitzung der Katalog-Erkennung

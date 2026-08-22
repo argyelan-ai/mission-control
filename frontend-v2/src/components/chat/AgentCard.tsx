@@ -21,7 +21,7 @@ import { Bot, ChevronRight, ChevronDown, CircleDot } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
-import type { ChatEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
+import type { ChatEvent, NotificationEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
@@ -67,10 +67,14 @@ function renderChild(ev: ChatEvent) {
 export function AgentCard({
   ev,
   run,
+  notice,
   agentId,
 }: {
   ev: ToolEvent;
   run?: SubagentRun;
+  /** Die Hintergrund-Meldung der CLI zu genau diesem Aufruf, falls sie
+   *  eingetroffen ist. */
+  notice?: NotificationEvent;
   agentId: string;
 }) {
   const t = useTranslations("sessions");
@@ -86,15 +90,17 @@ export function AgentCard({
   const model = run?.model ?? str(detail.model);
   const dot = run?.color ? RUN_COLORS[run.color] ?? C.accent : null;
 
-  /* Der Zustand kommt aus dem Aufruf, nie aus dem Ergebnis-TEXT: dort stehen
-     Spawn-Metadaten, die sich selbst als nicht zitierfaehig bezeichnen. Sie
-     werden gedeutet, nicht abgedruckt. */
+  /* Zuerst die BEOBACHTUNG: die CLI meldet selbst, wenn der Auftrag endet.
+     Ohne sie blieb nur die Vermutung "kein Ergebnis heisst laeuft noch" — die
+     nach einem Abbruch dauerhaft falsch stehen bleibt.
+     Nie aus dem Ergebnis-TEXT: dort stehen Spawn-Metadaten, die sich selbst
+     als nicht zitierfaehig bezeichnen. Sie werden gedeutet, nicht abgedruckt. */
   const status =
-    ev.status === "error"
+    notice?.status === "failed" || ev.status === "error"
       ? t("agentCardFailed")
-      : ev.result === null
-        ? t("agentCardRunning")
-        : t("agentCardDone");
+      : notice?.status === "completed" || ev.result !== null
+        ? t("agentCardDone")
+        : t("agentCardRunning");
 
   const history = useQuery({
     queryKey: ["subagent-history", agentId, run?.runId],

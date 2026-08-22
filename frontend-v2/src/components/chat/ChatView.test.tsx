@@ -326,6 +326,41 @@ describe("buildTimelineItems — delegierte Auftraege", () => {
   });
 });
 
+describe("buildTimelineItems — Hintergrund-Meldungen", () => {
+  function notif(uuid: string, toolUseId: string | null): TimelineChatEvent {
+    return {
+      kind: "notification", uuid, ts: "2026-08-22T10:00:00Z",
+      taskId: "t", toolUseId, status: "completed", summary: "fertig",
+    } as TimelineChatEvent;
+  }
+  function agentTool2(uuid: string, toolUseId: string): TimelineChatEvent {
+    return {
+      kind: "tool", uuid, ts: "2026-08-22T10:00:00Z", name: "Agent",
+      title: "Agent: x", detail: {}, toolUseId,
+      result: null, status: "done", stats: null, sidechain: false,
+    } as TimelineChatEvent;
+  }
+
+  it("schluckt die Meldung, die zu einer Karte im Verlauf gehoert", () => {
+    // Sonst stuende dieselbe Aussage zweimal nebeneinander — die Karte sagt
+    // "fertig", und direkt darunter noch einmal eine Zeile.
+    const items = buildTimelineItems([agentTool2("a1", "t1"), notif("n1", "t1")]);
+    expect(items.map((i) => i.kind)).toEqual(["agent"]);
+  });
+
+  it("zeigt eine Meldung ohne zugehoerigen Aufruf als eigene Zeile", () => {
+    // Hintergrund-BEFEHLE erzeugen dieselbe Meldung, haben aber keine Karte.
+    const items = buildTimelineItems([notif("n1", "tX")]);
+    expect(items.map((i) => i.kind)).toEqual(["single"]);
+  });
+
+  it("zeigt auch eine Meldung ohne Werkzeug-Kennung", () => {
+    const items = buildTimelineItems([notif("n1", null)]);
+    expect(items.map((i) => i.kind)).toEqual(["single"]);
+  });
+});
+
+
 
 describe("modelBadgeUuids", () => {
   it("flags the first assistant message so the reader knows what is answering", () => {

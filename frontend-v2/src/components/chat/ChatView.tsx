@@ -28,7 +28,8 @@ import { useChatStream } from "@/hooks/useChatStream";
 import { isAgentStartingError, isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { AgentCard } from "./AgentCard";
-import { isAgentSpawn, matchRuns } from "./agentRuns";
+import { NotificationRow } from "./NotificationRow";
+import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
@@ -220,7 +221,16 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
     activityRun = [];
   }
 
+  const absorbiert = new Set(
+    events.filter(isAgentSpawn).map((ev) => ev.toolUseId).filter(Boolean) as string[],
+  );
+
   for (const ev of events) {
+    if (ev.kind === "notification" && ev.toolUseId && absorbiert.has(ev.toolUseId)) {
+      /* Gehoert zu einer Karte — dort wird sie gezeigt. Zweimal dasselbe
+         nebeneinander war genau das Rauschen, das hier weg soll. */
+      continue;
+    }
     if (isSidechain(ev)) {
       flushActivity();
       sidechainRun.push(ev);
@@ -295,6 +305,8 @@ function TimelineSkeleton() {
 
 function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel, showModel = false) {
   switch (ev.kind) {
+    case "notification":
+      return <NotificationRow key={ev.uuid} ev={ev} />;
     case "message":
       return <ChatMessage key={ev.uuid} ev={ev} showModel={showModel} />;
     case "tool":
@@ -585,6 +597,9 @@ export function ChatView({
     () => matchRuns(stream.events, stream.subagentRuns),
     [stream.events, stream.subagentRuns],
   );
+  /* Meldungen, die zu einem Werkzeugaufruf gehoeren, werden in dessen Karte
+     gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
+  const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
 
   if (!agent) {
     return (
@@ -946,6 +961,7 @@ export function ChatView({
                       key={item.event.toolUseId ?? item.event.uuid}
                       ev={item.event}
                       run={runMatches.get(item.event.toolUseId ?? "")}
+                      notice={toolNotices.get(item.event.toolUseId ?? "")}
                       agentId={agent.id}
                     />
                   );
