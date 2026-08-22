@@ -413,8 +413,14 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
             text = block.get("text")
             if text is None:
                 continue
-            teammate_evs = _parse_teammate_message(text, msg_uuid, ts, sidechain)
-            if teammate_evs is not None:
+            notification_evs = _parse_task_notification(text, msg_uuid, ts)
+            teammate_evs = (
+                None if notification_evs is not None
+                else _parse_teammate_message(text, msg_uuid, ts, sidechain)
+            )
+            if notification_evs is not None:
+                events.extend(notification_evs)
+            elif teammate_evs is not None:
                 events.extend(teammate_evs)
             elif text.startswith("/") and "\n" not in text:
                 events.append(
@@ -769,21 +775,206 @@ def is_command_only_session(path: Path) -> bool:
     return result
 
 
+#: Dateien im ``subagents``-Ordner, die KEIN delegierter Auftrag sind:
+#: ``journal.jsonl`` ist das Protokoll eines Workflows, ``aside_question`` und
+#: ``acompact`` sind CLI-interne Hilfsagenten. Der Operator hat sie nie
+#: beauftragt und will sie nicht als Karte sehen.
+_SUBAGENT_INTERNAL_PREFIXES = ("aside_question", "acompact")
+
+#: Kopfzeilen, in denen der Startzeitpunkt gesucht wird. Bewusst klein: eine
+#: gemessene Subagenten-Datei war 13,8 MB gross, der Zeitstempel steht in der
+#: ersten Zeile.
+_SUBAGENT_HEAD_LINES = 5
+
+
+def subagent_runs(session_path: Path) -> list[dict[str, Any]]:
+    """Die Subagenten-Laeufe DIESER Sitzung — je Lauf ein Steckbrief.
+
+    Claude Code legt seit ~2.1.2xx neben dem Sitzungs-Transkript einen Ordner
+    ``<sitzung>/subagents/`` an, darin je Subagent eine ``.jsonl`` mit seinem
+    vollstaendigen Verlauf und eine gleichnamige ``.meta.json``. Im
+    HAUPT-Transkript steht davon nichts mehr: live gemessen am 22.08.2026
+    stehen dort 0 Zeilen mit ``isSidechain: true``, der Spawn erscheint nur als
+    Werkzeugaufruf ``Agent``. Der Verlauf eines Subagenten ist aus dem
+    Hauptstrom also NICHT rekonstruierbar — nur von hier.
+
+    Rueckgabe je Lauf: ``runId`` (Datei-Stem ohne ``agent-``), ``name``,
+    ``agentType``, ``description``, ``model``, ``color``, ``teamName``,
+    ``startedAt``. Nach Startzeitpunkt sortiert.
+
+    Von den Feldern ist keines garantiert: ueber 754 gemessene Steckbriefe war
+    ``agentType`` immer da, ``name`` in 50 %, ``model`` in 57 %. Fehlt der
+    Steckbrief ganz oder ist er kaputt, bleibt der Lauf trotzdem in der Liste —
+    er hat einen Verlauf, den man zeigen kann, und ein fehlendes Feld ist
+    ``None`` statt einer Erfindung.
+
+    Wirft nie: ein Fehler beim Auflisten darf nicht den ganzen Verlauf
+    mitreissen (gleiche Hausregel wie ``transcript_suggests_turn_ended``).
+    """
+    session_dir = session_path.parent / session_path.stem
+    subdir = session_dir / "subagents"
+    try:
+        # Ein SYMLINK auf den Ordner (oder auf das Sitzungsverzeichnis)
+        # verschoebe den ganzen Baum: ``glob`` folgt ihm, und die Laeufe eines
+        # FREMDEN Agenten stuenden in dieser Liste. Ein Agent kann das
+        # anlegen — sein Config-Verzeichnis ist schreibbar gemountet.
+        # Echte Pfade der Flotte enthalten keine Symlink-Komponente
+        # (nachgeprueft 22.08.2026), es geht hier also nichts Legitimes
+        # verloren.
+        if session_dir.is_symlink() or subdir.is_symlink():
+            logger.warning(
+                "transcript_chat: subagents dir is a symlink, refusing to follow it: %s",
+                subdir,
+            )
+            return []
+        if not subdir.is_dir():
+            return []
+        # Flach, nicht rekursiv: ``subagents/workflows/`` ist ein eigener
+        # Baum (396 von 1245 gemessenen Dateien) mit praktisch leeren
+        # Steckbriefen und gehoert zu einem anderen Thema.
+        files = sorted(subdir.glob("agent-*.jsonl"))
+    except OSError:
+        logger.debug("transcript_chat: subagents dir unreadable for %s", session_path)
+        return []
+
+    runs: list[dict[str, Any]] = []
+    for path in files:
+        run_id = path.stem[len("agent-") :]
+        if not run_id or run_id.startswith(_SUBAGENT_INTERNAL_PREFIXES):
+            continue
+        meta = _read_subagent_meta(path.with_suffix(".meta.json"))
+        runs.append(
+            {
+                "runId": run_id,
+                "name": meta.get("name"),
+                "agentType": meta.get("agentType"),
+                "description": meta.get("description"),
+                "model": meta.get("model"),
+                "color": meta.get("color"),
+                "teamName": meta.get("teamName"),
+                "startedAt": _subagent_started_at(path),
+            }
+        )
+
+    # Startreihenfolge, nicht alphabetisch — sonst zeigte die Oberflaeche eine
+    # Abfolge, die es nie gab. Laeufe ohne Zeitstempel ans Ende.
+    runs.sort(key=lambda r: (r["startedAt"] is None, r["startedAt"] or ""))
+    return runs
+
+
+def _read_subagent_meta(path: Path) -> dict[str, Any]:
+    """Der Steckbrief, oder ein leeres Dikt. Fail-silent mit Absicht: ein
+    kaputter Steckbrief darf den Lauf nicht verschwinden lassen."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _subagent_started_at(path: Path) -> str | None:
+    """Der Zeitstempel der ersten Zeile, die einen traegt. Nur die ersten
+    Zeilen werden gelesen — siehe ``_SUBAGENT_HEAD_LINES``."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for _ in range(_SUBAGENT_HEAD_LINES):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                ts = entry.get("timestamp") if isinstance(entry, dict) else None
+                if isinstance(ts, str) and ts:
+                    return ts
+    except OSError:
+        return None
+    return None
+
+
+#: Die Hintergrund-Meldung der CLI. Sie traegt die Rolle ``user`` und stand
+#: darum ungedeutet als NACHRICHT DES OPERATORS im Chat — eine Wand aus
+#: Kennungen und Host-Pfaden, die niemand getippt hat.
+#:
+#: Bewusst streng verankert (``\A`` … ``\Z`` auf dem getrimmten Text): Eine
+#: echte Nachricht, die ueber Hintergrund-Meldungen SPRICHT, darf nicht
+#: verschluckt werden. Text des Operators verlieren ist der teurere Fehler.
+_TASK_NOTIFICATION_RE = re.compile(
+    r"\A<task-notification>(?P<body>.*?)</task-notification>\Z", re.S
+)
+_NOTIFICATION_FIELD_RE = re.compile(r"<(?P<tag>[a-z-]+)>(?P<value>.*?)</(?P=tag)>", re.S)
+
+#: Was aus der Meldung ueberhaupt herausgereicht wird. ``output-file`` steht
+#: mit Absicht NICHT hier: das ist ein Pfad auf der Maschine des Operators,
+#: er hilft in der Oberflaeche niemandem, und dieses Repo ist oeffentlich.
+_NOTIFICATION_KEEP = {"task-id": "taskId", "tool-use-id": "toolUseId",
+                      "status": "status", "summary": "summary"}
+
+
+def _parse_task_notification(
+    text: str, msg_uuid: str, ts: str
+) -> list[dict[str, Any]] | None:
+    """``<task-notification>…</task-notification>`` -> ein ``notification``-
+    Ereignis, oder ``None``, wenn der Text keine (vollstaendige) Meldung ist.
+
+    Die Felder sind nicht garantiert: ueber 400 Transkripte gemessen traegt
+    ``tool-use-id`` 66 von 77 Meldungen, ``status`` und ``summary``
+    durchgaengig. Fehlendes wird ``None``, nicht erfunden.
+    """
+    match = _TASK_NOTIFICATION_RE.match(text.strip())
+    if match is None:
+        return None
+
+    felder = {
+        m.group("tag"): m.group("value").strip()
+        for m in _NOTIFICATION_FIELD_RE.finditer(match.group("body"))
+    }
+    if not felder:
+        return None
+
+    ereignis: dict[str, Any] = {"kind": "notification", "uuid": msg_uuid, "ts": ts}
+    for tag, name in _NOTIFICATION_KEEP.items():
+        wert = felder.get(tag)
+        ereignis[name] = wert or None
+    return [ereignis]
+
+
+#: Der EINZIGE Ordner, in dem je eine Wegwerf-Sitzung der Katalog-Erkennung
+#: gelandet ist: der Projektordner von ``/home/agent`` im Container. Host-
+#: Agenten liegen woanders (``~/.claude/projects/<pfad-des-checkouts>``), und
+#: die Erkennung erreicht sie ohnehin nicht — sie faehrt ``docker exec``.
+_DISCOVERY_LEGACY_PROJECT_DIR = "-home-agent"
+
+
 def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     """Finds the newest ``*.jsonl`` transcript directly under ``tdir`` (does
     NOT recurse into subdirectories — those hold sidechains/artifacts, not
     top-level sessions).
 
-    Sitzungen ohne jeden Gespraechsinhalt werden dabei UEBERSPRUNGEN
-    (``is_command_only_session``). Grund: die ``/model``-Katalog-Erkennung
-    hat monatelang Wegwerf-Sitzungen im Projektordner der Agenten
-    hinterlassen — als jeweils neueste Datei verdeckten sie das echte
-    Gespraech (Operator-Befund 19.08.2026: researcher zeigte 10 Zeilen / 0
-    Antworten statt seiner 218 Zeilen / 65 Antworten). Die Erkennung legt
-    dort inzwischen nichts mehr ab; diese Schicht heilt zusaetzlich die ~41
-    Dateien, die bereits auf der Platte liegen — geloescht wird nichts.
-    Bleibt danach nichts uebrig, gewinnt doch die neueste Datei: lieber eine
-    magere Sitzung zeigen als gar keine.
+    Sitzungen ohne jeden Gespraechsinhalt werden UEBERSPRUNGEN
+    (``is_command_only_session``) — aber NUR im Projektordner eines
+    Container-Agenten (``-home-agent``). Grund: die ``/model``-Katalog-
+    Erkennung hat monatelang Wegwerf-Sitzungen dort hinterlassen; als jeweils
+    neueste Datei verdeckten sie das echte Gespraech (Operator-Befund
+    19.08.2026: researcher zeigte 10 Zeilen / 0 Antworten statt seiner 218
+    Zeilen / 65 Antworten). Die Erkennung legt dort inzwischen nichts mehr ab
+    (sie schreibt seit 19.08. in den Projektordner von ``/workspace``); diese
+    Schicht heilt zusaetzlich die ~41 Dateien, die bereits auf der Platte
+    liegen — geloescht wird nichts. Bleibt danach nichts uebrig, gewinnt doch
+    die neueste Datei: lieber eine magere Sitzung zeigen als gar keine.
+
+    Warum die Einschraenkung auf diesen einen Ordner: Eine frische Sitzung,
+    deren erster Zug ein Slash-Befehl ist, sieht GENAUSO aus wie eine Sonde —
+    sie hat eine Kommando-Huelle und noch keine Antwort. Bei einem Host-Agenten
+    wurde deshalb der Modellwechsel im frischen Chat verschluckt: der Chat
+    sprang auf die vorige Sitzung zurueck, das Echo blieb als "Nicht
+    bestaetigt" stehen und der Modell-Chip las das ALTE Modell (Operator-
+    Befund 22.08.2026, Boss). Die Erkennung laeuft ausschliesslich per
+    ``docker exec`` gegen cli-bridge-Agenten (``harness_catalog._tmux``) — in
+    den Ordner eines Host-Agenten hat sie nie geschrieben und kann es nicht.
+    Dort ist eine reine Kommando-Sitzung also immer die des Operators.
 
     Returns ``(path, meta)`` where ``meta`` is
     ``{"sessionId": <filename stem>, "mtime": <iso8601>, "live": <bool>}``
@@ -805,12 +996,13 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
 
     candidates.sort(key=lambda row: (row[0], str(row[1])), reverse=True)
     newest_mtime, newest_path = candidates[0]
-    for mtime, candidate in candidates:
-        # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
-        # gewinnt, und im Normalfall ist das gleich der erste geprueft.
-        if not is_command_only_session(candidate):
-            newest_mtime, newest_path = mtime, candidate
-            break
+    if tdir.name == _DISCOVERY_LEGACY_PROJECT_DIR:
+        for mtime, candidate in candidates:
+            # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
+            # gewinnt, und im Normalfall ist das gleich der erste geprueft.
+            if not is_command_only_session(candidate):
+                newest_mtime, newest_path = mtime, candidate
+                break
 
     meta = {
         "sessionId": newest_path.stem,
@@ -1181,6 +1373,13 @@ def read_history(
         "events": page,
         "session": {"sessionId": session_id, "live": live, "startedAt": started_at},
         "hasMore": has_more,
+        # Eigener Schluessel auf oberster Ebene, NICHT in ``session`` hinein:
+        # ``session`` ist im Frontend als sessionId/live/startedAt/aliveness
+        # belegt. Und bewusst nur hier, nicht im Live-Tailer: der steigt am
+        # Dateiende ein und darf nie einen Ordner scannen. Die Lauf-Liste ist
+        # ein Handshake-Wert — ein Subagent, der NACH dem Laden startet,
+        # erscheint erst beim naechsten Abruf.
+        "subagentRuns": adapter.subagent_runs(path),
     }
 
 

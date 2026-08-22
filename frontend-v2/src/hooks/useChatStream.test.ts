@@ -12,6 +12,7 @@ import {
   withdrawPendingEcho,
   ECHO_CONFIRM_TIMEOUT_MS,
   MAX_CHAT_EVENTS,
+  seedSequence,
   type PendingEcho,
 } from "./useChatStream";
 import type {
@@ -140,15 +141,33 @@ describe("chatReducer", () => {
     expect(state.sessionChangedAt).toBe(2);
   });
 
-  it("preserves state/usage slots across a session_changed reset", () => {
+  it("behaelt den Zustand ueber einen Sitzungswechsel, leert aber den Verbrauch", () => {
+    // Zwei Faecher, zwei Antworten — der Name des Tests versprach frueher
+    // beides und pruefte nur eines.
+    //
+    // ZUSTAND bleibt: er beschreibt den Agenten und sein Terminal. Ein
+    // Rollover wechselt die Transkript-Datei, nicht den Agenten; ihn zu
+    // leeren erzeugte nur ein Flackern nach "Status unklar".
+    //
+    // VERBRAUCH geht: die Tokens gehoerten zum geloeschten Gespraech. Blieben
+    // sie stehen, zeigte der Kontext-Ring nach /clear weiter z. B. 87 %, bis
+    // der Agent das naechste Mal antwortet — bei einem ruhenden Agenten
+    // beliebig lange.
     let state = chatReducer(createInitialChatState(), {
       kind: "state",
       status: "idle",
       prompt: null,
     } as StateEvent);
+    state = chatReducer(state, {
+      kind: "usage", uuid: "x1", ts: "2026-08-21T00:00:00Z",
+      inputTokens: 1000, outputTokens: 200, model: "opus", contextPct: 87,
+    } as unknown as UsageEvent);
     state = chatReducer(state, msg("u1"));
     state = chatReducer(state, { kind: "session_changed" } as SessionChangedEvent);
+
     expect(state.state).toEqual({ kind: "state", status: "idle", prompt: null });
+    expect(state.usage).toBeNull();
+    expect(state.events).toEqual([]);
   });
 
   it("handles thinking and command events like other timeline kinds", () => {
@@ -216,6 +235,74 @@ describe("chatReducer", () => {
 function echo(overrides: Partial<PendingEcho> = {}): PendingEcho {
   return { id: "e1", text: "hallo", sentAt: 1_000, status: "pending", ...overrides };
 }
+
+
+describe("gemischte Bloecke unter einer uuid (omp/Sparky)", () => {
+  it("behaelt Denken UND Antwort, wenn beide dieselbe Eintrags-uuid tragen", () => {
+    // LIVE gemessen an Sparkys echtem omp-Transkript (21.08.2026): 10 von 25
+    // Eintraegen tragen `thinking` UND `message` unter derselben uuid — der
+    // omp-Adapter schreibt beide Bloecke in EINE Zeile. Mit der uuid allein
+    // als Schluessel galt die Antwort als Dublette des Denkens und wurde
+    // verworfen: Sparky dachte im Chat sichtbar nach und sagte nie etwas.
+    //
+    // Bei Claude Code faellt das nicht auf (eine Zeile je Block), der
+    // Backend-Parser unterstuetzt gemischte Bloecke aber ausdruecklich —
+    // die Falle wartete also auf den ersten Adapter, der sie nutzt.
+    const think: ThinkingEvent = {
+      kind: "thinking", uuid: "a1", ts: "2026-08-21T00:00:00Z", text: "ueberlege", sidechain: false,
+    };
+    const answer = msg("a1", "hier ist die Antwort", "assistant");
+
+    let st = createInitialChatState();
+    st = chatReducer(st, think);
+    st = chatReducer(st, answer);
+
+    expect(st.events.map((e) => e.kind)).toEqual(["thinking", "message"]);
+    expect(st.events[1]).toMatchObject({ text: "hier ist die Antwort" });
+  });
+
+  it("verwirft eine ECHTE Dublette weiterhin — gleiche Art, gleiche uuid", () => {
+    // Gegenprobe: der Schutz vor doppelt gelieferten Zeilen (Claude Code
+    // wiederholt eine Zeile beim Fortsetzen einer Sitzung) darf nicht
+    // mitverlorengehen.
+    let st = createInitialChatState();
+    st = chatReducer(st, msg("b1", "einmal"));
+    st = chatReducer(st, msg("b1", "nochmal"));
+
+    expect(st.events).toHaveLength(1);
+    expect(st.events[0]).toMatchObject({ text: "einmal" });
+  });
+});
+
+describe("seedSequence — Historie vor bereits eingetroffenen Live-Zeilen", () => {
+  it("stellt die Reihenfolge her, wenn eine Live-Zeile vor der Historie da war", () => {
+    // Beide Quellen starten gleichzeitig. Bei einem ARBEITENDEN Agenten kann
+    // eine Live-Zeile vor der Historien-Antwort eintreffen — sie stand dann
+    // allein in der Liste, und die Historie wurde DAHINTER angehaengt. Zu
+    // sehen war die neueste Nachricht ganz oben, das Gespraech darunter, und
+    // der Sprung ans Ende landete auf der aeltesten statt der neuesten Zeile.
+    const history = [msg("h1", "erste"), msg("h2", "zweite")];
+    const live = [msg("l1", "gerade eben")];
+
+    let st = createInitialChatState();
+    for (const ev of seedSequence(history, live)) st = chatReducer(st, ev);
+
+    expect(st.events.map((e) => (e as MessageEvent).text)).toEqual([
+      "erste", "zweite", "gerade eben",
+    ]);
+  });
+
+  it("laesst eine Zeile, die in BEIDEN Quellen steht, nur einmal durch", () => {
+    // Der Tailer setzt beim Verbinden ans Dateiende auf, die Historie liest
+    // bis zum Lesezeitpunkt — eine Zeile kann darum in beiden vorkommen.
+    const shared = msg("s1", "doppelt geliefert");
+
+    let st = createInitialChatState();
+    for (const ev of seedSequence([shared], [shared])) st = chatReducer(st, ev);
+
+    expect(st.events).toHaveLength(1);
+  });
+});
 
 describe("reconcilePendingEchoes", () => {
   it("retires the echo whose text the transcript just confirmed", () => {

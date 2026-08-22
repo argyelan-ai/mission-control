@@ -28,7 +28,7 @@ import {
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
-import type { MessageEvent, ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
+import type { MessageEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,6 +157,7 @@ function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
 function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamResult {
   return {
     events: [],
+    subagentRuns: [],
     state: null,
     usage: null,
     session: { sessionId: "s1", live: true, startedAt: "2026-08-15T10:00:00Z" },
@@ -282,6 +283,84 @@ describe("buildTimelineItems", () => {
     expect(buildTimelineItems([])).toEqual([]);
   });
 });
+
+describe("buildTimelineItems — delegierte Auftraege", () => {
+  function agentTool(uuid: string): TimelineChatEvent {
+    return {
+      kind: "tool", uuid, ts: "2026-08-22T10:00:00Z", name: "Agent",
+      title: "Agent: x", detail: {}, toolUseId: `t-${uuid}`,
+      result: null, status: "done", stats: null, sidechain: false,
+    } as TimelineChatEvent;
+  }
+  function bash(uuid: string): TimelineChatEvent {
+    return {
+      kind: "tool", uuid, ts: "2026-08-22T10:00:00Z", name: "Bash",
+      title: "Bash", detail: {}, toolUseId: `t-${uuid}`,
+      result: "ok", status: "done", stats: null, sidechain: false,
+    } as TimelineChatEvent;
+  }
+
+  it("macht aus einem Agent-Aufruf ein eigenes Element", () => {
+    const items = buildTimelineItems([agentTool("a1")]);
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("agent");
+  });
+
+  it("wird zwischen zwei Werkzeugen nicht in eine Gruppe geschluckt", () => {
+    // Ohne eigenen Zweig verschwaende der Auftrag als anonymes "+1 Tool" in
+    // einer Werkzeug-Gruppe — in der Praxis der Normalfall, weil er fast
+    // immer neben Bash/Read steht.
+    const items = buildTimelineItems([bash("b1"), agentTool("a1"), bash("b2")]);
+    expect(items.map((i) => i.kind)).toEqual(["single", "agent", "single"]);
+  });
+
+  it("behandelt Task wie Agent", () => {
+    const ev = { ...agentTool("a1"), name: "Task" } as TimelineChatEvent;
+    expect(buildTimelineItems([ev])[0].kind).toBe("agent");
+  });
+
+  it("laesst gewoehnliche Werkzeuge unberuehrt", () => {
+    // Gegenprobe: der neue Zweig darf nicht jedes Werkzeug herausloesen.
+    const items = buildTimelineItems([bash("b1"), bash("b2")]);
+    expect(items.map((i) => i.kind)).toEqual(["activity"]);
+  });
+});
+
+describe("buildTimelineItems — Hintergrund-Meldungen", () => {
+  function notif(uuid: string, toolUseId: string | null): TimelineChatEvent {
+    return {
+      kind: "notification", uuid, ts: "2026-08-22T10:00:00Z",
+      taskId: "t", toolUseId, status: "completed", summary: "fertig",
+    } as TimelineChatEvent;
+  }
+  function agentTool2(uuid: string, toolUseId: string): TimelineChatEvent {
+    return {
+      kind: "tool", uuid, ts: "2026-08-22T10:00:00Z", name: "Agent",
+      title: "Agent: x", detail: {}, toolUseId,
+      result: null, status: "done", stats: null, sidechain: false,
+    } as TimelineChatEvent;
+  }
+
+  it("schluckt die Meldung, die zu einer Karte im Verlauf gehoert", () => {
+    // Sonst stuende dieselbe Aussage zweimal nebeneinander — die Karte sagt
+    // "fertig", und direkt darunter noch einmal eine Zeile.
+    const items = buildTimelineItems([agentTool2("a1", "t1"), notif("n1", "t1")]);
+    expect(items.map((i) => i.kind)).toEqual(["agent"]);
+  });
+
+  it("zeigt eine Meldung ohne zugehoerigen Aufruf als eigene Zeile", () => {
+    // Hintergrund-BEFEHLE erzeugen dieselbe Meldung, haben aber keine Karte.
+    const items = buildTimelineItems([notif("n1", "tX")]);
+    expect(items.map((i) => i.kind)).toEqual(["single"]);
+  });
+
+  it("zeigt auch eine Meldung ohne Werkzeug-Kennung", () => {
+    const items = buildTimelineItems([notif("n1", null)]);
+    expect(items.map((i) => i.kind)).toEqual(["single"]);
+  });
+});
+
+
 
 describe("modelBadgeUuids", () => {
   it("flags the first assistant message so the reader knows what is answering", () => {

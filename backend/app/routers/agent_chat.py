@@ -6,6 +6,7 @@ plus a live SSE tail. Parsing/session-resolution lives in
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import re
 import uuid
 from pathlib import Path
@@ -164,6 +165,128 @@ async def get_chat_history(
         **await model_options_capabilities(agent),
     }
     return history
+
+
+#: Erlaubte Gestalt einer ``runId``. Der Wert wird SYNTAKTISCH geprueft, bevor
+#: er irgendwo hinkommt — obwohl er gleich danach ohnehin gegen die gescannte
+#: Lauf-Liste geprueft wird. Zwei Schranken, weil dieser Endpunkt als erster
+#: ueberhaupt in die Unterordner einer Sitzung greift: ``find_active_session``
+#: steigt bewusst nie dorthin ab, es gibt hier also keine Vorgaenger-
+#: Absicherung, die einen Fehler auffangen wuerde.
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
+
+
+@router.get("/agents/{agent_id}/chat/subagent/{run_id}")
+async def get_subagent_history(
+    agent_id: uuid.UUID,
+    run_id: str,
+    limit: int = Query(200, ge=1, le=1000),
+    before_uuid: str | None = Query(None),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Der Verlauf EINES Subagenten dieser Sitzung.
+
+    Claude Code legt je Subagent eine eigene Transkript-Datei unter
+    ``<sitzung>/subagents/`` an; im Hauptstrom steht davon nichts (live
+    gemessen: 0 Zeilen mit ``isSidechain: true``). Ohne diesen Endpunkt ist
+    ein delegierter Auftrag im Chat nur ein Werkzeugaufruf ohne Inhalt.
+
+    Gelesen wird mit DEMSELBEN Parser wie alles andere — die Dateien haben
+    dasselbe Format (679 Stueck fehlerfrei gegengelesen).
+
+    ── Warum hier vier Schranken stehen ──────────────────────────────────
+    Der Baum, in den dieser Endpunkt greift, enthaelt bei einem Host-Agenten
+    AUCH die persoenlichen Sitzungen des Operators, und
+    ``transcript_allowed`` gibt fuer cli-bridge-Agenten blind ``True``
+    zurueck. Ein Pfad, der aus der URL zusammengebaut wuerde, waere damit ein
+    Leseschluessel auf fremde Gespraeche. Darum:
+
+    1. ``run_id`` syntaktisch, auf dem ROHEN Wert (kein ``/``, kein ``..``);
+    2. Aufloesung ausschliesslich per Nachschlag in der Liste, die
+       ``subagent_runs`` selbst gescannt hat — der Pfad entsteht nie aus
+       Nutzereingabe;
+    3. Eindaemmung auf dem UNAUFGELOESTEN Pfad, plus ausdrueckliche
+       Abweisung von Symlinks auf das Sitzungsverzeichnis, den
+       ``subagents``-Ordner und die Zieldatei. Die Grenze zu ``resolve()``
+       verschob sie bei einem Ordner-Symlink mit — genau das war die Luecke;
+    4. ``transcript_allowed`` ZUSAETZLICH auf der Kind-Datei: Eltern- und
+       Kindurteil koennen auseinandergehen, weil ein Subagent das
+       Arbeitsverzeichnis wechseln kann.
+
+    Jede Ablehnung liefert denselben Koerper wie ueberall
+    (``{"reason": "no_transcript"}``) — nie 403, nie eine Meldung, die einen
+    Pfad verraet.
+    """
+    resolved = await _resolve_transcript_path(agent_id, session)
+    if isinstance(resolved, JSONResponse):
+        return resolved
+
+    agent, path, adapter = resolved
+
+    if not _RUN_ID_RE.match(run_id or ""):
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    run = next((r for r in adapter.subagent_runs(path) if r["runId"] == run_id), None)
+    if run is None:
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    session_dir = path.parent / path.stem
+    subroot = session_dir / "subagents"
+
+    # Die Grenze wird auf dem UNAUFGELOESTEN Pfad gebildet. Die Vorfassung
+    # rechnete ``(… / "subagents").resolve()`` — das loeste den Ordner SELBST
+    # mit auf, und ein Symlink darauf verschob die Grenze einfach mit: der
+    # Vergleich weiter unten war danach trivial wahr, und keine der anderen
+    # Schranken sah es (die Gestalt-Pruefung schaut nur auf Zeichen, der
+    # Nachschlag folgte demselben Symlink, ``transcript_allowed`` sagt fuer
+    # cli-bridge blind Ja). Der Endpunkt war damit ein Leseschluessel auf die
+    # Subagenten-Protokolle FREMDER Agenten. Reproduziert und behoben am
+    # 22.08.2026 (Review-Befund).
+    if session_dir.is_symlink() or subroot.is_symlink():
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    target = subroot / f"agent-{run_id}.jsonl"
+    if target.is_symlink():
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+    try:
+        # Zusaetzlich zur Symlink-Abweisung: die aufgeloesten Pfade muessen
+        # ineinander liegen. Faengt, was oben durchrutschen koennte.
+        if not target.resolve().is_relative_to(subroot.resolve()):
+            return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+    except OSError:
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+    if not target.is_file():
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    if not adapter.transcript_allowed(agent, target):
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    # ``stamp_usage`` stillgelegt: es leitet die Config-Wurzel ueber
+    # ``parent.parent.parent`` aus dem Pfad ab und unterstellt das Layout
+    # ``<root>/projects/<cwd>/<sitzung>.jsonl``. Eine Subagenten-Datei liegt
+    # zwei Ebenen tiefer — der Zeiger landete in einem FREMDEN Verzeichnis.
+    # Preis, ehrlich benannt: das Kontextfenster eines Subagenten bleibt eine
+    # Schaetzung. Lieber geschaetzt als aus der falschen Datei behauptet.
+    quiet = dataclasses.replace(adapter, stamp_usage=lambda ev, p: None)
+
+    try:
+        data = read_history(
+            target,
+            quiet,
+            limit=limit,
+            before_uuid=before_uuid,
+            observed_windows=await get_observed_model_windows(),
+        )
+    except OSError:
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    # Kein ``capabilities``-Block und kein ``aliveness``: die beschreiben einen
+    # steuerbaren Live-Agenten. Ein Subagenten-Lauf ist ein abgeschlossenes
+    # Protokoll, in das niemand hineintippen kann.
+    data.pop("subagentRuns", None)
+    data["subagent"] = run
+    return data
 
 
 @router.get("/agents/{agent_id}/chat/stream")
