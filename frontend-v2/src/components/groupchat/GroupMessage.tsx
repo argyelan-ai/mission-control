@@ -12,8 +12,13 @@
  *
  * Erwähnungen (`message.mentions`) werden NICHT zusätzlich gerendert: sie
  * stehen bereits im Text, und der angezeigte Text wird nie umgeschrieben.
+ *
+ * Zwei verschiedene Klemmen, absichtlich: ein System-Brief verschwindet GANZ
+ * hinter seinem Knopf (Maschinen-Auftrag, man liest ihn nur auf Verdacht), ein
+ * Agenten-Beitrag bleibt mit seinen ersten Zeilen stehen (Inhalt, den man im
+ * Vorbeilesen mitnimmt). Siehe ADR-075, Punkt F.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -37,6 +42,106 @@ interface GroupMessageProps {
  *  Synthese-Aufträge liegen bei 1000–5000 Zeichen, Timeout-Notizen bei ~60 —
  *  dazwischen ist viel Luft, die Grenze muss nicht fein justiert sein. */
 const SYSTEM_COLLAPSE_CHARS = 240;
+
+// ── Klemme für Agenten-Beiträge ─────────────────────────────────────────────
+// Ein Beitrag ist Inhalt, kein Maschinen-Auftrag. Er darf deshalb NICHT wie ein
+// Rundenbrief ganz hinter einem Knopf verschwinden — der Anfang muss ohne Klick
+// lesbar bleiben. Darum zwei Grenzen statt einer:
+//
+//   PREVIEW  — was sichtbar bleibt, wenn geklemmt wird (drei Zeilen: Position
+//              und erster Grund stehen fast immer darin).
+//   MIN      — ab wann überhaupt geklemmt wird. Die Kursänderung (ADR-075,
+//              Punkt A) beauftragt 2–4 Sätze, gemessen 200–500 Zeichen ≈ bis
+//              sieben Zeilen. Klemmten wir schon bei der Vorschauhöhe, stünde
+//              unter JEDEM regelkonformen Beitrag ein Aufklapper und der Raum
+//              wäre wieder zu — die Klemme ist das Netz für die Textwände von
+//              1600–4900 Zeichen, nicht die Regel.
+const CONTRIBUTION_LINE_HEIGHT_PX = 24; // 14px × 1.7, gerundet — wie unten gesetzt
+export const CONTRIBUTION_CLAMP_MAX_PX = 3 * CONTRIBUTION_LINE_HEIGHT_PX;
+export const CONTRIBUTION_COLLAPSE_MIN_PX = 7 * CONTRIBUTION_LINE_HEIGHT_PX;
+
+/** Beitrag mit Klemme: gemessen wird die gerenderte Höhe, nicht die Zeichenzahl.
+ *  Der Text wird nie abgeschnitten — sonst zerrisse man Markdown mittendrin (ein
+ *  halber Code-Block, eine Liste ohne Ende). Der Aufklapper erscheint nur, wenn
+ *  wirklich etwas verborgen ist. */
+function ClampedContribution({
+  content,
+  style,
+  title,
+}: {
+  content: string;
+  style?: React.CSSProperties;
+  title?: string;
+}) {
+  const t = useTranslations("sessions.groups");
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const measure = () => {
+      // Im mobilen Stapel bleibt die abgewählte Spalte mit `display: none`
+      // gemountet — dort liest jede Messung 0 und meldete „nichts verborgen"
+      // für einen 3000-Zeichen-Beitrag. Lieber gar nicht messen als falsch.
+      if (el.scrollHeight === 0) return;
+      setOverflows(el.scrollHeight > CONTRIBUTION_COLLAPSE_MIN_PX);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [content]);
+
+  const clamped = overflows && !expanded;
+
+  return (
+    <div
+      data-testid="group-message-agent"
+      data-sender-type="agent"
+      title={title}
+      // Leseweite statt Panelbreite — dieselbe Kappung wie im 1:1-Chat, damit
+      // ein Agentenbeitrag hier nicht anders liest als dort.
+      className="max-w-[76ch] min-w-0 text-[14px] leading-[1.7]"
+      style={style}
+    >
+      <div
+        ref={bodyRef}
+        data-testid="group-contribution-body"
+        data-clamped={clamped}
+        className="[&>*:last-child]:mb-0"
+        style={clamped ? { maxHeight: CONTRIBUTION_CLAMP_MAX_PX, overflow: "hidden" } : undefined}
+      >
+        <MarkdownContent content={content} />
+      </div>
+      {overflows && (
+        // Bewusst leise und ohne Rahmen: der Beitrag daneben trägt keinen
+        // Container, ein aufgemachter Knopf zöge mehr Blick auf sich als der
+        // Text, den er zeigt. Chevron in Dekorfarbe, Beschriftung lesbar.
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          data-testid="group-contribution-toggle"
+          // Aufhellen statt Farbwechsel beim Überfahren: die Farbe kommt aus
+          // dem Token per style-Attribut, eine hover:text-Klasse käme dagegen
+          // nicht an — und der Raum bleibt achromatisch.
+          className="mt-1 flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer font-mono text-[11px] opacity-90 hover:opacity-100 transition-opacity"
+          style={{ color: C.textMuted }}
+        >
+          {expanded ? (
+            <ChevronDown size={12} className="shrink-0" style={{ color: C.textDim }} />
+          ) : (
+            <ChevronRight size={12} className="shrink-0" style={{ color: C.textDim }} />
+          )}
+          {expanded ? t("contributionCollapse") : t("contributionExpand")}
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** HH:MM, 24h, de-CH. Ein kaputter Zeitstempel darf die Kopfzeile nicht
  *  killen — dann bleibt die Uhrzeit weg statt „Invalid Date" zu zeigen. */
@@ -188,17 +293,7 @@ export function GroupMessage({
           )}
         </div>
       )}
-      <div
-        data-testid="group-message-agent"
-        data-sender-type="agent"
-        title={pendingTitle}
-        // Leseweite statt Panelbreite — dieselbe Kappung wie im 1:1-Chat, damit
-        // ein Agentenbeitrag hier nicht anders liest als dort.
-        className="max-w-[76ch] min-w-0 text-[14px] leading-[1.7] [&>*:last-child]:mb-0"
-        style={pendingStyle}
-      >
-        <MarkdownContent content={message.body} />
-      </div>
+      <ClampedContribution content={message.body} style={pendingStyle} title={pendingTitle} />
     </div>
   );
 }
