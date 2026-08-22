@@ -11,9 +11,6 @@ from __future__ import annotations
 
 import re
 import textwrap
-from pathlib import Path
-
-import pytest
 
 from app.services.compose_renderer import (
     OMP_IMAGE,
@@ -22,9 +19,6 @@ from app.services.compose_renderer import (
     _ensure_omp_sessions_volume,
     _rewrite_compose,
 )
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-COMPOSE_PATH = _REPO_ROOT / "docker" / "docker-compose.agents.yml"
 
 
 def _extract_service_block(content: str, slug: str) -> str:
@@ -38,36 +32,63 @@ def _extract_service_block(content: str, slug: str) -> str:
     return m.group(1)
 
 
-# ── Real file (Sparky is currently the only omp agent) ──────────────────────
+# ── Fixture: an agent with an EXPLICIT omp image line ───────────────────────
+#
+# Fixture, not the real file: docker/docker-compose.agents.yml describes the
+# operator's own fleet and left version control. On a fresh clone it is
+# absent — these tests then SKIPPED, and the lost coverage was invisible.
+# After start-all.sh it exists but is EMPTY, and _extract_service_block died
+# on it with an AssertionError.
 
-@pytest.mark.skipif(not COMPOSE_PATH.exists(), reason="docker-compose.agents.yml not found")
-def test_sparky_gets_omp_sessions_mount_after_rewrite():
-    """Sparky's resolved image is OMP_IMAGE (explicit `image:` override in the
-    static file) — _rewrite_compose must add the omp-sessions mount even with
-    no DB-sourced image_overrides (idempotent detection from the static file)."""
-    raw = COMPOSE_PATH.read_text(encoding="utf-8")
-    result = _rewrite_compose(raw, image_overrides={})
-    block = _extract_service_block(result, "sparky")
+_EXPLICIT_IMAGE_COMPOSE = textwrap.dedent(
+    """\
+    x-claude-agent-base: &claude-agent-base
+      image: mc-claude-agent:latest
+      restart: unless-stopped
+
+    x-openclaude-agent-base: &openclaude-agent-base
+      image: mc-agent-base:latest
+      restart: unless-stopped
+
+    services:
+      mc-agent-alpha:
+        <<: *openclaude-agent-base
+        image: mc-omp-agent:latest
+        container_name: mc-agent-alpha
+        volumes:
+          - ${HOME}/.mc/agents/alpha/claude-config:/home/agent/.claude
+
+      mc-agent-beta:
+        <<: *claude-agent-base
+        container_name: mc-agent-beta
+        volumes:
+          - ${HOME}/.mc/agents/beta/claude-config:/home/agent/.claude
+    """
+)
+
+
+def test_explicit_omp_image_gets_sessions_mount_after_rewrite():
+    """Alpha's resolved image is OMP_IMAGE via an explicit `image:` line in
+    the static file — _rewrite_compose must add the omp-sessions mount even
+    with no DB-sourced image_overrides (idempotent detection from the file)."""
+    result = _rewrite_compose(_EXPLICIT_IMAGE_COMPOSE, image_overrides={})
+    block = _extract_service_block(result, "alpha")
     assert "/omp-sessions:/home/agent/.omp/profiles/mc-agent/agent/sessions" in block
-    assert "${HOME}/.mc/agents/sparky/omp-sessions:" in block
+    assert "${HOME}/.mc/agents/alpha/omp-sessions:" in block
 
 
-@pytest.mark.skipif(not COMPOSE_PATH.exists(), reason="docker-compose.agents.yml not found")
 def test_rewrite_compose_is_idempotent_for_omp_mount():
     """Running _rewrite_compose twice must not duplicate the mount line."""
-    raw = COMPOSE_PATH.read_text(encoding="utf-8")
-    once = _rewrite_compose(raw, image_overrides={})
+    once = _rewrite_compose(_EXPLICIT_IMAGE_COMPOSE, image_overrides={})
     twice = _rewrite_compose(once, image_overrides={})
     assert once == twice
     assert twice.count("/home/agent/.omp/profiles/mc-agent/agent/sessions") == 1
 
 
-@pytest.mark.skipif(not COMPOSE_PATH.exists(), reason="docker-compose.agents.yml not found")
 def test_non_omp_agents_get_no_omp_sessions_mount():
-    """Rex (claude image) must not get the omp-sessions mount."""
-    raw = COMPOSE_PATH.read_text(encoding="utf-8")
-    result = _rewrite_compose(raw, image_overrides={})
-    block = _extract_service_block(result, "rex")
+    """Beta (claude image) must not get the omp-sessions mount."""
+    result = _rewrite_compose(_EXPLICIT_IMAGE_COMPOSE, image_overrides={})
+    block = _extract_service_block(result, "beta")
     assert "omp-sessions" not in block
 
 
@@ -84,17 +105,17 @@ _MINIMAL_COMPOSE = textwrap.dedent(
       restart: unless-stopped
 
     services:
-      mc-agent-freecode:
+      mc-agent-gamma:
         <<: *claude-agent-base
-        container_name: mc-agent-freecode
+        container_name: mc-agent-gamma
         volumes:
-          - ${HOME}/.mc/agents/freecode/claude-config:/home/agent/.claude
+          - ${HOME}/.mc/agents/gamma/claude-config:/home/agent/.claude
 
-      mc-agent-newomp:
+      mc-agent-delta:
         <<: *omp-agent-base
-        container_name: mc-agent-newomp
+        container_name: mc-agent-delta
         volumes:
-          - ${HOME}/.mc/agents/newomp/claude-config:/home/agent/.claude
+          - ${HOME}/.mc/agents/delta/claude-config:/home/agent/.claude
     """
 )
 
@@ -104,16 +125,16 @@ def test_agent_inheriting_omp_anchor_gets_mount_without_explicit_override():
     image_overrides entry) must still get the mount — resolved via the
     anchor's default image, matching the vault/references injection pattern."""
     result = _rewrite_compose(_MINIMAL_COMPOSE, image_overrides={})
-    block = _extract_service_block(result, "newomp")
+    block = _extract_service_block(result, "delta")
     assert "/home/agent/.omp/profiles/mc-agent/agent/sessions" in block
-    assert "${HOME}/.mc/agents/newomp/omp-sessions:" in block
+    assert "${HOME}/.mc/agents/delta/omp-sessions:" in block
 
 
 def test_agent_switched_to_omp_via_override_gets_mount():
     """DB-driven switch to omp (image_overrides) must add the mount even
     though the static anchor was claude-agent-base."""
-    result = _rewrite_compose(_MINIMAL_COMPOSE, image_overrides={"freecode": OMP_IMAGE})
-    block = _extract_service_block(result, "freecode")
+    result = _rewrite_compose(_MINIMAL_COMPOSE, image_overrides={"gamma": OMP_IMAGE})
+    block = _extract_service_block(result, "gamma")
     assert f"image: {OMP_IMAGE}" in block
     assert "/home/agent/.omp/profiles/mc-agent/agent/sessions" in block
 
@@ -122,8 +143,8 @@ def test_agent_switched_away_from_omp_gets_no_mount():
     """DB-driven switch OFF omp to openclaude — the new service block should
     not get the omp mount (mount removal is out of scope, same limitation as
     vault entries, but a freshly-overridden-away agent should never gain one)."""
-    result = _rewrite_compose(_MINIMAL_COMPOSE, image_overrides={"newomp": OPENCLAUDE_IMAGE})
-    block = _extract_service_block(result, "newomp")
+    result = _rewrite_compose(_MINIMAL_COMPOSE, image_overrides={"delta": OPENCLAUDE_IMAGE})
+    block = _extract_service_block(result, "delta")
     assert f"image: {OPENCLAUDE_IMAGE}" in block
     assert "omp-sessions" not in block
 

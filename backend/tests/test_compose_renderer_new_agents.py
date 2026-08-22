@@ -130,13 +130,13 @@ async def test_existing_services_preserved_when_new_agent_appended(
     await async_session.commit()
     await async_session.refresh(rt)
 
-    estrich = Agent(
-        name="Estrich-Vision",
+    blueprint = Agent(
+        name="Blueprint-Vision",
         agent_runtime="cli-bridge",
         runtime_id=rt.id,
         scopes=["tasks:read"],  # explicit non-vault scope
     )
-    async_session.add(estrich)
+    async_session.add(blueprint)
     await async_session.commit()
 
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
@@ -206,38 +206,38 @@ async def test_new_agent_block_appended(async_session, compose_path):
     await async_session.refresh(rt)
 
     # scopes=None → vault:write (backward-compat all-scopes rule).
-    estrich = Agent(
-        name="Estrich-Vision",
+    blueprint = Agent(
+        name="Blueprint-Vision",
         agent_runtime="cli-bridge",
         runtime_id=rt.id,
         scopes=None,
     )
-    async_session.add(estrich)
+    async_session.add(blueprint)
     await async_session.commit()
 
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
 
     # Service header is present.
-    assert "mc-agent-estrich-vision:" in rendered
+    assert "mc-agent-blueprint-vision:" in rendered
 
     # Anchor selection: claude runtime → claude-agent-base.
     assert "<<: *claude-agent-base" in rendered
 
-    # Required env vars for estrich-vision.
-    assert "AGENT_SLUG=estrich-vision" in rendered
-    assert "MC_TOKEN=${MC_TOKEN_ESTRICH_VISION}" in rendered
-    assert "AGENT_NAME=estrich-vision" in rendered
+    # Required env vars for blueprint-vision.
+    assert "AGENT_SLUG=blueprint-vision" in rendered
+    assert "MC_TOKEN=${MC_TOKEN_BLUEPRINT_VISION}" in rendered
+    assert "AGENT_NAME=blueprint-vision" in rendered
     assert "MC_API_URL=${MC_API_URL:-http://backend:8000}" in rendered
-    assert "AGENT_VAULT_PATH=/vault/agents/estrich-vision" in rendered
+    assert "AGENT_VAULT_PATH=/vault/agents/blueprint-vision" in rendered
     assert "AGENT_VAULT_INBOX=/vault/_inbox" in rendered
     # Fleet default nudge+pull (W2.1) with host-level override knob.
     assert "MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}" in rendered
 
     # Standard volumes.
-    assert "${HOME}/.mc/agents/estrich-vision/claude-config:/home/agent/.claude" in rendered
+    assert "${HOME}/.mc/agents/blueprint-vision/claude-config:/home/agent/.claude" in rendered
     assert "${HOME}/.mc/mcp-servers:/mc-servers:ro" in rendered
-    assert "${HOME}/.mc/workspaces/estrich-vision:/workspace" in rendered
-    assert "${HOME}/.mc/deliverables/estrich-vision:/deliverables" in rendered
+    assert "${HOME}/.mc/workspaces/blueprint-vision:/workspace" in rendered
+    assert "${HOME}/.mc/deliverables/blueprint-vision:/deliverables" in rendered
 
     # Vault mount because scopes=None → vault:write.
     assert "${HOME}/.mc/vault:/vault:rw" in rendered
@@ -383,13 +383,13 @@ async def test_yaml_valid_with_existing_and_new_agent(async_session, compose_pat
     await async_session.commit()
     await async_session.refresh(rt)
 
-    estrich = Agent(
-        name="Estrich-Vision",
+    blueprint = Agent(
+        name="Blueprint-Vision",
         agent_runtime="cli-bridge",
         runtime_id=rt.id,
         scopes=None,
     )
-    async_session.add(estrich)
+    async_session.add(blueprint)
     await async_session.commit()
 
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
@@ -413,6 +413,6 @@ async def test_yaml_valid_with_existing_and_new_agent(async_session, compose_pat
     # Existing service survives.
     assert "mc-agent-rex" in services, "Pre-existing mc-agent-rex was removed"
     # New service was appended.
-    assert "mc-agent-estrich-vision" in services, (
-        "New agent mc-agent-estrich-vision is missing from parsed services"
+    assert "mc-agent-blueprint-vision" in services, (
+        "New agent mc-agent-blueprint-vision is missing from parsed services"
     )
