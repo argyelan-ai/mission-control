@@ -573,3 +573,22 @@ def test_resolve_context_window_unknown_model_returns_none():
 
 def test_resolve_context_window_none_model_returns_none():
     assert resolve_context_window(None) is None
+
+
+def test_synthetic_model_marker_is_not_a_model():
+    """Claude Code stempelt intern erzeugte Nachrichten mit model="<synthetic>"
+    — live gesehen am Researcher (18.08.2026): der Composer zeigte den Marker
+    woertlich als Modell. Er ist kein Modell und muss zu None werden, damit
+    die Anzeige auf den persistierten Standard zurueckfaellt."""
+    import json
+    from app.services.transcript_chat import parse_transcript_line
+
+    line = json.dumps({
+        "type": "assistant",
+        "uuid": "u1",
+        "timestamp": "2026-08-18T20:00:00Z",
+        "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Hinweis"}]},
+    })
+    events = parse_transcript_line(line)
+    msgs = [e for e in events if e.get("kind") == "message"]
+    assert msgs and msgs[0]["model"] is None

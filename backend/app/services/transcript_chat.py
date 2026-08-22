@@ -369,6 +369,13 @@ def _parse_assistant_entry(
 
     sidechain = bool(d.get("isSidechain", False))
     model = message.get("model")
+    if model == "<synthetic>":
+        # Claude Codes Marker fuer intern erzeugte Nachrichten (z.B.
+        # Fehler-Hinweise) — kein echtes Modell, kein API-Aufruf. Ungefiltert
+        # landete er woertlich als Modell-Label im Composer (live gesehen am
+        # Researcher, 18.08.2026: Chip zeigte "<synthetic>"). None laesst die
+        # Anzeige ehrlich auf den persistierten Standard zurueckfallen.
+        model = None
     events: list[dict[str, Any]] = []
 
     for block in content:
@@ -1261,6 +1268,90 @@ class ChatTailerManager:
             # from the outside — make every exit visible.
             logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
 
+    @staticmethod
+    def _transcript_suggests_turn_ended(path: Path) -> bool:
+        """True, wenn die letzte inhaltliche Transkript-Zeile die
+        ABSCHLUSS-Antwort des Agenten ist — dann ist der Zug vorbei, egal wie
+        frisch die Datei ist.
+
+        Operator-Befund (18.08.2026 nachts): nach Turn-Ende drehte die
+        Statuszeile noch bis zu ~20s die Arbeits-Verben weiter, weil die
+        working/idle-Disambiguierung allein am Datei-Alter hing
+        (STATE_ACTIVE_WINDOW_SECONDS) — die frische mtime stammte aber genau
+        von der ABSCHLUSS-Antwort.
+
+        Die erste Fassung las "assistant-Zeile OHNE tool_use = Zug beendet".
+        Das war an einer erfundenen Datei-Gestalt gemessen. Echte Claude-Code-
+        Transkripte schreiben JEDEN Content-Block als EIGENE Zeile — nachgemessen
+        an zwei echten Dateien (20.08.2026): die Blocktyp-Mengen waren
+        ausschliesslich ('tool_use',)=119, ('thinking',)=101, ('text',)=89, NIE
+        gemischt. Damit galt jede thinking- und jede Zwischentext-Zeile als
+        Zug-Ende: 245 Urteile ueber beide Dateien, davon 182 falsch (die
+        naechste Zeile setzte denselben Zug fort). Live sichtbar als Springen
+        der Statuszeile zwischen "Bereit" und "Arbeitet", als "Nicht
+        bestaetigt"-Warnung im Chat — und, am teuersten, als ausgehebelte
+        Belegt-Vorpruefung von ``_set_effort_boss``, die dann /effort in einen
+        ARBEITENDEN Boss tippte.
+
+        Das echte Zug-Ende steht in ``message.stop_reason``: "tool_use"
+        solange es weitergeht, "end_turn" bei der letzten API-Antwort. Alle
+        Zeilen EINER Antwort tragen dasselbe stop_reason, darum reicht
+        end_turn allein nicht — verlangt wird zusaetzlich ein TEXT-Block, denn
+        die Antwort endet mit ihrem Text, nicht mit dem Denken davor. Gegen
+        dieselben zwei Dateien nachgemessen: 17 Urteile, 0 falsch.
+
+        Alles andere (user/tool_result, assistant MIT tool_use, Subagenten-
+        Zeilen, fehlendes stop_reason, Metadaten, unlesbare Riesenzeile) laesst
+        bewusst das alte mtime-Verhalten gelten — nur der falsche Nachlauf
+        wird entfernt, die Redraw-Luecken-Absicherung bleibt.
+
+        Synchron und billig (ein Tail-Read von max 256KB pro Probe-Tick);
+        Aufrufer wrappt in asyncio.to_thread. Fail-silent -> False."""
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as f:
+                f.seek(max(0, size - 262_144))
+                tail = f.read()
+            lines = [ln for ln in tail.split(b"\n") if ln.strip()]
+            if not lines:
+                return False
+            # Rueckwaerts bis zur letzten INHALTLICHEN Zeile: nach der Antwort
+            # schreibt Claude Code noch system-Zeilen (Stop-Hook-Protokoll,
+            # Zug-Dauer-Metadaten mit durationMs/messageCount — live gesehen
+            # beim ersten Messlauf dieses Fixes, der genau daran scheiterte).
+            # Nur user/assistant tragen die Zug-Semantik; alles andere wird
+            # uebersprungen. Scan begrenzt — irgendwo in den letzten 50 Zeilen
+            # liegt die Semantik immer, sonst gilt konservativ das
+            # mtime-Verhalten. lines[0] kann ein abgeschnittener Zeilenrest
+            # sein (Chunk-Grenze): unparseabar -> einfach aeltere Zeile, stop.
+            for raw in list(reversed(lines))[:50]:
+                try:
+                    entry = json.loads(raw.decode("utf-8", errors="replace"))
+                except Exception:
+                    return False
+                etype = entry.get("type")
+                if etype not in ("user", "assistant"):
+                    continue
+                if etype != "assistant":
+                    return False
+                if entry.get("isSidechain"):
+                    # Ein Subagent beendet nur SEINEN Zug — ueber den Hauptzug
+                    # ist damit nichts bewiesen.
+                    return False
+                message = entry.get("message") or {}
+                content = message.get("content")
+                if not isinstance(content, list):
+                    return False
+                types = {b.get("type") for b in content if isinstance(b, dict)}
+                if "tool_use" in types:
+                    return False
+                if message.get("stop_reason") != "end_turn":
+                    return False
+                return "text" in types
+            return False
+        except Exception:
+            return False
+
     async def _compute_pane_state(self, agent: Any, current_path: Path) -> dict[str, Any]:
         """One probe tick's worth of state classification (A6). Computes
         ``transcript_active`` from the current session file's mtime (used
@@ -1278,6 +1369,17 @@ class ChatTailerManager:
             mtime = await asyncio.to_thread(lambda: current_path.stat().st_mtime)
             transcript_active = (time.time() - mtime) < self.STATE_ACTIVE_WINDOW_SECONDS
         except OSError:
+            transcript_active = False
+
+        # Frische mtime allein heisst nicht "arbeitet": direkt nach dem Zug
+        # stammt sie von der Abschluss-Antwort selbst. Endet das Transkript
+        # mit einer reinen Text-Antwort, ist der Zug vorbei (Details im
+        # Helper) — das nimmt sowohl dem Pane-Parser die falsche
+        # working-Aufloesung als auch dem pane-losen Boss-Zweig den
+        # 20s-Nachlauf.
+        if transcript_active and await asyncio.to_thread(
+            self._transcript_suggests_turn_ended, current_path
+        ):
             transcript_active = False
 
         aliveness = await resolve_aliveness(agent, current_path)

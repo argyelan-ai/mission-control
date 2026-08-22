@@ -176,6 +176,18 @@ export function resolveAliveness(session: ChatSession | null | undefined): ChatA
 export interface ChatCapabilities {
   effortLevels: string[];
   canSwitchEffort: boolean;
+  /** Die im `settings.json` des Agenten hinterlegte Effort-Stufe: der Standard,
+   *  mit dem jede neue Session startet. Dient dem Composer als Startwert,
+   *  solange die laufende Session noch kein `usage`-Ereignis geschrieben hat —
+   *  vorher fehlte der Chip in genau diesem Fenster komplett. Ein spaeteres
+   *  `usage.effort` gewinnt immer (nur es kennt die session-only-Stufen
+   *  `max`/`ultracode`). `null`/absent = unbekannt, der Chip zeigt dann `auto`. */
+  effort?: string | null;
+  /** True bei Boss: er nutzt Marks eigene ~/.claude/settings.json — eine
+   *  persistierende Stufe (low..xhigh) aendert damit auch den Standard der
+   *  lokalen Claude-Sessions des Operators. Der Regler-Hinweis muss das am
+   *  Wert sagen, nicht verschweigen. */
+  effortShared?: boolean;
   /** Every slash command this harness actually offers — built-ins AND the
    *  agent's skills. Absent on older backends, where the composer falls back to
    *  its own short static list. `name` may or may not carry the leading slash
@@ -186,6 +198,12 @@ export interface ChatCapabilities {
    *  backends, where the switcher falls back to its static list and shows no
    *  window sizes at all — better than printing a number we made up. */
   modelOptions?: ChatModelOption[] | null;
+  /** Das im settings.json des Agenten hinterlegte Modell — Startwert fuers
+   *  Composer-Label, solange die Session noch kein usage-Ereignis hat (vorher
+   *  stand dort "—"). Kommt als Kurz-Alias ("sonnet") ODER volle ID
+   *  ("claude-sonnet-5") — beide Gestalten existieren real in der Flotte.
+   *  usage.model gewinnt immer. */
+  model?: string | null;
 }
 
 export interface ChatSlashCommand {

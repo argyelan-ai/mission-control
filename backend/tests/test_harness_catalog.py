@@ -95,8 +95,16 @@ async def test_parse_model_picker_empty_pane_yields_empty_list():
 
 
 async def test_harness_for_docker_agent():
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert hc.harness_for(agent) == "claude"
+
+
+async def test_harness_for_foreign_cli_returns_none():
+    """Kimi/Sparky sind cli-bridge, aber kein Claude — der Katalog darf ihre
+    TUI nie mit einem /model-Picker-Probe anfassen (Gate 18.08.2026)."""
+    for harness in ("kimi", "omp", None):
+        agent = SimpleNamespace(slug="kimi", agent_runtime="cli-bridge", harness=harness)
+        assert hc.harness_for(agent) is None
 
 
 async def test_harness_for_host_agent_returns_none():
@@ -116,7 +124,7 @@ async def test_resolve_cli_version_parses_real_output_format(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert await hc.resolve_cli_version(agent) == "2.1.234"
 
 
@@ -131,7 +139,7 @@ async def test_resolve_cli_version_none_on_nonzero_exit(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert await hc.resolve_cli_version(agent) is None
 
 
@@ -141,7 +149,7 @@ async def test_resolve_cli_version_none_on_subprocess_exception(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
     assert await hc.resolve_cli_version(agent) is None
 
 
@@ -168,7 +176,7 @@ async def test_discover_model_catalog_no_harness_returns_empty_without_any_io(re
 
 
 async def test_discover_model_catalog_no_version_returns_empty(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _no_version(a):
         return None
@@ -179,7 +187,7 @@ async def test_discover_model_catalog_no_version_returns_empty(monkeypatch, redi
 
 
 async def test_discover_model_catalog_cache_hit_skips_discovery(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -191,7 +199,7 @@ async def test_discover_model_catalog_cache_hit_skips_discovery(monkeypatch, red
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _boom)
 
     cached = [{"command": "opus", "label": "Opus"}]
-    await redis_env.set(hc.RedisKeys.model_catalog("claude", "2.1.234"), json.dumps(cached))
+    await redis_env.set(hc.RedisKeys.model_catalog("claude", "2.1.234", "rex"), json.dumps(cached))
 
     assert await hc.discover_model_catalog(agent) == cached
 
@@ -199,7 +207,7 @@ async def test_discover_model_catalog_cache_hit_skips_discovery(monkeypatch, red
 async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_versions(monkeypatch, redis_env):
     """A cached catalog for version 2.1.233 must NOT answer a request for
     2.1.234 — a CLI upgrade invalidates the catalog automatically."""
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -214,7 +222,7 @@ async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_v
     monkeypatch.setattr(hc, "_discover_via_throwaway_window", _discover)
 
     await redis_env.set(
-        hc.RedisKeys.model_catalog("claude", "2.1.233"),
+        hc.RedisKeys.model_catalog("claude", "2.1.233", "rex"),
         json.dumps([{"command": "opus", "label": "Opus"}]),
     )
 
@@ -225,7 +233,7 @@ async def test_discover_model_catalog_version_keyed_cache_does_not_leak_across_v
 
 
 async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -239,12 +247,12 @@ async def test_discover_model_catalog_populates_cache_after_fresh_discovery(monk
     result = await hc.discover_model_catalog(agent)
     assert result == [{"command": "opus", "label": "Opus"}]
 
-    cached = await redis_env.get(hc.RedisKeys.model_catalog("claude", "2.1.234"))
+    cached = await redis_env.get(hc.RedisKeys.model_catalog("claude", "2.1.234", "rex"))
     assert json.loads(cached) == [{"command": "opus", "label": "Opus"}]
 
 
 async def test_discover_model_catalog_discovery_failure_returns_empty_not_raises(monkeypatch, redis_env):
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -263,7 +271,7 @@ async def test_discover_model_catalog_concurrent_request_skips_when_lock_held(mo
     not both spin up a throwaway discovery window — the second one gets []
     (falls back to the static alias list for that one request) rather than
     piling on."""
-    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
+    agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge", harness="claude")
 
     async def _version(a):
         return "2.1.234"
@@ -279,7 +287,7 @@ async def test_discover_model_catalog_concurrent_request_skips_when_lock_held(mo
 
     # Simulate another request already holding the lock.
     await redis_env.set(
-        hc.RedisKeys.model_catalog_discovery_lock("claude", "2.1.234"), "1", ex=60
+        hc.RedisKeys.model_catalog_discovery_lock("claude", "2.1.234", "rex"), "1", ex=60
     )
 
     assert await hc.discover_model_catalog(agent) == []
@@ -354,3 +362,35 @@ async def test_resolve_context_window_none_observed_behaves_like_before():
 
 async def test_resolve_context_window_observed_does_not_match_unrelated_model():
     assert resolve_context_window("totally-unknown-model", observed={"claude-opus-5": 1}) is None
+
+
+async def test_catalog_cache_is_per_agent_not_fleet_wide(redis_env, monkeypatch):
+    """Operator-Befund 19.08.2026: FreeCodes lokal erkanntes Qwen stand bei
+    JEDEM Claude-Agenten im Modell-Dropdown. Ursache: der Katalog-Cache war
+    nur nach (harness, cli_version) geschluesselt — der /model-Picker ist
+    aber PRO AGENT verschieden (lokal erkannte OpenAI-kompatible Modelle des
+    jeweiligen Containers). Zwei Agenten duerfen sich keinen Eintrag teilen."""
+    import json
+    from types import SimpleNamespace
+
+    async def _version(agent):
+        return "2.1.234"
+    monkeypatch.setattr(hc, "resolve_cli_version", _version)
+
+    freecode_rows = [{"command": "sonnet", "label": "Sonnet"},
+                     {"command": "Qwen/Qwen3.6-35B-A3B-FP8", "label": "Qwen/Qwen3.6-35B-A3B-FP8"}]
+    await redis_env.set(
+        hc.RedisKeys.model_catalog("claude", "2.1.234", "freecode"), json.dumps(freecode_rows)
+    )
+
+    freecode = SimpleNamespace(slug="freecode", agent_runtime="cli-bridge", harness="claude")
+    assert await hc.discover_model_catalog(freecode) == freecode_rows
+
+    # Davinci hat KEINEN Cache-Eintrag — er darf FreeCodes Qwen nicht erben.
+    # (Discovery selbst schlaegt hier kontrolliert fehl -> [].)
+    async def _no_discovery(*a, **k):
+        raise RuntimeError("kein Fenster im Test")
+    monkeypatch.setattr(hc, "_discover_via_throwaway_window", _no_discovery)
+    davinci = SimpleNamespace(slug="davinci", agent_runtime="cli-bridge", harness="claude")
+    result = await hc.discover_model_catalog(davinci)
+    assert "Qwen/Qwen3.6-35B-A3B-FP8" not in json.dumps(result)

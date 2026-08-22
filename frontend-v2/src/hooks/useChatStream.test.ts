@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { resolveAliveness } from "@/lib/chatTypes";
 import {
+  isSessionClearingCommand,
+  retireEchoesAnsweredByRollover,
   chatReducer,
   markEchoRetried,
   markEchoStarting,
@@ -474,5 +476,32 @@ describe("chatReducer — state freshness", () => {
 
     // Messages carry no status claim; the probe stays the only source.
     expect(st.state?.status).toBe("idle");
+  });
+});
+
+
+// ── /clear: der Rollover IST die Bestaetigung (Operator-Befund 19.08.2026) ──
+
+describe("echoes answered by a session rollover", () => {
+  const echo = (text: string) => ({ id: "e1", text, sentAt: 0, status: "pending" as const });
+
+  it("retires a /clear echo — its confirmation can never appear in the new file", () => {
+    const out = retireEchoesAnsweredByRollover([echo("/clear")]);
+    expect(out).toEqual([]);
+  });
+
+  it("keeps a normal message — a rollover for another reason must not fake delivery", () => {
+    // Recycler-Respawn oder Auto-Compact der CLI rollen die Datei ebenfalls;
+    // dort waere ein Abhaken eine Luege (Rollover-Haerte aus R14a).
+    const echoes = [echo("mach bitte X")];
+    expect(retireEchoesAnsweredByRollover(echoes)).toBe(echoes);
+  });
+
+  it("recognises the command regardless of case and trailing args", () => {
+    expect(isSessionClearingCommand("  /CLEAR  ")).toBe(true);
+    expect(isSessionClearingCommand("/clear now")).toBe(true);
+    // /compact verdichtet INNERHALB der Session — kein Rollover-Beweis.
+    expect(isSessionClearingCommand("/compact")).toBe(false);
+    expect(isSessionClearingCommand("bitte /clear machen")).toBe(false);
   });
 });
