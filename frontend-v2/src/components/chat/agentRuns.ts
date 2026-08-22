@@ -14,9 +14,18 @@
  * in 97,1 % der Faelle genau einen Steckbrief — und die Fehltreffer sind
  * Spawns, deren Datei gar nicht existiert, keine Fehlzuordnungen.
  *
- * Lesbar ist sie allerdings nur in 51,7 % der Spawns, mit klarem Trend nach
- * oben bei neueren CLI-Staenden (2.1.233 und 2.1.235: 100 %). Fuer den Rest
- * gibt es den Rueckfall ueber `input.name` — aber NUR, wenn er eindeutig ist.
+ * Lesbar ist sie allerdings nur in gut der Haelfte der Spawns, mit klarem
+ * Trend nach oben bei neueren CLI-Staenden (2.1.233/235: 100 %) — die Flotte
+ * faehrt aber teils noch 2.1.207, wo sie fehlt. Darum zwei Rueckfaelle, beide
+ * nur bei EINDEUTIGKEIT:
+ *
+ *   2. `input.description` == `meta.description`. Der Auftragstext, den der
+ *      Aufrufer vergibt, landet unveraendert im Steckbrief. Live gemessen
+ *      ueber 602 Spawns: hebt die Abdeckung von 50,2 % auf 95,5 %; 16 Faelle
+ *      bleiben mehrdeutig (mehrfach derselbe Auftragstext) und werden
+ *      uebersprungen, 11 haben ueberhaupt keine Datei.
+ *   3. `input.name` == `meta.name`, fuer die wenigen Faelle mit Namen aber
+ *      ohne verwertbaren Auftragstext.
  *
  * Die Leitplanke dahinter: **falsch zuordnen ist schlimmer als nicht
  * zuordnen.** Eine Karte, die den Steckbrief eines fremden Laufs zeigt, ist
@@ -46,10 +55,10 @@ function readAgentId(ev: ToolEvent): { name: string; team: string } | null {
   return m ? { name: m[1], team: m[2] } : null;
 }
 
-function spawnName(ev: ToolEvent): string | null {
+function detailText(ev: ToolEvent, key: "name" | "description"): string | null {
   const detail = ev.detail as Record<string, unknown> | null | undefined;
-  const name = detail?.name;
-  return typeof name === "string" && name ? name : null;
+  const value = detail?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 /**
@@ -81,17 +90,22 @@ export function matchRuns(
     }
   }
 
-  // Durchgang 2 — Rueckfall ueber den Namen aus dem Aufruf, und nur bei
-  // Eindeutigkeit. Bleiben zwei gleichnamige Laeufe uebrig, wird geraten —
-  // also gar nicht zugeordnet.
-  for (const ev of spawns) {
-    if (out.has(ev.toolUseId!)) continue;
-    const name = spawnName(ev);
-    if (!name) continue;
-    const offen = runs.filter((r) => !vergeben.has(r.runId) && r.name === name);
-    if (offen.length !== 1) continue;
-    vergeben.add(offen[0].runId);
-    out.set(ev.toolUseId!, offen[0]);
+  /* Durchgang 2 und 3 — Rueckfaelle, jeweils NUR bei Eindeutigkeit. Bleiben
+     zwei Kandidaten uebrig, wird geraten, also gar nicht zugeordnet. Erst der
+     Auftragstext, dann der Name: der Text ist spezifischer und in der Praxis
+     deutlich haeufiger vorhanden. */
+  for (const key of ["description", "name"] as const) {
+    for (const ev of spawns) {
+      if (out.has(ev.toolUseId!)) continue;
+      const wert = detailText(ev, key);
+      if (!wert) continue;
+      const offen = runs.filter(
+        (r) => !vergeben.has(r.runId) && (key === "description" ? r.description : r.name) === wert,
+      );
+      if (offen.length !== 1) continue;
+      vergeben.add(offen[0].runId);
+      out.set(ev.toolUseId!, offen[0]);
+    }
   }
 
   return out;

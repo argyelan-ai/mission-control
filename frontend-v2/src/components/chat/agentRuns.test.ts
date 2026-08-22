@@ -4,7 +4,7 @@ import type { SubagentRun, ToolEvent } from "@/lib/chatTypes";
 
 function spawn(
   toolUseId: string,
-  opts: { name?: string; agentId?: string } = {},
+  opts: { name?: string; agentId?: string; description?: string } = {},
 ): ToolEvent {
   return {
     kind: "tool",
@@ -12,7 +12,10 @@ function spawn(
     ts: "2026-08-22T10:00:00Z",
     name: "Agent",
     title: "Agent: irgendwas",
-    detail: opts.name ? { name: opts.name } : {},
+    detail: {
+      ...(opts.name ? { name: opts.name } : {}),
+      ...(opts.description ? { description: opts.description } : {}),
+    },
     toolUseId,
     result: opts.agentId
       ? `Spawned successfully.\nagent_id: ${opts.agentId}\nname: x`
@@ -23,10 +26,15 @@ function spawn(
   } as ToolEvent;
 }
 
-function run(runId: string, name: string | null, team = "session-abc"): SubagentRun {
+function run(
+  runId: string,
+  name: string | null,
+  team = "session-abc",
+  description: string | null = null,
+): SubagentRun {
   return {
-    runId, name, teamName: team,
-    agentType: "worker", description: null, model: null, color: null,
+    runId, name, teamName: team, description,
+    agentType: "worker", model: null, color: null,
     startedAt: "2026-08-22T10:00:00Z",
   };
 }
@@ -101,6 +109,41 @@ describe("matchRuns", () => {
     const m = matchRuns([ev], runs);
     expect(m.size).toBe(1);
     expect(m.get("t1")?.runId).toBe("a1");
+  });
+
+
+  it("trifft ueber den Auftragstext, wenn Name und agent_id fehlen", () => {
+    // Der praktisch wichtigste Rueckfall: Container-Agenten fahren teils noch
+    // CLI 2.1.207, dort fehlt die agent_id-Zeile UND der Name im Steckbrief.
+    // Live am 22.08.2026 an einem echten Lauf von Tester beobachtet — der
+    // Auftragstext war das einzige gemeinsame Feld. Ueber 602 Spawns gemessen
+    // hebt dieser Schluessel die Abdeckung von 50,2 % auf 95,5 %.
+    const ev = spawn("t1", { description: "pruef-demo OS check" });
+    const runs = [run("a1", null, "session-abc", "pruef-demo OS check")];
+
+    expect(matchRuns([ev], runs).get("t1")).toBe(runs[0]);
+  });
+
+  it("ordnet NICHT zu, wenn derselbe Auftragstext mehrfach vorkommt", () => {
+    // 16 der 602 gemessenen Spawns sind genau dieser Fall.
+    const ev = spawn("t1", { description: "gleicher Auftrag" });
+    const runs = [
+      run("a1", null, "session-abc", "gleicher Auftrag"),
+      run("a2", null, "session-abc", "gleicher Auftrag"),
+    ];
+
+    expect(matchRuns([ev], runs).has("t1")).toBe(false);
+  });
+
+  it("der Auftragstext geht dem Namen vor", () => {
+    // Beide Rueckfaelle sind moeglich; der Text ist spezifischer.
+    const ev = spawn("t1", { name: "pruefer", description: "der genaue Auftrag" });
+    const runs = [
+      run("a1", "pruefer", "session-abc", "ein anderer Auftrag"),
+      run("a2", null, "session-abc", "der genaue Auftrag"),
+    ];
+
+    expect(matchRuns([ev], runs).get("t1")?.runId).toBe("a2");
   });
 
   it("ohne Laeufe und ohne Aufrufe passiert schlicht nichts", () => {
