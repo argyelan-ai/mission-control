@@ -1,3 +1,11 @@
-livekit-agents[openai,xai]~=1.5
+# PINNED, not ~=1.5 (2026-08-22). The loose pin let a rebuild jump to 1.7.0,
+# where turn_detection is no longer accepted as a plain dict:
+#   AttributeError: 'dict' object has no attribute 'create_response'
+# Jarvis joined the call, resolved its provider, then died on every session.
+# The trap is that the pip layer was cached, so the version only moved on the
+# first real rebuild — months after the pin was written, and unrelated to the
+# change being deployed. Moving to 1.7.x is its own task: the turn-detection
+# argument has to be built with the plugin's type instead of a dict.
+livekit-agents[openai,xai]==1.6.7
 httpx>=0.27
 python-dotenv>=1.0
