@@ -290,23 +290,46 @@ export function GroupMessage({
   const clock = formatClock(message.created_at);
 
   return (
-    <div className="w-full px-4 md:px-5 py-2">
-      {!groupWithPrevious && (
-        <div className="mb-1 flex items-center gap-1.5">
-          <EntityIcon value={senderEmoji} size={14} style={{ color: C.textSecondary }} />
-          {senderName && (
-            <span className="font-mono text-[11px]" style={{ color: C.textSecondary }}>
-              {senderName}
-            </span>
-          )}
-          {clock && (
-            <span className="font-mono text-[11px]" style={{ color: C.textDim }}>
-              {clock}
-            </span>
+    // Sprecher-Rinne statt bündiger Kante (Operator-Befund 22.08.2026: „das
+    // sieht nicht nach Gruppenchat aus"). Vorher standen Kopfzeile und Text an
+    // derselben Kante wie System- und Nutzerzeilen — der Verlauf las sich als
+    // Protokoll, nicht als Raum mit Leuten darin. Jetzt hält eine schmale
+    // Spalte links den Avatar, der Text rückt auf Namenshöhe ein.
+    //
+    // Folgt derselbe Sprecher noch einmal, bleibt die Rinne LEER statt den
+    // Avatar zu wiederholen: der Einzug trägt die Zuordnung weiter, und die
+    // Beiträge lesen als ein Block statt als Stakkato.
+    <div className={`w-full px-4 md:px-5 ${groupWithPrevious ? "pt-0.5 pb-1.5" : "pt-2 pb-1.5"}`}>
+      <div className="flex gap-2.5">
+        <div
+          data-testid="group-speaker-gutter"
+          className="w-7 shrink-0 flex justify-center pt-[3px]"
+        >
+          {!groupWithPrevious && (
+            <EntityIcon value={senderEmoji} size={18} style={{ color: C.textSecondary }} />
           )}
         </div>
-      )}
-      <ClampedContribution content={message.body} style={pendingStyle} title={pendingTitle} />
+        <div className="min-w-0 flex-1">
+          {!groupWithPrevious && (
+            <div className="mb-1 flex items-baseline gap-2">
+              {senderName && (
+                <span
+                  className="font-mono text-[11px] font-medium"
+                  style={{ color: C.textSecondary }}
+                >
+                  {senderName}
+                </span>
+              )}
+              {clock && (
+                <span className="font-mono text-[11px]" style={{ color: C.textDim }}>
+                  {clock}
+                </span>
+              )}
+            </div>
+          )}
+          <ClampedContribution content={message.body} style={pendingStyle} title={pendingTitle} />
+        </div>
+      </div>
     </div>
   );
 }
