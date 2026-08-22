@@ -31,6 +31,9 @@ from app.services.ai_provider_config import (
     HF_TOKEN_SECRET_KEY,
     INSIGHTS_PROVIDERS,
     OLLAMA_API_KEY_SECRET_KEY,
+    embeddings_provider_key,
+    get_embeddings_api_key,
+    get_embeddings_cloud_api_key,
     get_hf_token,
     get_ollama_api_key,
     insights_provider_key,
@@ -61,11 +64,17 @@ async def get_ai_provider_settings(
     keys the operator has pinned via this page (everything else is env/default).
     Keys never appear here — they live behind the secrets API, masked.
     """
+    from app.services.intelligence import effective_insights_model
+
     values = {key: getattr(settings, key, None) for key in AI_PROVIDER_SETTING_FIELDS}
     overridden = sorted((await stored_overrides(session)).keys())
     return {
         "values": values,
         "overridden": overridden,
+        # What the next distillation would ACTUALLY use — includes the legacy
+        # Redis model field the Intelligence tab no longer edits. null =
+        # resolved at call time from the box (spark auto) / provider off.
+        "insights_effective_model": await effective_insights_model(),
         "choices": {
             "ai_embeddings_provider": list(EMBEDDING_PROVIDERS),
             "ai_insights_provider": list(INSIGHTS_PROVIDERS),
@@ -74,12 +83,13 @@ async def get_ai_provider_settings(
         "state": {
             "hf_token_set": bool(await get_hf_token()),
             "ollama_api_key_set": bool(await get_ollama_api_key()),
-            # The one combination that silently cannot work: cloud provider
-            # selected, no key stored. Surfaced as state, not as an error.
-            "ollama_key_required": (
-                settings.ai_embeddings_provider == "ollama_cloud"
-                or insights_provider_key() == "ollama_cloud"
-            ),
+            "embeddings_api_key_set": bool(await get_embeddings_api_key()),
+            "embeddings_cloud_api_key_set": bool(await get_embeddings_cloud_api_key()),
+            # Combinations that silently cannot work, surfaced as state, not
+            # as an error: Ollama Cloud (insights-only arm) without its key,
+            # and the cloud embeddings arm without its key.
+            "ollama_key_required": insights_provider_key() == "ollama_cloud",
+            "embeddings_cloud_key_required": embeddings_provider_key() == "cloud",
         },
     }
 

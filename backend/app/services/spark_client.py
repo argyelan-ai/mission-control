@@ -47,6 +47,24 @@ class SparkClient:
 
         return ai_provider_config.embeddings_model()
 
+    @property
+    def embedding_url(self) -> str:
+        """Base URL (``.../v1``) of the ACTIVE embeddings arm, resolved at
+        call time — the same single source ``embedding_service`` reads, so a
+        settings-page save reaches this client without a restart (the frozen
+        ``__init__`` copy was the import-freeze bug in a second place, and
+        with the empty not-configured default it silently degraded to ""). An
+        explicit constructor override still wins, for tests and one-off
+        scripts. "" = not configured."""
+        from app.services import ai_provider_config
+
+        emb = self._embedding_url_override or ai_provider_config.embeddings_url()
+        # The config value is the full POST URL ".../v1/embeddings"; strip the
+        # "/embeddings" suffix so embedding_url is the base URL (.../v1).
+        if emb.endswith("/embeddings"):
+            emb = emb.rsplit("/embeddings", 1)[0]
+        return emb.rstrip("/")
+
     def __init__(
         self,
         llm_url: str | None = None,
@@ -56,12 +74,7 @@ class SparkClient:
         from app.config import settings
 
         self.llm_url = (llm_url or settings.spark_llm_url).rstrip("/")
-        # spark_embedding_url is the full POST URL ".../v1/embeddings"; strip the
-        # "/embeddings" suffix so self.embedding_url is the base URL (.../v1).
-        emb = embedding_url or settings.spark_embedding_url
-        if emb.endswith("/embeddings"):
-            emb = emb.rsplit("/embeddings", 1)[0]
-        self.embedding_url = emb.rstrip("/")
+        self._embedding_url_override = (embedding_url or "").strip()
         self.timeout = timeout
 
     async def _resolve_llm_model(self) -> str:
@@ -94,16 +107,22 @@ class SparkClient:
             except httpx.HTTPError:
                 llm_ready = False
 
-            try:
-                emb_resp = await cli.post(
-                    f"{self.embedding_url}/embeddings",
-                    json={"model": self.embedding_model, "input": "ping"},
-                )
-                emb_ready = emb_resp.status_code == 200 and len(
-                    emb_resp.json()["data"][0]["embedding"]
-                ) == 768
-            except httpx.HTTPError:
+            emb_base = self.embedding_url
+            if not emb_base:
+                # Not configured: report "not ready" without a network attempt
+                # (the not-configured contract of the provider registry).
                 emb_ready = False
+            else:
+                try:
+                    emb_resp = await cli.post(
+                        f"{emb_base}/embeddings",
+                        json={"model": self.embedding_model, "input": "ping"},
+                    )
+                    emb_ready = emb_resp.status_code == 200 and len(
+                        emb_resp.json()["data"][0]["embedding"]
+                    ) == 768
+                except httpx.HTTPError:
+                    emb_ready = False
 
         return {
             "llm_model": llm_model,
@@ -180,6 +199,19 @@ class SparkClient:
             ) from e
 
     async def embed(self, text: str) -> list[float]:
+        """Delegates to the ACTIVE embeddings arm via the provider registry —
+        arm selection, per-arm URL/model, auth header and the not-configured
+        guard all live there, and a second hand-rolled HTTP path here is how
+        the two clients drifted apart in the first place. An explicit
+        constructor ``embedding_url`` keeps the old direct path (tests,
+        one-off scripts against a specific box)."""
+        if self._embedding_url_override:
+            return await self._embed_direct(text)
+        from app.services.embedding_provider import active_embedding_provider
+
+        return await active_embedding_provider().embed(text)
+
+    async def _embed_direct(self, text: str) -> list[float]:
         async with httpx.AsyncClient(timeout=self.timeout) as cli:
             try:
                 resp = await cli.post(
@@ -204,9 +236,13 @@ class SparkClient:
             return False
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Single batched call for better throughput."""
+        """Single batched call — same delegation as ``embed``."""
         if not texts:
             return []
+        if not self._embedding_url_override:
+            from app.services.embedding_provider import active_embedding_provider
+
+            return await active_embedding_provider().embed_batch(texts)
         async with httpx.AsyncClient(timeout=self.timeout) as cli:
             try:
                 resp = await cli.post(
