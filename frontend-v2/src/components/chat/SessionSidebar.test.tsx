@@ -500,3 +500,128 @@ describe("SessionSidebar", () => {
     });
   });
 });
+
+// ── Gruppen-Sektion (ADR-075) ───────────────────────────────────────────────
+// Die vier Gruppen-Props sind optional: ohne sie muss die Sidebar exakt so
+// rendern wie vorher — genau das prüft der erste Test hier.
+function mkGroup(overrides: Partial<import("@/lib/groupTypes").GroupSummary> = {}) {
+  return {
+    id: "grp-1",
+    thread_id: "thr-1",
+    name: "Spark-Runde",
+    goal: "DFlash2 bewerten",
+    status: "idle" as const,
+    lifecycle: "one_shot" as const,
+    member_count: 2,
+    rounds_completed: 0,
+    current_round_no: 0,
+    max_rounds: 3,
+    created_at: "2026-08-20T10:00:00Z",
+    member_avatars: [
+      { id: "a1", emoji: null, name: "Alpha" },
+      { id: "a2", emoji: null, name: "Beta" },
+    ],
+    last_message: null,
+    ...overrides,
+  };
+}
+
+describe("SessionSidebar — Gruppen-Sektion", () => {
+  it("renders no group section at all when the caller passes no group props", () => {
+    render(
+      <SessionSidebar agents={[mkAgent()]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} />
+    );
+    expect(screen.queryByText("Groups")).not.toBeInTheDocument();
+  });
+
+  it("puts the group section above the agent list", () => {
+    render(
+      <SessionSidebar
+        agents={[mkAgent({ name: "Agent One" })]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[mkGroup()]}
+        onSelectGroup={() => {}}
+      />
+    );
+    const listbox = screen.getByRole("listbox", { name: "Sessions" });
+    const text = listbox.textContent ?? "";
+    expect(text.indexOf("Groups")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Groups")).toBeLessThan(text.indexOf("Agent One"));
+  });
+
+  it("sorts a waiting group above a running one", () => {
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[
+          mkGroup({ id: "running", name: "Läuft", status: "running", current_round_no: 2 }),
+          mkGroup({ id: "waiting", name: "Wartet", status: "waiting_gate" }),
+        ]}
+        onSelectGroup={() => {}}
+      />
+    );
+    const text = screen.getByRole("listbox", { name: "Sessions" }).textContent ?? "";
+    expect(text.indexOf("Wartet")).toBeLessThan(text.indexOf("Läuft"));
+  });
+
+  it("selects a group by click and offers the create button", async () => {
+    const onSelectGroup = vi.fn();
+    const onCreateGroup = vi.fn();
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[mkGroup()]}
+        onSelectGroup={onSelectGroup}
+        onCreateGroup={onCreateGroup}
+      />
+    );
+    await userEvent.click(screen.getByRole("option", { name: /Spark-Runde/ }));
+    expect(onSelectGroup).toHaveBeenCalledWith("grp-1");
+
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    expect(onCreateGroup).toHaveBeenCalled();
+  });
+
+  it("explains the empty state instead of showing a bare header", () => {
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[]}
+        onSelectGroup={() => {}}
+      />
+    );
+    expect(screen.getByText("No groups yet — several agents, one goal.")).toBeInTheDocument();
+  });
+
+  it("keeps a waiting group reachable in the collapsed rail", () => {
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[mkGroup({ status: "waiting_gate" })]}
+        onSelectGroup={() => {}}
+        collapsed
+        onToggleCollapse={() => {}}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Spark-Runde" })).toBeInTheDocument();
+  });
+});
