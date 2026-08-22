@@ -313,12 +313,34 @@ body {
 /* ============================================================
    Focus visibility — keyboard a11y (WCAG 2.4.7)
    Inline-styled buttons/links lose the default ring; restore a
-   consistent accent ring for keyboard users only (not mouse clicks).
+   consistent ring for keyboard users only (not mouse clicks).
+
+   Operator-Befund 18.08.2026: "wenn ich etwas im Eingabefeld eingebe, wird es
+   mit einem weissen Rahmen umrahmt". Zwei Ursachen kamen zusammen:
+   1. Der Ring war in der vollen Akzentfarbe (#ebe8de, ein helles Creme) und
+      2px breit mit 2px Abstand — auf fast schwarzem Grund ein regelrechter Halo.
+   2. `:focus-visible` trifft bei TEXTFELDERN auch beim Mausklick (so ist es
+      spezifiziert: wer in ein Textfeld klickt, tippt gleich), waehrend Knoepfe
+      den Ring nur bei Tastaturbedienung zeigen. Der Halo erschien also bei jeder
+      normalen Eingabe, nicht nur beim Tabben.
+
+   Loesung, ohne die Zugaenglichkeit aufzugeben: Der Fokus bleibt ueberall
+   deutlich sichtbar, aber Textfelder bekommen eine ruhige, anliegende Kante
+   statt eines abgesetzten Leuchtrings.
    ============================================================ */
 
-:where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-accent);
+:where(a, button, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--color-border-accent);
   outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Textfelder: 1px, anliegend (kein Offset), in der gedaempften Akzentkante.
+   Sichtbar genug, um den Fokus zu zeigen — und leise genug, um beim Tippen
+   nicht im Weg zu stehen. */
+:where(input, select, textarea, [contenteditable="true"]):focus-visible {
+  outline: 1px solid var(--color-border-accent);
+  outline-offset: 0;
   border-radius: var(--radius-sm);
 }
 
