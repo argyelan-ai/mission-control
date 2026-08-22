@@ -500,6 +500,8 @@
       "resultCopied": "Result copied",
       "composerPlaceholder": "Message the group… (@ mentions)",
       "composerQueuedNote": "Will reach the group with the next round.",
+      "contributionExpand": "Show more",
+      "contributionCollapse": "Show less",
       "composerMentionAll": "all",
       "statusWaitingFor": "Round {round}/{max} — waiting for {names}",
       "statusSynthesis": "{name} is summarising…",

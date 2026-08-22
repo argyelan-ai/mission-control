@@ -1,8 +1,24 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { GroupMessage } from "./GroupMessage";
+import {
+  GroupMessage,
+  CONTRIBUTION_CLAMP_MAX_PX,
+  CONTRIBUTION_COLLAPSE_MIN_PX,
+} from "./GroupMessage";
 import type { GroupMessage as GroupMessageData } from "@/lib/groupTypes";
+
+/** jsdom liefert für jede Layout-Messung 0 — die Klemme könnte einen Überlauf
+ *  also nie selbst sehen. Nur ein gestelltes scrollHeight prüft den Zweig, auf
+ *  den es ankommt. */
+function stubScrollHeight(px: number) {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => px });
+  return () => {
+    if (original) Object.defineProperty(HTMLElement.prototype, "scrollHeight", original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+  };
+}
 
 function mkMessage(overrides: Partial<GroupMessageData> = {}): GroupMessageData {
   return {
@@ -207,5 +223,90 @@ describe("GroupMessage — lange System-Nachrichten", () => {
     );
     expect(screen.queryByTestId("group-system-toggle")).not.toBeInTheDocument();
     expect(screen.getByTestId("group-message-system")).toHaveTextContent("übersprungen: @rex");
+  });
+});
+
+describe("GroupMessage — lange Agenten-Beiträge", () => {
+  let restore: (() => void) | null = null;
+
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
+  it("leaves a contribution within the length budget whole — no expander", () => {
+    // Genau der Fall, den die Kursänderung anstrebt: 2–4 Sätze. Erschiene hier
+    // ein Knopf, stünde unter JEDEM Beitrag einer und der Raum wäre wieder voll.
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX - 24);
+    renderMessage(mkMessage({ body: "DFlash2 ist schneller. Der Kontext ist der Preis." }));
+    expect(screen.getByTestId("group-contribution-body")).toHaveAttribute("data-clamped", "false");
+    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
+  });
+
+  it("clamps a wall of text to the preview height and offers an expander", () => {
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
+    const body = screen.getByTestId("group-contribution-body");
+    expect(body).toHaveAttribute("data-clamped", "true");
+    expect(body.style.maxHeight).toBe(`${CONTRIBUTION_CLAMP_MAX_PX}px`);
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show more");
+  });
+
+  it("keeps the opening of a clamped contribution readable without a click", () => {
+    // Ein Beitrag ist Inhalt, kein Maschinen-Auftrag: er darf nicht vollständig
+    // hinter dem Knopf verschwinden wie ein Rundenbrief.
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    renderMessage(mkMessage({ body: `Meine Position zuerst.\n\n${"Belege. ".repeat(200)}` }));
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("Meine Position zuerst.");
+  });
+
+  it("expands on click and clamps again on the second click", async () => {
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
+
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.getByTestId("group-contribution-body")).toHaveAttribute("data-clamped", "false");
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show less");
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.getByTestId("group-contribution-body")).toHaveAttribute("data-clamped", "true");
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show more");
+  });
+
+  it("reports nothing hidden while the element cannot be measured (hidden mobile pane)", () => {
+    // Im mobilen Stapel bleibt die abgewählte Spalte mit display:none gemountet;
+    // dort misst alles 0. Ohne diesen Schutz meldete die Messung „nichts
+    // verborgen" und der Beitrag stünde beim Zurückwechseln ungeklemmt da.
+    restore = stubScrollHeight(0);
+    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
+    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
+  });
+
+  it("still renders the clamped body as markdown, not as cut-off source text", () => {
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    renderMessage(mkMessage({ body: `Das ist **wichtig**.\n\n${"Weiter. ".repeat(200)}` }));
+    expect(screen.getByText("wichtig").tagName).toBe("STRONG");
+  });
+
+  it("leaves the operator's own bubble to the chat clamp — no group expander there", () => {
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    renderMessage(mkMessage({ sender_type: "user", body: "Langer Auftrag. ".repeat(60) }), {
+      isOwn: true,
+    });
+    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
+  });
+
+  it("leaves system messages on their own mechanism (regression)", () => {
+    // Der Rundenbrief verschwindet weiterhin GANZ hinter dem Knopf — dort ist
+    // das richtig, hier wäre es falsch. Beide Mechaniken dürfen sich nicht
+    // vermischen.
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    const long = `# Gruppe: Spark — Runde 2/3\n\n${"Auftragstext. ".repeat(60)}`;
+    renderMessage(mkMessage({ sender_type: "system", sender_id: null, body: long }));
+    expect(screen.getByTestId("group-system-toggle")).toHaveTextContent("Gruppe: Spark — Runde 2/3");
+    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
   });
 });
