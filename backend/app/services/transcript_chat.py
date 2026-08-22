@@ -805,8 +805,22 @@ def subagent_runs(session_path: Path) -> list[dict[str, Any]]:
     Wirft nie: ein Fehler beim Auflisten darf nicht den ganzen Verlauf
     mitreissen (gleiche Hausregel wie ``transcript_suggests_turn_ended``).
     """
-    subdir = session_path.parent / session_path.stem / "subagents"
+    session_dir = session_path.parent / session_path.stem
+    subdir = session_dir / "subagents"
     try:
+        # Ein SYMLINK auf den Ordner (oder auf das Sitzungsverzeichnis)
+        # verschoebe den ganzen Baum: ``glob`` folgt ihm, und die Laeufe eines
+        # FREMDEN Agenten stuenden in dieser Liste. Ein Agent kann das
+        # anlegen — sein Config-Verzeichnis ist schreibbar gemountet.
+        # Echte Pfade der Flotte enthalten keine Symlink-Komponente
+        # (nachgeprueft 22.08.2026), es geht hier also nichts Legitimes
+        # verloren.
+        if session_dir.is_symlink() or subdir.is_symlink():
+            logger.warning(
+                "transcript_chat: subagents dir is a symlink, refusing to follow it: %s",
+                subdir,
+            )
+            return []
         if not subdir.is_dir():
             return []
         # Flach, nicht rekursiv: ``subagents/workflows/`` ist ein eigener

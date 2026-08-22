@@ -206,8 +206,10 @@ async def get_subagent_history(
     2. Aufloesung ausschliesslich per Nachschlag in der Liste, die
        ``subagent_runs`` selbst gescannt hat — der Pfad entsteht nie aus
        Nutzereingabe;
-    3. Eindaemmung nach ``resolve()`` (faengt einen Symlink, der aus dem
-       Ordner herauszeigt — Schranke 1 und 2 sehen den nicht);
+    3. Eindaemmung auf dem UNAUFGELOESTEN Pfad, plus ausdrueckliche
+       Abweisung von Symlinks auf das Sitzungsverzeichnis, den
+       ``subagents``-Ordner und die Zieldatei. Die Grenze zu ``resolve()``
+       verschob sie bei einem Ordner-Symlink mit — genau das war die Luecke;
     4. ``transcript_allowed`` ZUSAETZLICH auf der Kind-Datei: Eltern- und
        Kindurteil koennen auseinandergehen, weil ein Subagent das
        Arbeitsverzeichnis wechseln kann.
@@ -229,12 +231,32 @@ async def get_subagent_history(
     if run is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
-    subroot = (path.parent / path.stem / "subagents").resolve()
+    session_dir = path.parent / path.stem
+    subroot = session_dir / "subagents"
+
+    # Die Grenze wird auf dem UNAUFGELOESTEN Pfad gebildet. Die Vorfassung
+    # rechnete ``(… / "subagents").resolve()`` — das loeste den Ordner SELBST
+    # mit auf, und ein Symlink darauf verschob die Grenze einfach mit: der
+    # Vergleich weiter unten war danach trivial wahr, und keine der anderen
+    # Schranken sah es (die Gestalt-Pruefung schaut nur auf Zeichen, der
+    # Nachschlag folgte demselben Symlink, ``transcript_allowed`` sagt fuer
+    # cli-bridge blind Ja). Der Endpunkt war damit ein Leseschluessel auf die
+    # Subagenten-Protokolle FREMDER Agenten. Reproduziert und behoben am
+    # 22.08.2026 (Review-Befund).
+    if session_dir.is_symlink() or subroot.is_symlink():
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
+
+    target = subroot / f"agent-{run_id}.jsonl"
+    if target.is_symlink():
+        return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
     try:
-        target = (subroot / f"agent-{run_id}.jsonl").resolve()
+        # Zusaetzlich zur Symlink-Abweisung: die aufgeloesten Pfade muessen
+        # ineinander liegen. Faengt, was oben durchrutschen koennte.
+        if not target.resolve().is_relative_to(subroot.resolve()):
+            return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
     except OSError:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
-    if not target.is_relative_to(subroot) or not target.is_file():
+    if not target.is_file():
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
     if not adapter.transcript_allowed(agent, target):

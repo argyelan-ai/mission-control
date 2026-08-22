@@ -1318,3 +1318,133 @@ async def test_a_malformed_run_id_never_reaches_the_directory_scan(auth_client: 
 
     assert resp.status_code == 404
     assert scans == [], "der Ordner wurde trotz missgestalteter runId gelesen"
+
+
+async def test_subagent_404_when_the_whole_folder_is_a_symlink(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """Der Ordner-Symlink — die Luecke, die das Review gefunden hat.
+
+    Die Eindaemmung bildete ihre Grenze mit ``(… / "subagents").resolve()``,
+    loeste also den ORDNER selbst mit auf. Zeigt ``subagents`` per Symlink
+    woandershin, wandert die Grenze mit und der Vergleich ist danach trivial
+    wahr. Die anderen drei Schranken sehen ihn ebenfalls nicht: die
+    Gestalt-Pruefung schaut nur auf Zeichen, der Nachschlag benutzt
+    ``glob()`` (folgt dem Symlink, findet den fremden Lauf und bestaetigt
+    ihn), und ``transcript_allowed`` gibt fuer cli-bridge blind True zurueck.
+
+    Der frueher einzige Symlink-Test haengte einen Symlink auf eine DATEI ein
+    — genau den Fall, den die Eindaemmung faengt. Der Ordner-Fall war
+    ungeprueft.
+    """
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir()
+    (tdir / "sess1.jsonl").write_text(_user_line("hauptstrom") + "\n")
+
+    # Ein fremder Baum — im Betrieb das Config-Verzeichnis eines ANDEREN
+    # Agenten oder der persoenliche ~/.claude-Baum des Operators.
+    fremd = tmp_path / "fremd" / "subagents"
+    fremd.mkdir(parents=True)
+    (fremd / "agent-ageheim.jsonl").write_text(_user_line("MEIN PRIVATER INHALT", "g1") + "\n")
+    (fremd / "agent-ageheim.meta.json").write_text('{"agentType":"privat","name":"privat"}')
+
+    # Der Agent legt den Symlink in seiner EIGENEN Sitzung an — er hat sein
+    # Config-Verzeichnis rw gemountet.
+    (tdir / "sess1").mkdir()
+    (tdir / "sess1" / "subagents").symlink_to(fremd, target_is_directory=True)
+
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/ageheim")
+
+    assert resp.status_code == 404, resp.text
+    assert "PRIVATER" not in resp.text
+
+
+async def test_a_symlinked_folder_contributes_no_runs_at_all(tmp_path):
+    """Zweite Haelfte desselben Fixes: der fremde Lauf darf gar nicht erst in
+    der Liste auftauchen. Sonst zeigte die Oberflaeche eine Karte fuer ein
+    Protokoll, das der Endpunkt danach zu Recht verweigert — eine Karte, die
+    ins Leere fuehrt."""
+    import app.services.transcript_chat as tc
+
+    session = tmp_path / "sess.jsonl"
+    session.write_text("{}\n", encoding="utf-8")
+    fremd = tmp_path / "fremd" / "subagents"
+    fremd.mkdir(parents=True)
+    (fremd / "agent-ageheim.jsonl").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "sess").mkdir()
+    (tmp_path / "sess" / "subagents").symlink_to(fremd, target_is_directory=True)
+
+    assert tc.subagent_runs(session) == []
+
+
+async def test_the_endpoint_refuses_a_symlinked_folder_even_if_the_run_list_offers_it(
+    auth_client: AsyncClient, make_agent, tmp_path, monkeypatch
+):
+    """Die Schranke des ENDPUNKTS, unabhaengig von der Lauf-Liste geprueft.
+
+    Sabotage-Probe 22.08.2026: Nimmt man die Symlink-Abweisung aus dem
+    Endpunkt heraus, bleiben alle Tests gruen — weil ``subagent_runs`` den
+    fremden Lauf schon gar nicht mehr liefert und der Nachschlag scheitert.
+    Die zweite Schicht war damit vorhanden, aber ungeprueft, und beim
+    naechsten Umbau spurlos entfernbar.
+
+    Hier liefert die Lauf-Liste den fremden Lauf ABSICHTLICH — und der
+    Endpunkt muss ihn trotzdem verweigern.
+    """
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir()
+    (tdir / "sess1.jsonl").write_text(_user_line("hauptstrom") + "\n")
+    fremd = tmp_path / "fremd" / "subagents"
+    fremd.mkdir(parents=True)
+    (fremd / "agent-ageheim.jsonl").write_text(_user_line("MEIN PRIVATER INHALT", "g1") + "\n")
+    (tdir / "sess1").mkdir()
+    (tdir / "sess1" / "subagents").symlink_to(fremd, target_is_directory=True)
+
+    import app.services.transcript_chat as tc
+    import app.routers.agent_chat as router_mod
+    import app.services.transcript_adapters as ta
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    base = ta.adapter_for(agent)
+    fake_run = {
+        "runId": "ageheim", "name": "privat", "agentType": "privat",
+        "description": None, "model": None, "color": None,
+        "teamName": None, "startedAt": None,
+    }
+    spy = dataclasses.replace(base, subagent_runs=lambda _p: [fake_run])
+    monkeypatch.setattr(router_mod, "adapter_for", lambda a: spy)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/ageheim")
+
+    assert resp.status_code == 404, resp.text
+    assert "PRIVATER" not in resp.text
+
+
+async def test_the_endpoint_serves_only_real_files_from_that_folder(
+    auth_client: AsyncClient, make_agent, tmp_path, monkeypatch
+):
+    """Auch ein Symlink INNERHALB des Ordners wird nicht bedient.
+
+    Die Eindaemmung allein liesse ihn durch — er zeigt ja nach drinnen. Er ist
+    trotzdem nicht das, was die Lauf-Liste beschreibt, und ein Verweis, dem
+    wir folgen, ist ein Verweis, den jemand umbiegen kann. Ohne diesen Test
+    waere die ``is_symlink``-Pruefung auf die Zieldatei ungeprueft (Sabotage
+    D blieb gruen).
+    """
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, subdir = _subagent_fixture(tmp_path, run_id="aecht")
+    (subdir / "agent-averweis.jsonl").symlink_to(subdir / "agent-aecht.jsonl")
+    (subdir / "agent-averweis.meta.json").write_text('{"agentType":"x"}')
+
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    # Der echte Lauf geht.
+    assert (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/aecht")).status_code == 200
+    # Der Verweis darauf nicht.
+    assert (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/averweis")).status_code == 404
