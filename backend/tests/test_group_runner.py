@@ -395,6 +395,36 @@ async def test_timeout_speaker_does_not_settle_the_room(
     assert round_row.lead_prompt_seq is not None  # Lead urteilt
 
 
+@pytest.mark.asyncio
+async def test_lead_learns_who_was_skipped(async_session: AsyncSession):
+    """Der Lead muss erfahren, WER gefehlt hat.
+
+    Die Liste war immer leer: der Timeout-Zweig räumt `pending_speakers`
+    selbst, bevor `_prompt_lead` sie ausliest — der Lead bekam nie einen Namen
+    zu sehen und hielt jede Runde für vollzählig. Ein Synthese-Urteil über
+    zwei Meinungen, das drei gehört zu haben glaubt, ist genau der stille
+    Fehler, den kein Statuswert anzeigt.
+    """
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "Position B. Quelle: https://b.org")
+
+    round_row = await _current_round(async_session, group)
+    round_row.started_at = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(
+        seconds=group.speaker_timeout_seconds + 60
+    )
+    async_session.add(round_row)
+    await async_session.commit()
+
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
+    assert "Übersprungen (Timeout): @gamma" in lead_prompt.body
+    assert "### @beta" in lead_prompt.body   # der Anwesende zählt normal
+
+
 # ── Verdikte ───────────────────────────────────────────────────────────────
 
 
