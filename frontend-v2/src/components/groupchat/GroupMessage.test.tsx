@@ -252,6 +252,29 @@ describe("GroupMessage — lange Agenten-Beiträge", () => {
     expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show more");
   });
 
+  it("fades the cut edge instead of slicing through a line of text", () => {
+    // Live-Befund 22.08.: der harte Pixel-Deckel traf mitten in die Buchstaben
+    // ("entscheidungsreif" horizontal halbiert). Auf Markdown mit gemischten
+    // Zeilenhöhen — Überschrift, Absatz, Liste — KANN ein fester Deckel gar
+    // nicht auf einer Zeilenkante landen. Ein weicher Verlauf am Schnitt macht
+    // die Kante zur Absicht statt zum Defekt.
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
+    const body = screen.getByTestId("group-contribution-body");
+    expect(body.className).toContain("clamp-fade");
+  });
+
+  it("drops the fade once the contribution is open", async () => {
+    // Sonst verblasste die letzte Zeile eines vollständig sichtbaren Beitrags —
+    // der Leser hielte ihn für weiterhin gekürzt.
+    const user = userEvent.setup();
+    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    const body = screen.getByTestId("group-contribution-body");
+    expect(body.className).not.toContain("clamp-fade");
+  });
+
   it("keeps the opening of a clamped contribution readable without a click", () => {
     // Ein Beitrag ist Inhalt, kein Maschinen-Auftrag: er darf nicht vollständig
     // hinter dem Knopf verschwinden wie ein Rundenbrief.

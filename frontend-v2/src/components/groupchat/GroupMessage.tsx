@@ -57,8 +57,17 @@ const SYSTEM_COLLAPSE_CHARS = 240;
 //              wäre wieder zu — die Klemme ist das Netz für die Textwände von
 //              1600–4900 Zeichen, nicht die Regel.
 const CONTRIBUTION_LINE_HEIGHT_PX = 24; // 14px × 1.7, gerundet — wie unten gesetzt
-export const CONTRIBUTION_CLAMP_MAX_PX = 3 * CONTRIBUTION_LINE_HEIGHT_PX;
+// Vier statt drei Zeilen, weil die unterste unter dem Verlauf ausblendet: nach
+// dem Fade bleiben rund drei Zeilen wirklich lesbar — die Vorschauhöhe, die
+// oben gemeint ist.
+export const CONTRIBUTION_CLAMP_MAX_PX = 4 * CONTRIBUTION_LINE_HEIGHT_PX;
 export const CONTRIBUTION_COLLAPSE_MIN_PX = 7 * CONTRIBUTION_LINE_HEIGHT_PX;
+// Weiche Schnittkante — die Regel steht als `.clamp-fade` in globals.css. Ein
+// fester Pixel-Deckel auf Markdown KANN nicht auf einer Zeilenkante landen
+// (Überschrift, Absatz und Liste haben verschiedene Zeilenhöhen); live schnitt
+// er mitten durch die Buchstaben, Befund 22.08.2026. Die Verlaufshöhe dort ist
+// bewusst dieselbe wie CONTRIBUTION_LINE_HEIGHT_PX.
+const CONTRIBUTION_FADE_CLASS = "clamp-fade";
 
 /** Beitrag mit Klemme: gemessen wird die gerenderte Höhe, nicht die Zeichenzahl.
  *  Der Text wird nie abgeschnitten — sonst zerrisse man Markdown mittendrin (ein
@@ -111,7 +120,7 @@ function ClampedContribution({
         ref={bodyRef}
         data-testid="group-contribution-body"
         data-clamped={clamped}
-        className="[&>*:last-child]:mb-0"
+        className={`[&>*:last-child]:mb-0${clamped ? ` ${CONTRIBUTION_FADE_CLASS}` : ""}`}
         style={clamped ? { maxHeight: CONTRIBUTION_CLAMP_MAX_PX, overflow: "hidden" } : undefined}
       >
         <MarkdownContent content={content} />

@@ -74,7 +74,11 @@ async function durchgang(browser, label, deviceOpts) {
     : fehler(`${label}: Sektion GRUPPEN sichtbar`, `nicht gefunden, Liste beginnt mit: ${sektion.anfang}`);
 
   // 2. Eine Gruppe öffnen — wie ein Mensch: anklicken, nicht per URL springen
-  const zeile = page.locator('[role="option"]').first();
+  // `:visible` ist hier nicht Kosmetik: die Sidebar rendert mehrere Varianten
+  // (Schiene, Liste, Sheet) und blendet die unpassenden per `md:`-Klassen aus.
+  // Ohne den Filter klickt der Test auf eine Zeile, die ein Mensch gar nicht
+  // sehen kann — und wartet 30 s auf ein Element, das nie sichtbar wird.
+  const zeile = page.locator('[role="option"]:visible').first();
   if (await zeile.count()) {
     await zeile.click();
     await page.waitForTimeout(2500);
