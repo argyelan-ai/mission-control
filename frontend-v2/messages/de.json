@@ -2576,5 +2576,9 @@
       "expand": "Details anzeigen",
       "collapse": "Details ausblenden"
     }
+  },
+  "chat": {
+    "showMore": "Mehr anzeigen",
+    "showLess": "Weniger anzeigen"
   }
 }

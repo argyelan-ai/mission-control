@@ -225,8 +225,12 @@ export function GroupMessage({
               <ChevronRight size={12} className="shrink-0" style={{ color: C.textDim }} />
             )}
             <span
+              // textMuted, nicht textDim: colors.ts sagt zu textDim
+              // ausdruecklich „decoration / inactive icons ONLY — never body
+              // text". Die Beschriftung IST Text; der Chevron daneben darf
+              // dekorativ bleiben.
               className="font-mono text-[11px] truncate"
-              style={{ color: C.textDim }}
+              style={{ color: C.textMuted }}
             >
               {summary}
             </span>
