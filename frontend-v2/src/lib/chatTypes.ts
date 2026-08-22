@@ -288,12 +288,44 @@ export interface ChatAttachment {
   subpath: string;
 }
 
+/** Ein delegierter Auftrag dieser Sitzung — ein Subagenten-Lauf.
+ *
+ *  Claude Code legt je Subagent eine eigene Transkript-Datei an; im
+ *  Hauptstrom steht davon nichts (live gemessen: 0 Zeilen mit
+ *  `isSidechain: true`). Was hier steht, kommt aus dem Steckbrief neben
+ *  dieser Datei.
+ *
+ *  Alles ausser `runId` ist `null`-faehig, und das ist kein Schoenheitsfehler:
+ *  ueber 754 gemessene Steckbriefe war `agentType` immer vorhanden, `name`
+ *  in 50 %, `model` in 57 %. Die Karte muss also ohne jedes einzelne Feld
+ *  auskommen. */
+export interface SubagentRun {
+  runId: string;
+  name: string | null;
+  agentType: string | null;
+  description: string | null;
+  model: string | null;
+  color: string | null;
+  teamName: string | null;
+  startedAt: string | null;
+}
+
 export interface ChatHistoryResponse {
   events: ChatEvent[];
   session: ChatSession;
   hasMore: boolean;
   /** Absent on older backends — consumers must treat that as "cannot switch". */
   capabilities?: ChatCapabilities | null;
+  /** Fehlt bei aelteren Backends und ist dann schlicht leer. Kommt nur beim
+   *  Handshake, nicht ueber den Live-Strom: ein Subagent, der NACH dem Laden
+   *  startet, erscheint erst beim naechsten Abruf. */
+  subagentRuns?: SubagentRun[];
+}
+
+/** Der Verlauf EINES Subagenten. Wie eine History-Seite, aber ohne
+ *  `capabilities` (es gibt nichts zu steuern) und mit dem Steckbrief dabei. */
+export interface SubagentHistoryResponse extends ChatHistoryResponse {
+  subagent: SubagentRun;
 }
 
 /** 404 body shared by /chat/history and /chat/stream when the agent/runtime

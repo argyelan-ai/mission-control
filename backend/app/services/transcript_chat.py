@@ -769,6 +769,111 @@ def is_command_only_session(path: Path) -> bool:
     return result
 
 
+#: Dateien im ``subagents``-Ordner, die KEIN delegierter Auftrag sind:
+#: ``journal.jsonl`` ist das Protokoll eines Workflows, ``aside_question`` und
+#: ``acompact`` sind CLI-interne Hilfsagenten. Der Operator hat sie nie
+#: beauftragt und will sie nicht als Karte sehen.
+_SUBAGENT_INTERNAL_PREFIXES = ("aside_question", "acompact")
+
+#: Kopfzeilen, in denen der Startzeitpunkt gesucht wird. Bewusst klein: eine
+#: gemessene Subagenten-Datei war 13,8 MB gross, der Zeitstempel steht in der
+#: ersten Zeile.
+_SUBAGENT_HEAD_LINES = 5
+
+
+def subagent_runs(session_path: Path) -> list[dict[str, Any]]:
+    """Die Subagenten-Laeufe DIESER Sitzung — je Lauf ein Steckbrief.
+
+    Claude Code legt seit ~2.1.2xx neben dem Sitzungs-Transkript einen Ordner
+    ``<sitzung>/subagents/`` an, darin je Subagent eine ``.jsonl`` mit seinem
+    vollstaendigen Verlauf und eine gleichnamige ``.meta.json``. Im
+    HAUPT-Transkript steht davon nichts mehr: live gemessen am 22.08.2026
+    stehen dort 0 Zeilen mit ``isSidechain: true``, der Spawn erscheint nur als
+    Werkzeugaufruf ``Agent``. Der Verlauf eines Subagenten ist aus dem
+    Hauptstrom also NICHT rekonstruierbar — nur von hier.
+
+    Rueckgabe je Lauf: ``runId`` (Datei-Stem ohne ``agent-``), ``name``,
+    ``agentType``, ``description``, ``model``, ``color``, ``teamName``,
+    ``startedAt``. Nach Startzeitpunkt sortiert.
+
+    Von den Feldern ist keines garantiert: ueber 754 gemessene Steckbriefe war
+    ``agentType`` immer da, ``name`` in 50 %, ``model`` in 57 %. Fehlt der
+    Steckbrief ganz oder ist er kaputt, bleibt der Lauf trotzdem in der Liste —
+    er hat einen Verlauf, den man zeigen kann, und ein fehlendes Feld ist
+    ``None`` statt einer Erfindung.
+
+    Wirft nie: ein Fehler beim Auflisten darf nicht den ganzen Verlauf
+    mitreissen (gleiche Hausregel wie ``transcript_suggests_turn_ended``).
+    """
+    subdir = session_path.parent / session_path.stem / "subagents"
+    try:
+        if not subdir.is_dir():
+            return []
+        # Flach, nicht rekursiv: ``subagents/workflows/`` ist ein eigener
+        # Baum (396 von 1245 gemessenen Dateien) mit praktisch leeren
+        # Steckbriefen und gehoert zu einem anderen Thema.
+        files = sorted(subdir.glob("agent-*.jsonl"))
+    except OSError:
+        logger.debug("transcript_chat: subagents dir unreadable for %s", session_path)
+        return []
+
+    runs: list[dict[str, Any]] = []
+    for path in files:
+        run_id = path.stem[len("agent-") :]
+        if not run_id or run_id.startswith(_SUBAGENT_INTERNAL_PREFIXES):
+            continue
+        meta = _read_subagent_meta(path.with_suffix(".meta.json"))
+        runs.append(
+            {
+                "runId": run_id,
+                "name": meta.get("name"),
+                "agentType": meta.get("agentType"),
+                "description": meta.get("description"),
+                "model": meta.get("model"),
+                "color": meta.get("color"),
+                "teamName": meta.get("teamName"),
+                "startedAt": _subagent_started_at(path),
+            }
+        )
+
+    # Startreihenfolge, nicht alphabetisch — sonst zeigte die Oberflaeche eine
+    # Abfolge, die es nie gab. Laeufe ohne Zeitstempel ans Ende.
+    runs.sort(key=lambda r: (r["startedAt"] is None, r["startedAt"] or ""))
+    return runs
+
+
+def _read_subagent_meta(path: Path) -> dict[str, Any]:
+    """Der Steckbrief, oder ein leeres Dikt. Fail-silent mit Absicht: ein
+    kaputter Steckbrief darf den Lauf nicht verschwinden lassen."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _subagent_started_at(path: Path) -> str | None:
+    """Der Zeitstempel der ersten Zeile, die einen traegt. Nur die ersten
+    Zeilen werden gelesen — siehe ``_SUBAGENT_HEAD_LINES``."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for _ in range(_SUBAGENT_HEAD_LINES):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                ts = entry.get("timestamp") if isinstance(entry, dict) else None
+                if isinstance(ts, str) and ts:
+                    return ts
+    except OSError:
+        return None
+    return None
+
+
 #: Der EINZIGE Ordner, in dem je eine Wegwerf-Sitzung der Katalog-Erkennung
 #: gelandet ist: der Projektordner von ``/home/agent`` im Container. Host-
 #: Agenten liegen woanders (``~/.claude/projects/<pfad-des-checkouts>``), und
@@ -1201,6 +1306,13 @@ def read_history(
         "events": page,
         "session": {"sessionId": session_id, "live": live, "startedAt": started_at},
         "hasMore": has_more,
+        # Eigener Schluessel auf oberster Ebene, NICHT in ``session`` hinein:
+        # ``session`` ist im Frontend als sessionId/live/startedAt/aliveness
+        # belegt. Und bewusst nur hier, nicht im Live-Tailer: der steigt am
+        # Dateiende ein und darf nie einen Ordner scannen. Die Lauf-Liste ist
+        # ein Handshake-Wert — ein Subagent, der NACH dem Laden startet,
+        # erscheint erst beim naechsten Abruf.
+        "subagentRuns": adapter.subagent_runs(path),
     }
 
 

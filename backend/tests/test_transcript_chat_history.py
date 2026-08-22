@@ -429,13 +429,39 @@ def test_read_history_live_flag_stale(tmp_path):
 
 
 def test_read_history_missing_file_returns_empty_session(tmp_path):
+    """Der Vergleich ist mit Absicht auf das GANZE Dikt: er ist damit auch der
+    Waechter darueber, dass niemand still ein Feld ergaenzt, das das Frontend
+    nicht kennt. ``subagentRuns`` ist am 22.08.2026 bewusst dazugekommen."""
     result = read_history(tmp_path / "does-not-exist.jsonl", limit=200, adapter=CLAUDE)
 
     assert result == {
         "events": [],
         "session": {"sessionId": "does-not-exist", "live": False, "startedAt": None},
         "hasMore": False,
+        "subagentRuns": [],
     }
+
+
+def test_read_history_carries_the_subagent_runs_of_that_session(tmp_path):
+    """Die Lauf-Liste kommt mit dem Verlauf, nicht ueber einen zweiten Abruf —
+    die Oberflaeche braucht sie im selben Moment, in dem sie die Agent-Karten
+    zeichnet."""
+    session = tmp_path / "sess.jsonl"
+    session.write_text('{"type":"user"}\n', encoding="utf-8")
+    subdir = tmp_path / "sess" / "subagents"
+    subdir.mkdir(parents=True)
+    (subdir / "agent-apruefer.jsonl").write_text(
+        '{"timestamp":"2026-08-22T10:00:00.000Z"}\n', encoding="utf-8"
+    )
+    (subdir / "agent-apruefer.meta.json").write_text(
+        '{"agentType":"reviewer","name":"pruefer","model":"claude-opus-5"}',
+        encoding="utf-8",
+    )
+
+    result = read_history(session, limit=200, adapter=CLAUDE)
+
+    assert [r["runId"] for r in result["subagentRuns"]] == ["apruefer"]
+    assert result["subagentRuns"][0]["name"] == "pruefer"
 
 
 def test_read_history_malformed_and_blank_lines_skipped(tmp_path):

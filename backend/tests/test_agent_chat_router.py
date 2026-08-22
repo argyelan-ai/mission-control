@@ -19,6 +19,7 @@ Two layers:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import uuid
@@ -1066,3 +1067,254 @@ async def test_attachment_404_for_unknown_agent(auth_client: AsyncClient, attach
         files={"file": ("x.png", b"x", "image/png")},
     )
     assert res.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Router: /agents/{id}/chat/subagent/{run_id}
+#
+# Der Endpunkt greift als ERSTER ueberhaupt in die Unterordner einer Sitzung.
+# ``find_active_session`` steigt dort bewusst nie ab — es gibt hier also keine
+# Vorgaenger-Absicherung, die einen Fehler auffinge. Darum steht unter den
+# Tests fuer den Normalfall eine ganze Reihe fuer den Missbrauchsfall.
+#
+# Angenehme Folge des schmalen Vertrags (kein ``capabilities``-Block): der
+# ganze Mock-Block des History-Tests entfaellt, der sonst per ``docker exec``
+# echte Container anfassen wuerde.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _subagent_fixture(tmp_path, run_id="apruefer", meta=None, body=None):
+    """Legt eine Sitzung mit genau einem Subagenten-Lauf an."""
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir(exist_ok=True)
+    (tdir / "sess1.jsonl").write_text(_user_line("hauptstrom") + "\n")
+    subdir = tdir / "sess1" / "subagents"
+    subdir.mkdir(parents=True, exist_ok=True)
+    (subdir / f"agent-{run_id}.jsonl").write_text(
+        (body if body is not None else _user_line("ich bin der subagent", "s1")) + "\n"
+    )
+    if meta is not False:
+        (subdir / f"agent-{run_id}.meta.json").write_text(
+            json.dumps(meta or {
+                "agentType": "reviewer",
+                "name": "pruefer",
+                "description": "Prueft den Zweig",
+                "model": "claude-opus-5",
+                "color": "green",
+                "teamName": "session-abc123",
+            })
+        )
+    return tdir, subdir
+
+
+async def test_subagent_401_without_auth(client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    resp = await client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")
+    assert resp.status_code == 401
+
+
+async def test_subagent_200_returns_that_runs_events(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [e["kind"] for e in body["events"]] == ["message"]
+    assert body["events"][0]["text"] == "ich bin der subagent"
+    # Der Steckbrief kommt mit — die Karte braucht ihn ohne zweiten Abruf.
+    assert body["subagent"]["runId"] == "apruefer"
+    assert body["subagent"]["name"] == "pruefer"
+    assert body["subagent"]["model"] == "claude-opus-5"
+
+
+async def test_subagent_response_carries_no_capabilities(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """``capabilities`` beschreibt einen steuerbaren Live-Agenten. Ein
+    Subagenten-Lauf ist ein abgeschlossenes Protokoll — wer dort einen
+    Effort-Regler saehe, saehe eine Luege. (Und der Block zoege echte
+    docker-exec-Aufrufe in diesen Test.)"""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")).json()
+
+    assert "capabilities" not in body
+    assert "aliveness" not in body["session"]
+    assert "subagentRuns" not in body
+
+
+async def test_subagent_404_for_unknown_run(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/agibtsnicht")
+
+    assert resp.status_code == 404
+    assert resp.json() == {"reason": "no_transcript"}
+
+
+@pytest.mark.parametrize(
+    "evil",
+    ["..%2F..%2Fetc%2Fpasswd", "..", "%2e%2e%2fsess1", "a%00b", "a/b"],
+)
+async def test_subagent_404_on_a_traversal_run_id(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch, evil):
+    """Der Pfad entsteht NIE aus der Eingabe — er wird in der gescannten
+    Lauf-Liste nachgeschlagen. Zusaetzlich faellt die Gestalt schon vorher
+    durch. Beides zusammen, weil dieser Baum bei einem Host-Agenten auch die
+    persoenlichen Sitzungen des Operators enthaelt."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/{evil}")
+
+    assert resp.status_code == 404, resp.text
+    assert "passwd" not in resp.text
+
+
+async def test_subagent_404_when_a_symlink_escapes_the_folder(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """Ein Symlink IM Ordner zeigt nach draussen. Gestalt-Pruefung und
+    Nachschlag sehen ihn beide nicht — nur die Eindaemmung nach ``resolve()``
+    faengt ihn."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, subdir = _subagent_fixture(tmp_path)
+    geheim = tmp_path / "geheim.jsonl"
+    geheim.write_text(_user_line("privat", "p1") + "\n")
+    (subdir / "agent-apruefer.jsonl").unlink()
+    (subdir / "agent-apruefer.jsonl").symlink_to(geheim)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")
+
+    assert resp.status_code == 404, resp.text
+    assert "privat" not in resp.text
+
+
+async def test_subagent_404_when_the_child_file_fails_the_privacy_gate(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """DER wichtigste Test hier.
+
+    Boss teilt sein Transkript-Verzeichnis mit den PERSOENLICHEN Sitzungen des
+    Operators; welche dazugehoert, entscheidet ``transcript_allowed`` am
+    Arbeitsverzeichnis. Eltern- und Kindurteil koennen auseinandergehen, weil
+    ein Subagent das Verzeichnis wechseln kann. Die Eltern-Pruefung allein
+    reicht darum NICHT.
+    """
+    agent = await make_agent(name="Boss", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path)
+    import app.services.transcript_chat as tc
+    import app.services.transcript_adapters as ta
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    base = ta.adapter_for(agent)
+
+    # Eltern erlaubt, Kind verboten — genau die Divergenz.
+    def _gate(a, path):
+        return "subagents" not in str(path)
+
+    spy = dataclasses.replace(base, transcript_allowed=_gate)
+    # Am VERWENDUNGSORT patchen: der Router hat ``adapter_for`` direkt
+    # importiert, eine Aenderung am Modul erreicht ihn nicht mehr.
+    import app.routers.agent_chat as router_mod
+    monkeypatch.setattr(router_mod, "adapter_for", lambda a: spy)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")
+
+    assert resp.status_code == 404, resp.text
+    assert "subagent" not in resp.text.lower() or resp.json() == {"reason": "no_transcript"}
+
+
+async def test_subagent_usage_never_reads_a_foreign_statusline(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """``stamp_usage`` leitet die Config-Wurzel ueber ``parent.parent.parent``
+    aus dem Pfad ab. Eine Subagenten-Datei liegt zwei Ebenen tiefer — der
+    Zeiger landete in einem FREMDEN Verzeichnis. Darum ist es fuer diesen
+    Aufruf stillgelegt."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    # Ein Zug MIT Verbrauchszahlen — sonst gibt es kein usage-Ereignis, und
+    # der Spy bliebe auch ohne Stilllegung leer (die erste Fassung dieses
+    # Tests war genau so und prueft nichts; Sabotage-Probe 22.08.2026).
+    assistant = json.dumps({
+        "type": "assistant",
+        "uuid": "a1",
+        "timestamp": "2026-08-13T00:00:01Z",
+        "message": {
+            "id": "msg_1",
+            "model": "claude-opus-5",
+            "content": [{"type": "text", "text": "fertig"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    })
+    tdir, _ = _subagent_fixture(tmp_path, body=assistant)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    gesehen: list = []
+    echt = tc._stamp_usage_source
+
+    def _spy(ev, root, session_id):
+        gesehen.append((root, session_id))
+        return echt(ev, root, session_id)
+
+    monkeypatch.setattr(tc, "_stamp_usage_source", _spy)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Gegenprobe, dass die Vorbedingung stimmt: es GIBT ein usage-Ereignis,
+    # stamp_usage haette also etwas zu tun gehabt.
+    assert any(e["kind"] == "usage" for e in body["events"]), body["events"]
+    assert gesehen == [], f"stamp_usage lief doch: {gesehen}"
+
+
+async def test_subagent_without_a_profile_still_works(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """Der Steckbrief fehlt in der Haelfte der Faelle. Der Verlauf ist trotzdem
+    da und wird gezeigt — nur ohne Namen."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path, meta=False)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/apruefer")).json()
+
+    assert body["subagent"]["name"] is None
+    assert len(body["events"]) == 1
+
+
+async def test_a_malformed_run_id_never_reaches_the_directory_scan(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
+    """Die Gestalt-Pruefung ist die AEUSSERE der beiden Schranken und deckt
+    sich in der Wirkung mit dem Nachschlag. Ohne diesen Test waere sie
+    trotzdem ungeprueft — und beim naechsten Umbau still entfernbar.
+
+    Gepinnt wird darum die REIHENFOLGE: ein missgestalteter Wert wird
+    abgewiesen, BEVOR ueberhaupt ein Ordner gelesen wird."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    tdir, _ = _subagent_fixture(tmp_path)
+    import app.services.transcript_chat as tc
+    import app.routers.agent_chat as router_mod
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tdir)
+
+    scans: list = []
+    base = router_mod.adapter_for(agent)
+
+    def _spy_runs(session_path):
+        scans.append(session_path)
+        return base.subagent_runs(session_path)
+
+    monkeypatch.setattr(
+        router_mod, "adapter_for",
+        lambda a: dataclasses.replace(base, subagent_runs=_spy_runs),
+    )
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/hat%20leerzeichen")
+
+    assert resp.status_code == 404
+    assert scans == [], "der Ordner wurde trotz missgestalteter runId gelesen"

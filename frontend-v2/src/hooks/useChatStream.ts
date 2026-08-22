@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
 import type {
+  SubagentRun,
   ChatCapabilities,
   ChatEvent,
   ChatSession,
@@ -350,10 +351,19 @@ export function seedSequence(
  *  Chip laenger falsch stehen. */
 const MODEL_SETTLE_MS = 2000;
 
+/** Eine einzige leere Liste statt eines frischen `[]` je Rendern — sonst
+ *  wechselt die Kennung bei jedem Durchlauf und jedes `useMemo` darauf
+ *  rechnet umsonst neu. */
+const EMPTY_RUNS: SubagentRun[] = [];
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export interface UseChatStreamResult {
   events: TimelineChatEvent[];
+  /** Die Subagenten-Laeufe DIESER Sitzung — Handshake-Wert aus dem
+   *  History-Abruf, kein Live-Wert (siehe `read_history` im Backend). Leer
+   *  bei aelteren Backends und bei jedem Harness ohne eigenes Layout. */
+  subagentRuns: SubagentRun[];
   state: StateEvent | null;
   usage: UsageEvent | null;
   session: ChatSession | null;
@@ -634,6 +644,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   return {
     events: chatState.events,
+    subagentRuns: historyQuery.data?.subagentRuns ?? EMPTY_RUNS,
     state: chatState.state,
     usage: chatState.usage,
     session: historyQuery.data?.session ?? null,
