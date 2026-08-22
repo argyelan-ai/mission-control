@@ -199,8 +199,13 @@ class Settings(BaseSettings):
     enforce_reflection: bool = True
 
     # Memory-System / Embeddings (Phase 3, 2026-04-11)
-    # Primary: Spark DGX LM Studio OpenAI-compat endpoint
-    spark_embedding_url: str = "http://192.0.2.10:1234/v1/embeddings"
+    # Any OpenAI-compatible /v1/embeddings endpoint (LM Studio, llama.cpp,
+    # vLLM, ...). Empty = "not configured": memory inserts are saved without a
+    # vector and NO network call is attempted. The old placeholder default
+    # (192.0.2.10, TEST-NET) made every fresh install hammer a blackhole on
+    # each memory insert — the exact SYN_SENT pile-up class documented in the
+    # 2026-08 socket-congestion incident.
+    spark_embedding_url: str = ""
     spark_embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
     spark_embedding_timeout: float = 15.0
     # Spark DGX vLLM — LLM completion endpoint
@@ -218,14 +223,21 @@ class Settings(BaseSettings):
     # boundary. Empty string = "inherit the function's legacy source", so a
     # plain .env install behaves exactly as before this was configurable.
     ai_embeddings_provider: str = "spark"
-    ai_embeddings_url: str = ""      # "" -> spark_embedding_url / provider default
-    ai_embeddings_model: str = ""    # "" -> spark_embedding_model / provider default
+    ai_embeddings_url: str = ""      # "" -> spark_embedding_url (self-hosted arm)
+    ai_embeddings_model: str = ""    # "" -> spark_embedding_model (self-hosted arm)
+    # Cloud arm for embeddings: any OpenAI-compatible hosted /v1/embeddings
+    # (Together, DeepInfra, Fireworks, ... — pick one that serves the SAME
+    # model family as the stored vectors). No default: a cloud endpoint is
+    # always an explicit operator decision. Key: secret "embeddings_cloud_api_key".
+    ai_embeddings_cloud_url: str = ""
+    ai_embeddings_cloud_model: str = ""
     ai_insights_provider: str = "spark"
     ai_insights_model: str = ""      # "" -> runtime resolver (spark) / provider default
     # Ollama Cloud (ollama.com) — the ONLY Ollama MC talks to by default. Local
-    # Ollama on a Mac is deliberately not a provider option here.
+    # Ollama on a Mac is deliberately not a provider option here. Insights-only:
+    # ollama.com hosts chat models but NO embedding models and no OpenAI-compat
+    # /v1/embeddings path (verified 2026-08-19), so it is not an embeddings arm.
     ollama_cloud_url: str = "https://ollama.com"
-    ollama_cloud_embedding_model: str = "nomic-embed-text"
     ollama_cloud_insights_model: str = "qwen3-coder:480b-cloud"
 
     # Qdrant: service name on the Docker network

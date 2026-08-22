@@ -1,6 +1,12 @@
 """
 Meetings router — agent meetings + direct messages.
 
+DEPRECATED (ADR-075, 2026-08-20): Meetings wurden nie produktiv (0 Zeilen
+live, `_send_and_wait` ist ein Platzhalter ohne Zustellweg, keine UI). Die
+Konzepte (Agenda, Runden, Facilitator, Teilnehmer) leben im Multi-Agent-
+Gruppenchat weiter (`routers/groups.py` + `services/group_runner.py`).
+Kein Neubau hier — DROP-Migration der Tabellen folgt in einem eigenen PR.
+
 Static paths (/stream, /messages) before parameterized ones (/{id}).
 """
 import uuid
