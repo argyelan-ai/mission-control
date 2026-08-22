@@ -2366,6 +2366,11 @@
       "collapseRow": "{n} models without an agent — show all",
       "bindCta": "bind ›"
     },
+    "voiceSection": {
+      "title": "Voice",
+      "hint": "What Jarvis speaks with. No model to load, no start/stop — a change takes effect on the next call. Affects speech only, not Jarvis' text replies.",
+      "standby": "standby"
+    },
     "slotPage": {
       "subtitle": "What's occupying the GPU — and who's working with it",
       "sleepingLine": "{host} — {status}",

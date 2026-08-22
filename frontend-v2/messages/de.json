@@ -2366,6 +2366,11 @@
       "collapseRow": "{n} Modelle ohne Agent — alle zeigen",
       "bindCta": "binden ›"
     },
+    "voiceSection": {
+      "title": "Sprache",
+      "hint": "Womit Jarvis spricht. Kein Modell zum Laden, kein Start/Stop — die Umstellung wirkt beim nächsten Anruf. Betrifft nur das Sprechen, nicht Jarvis' Text-Antworten.",
+      "standby": "bereit"
+    },
     "slotPage": {
       "subtitle": "Was besetzt die GPU — und wer arbeitet womit",
       "sleepingLine": "{host} — {status}",
