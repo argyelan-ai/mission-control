@@ -148,8 +148,12 @@ export function GroupChatView({
       {/* Kopf — mobil mit Zurück-Chevron, Titel mittig (Muster aus dem
           Handy-Chat), darunter das Ziel als Kontextzeile: eine Gruppe ohne
           sichtbares Ziel wäre nur ein Haufen Agenten. */}
+      {/* pt-safe-top wie in ChatView: auf dem Handy laeuft die Sessions-Seite
+          chromelos (AppShell `mobileChromeless`) — ueber dieser Zeile liegt
+          nichts mehr, also muss SIE die Statusleiste abfedern. Ohne das sass
+          der Gruppen-Kopf unter der Uhrzeit (Operator-Befund 21.08.2026). */}
       <div
-        className="shrink-0 flex items-center gap-2 px-3 py-2 border-b"
+        className="shrink-0 flex items-center gap-2 px-3 py-2 pt-safe-top md:pt-2 border-b"
         style={{ borderColor: C.border }}
       >
         {onBack && (
