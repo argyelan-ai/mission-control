@@ -176,6 +176,45 @@ Bewusst **nicht** von Hermes übernommen: „alle antworten, wenn niemand
 erwähnt wird" (bricht den Sturm-Schutz) und das reine Gesprächsmodell ohne
 Ziel (unser Pflicht-Ziel ist der Grund, warum eine Runde überhaupt endet).
 
+## Nachtrag Abschluss — merken, archivieren, löschen (2026-08-22)
+
+Operator-Befund: „ich habe keine Möglichkeit die Gruppen zu löschen … wenn ich
+am Schluss die Ergebnisse abnehme sollte ich in der Lage sein selber zu
+bestimmen ob ich es mit den Daten oder ohne Daten löschen/archivieren möchte,
+nur den Chat. Diese Ergebnisse sollten auch in unserem Memorysystem
+aufgenommen werden, embedded, wie die Tasks."
+
+Nachgesehen und bestätigt: es gab nur `DELETE /groups/{id}/members/{agent_id}`.
+Eine Gruppe blieb für immer in der Liste, und das Ergebnis-Dokument lag
+ausschliesslich als Datei unter `~/.mc/references/groups/…` — im Gedächtnis
+tauchte es nie auf.
+
+**Entscheidung: zwei getrennte Fragen beim Abschluss, in dieser Reihenfolge.**
+
+1. **Kommt das Ergebnis ins Gedächtnis?** Als `BoardMemory` (`source="group"`,
+   `memory_type` wählbar) plus `index_memory()` — dieselbe Ablage und dieselbe
+   Einbettung, die Tasks nutzen. Das *Ziel* wandert in den Inhalt mit: ohne die
+   Frage ist die Antwort in einem halben Jahr nicht mehr einzuordnen, und die
+   Einbettung findet sie schlechter.
+2. **Was passiert mit dem Arbeitsmaterial?**
+   - `archivieren` → nur aus der Liste; vollständig lesbar, umkehrbar. Vorauswahl.
+   - `nur den Chat` → Verlauf und Lese-Zeiger weg, Ergebnis-Dokument bleibt.
+   - `alles` → Gruppe, Mitglieder, Runden, Thread und Datei weg.
+
+**Der Kern ist die Trennung.** Eine Erkenntnis darf ihr Arbeitsmaterial
+überleben. Wäre das Merken an „archivieren" gekoppelt, müsste man Müll
+aufheben, um Wissen zu behalten. Gemerkt wird deshalb VOR dem Räumen — bricht
+das Merken ab, wird nichts gelöscht; sonst verlöre man beides: die Notiz und
+das Material, aus dem man sie neu schreiben könnte.
+
+**`archived_at` ist bewusst ein eigenes Feld und kein weiterer `status`-Wert.**
+`status` beschreibt, was die Engine tut (läuft, wartet, fertig); das Archiv
+beschreibt, was der Operator noch sehen will. In einer Spalte vermischt hätte
+eine archivierte Gruppe ihren Ausgang vergessen.
+
+Eine laufende Gruppe wird nicht gelöscht (409): das zöge Agenten mitten im Turn
+den Thread unter den Füssen weg — sie antworteten in einen 404.
+
 ## Referenzen
 
 - Betroffene Dateien: `app/models/group.py`, `alembic/versions/0181_agent_groups.py`,
