@@ -2576,5 +2576,9 @@
       "expand": "Show details",
       "collapse": "Hide details"
     }
+  },
+  "chat": {
+    "showMore": "Show more",
+    "showLess": "Show less"
   }
 }
