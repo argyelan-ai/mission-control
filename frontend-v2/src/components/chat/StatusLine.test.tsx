@@ -5,9 +5,10 @@
  * status, plus the truthful-status fallback for "unknown" and for a
  * disconnected stream (never pretend a status we don't actually have).
  */
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { StatusLine } from "./StatusLine";
+import React from "react";
+import { describe, it, expect, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { StatusLine, WORKING_WORDS, WORKING_WORD_INTERVAL_MS } from "./StatusLine";
 import type { StateEvent } from "@/lib/chatTypes";
 
 const mkState = (status: StateEvent["status"]): StateEvent => ({
@@ -17,9 +18,40 @@ const mkState = (status: StateEvent["status"]): StateEvent => ({
 });
 
 describe("StatusLine", () => {
-  it('shows "Arbeitet…" for working', () => {
+  /** Der Arbeits-Text wechselt jetzt (Operator-Wunsch: wie in der Claude-Code-CLI).
+   *  Getestet wird darum die Menge der erlaubten Woerter, nicht ein festes. */
+  const workingText = () =>
+    screen.getByText((t) => WORKING_WORDS.some((w) => t === `${w}…`)).textContent;
+
+  it("shows one of the rotating working verbs for working", () => {
     render(<StatusLine state={mkState("working")} connected />);
-    expect(screen.getByText("Arbeitet…")).toBeInTheDocument();
+    expect(WORKING_WORDS.map((w) => `${w}…`)).toContain(workingText());
+  });
+
+  it("rotates the verb while the agent keeps working", () => {
+    vi.useFakeTimers();
+    try {
+      render(<StatusLine state={mkState("working")} connected />);
+      const first = workingText();
+      act(() => {
+        vi.advanceTimersByTime(WORKING_WORD_INTERVAL_MS + 10);
+      });
+      const second = workingText();
+      expect(second).not.toBe(first);
+      expect(WORKING_WORDS.map((w) => `${w}…`)).toContain(second);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs no timer while the agent is idle", () => {
+    vi.useFakeTimers();
+    try {
+      render(<StatusLine state={mkState("idle")} connected />);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows "Wartet auf dich" for waiting_input', () => {
@@ -77,7 +109,7 @@ describe("StatusLine", () => {
 
   it("still shows live statuses while the session is active", () => {
     render(<StatusLine state={mkState("working")} connected aliveness="active" />);
-    expect(screen.getByText("Arbeitet…")).toBeInTheDocument();
+    expect(WORKING_WORDS.map((w) => `${w}…`)).toContain(workingText());
   });
 
   it('reads an IDLE session as "Bereit", never as ended', () => {
@@ -97,3 +129,59 @@ describe("StatusLine", () => {
     expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
   });
 });
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Review 20.08.2026 — Befund 8: `useWorkingWord` schrieb im Render-Koerper
+ * Refs (`seed.current = Math.random()…` und `wasActive.current = active`).
+ * React verbietet das: die Render-Funktion muss rein sein. Direkt sichtbare
+ * Folge — das Verb wird schon beim SERVER-Render gewuerfelt, der Client
+ * wuerfelt beim Hydrieren ein anderes: Hydration-Mismatch. Unter Concurrent
+ * Rendering kommt dazu, dass ein verworfener Render `wasActive.current = true`
+ * stehen laesst und der naechste Zug dann NICHT neu wuerfelt — genau das, was
+ * die Zufallsauswahl verhindern soll.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe("StatusLine — Arbeits-Verb (Render-Reinheit)", () => {
+  it("wuerfelt das Verb nicht waehrend des Renders", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const spy = vi.spyOn(Math, "random");
+    try {
+      renderToStaticMarkup(<StatusLine state={mkState("working")} connected />);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("liefert zwei Server-Renders dasselbe Markup (kein Hydration-Mismatch)", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const a = renderToStaticMarkup(<StatusLine state={mkState("working")} connected />);
+    const b = renderToStaticMarkup(<StatusLine state={mkState("working")} connected />);
+    expect(a).toBe(b);
+  });
+
+  it("zieht bei jedem neuen Arbeitsabschnitt ein neues Verb — auch unter StrictMode", () => {
+    const { StrictMode } = React;
+    const folge = [0, 0.5];
+    let i = 0;
+    const spy = vi.spyOn(Math, "random").mockImplementation(() => folge[i++ % folge.length]);
+    try {
+      const { rerender } = render(
+        <StrictMode><StatusLine state={mkState("idle")} connected /></StrictMode>
+      );
+      rerender(<StrictMode><StatusLine state={mkState("working")} connected /></StrictMode>);
+      const erstes = workingWordOf();
+      rerender(<StrictMode><StatusLine state={mkState("idle")} connected /></StrictMode>);
+      rerender(<StrictMode><StatusLine state={mkState("working")} connected /></StrictMode>);
+      const zweites = workingWordOf();
+      expect(erstes).toBe(`${WORKING_WORDS[0]}…`);
+      expect(zweites).toBe(`${WORKING_WORDS[Math.floor(0.5 * WORKING_WORDS.length)]}…`);
+      expect(zweites).not.toBe(erstes);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+function workingWordOf() {
+  return screen.getByText((t) => WORKING_WORDS.some((w) => t === `${w}…`)).textContent;
+}

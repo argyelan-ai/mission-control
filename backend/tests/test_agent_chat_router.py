@@ -45,7 +45,7 @@ def _user_line(text: str, msg_uuid: str = "u1", ts: str = "2026-08-13T00:00:00Z"
 
 
 async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     tdir = tmp_path / "rex-transcripts"
     tdir.mkdir()
@@ -55,6 +55,10 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     import app.services.agent_chat_input as agent_chat_input_mod
 
     monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    # "rex" existiert wirklich in der Flotte — capabilities.model/effort nie
+    # aus der LIVE settings.json des Hosts lesen (Real-Host-Leak).
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
     # This test is about the transcript page + effort capabilities, not skill
     # discovery — point the skills scan at a dir that doesn't exist so the
     # result is deterministic (builtins only) regardless of whatever real
@@ -107,6 +111,11 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     assert body["capabilities"] == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        # Startwerte fuer den Composer, solange die Session noch kein
+        # usage-Ereignis hat. Der Fixture-Agent hat keine settings.json -> None.
+        "effort": None,
+        "effortShared": False,
+        "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
             "modelOptions"
@@ -115,11 +124,14 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
 
 
 async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    """Boss (host runtime) has no pane probe — capabilities must say so
-    explicitly rather than the frontend guessing from agent_runtime alone.
+    """Boss (host runtime) has no pane probe — SWITCHING must stay off. Seit
+    18.08.2026 liefert das Backend fuer host+harness=claude trotzdem die
+    Stufenleiter (canSwitchEffort=false = "kennt der Harness, darfst du aber
+    nicht druecken"): das Frontend proportioniert damit die Saeule des
+    read-only Brain-Chips, statt Boss das nackte Alt-Label zu zeigen.
     slashCommands still shows the builtins (those aren't docker-gated),
     just no skill discovery (host has no claude-config mount to scan)."""
-    agent = await make_agent(name="Boss", agent_runtime="host", slug="boss")
+    agent = await make_agent(name="Boss", agent_runtime="host", slug="boss", harness="claude")
 
     tdir = tmp_path / "boss-transcripts"
     tdir.mkdir()
@@ -133,13 +145,26 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     # Boss privacy heuristic (cwd/branch sniffing) entirely rather than
     # constructing a transcript line that would satisfy it.
     monkeypatch.setattr(agent_chat_mod, "transcript_allowed", lambda a, p: True)
+    # Echte Fleet-Slugs — der capabilities.model/effort-Zweig darf nie die
+    # settings.json des LAUFENDEN Agenten vom Host lesen (Real-Host-Leak).
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["capabilities"] == {
-        "effortLevels": [],
-        "canSwitchEffort": False,
+        "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+        # Seit 19.08.2026 schaltbar: die Bridge tippt, das Transkript
+        # verifiziert. effortShared sagt dem UI, dass eine persistierende
+        # Stufe auch die lokalen Claude-Sessions des Operators umstellt
+        # (geteilte ~/.claude/settings.json).
+        "canSwitchEffort": True,
+        "effort": None,
+        "effortShared": True,
+        "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         # modelOptions: Boss has no harness (host runtime) -> catalog is
         # empty, no subprocess attempted at all -> static-alias fallback,
@@ -162,7 +187,7 @@ async def test_history_404_no_transcript_for_host_agent_without_dir(auth_client:
 
 
 async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -178,7 +203,7 @@ async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: A
 
 
 async def test_history_requires_auth(client: AsyncClient, make_agent):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     resp = await client.get(f"/api/v1/agents/{agent.id}/chat/history")
 

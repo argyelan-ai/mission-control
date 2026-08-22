@@ -123,20 +123,25 @@ class RedisKeys:
         return "mc:catalog:model-windows"
 
     @staticmethod
-    def model_catalog(harness: str, cli_version: str) -> str:
+    def model_catalog(harness: str, cli_version: str, slug: str) -> str:
         """JSON-encoded list of {"command","label"} rows discovered from a
         harness's own /model picker (harness_catalog.discover_model_catalog)
-        — keyed by (harness, cli_version) so a CLI upgrade invalidates the
-        old catalog automatically instead of serving stale rows forever.
+        — keyed by (harness, cli_version, slug). cli_version im Schluessel:
+        ein CLI-Upgrade invalidiert automatisch. slug im Schluessel
+        (19.08.2026): der Picker ist PRO AGENT verschieden — Claude Code
+        listet lokal erkannte OpenAI-kompatible Modelle des jeweiligen
+        Containers ("Detected from Local OpenAI-compatible"). Der alte
+        flottenweite Schluessel liess FreeCodes echtes Qwen bei JEDEM
+        Claude-Agenten im Dropdown auftauchen (Operator-Befund).
         TTL is set by the writer (24h — see harness_catalog)."""
-        return f"mc:catalog:models:{harness}:{cli_version}"
+        return f"mc:catalog:models:{harness}:{cli_version}:{slug}"
 
     @staticmethod
-    def model_catalog_discovery_lock(harness: str, cli_version: str) -> str:
+    def model_catalog_discovery_lock(harness: str, cli_version: str, slug: str) -> str:
         """SET NX EX lock so concurrent cache-miss requests for the same
-        (harness, cli_version) don't each spin up their own throwaway
+        (harness, cli_version, slug) don't each spin up their own throwaway
         discovery window at once."""
-        return f"mc:catalog:models:{harness}:{cli_version}:discovery-lock"
+        return f"mc:catalog:models:{harness}:{cli_version}:{slug}:discovery-lock"
 
     @staticmethod
     def effort_levels_drift_logged(cli_version: str) -> str:

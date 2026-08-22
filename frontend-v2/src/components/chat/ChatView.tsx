@@ -594,6 +594,10 @@ export function ChatView({
             onSend={handleSend}
             onStop={handleStop}
             sessionLive={aliveness !== "ended"}
+            /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
+             * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
+             * nie widerlegbar, also bleibt Stop erreichbar. */
+            paneObservable={agent.agent_runtime === "cli-bridge"}
             capabilities={stream.capabilities}
           />
         </>
