@@ -87,6 +87,46 @@ export function GroupChatView({
     return map;
   }, [rounds]);
 
+  // Aufeinanderfolgende Maschinen-Aufträge einer Runde werden zu EINER Zeile
+  // gebündelt (Operator-Befund 22.08.2026). Zwischen zwei Beiträgen, die man
+  // vergleichen will, standen sonst Runden-Brief, Timeout-Notiz und
+  // Synthese-Auftrag als drei einzelne Aufklapper.
+  //
+  // Zwei Grenzen, beide absichtlich:
+  //   • Ein Runden-Teiler bricht die Bündelung — sonst verschwände der Auftrag
+  //     der neuen Runde im Bündel der alten.
+  //   • Kurze System-Zeilen (Timeout-Notiz, Statuswechsel) bleiben eigenständig
+  //     und offen. Sie sind eine Zeile lang und genau dann wichtig, wenn man
+  //     sie nicht sucht — im Bündel wären sie weggeklappt.
+  const renderItems = useMemo(() => {
+    const MACHINE_BRIEF_CHARS = 240;
+    const isBrief = (m: (typeof stream.messages)[number]) =>
+      m.sender_type === "system" &&
+      ((m.body ?? "").length > MACHINE_BRIEF_CHARS || (m.body ?? "").split("\n").length > 3);
+
+    const out: {
+      message: (typeof stream.messages)[number];
+      index: number;
+      alsoContains?: string[];
+    }[] = [];
+    stream.messages.forEach((message, index) => {
+      const last = out[out.length - 1];
+      if (
+        isBrief(message) &&
+        !roundBySeq.has(message.seq) &&
+        last &&
+        isBrief(last.message)
+      ) {
+        // Der Runden-Brief selbst DARF Bündel-Anfang sein — er trägt den
+        // Teiler, und genau dann steht am Ende eine Zeile pro Runde.
+        last.alsoContains = [...(last.alsoContains ?? []), message.body ?? ""];
+        return;
+      }
+      out.push({ message, index });
+    });
+    return out;
+  }, [stream.messages, roundBySeq]);
+
   const memberById = useMemo(() => {
     const map = new Map<string, { name: string; emoji: string | null }>();
     for (const m of group.members) map.set(m.id, { name: m.name, emoji: m.emoji });
@@ -268,7 +308,7 @@ export function GroupChatView({
             )}
           </div>
         )}
-        {stream.messages.map((message, index) => {
+        {renderItems.map(({ message, index, alsoContains }) => {
           const previous = stream.messages[index - 1];
           const sender = message.sender_id ? memberById.get(message.sender_id) : undefined;
           const roundNo = roundBySeq.get(message.seq);
@@ -286,6 +326,7 @@ export function GroupChatView({
                 senderEmoji={sender?.emoji ?? null}
                 isOwn={message.sender_type === "user"}
                 groupWithPrevious={groupWithPrevious}
+                alsoContains={alsoContains}
               />
             </div>
           );

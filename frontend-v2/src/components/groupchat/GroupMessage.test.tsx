@@ -46,6 +46,7 @@ function renderMessage(
       senderEmoji={props.senderEmoji !== undefined ? props.senderEmoji : "🤖"}
       isOwn={props.isOwn ?? false}
       groupWithPrevious={props.groupWithPrevious}
+      alsoContains={props.alsoContains}
     />,
   );
 }
@@ -250,6 +251,29 @@ describe("GroupMessage — lange Agenten-Beiträge", () => {
     expect(body).toHaveAttribute("data-clamped", "true");
     expect(body.style.maxHeight).toBe(`${CONTRIBUTION_CLAMP_MAX_PX}px`);
     expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show more");
+  });
+
+  it("führt mehrere Maschinen-Aufträge einer Runde als EINE Zeile", async () => {
+    // Pro Runde standen drei Aufklapper untereinander: Runden-Brief,
+    // Timeout-Notiz, Synthese-Auftrag. Drei Zeilen Maschinerie zwischen zwei
+    // Beiträgen, die der Leser vergleichen will (Operator-Befund 22.08.2026).
+    const user = userEvent.setup();
+    renderMessage(
+      mkMessage({
+        sender_type: "system",
+        body: "# Gruppe: Test — Runde 1/2\n" + "x".repeat(400),
+      }),
+      { alsoContains: ["@lead — Synthese-Turn Runde 1/2.\n" + "y".repeat(400)] },
+    );
+
+    // EIN Aufklapper, nicht zwei — und er sagt, dass mehr dahinter steckt.
+    expect(screen.getAllByTestId("group-system-toggle")).toHaveLength(1);
+    expect(screen.getByTestId("group-system-toggle")).toHaveTextContent("+1");
+
+    await user.click(screen.getByTestId("group-system-toggle"));
+    const body = screen.getByTestId("group-system-body");
+    expect(body).toHaveTextContent("Gruppe: Test");
+    expect(body).toHaveTextContent("Synthese-Turn");
   });
 
   it("fades the cut edge instead of slicing through a line of text", () => {

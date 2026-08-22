@@ -36,6 +36,11 @@ interface GroupMessageProps {
   /** Vorgänger kommt vom selben Sprecher → Kopfzeile weglassen, damit ein
    *  mehrteiliger Beitrag als ein Block liest statt als Stakkato. */
   groupWithPrevious?: boolean;
+  /** Weitere Maschinen-Aufträge, die direkt auf diesen folgten. Sie werden
+   *  unter DIESEM Aufklapper mitgeführt statt eigene Zeilen zu bekommen:
+   *  pro Runde standen sonst Brief, Timeout-Notiz und Synthese-Auftrag als
+   *  drei Zeilen zwischen zwei Beiträgen, die man vergleichen will. */
+  alsoContains?: string[];
 }
 
 /** Ab dieser Länge wird eine System-Nachricht zugeklappt. Runden-Briefe und
@@ -167,6 +172,7 @@ export function GroupMessage({
   senderEmoji,
   isOwn,
   groupWithPrevious = false,
+  alsoContains,
 }: GroupMessageProps) {
   const t = useTranslations("sessions.groups");
   // Zugeklappt starten: der Verlauf gehört den Beiträgen, nicht den Aufträgen
@@ -188,7 +194,14 @@ export function GroupMessage({
     // mit „@freecode — Synthese-Turn Runde 2/2". Deshalb wird hier nichts
     // geparst und nichts geraten: was oben steht, steht auf dem Knopf.
     const summary = (lines.find((l) => l.trim()) ?? "").replace(/^#+\s*/, "").trim();
-    const long = body.length > SYSTEM_COLLAPSE_CHARS || lines.length > 3;
+    const merged = alsoContains ?? [];
+    // Die Trennlinie macht sichtbar, dass hier mehrere Auftraege stehen —
+    // sonst laese sich der aufgeklappte Block als ein einziger langer Text.
+    const fullBody = merged.length
+      ? [body, ...merged].join("\n\n────────\n\n")
+      : body;
+    const long =
+      merged.length > 0 || body.length > SYSTEM_COLLAPSE_CHARS || lines.length > 3;
 
     // Kurze Systemzeilen (Timeout-Notiz, Statuswechsel) bleiben offen: sie sind
     // eine Zeile lang und genau dann wichtig, wenn man sie nicht sucht.
@@ -241,7 +254,7 @@ export function GroupMessage({
               className="font-mono text-[11px] truncate"
               style={{ color: C.textMuted }}
             >
-              {summary}
+              {merged.length ? `${summary} · +${merged.length}` : summary}
             </span>
           </button>
 
@@ -255,7 +268,7 @@ export function GroupMessage({
                 border: `1px solid ${C.border}`,
               }}
             >
-              {body}
+              {fullBody}
             </pre>
           )}
         </div>
