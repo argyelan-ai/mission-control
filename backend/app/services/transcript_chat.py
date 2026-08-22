@@ -769,21 +769,40 @@ def is_command_only_session(path: Path) -> bool:
     return result
 
 
+#: Der EINZIGE Ordner, in dem je eine Wegwerf-Sitzung der Katalog-Erkennung
+#: gelandet ist: der Projektordner von ``/home/agent`` im Container. Host-
+#: Agenten liegen woanders (``~/.claude/projects/<pfad-des-checkouts>``), und
+#: die Erkennung erreicht sie ohnehin nicht — sie faehrt ``docker exec``.
+_DISCOVERY_LEGACY_PROJECT_DIR = "-home-agent"
+
+
 def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     """Finds the newest ``*.jsonl`` transcript directly under ``tdir`` (does
     NOT recurse into subdirectories — those hold sidechains/artifacts, not
     top-level sessions).
 
-    Sitzungen ohne jeden Gespraechsinhalt werden dabei UEBERSPRUNGEN
-    (``is_command_only_session``). Grund: die ``/model``-Katalog-Erkennung
-    hat monatelang Wegwerf-Sitzungen im Projektordner der Agenten
-    hinterlassen — als jeweils neueste Datei verdeckten sie das echte
-    Gespraech (Operator-Befund 19.08.2026: researcher zeigte 10 Zeilen / 0
-    Antworten statt seiner 218 Zeilen / 65 Antworten). Die Erkennung legt
-    dort inzwischen nichts mehr ab; diese Schicht heilt zusaetzlich die ~41
-    Dateien, die bereits auf der Platte liegen — geloescht wird nichts.
-    Bleibt danach nichts uebrig, gewinnt doch die neueste Datei: lieber eine
-    magere Sitzung zeigen als gar keine.
+    Sitzungen ohne jeden Gespraechsinhalt werden UEBERSPRUNGEN
+    (``is_command_only_session``) — aber NUR im Projektordner eines
+    Container-Agenten (``-home-agent``). Grund: die ``/model``-Katalog-
+    Erkennung hat monatelang Wegwerf-Sitzungen dort hinterlassen; als jeweils
+    neueste Datei verdeckten sie das echte Gespraech (Operator-Befund
+    19.08.2026: researcher zeigte 10 Zeilen / 0 Antworten statt seiner 218
+    Zeilen / 65 Antworten). Die Erkennung legt dort inzwischen nichts mehr ab
+    (sie schreibt seit 19.08. in den Projektordner von ``/workspace``); diese
+    Schicht heilt zusaetzlich die ~41 Dateien, die bereits auf der Platte
+    liegen — geloescht wird nichts. Bleibt danach nichts uebrig, gewinnt doch
+    die neueste Datei: lieber eine magere Sitzung zeigen als gar keine.
+
+    Warum die Einschraenkung auf diesen einen Ordner: Eine frische Sitzung,
+    deren erster Zug ein Slash-Befehl ist, sieht GENAUSO aus wie eine Sonde —
+    sie hat eine Kommando-Huelle und noch keine Antwort. Bei einem Host-Agenten
+    wurde deshalb der Modellwechsel im frischen Chat verschluckt: der Chat
+    sprang auf die vorige Sitzung zurueck, das Echo blieb als "Nicht
+    bestaetigt" stehen und der Modell-Chip las das ALTE Modell (Operator-
+    Befund 22.08.2026, Boss). Die Erkennung laeuft ausschliesslich per
+    ``docker exec`` gegen cli-bridge-Agenten (``harness_catalog._tmux``) — in
+    den Ordner eines Host-Agenten hat sie nie geschrieben und kann es nicht.
+    Dort ist eine reine Kommando-Sitzung also immer die des Operators.
 
     Returns ``(path, meta)`` where ``meta`` is
     ``{"sessionId": <filename stem>, "mtime": <iso8601>, "live": <bool>}``
@@ -805,12 +824,13 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
 
     candidates.sort(key=lambda row: (row[0], str(row[1])), reverse=True)
     newest_mtime, newest_path = candidates[0]
-    for mtime, candidate in candidates:
-        # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
-        # gewinnt, und im Normalfall ist das gleich der erste geprueft.
-        if not is_command_only_session(candidate):
-            newest_mtime, newest_path = mtime, candidate
-            break
+    if tdir.name == _DISCOVERY_LEGACY_PROJECT_DIR:
+        for mtime, candidate in candidates:
+            # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
+            # gewinnt, und im Normalfall ist das gleich der erste geprueft.
+            if not is_command_only_session(candidate):
+                newest_mtime, newest_path = mtime, candidate
+                break
 
     meta = {
         "sessionId": newest_path.stem,

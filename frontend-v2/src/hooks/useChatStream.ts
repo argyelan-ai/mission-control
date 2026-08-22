@@ -344,6 +344,12 @@ export function seedSequence(
   return [...history, ...buffered];
 }
 
+/** Abstand zwischen "die CLI hat den Befehl angenommen" und "sie hat ihn
+ *  angewendet und die Datei geschrieben". Grosszuegig gewaehlt: ein zu
+ *  frueher zweiter Abruf kostet nur einen Rundlauf, ein zu spaeter laesst den
+ *  Chip laenger falsch stehen. */
+const MODEL_SETTLE_MS = 2000;
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export interface UseChatStreamResult {
@@ -571,7 +577,30 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
         dispatch(ev);
       }
       if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text);
-      if (ev.kind === "command") reconcileEcho(ev.command);
+      if (ev.kind === "command") {
+        reconcileEcho(ev.command);
+        /* Ein Modellwechsel aendert die `settings.json` des Agenten — und
+           genau daraus liest `capabilities.model` den Wert fuer den Chip.
+           Ohne erneutes Lesen zeigte er weiter das alte Modell, bis zufaellig
+           etwas anderes einen Abruf ausloeste; bei einem ruhenden Agenten
+           also beliebig lange (Operator-Befund 22.08.2026).
+
+           Zweimal gelesen, nicht geraten: sofort, und einmal nach einer
+           kurzen Weile. Der Befehl steht im Transkript, sobald die CLI die
+           EINGABE angenommen hat — die Datei schreibt sie erst, wenn sie den
+           Wechsel ANWENDET. Der zweite Abruf deckt diesen Abstand ab.
+           Angezeigt wird immer nur, was gelesen wurde: bleibt die CLI
+           laenger haengen, steht kurz der alte Wert da — nie ein erfundener
+           neuer. */
+        if (/^\/model\b/.test(ev.command)) {
+          historyQuery.refetch();
+          const handle = window.setTimeout(() => {
+            retryTimersRef.current.delete(handle);
+            historyQuery.refetch();
+          }, MODEL_SETTLE_MS);
+          retryTimersRef.current.add(handle);
+        }
+      }
       // Ein Sitzungswechsel beantwortet genau die Kommandos, die ihn ausloesen
       // (/clear) — ihre Bestaetigung kaeme sonst nie, weil das alte Transkript
       // weg ist und das neue leer startet.
