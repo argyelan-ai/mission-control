@@ -36,11 +36,19 @@ logger = logging.getLogger("mc.embedding_provider")
 EMBED_DIM = 768
 
 
+class EmbeddingNotConfiguredError(ValueError):
+    """The active arm has no endpoint URL — a fresh install, or a cloud arm
+    without its URL. Raised BEFORE any network attempt: a dead default that
+    gets hammered on every memory insert is the SYN_SENT pile-up class from
+    the 2026-08 socket incident. Callers treat this as "save without vector,
+    do not retry" — retrying cannot succeed until an operator configures it."""
+
+
 @runtime_checkable
 class EmbeddingProvider(Protocol):
     """One embedding backend. Everything provider-specific — and nothing else."""
 
-    key: str    # "spark" | "ollama_cloud" — the value in AI_EMBEDDINGS_PROVIDER
+    key: str    # "spark" | "cloud" — the value in AI_EMBEDDINGS_PROVIDER
     label: str  # display name for the settings UI / diagnostics
 
     async def embed(self, text: str) -> list[float]:
@@ -94,9 +102,15 @@ class BaseEmbeddingProvider:
             self._client = None
 
     async def _post(self, payload_input: Any) -> dict:
+        url = self.url()
+        if not url:
+            raise EmbeddingNotConfiguredError(
+                f"Embedding-Provider '{self.key}' hat keinen Endpunkt konfiguriert "
+                "— Settings → KI-Provider."
+            )
         client = await self._get_client()
         resp = await client.post(
-            self.url(),
+            url,
             json={"model": self.model(), "input": payload_input},
             headers=await self.headers(),
         )
@@ -132,30 +146,15 @@ class BaseEmbeddingProvider:
 
 
 class SparkEmbeddingProvider(BaseEmbeddingProvider):
-    """The GPU box (LM Studio / vLLM, OpenAI-compatible). Keyless by design —
-    it is a machine on your own network, not a paid API."""
+    """The self-hosted arm: ANY OpenAI-compatible /v1/embeddings on your own
+    hardware — LM Studio, llama.cpp's llama-server, vLLM, ... The key name
+    "spark" predates the generalization and stays for stored-row compat.
+
+    Auth is optional: keyless by default (a machine on your own network), but
+    an endpoint behind an auth proxy can store ``embeddings_api_key``."""
 
     key = "spark"
-    label = "GPU-Box (OpenAI-kompatibel)"
-
-    def url(self) -> str:
-        return ai_provider_config.embeddings_url()
-
-    def model(self) -> str:
-        return ai_provider_config.embeddings_model()
-
-
-class OllamaCloudEmbeddingProvider(BaseEmbeddingProvider):
-    """ollama.com — the ONLY Ollama MC talks to. Local Ollama on the Mac is
-    deliberately not an option (it panics the kernel on this hardware).
-
-    This is the explicit ``ollama_api_key`` consumer ADR-056 Finding 5 left
-    room for: a named function asks for the key by name, and no runtime ever
-    sees it.
-    """
-
-    key = "ollama_cloud"
-    label = "Ollama Cloud (ollama.com)"
+    label = "Eigener Server (OpenAI-kompatibel)"
 
     def url(self) -> str:
         return ai_provider_config.embeddings_url()
@@ -165,7 +164,35 @@ class OllamaCloudEmbeddingProvider(BaseEmbeddingProvider):
 
     async def headers(self) -> dict[str, str]:
         base = {"Content-Type": "application/json"}
-        key = await ai_provider_config.get_ollama_api_key()
+        key = await ai_provider_config.get_embeddings_api_key()
+        if key:
+            base["Authorization"] = f"Bearer {key}"
+        return base
+
+
+class CloudEmbeddingProvider(BaseEmbeddingProvider):
+    """Any HOSTED OpenAI-compatible /v1/embeddings (Together, DeepInfra,
+    Fireworks, ...). Replaces the former ollama_cloud arm, which could never
+    work: ollama.com hosts no embedding model and no /v1/embeddings path
+    (live-verified 2026-08-19). No default URL — a cloud endpoint that gets
+    paid per call is always an explicit operator decision.
+
+    The stored vectors pin the model family: pick a host that serves the same
+    768-dim model as the self-hosted side, or the collections mix vector
+    spaces. The test button reports the real dimension."""
+
+    key = "cloud"
+    label = "Cloud (OpenAI-kompatibel)"
+
+    def url(self) -> str:
+        return ai_provider_config.embeddings_url()
+
+    def model(self) -> str:
+        return ai_provider_config.embeddings_model()
+
+    async def headers(self) -> dict[str, str]:
+        base = {"Content-Type": "application/json"}
+        key = await ai_provider_config.get_embeddings_cloud_api_key()
         if key:
             base["Authorization"] = f"Bearer {key}"
         return base
@@ -186,7 +213,7 @@ def _registry() -> dict[str, EmbeddingProvider]:
     if _PROVIDERS is None:
         _PROVIDERS = {
             "spark": SparkEmbeddingProvider(),
-            "ollama_cloud": OllamaCloudEmbeddingProvider(),
+            "cloud": CloudEmbeddingProvider(),
         }
     return _PROVIDERS
 

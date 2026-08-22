@@ -823,3 +823,30 @@ async def fetch_recent_insights(session: AsyncSession, limit: int = 2) -> list[B
 
 # Singleton instance
 intelligence = IntelligenceService()
+
+
+async def effective_insights_model() -> str | None:
+    """The model the next distillation would ACTUALLY use, mirroring
+    ``_call_insights_llm``/``_call_ollama_cloud`` exactly — including the
+    legacy Redis field ``config.ollama_model``, which keeps steering the
+    ollama_cloud arm although its edit field left the Intelligence tab.
+    Settings pages show this instead of re-deriving it half-right.
+
+    None = "the runtime resolver decides at call time" (spark auto) or the
+    provider is off.
+    """
+    provider = ai_provider_config.insights_provider_key()
+    if provider == "off":
+        return None
+    override = ai_provider_config.insights_model_override()
+    if override:
+        return override
+    if provider == "ollama_cloud":
+        config = await intelligence._get_config()
+        legacy = (
+            config.ollama_model
+            if config and config.ollama_model != _LEGACY_INSIGHTS_MODEL
+            else ""
+        )
+        return legacy or settings.ollama_cloud_insights_model
+    return None

@@ -1504,6 +1504,60 @@ export const api = {
     remove: (id: string) => request<void>(`/api/v1/loops/${id}`, { method: "DELETE" }),
   },
 
+  // ── Gruppen (Multi-Agent-Gruppenchat, ADR-075) ────────────────────────────
+  // Eine Gruppe ist ein comm_v2-Thread mit mehreren Agenten und einem Ziel.
+  // `eligibleMembers` entscheidet das Backend (comm_v2-Fähigkeit) — die UI
+  // re-implementiert diese Regel bewusst nicht.
+  groups: {
+    list: () => request<import("./groupTypes").GroupSummary[]>("/api/v1/groups"),
+    get: (id: string) => request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}`),
+    create: (data: import("./groupTypes").GroupCreatePayload) =>
+      request<import("./groupTypes").GroupDetail>("/api/v1/groups", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: Record<string, unknown>) =>
+      request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    addMember: (id: string, agentId: string, role = "member") =>
+      request<import("./groupTypes").GroupMemberInfo>(`/api/v1/groups/${id}/members`, {
+        method: "POST",
+        body: JSON.stringify({ agent_id: agentId, role }),
+      }),
+    removeMember: (id: string, agentId: string) =>
+      request<void>(`/api/v1/groups/${id}/members/${agentId}`, { method: "DELETE" }),
+    messages: (id: string, params?: { sinceSeq?: number; limit?: number }) => {
+      const qs = new URLSearchParams();
+      if (params?.sinceSeq != null) qs.set("since_seq", String(params.sinceSeq));
+      if (params?.limit != null) qs.set("limit", String(params.limit));
+      const suffix = qs.toString();
+      return request<{ messages: import("./groupTypes").GroupMessage[] }>(
+        `/api/v1/groups/${id}/messages${suffix ? `?${suffix}` : ""}`,
+      );
+    },
+    postMessage: (id: string, text: string) =>
+      request<import("./groupTypes").GroupMessage>(`/api/v1/groups/${id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }),
+    rounds: (id: string) =>
+      request<{ rounds: import("./groupTypes").GroupRoundInfo[] }>(`/api/v1/groups/${id}/rounds`),
+    document: (id: string, version?: number) =>
+      request<import("./groupTypes").GroupDocument>(
+        `/api/v1/groups/${id}/document${version != null ? `?version=${version}` : ""}`,
+      ),
+    start: (id: string) =>
+      request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}/start`, { method: "POST" }),
+    pause: (id: string) =>
+      request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}/pause`, { method: "POST" }),
+    stop: (id: string) =>
+      request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}/stop`, { method: "POST" }),
+    eligibleMembers: () =>
+      request<import("./groupTypes").EligibleMember[]>("/api/v1/groups/eligible-members"),
+  },
+
   // ── Skills (filesystem-local) ─────────────────────────────────────────────
   // Phase 31 / OCS-15: backend now reads skills from ~/.mc/skills/ (Phase 29).
   skills: {
