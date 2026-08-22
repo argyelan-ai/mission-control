@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AlertTriangle, Clock } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
@@ -19,6 +20,9 @@ export const USER_CLAMP_MAX_PX = USER_CLAMP_LINES * USER_LINE_HEIGHT_PX;
 /** Renders the user's markdown, clamped until the reader asks for the rest.
  *  The expander only appears when there is genuinely something hidden. */
 function ClampedUserContent({ text }: { text: string }) {
+  // Der Aufklapper stand bis 22.08.2026 fest auf Deutsch — in der
+  // englischen Oberflaeche also mitten im Satz die falsche Sprache.
+  const tChat = useTranslations("chat");
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -61,7 +65,7 @@ function ClampedUserContent({ text }: { text: string }) {
           className="mt-1.5 pt-1.5 w-full text-left text-[12px] font-medium cursor-pointer transition-colors"
           style={{ color: C.textMuted, borderTop: `1px solid ${C.borderSubtle}` }}
         >
-          {expanded ? "Weniger anzeigen" : "Mehr anzeigen"}
+          {expanded ? tChat("showLess") : tChat("showMore")}
         </button>
       )}
     </>

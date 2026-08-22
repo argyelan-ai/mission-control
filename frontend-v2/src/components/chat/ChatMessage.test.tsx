@@ -93,7 +93,7 @@ describe("ChatMessage", () => {
       restore = stubScrollHeight(60);
       renderUser("Kurzer Auftrag");
       expect(screen.getByTestId("user-message-content")).toHaveAttribute("data-clamped", "false");
-      expect(screen.queryByRole("button", { name: "Mehr anzeigen" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
     });
 
     it("clamps a long dispatch brief and offers an expander", () => {
@@ -102,7 +102,7 @@ describe("ChatMessage", () => {
       const content = screen.getByTestId("user-message-content");
       expect(content).toHaveAttribute("data-clamped", "true");
       expect(content.style.maxHeight).toBe(`${USER_CLAMP_MAX_PX}px`);
-      expect(screen.getByRole("button", { name: "Mehr anzeigen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
     });
 
     it("expands and collapses again on the expander", async () => {
@@ -110,17 +110,17 @@ describe("ChatMessage", () => {
       const user = userEvent.setup();
       renderUser("# Auftrag\n\nSehr langer Brief …");
 
-      await user.click(screen.getByRole("button", { name: "Mehr anzeigen" }));
+      await user.click(screen.getByRole("button", { name: "Show more" }));
       expect(screen.getByTestId("user-message-content")).toHaveAttribute("data-clamped", "false");
 
-      await user.click(screen.getByRole("button", { name: "Weniger anzeigen" }));
+      await user.click(screen.getByRole("button", { name: "Show less" }));
       expect(screen.getByTestId("user-message-content")).toHaveAttribute("data-clamped", "true");
     });
 
     it("reports nothing hidden while the element cannot be measured (hidden pane)", () => {
       restore = stubScrollHeight(0);
       renderUser("# Auftrag\n\nSehr langer Brief …");
-      expect(screen.queryByRole("button", { name: "Mehr anzeigen" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
     });
 
     it("flattens headings inside a user bubble to one body-weight step", () => {

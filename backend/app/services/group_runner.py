@@ -7,15 +7,21 @@ Lead den Synthese-Turn (Beiträge als Delta, Dokument-Pflicht, Zwangsformat)
 und wertet das Verdikt:
 
     ZIEL ERREICHT: … → one_shot: done · standing: idle
-    WEITER: …        → nächste Runde (Delta + Anti-Lob-Klausel im Brief)
+    WEITER: …        → nächste Runde (Delta + PASS-Klausel im Brief)
     FRAGE AN OPERATOR: … → waiting_gate + group_gate-Approval
     formwidrig/Timeout → Fehlrunde (Circuit-Breaker nach N in Folge)
 
+Kürze ist Teil des Auftrags (Kursänderung 22.08.2026): der Chat trägt die
+Meinungsbildung (2–4 Sätze je Beitrag), das Ergebnis-Dokument trägt die
+Substanz. Wer nichts Neues hat, antwortet `PASS` — das zählt als geliefert,
+nicht als Fehlrunde. Passen ALLE Sprecher einer Runde, endet der Lauf regulär,
+ohne den Lead überhaupt zu wecken (`all_passed` → `room_settled`).
+
 Deckel-Kaskade an jeder Rundengrenze (Reihenfolge wie loop_runner, ADR-051):
-Circuit-Breaker → Gate-Frage → Ziel → Fortschritts-Bremse (2× ohne neue
-Substanz) → max_rounds (der HARTE Deckel) → max_duration → Budget (weiche
-Bremse: Zeitfenster × Mitglieder, Harvester-Lag — kann ~1 Runde
-überschiessen) → Human-Gate → nächste Runde.
+Circuit-Breaker → Gate-Frage → Ziel → stille Runde (alle gepasst) →
+Fortschritts-Bremse (2× ohne neue Substanz) → max_rounds (der HARTE Deckel)
+→ max_duration → Budget (weiche Bremse: Zeitfenster × Mitglieder,
+Harvester-Lag — kann ~1 Runde überschiessen) → Human-Gate → nächste Runde.
 
 Sturm-Schutz bleibt strukturell (PR A): nur dieser Runner, Marks @-Mentions
 und explizite Agenten-@-Mentions erteilen das Wort; die Timeout-Notiz trägt
@@ -25,6 +31,7 @@ bewusst KEINE mentions.
 import asyncio
 import logging
 import os
+import re
 from datetime import timedelta
 
 from sqlmodel import select
@@ -58,7 +65,21 @@ _VERDICT_MARKERS = (
     ("WEITER", "continue"),
 )
 
+# Passen ist eine vollwertige Antwort (Kursänderung 22.08.2026). Streng wie
+# bei Hermes: nur wer NICHTS ausser "PASS" sagt, hat gepasst — sonst würde
+# "PASS wäre hier falsch, weil …" als Schweigen durchgehen.
+_PASS_RE = re.compile(r"^\(?\s*pass\s*\)?[.!]?$", re.IGNORECASE)
+# Deutsche Altform. Bleibt gültig, damit laufende Gruppen nicht brechen: ihre
+# alten Briefe im Thread fordern noch wörtlich "NICHTS NEUES". Bewusst
+# prefix-tolerant — genau das war das bisherige Verhalten.
 _STALE_PREFIX = "NICHTS NEUES"
+
+# Längen-Deckel für alles, was die Engine zwischen Agenten weiterreicht.
+# Vorher 2000 Zeichen je Beitrag — das waren 30 000–41 800 Token pro Runde
+# (Live-Messung 22.08.). Der Chat trägt die Meinungsbildung, die Substanz
+# steht im Ergebnis-Dokument; zum Weiterdenken reicht der Kern.
+_CONTRIB_LIMIT = 400   # Beitrag eines Sprechers im Lead-Auftrag
+_HEADER_LIMIT = 300    # Vorrunden-Delta und Operator-Einwürfe im Brief
 
 
 def _short(text: str | None, limit: int = 500) -> str:
@@ -66,6 +87,20 @@ def _short(text: str | None, limit: int = 500) -> str:
         return ""
     text = text.strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _is_pass(text: str | None) -> bool:
+    """Hat dieser Beitrag bewusst nichts Neues beigetragen?
+
+    Erkennt `PASS` / `(pass)` / `pass.` (Hermes-Muster), die leere Antwort
+    (Schweigen zählt wie passen) und die deutsche Altform `NICHTS NEUES`.
+    """
+    body = (text or "").strip()
+    if not body:
+        return True
+    if _PASS_RE.match(body):
+        return True
+    return body.upper().startswith(_STALE_PREFIX)
 
 
 def _parse_verdict(text: str | None) -> tuple[str | None, str]:
@@ -232,20 +267,26 @@ class GroupRunnerService:
         if prev is not None:
             _outcome, delta = await _resolve_lead_verdict(session, group, prev)
             if delta:
-                parts += ["", "## Stand der Vorrunde (Lead)", delta]
+                parts += ["", "## Stand der Vorrunde (Lead)", _short(delta, _HEADER_LIMIT)]
             operator_notes = await _user_messages_since(
                 session, group, since_seq=prev.brief_seq or 0
             )
             if operator_notes:
                 parts += ["", "## Operator-Einwürfe seit der letzten Runde"]
-                parts += [f"- {_short(m.body, 300)}" for m in operator_notes]
+                parts += [f"- {_short(m.body, _HEADER_LIMIT)}" for m in operator_notes]
 
         parts += [
             "",
             f"## Deine Aufgabe (Runde {n}/{mx})",
             "- Recherchiere/denke selbstständig im Sinne des Ziels und antworte "
             f"mit GENAU EINEM Beitrag: `mc msg --thread {group.thread_id} \"…\"`.",
-            "- Quellen-Pflicht: eine Behauptung ohne Quellen-URL ist kein Beitrag.",
+            # Der grösste Hebel gegen Textwände: ohne Längenbudget schreibt ein
+            # so beauftragter Agent einen Aufsatz — er tut genau, was dasteht.
+            "- **Antworte in 2–4 Sätzen**: deine Position, ein Grund, eine "
+            "Quelle als Link. Ausführliche Belege gehören ins Ergebnis-Dokument, "
+            "nicht in den Raum.",
+            "- Quellen-Pflicht bleibt: eine Behauptung ohne Quellen-URL ist kein "
+            "Beitrag — der nackte Link genügt, kein Zitat-Block.",
             "- Antworte NICHT auf andere Mitglieder per @-Mention — die Engine "
             "sammelt alle Beiträge und gibt sie weiter.",
         ]
@@ -256,12 +297,15 @@ class GroupRunnerService:
         if critic_handles:
             parts += [
                 f"- Kritiker-Rolle ({', '.join(critic_handles)}): nenne mindestens "
-                "einen konkreten Einwand oder eine Lücke.",
+                "einen konkreten Einwand oder eine Lücke — in einem Satz.",
             ]
         if round_row.round_no >= 2:
+            # Erst ab Runde 2: in Runde 1 hat noch niemand etwas gehört, ein
+            # PASS wäre dort kein Schweigen, sondern Arbeitsverweigerung.
             parts += [
-                "- Reine Zustimmung ist kein Beitrag — widersprich konkret oder "
-                "ergänze Neues; sonst antworte wörtlich: NICHTS NEUES.",
+                "- Hast du nichts Neues beizutragen, antworte nur mit `PASS`. "
+                "Passen ist eine vollwertige Antwort; reine Zustimmung dagegen "
+                "ist kein Beitrag. Passen ALLE, endet die Gruppe.",
             ]
         return "\n".join(parts)
 
@@ -297,6 +341,7 @@ class GroupRunnerService:
             session.add(round_row)
             await session.commit()
 
+        skipped_by_timeout: list[str] = []
         if pending:
             started = ensure_aware(round_row.started_at) if round_row.started_at else None
             timed_out = (
@@ -320,15 +365,56 @@ class GroupRunnerService:
                 mentions=[],
                 mirror_to_telegram=False,
             )
+            skipped_by_timeout = list(pending)
             round_row.pending_speakers = []
             session.add(round_row)
             await session.commit()
 
-        await self._prompt_lead(session, group, round_row, members)
+        # ── Stille Runde beendet den Lauf ───────────────────────────────
+        # Hermes: „the room settles when a full round stays silent." Haben ALLE
+        # Sprecher gepasst, gibt es nichts zu synthetisieren — die Gruppe endet
+        # regulär, und der teuerste Turn (Lead-Synthese) entfällt gleich mit.
+        #
+        # Bewusst NUR bei aktivem Passen aller: wer per Timeout übersprungen
+        # wurde, ist nicht einverstanden, sondern unbekannt — dann läuft die
+        # Runde normal weiter zum Lead.
+        #
+        # Die Fortschritts-Bremse (continue_stale) bleibt DANEBEN bestehen: sie
+        # deckt den Teil-Fall ab, in dem nur die Hälfte passt und der Lead
+        # trotzdem WEITER urteilt. Ersetzen würde diese Lücke aufreissen.
+        lead_slug = slug_by_id.get(group.lead_agent_id)
+        first_by_slug = _first_reply_per_speaker(replies, slug_by_id, lead_slug)
+        if (
+            not skipped_by_timeout
+            and first_by_slug
+            and all(_is_pass(body) for body in first_by_slug.values())
+        ):
+            await post_message(
+                session,
+                thread_id=group.thread_id,
+                sender_type="system",
+                message_type="system",
+                body=(
+                    "🤫 Alle Sprecher haben gepasst — die Runde bleibt still. "
+                    "Es gibt nichts Neues zu synthetisieren, der Lauf endet hier."
+                ),
+                mentions=[],  # Sturm-Schutz: die Schluss-Notiz weckt niemanden.
+                mirror_to_telegram=False,
+            )
+            await self._complete_round(
+                session, group, round_row, outcome="all_passed",
+                note="Alle Sprecher haben gepasst — stille Runde.",
+            )
+            return
+
+        await self._prompt_lead(
+            session, group, round_row, members, skipped=skipped_by_timeout,
+        )
 
     async def _prompt_lead(
         self, session: AsyncSession, group: AgentGroup,
         round_row: GroupRound, members: list[Agent],
+        skipped: list[str] | None = None,
     ) -> None:
         lead = next((a for a in members if a.id == group.lead_agent_id), None)
         if lead is None:
@@ -343,15 +429,21 @@ class GroupRunnerService:
         contributions = await _agent_messages_since(
             session, group, since_seq=round_row.brief_seq or 0
         )
+        first_by_slug = _first_reply_per_speaker(contributions, slug_by_id, lead_slug)
         contrib_parts: list[str] = []
-        seen: set = set()
-        for m in contributions:
-            slug = slug_by_id.get(m.sender_id)
-            if slug is None or slug == lead_slug or slug in seen:
+        passed: list[str] = []
+        for slug, body in first_by_slug.items():
+            # Wer gepasst hat, kostet eine Zeile statt eines Blocks — sein
+            # "PASS" trägt keine Information, nur Token.
+            if _is_pass(body):
+                passed.append(slug)
                 continue
-            seen.add(slug)
-            contrib_parts += [f"### @{slug}", _short(m.body, 2000)]
-        skipped = [s for s in (round_row.pending_speakers or []) if s not in seen]
+            contrib_parts += [f"### @{slug}", _short(body, _CONTRIB_LIMIT)]
+        # `skipped` reicht der Sammler durch: `round_row.pending_speakers` ist
+        # zu diesem Zeitpunkt IMMER schon leer (der Timeout-Zweig räumt es
+        # selbst), die Liste hier aus der Runden-Zeile zu lesen ergab nie einen
+        # Namen — der Lead erfuhr nie, wer gefehlt hat.
+        skipped = [s for s in (skipped or []) if s not in first_by_slug]
 
         # Lesen darf der Agent die Datei (Mount ist da), SCHREIBEN nicht —
         # der References-Mount ist in den Agenten-Containern read-only (live
@@ -369,6 +461,10 @@ class GroupRunnerService:
             "## Beiträge dieser Runde",
             *(contrib_parts or ["(keine Beiträge — alle Sprecher übersprungen)"]),
         ]
+        if passed:
+            body_parts += [
+                "", "Gepasst (nichts Neues): " + ", ".join(f"@{s}" for s in passed),
+            ]
         if skipped:
             body_parts += ["", "Übersprungen (Timeout): " + ", ".join(f"@{s}" for s in skipped)]
         body_parts += [
@@ -392,9 +488,15 @@ class GroupRunnerService:
             ),
             f"1. Antworte mit `mc msg --thread {group.thread_id}` und beginne dein "
             "Urteil mit GENAU EINEM Marker:",
-            "   - `ZIEL ERREICHT: <Synthese mit Quellen + Dissens>`",
+            "   - `ZIEL ERREICHT: <dein Verdikt in zwei bis drei Sätzen>`",
             "   - `WEITER: <was noch offen ist>`",
             "   - `FRAGE AN OPERATOR: <deine Frage>`",
+            # Der Synthese-Beitrag war die grösste einzelne Textwand im Raum
+            # (bis 4900 Zeichen). Die Substanz ist im Dokument nicht verloren,
+            # sondern dort erst am richtigen Platz.
+            "**Halte den Chat-Beitrag kurz: Marker + zwei bis drei Sätze.** Die "
+            "ausführliche Synthese mit Quellen und Dissens gehört ins "
+            "Ergebnis-Dokument, nicht in den Raum.",
             "Eine Antwort ohne Marker wertet die Runde als gescheitert.",
         ]
         msg = await post_message(
@@ -478,30 +580,26 @@ class GroupRunnerService:
         lead_slug = slug_by_id.get(group.lead_agent_id)
         speakers_total = len([a for a in members if a.id != group.lead_agent_id])
 
-        # Fortschritts-Substanz: erster Beitrag je Sprecher, wörtlich NICHTS NEUES?
+        # Fortschritts-Substanz: erster Beitrag je Sprecher — gepasst?
         replies = await _agent_messages_since(
             session, group, since_seq=round_row.brief_seq or 0
         )
-        first_by_slug: dict[str, str] = {}
-        for m in replies:
-            slug = slug_by_id.get(m.sender_id)
-            if slug is None or slug == lead_slug or slug in first_by_slug:
-                continue
-            first_by_slug[slug] = m.body or ""
-        stale_count = sum(
-            1
-            for body in first_by_slug.values()
-            if body.strip().upper().startswith(_STALE_PREFIX)
-        )
+        first_by_slug = _first_reply_per_speaker(replies, slug_by_id, lead_slug)
+        stale_count = sum(1 for body in first_by_slug.values() if _is_pass(body))
         is_stale = speakers_total > 0 and stale_count * 2 >= speakers_total
         if outcome == "continue" and is_stale:
             outcome = "continue_stale"
 
         # Dokument-Snapshot + Unverändert-Prüfung (ehrlich statt still).
+        # Beides gilt nur, wenn der Lead überhaupt einen Turn hatte — in einer
+        # stillen Runde (alle gepasst) wurde er nie gefragt, weder „aktualisiert"
+        # noch „unverändert" wäre da eine ehrliche Aussage.
+        lead_had_turn = round_row.lead_prompt_seq is not None
         doc_note = ""
         snapshot = await self._snapshot_doc(session, group, round_row)
         if snapshot is not None:
             round_row.doc_snapshot = snapshot
+        if snapshot is not None and lead_had_turn:
             prev_snapshot = await _previous_doc_snapshot(session, group, round_row)
             if prev_snapshot is None:
                 prev_snapshot = group_service._DOC_SKELETON.format(
@@ -528,14 +626,14 @@ class GroupRunnerService:
             report_lines.append(f"**Lead:** {_short(verdict_text)}")
         if doc_note:
             report_lines.append(f"**Dokument:** {doc_note}")
-        elif snapshot is not None:
+        elif snapshot is not None and lead_had_turn:
             report_lines.append(
                 f"**Dokument:** aktualisiert (Snapshot Runde {round_row.round_no})."
             )
         if stale_count:
             report_lines.append(
-                f"**Substanz:** {stale_count}/{speakers_total} Sprecher meldeten "
-                "NICHTS NEUES."
+                f"**Substanz:** {stale_count}/{speakers_total} Sprecher haben "
+                "gepasst."
             )
         if cost:
             report_lines.append(f"**Kosten (Fenster):** ~{cost:.2f} USD")
@@ -567,7 +665,7 @@ class GroupRunnerService:
             "outcome": outcome,
             "cost_usd": cost,
         })
-        if snapshot is not None and not doc_note:
+        if snapshot is not None and lead_had_turn and not doc_note:
             await self._broadcast(group, "group.doc_updated", {
                 "group_id": str(group.id),
                 "version": round_row.round_no,
@@ -592,6 +690,13 @@ class GroupRunnerService:
 
         if outcome == "goal_reached":
             await self._finish_run(session, group, reason="goal_reached")
+            return
+
+        # Stille Runde: alle haben gepasst → der Raum hat sich gesetzt. Kein
+        # Fehler, kein Deckel — ein reguläres Ende wie ZIEL ERREICHT, nur ohne
+        # Verdikt (der Lead wurde gar nicht erst geweckt, siehe _collect).
+        if outcome == "all_passed":
+            await self._finish_run(session, group, reason="room_settled")
             return
 
         if outcome == "continue_stale":
@@ -898,6 +1003,23 @@ async def _previous_doc_snapshot(
         )
     ).first()
     return rows.doc_snapshot if rows else None
+
+
+def _first_reply_per_speaker(
+    replies: list[Message], slug_by_id: dict, lead_slug: str | None,
+) -> dict[str, str]:
+    """Erster Beitrag je Sprecher (Lead ausgenommen), Reihenfolge = seq.
+
+    Es zählt der ERSTE Beitrag: wer nachlegt, bekommt keinen zweiten Platz im
+    Lead-Auftrag — sonst hätte die Sprecherliste keine Wirkung mehr.
+    """
+    first: dict[str, str] = {}
+    for m in replies:
+        slug = slug_by_id.get(m.sender_id)
+        if slug is None or slug == lead_slug or slug in first:
+            continue
+        first[slug] = m.body or ""
+    return first
 
 
 async def _agent_messages_since(
