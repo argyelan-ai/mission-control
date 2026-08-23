@@ -59,6 +59,30 @@ export interface PendingEcho {
   retried?: boolean;
 }
 
+/** Kommandos, deren ERFOLG die Sitzung wegwirft. Ihre Bestaetigung kann per
+ *  Definition nicht im Transkript stehen — die CLI legt eine neue Datei an, und
+ *  in der taucht die abgeschickte Zeile nie auf. Der Sitzungswechsel selbst IST
+ *  hier der Beweis (Operator-Befund 19.08.2026: nach /clear bei Boss stand
+ *  "Nicht bestaetigt — Terminal pruefen", obwohl /clear sauber lief).
+ *  Bewusst eng gehalten: nur Kommandos, bei denen der Rollover der Zweck ist.
+ *  /compact steht NICHT drin - es verdichtet innerhalb derselben Session. */
+const SESSION_CLEARING_COMMANDS = ["/clear"];
+
+export function isSessionClearingCommand(text: string): boolean {
+  const first = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  return SESSION_CLEARING_COMMANDS.includes(first);
+}
+
+/** Retires echoes that a session rollover has just ANSWERED: exactly the
+ *  session-clearing commands above. Alles andere bleibt unangetastet — ein
+ *  Rollover aus anderem Grund (Recycler, Auto-Compact der CLI) darf eine
+ *  normale Nachricht nicht faelschlich als zugestellt abhaken (die
+ *  Rollover-Haerte aus R14a bleibt damit gewahrt). */
+export function retireEchoesAnsweredByRollover(echoes: PendingEcho[]): PendingEcho[] {
+  const next = echoes.filter((e) => !isSessionClearingCommand(e.text));
+  return next.length === echoes.length ? echoes : next;
+}
+
 /** Echo states that are simply waiting on something known and expected — no
  *  warning belongs on any of them. */
 export function isCalmEchoStatus(status: EchoStatus): boolean {
@@ -423,6 +447,12 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
       const ev = data as unknown as ChatEvent;
       dispatch(ev);
       if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text);
+      // Ein Sitzungswechsel beantwortet genau die Kommandos, die ihn ausloesen
+      // (/clear) — ihre Bestaetigung kaeme sonst nie, weil das alte Transkript
+      // weg ist und das neue leer startet.
+      if (ev.kind === "session_changed") {
+        setPendingEchoes((prev) => retireEchoesAnsweredByRollover(prev));
+      }
       // Any sign the agent processed the turn ends the "Gesendet…" line. A
       // `usage` frame alone doesn't count — it can arrive for the previous turn.
       if (ev.kind === "state" || ev.kind === "tool" || ev.kind === "thinking" || ev.kind === "message") {

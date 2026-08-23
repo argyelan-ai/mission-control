@@ -2,22 +2,25 @@
  * Composer — Task B4 vitest.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer } from "./Composer";
-import type { StateEvent, UsageEvent } from "@/lib/chatTypes";
+import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
 // The effort chip talks to the backend directly (it is the only control in the
 // composer that does), so both the client and the toast helper are stubbed.
-vi.mock("@/lib/api", () => ({ api: { chat: { setEffort: vi.fn() } } }));
+vi.mock("@/lib/api", () => ({
+  api: { chat: { setEffort: vi.fn(), uploadAttachment: vi.fn() } },
+}));
 vi.mock("@/lib/notify", () => ({
   notify: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
 const mockSetEffort = vi.mocked(api.chat.setEffort);
+const mockUpload = vi.mocked(api.chat.uploadAttachment);
 const mockNotifyError = vi.mocked(notify.error);
 const mockNotifyInfo = vi.mocked(notify.info);
 
@@ -51,7 +54,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />
     );
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "hallo agent{Enter}");
     expect(onSend).toHaveBeenCalledWith("hallo agent");
     expect(textarea).toHaveValue("");
@@ -63,7 +66,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />
     );
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "zeile1{Shift>}{Enter}{/Shift}zeile2");
     expect(onSend).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("zeile1\nzeile2");
@@ -75,7 +78,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />
     );
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "   {Enter}");
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -100,12 +103,13 @@ describe("Composer", () => {
   // Stop appears whenever working cannot be DISPROVED and there is nothing to
   // send: confirmed "working", or a pane the probe couldn't classify at all.
   //
-  // KNOWN GAP, deliberate: this still does not cover Boss. For host agents
-  // `capture_pane` returns None, so the backend reports a confident
+  // Host agents (Boss, Hermes, Jarvis) are covered via `paneObservable={false}`:
+  // `capture_pane` returns None for them, so the backend reports a confident
   // `working`/`idle` from transcript mtime alone and never `unknown`
-  // (transcript_chat.py:1285-1291) — a Boss thinking without writing reads as
-  // `idle` and offers the disabled Send. Interrupting him goes through the
-  // Terminal view until that is closed via the runtime, not via this flag.
+  // (transcript_chat.py:1285-1291) — a Boss thinking without writing read as
+  // `idle` and offered a disabled Send, i.e. no way to interrupt at all. The
+  // accepted cost (operator decision 18.08.2026) is a Stop that stays visible
+  // while such an agent rests.
 
   it("morphs to Stop while the agent works and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
@@ -116,7 +120,7 @@ describe("Composer", () => {
   it("morphs back to Send as soon as there is text, even mid-turn", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "stopp mal, mach lieber X");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "stopp mal, mach lieber X");
 
     // Steering a working agent with a normal message is the point — the same
     // thing the terminal allows.
@@ -151,10 +155,52 @@ describe("Composer", () => {
     expect(stop).toHaveAttribute("data-reason", "working");
   });
 
+  it("keeps Stop reachable for an agent whose pane cannot be read at all", () => {
+    // Boss idles on the transcript clock even while thinking — without this the
+    // only control on offer was a disabled Send.
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
+    );
+    const stop = screen.getByTestId("stop-button-prominent");
+    expect(stop).toHaveAttribute("data-reason", "unobservable");
+    expect(stop).not.toHaveClass("animate-pulse"); // kein Puls: Aktivitaet ist nicht bestaetigt
+    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+  });
+
+  it("still calls onStop for an unobservable agent", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={onStop} paneObservable={false} />
+    );
+    await user.click(screen.getByTestId("stop-button-prominent"));
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets text win over the unobservable Stop — steering stays possible", async () => {
+    const user = userEvent.setup();
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
+    );
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "mach bitte X");
+    expect(screen.getByTestId("send-button")).toBeEnabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
+  it("does NOT change readable agents: idle cli-bridge keeps the ghost Send", () => {
+    // Sabotage-Gegenprobe zum Fix: paneObservable=true (Default) darf sich exakt
+    // wie vorher verhalten, sonst haetten wir den Stop app-weit eingeschaltet.
+    render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable />
+    );
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  });
+
   it("still yields to Send once there is text on an unknown pane", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={mkState("unknown")} onSend={vi.fn()} onStop={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "bist du da?");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "bist du da?");
 
     expect(screen.getByTestId("send-button")).toBeEnabled();
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
@@ -195,16 +241,16 @@ describe("Composer", () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={onSend} onStop={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "auch mitten im Zug{Enter}");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "auch mitten im Zug{Enter}");
 
     // Wave-review M-9 was the mismatch between a hidden button and a working
     // Enter; both paths now agree.
     expect(onSend).toHaveBeenCalledWith("auch mitten im Zug");
   });
 
-  it('keeps the "Unterbrechen (ESC)" tooltip on the Stop face', () => {
+  it('keeps the "Interrupt (ESC)" tooltip on the Stop face', () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("title", "Unterbrechen (ESC)");
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("title", "Interrupt (ESC)");
   });
 
   it("hides the Stop button entirely when sessionLive is false, even while working", () => {
@@ -284,7 +330,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByRole("button", { name: /sonnet/ }));
+      await user.click(screen.getByRole("button", { name: /sonnet/i }));
 
       expect(modelRow("Sonnet")).toHaveTextContent("200k");
       expect(modelRow("Opus")).toHaveTextContent("1M");
@@ -311,7 +357,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByRole("button", { name: /custom/ }));
+      await user.click(screen.getByRole("button", { name: /custom/i }));
 
       expect(modelRow("Custom").textContent?.trim()).toBe("Custom");
       expect(modelRow("Broken").textContent?.trim()).toBe("Broken");
@@ -334,7 +380,7 @@ describe("Composer", () => {
           onStop={vi.fn()}
         />
       );
-      await user.click(screen.getByRole("button", { name: /sonnet/ }));
+      await user.click(screen.getByRole("button", { name: /sonnet/i }));
       await user.click(modelRow("Opus 5"));
 
       expect(onSend).toHaveBeenCalledWith("/model opus-5");
@@ -371,7 +417,7 @@ describe("Composer", () => {
     );
     expect(screen.queryByTestId("context-panel")).not.toBeInTheDocument();
 
-    const trigger = screen.getByRole("button", { name: /^Kontext: \d+% belegt$/ });
+    const trigger = screen.getByRole("button", { name: /^Context: \d+% used$/ });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
 
@@ -386,13 +432,13 @@ describe("Composer", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 15 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Kontext: 15% belegt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Context: 15% used" })).toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 92 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Kontext: 92% belegt" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Kontext: 15% belegt" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Context: 92% used" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Context: 15% used" })).not.toBeInTheDocument();
   });
 
   it("keeps the ring itself a progressbar with its tooltip (quick glance stays)", () => {
@@ -410,13 +456,13 @@ describe("Composer", () => {
   it("keeps the send button a ghost outline until there is something to send", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const send = screen.getByRole("button", { name: "Senden" });
+    const send = screen.getByRole("button", { name: "Send" });
     // The accent means "this is the action" — there is no action yet.
     expect(send).toBeDisabled();
     expect(send).toHaveAttribute("data-empty", "true");
     expect(send.style.backgroundColor).toBe("transparent");
 
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "los");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "los");
     expect(send).toBeEnabled();
     expect(send).toHaveAttribute("data-empty", "false");
     expect(send.style.backgroundColor).not.toBe("transparent");
@@ -427,7 +473,7 @@ describe("Composer", () => {
   it("marks focus with a neutral border step, never a bright frame", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     const pill = textarea.parentElement as HTMLElement;
 
     expect(pill.style.border).toContain("rgba(168, 168, 168, 0.1)");
@@ -448,7 +494,7 @@ describe("Composer", () => {
 
   it("gives the input two lines of room at rest without breaking autogrow", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
     // 2 rows floor, 8 rows ceiling — the ceiling is what autogrow stops at.
     expect(textarea.style.minHeight).toBe("44px");
     expect(textarea.style.maxHeight).toBe("176px");
@@ -456,7 +502,7 @@ describe("Composer", () => {
 
   it("lifts the pill above the island tone instead of sinking below it", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const pill = screen.getByPlaceholderText(/Nachricht/).parentElement as HTMLElement;
+    const pill = screen.getByPlaceholderText(/Message the agent/).parentElement as HTMLElement;
     // Panels are bg-surface now, so a bg-surface pill would disappear into them.
     expect(pill.style.backgroundColor).toBe("rgb(34, 34, 34)");
   });
@@ -469,7 +515,7 @@ describe("Composer", () => {
   // the hidden case exactly.
   it("does not pin the textarea height while the element cannot be measured", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
     expect(textarea.style.height).toBe("");
   });
 
@@ -490,7 +536,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={mkUsage({ model: "sonnet" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    await user.click(screen.getByRole("button", { name: /sonnet/ }));
+    await user.click(screen.getByRole("button", { name: /sonnet/i }));
     expect(screen.getByRole("option", { name: "Sonnet" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("option", { name: "Opus" })).toHaveAttribute("aria-selected", "false");
   });
@@ -508,6 +554,103 @@ describe("Composer", () => {
   });
 
   // ── Effort switching ──────────────────────────────────────────────────────
+
+  describe("foreign-CLI shape (kimi/omp): explicitly empty capabilities", () => {
+    const FOREIGN = { effortLevels: [], canSwitchEffort: false, slashCommands: [], modelOptions: [], model: null, effort: null };
+
+    it("shows a read-only model label instead of a dropdown of Claude aliases", () => {
+      render(
+        <Composer agentId="a1" usage={mkUsage({ model: "kimi-code/k3", effort: null })} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(screen.getByTestId("model-chip-static")).toHaveTextContent("kimi-code/k3");
+      expect(screen.queryByRole("button", { name: /kimi-code/ })).not.toBeInTheDocument();
+    });
+
+    it("offers no slash palette — Claude builtins would be a false promise", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={null} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
+      expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
+    });
+
+    it("shows no effort control at all", () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("shared-config hint (Boss)", () => {
+    it("warns that a persisting level also rewrites the operator's own sessions", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{ effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true, effortShared: true }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      expect(screen.getByTestId("effort-menu").textContent).toContain("shared config");
+      // Session-only-Stufen bleiben harmlos beschriftet:
+      fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "4" } });
+      expect(screen.getByTestId("effort-menu").textContent).toContain("this session only");
+    });
+  });
+
+  describe("popover dismissal", () => {
+    const CAPS6 = { effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true };
+
+    it("closes the effort popover on an outside click without committing", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ effort: "medium" })} capabilities={CAPS6} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      // Vorschau verschieben, dann daneben klicken: nichts darf gesendet werden.
+      fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "5" } });
+      await user.click(screen.getByPlaceholderText(/Message the agent/));
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+      expect(mockSetEffort).not.toHaveBeenCalled();
+    });
+
+    it("closes on Escape and discards the drag preview", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ effort: "medium" })} capabilities={CAPS6} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "0" } });
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+      expect(mockSetEffort).not.toHaveBeenCalled();
+    });
+
+    it("arrow keys only preview — a switch is sent on Enter, once", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ effort: "low" })} capabilities={CAPS6} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("effort-chip"));
+      const slider = screen.getByTestId("effort-slider");
+      // Drei Pfeil-Schritte = drei change+keyup-Zyklen — frueher drei Requests.
+      for (const v of ["1", "2", "3"]) {
+        fireEvent.change(slider, { target: { value: v } });
+        fireEvent.keyUp(slider, { key: "ArrowRight" });
+      }
+      expect(mockSetEffort).not.toHaveBeenCalled();
+      fireEvent.keyUp(slider, { key: "Enter" });
+      expect(mockSetEffort).toHaveBeenCalledTimes(1);
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "xhigh");
+    });
+  });
 
   describe("effort chip", () => {
     // The real capability block a docker/cli-bridge agent reports
@@ -530,17 +673,268 @@ describe("Composer", () => {
       );
     }
 
-    /** Levels in render order, read from `data-level` rather than the label —
-     *  the label also carries the persist hint now. */
-    const optionLabels = () =>
-      screen.getAllByRole("option").map((o) => o.getAttribute("data-level"));
+    /** Die Auswahl ist ein Schieberegler (Operator-Wunsch 18.08.2026): die
+     *  Stufen sind eine echte Reihenfolge, kein Sortiment. Getestet wird darum
+     *  ueber Position und angezeigten Wert, nicht ueber Listeneintraege. */
+    const slider = () => screen.getByTestId("effort-slider") as HTMLInputElement;
+    const shownLevel = () => screen.getByTestId("effort-slider-value").textContent;
 
-    /** One option row, addressed exactly. No `\b` after the level: the option's
-     *  accessible name concatenates the level and its persist hint without a
-     *  separator ("highwird Standard"), so there is no word boundary there —
-     *  the leading anchor alone is what distinguishes "high" from "xhigh". */
-    const option = (level: string) =>
-      screen.getByRole("option", { name: new RegExp(`^${level}`) });
+    /** Levels in Reihenfolge: der Regler wird Schritt fuer Schritt durchfahren
+     *  und der jeweils angezeigte Wert eingesammelt — genau das, was der
+     *  Bediener beim Ziehen sieht. Ohne Loslassen wird nichts gesendet. */
+    const levelsInOrder = (levels: readonly string[]) =>
+      levels.map((_, i) => {
+        fireEvent.change(slider(), { target: { value: String(i) } });
+        return shownLevel();
+      });
+
+    /** Eine Stufe waehlen: ziehen (Vorschau) und loslassen (senden). */
+    const pick = (levels: readonly string[], level: string) => {
+      fireEvent.change(slider(), { target: { value: String(levels.indexOf(level)) } });
+      fireEvent.pointerUp(slider());
+    };
+
+    it("fills the gauge proportionally to the level — the bar IS the display", () => {
+      // Brain-Knopf nach Marks Vorbild (Claude-Desktop-App): keine Text-Stufe
+      // mehr, die Hoehe des gruenen Segments traegt die Information.
+      renderWithEffort("high"); // Index 2 von 6 -> (2+1)/6 = 50%
+      expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("50%");
+    });
+
+    it("keeps the gauge empty when the level is unknown — nothing is claimed", () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("0%");
+    });
+
+    it("fills the gauge completely on the top level", () => {
+      renderWithEffort("ultracode"); // Index 5 von 6 -> 100%
+      expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("100%");
+    });
+
+    it("offers the picker even before the session wrote its first usage event", () => {
+      // Operator-Befund 18.08.2026: Der Chip hing an usage?.effort. Eine frisch
+      // gestartete Session hat noch keines — der Effort war damit schlicht nicht
+      // schaltbar, obwohl der Agent es kann. Der persistierte Standard aus
+      // capabilities.effort traegt den Chip durch dieses Fenster.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{ ...CAPS, effort: "high" }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "high");
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+    });
+
+    it("says auto when nobody knows the level yet, instead of hiding the control", () => {
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={CAPS}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "auto");
+    });
+
+    it("lets the running session override the persisted default", () => {
+      // max ist session-only und steht nie in settings.json — der Chip muss
+      // trotzdem max zeigen, sobald die Session es meldet.
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "max" })}
+          capabilities={{ ...CAPS, effort: "high" }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "max");
+    });
+
+    it("stays hidden when the agent can neither switch nor report a level", () => {
+      // Gegenprobe: ohne jede Information darf KEIN Chip erscheinen — sonst
+      // behaupten wir bei Host-Agenten eine Stufe, die wir nicht kennen.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{ effortLevels: [], canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+    });
+
+    it("renders Boss's chip in the same brain look, read-only with a filled gauge", () => {
+      // Boss-Shape seit 18.08.2026: das Backend liefert die Stufenleiter des
+      // Claude-Harness auch ohne Schaltrecht — vorher stand bei Boss das nackte
+      // Alt-Label "high" ohne Aktion (Operator-Befund).
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{ effortLevels: CAPS.effortLevels, canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-level", "high");
+      // Gleiche Proportion wie der schaltbare Chip: high = 3/6 = 50%.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("50%");
+      // Read-only: kein interaktiver Chip, kein Regler aufrufbar.
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+    });
+
+    it("erklaert am Chip, WARUM der Regler fehlt, wenn das Modell keine Stufen kennt", () => {
+      // openclaude-Fall (19.08.2026): die CLI kennt /effort sehr wohl, aber das
+      // Modell des Agenten nicht — der Picker sagt es selbst
+      // ("Effort not supported for <modell>"). Vorher verschwand der Chip
+      // spurlos: keine Stufe, kein Regler, keine Erklaerung. Jetzt bleibt er
+      // sichtbar und traegt den Grund, sonst sucht der Operator den Fehler bei
+      // sich.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effortReason: "model_no_effort",
+            model: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "model_no_effort");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      // Keine Stufe bekannt -> leere Saeule. Nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+    });
+
+    it("nennt bei einer fremden CLI den Harness als Grund, nicht die Runtime", () => {
+      // Gegenprobe: derselbe leere Chip-Zustand, ein anderer Grund — der Text
+      // darf nicht pauschal "Runtime hat kein Terminal" behaupten, wo die
+      // Runtime sehr wohl eines hat.
+      //
+      // Die Nutzlast ist EXAKT die, die das Backend fuer kimi/omp erzeugt
+      // (`_no_effort("foreign_harness")` -> leere Stufenliste). Die
+      // Vorfassung uebergab hier ["low","medium","high"] — eine Nutzlast, die
+      // es nie gibt; der Test segnete damit Verhalten ab, das nie lief,
+      // waehrend der Chip in Wahrheit gar nicht gerendert wurde.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "foreign_harness",
+            effortModel: null,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("/effort");
+      expect(chip.getAttribute("title")).not.toMatch(/runtime/i);
+      // Ohne Stufenleiter bleibt die Saeule leer — nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+    });
+
+    it("erklaert auch bei einer Runtime ohne Terminal, statt nichts zu zeigen", () => {
+      // Dritte Begruendung, ebenfalls mit leerer Stufenliste vom Backend
+      // (Hermes/Jarvis). Sie erreichte die Oberflaeche vorher nie.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "no_pane",
+            effortModel: null,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "no_pane");
+      expect(chip.getAttribute("title")).toMatch(/terminal/i);
+    });
+
+    it("bleibt ohne Grund, ohne Stufen und ohne Wert unsichtbar", () => {
+      // Der Chip erscheint NUR, wenn es etwas zu zeigen gibt: eine Stufe, ein
+      // Schaltrecht oder eine Erklaerung. Liefert das Backend nichts davon
+      // (aeltere Fassung ohne Grund-Feld), bleibt er weg.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{ effortLevels: [], canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+    });
+
+    it("nennt im Grund das GEMESSENE Modell, nicht das gerade angezeigte", () => {
+      // Die Effort-Messung liegt im Cache, das Modell-Label nicht. Ohne den
+      // Vorrang von `effortModel` stand nach einem Modellwechsel dort
+      // "Das Modell gpt-5.2-codex kennt keine Effort-Stufen" — eine falsche
+      // Aussage ueber ein Modell, das Stufen sehr wohl kennt.
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ model: "gpt-5.2-codex" })}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "model_no_effort",
+            effortModel: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      expect(chip.getAttribute("title")).not.toContain("gpt-5.2-codex");
+    });
 
     it("shows the level read-only when the backend reports no capabilities", () => {
       render(
@@ -577,9 +971,11 @@ describe("Composer", () => {
       renderWithEffort("high");
       await user.click(screen.getByTestId("effort-chip"));
 
-      // The real Claude Code 2.1.233 set — six levels, not three.
-      expect(optionLabels()).toEqual(["low", "medium", "high", "xhigh", "max", "ultracode"]);
-      expect(option("high")).toHaveAttribute("aria-selected", "true");
+      // The real Claude Code 2.1.233 set — six levels, not three, und der
+      // Regler faehrt sie in genau dieser Reihenfolge ab.
+      expect(slider()).toHaveAttribute("max", "5");
+      expect(shownLevel()).toBe("high"); // steht auf dem aktuellen Wert
+      expect(levelsInOrder(CAPS.effortLevels)).toEqual(CAPS.effortLevels);
     });
 
     it("marks which levels outlive the session and which do not", async () => {
@@ -589,10 +985,14 @@ describe("Composer", () => {
 
       // The operator's original question was "does this stick?" — answered per
       // level, because the CLI answers it differently per level.
-      expect(option("high")).toHaveTextContent("wird Standard");
-      expect(option("xhigh")).toHaveTextContent("wird Standard");
-      expect(option("max")).toHaveTextContent("nur diese Session");
-      expect(option("ultracode")).toHaveTextContent("nur diese Session");
+      const hintAt = (level: string) => {
+        fireEvent.change(slider(), { target: { value: String(CAPS.effortLevels.indexOf(level)) } });
+        return screen.getByTestId("effort-menu").textContent;
+      };
+      expect(hintAt("high")).toContain("becomes the default");
+      expect(hintAt("xhigh")).toContain("becomes the default");
+      expect(hintAt("max")).toContain("this session only");
+      expect(hintAt("ultracode")).toContain("this session only");
     });
 
     it("switches to a backend-supplied level the frontend has never heard of", async () => {
@@ -608,11 +1008,11 @@ describe("Composer", () => {
         />
       );
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("thorough"));
+      pick(["fast", "thorough"], "thorough");
 
       expect(mockSetEffort).toHaveBeenCalledWith("a1", "thorough");
       // Unknown to the frontend, so it cannot claim session-only semantics.
-      expect(screen.queryByText("nur diese Session")).not.toBeInTheDocument();
+      expect(screen.queryByText("this session only")).not.toBeInTheDocument();
     });
 
     it("falls back to read-only when the reported list is all blanks", () => {
@@ -636,15 +1036,16 @@ describe("Composer", () => {
       renderWithEffort("high");
       await user.click(screen.getByTestId("effort-chip"));
 
-      expect(option("high")).toHaveAttribute("aria-selected", "true");
-      expect(option("low")).toHaveAttribute("aria-selected", "false");
+      expect(shownLevel()).toBe("high");
+      expect(slider().value).toBe(String(CAPS.effortLevels.indexOf("high")));
+      expect(slider()).toHaveAttribute("aria-valuetext", "high");
     });
 
     it("sends the chosen level to the backend", async () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
       expect(mockSetEffort).toHaveBeenCalledWith("a1", "high");
     });
@@ -653,7 +1054,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("medium"));
+      pick(CAPS.effortLevels, "medium");
 
       expect(mockSetEffort).not.toHaveBeenCalled();
     });
@@ -665,11 +1066,11 @@ describe("Composer", () => {
       renderWithEffort("medium");
 
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
       const chip = screen.getByTestId("effort-chip");
-      // No fake instant flip: the label is still what the agent last reported.
-      expect(chip).toHaveTextContent("medium");
+      // No fake instant flip: the gauge still shows what the agent last reported.
+      expect(chip).toHaveAttribute("data-level", "medium");
       expect(chip).toHaveAttribute("data-pending", "true");
       expect(chip).toBeDisabled();
 
@@ -682,11 +1083,11 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
       await waitFor(() => expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument());
       expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
-      expect(screen.getByTestId("effort-chip-static")).toHaveAttribute("title", expect.stringContaining("Runtime"));
+      expect(screen.getByTestId("effort-chip-static")).toHaveAttribute("title", expect.stringContaining("runtime"));
       // Not an error the operator caused — no toast.
       expect(mockNotifyError).not.toHaveBeenCalled();
     });
@@ -699,11 +1100,11 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
       await waitFor(() =>
         expect(mockNotifyInfo).toHaveBeenCalledWith(
-          "Agent arbeitet gerade — nach dem Zug erneut versuchen"
+          "Agent is working — try again after the turn"
         )
       );
       expect(mockNotifyError).not.toHaveBeenCalled();
@@ -724,11 +1125,11 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("ultracode"));
+      pick(CAPS.effortLevels, "ultracode");
 
       await waitFor(() =>
         expect(mockNotifyError).toHaveBeenCalledWith(
-          "Effort abgelehnt: ultracode requires a reasoning model"
+          "Effort rejected: ultracode requires a reasoning model"
         )
       );
       // Rejection is about this level, not about the runtime — the chip stays.
@@ -742,10 +1143,10 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
       await waitFor(() =>
-        expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel abgelehnt")
+        expect(mockNotifyError).toHaveBeenCalledWith("Effort change rejected")
       );
     });
 
@@ -754,13 +1155,13 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
       await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith(
-        "Effort-Wechsel nicht bestätigt — im Terminal prüfen"
+        "Effort change not confirmed — check the terminal"
       ));
       const chip = screen.getByTestId("effort-chip");
-      expect(chip).toHaveTextContent("medium");
+      expect(chip).toHaveAttribute("data-level", "medium");
       expect(chip).toHaveAttribute("data-pending", "false");
     });
 
@@ -769,9 +1170,9 @@ describe("Composer", () => {
       const user = userEvent.setup();
       renderWithEffort("medium");
       await user.click(screen.getByTestId("effort-chip"));
-      await user.click(option("high"));
+      pick(CAPS.effortLevels, "high");
 
-      await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel fehlgeschlagen"));
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("Effort change failed"));
       expect(screen.getByTestId("effort-chip")).toBeInTheDocument();
     });
 
@@ -781,10 +1182,8 @@ describe("Composer", () => {
       // size is off the documented ramp, so this catches the next off-ramp step
       // too — and leaves no literal off-ramp size in the file to grep for.
       const arbitraryFontSize = /text-\[\d+px\]/;
-      const effortChip = screen.getByTestId("effort-chip").className;
-      expect(effortChip).toContain("text-xs");
-      expect(effortChip).not.toMatch(arbitraryFontSize);
-
+      // Der Effort-Knopf ist seit dem Brain-Umbau Icon+Saeule ohne Text —
+      // die Mono-Stufen-Regel greift nur noch fuer textführende Chips.
       const modelChip = screen.getByRole("button", { name: /claude-sonnet-4-6/ }).className;
       expect(modelChip).toContain("text-xs");
       expect(modelChip).not.toMatch(arbitraryFontSize);
@@ -898,11 +1297,11 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-ring")).toHaveAttribute(
       "title",
-      "≈12k/200k belegt. Quelle: CLI. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
+      "≈12k/200k used. Source: CLI. The CLI status line shows what is left until auto-compaction instead — different basis, both correct."
     );
   });
 
-  it('labels the tooltip source "Schätzung" when falling back to the token estimate', () => {
+  it('labels the tooltip source "estimate" when falling back to the token estimate', () => {
     render(
       <Composer
         agentId="a1"
@@ -914,14 +1313,14 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-ring")).toHaveAttribute(
       "title",
-      expect.stringContaining("Quelle: Schätzung")
+      expect.stringContaining("Source: estimate")
     );
   });
 
   it('opens the slash-command palette when "/" is typed at position 0, listing all commands', async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     expect(screen.getByText("/clear")).toBeInTheDocument();
     expect(screen.getByText("/model")).toBeInTheDocument();
@@ -930,7 +1329,7 @@ describe("Composer", () => {
   it("does not open the palette for a / that isn't the first character", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "path/to/file");
     expect(screen.queryByText("/clear")).not.toBeInTheDocument();
   });
@@ -938,7 +1337,7 @@ describe("Composer", () => {
   it('filters live as you type — "/mo" narrows to only /model', async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo");
     expect(screen.getByText("/model")).toBeInTheDocument();
     expect(screen.queryByText("/clear")).not.toBeInTheDocument();
@@ -949,7 +1348,7 @@ describe("Composer", () => {
   it("filters case-insensitively", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/MO");
     expect(screen.getByText("/model")).toBeInTheDocument();
   });
@@ -957,7 +1356,7 @@ describe("Composer", () => {
   it("closes the palette entirely when the filter matches nothing", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/xyz");
     expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
   });
@@ -965,7 +1364,7 @@ describe("Composer", () => {
   it("resets the highlight to the first match on every keystroke", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/c");
     await user.keyboard("{ArrowDown}"); // highlight moves to the 2nd "/c…" match
     await user.type(textarea, "o"); // narrows to "/co…" — highlight must snap back to index 0
@@ -976,7 +1375,7 @@ describe("Composer", () => {
   it("moves the highlight with ArrowDown/ArrowUp", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     expect(screen.getByTestId("slash-item-/model")).toHaveAttribute("data-highlighted", "true");
 
@@ -992,7 +1391,7 @@ describe("Composer", () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
     render(<Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo{Enter}");
     expect(textarea).toHaveValue("/model ");
     expect(onSend).not.toHaveBeenCalled();
@@ -1001,7 +1400,7 @@ describe("Composer", () => {
   it("inserts the highlighted command on Tab", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo");
     await user.keyboard("{Tab}");
     expect(textarea).toHaveValue("/model ");
@@ -1010,7 +1409,7 @@ describe("Composer", () => {
   it("Escape closes the palette without clearing the input", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo");
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
@@ -1020,7 +1419,7 @@ describe("Composer", () => {
   it("inserts the clicked command into the textarea and closes the palette", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     await user.click(screen.getByText("/compact"));
     expect(textarea).toHaveValue("/compact ");
@@ -1053,7 +1452,7 @@ describe("Composer", () => {
         { name: "/mc-tdd", description: "TDD-Skill" },
         { name: "mc-verify" },
       ]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       const palette = screen.getByTestId("slash-palette");
       expect(palette).toHaveTextContent("/clear");
@@ -1066,7 +1465,7 @@ describe("Composer", () => {
     it("normalizes a name that already carries the slash", async () => {
       const user = userEvent.setup();
       withCommands([{ name: "/compact", description: "Kontext komprimieren" }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       // "//compact" would be unreachable by the prefix filter and wrong to send.
       expect(screen.getByTestId("slash-item-/compact")).toBeInTheDocument();
@@ -1075,7 +1474,7 @@ describe("Composer", () => {
     it("filters the reported list as you type", async () => {
       const user = userEvent.setup();
       withCommands([{ name: "mc-tdd" }, { name: "mc-verify" }, { name: "clear" }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/mc-");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/mc-");
 
       const palette = screen.getByTestId("slash-palette");
       expect(palette).toHaveTextContent("/mc-tdd");
@@ -1086,7 +1485,7 @@ describe("Composer", () => {
     it("puts the highlight on the first match after filtering", async () => {
       const user = userEvent.setup();
       withCommands([{ name: "clear" }, { name: "mc-tdd" }, { name: "mc-verify" }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/mc-");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/mc-");
 
       expect(screen.getByTestId("slash-item-/mc-tdd")).toHaveAttribute("data-highlighted", "true");
     });
@@ -1095,7 +1494,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       // A real fleet agent reports dozens once skills are included.
       withCommands(Array.from({ length: 40 }, (_, i) => ({ name: `cmd-${i}` })));
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       const scroller = screen.getByTestId("slash-palette").firstElementChild as HTMLElement;
       expect(scroller.className).toContain("overflow-y-auto");
@@ -1105,24 +1504,29 @@ describe("Composer", () => {
     it("keeps the static list while the backend does not report one", async () => {
       const user = userEvent.setup();
       withCommands(null);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
     });
 
-    it("falls back rather than rendering blank rows for a malformed list", async () => {
+    it("renders no rows for a list of blanks — and never the static Claude list", async () => {
+      // Seit dem Harness-Gate (18.08.2026) ist eine gemeldete-aber-unbrauchbare
+      // Liste KEIN Grund mehr, auf die statischen Claude-Kommandos zu fallen:
+      // fuer eine fremde CLI (kimi, omp) waeren die ein falsches Versprechen.
+      // Nur ein FEHLENDES Feld (aelteres Backend) faellt noch zurueck.
       const user = userEvent.setup();
       withCommands([{ name: "" }, { name: "   " }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
-      expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
+      expect(screen.queryByTestId("slash-item-/model")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
     });
   });
 
   it("anchors the palette directly above the input via absolute positioning (bottom-full) with a 320px floor", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     const palette = screen.getByTestId("slash-palette");
     // Inline style, not just the class — see the comment in Composer.tsx on
@@ -1132,5 +1536,237 @@ describe("Composer", () => {
     expect(palette.className).toContain("left-3");
     expect(palette.className).toContain("right-3");
     expect(palette.className).toContain("min-w-[320px]");
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * Review 20.08.2026 — Befund 7: capabilities.effort wurde nach einem
+   * Wechsel nie aufgefrischt. `capabilities` kommt aus historyQuery.data und
+   * wird nur bei `session_changed` neu geholt; `selectEffort` macht bewusst
+   * keine optimistische Umbenennung. Frische Sitzung ohne usage-Ereignis:
+   * Chip steht auf 'medium', der Operator zieht auf 'xhigh', das Backend
+   * bestaetigt — und der Chip blieb die GANZE Sitzung auf 'medium' (ein
+   * ruhender Agent schickt evtl. nie ein usage). Schlimmer: der Weg ZURUECK
+   * auf 'medium' wurde von `if (level === currentEffort) return;` stumm
+   * verschluckt.
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe("effort chip nach einem bestaetigten Wechsel", () => {
+    const CAPS_MED = {
+      effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+      canSwitchEffort: true,
+      effort: "medium",
+    };
+    const chipLevel = () => screen.getByTestId("effort-chip").getAttribute("data-level");
+    const pick = async (index: string) => {
+      await userEvent.setup().click(screen.getByTestId("effort-chip"));
+      const slider = screen.getByTestId("effort-slider");
+      fireEvent.change(slider, { target: { value: index } });
+      fireEvent.pointerUp(slider);
+    };
+
+    it("zeigt die vom Backend bestaetigte Stufe und laesst den Weg zurueck zu", async () => {
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(chipLevel()).toBe("medium");
+
+      await pick("3"); // xhigh
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+      expect(mockSetEffort).toHaveBeenCalledWith("a1", "xhigh");
+
+      // Und zurueck: darf NICHT stumm verschluckt werden.
+      await pick("1"); // medium
+      await waitFor(() => expect(mockSetEffort).toHaveBeenCalledTimes(2));
+      expect(mockSetEffort).toHaveBeenLastCalledWith("a1", "medium");
+      await waitFor(() => expect(chipLevel()).toBe("medium"));
+    });
+
+    it("laesst ein spaeteres usage-Ereignis wieder gewinnen", async () => {
+      const { rerender } = render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+
+      // Der naechste Zug meldet, was der Agent WIRKLICH faehrt — das gewinnt
+      // immer, auch gegen unsere eigene Bestaetigung.
+      rerender(
+        <Composer agentId="a1" usage={mkUsage({ effort: "low" })} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      expect(chipLevel()).toBe("low");
+    });
+
+    it("vergisst die Bestaetigung beim Agentenwechsel", async () => {
+      const { rerender } = render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(chipLevel()).toBe("xhigh"));
+
+      rerender(
+        <Composer agentId="a2" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await waitFor(() => expect(chipLevel()).toBe("medium"));
+    });
+
+    it("uebernimmt nichts, wenn das Backend den Wechsel abgelehnt hat", async () => {
+      mockSetEffort.mockRejectedValueOnce(new Error("kaputt"));
+      render(
+        <Composer agentId="a1" usage={null} capabilities={CAPS_MED} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await pick("3");
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalled());
+      expect(chipLevel()).toBe("medium");
+    });
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// Anhänge — Knopf, Einfügen, Ziehen (Operator-Wunsch 19.08.2026)
+// ══════════════════════════════════════════════════════════════════════════
+
+function mkFile(name = "foto.png", type = "image/png") {
+  return new File(["bytes"], name, { type });
+}
+
+function mkAttachment(over: Partial<ChatAttachment> = {}): ChatAttachment {
+  // So, wie der Endpunkt antwortet: Anhaenge liegen als AGENTEN-Referenzen
+  // (reference_files.agent_id), und root/subpath kommen mit, damit das UI sie
+  // nicht aus dem absoluten Pfad zurueckrechnen muss.
+  return {
+    path: "/Users/x/.mc/references/agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    name: "foto.png",
+    bytes: 5,
+    isImage: true,
+    root: "references",
+    subpath: "agent/11111111-1111-1111-1111-111111111111/ab12-foto.png",
+    ...over,
+  };
+}
+
+describe("Composer — Anhänge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpload.mockResolvedValue(mkAttachment());
+  });
+
+  it("zeigt den Anhängen-Knopf links in der Steuerzeile", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByLabelText("Attach file")).toBeTruthy();
+  });
+
+  it("lädt eine gewählte Datei hoch und zeigt eine Kachel", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    const input = screen.getByTestId("attachment-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [mkFile()] } });
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledWith("a1", expect.any(File)));
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+    expect(screen.getByText("foto.png")).toBeTruthy();
+  });
+
+  it("nimmt ein Bild aus der Zwischenablage an (Marks Screenshot-Weg)", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    const textarea = screen.getByRole("textbox");
+    fireEvent.paste(textarea, { clipboardData: { files: [mkFile()], items: [], getData: () => "" } });
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+  });
+
+  it("nimmt eine gezogene Datei an", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    const zone = screen.getByTestId("composer-dropzone");
+    fireEvent.drop(zone, { dataTransfer: { files: [mkFile()], types: ["Files"] } });
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+  });
+
+  it("hängt den Pfad an die Nachricht an", async () => {
+    const onSend = vi.fn();
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    const textarea = screen.getByRole("textbox");
+    fireEvent.change(textarea, { target: { value: "Was siehst du?" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const sent = onSend.mock.calls[0][0] as string;
+    expect(sent).toContain("Was siehst du?");
+    expect(sent).toContain(mkAttachment().path);
+  });
+
+  it("kann ohne Text gesendet werden, wenn ein Anhang dranhängt", async () => {
+    const onSend = vi.fn();
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    expect(onSend).toHaveBeenCalled();
+  });
+
+  it("leert die Kacheln nach dem Senden", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    await waitFor(() => expect(screen.queryByTestId("attachment-tile")).toBeNull());
+  });
+
+  it("lässt eine Kachel einzeln entfernen", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile()] } });
+    await waitFor(() => expect(screen.getByTestId("attachment-tile")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Remove attachment foto.png"));
+
+    await waitFor(() => expect(screen.queryByTestId("attachment-tile")).toBeNull());
+  });
+
+  it("meldet einen abgelehnten Upload sichtbar statt still", async () => {
+    mockUpload.mockRejectedValue(new Error("Die Datei ist 31.0 MB — maximal 25 MB pro Anhang."));
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), { target: { files: [mkFile("gross.bin")] } });
+
+    await waitFor(() => expect(mockNotifyError).toHaveBeenCalled());
+    expect(String(mockNotifyError.mock.calls[0][0])).toContain("25 MB");
+    expect(screen.queryByTestId("attachment-tile")).toBeNull();
+  });
+
+  it("nimmt jeden Dateityp an — die CLI entscheidet, nicht das UI", async () => {
+    mockUpload.mockResolvedValue(mkAttachment({ name: "clip.mov", isImage: false }));
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), {
+      target: { files: [mkFile("clip.mov", "video/quicktime")] },
+    });
+
+    await waitFor(() => expect(screen.getByText("clip.mov")).toBeTruthy());
+  });
+
+  it("erlaubt mehrere Anhänge gleichzeitig", async () => {
+    mockUpload
+      .mockResolvedValueOnce(mkAttachment({ name: "a.png", path: "/p/a.png" }))
+      .mockResolvedValueOnce(mkAttachment({ name: "b.png", path: "/p/b.png" }));
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId("attachment-input"), {
+      target: { files: [mkFile("a.png"), mkFile("b.png")] },
+    });
+
+    await waitFor(() => expect(screen.getAllByTestId("attachment-tile").length).toBe(2));
   });
 });

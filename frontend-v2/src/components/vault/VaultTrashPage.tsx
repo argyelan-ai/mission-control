@@ -556,13 +556,13 @@ export function VaultTrashPage() {
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="flex animate-pulse">
               <div className="shrink-0 w-[92px] py-5 pl-3 pr-4 flex flex-col items-end gap-1.5">
-                <div className="h-7 w-9 rounded" style={{ background: "var(--color-bg-elevated)" }} />
-                <div className="h-2.5 w-8 rounded" style={{ background: "var(--color-bg-elevated)" }} />
+                <div className="h-7 w-9 rounded-sm" style={{ background: "var(--color-bg-elevated)" }} />
+                <div className="h-2.5 w-8 rounded-sm" style={{ background: "var(--color-bg-elevated)" }} />
               </div>
               <div className="shrink-0 w-px self-stretch" style={{ background: "var(--color-bg-elevated)" }} />
               <div className="flex-1 py-5 px-5">
-                <div className="h-4 w-1/2 rounded mb-2" style={{ background: "var(--color-bg-elevated)" }} />
-                <div className="h-3 w-3/4 rounded" style={{ background: "var(--color-bg-elevated)" }} />
+                <div className="h-4 w-1/2 rounded-sm mb-2" style={{ background: "var(--color-bg-elevated)" }} />
+                <div className="h-3 w-3/4 rounded-sm" style={{ background: "var(--color-bg-elevated)" }} />
               </div>
             </div>
           ))}

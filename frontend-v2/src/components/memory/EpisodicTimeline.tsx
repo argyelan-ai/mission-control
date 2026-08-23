@@ -128,7 +128,7 @@ export function EpisodicTimeline({
                         {timeAgo(item.created_at, locale)}
                       </span>
                       {item.auto_generated && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
                           Auto
                         </span>
                       )}

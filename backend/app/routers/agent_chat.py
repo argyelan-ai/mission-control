@@ -9,8 +9,9 @@ import asyncio
 import re
 import uuid
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -26,6 +27,7 @@ from app.services.agent_chat_input import (
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
+    can_receive_input,
     effort_capabilities,
     model_options_capabilities,
     send_keys,
@@ -34,14 +36,19 @@ from app.services.agent_chat_input import (
     slash_command_capabilities,
 )
 from app.services.harness_catalog import get_observed_model_windows
+from app.services.reference_ingest import (
+    ReferenceIngestError,
+    ReferenceTooLargeError,
+    is_image_reference,
+    serialize_reference,
+    store_reference,
+)
 from app.services.sse import _sse_generator
+from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import (
-    find_active_session,
     read_history,
     resolve_aliveness,
-    resolve_transcript_dir,
     tailer_manager,
-    transcript_allowed,
 )
 from app.services.workspace_diff import NoWorkspaceError, resolve_workspace_path, workspace_diff
 
@@ -76,7 +83,7 @@ class ChatEffortBody(BaseModel):
 
 async def _resolve_transcript_path(
     agent_id: uuid.UUID, session: AsyncSession
-) -> tuple[Agent, Path] | JSONResponse:
+) -> tuple[Agent, Path, Any] | JSONResponse:
     """Loads the agent and its live session's transcript path, or the exact
     404 body the frontend keys on (``{"reason": "no_transcript"}``) for
     every "nothing to show" case: no transcript dir for this agent/runtime,
@@ -84,24 +91,33 @@ async def _resolve_transcript_path(
     rejecting the newest session's cwd. A genuinely unknown ``agent_id``
     raises a plain 404 instead — that's a routing error, not a "no session
     yet" state the frontend renders specially.
+
+    Welcher Adapter das beantwortet, entscheidet der Harness des Agenten
+    (``transcript_adapters.adapter_for``) — Claude Code liest flach aus
+    ``~/.mc/agents/<slug>/claude-config/projects/…``, omp eine Ebene tief
+    aus ``~/.mc/agents/<slug>/omp-sessions/<cwd>/…``. Der Adapter wird
+    mitgegeben, damit History-Seite und Tailer garantiert denselben
+    benutzen.
     """
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    tdir = resolve_transcript_dir(agent)
+    adapter = adapter_for(agent)
+
+    tdir = adapter.resolve_transcript_dir(agent)
     if tdir is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
-    active = find_active_session(tdir)
+    active = adapter.find_active_session(tdir)
     if active is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
     path, _meta = active
-    if not transcript_allowed(agent, path):
+    if not adapter.transcript_allowed(agent, path):
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
-    return agent, path
+    return agent, path, adapter
 
 
 @router.get("/agents/{agent_id}/chat/history")
@@ -132,12 +148,16 @@ async def get_chat_history(
     if isinstance(resolved, JSONResponse):
         return resolved
 
-    agent, path = resolved
+    agent, path, adapter = resolved
     observed_windows = await get_observed_model_windows()
     history = read_history(
-        path, limit=limit, before_uuid=before_uuid, observed_windows=observed_windows
+        path,
+        adapter,
+        limit=limit,
+        before_uuid=before_uuid,
+        observed_windows=observed_windows,
     )
-    history["session"]["aliveness"] = await resolve_aliveness(agent, path)
+    history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
     history["capabilities"] = {
         **await effort_capabilities(agent),
         **await slash_command_capabilities(agent),
@@ -161,7 +181,7 @@ async def stream_agent_chat(
     if isinstance(resolved, JSONResponse):
         return resolved
 
-    agent, path = resolved
+    agent, path, _adapter = resolved
     channel = RedisKeys.agent_chat_channel(str(agent_id))
 
     async def _generator():
@@ -243,6 +263,82 @@ async def post_chat_input(
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:
         return JSONResponse(status_code=409, content=_AGENT_STARTING)
+
+
+@router.post("/agents/{agent_id}/chat/attachment", status_code=201)
+async def post_chat_attachment(
+    agent_id: uuid.UUID,
+    file: UploadFile = File(...),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Nimmt eine Datei entgegen und gibt den absoluten Pfad zurueck, unter
+    dem der Agent sie lesen kann.
+
+    Abgelegt wird sie als Agenten-Referenz — dieselbe Ablage, die der
+    Slack-Datei-Ingest schon benutzt (``reference_files.agent_id``, Migration
+    0172). Das ist keine Bequemlichkeit, sondern der Grund, aus dem es die
+    Besitz-Art ueberhaupt gibt: eine Datei, die der Operator top-level im
+    Chat schickt, gehoert dem AGENTEN und keiner Aufgabe. Sie wird damit
+    automatisch mit ihm geloescht (``delete_references_for(agent_id=…)`` in
+    routers/agents.py) statt verwaist liegen zu bleiben.
+
+    Der Composer haengt den Pfad danach an die Nachricht — die CLI liest die
+    Datei selbst. Es gibt bewusst KEINE Typen-Beschraenkung und keinen
+    20er-Deckel (Operator-Entscheid 19.08.2026): ob ein Agent eine Datei
+    versteht, ist seine Sache, das UI legt nur ab. Gefaehrlich ist das nicht
+    — aktive Inhalte liefert ``fs_service.read_stream`` grundsaetzlich als
+    Download aus, nie inline.
+
+    409 ``{"reason":"input_not_supported"}`` fuer Agenten, die ueberhaupt
+    keinen Chat-Text annehmen (Host-Agenten ausser Boss): dort waere die
+    Datei nur Platte ohne Empfaenger. 413 wenn zu gross, 422 bei einem
+    unbrauchbaren oder leeren Upload."""
+    agent = await _load_agent_or_404(agent_id, session)
+
+    if not can_receive_input(agent):
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+
+    contents = await file.read()
+    if not contents:
+        # Frueh und eigenstaendig: eine leere Datei ist kein Ingest-Problem,
+        # sondern eine Auswahl, die niemandem nuetzt — der Agent bekaeme
+        # einen Pfad auf 0 Bytes.
+        raise HTTPException(status_code=422, detail="Die Datei ist leer.")
+
+    try:
+        ref = await store_reference(
+            session,
+            contents=contents,
+            filename=file.filename or "",
+            mime=file.content_type,
+            agent_id=agent.id,
+            uploaded_by="chat",
+            # Die zwei Huerden, die fuer einen laufenden Chat nicht passen.
+            allowed_mimes=None,
+            max_files=None,
+        )
+    except ReferenceTooLargeError as exc:
+        # Zu gross ist die einzige Ablehnung, die der Nutzer beim Auswaehlen
+        # nicht sehen konnte — sie bekommt darum ihren eigenen Status, damit
+        # das UI sie als Hinweis statt als Fehler zeigen kann. Eigene
+        # Fehlerklasse statt Textsuche: ein Umformulieren der Meldung darf
+        # den Status nie kippen.
+        raise HTTPException(status_code=413, detail=str(exc))
+    except ReferenceIngestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return {
+        "path": serialize_reference(ref)["abs_path"],
+        "name": ref.original_name,
+        "bytes": ref.size,
+        "isImage": is_image_reference(ref.original_name),
+        # Root + Unterpfad direkt aus der Ablage: das Frontend holt die Bytes
+        # ueber den Files-Endpunkt und muss sie sonst aus dem absoluten Pfad
+        # zurueckrechnen (siehe ChatAttachmentTile.toFilesRef).
+        "root": "references",
+        "subpath": ref.rel_path,
+    }
 
 
 @router.post("/agents/{agent_id}/chat/keys", status_code=204)

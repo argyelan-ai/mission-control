@@ -38,6 +38,15 @@ until docker compose ps backend --format "{{.Health}}" 2>/dev/null | grep -q hea
     sleep 1
 done
 
+# 1c. Eigene Agenten-Datei sicherstellen (frischer Klon).
+# docker/docker-compose.agents.yml liegt NICHT in der Versionsverwaltung: sie
+# wird zur Laufzeit fortgeschrieben und beschreibt die eigene Flotte
+# (Agentennamen, Projektbezuege, Mount-Pfade). Ausgeliefert wird die leere
+# Vorlage; ab hier gehoert die Kopie dem Betreiber. Fehlt auch die Vorlage,
+# bricht das Skript hier ab — Schritt 3 unten wuerde sonst mit einem rohen
+# compose-Fehler sterben, der die hilfreiche Meldung ueberschreibt.
+bash scripts/ensure-agents-yml.sh | sed 's/^/  [1c]  /'
+
 # 2. Agent-Tokens aus Vault generieren (falls vorhanden)
 ENV_AGENTS="docker/.env.agents"
 GENERATED=$(docker compose exec -T backend python3 -c "

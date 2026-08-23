@@ -383,7 +383,13 @@ The Docker agent fleet (`docker/docker-compose.agents.yml`) is a separate,
 host-coupled layer on top of the core stack: it provisions per-agent
 containers with tmux sessions, a poll loop, and rendered SOUL/TOOLS files.
 Start with the core stack first; provision agents via the UI (Agents → New →
-Provision) once it runs. Agent souls and settings are rendered from
+Provision) once it runs.
+
+That compose file is **yours**, not the project's: MC rewrites it every time
+you add an agent or switch a runtime, so it is git-ignored. `./setup.sh`
+creates it from `docker/docker-compose.agents.example.yml`, which ships
+deliberately empty — nobody should download somebody else's fleet. You never
+have to edit it by hand. Agent souls and settings are rendered from
 `backend/templates/*.j2` — customize `USER.md.j2` (who you are) and set
 `OPERATOR_NAME` in `.env` (how agents address you).
 

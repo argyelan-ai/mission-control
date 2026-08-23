@@ -277,7 +277,7 @@ export function SparkRecipeSwitcher({
                     </span>
                     {gpuHint && (
                       <span
-                        className="text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0"
+                        className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm shrink-0"
                         style={{
                           background: "var(--color-bg-elevated)",
                           color: "var(--color-text-muted)",
@@ -287,7 +287,7 @@ export function SparkRecipeSwitcher({
                       </span>
                     )}
                     <span
-                      className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                      className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-sm shrink-0"
                       style={{
                         background:
                           r.registry === "official"
@@ -375,7 +375,7 @@ export function SparkRecipeSwitcher({
 
       {statusMsg && !open && (
         <div
-          className="absolute top-full right-0 mt-1 text-xs px-2 py-1 rounded"
+          className="absolute top-full right-0 mt-1 text-xs px-2 py-1 rounded-sm"
           style={{
             background: "var(--color-bg-elevated)",
             border: "1px solid var(--color-border-subtle)",

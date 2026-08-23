@@ -53,7 +53,7 @@ export function ReferenceFileRow({
           <span className="truncate" style={{ color: C.textPrimary }}>{reference.original_name}</span>
           {reference.inherited && (
             <span
-              className="shrink-0 text-[9px] px-1.5 py-px rounded uppercase tracking-[0.04em]"
+              className="shrink-0 text-[9px] px-1.5 py-px rounded-sm uppercase tracking-[0.04em]"
               style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
             >
               from project
@@ -82,7 +82,7 @@ export function ReferenceFileRow({
               type="button"
               onClick={onDelete}
               disabled={deleting}
-              className="text-[10px] font-semibold px-1.5 py-0.5 rounded cursor-pointer"
+              className="text-[10px] font-semibold px-1.5 py-0.5 rounded-sm cursor-pointer"
               style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
             >
               {deleting ? "…" : "Delete"}

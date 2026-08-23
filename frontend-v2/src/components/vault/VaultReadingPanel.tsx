@@ -78,7 +78,7 @@ function RelatedNotesSection({
               type="button"
               onClick={() => onSelectNote?.(n.path)}
               disabled={!onSelectNote}
-              className="w-full text-left flex items-center gap-2 rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.04] disabled:opacity-60 disabled:cursor-default"
+              className="w-full text-left flex items-center gap-2 rounded-sm px-1.5 py-0.5 transition-colors hover:bg-white/[0.04] disabled:opacity-60 disabled:cursor-default"
               style={{ fontSize: "12px" }}
             >
               <span
@@ -297,7 +297,7 @@ function PanelContent({
                   disabled={saveMutation.isPending}
                   aria-label={t("cancelEdit")}
                   title={t("cancelEditTitle")}
-                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
+                  className="rounded-sm p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -322,7 +322,7 @@ function PanelContent({
                   disabled={saveMutation.isPending}
                   aria-label={t("saveEdit")}
                   title={t("saveEditTitle")}
-                  className="rounded p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
+                  className="rounded-sm p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
                   style={{
                     color: C.online,
                     background: "rgba(52,211,153,0.08)",
@@ -347,7 +347,7 @@ function PanelContent({
                   onClick={startEdit}
                   aria-label={t("editNote")}
                   title={t("edit")}
-                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
+                  className="rounded-sm p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -373,7 +373,7 @@ function PanelContent({
                   type="button"
                   onClick={() => setConfirmOpen(true)}
                   aria-label={t("deleteNote")}
-                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
+                  className="rounded-sm p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -567,7 +567,7 @@ function PanelContent({
             {Array.from({ length: 8 }).map((_, i) => (
               <div
                 key={i}
-                className="h-3 rounded"
+                className="h-3 rounded-sm"
                 style={{
                   background: "var(--color-bg-elevated)",
                   width: `${60 + Math.random() * 35}%`,
