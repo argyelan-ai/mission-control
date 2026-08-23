@@ -69,7 +69,7 @@ class Thread(SQLModel, table=True):
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    kind: str  # "task" | "side" | "dm" | "chat" (see comm_constants.THREAD_KINDS)
+    kind: str  # "task" | "side" | "dm" | "chat" | "group" (see comm_constants.THREAD_KINDS)
     # ondelete=SET NULL (mc-task-delete-guard): a thread survives its task's
     # deletion — same rationale as bench_entries.task_id — so a deleted task
     # never RESTRICTs against a thread that outlives it.
