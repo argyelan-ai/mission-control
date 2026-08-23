@@ -117,7 +117,7 @@ export default function Sidebar() {
           style={{
             width: 44,
             height: 38,
-            borderRadius: "12px",
+            borderRadius: "var(--radius-md)",
             backgroundColor: active ? "var(--color-accent-subtle)" : "transparent",
             color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
           }}
@@ -131,7 +131,7 @@ export default function Sidebar() {
                 right: 9,
                 width: 6,
                 height: 6,
-                borderRadius: "999px",
+                borderRadius: "var(--radius-full)",
                 backgroundColor: "var(--color-p2-err)",
               }}
             />
@@ -143,7 +143,7 @@ export default function Sidebar() {
               fontSize: "11px",
               backgroundColor: "var(--color-p2-pan2)",
               border: "1px solid var(--color-p2-line)",
-              borderRadius: "8px",
+              borderRadius: "var(--radius-sm)",
               color: "var(--color-p2-txt)",
               boxShadow: "var(--shadow-elevated)",
             }}
@@ -166,7 +166,7 @@ export default function Sidebar() {
         style={{
           height: nested ? 32 : 38,
           padding: nested ? "0 12px 0 30px" : "0 12px",
-          borderRadius: "12px",
+          borderRadius: "var(--radius-md)",
           ...MONO,
           fontSize: nested ? "11.5px" : "12.5px",
           fontWeight: active ? 700 : 400,
@@ -195,7 +195,7 @@ export default function Sidebar() {
         {alert ? (
           <span
             className="ml-auto shrink-0"
-            style={{ width: 6, height: 6, borderRadius: "999px", backgroundColor: "var(--color-p2-err)" }}
+            style={{ width: 6, height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--color-p2-err)" }}
           />
         ) : text ? (
           <span
@@ -220,7 +220,7 @@ export default function Sidebar() {
             width: 18,
             height: 18,
             marginLeft: alert || text ? 6 : "auto",
-            borderRadius: "6px",
+            borderRadius: "var(--radius-sm)",
             color: "var(--color-p2-faint)",
           }}
         >
@@ -240,7 +240,7 @@ export default function Sidebar() {
         // A card rather than a full-bleed column: the rows inside are rounded,
         // so a hard-edged container around them reads as unfinished.
         border: "1px solid var(--color-p2-line2)",
-        borderRadius: "16px",
+        borderRadius: "var(--radius-lg)",
         padding: sidebarCollapsed ? "10px 0" : "10px",
       }}
     >
@@ -264,7 +264,7 @@ export default function Sidebar() {
             aria-label={`${tShell("search")} (⌘K)`}
             title={`${tShell("search")} · ⌘K`}
             className="grid place-items-center cursor-pointer"
-            style={{ width: 44, height: 38, borderRadius: "12px", color: "var(--color-p2-dim)" }}
+            style={{ width: 44, height: 38, borderRadius: "var(--radius-md)", color: "var(--color-p2-dim)" }}
           >
             <Search size={16} />
           </button>
@@ -288,7 +288,7 @@ export default function Sidebar() {
           className="flex items-center gap-2 mt-2 shrink-0 w-full cursor-pointer text-left px-3"
           style={{
             height: 36,
-            borderRadius: "12px",
+            borderRadius: "var(--radius-md)",
             backgroundColor: "transparent",
             border: "1px solid var(--color-p2-line)",
             ...MONO,
@@ -313,7 +313,7 @@ export default function Sidebar() {
             className="ml-auto shrink-0 px-1.5 py-0.5"
             style={{
               border: "1px solid var(--color-p2-line)",
-              borderRadius: "6px",
+              borderRadius: "var(--radius-sm)",
               fontSize: "10px",
               color: "var(--color-p2-txt)",
               backgroundColor: "var(--color-p2-pan2)",
@@ -351,7 +351,7 @@ export default function Sidebar() {
             title={`${t("moreAreas")} (${groups.reduce((n, g) => n + g.children.length, 0)}) · ⌘K`}
             aria-label={t("moreAreas")}
             className="grid place-items-center cursor-pointer shrink-0"
-            style={{ width: 44, height: 38, borderRadius: "12px", color: "var(--color-p2-faint)" }}
+            style={{ width: 44, height: 38, borderRadius: "var(--radius-md)", color: "var(--color-p2-faint)" }}
           >
             <MoreHorizontal size={16} />
           </button>
@@ -375,7 +375,7 @@ export default function Sidebar() {
                     style={{
                       height: 34,
                       padding: "0 12px",
-                      borderRadius: "12px",
+                      borderRadius: "var(--radius-md)",
                       ...MONO,
                       fontSize: "12px",
                       color: holdsActive && !open ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
@@ -399,7 +399,7 @@ export default function Sidebar() {
                         style={{
                           width: 5,
                           height: 5,
-                          borderRadius: "999px",
+                          borderRadius: "var(--radius-full)",
                           backgroundColor: "var(--color-p2-amb)",
                         }}
                       />
@@ -453,7 +453,7 @@ export default function Sidebar() {
               minWidth: 168,
               backgroundColor: "var(--color-p2-pan2)",
               border: "1px solid var(--color-p2-line)",
-              borderRadius: "10px",
+              borderRadius: "var(--radius-md)",
               boxShadow: "var(--shadow-elevated)",
             }}
           >
@@ -504,7 +504,7 @@ function CtxItem({
       style={{
         height: 30,
         padding: "0 10px",
-        borderRadius: "7px",
+        borderRadius: "var(--radius-sm)",
         ...MONO,
         fontSize: "11.5px",
         color: "var(--color-p2-txt)",
