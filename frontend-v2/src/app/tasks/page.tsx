@@ -1170,7 +1170,13 @@ function TasksPageContent() {
         )}
 
         {selectedTask ? (
-          <div className="flex-1 flex flex-col min-h-0" style={{ backgroundColor: C.bgBase }}>
+          // Bewusst OHNE eigene Füllung: der Seitengrund trägt den Ambient-
+          // Schleier, und eine opake Fläche stanzt dort ein flaches Rechteck
+          // heraus (gemessen: 12–14 Grund gegen flache 16 mit bgBase). Die
+          // Schwester-Zustände darunter (Projekt-Ansicht, Leerzustand) stehen
+          // ebenfalls direkt auf dem Grund — geklebt wird hier nichts, also
+          // braucht es auch keine Maskierung.
+          <div className="flex-1 flex flex-col min-h-0">
             <TaskDetailBody
               task={selectedTask}
               agents={agents}
