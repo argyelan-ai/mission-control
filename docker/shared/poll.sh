@@ -81,6 +81,11 @@ LAST_BLOCKED_TASK_ID=""
 # ENV-overridable fuer Host-Betrieb (kimi-host, 2026-07-24): auf macOS gibt es
 # kein /home/agent — der Host-Entrypoint setzt den Pfad ins Agent-Config-Dir.
 TASK_LOCK_FILE="${TASK_LOCK_FILE:-/home/agent/.task-active.lock}"
+# Recycler-Idle-Marker (ADR-024): recycler.sh misst "untaetig" AUSSCHLIESSLICH
+# an der mtime dieser Datei. ENV-overridable aus denselben Gruenden wie
+# TASK_LOCK_FILE (Host-Betrieb ohne /home/agent, Tests auf macOS) — Default
+# byte-identisch zum bisherigen Literal.
+RECYCLER_MARKER_FILE="${RECYCLER_MARKER_FILE:-/home/agent/.claude/last-task.marker}"
 
 # Poll-interne Prompt-Dateien (nur poll.sh liest/schreibt sie: run_task pastet
 # TASK_PROMPT_FILE, deliver_comments pastet COMMENTS_PROMPT_FILE). Im Container
@@ -155,6 +160,39 @@ TURN_SIGNAL_FILE="${TURN_SIGNAL_FILE:-/home/agent/.turn-signal}"
 # Datei ist ok — die Hooks legen sie beim naechsten Submit neu an.
 reset_turn_signal() {
     : > "$TURN_SIGNAL_FILE" 2>/dev/null || true
+}
+
+# touch_recycler_marker — Aktivitaets-Signal an recycler.sh (mtime = jetzt).
+# Fail-silent wie die bisherigen Inline-touches: auf Hosts ohne /home/agent
+# (kimi-host, Tests) darf ein fehlender Pfad poll.sh nicht killen (set -e).
+touch_recycler_marker() {
+    touch "$RECYCLER_MARKER_FILE" 2>/dev/null || true
+}
+
+# protect_chat_turn_if_working — Recycler-Schutz fuer laufende Chat-Turns.
+#
+# Fix 2026-08-23: Board-Tasks signalisieren Aktivitaet doppelt (TASK_LOCK_FILE
+# + Marker-Touch bei state=working), aber ein Chat-Turn (comm_v2-Nudge/Message,
+# Sessions-Chat-Eingabe) lief voellig unsichtbar fuer den Recycler — der killte
+# Agenten mitten im Turn, sobald sie vorher >= RECYCLER_IDLE_MIN untaetig waren
+# (Live-Beleg Gruppenlauf 22.08.: zwei Sprecher wurden 2s nach ihrem
+# Suchergebnis gekillt — der Turn war noch nicht fertig.)
+#
+# Bewusst SELBSTBEGRENZEND, damit der Recycler seinen Zweck behaelt (Speicher-
+# Hygiene): getoucht wird NUR solange detect_turn_state wirklich "working"
+# meldet. Endet der Turn, enden die Touches — nach RECYCLER_IDLE_MIN echter
+# Untaetigkeit wird weiterhin recycelt. Ein Touch pro eingehender Nachricht
+# (ohne Turn-Pruefung) haette den Recycler dauerhaft ausgehebelt.
+# crashed schuetzt ABSICHTLICH nicht: der Recycler-Respawn ist dort die Heilung.
+protect_chat_turn_if_working() {
+    # Aktiver Board-Task: der Task-Pfad signalisiert selbst — nichts tun,
+    # damit dieser Pfad byte-identisch zum bisherigen Verhalten bleibt.
+    [ -n "$CURRENT_TASK_ID" ] && return 0
+    local ts
+    ts=$(detect_turn_state "$SESSION_NAME" 2>/dev/null || echo "unknown")
+    if [ "$ts" = "working" ]; then
+        touch_recycler_marker
+    fi
 }
 
 log() {
@@ -468,7 +506,7 @@ with open(os.environ['TASK_PROMPT_FILE'], 'w') as f:
     # Phase 3 — Marker for the recycler's idle-detection (ADR-024).
     # Updates mtime so recycler.sh sees activity = now. File-only signal,
     # no syscall to backend. First-boot is handled by recycler.sh itself.
-    touch /home/agent/.claude/last-task.marker 2>/dev/null || true
+    touch_recycler_marker
     # Lockfile: recycler.sh prueft dieses File vor idle-Kill.
     echo "$task_id" > "$TASK_LOCK_FILE" 2>/dev/null || true
 
@@ -803,6 +841,11 @@ with open(os.environ['COMMENTS_PROMPT_FILE'], 'w') as f:
     # Bug 12 fix (2026-05-13): siehe run_task — kein set-e-kill bei Fehler.
     if ! paste_and_submit "$COMMENTS_PROMPT_FILE"; then
         log "WARNING: paste_and_submit fuer new_comments returnte non-zero — Comments wurden ggf. nicht ans claude-Pane geliefert. Nicht fatal, poll-Loop laeuft weiter."
+    else
+        # Zugestellte Kommentare starten einen Turn — Recycler-Uhr nullen,
+        # sonst killt ein altes Idle-Fenster den Turn Sekunden nach dem Paste
+        # (gleiche Luecke wie bei comm_v2, Fix 2026-08-23).
+        touch_recycler_marker
     fi
 }
 
@@ -900,6 +943,10 @@ flush_msg_queue() {
         local rc=0
         paste_and_submit --no-fail-open "$path" || rc=$?
         if [ "$rc" -eq 0 ]; then
+            # Gepastete Message = Turn-Start: Recycler-Uhr nullen (Fix
+            # 2026-08-23). NUR bei erfolgreichem Paste — blosses Queuen ist
+            # keine Aktivitaet, sonst waere der Recycler dauerhaft ausgehebelt.
+            touch_recycler_marker
             _record_ack "$tid" "$seq"
             rm -f "$path"
         elif [ "$rc" -eq 2 ]; then
@@ -997,6 +1044,10 @@ EOF
     printf '📬 Neue Nachrichten (bis seq %s, %s) — lies sie jetzt mit: mc inbox\n' \
         "$global_max" "$now" > "$nf"
     if paste_and_submit "$nf"; then
+        # Gepasteter Nudge = Turn-Start: Recycler-Uhr nullen (Fix 2026-08-23).
+        # Genau hier starb der Gruppenlauf 22.08.: Nudge kam nach >15 Min Idle,
+        # der Marker blieb alt, recycler.sh killte den Turn 18s spaeter.
+        touch_recycler_marker
         # Ein Nudge deckt ALLE pending Threads ab (der Agent liest via `mc inbox`
         # alles) — darum den High-Water fuer jeden aktuell pending Thread setzen.
         : > "$NUDGE_STATE_FILE"
@@ -1094,6 +1145,12 @@ while true; do
         fi
         heartbeat "$HB_STATE"
         LAST_HEARTBEAT=$NOW
+        # Chat-Turn-Schutz im Heartbeat-Takt (30s — reicht bei 15-Min-Idle-
+        # Schwelle locker): laeuft ein Turn OHNE Board-Task, Recycler-Uhr
+        # nullen. Deckt Turns > RECYCLER_IDLE_MIN ab und auch Turns, die nicht
+        # poll.sh gestartet hat (Sessions-Chat-Eingabe direkt in den Container).
+        # Bei aktivem Task no-op (early return) — Task-Pfad bleibt unveraendert.
+        protect_chat_turn_if_working
     fi
 
     # Turn-State Check — wenn wir einen aktiven Task haben, pruefen ob claude
@@ -1235,7 +1292,7 @@ print(json.load(sys.stdin).get('task_id', '?'))" 2>/dev/null || echo "?")
             # Marker refreshen damit der Recycler weiss dass der Agent aktiv ist.
             # Ohne diesen Touch wuerde ein Task der laenger als RECYCLER_IDLE_MIN
             # (Default 15 Min) dauert durch den Recycler gekillt — Bug 2026-05-03.
-            touch /home/agent/.claude/last-task.marker 2>/dev/null || true
+            touch_recycler_marker
             ;;
         idle)
             # Task-State unveraendert — nur Kommentare zustellen (unten).
