@@ -149,7 +149,7 @@ export function VaultTopicsView() {
               {topic.agents.map((agent) => (
                 <span
                   key={agent}
-                  className="px-1.5 py-0.5 rounded text-[9px] font-mono"
+                  className="px-1.5 py-0.5 rounded-sm text-[9px] font-mono"
                   style={{
                     background: `${agentColor(agent)}18`,
                     color: agentColor(agent),

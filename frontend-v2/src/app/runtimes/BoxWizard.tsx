@@ -702,7 +702,7 @@ function ModelStep({
                   {r.display_name}
                 </span>
                 <span
-                  className="text-[10px] px-1.5 py-px rounded uppercase"
+                  className="text-[10px] px-1.5 py-px rounded-sm uppercase"
                   style={{ background: C.border, color: C.textMuted, letterSpacing: "0.06em" }}
                 >
                   {r.engine}
@@ -710,7 +710,7 @@ function ModelStep({
                 {!fits && (
                   <span
                     data-testid="box-wizard-fit-warning"
-                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded"
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded-sm"
                     style={{
                       background: `${C.warning}14`,
                       border: `1px solid ${C.warning}33`,

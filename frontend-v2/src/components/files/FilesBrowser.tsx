@@ -206,7 +206,7 @@ function AgentBadge({ slug }: { slug: string }) {
   const color = colorForAgent(slug);
   return (
     <span
-      className="inline-flex items-center shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded"
+      className="inline-flex items-center shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-sm"
       style={{ background: `${color}1A`, color }}
       title={`Agent: ${slug}`}
     >

@@ -281,7 +281,7 @@ function WeekCalendar({
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         onClick={() => onJobSelect(job.id)}
-                        className="w-full text-left px-1.5 py-1 rounded border text-[10px] transition-all hover:scale-[1.02] cursor-pointer"
+                        className="w-full text-left px-1.5 py-1 rounded-sm border text-[10px] transition-all hover:scale-[1.02] cursor-pointer"
                         style={{
                           background: c.bg,
                           borderColor: c.border,
@@ -397,7 +397,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                   )}
                 </div>
                 <div
-                  className="text-xs font-mono px-2 py-1 rounded flex-shrink-0"
+                  className="text-xs font-mono px-2 py-1 rounded-sm flex-shrink-0"
                   style={{
                     background: `${C.error}1F`,
                     color: C.error,

@@ -277,7 +277,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
             <WifiOff size={12} style={{ color: C.error, flexShrink: 0 }} />
           )}
           <span
-            className="text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0"
+            className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono shrink-0"
             style={{
               background: connected ? `${C.online}1A` : `${C.error}1A`,
               color: connected ? C.online : C.error,

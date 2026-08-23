@@ -210,7 +210,7 @@ export function MCPServerMatrix({
                     {showDeleteButton && (
                       <button
                         onClick={() => onDeleteServer?.(s.name)}
-                        className="p-1 rounded cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shrink-0 touch-visible"
+                        className="p-1 rounded-sm cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shrink-0 touch-visible"
                         style={{ color: "var(--color-text-muted)" }}
                         title={t("removeServer", { name: s.name })}
                       >
@@ -226,7 +226,7 @@ export function MCPServerMatrix({
                     <td key={a.id} className="p-3 text-center">
                       <button
                         onClick={() => toggle(a.id, s.name)}
-                        className="w-5 h-5 rounded flex items-center justify-center mx-auto cursor-pointer transition-colors"
+                        className="w-5 h-5 rounded-sm flex items-center justify-center mx-auto cursor-pointer transition-colors"
                         style={{
                           backgroundColor: enabled
                             ? `${C.accent}33`

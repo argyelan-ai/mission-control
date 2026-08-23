@@ -53,6 +53,43 @@ export function resolveEffortLevels(capabilities: ChatCapabilities | null | unde
   );
 }
 
+
+/**
+ * Warum der Regler fehlt, in einem Satz — aus dem `effortReason` des Backends.
+ *
+ * Der haeufigste Fall ist neu und war vorher unsichtbar: bei openclaude
+ * haengen die Effort-Stufen am MODELL, nicht am Harness. Ein Agent auf einem
+ * eigenen/lokalen Modell bekommt darum keinen Regler, obwohl seine CLI
+ * `/effort` sehr wohl kennt. Ohne diesen Satz sieht man nur, dass etwas
+ * fehlt — und sucht den Fehler bei sich.
+ */
+export function effortReasonText(
+  capabilities: ChatCapabilities | null | undefined,
+  model: string | null | undefined,
+  t: (key: string, values?: Record<string, string>) => string,
+): string {
+  /* Das Modell, ueber das die CLI die Aussage gemacht hat, schlaegt das gerade
+     angezeigte: die Effort-Messung ist zwischengespeichert, das Modell-Label
+     nicht. Ohne diesen Vorrang benennt der Satz nach einem Modellwechsel das
+     FRISCHE Modell und behauptet ueber es etwas, das nur fuer das alte gemessen
+     wurde. */
+  const measured = capabilities?.effortModel ?? model;
+  switch (capabilities?.effortReason) {
+    case "model_no_effort":
+      return measured
+        ? t("effortLockedModelNoEffort", { model: measured })
+        : t("effortLockedModelNoEffortGeneric");
+    case "foreign_harness":
+      return t("effortLockedForeignHarness");
+    /* `no_pane` ist zugleich der Rueckfall: der Text nennt die fehlende
+       Terminal-Steuerung und ist damit fuer aeltere Backends ohne Grund-Feld
+       die einzige Aussage, die nicht raet. */
+    case "no_pane":
+    default:
+      return t("effortLockedHint");
+  }
+}
+
 /**
  * The palette's command list: everything the harness reports (built-ins plus
  * the agent's own skills), falling back to the short static list only while the
@@ -690,7 +727,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 {a.isImage ? (
                   <span
                     aria-hidden
-                    className="w-6 h-6 rounded shrink-0 flex items-center justify-center text-[10px]"
+                    className="w-6 h-6 rounded-sm shrink-0 flex items-center justify-center text-[10px]"
                     style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                   >
                     IMG
@@ -705,7 +742,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   type="button"
                   onClick={() => removeAttachment(a.path)}
                   aria-label={t("removeAttachment", { name: a.name })}
-                  className="shrink-0 w-5 h-5 flex items-center justify-center rounded cursor-pointer"
+                  className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm cursor-pointer"
                   style={{ color: C.textMuted }}
                 >
                   <X size={12} />
@@ -974,7 +1011,22 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
-          {(currentEffort || (effortSupported && effortLevels.length > 0)) &&
+          {(currentEffort ||
+            (effortSupported && effortLevels.length > 0) ||
+            /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend
+               einen Grund mitliefert. Genau dieser Fall — openclaude auf einem
+               Modell ohne Effort-Stufen — hatte vorher weder Wert noch Regler
+               und verschwand damit spurlos; der Tooltip ist die einzige Stelle,
+               an der die Erklaerung ueberhaupt ankommt.
+
+               OHNE Kopplung an `displayLevels`: das Backend liefert fuer
+               `foreign_harness` (kimi, omp) und `no_pane` (Hermes, Jarvis) hart
+               eine LEERE Stufenliste — die Bedingung schloss also ausgerechnet
+               zwei der drei Begruendungen aus, und sie erreichten die
+               Oberflaeche nie. Ein Grund ohne Stufen ist kein Widerspruch,
+               sondern der Normalfall: die Saeule bleibt dann leer (nichts
+               behaupten), der Satz steht trotzdem da. */
+            capabilities?.effortReason) &&
             // A picker needs levels to offer. No capabilities, `canSwitchEffort:
             // false`, or an empty list all mean the same thing here: show the
             // level, don't pretend it can be changed. Umgekehrt gilt: kann der
@@ -1101,19 +1153,25 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   </div>
                 )}
               </div>
-            ) : displayLevels.length > 0 ? (
+            ) : displayLevels.length > 0 || capabilities?.effortReason ? (
               /* Read-only-Variante des Brain-Chips (Operator-Wunsch 18.08.2026:
                  Boss zeigte das nackte Alt-Label). Gleiche Optik wie der
                  schaltbare Knopf — Gehirn + Saeule — aber als span ohne Aktion:
                  die Leiter kommt vom Backend (canSwitchEffort=false heisst
                  "kennt der Harness", nicht "darfst du druecken"), die Stufe aus
                  dem usage-Ereignis. Der Tooltip sagt ehrlich, warum hier nichts
-                 zu klicken ist. */
+                 zu klicken ist.
+
+                 Auch OHNE Stufenleiter (fremde CLI, Runtime ohne Terminal):
+                 dann bleibt die Saeule leer — `staticFillPct` ist 0, sobald
+                 keine Stufe zuzuordnen ist — und der Chip traegt nur noch den
+                 Grund. Das ist der ganze Zweck des Grundes. */
               <span
                 data-testid="effort-chip-static"
                 data-level={currentEffort ?? "auto"}
-                aria-label={t("effortLevelLocked", { level: currentEffort ?? "auto" })}
-                title={t("effortLockedHint")}
+                aria-label={`${t("effortLevelLocked", { level: currentEffort ?? "auto" })} — ${effortReasonText(capabilities, currentModel, t)}`}
+                title={effortReasonText(capabilities, currentModel, t)}
+                data-reason={capabilities?.effortReason ?? "unspecified"}
                 className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
@@ -1136,7 +1194,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                  ehrliche Text. */
               <span
                 data-testid="effort-chip-static"
-                title={t("effortLockedHint")}
+                title={effortReasonText(capabilities, currentModel, t)}
+                data-reason={capabilities?.effortReason ?? "unspecified"}
                 className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >

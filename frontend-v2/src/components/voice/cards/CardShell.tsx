@@ -65,7 +65,7 @@ export function CardShell({
       <button
         type="button"
         onClick={onClose}
-        className="shrink-0 p-1 rounded hover:bg-white/5 transition-colors cursor-pointer -mr-1 -mt-1"
+        className="shrink-0 p-1 rounded-sm hover:bg-white/5 transition-colors cursor-pointer -mr-1 -mt-1"
         aria-label="Karte schliessen"
       >
         <X size={10} style={{ color: "var(--color-text-muted)" }} />

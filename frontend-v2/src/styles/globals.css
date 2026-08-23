@@ -186,12 +186,37 @@
   --space-12: 48px;
   --space-16: 64px;
 
-  /* ---- Radii (eckig — argyelan-Formensprache) ---- */
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
-  --radius-xl: 10px;
+  /* ---- Radien ------------------------------------------------------------
+     Rund für alles, was man anfässt oder was schwebt — eckig nur noch für
+     dichte Daten. Bewusste Kehrtwende gegenüber der ursprünglich eckigen
+     Formensprache (Operator-Entscheid 23.08.2026, ADR-076).
+
+     Der Grund für die Regel statt eines pauschalen „alles rund": ein Radius
+     kämpft im Raster gegen die Kante. In einer Tabelle, im Terminal und in
+     Code-Blöcken kostet er Platz, den dichte Daten brauchen, und macht weich,
+     wo man Präzision liest. Überall sonst signalisiert er das Gegenteil —
+     anfassbar, beweglich, eigenständig.
+
+     Vorher 2/4/6/10px. Die Klassennamen bleiben, nur die Werte wandern: rund
+     wird die ganze App über diese sechs Zeilen, nicht über tausend
+     Einzelstellen. Wer eine neue Fläche baut, wählt die ROLLE unten, nicht
+     eine Zahl. */
+  --radius-dense: 4px;  /* Tabellenzelle, Terminal, Code, Log-Zeile */
+  --radius-sm: 6px;     /* Marker, Punkt, Mini-Chip */
+  --radius-md: 10px;    /* Knopf, Eingabefeld */
+  --radius-lg: 14px;    /* Listenzeile, Kachel */
+  --radius-xl: 20px;    /* Insel, Panel */
+  --radius-2xl: 28px;   /* Dialog, Sheet — vorher undefiniert (Tailwind-Standard 16px) */
   --radius-full: 9999px;
+
+  /* Rollen-Aliasse. Für neue Arbeit gedacht: die Frage lautet „was ist das?",
+     nicht „welche Zahl?". Zeigen auf die Stufen darüber, damit eine
+     Nachkalibrierung an EINER Stelle passiert. */
+  --radius-control: var(--radius-md);
+  --radius-card: var(--radius-lg);
+  --radius-surface: var(--radius-xl);
+  --radius-floating: var(--radius-2xl);
+  --radius-pill: var(--radius-full);
 
   /* ---- Blur ---- */
   --blur-glass: 16px;
@@ -448,17 +473,23 @@ body {
   pointer-events: none;
   z-index: 1;
 }
+/* Die Ticks folgen der Rundung ihres Trägers (ADR-076). Vorher zeichneten sie
+   einen scharfen 90°-Winkel bei -1px — auf einer runden Fläche schwebte der
+   frei neben der Kante. `inherit` holt sich den Radius der jeweiligen Ecke vom
+   Element selbst, damit die Marke bei jeder Nachkalibrierung mitwandert. */
 .corner-ticks::before {
   top: -1px;
   left: -1px;
   border-top: 1px solid var(--color-border-accent);
   border-left: 1px solid var(--color-border-accent);
+  border-top-left-radius: inherit;
 }
 .corner-ticks::after {
   bottom: -1px;
   right: -1px;
   border-bottom: 1px solid var(--color-border-accent);
   border-right: 1px solid var(--color-border-accent);
+  border-bottom-right-radius: inherit;
 }
 
 /* ── Display-Headline (Clash Display), enger Tracking */

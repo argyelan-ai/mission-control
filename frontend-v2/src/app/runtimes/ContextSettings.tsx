@@ -161,7 +161,7 @@ export function ContextSettingsPanel({
               disabled={isStandard}
               aria-label={t("customAria")}
               onChange={(e) => handleCustomInput(e.target.value)}
-              className="flex-1 text-xs font-mono px-2 py-1 rounded disabled:opacity-30"
+              className="flex-1 text-xs font-mono px-2 py-1 rounded-sm disabled:opacity-30"
               style={{
                 background: C.borderSubtle,
                 border: `1px solid ${customError ? C.error : C.border}`,

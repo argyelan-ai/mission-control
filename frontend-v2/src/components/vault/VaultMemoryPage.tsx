@@ -474,7 +474,7 @@ export default function VaultMemoryPage() {
                 setSelectedPath(null);
                 pushUrl({ task: null, path: null });
               }}
-              className="text-xs px-2 py-1 rounded hover:bg-[var(--color-bg-hover)] shrink-0"
+              className="text-xs px-2 py-1 rounded-sm hover:bg-[var(--color-bg-hover)] shrink-0"
               style={{ color: "var(--color-text-muted)" }}
             >
               {t("showAllNotes")}

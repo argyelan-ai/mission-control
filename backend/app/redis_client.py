@@ -123,25 +123,57 @@ class RedisKeys:
         return "mc:catalog:model-windows"
 
     @staticmethod
-    def model_catalog(harness: str, cli_version: str, slug: str) -> str:
-        """JSON-encoded list of {"command","label"} rows discovered from a
-        harness's own /model picker (harness_catalog.discover_model_catalog)
-        — keyed by (harness, cli_version, slug). cli_version im Schluessel:
+    def model_catalog(
+        harness: str, cli_version: str, slug: str, model: str | None = None
+    ) -> str:
+        """Der eine Erkennungslauf des /model-Pickers, JSON-kodiert:
+        ``{"models": [{"command","label"}, ...], "effort": {...}}``
+        (harness_catalog.discover_harness_capabilities) — keyed by
+        (harness, cli_version, slug, model). cli_version im Schluessel:
         ein CLI-Upgrade invalidiert automatisch. slug im Schluessel
         (19.08.2026): der Picker ist PRO AGENT verschieden — Claude Code
         listet lokal erkannte OpenAI-kompatible Modelle des jeweiligen
         Containers ("Detected from Local OpenAI-compatible"). Der alte
         flottenweite Schluessel liess FreeCodes echtes Qwen bei JEDEM
         Claude-Agenten im Dropdown auftauchen (Operator-Befund).
+
+        model im Schluessel (20.08.2026): die Effort-Aussage im Eintrag
+        haengt am MODELL, nicht am Harness — ein Modellwechsel invalidierte
+        vorher NICHTS und der Chip log bis zu 24h lang (Regler weg, obwohl
+        das neue Modell Stufen kennt, oder Regler da, obwohl das neue Modell
+        sie ignoriert). Der Modellname statt eines Loeschbefehls beim
+        Wechsel, weil das Modell auch AM Chat VORBEI umgestellt werden kann
+        (Operator tippt /model im Terminal) — ein Schluessel deckt beide
+        Wege, ein Invalidierungs-Aufruf nur einen.
+
+        ``model=`` als eigenes Segment-Praefix, damit kein Modellname je den
+        Sperr-Schluessel (…:discovery-lock) treffen kann.
         TTL is set by the writer (24h — see harness_catalog)."""
-        return f"mc:catalog:models:{harness}:{cli_version}:{slug}"
+        return f"mc:catalog:models:{harness}:{cli_version}:{slug}:model={model or '-'}"
 
     @staticmethod
-    def model_catalog_discovery_lock(harness: str, cli_version: str, slug: str) -> str:
+    def model_catalog_discovery_lock(
+        harness: str, cli_version: str, slug: str, model: str | None = None
+    ) -> str:
         """SET NX EX lock so concurrent cache-miss requests for the same
-        (harness, cli_version, slug) don't each spin up their own throwaway
-        discovery window at once."""
-        return f"mc:catalog:models:{harness}:{cli_version}:{slug}:discovery-lock"
+        (harness, cli_version, slug, model) don't each spin up their own
+        throwaway discovery window at once. Wird NICHT freigegeben — die TTL
+        ist zugleich die Abkuehlzeit nach einer gescheiterten Erkennung, damit
+        ein dauerhaft kaputter Container nicht bei jedem Poll ein neues
+        Fenster bekommt.
+
+        Das Modell gehoert genau deswegen mit hinein: sonst bliebe nach einem
+        Modellwechsel bis zu einer Minute lang die Abkuehlzeit des ALTEN
+        Modells stehen, die Effort-Frage waere so lange "unermittelt" — und
+        unermittelt heisst schaltbar. Genau in diesem Fenster koennte der
+        Regler wieder eine Stufe schreiben, die das neue Modell ignoriert.
+        Der Preis ist theoretisch: zwei Anfragen, die einen Modellwechsel
+        ueberlappen, koennten zwei Wegwerf-Fenster oeffnen — zwei Fenster
+        sind Verschwendung, eine luegende Anzeige ist ein Fehler."""
+        return (
+            f"mc:catalog:models:{harness}:{cli_version}:{slug}:"
+            f"model={model or '-'}:discovery-lock"
+        )
 
     @staticmethod
     def effort_levels_drift_logged(cli_version: str) -> str:

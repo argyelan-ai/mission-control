@@ -61,7 +61,7 @@ function UsageRow({
             key={a.id}
             href={`/agents/${a.id}`}
             onClick={(e) => e.stopPropagation()}
-            className="font-mono text-[11px] leading-none rounded px-2 py-1 hover:bg-[var(--color-bg-hover)] transition-colors"
+            className="font-mono text-[11px] leading-none rounded-sm px-2 py-1 hover:bg-[var(--color-bg-hover)] transition-colors"
             style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
           >
             {a.name}
@@ -69,7 +69,7 @@ function UsageRow({
         ))}
         {overflow > 0 && (
           <span
-            className="font-mono text-[11px] leading-none rounded px-2 py-1"
+            className="font-mono text-[11px] leading-none rounded-sm px-2 py-1"
             style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
           >
             +{overflow}
@@ -77,7 +77,7 @@ function UsageRow({
         )}
         {anyPending && (
           <span
-            className="text-[11px] leading-none rounded px-2 py-1 shrink-0"
+            className="text-[11px] leading-none rounded-sm px-2 py-1 shrink-0"
             style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}66` }}
             title={pendingTitle}
           >

@@ -150,7 +150,7 @@ function ScheduleEntry({
           <div className="flex gap-1">
             <button
               onClick={() => { setEditing((e) => !e); setEditError(null); }}
-              className="text-xs px-1.5 py-0.5 rounded cursor-pointer"
+              className="text-xs px-1.5 py-0.5 rounded-sm cursor-pointer"
               style={{
                 color: C.textMuted,
                 background: C.borderSubtle,
