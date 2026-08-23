@@ -132,8 +132,21 @@ async def index_memory(memory: BoardMemory) -> Optional[str]:
     from app.services.embedding_service import embedding_service
     from app.services.qdrant_service import qdrant_service
 
+    from app.services.embedding_provider import EmbeddingNotConfiguredError
+
     try:
         vec = await embedding_service.embed(text)
+    except EmbeddingNotConfiguredError as e:
+        # No endpoint configured (fresh install / cleared URL): retrying
+        # cannot succeed until an operator sets one, so no retry enqueue.
+        # These rows stay vector-less until the operator runs the one-time
+        # backfill (docker compose exec backend python -m
+        # scripts.backfill_memory_embeddings) — deliberately not automatic.
+        logger.info(
+            "Embedding uebersprungen fuer memory %s (layer=%s): %s",
+            memory.id, layer, e,
+        )
+        return None
     except Exception as e:
         logger.warning(
             "Embedding failed for memory %s (layer=%s): %s — DB-Insert bleibt, Qdrant uebersprungen, retry enqueued",

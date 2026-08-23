@@ -6,6 +6,74 @@
 [extend]
 useDefault = true
 
+# ── What actually leaks out of THIS repo ─────────────────────────────────────
+# Not passwords — addresses and paths. Five commits published the maintainer's
+# fleet, and the Spark's Tailscale address reached the public branch in four
+# files before anyone noticed. The default ruleset has nothing for any of it,
+# and the CI check next to it only greps for FILE NAMES.
+#
+# Each rule allowlists the placeholders the repo already uses on purpose. If
+# one of these fires on your change, do not widen the allowlist — use the
+# placeholder instead: 198.51.100.7 (RFC 5737), your-machine.tailnet-name.ts.net,
+# /Users/testuser.
+
+[[rules]]
+id = "mc-tailscale-cgnat-address"
+description = "Tailscale address (100.64.0.0/10) — a machine on a private tailnet"
+regex = '''\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}\b'''
+tags = ["mission-control", "private-network"]
+
+  [rules.allowlist]
+  description = "The range definition itself, plus fixed test addresses"
+  regexTarget = "match"
+  regexes = [
+    # 100.64.0.0/10 as written in address_classify.py / host.py / hosts.py —
+    # the range boundary, not a machine.
+    '''^100\.64\.0\.0$''',
+    # Tailscale's own MagicDNS resolver, a public constant.
+    '''^100\.100\.100\.100$''',
+    # Invented address in the tailscale/host tests.
+    '''^100\.100\.200\.50$''',
+  ]
+  paths = ['''backend/tests/test_oss_scrub_hygiene\.py''']  # deliberate samples: this file TESTS the rules
+  # Everything else in 100.64.0.0/10 is somebody's machine. Documentation
+  # examples belong in the RFC 5737 ranges (192.0.2.0/24, 198.51.100.0/24,
+  # 203.0.113.0/24) — do not add addresses here, change the example.
+
+[[rules]]
+id = "mc-tailscale-magic-dns"
+description = "Tailscale MagicDNS name (<host>.<tailnet>.ts.net) — names a private tailnet"
+regex = '''\b[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9-]*\.ts\.net\b'''
+tags = ["mission-control", "private-network"]
+
+  [rules.allowlist]
+  description = "Documented placeholder hostnames"
+  regexTarget = "match"
+  regexes = [
+    '''\.tailnet-name\.ts\.net''',   # README / setup docs
+    '''\.tail1234\.ts\.net''',       # obviously-fake tailnet in address tests
+    '''\.tailexample\.ts\.net''',    # recorded omp-bridge protocol fixture
+  ]
+  paths = ['''backend/tests/test_oss_scrub_hygiene\.py''']  # deliberate samples: this file TESTS the rules
+
+[[rules]]
+id = "mc-absolute-macos-home-path"
+description = "Absolute macOS home path — carries the operator's login name"
+regex = '''/Users/[A-Za-z0-9_-]+'''
+tags = ["mission-control", "host-layout"]
+
+  [rules.allowlist]
+  description = "Placeholder home directories used across tests, docs and fixtures"
+  regexTarget = "match"
+  regexes = [
+    '''^/Users/(testuser|otheruser|operator|op|x|mark|fakehost|YOUR_USER)$''',
+    # The omp-bridge fixtures are recorded token-delta streams: a path is built
+    # up piece by piece, so truncated prefixes of the placeholder show up as
+    # their own matches.
+    '''^/Users/(H|HY|tes)$''',
+  ]
+  paths = ['''backend/tests/test_oss_scrub_hygiene\.py''']  # deliberate samples: this file TESTS the rules
+
 [allowlist]
 description = "Verified false positives"
 regexes = [

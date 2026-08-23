@@ -1,20 +1,20 @@
 """omp-Adapter fuer die Sessions-Chat-Ansicht — Transkript-Aufloesung, Zeilen-
-Parser und Pane-Sonde fuer den Harness ``omp`` (Agent Sparky).
+Parser und Pane-Sonde fuer den Harness ``omp`` (Agent der omp-Agent).
 
 Gegenstueck zu ``transcript_chat.py`` (Claude Code) und ueber
 ``transcript_adapters.adapter_for`` angebunden. Der ChatEvent-Vertrag
 (``frontend-v2/src/lib/chatTypes.ts``) bleibt unveraendert — dieser Adapter
 uebersetzt nur das omp-Format in dieselben normalisierten Ereignisse.
 
-Phase-0-Discovery (live erhoben am 19.08.2026 gegen Sparky, omp im Container
-``mc-agent-sparky``, Modell ``mc-openai/qwen38-27b-unsloth-nvfp4``):
+Phase-0-Discovery (live erhoben am 19.08.2026 gegen der omp-Agent, omp im Container
+``mc-agent-<slug>``, Modell ``mc-openai/qwen38-27b-unsloth-nvfp4``):
 
 ABLAGE — omp schreibt JSONL live, eine Datei je Session:
     <OMP_HOME>/profiles/<profil>/agent/sessions/<kodiertes-cwd>/<ts>_<uuid>.jsonl
   Im Container ist das ``/home/agent/.omp/profiles/mc-agent/agent/sessions``;
   dieses Verzeichnis ist per Bind-Mount auf dem Host als
   ``~/.mc/agents/<slug>/omp-sessions`` sichtbar (``docker inspect
-  mc-agent-sparky``), und genau von dort liest das Backend. Wichtiger
+  mc-agent-<slug>``), und genau von dort liest das Backend. Wichtiger
   Unterschied zu Claude Code: die Sessions liegen NICHT flach im Verzeichnis,
   sondern eine Ebene tiefer in einem pro-cwd-Unterordner (z. B.
   ``--workspace--``) — ``find_active_session`` sucht deshalb eine Ebene tief.
@@ -58,7 +58,7 @@ WAS OMP NICHT HAT: Subagenten/Sidechains (``sidechain`` ist immer ``False``),
 
 PANE — omp Fenster 0 ist die ECHTE, interaktive TUI (ADR-049 loest den
   headless ``omp -p``-Betrieb von ADR-045 ab; live bestaetigt: ``ps`` zeigt
-  ``omp --hook … --cwd /workspace`` in tmux ``sparky:0``). Zwei Formen
+  ``omp --hook … --cwd /workspace`` in tmux ``omp-agent:0``). Zwei Formen
   reichen zur Klassifikation:
     Arbeitszeile:  `` ⠴ Working… ⟦esc⟧`` bzw. `` ⠇ Reading hostname file ⟦esc⟧``
                    — der Text WECHSELT, stabil ist die Abbruch-Marke ``⟦esc⟧``.
@@ -133,7 +133,7 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     Anders als beim Claude-Adapter wird EINE Ebene tief gesucht: omp legt je
     Arbeitsverzeichnis einen eigenen Unterordner an (``--workspace--``,
     ``--workspace-bench-…--``) und schreibt die Session-Datei dort hinein.
-    Ein Agent kann Sessions in mehreren solchen Ordnern haben (Sparky hat
+    Ein Agent kann Sessions in mehreren solchen Ordnern haben (der omp-Agent hat
     sechs) — die aktive ist schlicht die zuletzt geschriebene ueber alle
     hinweg.
 
@@ -428,7 +428,7 @@ class OmpLineParser:
         jede gequeuete Nachricht und jeden Nudge ein. Es ist Eingabe ins
         Gespraech — aber NICHT vom Operator: geschrieben hat sie Mission
         Control selbst. Auf der Nutzer-Seite (so war es bis hierher) sah es
-        aus, als haette Mark 2000 Zeichen Briefing getippt; live in Sparkys
+        aus, als haette Mark 2000 Zeichen Briefing getippt; live in der omp-Agents
         Transkripten sind das 33 Zeilen, darunter zwei Operating-Cards.
 
         Das ist dieselbe Fehlerklasse, die ``0fd8542c`` fuer Claude Code

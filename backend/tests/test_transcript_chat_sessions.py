@@ -470,7 +470,7 @@ async def test_resolve_aliveness_asks_for_the_harness_process(tmp_path, monkeypa
     „nachweislich weg" — eine laufende Sitzung galte als beendet."""
     f = tmp_path / "session.jsonl"
     _touch(f, mtime_offset_seconds=300)
-    agent = SimpleNamespace(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = SimpleNamespace(slug="omp-agent", agent_runtime="cli-bridge", harness="omp")
     gefragt: list[str] = []
 
     async def _fake_process_alive(a, process_name):

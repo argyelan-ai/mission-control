@@ -28,6 +28,10 @@ const NAMED_EVENTS = [
   "job.started", "job.completed",
   "meeting.scheduled", "meeting.started", "meeting.completed", "meeting.failed",
   "meeting.cancelled", "meeting.topic_started", "meeting.agent_thinking", "meeting.message_received",
+  // Gruppenchat (ADR-075) — Kanal mc:events:group:{id}
+  "group.message_posted", "group.round_started", "group.turn_started",
+  "group.round_completed", "group.doc_updated", "group.gate_requested",
+  "group.status_changed", "group.member_changed",
   "chat.message", "chat_event", "memory.created", "project.updated", "system.alert",
   "system.rpc_disconnected", "system.rpc_reconnected", "system.slow_response", "system.component_down",
 ] as const;

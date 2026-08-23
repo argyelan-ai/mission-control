@@ -383,7 +383,7 @@ async def test_process_alive_demands_a_process_name():
     """Kein ``claude``-Standard mehr. Ein Aufrufer, der den Namen vergisst,
     suchte sonst still den falschen Prozess — und rc=1 heisst „nachweislich
     weg": eine laufende omp-Sitzung laese sich als ``ended``. Live geprueft
-    an ``mc-agent-sparky``: ``pgrep -x omp`` findet den Prozess,
+    an ``mc-agent-omp-agent``: ``pgrep -x omp`` findet den Prozess,
     ``pgrep -x claude`` nicht."""
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
     with pytest.raises(TypeError):
@@ -431,7 +431,7 @@ async def test_process_alive_looks_for_the_openclaude_binary(monkeypatch):
     # waehlt den Adapter, der Adapter nennt den Prozess, ``process_alive``
     # sucht ihn. Genau dieser Weg laeuft in Produktion — eine Hilfsfunktion
     # direkt zu pruefen liesse die Verdrahtung ungeprueft.
-    agent = _StubAgent(agent_runtime="cli-bridge", slug="shakespeare", harness="openclaude")
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="openclaude-agent", harness="openclaude")
     result = await process_alive(agent, adapter_for(agent).process_name)
 
     assert captured_argv[-1] == "openclaude", captured_argv

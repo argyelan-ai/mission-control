@@ -2609,6 +2609,29 @@ def _is_own_message(message, agent: Agent) -> bool:
     return message.sender_type == "agent" and message.sender_id == agent.id
 
 
+def _group_message_visible_to(message, thread, agent: Agent) -> bool:
+    """Mention-Filter für Gruppen-Threads (Gruppenchat V1, Sturm-Schutz).
+
+    Auf einem Thread(kind="group") wird eine Nachricht nur zugestellt, wenn
+    der Agent in ``message.mentions`` steht — fold-tolerant gegen Slug UND
+    Name (chat_inbound._fold: Gross/Klein, ``-``/``_`` egal). Ohne mentions
+    wird NIEMAND geweckt: ein unaufgeforderter Agenten-Post kann so
+    strukturell keinen anderen Agenten triggern; das Wort erteilen nur die
+    Runden-Engine, Marks @-Mentions und explizite Agenten-@-Mentions.
+    Cursor rücken trotzdem vor (Aufrufer behandelt das wie _is_own_message).
+    Alle anderen Thread-Arten bleiben ungefiltert (bestehendes Verhalten).
+    """
+    if thread.kind != "group":
+        return True
+    from app.services.chat_inbound import _fold
+
+    wanted = {_fold(m) for m in (message.mentions or [])} - {""}
+    if not wanted:
+        return False
+    own_keys = {_fold(agent.slug or ""), _fold(agent.name or "")} - {""}
+    return bool(own_keys & wanted)
+
+
 def _is_briefing_message(message) -> bool:
     """True for the persisted dispatch briefing (system line with marker).
 
@@ -2719,7 +2742,9 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
         out.extend(
             _serialize_message(m)
             for m in msgs
-            if not _is_own_message(m, agent) and not _is_briefing_message(m)
+            if not _is_own_message(m, agent)
+            and not _is_briefing_message(m)
+            and _group_message_visible_to(m, thread, agent)
         )
 
     if changed:
@@ -3234,7 +3259,9 @@ async def agent_inbox(
         msgs = await _unacked_thread_messages(session, thread, cursor)
         non_own = [
             m for m in msgs
-            if not _is_own_message(m, agent) and not _is_briefing_message(m)
+            if not _is_own_message(m, agent)
+            and not _is_briefing_message(m)
+            and _group_message_visible_to(m, thread, agent)
         ]
         if not non_own:
             continue

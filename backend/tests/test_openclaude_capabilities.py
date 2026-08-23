@@ -5,7 +5,7 @@ Zustands-Sonde tragen unveraendert (Phase-0-Discovery 19.08.2026). Was NICHT
 traegt, ist die Capabilities-Schicht — und genau die wird hier festgenagelt.
 
 Alle Fixtures in dieser Datei sind ECHTE ``capture-pane``-Ausgaben von
-``mc-agent-shakespeare`` (openclaude 0.7.0, Modell ``qwen38-27b-unsloth-nvfp4``
+``mc-agent-openclaude-agent`` (openclaude 0.7.0, Modell ``qwen38-27b-unsloth-nvfp4``
 gegen den Spark), aufgenommen am 19.08.2026 in WEGWERF-tmux-Fenstern. Keine
 persoenlichen Daten — generische Picker-Chrome und Modellnamen.
 
@@ -45,9 +45,9 @@ def no_real_fleet_access(monkeypatch):
     """Wachhund gegen den Real-Host-Leak — die Klasse Fehler, die diese Datei
     schon dreimal getroffen hat.
 
-    ``mc-agent-shakespeare`` ist ein ECHTER Container auf Marks Rechner. Wer
+    ``mc-agent-openclaude-agent`` ist ein ECHTER Container auf Marks Rechner. Wer
     hier einen Stub vergisst, laesst die Suite ``docker exec -u agent
-    mc-agent-shakespeare openclaude --version`` in die laufende Flotte
+    mc-agent-openclaude-agent openclaude --version`` in die laufende Flotte
     absetzen — und merkt es nicht, weil ``resolve_cli_version`` jede Ausnahme
     schluckt und ``None`` zurueckgibt. Genau darum wird hier gesammelt und
     erst beim Abbau geprueft, statt zu werfen.
@@ -68,7 +68,7 @@ def no_real_fleet_access(monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Echte Pane-Fixtures (mc-agent-shakespeare, openclaude 0.7.0, 19.08.2026)
+# Echte Pane-Fixtures (mc-agent-openclaude-agent, openclaude 0.7.0, 19.08.2026)
 # ══════════════════════════════════════════════════════════════════════════
 
 # Der Picker beim OEFFNEN: der Cursor steht auf dem aktiven Modell (``✔``),
@@ -139,7 +139,7 @@ OPENCLAUDE_PICKER_EFFORT_SUPPORTED = """\
 CLAUDE_EFFORT_LINE = "   ● High effort (default) ←/→ to adjust\n"
 
 
-def _agent(slug="shakespeare", harness="openclaude", runtime="cli-bridge"):
+def _agent(slug="openclaude-agent", harness="openclaude", runtime="cli-bridge"):
     return SimpleNamespace(slug=slug, agent_runtime=runtime, harness=harness)
 
 
@@ -584,7 +584,7 @@ async def test_catalog_cache_does_not_leak_between_harnesses(monkeypatch, redis_
 
     monkeypatch.setattr(hc, "resolve_cli_version", _version)
     await redis_env.set(
-        hc.RedisKeys.model_catalog("claude", "0.7.0", "shakespeare"),
+        hc.RedisKeys.model_catalog("claude", "0.7.0", "openclaude-agent"),
         json.dumps([{"command": "opus", "label": "Opus"}]),
     )
 
@@ -645,12 +645,12 @@ async def test_cache_key_carries_the_model(redis_env):
     """Die Sperre bleibt bewusst OHNE Modell (sie schuetzt das eine
     Wegwerf-Fenster je Container), der Eintrag traegt es — und kein
     Modellname kann je den Sperr-Schluessel treffen."""
-    a = hc.RedisKeys.model_catalog("openclaude", "0.7.0", "shakespeare", "gpt-5.2-codex")
-    b = hc.RedisKeys.model_catalog("openclaude", "0.7.0", "shakespeare", "qwen38-27b")
-    lock = hc.RedisKeys.model_catalog_discovery_lock("openclaude", "0.7.0", "shakespeare")
+    a = hc.RedisKeys.model_catalog("openclaude", "0.7.0", "openclaude-agent", "gpt-5.2-codex")
+    b = hc.RedisKeys.model_catalog("openclaude", "0.7.0", "openclaude-agent", "qwen38-27b")
+    lock = hc.RedisKeys.model_catalog_discovery_lock("openclaude", "0.7.0", "openclaude-agent")
 
     assert a != b
-    assert hc.RedisKeys.model_catalog("openclaude", "0.7.0", "shakespeare", "discovery-lock") != lock
+    assert hc.RedisKeys.model_catalog("openclaude", "0.7.0", "openclaude-agent", "discovery-lock") != lock
 
 
 async def test_legacy_cached_list_is_still_readable(monkeypatch, redis_env):
@@ -695,7 +695,7 @@ def _stub_effort_support(monkeypatch, tmp_path, **support):
     sonst nimmt.
 
     Ohne den dritten (``resolve_cli_version``) fuehrte diese Testdatei auf
-    Marks Rechner ``docker exec -u agent mc-agent-shakespeare openclaude
+    Marks Rechner ``docker exec -u agent mc-agent-openclaude-agent openclaude
     --version`` aus: der Container existiert dort, die Suite griff also in
     die laufende Flotte. ``_check_effort_levels_version_drift`` laeuft VOR
     dem Effort-Stub und geht an ihm vorbei — genau der "Real-Host-Leak",
@@ -739,7 +739,7 @@ async def test_model_without_effort_reports_no_level_at_all(monkeypatch, tmp_pat
     Der Chip behauptete damit eine Stufe, die das Modell ignoriert; genau
     die luegende Anzeige, gegen die das Tor gebaut wurde."""
     _stub_effort_support(monkeypatch, tmp_path, supported=False, model="qwen38-27b")
-    cfg = tmp_path / ".mc" / "agents" / "shakespeare" / "claude-config"
+    cfg = tmp_path / ".mc" / "agents" / "openclaude-agent" / "claude-config"
     cfg.mkdir(parents=True)
     (cfg / "settings.json").write_text(json.dumps({"effortLevel": "xhigh"}))
 
@@ -767,7 +767,7 @@ async def test_effort_capabilities_reads_persisted_level_for_openclaude(monkeypa
     (danach zurueckgesetzt)."""
     _stub_effort_support(monkeypatch, tmp_path, supported=True, model="gpt-5.2-codex")
 
-    cfg = tmp_path / ".mc" / "agents" / "shakespeare" / "claude-config"
+    cfg = tmp_path / ".mc" / "agents" / "openclaude-agent" / "claude-config"
     cfg.mkdir(parents=True)
     (cfg / "settings.json").write_text(json.dumps({"effortLevel": "xhigh"}))
     assert (await agent_chat_input.effort_capabilities(_agent()))["effort"] == "xhigh"
@@ -799,7 +799,7 @@ async def test_set_effort_accepts_openclaude_and_its_levels(monkeypatch):
 def _stub_set_effort(monkeypatch, **support):
     """Alle I/O-Wege von ``set_effort`` abgefangen — inklusive des
     Modell-Tors, das sonst ein echtes Wegwerf-Fenster im Container von
-    Shakespeare oeffnen wuerde."""
+    der openclaude-Agent oeffnen wuerde."""
     sent: list[list[str]] = []
 
     async def _run(argv):
@@ -888,7 +888,7 @@ async def test_model_options_openclaude_cold_cache_offers_nothing(monkeypatch, t
 
 async def test_send_text_gates_on_readiness_for_openclaude(monkeypatch):
     """Die Bereitschafts-Marker sind bei openclaude identisch — live
-    gegengeprueft am ECHTEN Pane von Shakespeare (nur gelesen, nichts
+    gegengeprueft am ECHTEN Pane eines openclaude-Agenten (nur gelesen, nichts
     getippt): ``parse_pane_state`` liefert dort ``idle``. Damit schuetzt das
     Gate auch hier vor einem Send in eine noch bootende TUI, statt wie bei
     fremden CLIs jede Nachricht mit 409 abzuweisen."""

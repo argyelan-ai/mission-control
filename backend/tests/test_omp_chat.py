@@ -1,12 +1,12 @@
-"""Tests fuer den omp-Chat-Adapter (Harness ``omp``, Agent Sparky).
+"""Tests fuer den omp-Chat-Adapter (Harness ``omp``, Agent der omp-Agent).
 
 Die Fixture-Zeilen sind gekuerzte, REDIGIERTE Kopien echter Transkript-Zeilen
-aus ``~/.mc/agents/sparky/omp-sessions`` (aufgezeichnet am 19.08.2026):
+aus ``~/.mc/agents/omp-agent/omp-sessions`` (aufgezeichnet am 19.08.2026):
 Struktur unveraendert, Inhalte neutralisiert — keine personenbezogenen Daten,
 keine Tokens, keine Pfade mit echten Namen. Das Repo ist oeffentlich.
 
 Die Pane-Fixtures sind woertliche ``tmux capture-pane``-Ausgaben aus
-``mc-agent-sparky`` (Fenster 0, omp-TUI) — Arbeitszustand einmal mit dem
+``mc-agent-<slug>`` (Fenster 0, omp-TUI) — Arbeitszustand einmal mit dem
 Standardtext („Working…") und einmal mit einem werkzeugspezifischen Text, weil
 genau dieser Text wechselt und deshalb NICHT der Anker sein darf.
 """
@@ -74,7 +74,7 @@ CUSTOM_MESSAGE_HIDDEN_LINE = CUSTOM_MESSAGE_LINE.replace('"display":true', '"dis
 CUSTOM_MESSAGE_NO_DISPLAY_LINE = CUSTOM_MESSAGE_LINE.replace('"display":true,', "")
 
 # Der Auftrag, den MC ueber ``bridge.py:inject_file`` einspielt: eine
-# Operating Card von 2069 Zeichen. Live in Sparkys Transkripten (33 solche
+# Operating Card von 2069 Zeichen. Live in der omp-Agents Transkripten (33 solche
 # Zeilen) — sie war NIE etwas, das der Operator getippt hat.
 TASK_MENTION_LINE = json.dumps(
     {
@@ -417,7 +417,7 @@ def test_duplicate_line_is_caught_by_the_entry_id():
 
 
 class _Agent:
-    def __init__(self, slug="sparky", agent_runtime="cli-bridge", harness="omp"):
+    def __init__(self, slug="omp-agent", agent_runtime="cli-bridge", harness="omp"):
         self.slug = slug
         self.agent_runtime = agent_runtime
         self.harness = harness
@@ -430,7 +430,7 @@ def omp_home(tmp_path, monkeypatch):
 
 
 def test_resolve_transcript_dir(omp_home):
-    assert resolve_transcript_dir(_Agent()) == omp_home / ".mc/agents/sparky/omp-sessions"
+    assert resolve_transcript_dir(_Agent()) == omp_home / ".mc/agents/omp-agent/omp-sessions"
 
 
 @pytest.mark.parametrize(
@@ -483,7 +483,7 @@ def test_find_active_session_also_finds_a_flat_file(tmp_path):
 
 
 def test_session_scan_root_of_a_nested_file_is_the_sessions_root(tmp_path):
-    root = tmp_path / "agents" / "sparky" / "omp-sessions"
+    root = tmp_path / "agents" / "omp-agent" / "omp-sessions"
     p = _make_session(root, "--workspace--", "a.jsonl", 1_000_000)
     assert session_scan_root(p) == root
 
@@ -491,10 +491,10 @@ def test_session_scan_root_of_a_nested_file_is_the_sessions_root(tmp_path):
 def test_session_scan_root_of_a_flat_file_is_the_sessions_root(tmp_path):
     """``find_active_session`` unterstuetzt flache Dateien (eigener Test) —
     dann darf die Wurzel NICHT eine Ebene ueber ``omp-sessions`` landen.
-    Dort liegt ``claude-config/history.jsonl`` (real bei sparky, kimi und 11
+    Dort liegt ``claude-config/history.jsonl`` (real bei omp-agent, kimi und 11
     weiteren Agenten): der Rollover-Scan haette die als „neuere Session"
     gesehen und eine LEBENDE Sitzung als beendet gemeldet."""
-    root = tmp_path / "agents" / "sparky" / "omp-sessions"
+    root = tmp_path / "agents" / "omp-agent" / "omp-sessions"
     p = _make_session(root, ".", "flach.jsonl", 1_000_000)
     assert session_scan_root(p) == root
 
@@ -510,7 +510,7 @@ def test_flat_session_next_to_a_foreign_transcript_stays_the_active_one(tmp_path
     """Die Wirkung des Fehlers, End-to-End nachgestellt: neben der
     Sessions-Wurzel liegt ein fremdes, NEUERES ``history.jsonl``. Ueber der
     falschen Wurzel gescannt gilt das als Rollover."""
-    root = tmp_path / "agents" / "sparky" / "omp-sessions"
+    root = tmp_path / "agents" / "omp-agent" / "omp-sessions"
     p = _make_session(root, ".", "flach.jsonl", 1_000_000)
     _make_session(root.parent, "claude-config", "history.jsonl", 9_000_000)
     assert find_active_session(session_scan_root(p))[0] == p
@@ -559,7 +559,7 @@ def test_transcript_allowed_fails_closed_for_a_foreign_harness(omp_home):
     """Ohne Verzeichnis kein Zugriff — auch nicht auf einen Pfad, der zufaellig
     passend aussieht."""
     agent = _Agent(harness="kimi")
-    path = omp_home / ".mc/agents/sparky/omp-sessions/--workspace--/x.jsonl"
+    path = omp_home / ".mc/agents/omp-agent/omp-sessions/--workspace--/x.jsonl"
     assert transcript_allowed(agent, path) is False
 
 
@@ -614,7 +614,7 @@ def test_turn_end_probe_fails_silent(tmp_path):
 
 # ── Pane-Sonde ──────────────────────────────────────────────────────────────
 
-# Woertliche capture-pane-Ausgaben aus mc-agent-sparky (19.08.2026).
+# Woertliche capture-pane-Ausgaben aus mc-agent-<slug> (19.08.2026).
 PANE_IDLE = """\
  Die Datei enthält den Hostnamen c83837ef127c.
 

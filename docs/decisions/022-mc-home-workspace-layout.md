@@ -167,6 +167,46 @@ Code-Migration in späteren PRs.
    --force-recreate`).
 8. Smoke-Test: `docker exec mc-agent-rex bash -c "ls /workspace && mc --version"`.
 
+## Bekannte Ausnahme: `docker/docker-compose.agents.yml` (2026-08-20)
+
+Diese ADR sagt: **aller pro-Betreiber erzeugte Zustand liegt unter `~/.mc/`**,
+ausserhalb des Repos — genau damit Produktcode und die Maschine ihres Besitzers
+sich nicht mischen. Eine Datei haelt sich nicht daran.
+
+`docker/docker-compose.agents.yml` wird zur Laufzeit fortgeschrieben
+(`compose_renderer.py`) und beschreibt die eigene Flotte. Sie lag bis
+2026-08-19 sogar in der Versionsverwaltung; seitdem ist sie gitignored — aber
+sie liegt weiterhin **im Repo-Ordner**. Das ist ein Widerspruch zu dieser ADR,
+und er ist bewusst offen, nicht uebersehen:
+
+**Was daran real weh tut**
+- `git clean -fdx` loescht sie mit, samt Hand-Anpassungen, die der Renderer
+  nie wieder erzeugt.
+- Jedes Tar/Zip/Bildschirmfoto des Repo-Ordners nimmt sie mit.
+
+**Warum sie trotzdem (noch) dort liegt**
+Technisch machbar waere der Umzug: `${HOME}/.mc` ist im Backend-Container unter
+demselben absoluten Pfad gemountet (`docker-compose.yml`), der Renderer koennte
+also dorthin schreiben. Es haengt aber mehr daran als der Pfad:
+
+1. **Projektverzeichnis.** `docker compose` leitet Projektverzeichnis *und*
+   Projektnamen aus dem ERSTEN `-f` ab. Alle Produktiv-Aufrufe geben
+   `docker-compose.yml` zuerst an, die waeren unbetroffen. Die dokumentierten
+   Ad-hoc-Aufrufe geben aber nur die Agenten-Datei an (`docker compose -f
+   docker/docker-compose.agents.yml restart mc-agent-<slug>`, u.a. in ADR-024
+   und `docs/agent-configuration-standard.md`). Nach dem Umzug zeigte deren
+   Projektverzeichnis auf `~/.mc`: `env_file: docker/.env.shared` loest nicht
+   mehr auf, und das Projekt hiesse `mc` statt `mission-control` — womit
+   `external: true` auf `mission-control_default` ins Leere greift. Jeder
+   dieser Aufrufe braucht dann `--project-directory`.
+2. **Etwa zwanzig Fundstellen** in Code, Skripten, Doku und ADRs.
+3. **Eine zweite Migration derselben Datei innerhalb eines Releases** — die
+   erste (raus aus der Versionsverwaltung) faehrt gerade erst aus.
+
+**Entscheidung:** Der Umzug ist ein eigener Schritt, nicht ein Anhaengsel des
+OSS-Splits. Bis dahin gilt die Ausnahme als hier dokumentiert. Wer den Umzug
+angeht, faengt bei Punkt 1 an — er ist der einzige, der still kaputtgeht.
+
 ## Referenzen
 
 - Key Files:
