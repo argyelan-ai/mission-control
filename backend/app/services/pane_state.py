@@ -21,7 +21,7 @@ adapter (parser stays pure, capture is the only I/O):
   (agent slug, process name); same Boss/host `None` scoping as
   ``capture_pane``. The process name comes from the harness adapter
   (``transcript_adapters``) — it is ``claude`` for Claude Code and ``omp``
-  for Sparky.
+  for der omp-Agent.
 
 ``parse_pane_state`` here is the CLAUDE CODE probe. A foreign TUI has its own
 (``omp_chat.parse_pane_state``); the adapter registry picks which one runs.
@@ -376,7 +376,7 @@ async def process_alive(agent, process_name: str) -> bool | None:
     PFLICHT — ohne Vorgabewert. Der frueher fest verdrahtete Wert ``claude``
     machte jede omp-Sitzung „beendet": ``pgrep -x claude`` findet im
     omp-Container nichts, rc=1 heisst aber „nachweislich weg" — der
-    Container faehrt ``omp`` (live geprueft: ``ps`` in ``mc-agent-sparky``).
+    Container faehrt ``omp`` (live geprueft: ``ps`` in ``mc-agent-<slug>``).
     Ein ``claude``-Standard in einem Modul, das gerade harness-generisch
     geworden ist, waere genau dieselbe Falle noch einmal: ein Aufrufer, der
     das Argument vergisst, sucht still den falschen Prozess. So wird daraus

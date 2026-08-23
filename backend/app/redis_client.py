@@ -96,6 +96,13 @@ class RedisKeys:
         return f"mc:agent:{agent_id}:chat"
 
     @staticmethod
+    def group_events(group_id: str) -> str:
+        """Per-Gruppe Pub/Sub-Kanal (Gruppenchat V1) — SSE-Events wie
+        group.message_posted / group.member_changed; die Runden-Engine (PR B)
+        publiziert hier round_started/round_completed/doc_updated."""
+        return f"mc:events:group:{group_id}"
+
+    @staticmethod
     def bench_entry_rerender_cooldown(entry_id: str) -> str:
         """Per-entry rerender rate limit (SET NX EX) — bench_studio's
         per-video rerender button. Prevents double-click/spam fan-out of

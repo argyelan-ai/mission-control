@@ -12,7 +12,7 @@ from app.services.transcript_adapters import adapter_for
 
 
 class _Agent:
-    def __init__(self, slug="sparky", agent_runtime="cli-bridge", harness="omp"):
+    def __init__(self, slug="omp-agent", agent_runtime="cli-bridge", harness="omp"):
         self.slug = slug
         self.agent_runtime = agent_runtime
         self.harness = harness
@@ -31,7 +31,7 @@ def test_omp_agent_gets_the_omp_adapter():
 
 
 def test_claude_agent_gets_the_claude_adapter():
-    a = adapter_for(_Agent(slug="davinci", harness="claude"))
+    a = adapter_for(_Agent(slug="alpha", harness="claude"))
     assert a.name == "claude"
     assert a.process_name == "claude"
     assert a.resolve_transcript_dir is transcript_chat.resolve_transcript_dir

@@ -221,25 +221,6 @@
     "enabled": false
   },
   {
-    "id": "omp-qwen",
-    "display_name": "omp headless (Qwen)",
-    "runtime_type": "omp",
-    "provider": "local",
-    "endpoint": "http://192.0.2.20:8000/v1",
-    "healthcheck_path": "/models",
-    "container_name": null,
-    "model_identifier": null,
-    "role_tags": ["coder", "general"],
-    "supports_tools": true,
-    "supports_reasoning": true,
-    "supports_streaming": true,
-    "preferred_context_len": 32768,
-    "max_context_len": 262144,
-    "gpu_profile": "dgx_spark_heavy",
-    "memory_notes": "omp headless driver (bridge.py --serve). Reuses the Qwen vLLM on the DGX Spark (same endpoint as qwen-general). OpenAI-compatible transport, no anthropic auth.",
-    "startup_notes": "Container boots bridge.py --serve; ready when the Window-0 pane prints OMP_BRIDGE_READY. Qwen must be warm (2-5 min after vLLM start)."
-  },
-  {
     "id": "llamacpp-example",
     "display_name": "llama.cpp Example (GGUF)",
     "runtime_type": "llamacpp_docker",

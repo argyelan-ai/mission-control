@@ -18,22 +18,30 @@
  * from the chat header's options sheet instead (ChatOptionsSheet), and open as
  * full-screen sheets — the phone has no room for a permanent rail anyway.
  */
-import { GitCompare, Globe } from "lucide-react";
+import { FileText, GitCompare, Globe } from "lucide-react";
 import { C } from "@/lib/colors";
 
-export type PanelKind = "diff" | "browser";
+export type PanelKind = "diff" | "browser" | "doc";
 
 const PANELS: { key: PanelKind; label: string; icon: typeof GitCompare }[] = [
   { key: "diff", label: "Diff", icon: GitCompare },
   { key: "browser", label: "Browser", icon: Globe },
+  // Nur im Gruppenraum: das lebende Ergebnis-Dokument (ADR-075). Ein Agent
+  // hat keins, eine Gruppe hat keinen Workspace-Diff — deshalb entscheidet
+  // die Seite über `only`, welche Knöpfe hier überhaupt erscheinen.
+  { key: "doc", label: "Ergebnis", icon: FileText },
 ];
 
 interface PanelRailProps {
   active: PanelKind | null;
   onSelect: (panel: PanelKind | null) => void;
+  /** Auswahl der sichtbaren Panels. Ohne Angabe: Diff + Browser (bisheriges
+   *  Verhalten, damit bestehende Aufrufer unverändert bleiben). */
+  only?: PanelKind[];
 }
 
-export function PanelRail({ active, onSelect }: PanelRailProps) {
+export function PanelRail({ active, onSelect, only }: PanelRailProps) {
+  const visible = only ?? (["diff", "browser"] as PanelKind[]);
   return (
     <div
       role="toolbar"
@@ -44,7 +52,7 @@ export function PanelRail({ active, onSelect }: PanelRailProps) {
       className="hidden md:flex md:flex-col items-center gap-1 md:px-1.5 md:py-3 md:border md:rounded-xl md:overflow-hidden shrink-0"
       style={{ background: C.bgSurface, borderColor: C.border }}
     >
-      {PANELS.map(({ key, label, icon: Icon }) => {
+      {PANELS.filter((p) => visible.includes(p.key)).map(({ key, label, icon: Icon }) => {
         const isActive = active === key;
         return (
           <button

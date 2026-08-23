@@ -16,7 +16,23 @@ RUN apk add --no-cache \
     openssh-client \
     tmux \
     github-cli \
-    pandoc
+    pandoc \
+    # poppler-utils: das `Read`-Werkzeug der CLIs rendert PDF-Seiten mit
+    # `pdftoppm`. Ohne das Paket bricht jedes mehrseitige PDF mit
+    # "pdftoppm is not installed" ab — und der naheliegende Ausweg (macOS
+    # `sips`) rendert nur Seite 1, ein mehrseitiges Dokument bleibt also
+    # unlesbar. Aufgefallen 19.08.2026 am ersten PDF-Anhang im Sessions-Chat.
+    poppler-utils \
+    # font-liberation + fontconfig: NUR im Alpine-Image noetig und die
+    # eigentliche Falle. poppler-utils allein rendert hier zwar ohne Abbruch,
+    # meldet aber "Couldn't find a font for 'Helvetica'" und liefert LEERE
+    # Seiten — beide Seiten kamen byte-gleich mit 4342 B heraus. Der Agent
+    # sagte daraufhin voellig korrekt "Seite 2 ist leer": ein stiller
+    # Fehlschlag, der wie ein inhaltliches Ergebnis aussieht. Mit den
+    # Basis-Schriften: 9195 B und 10453 B, also echter Text.
+    # Die Debian-Images bringen diese Schriften bereits mit.
+    font-liberation \
+    fontconfig
 
 # Python-Libraries fuer Office-Formate (Word/Excel/PowerPoint). Pure Python,
 # ARM-neutral. Anthropic document-skills (pdf/docx/xlsx/pptx) sind bereits

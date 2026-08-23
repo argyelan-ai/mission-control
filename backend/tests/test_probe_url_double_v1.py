@@ -20,7 +20,7 @@ from app.services.runtime_manager import join_probe_url
     ("endpoint", "path", "expected"),
     [
         # The live case: endpoint carries /v1, healthcheck repeats it.
-        ("http://100.67.20.66:8000/v1", "/v1/models", "http://100.67.20.66:8000/v1/models"),
+        ("http://198.51.100.7:8000/v1", "/v1/models", "http://198.51.100.7:8000/v1/models"),
         # Trailing slash on the endpoint must not change the outcome.
         ("http://box:8000/v1/", "/v1/models", "http://box:8000/v1/models"),
         # Bare base URL — the version segment has to be kept.
@@ -78,5 +78,5 @@ async def test_probe_http_requests_the_normalized_url(monkeypatch):
 
     monkeypatch.setattr(runtime_manager.httpx, "AsyncClient", _Client)
 
-    assert await runtime_manager._probe_http("http://100.67.20.66:8000/v1", "/v1/models") is True
-    assert seen == ["http://100.67.20.66:8000/v1/models"]
+    assert await runtime_manager._probe_http("http://198.51.100.7:8000/v1", "/v1/models") is True
+    assert seen == ["http://198.51.100.7:8000/v1/models"]

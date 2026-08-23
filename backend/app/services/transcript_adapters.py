@@ -9,7 +9,7 @@ verdrahtet — an drei Stellen sogar so, dass ein Nicht-Claude-Agent still
 falsche Antworten bekam:
 
   * ``transcript_chat.resolve_transcript_dir`` gab JEDEM ``cli-bridge``-Agenten
-    das Claude-Verzeichnis. Sparky (omp) landete damit auf seinen ALTEN
+    das Claude-Verzeichnis. der omp-Agent (omp) landete damit auf seinen ALTEN
     Claude-Transkripten aus der Zeit vor der omp-Umstellung — der Chat zeigte
     eine Sitzung, die es nicht mehr gibt.
   * ``pane_state.process_alive`` sucht ``pgrep -x claude``. Bei omp findet das

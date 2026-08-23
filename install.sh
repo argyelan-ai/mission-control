@@ -73,8 +73,18 @@ say "✓ prerequisites ok (git, docker, compose v2, openssl)"
 # ── Update-Modus: bestehende Installation aktualisieren ─────────────────────
 if [ "$UPDATE" = 1 ]; then
   [ -f docker-compose.yml ] && [ -f .env ] || fail "--update expects to run inside an installed Mission Control directory."
+  # docker/docker-compose.agents.yml describes YOUR fleet and rewrites itself
+  # at runtime, so it left version control. On an install that still has it
+  # tracked, a plain pull either deletes it without a word or refuses to run —
+  # and `set -euo pipefail` turns that refusal into a failed update. save/
+  # restore carries it across; both are no-ops once migrated.
+  # NOTE: this only protects updates run with THIS version of install.sh. An
+  # install still on the older one has to do the step by hand once — see
+  # docs/setup/updating.md.
+  bash scripts/migrate-agents-yml.sh save
   say "→ pulling latest code ..."
   git pull --ff-only
+  bash scripts/migrate-agents-yml.sh restore
   if docker compose pull backend frontend >/dev/null 2>&1; then
     say "→ using updated prebuilt images ..."
     docker compose up -d

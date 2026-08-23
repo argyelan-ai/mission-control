@@ -58,6 +58,13 @@ fi
 grep -q '^HOST_UID=' .env || { echo "HOST_UID=$(id -u)" >> .env; echo "✅ backfilled HOST_UID=$(id -u)"; }
 grep -q '^MC_REPO_PATH=' .env || { echo "MC_REPO_PATH=$(pwd)" >> .env; echo "✅ backfilled MC_REPO_PATH=$(pwd)"; }
 
+# Your own agent fleet. Same pattern as .env from .env.example above, and for
+# the same reason: docker/docker-compose.agents.yml has to exist BEFORE the
+# first agent is created, or the first runtime bind fails inside a background
+# task where nobody sees the error. It is not in version control — it rewrites
+# itself at runtime and describes your machine.
+bash scripts/ensure-agents-yml.sh
+
 # Preflight: create deliverables dirs as the host user (so the first
 # `docker compose up` does not create them as root).
 if [ -x scripts/init-mc-deliverables-dirs.sh ]; then

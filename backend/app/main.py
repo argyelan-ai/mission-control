@@ -74,6 +74,7 @@ from app.routers import (
     cli_terminal,
     consensus,
     credentials,
+    groups,
     deploy,
     discord as discord_router,
     hosts,
@@ -120,6 +121,7 @@ from app.services.scheduler import scheduler
 from app.services.runtime_schedule_service import runtime_schedule_service
 from app.services.runtime_watcher import runtime_watcher
 from app.services.task_runner import task_runner
+from app.services.group_runner import group_runner
 from app.services.loop_runner import loop_runner
 from app.services.slack_socket import slack_socket
 from app.services.telegram_bot import telegram_bot
@@ -166,6 +168,7 @@ async def lifespan(app: FastAPI):
     await watchdog.start()
     await task_runner.start()
     await loop_runner.start()  # Loops L1 (ADR-051) — Runden-Meta-Controller
+    await group_runner.start()  # Gruppenchat (ADR-075) — Runden-Engine
     await intelligence.start()
     # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
     from app.services.fs_roots import mc_home as _mc_home
@@ -465,6 +468,7 @@ async def lifespan(app: FastAPI):
     await model_catalog_checker.stop()
     await local_registry_checker.stop()
     await runtime_schedule_service.stop()
+    await group_runner.stop()
     await loop_runner.stop()
     await task_runner.stop()
     await watchdog.stop()
@@ -874,6 +878,7 @@ app.include_router(local_registry.router)  # /api/v1/local-registry — curated 
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
+app.include_router(groups.router)  # /api/v1/groups — Multi-Agent-Gruppenchat (V1)
 app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-054)
 app.include_router(prompt_templates.router)  # /api/v1/prompt-templates — Prompt Library (Benchmark Studio core, PR 2)
 app.include_router(runtime_schedules.router)

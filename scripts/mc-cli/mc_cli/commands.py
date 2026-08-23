@@ -6,6 +6,8 @@ whenever a new agent-scoped endpoint must be reachable from agents.
 """
 from __future__ import annotations
 
+import pathlib
+
 import argparse
 import json
 import re
@@ -1030,6 +1032,42 @@ def _cmd_msg(args, client, cfg):
     resp = client.request("POST", path, body=body)
     _emit(resp)
     return 0
+
+
+def _cmd_group_doc(args, client, cfg):
+    """mc group-doc — das lebende Ergebnis-Dokument einer Gruppe schreiben.
+
+    Nur der Lead der Gruppe darf das (das Backend antwortet allen anderen mit
+    403). Der Weg fuehrt bewusst ueber die API und nicht ueber die Datei: der
+    References-Mount ist in den Agenten-Containern read-only — der Lead kann
+    das Dokument lesen, aber nicht schreiben (live belegt 21.08.2026).
+
+    Der Text kommt aus einer Datei (--file) oder von stdin ('-'), weil ein
+    Ergebnis-Dokument regelmaessig laenger ist, als eine Kommandozeile traegt.
+    Geschrieben wird immer der VOLLSTAENDIGE neue Stand; die Datei wird ersetzt.
+    """
+    if getattr(args, "file", None):
+        content = pathlib.Path(args.file).read_text(encoding="utf-8")
+    else:
+        content = resolve_text_arg(args.text, verb="group-doc")
+    resp = client.request(
+        "PUT",
+        f"/api/v1/agent/groups/{args.group_id}/document",
+        body={"content": content},
+    )
+    _emit(resp)
+
+
+def _add_group_doc_args(p):
+    p.add_argument("group_id", help="ID der Gruppe (steht im Synthese-Auftrag)")
+    p.add_argument(
+        "text", nargs="?", default="-",
+        help="Dokument-Text, oder '-' fuer stdin (Heredoc/Pipe). Alternativ --file.",
+    )
+    p.add_argument(
+        "--file", dest="file", default=None,
+        help="Datei, deren Inhalt als neues Ergebnis-Dokument geschrieben wird.",
+    )
 
 
 def _add_msg_args(p):
@@ -2530,6 +2568,14 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
         handler=_cmd_ask,
         add_args=_add_ask_args,
+    ),
+    "group-doc": CommandSpec(
+        name="group-doc",
+        help="Ergebnis-Dokument der eigenen Gruppe schreiben (nur als Lead)",
+        endpoints=("PUT /groups/{group_id}/document",),
+        scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE) + Lead-Pruefung
+        handler=_cmd_group_doc,
+        add_args=_add_group_doc_args,
     ),
     "msg": CommandSpec(
         name="msg",

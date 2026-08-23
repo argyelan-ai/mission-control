@@ -12,7 +12,9 @@ def test_question_priorities_match_task_priorities():
 def test_thread_kinds():
     # "chat": one anchored conversation per operator channel-root message
     # (thread-anchor fix 2026-08-05).
-    assert THREAD_KINDS == ("task", "side", "dm", "chat")
+    # "group": Multi-Agent-Gruppenchat — Teilnahme über group_members statt
+    # Thread.agent_id, Zustellung mention-gefiltert (ADR-075, 2026-08-20).
+    assert THREAD_KINDS == ("task", "side", "dm", "chat", "group")
 
 def test_waiting_timeout_two_hours():
     assert WAITING_TIMEOUT_SECONDS == 7200

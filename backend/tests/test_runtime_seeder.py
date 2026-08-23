@@ -44,3 +44,26 @@ async def test_agent_runtime_fk_nullable(async_session):
     await async_session.commit()
     await async_session.refresh(agent)
     assert agent.runtime_id is None
+
+
+@pytest.mark.asyncio
+async def test_seed_has_no_harness_typed_runtimes(async_session):
+    """The seed must not ship harness rows dressed up as model runtimes.
+
+    Harness (which CLI an agent drives) and runtime (which engine serves the
+    model) were decoupled in ADR-056 — the harness now lives on the agent.
+    A leftover ``runtime_type="omp"`` row survived that split and kept showing
+    up in the operator's *model* picker, where a CLI has no business being.
+
+    Guarding on the HARNESSES tuple rather than on the single slug means a new
+    harness added there is covered automatically.
+    """
+    from app.services.harness_compat import HARNESSES
+
+    await seed_runtimes(async_session)
+    rows = (await async_session.exec(select(Runtime))).scalars().all()
+    offenders = {r.slug: r.runtime_type for r in rows if r.runtime_type in HARNESSES}
+    assert not offenders, (
+        f"seeded runtimes carry a harness runtime_type: {offenders} — "
+        "a harness belongs on the agent, not in the runtimes seed"
+    )

@@ -37,7 +37,7 @@ class ApprovalResolve(BaseModel):
 # needing to know they exist.
 _CORE_HANDLED_ACTION_TYPES = {
     "blocker_decision", "promote_approval", "visual_review",
-    "clarification_question", "loop_gate", "spawn_agent", "x_post",
+    "clarification_question", "loop_gate", "group_gate", "spawn_agent", "x_post",
     "install_skill", "uninstall_skill",
     "install_plugin", "uninstall_plugin",
     "install_mcp", "uninstall_mcp",
@@ -520,6 +520,11 @@ async def resolve_approval(
         from app.services.loop_runner import apply_loop_gate_decision
         await apply_loop_gate_decision(session, approval, payload.status)
 
+    # ── Group-Gate (ADR-075): Zwilling des loop_gate-Pfads ──
+    if approval.action_type == "group_gate":
+        from app.services.group_runner import apply_group_gate_decision
+        await apply_group_gate_decision(session, approval, payload.status)
+
     # ── Boss Spawn-Approval: approved → create + provision agent ──
     if approval.action_type == "spawn_agent":
         import re as _re
@@ -968,6 +973,12 @@ async def quick_resolve_confirm(
     if approval.action_type == "loop_gate":
         from app.services.loop_runner import apply_loop_gate_decision
         await apply_loop_gate_decision(session, approval, status)
+
+    # Group-Gate (ADR-075): Zwilling des loop_gate-Pfads — gilt auch für
+    # Telegram-Quick-Resolve.
+    if approval.action_type == "group_gate":
+        from app.services.group_runner import apply_group_gate_decision
+        await apply_group_gate_decision(session, approval, status)
 
     # ── Generic vertical hook (ADR-044) — mirrors resolve_approval above:
     # action_types without a dedicated core handler on THIS pathway let
