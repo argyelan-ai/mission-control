@@ -88,7 +88,7 @@ def harness_for(agent) -> str | None:
 
     Kritischer Zusatz (18.08.2026, kritischer Test-Durchgang): NUR fuer
     harness=claude. Vorher galt JEDER cli-bridge-Agent als Claude — Kimi
-    (kimi-CLI) und Sparky (omp) haetten damit einen /model-Picker-Probe in
+    (kimi-CLI) und der omp-Agent haetten damit einen /model-Picker-Probe in
     eine fremde TUI bekommen und canSwitchEffort=true gemeldet, worauf ein
     Klick /effort-Kommandos in eine CLI getippt haette, die sie nicht kennt.
     Eine fremde CLI ist kein defekter Claude, sondern ein anderes Gerät."""

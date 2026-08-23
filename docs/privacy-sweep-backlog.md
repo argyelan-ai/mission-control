@@ -119,7 +119,6 @@ backend/app/routers/cli_terminal.py: freecode, sparky
 backend/app/routers/internal.py: davinci
 backend/app/routers/tasks.py: freecode
 backend/app/routers/vault.py: sparky
-backend/app/services/agent_chat_input.py: davinci
 backend/app/services/chat_inbound.py: freecode
 backend/app/services/chat_slack.py: freecode
 backend/app/services/cli_bridge_runner.py: freecode, sparky
@@ -148,7 +147,7 @@ backend/templates/docs/pdf-office.md.j2: freecode
 backend/tests/context_scrape_fixtures.py: sparky
 backend/tests/fixtures/panes/claude/meta.json: freecode
 backend/tests/fixtures/panes/openclaude/meta.json: freecode, shakespeare
-backend/tests/test_agent_chat_input.py: davinci, freecode
+backend/tests/test_agent_chat_input.py: freecode
 backend/tests/test_agent_image_no_provider_defaults.py: shakespeare
 backend/tests/test_agent_restart_never_targets_runtime_container.py: sparky
 backend/tests/test_approval_install_hook.py: davinci
