@@ -217,7 +217,20 @@ function GroupHeader({
 }) {
   const t = useTranslations("tasks");
   return (
-    <div className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0" style={{ backgroundColor: C.bgBase }}>
+    // Sticky braucht einen Grund, damit Rows beim Scrollen darunter verschwinden.
+    // Aber NICHT opak: der Seitengrund trägt den Ambient-Schleier (Helligkeits-
+    // Gradient + Grain), und jede opake Füllung stanzt dort ein dunkles Rechteck
+    // heraus — die eingeklappten Gruppen verschmolzen zu einer abgesetzten Platte
+    // hinter der Liste (Operator-Befund 23.08.). Darum das MonthMarker-Rezept
+    // aus VaultNoteRow: transluzent + Blur, im Ruhezustand unsichtbar.
+    <div
+      className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0"
+      style={{
+        background: "rgba(10,10,10,0.55)",
+        backdropFilter: "blur(10px)",
+        WebkitBackdropFilter: "blur(10px)",
+      }}
+    >
       <button
         type="button"
         onClick={onToggle}
