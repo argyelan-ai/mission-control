@@ -5,17 +5,9 @@ import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Home,
-  FolderKanban,
-  Bot,
-  Inbox,
-  Settings,
-  Plus,
-  CheckCheck,
-  Search,
-} from "lucide-react";
+import { Plus, CheckCheck, Search } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { NAV_TREE } from "@/lib/nav";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -99,12 +91,18 @@ export default function CommandPalette() {
 
           {/* Palette */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: -10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: -10 }}
+            initial={{ opacity: 0, scale: 0.96, y: -10, x: "-50%" }}
+            animate={{ opacity: 1, scale: 1, y: 0, x: "-50%" }}
+            exit={{ opacity: 0, scale: 0.96, y: -10, x: "-50%" }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed left-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 rounded-md overflow-hidden corner-ticks"
+            className="left-1/2 z-50 w-[calc(100%-2rem)] max-w-lg rounded-md overflow-hidden corner-ticks"
             style={{
+              // Two things fight the centring here, so both are handled
+              // explicitly: framer writes `transform` inline and would drop a
+              // class-based -translate-x-1/2 (hence x in the motion props), and
+              // `.corner-ticks { position: relative }` in globals.css lands
+              // after the Tailwind utilities and beats a `fixed` class.
+              position: "fixed",
               top: "calc(env(safe-area-inset-top) + 1rem)",
               backgroundColor: "var(--color-bg-elevated)",
               border: "1px solid var(--color-border)",
@@ -120,10 +118,7 @@ export default function CommandPalette() {
               }}
             >
               {/* Search input */}
-              <div
-                className="flex items-center gap-3 px-4"
-                style={{ borderBottom: "1px solid var(--color-border)" }}
-              >
+              <div className="palette-input-row flex items-center gap-3 px-4">
                 <Search
                   size={15}
                   style={{ color: "var(--color-text-muted)", flexShrink: 0 }}
@@ -154,33 +149,36 @@ export default function CommandPalette() {
                   {t("noResults")}
                 </Command.Empty>
 
-                {/* Navigation */}
-                <Command.Group heading={t("navigation")} className={groupClass}>
-                  {[
-                    { icon: Home, label: tNav("home"), href: "/" },
-                    { icon: FolderKanban, label: tNav("tasks"), href: "/tasks" },
-                    { icon: Bot, label: tNav("agents"), href: "/agents" },
-                    { icon: Inbox, label: tNav("inbox"), href: "/inbox" },
-                    {
-                      icon: Settings,
-                      label: tNav("settings"),
-                      href: "/settings",
-                    },
-                  ].map(({ icon: Icon, label, href }) => (
-                    <Command.Item
-                      key={href}
-                      value={`go ${label}`}
-                      onSelect={() => navigate(href)}
-                      className={itemClass}
-                    >
-                      <Icon
-                        size={15}
-                        style={{ color: "var(--color-text-secondary)" }}
-                      />
-                      {label}
-                    </Command.Item>
-                  ))}
-                </Command.Group>
+                {/* Navigation — every destination the shell knows, grouped
+                    like the sidebar. Sourced from NAV_TREE so a page added to
+                    the model is findable here the moment it exists. This used
+                    to be five hard-coded entries while the sidebar listed
+                    nineteen. */}
+                {NAV_TREE.map((group) => (
+                  <Command.Group
+                    key={group.key}
+                    heading={tNav(group.labelKey) || group.label}
+                    className={groupClass}
+                  >
+                    {group.children.map(({ icon: Icon, labelKey, label, href }) => {
+                      const name = tNav(labelKey) || label;
+                      return (
+                        <Command.Item
+                          key={href}
+                          value={`${name} ${label} ${href}`}
+                          onSelect={() => navigate(href)}
+                          className={itemClass}
+                        >
+                          <Icon
+                            size={15}
+                            style={{ color: "var(--color-text-secondary)" }}
+                          />
+                          {name}
+                        </Command.Item>
+                      );
+                    })}
+                  </Command.Group>
+                ))}
 
                 {/* Quick Actions */}
                 <Command.Group heading={t("actions")} className={groupClass}>

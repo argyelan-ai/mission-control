@@ -23,7 +23,17 @@
     "groupKnowledge": "WISSEN",
     "groupStudio": "STUDIO",
     "groupSystem": "SYSTEM",
-    "logout": "Abmelden"
+    "logout": "Abmelden",
+    "pin": "Anpinnen",
+    "unpin": "Lösen",
+    "moveUp": "Nach oben",
+    "moveDown": "Nach unten",
+    "moreAreas": "Weitere Bereiche",
+    "navGroupOverview": "Überblick",
+    "navGroupWork": "Arbeit",
+    "navGroupKnowledge": "Wissen",
+    "navGroupStudio": "Studio",
+    "navGroupSystem": "System"
   },
   "settingsProfile": {
     "email": "E-Mail",
@@ -672,7 +682,17 @@
     "boardNamePlaceholder": "Board-Name",
     "creating": "ERSTELLE…",
     "createBoard": "BOARD ERSTELLEN",
-    "commandPaletteLabel": "PALETTE"
+    "commandPaletteLabel": "PALETTE",
+    "search": "Suchen",
+    "systemOk": "Alles läuft",
+    "systemChecking": "Prüft…",
+    "systemNoContact": "Kein Kontakt",
+    "systemDbDegraded": "Datenbank wackelt",
+    "systemRedisDegraded": "Redis wackelt",
+    "settings": "Einstellungen",
+    "boardPicker": "Board wählen",
+    "collapseSidebar": "Leiste einklappen",
+    "expandSidebar": "Leiste ausklappen"
   },
   "login": {
     "consoleAccess": "Konsole · Zugang",

@@ -1,341 +1,523 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
-import { useTranslations } from "next-intl";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Home,
-  FolderKanban,
-  Bot,
-  Inbox,
-  Calendar,
-  LogOut,
-  Settings,
-  TrendingUp,
-  Brain,
-  PenLine,
-  Puzzle,
-  FolderGit2,
-  Server,
-  Terminal,
-  Building2,
-  Newspaper,
-  FolderOpen,
-  Repeat,
-  FlaskConical,
-  type LucideIcon,
-} from "lucide-react";
+import { Search, Pin, PinOff, ArrowUp, ArrowDown, ChevronDown, MoreHorizontal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
-import { clearToken, api } from "@/lib/api";
-import type { Approval } from "@/lib/types";
+import { api } from "@/lib/api";
+import type { SystemMetrics } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
-import { P2 } from "@/lib/colors";
-import { VERTICALS } from "@/lib/verticals";
+import BoardPicker from "./BoardPicker";
+import SidebarFooter from "./SidebarFooter";
+import {
+  DEFAULT_PINS,
+  NAV_ITEMS,
+  NAV_TREE,
+  resolveNav,
+  isActiveRoute,
+  groupKeyFor,
+  type NavItem,
+} from "@/lib/nav";
 
-// Wordmark: env-getrieben — Deployments branden via NEXT_PUBLIC_BRAND
-// ("main.accent"-Split am letzten Punkt; Default = Produktname).
-const _BRAND = process.env.NEXT_PUBLIC_BRAND || "Mission.Control";
-const _dot = _BRAND.lastIndexOf(".");
-const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
-const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
-
-// label = English fallback; labelKey = message key in the "nav" namespace
-// (messages/en.json + de.json). Render sites translate via t(labelKey).
-export type NavItem = { href: string; icon: LucideIcon; label: string; labelKey: string };
-
-export const NAV_ITEMS: NavItem[] = [
-  { href: "/", icon: Home, label: "Home", labelKey: "home" },
-  { href: "/tasks", icon: FolderKanban, label: "Tasks", labelKey: "tasks" },
-  { href: "/agents", icon: Bot, label: "Agents", labelKey: "agents" },
-  { href: "/office", icon: Building2, label: "Office", labelKey: "office" },
-  { href: "/inbox", icon: Inbox, label: "Inbox", labelKey: "inbox" },
-  { href: "/insights", icon: TrendingUp, label: "Insights", labelKey: "insights" },
-  { href: "/memory", icon: Brain, label: "Memory", labelKey: "memory" },
-  { href: "/files", icon: FolderOpen, label: "Files", labelKey: "files" },
-  // News-Studio vertical — stripped from the public-release build
-  ...(VERTICALS.newsStudio
-    ? [
-        { href: "/content", icon: PenLine, label: "Content", labelKey: "content" },
-        { href: "/news", icon: Newspaper, label: "News", labelKey: "news" },
-      ]
-    : []),
-  // Benchmark-Studio vertical — strippable (flag flipped by release script)
-  ...(VERTICALS.benchStudio
-    ? [{ href: "/bench", icon: FlaskConical, label: "Benchmark", labelKey: "bench" }]
-    : []),
-  { href: "/repos", icon: FolderGit2, label: "Repos", labelKey: "repos" },
-  { href: "/skills", icon: Puzzle, label: "Skills", labelKey: "skills" },
-  { href: "/runtimes", icon: Server, label: "Runtimes", labelKey: "runtimes" },
-  { href: "/sessions", icon: Terminal, label: "Sessions", labelKey: "sessions" },
-  { href: "/loops", icon: Repeat, label: "Loops", labelKey: "loops" },
-  { href: "/schedule", icon: Calendar, label: "Schedule", labelKey: "schedule" },
-  { href: "/settings", icon: Settings, label: "Settings", labelKey: "settings" },
-];
-
-// P2: Gruppen priorisieren den Alltag (S5 aus 00-redesign-brief: Home/Tasks/
-// Sessions/Agents sind der Alltag, Rest ist selten). Reihenfolge der Gruppen
-// spiegelt Nutzungshäufigkeit — bewusste Abweichung von der alten Liste.
-const _byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
-const pick = (hrefs: string[]): NavItem[] =>
-  hrefs.map((h) => _byHref.get(h)).filter((i): i is NavItem => !!i);
-
-export const NAV_GROUPS: { label: string; labelKey: string; items: NavItem[] }[] = [
-  { label: "OVERVIEW", labelKey: "groupOverview", items: pick(["/", "/insights", "/office"]) },
-  { label: "WORK", labelKey: "groupWork", items: pick(["/tasks", "/inbox", "/sessions", "/agents"]) },
-  { label: "KNOWLEDGE", labelKey: "groupKnowledge", items: pick(["/memory", "/files", "/repos", "/skills"]) },
-  { label: "STUDIO", labelKey: "groupStudio", items: pick(["/content", "/news", "/bench"]) },
-  { label: "SYSTEM", labelKey: "groupSystem", items: pick(["/runtimes", "/loops", "/schedule", "/settings"]) },
-];
+// Re-exported for existing consumers (MobileNav). The model lives in lib/nav.
+export { NAV_ITEMS, NAV_TREE };
 
 const MONO = { fontFamily: "var(--font-p2-mono)" };
+const EASE = [0.16, 1, 0.3, 1] as const;
+const EMPTY_GROUP_STATE: Record<string, boolean> = {};
+const noop = () => {};
+
+type Ctx = { href: string; x: number; y: number; pinned: boolean } | null;
 
 export default function Sidebar() {
   const t = useTranslations("nav");
+  const tShell = useTranslations("shell");
   const pathname = usePathname();
-  const router = useRouter();
-  const { sidebarCollapsed, currentUser } = useAppStore();
+  const store = useAppStore();
+  const { sidebarCollapsed, setCommandPaletteOpen } = store;
+  // Fall back rather than crash: state persisted by an older build carries no
+  // pinnedNav, and partial store mocks in tests carry neither.
+  const pinnedNav = store.pinnedNav ?? DEFAULT_PINS;
+  const navGroupState = store.navGroupState ?? EMPTY_GROUP_STATE;
+  const setPinnedNav = store.setPinnedNav ?? noop;
+  const togglePin = store.togglePin ?? noop;
+  const setNavGroupOpen = store.setNavGroupOpen ?? noop;
 
-  const { data: approvals } = useQuery<Approval[]>({
-    queryKey: ["approvals-badge"],
-    queryFn: () => api.approvals.list(),
+  const [ctx, setCtx] = useState<Ctx>(null);
+
+  const { data: metrics } = useQuery<SystemMetrics>({
+    queryKey: ["system-metrics"],
+    queryFn: api.system.metrics,
     refetchInterval: 30_000,
   });
-  const hasPendingApprovals = (approvals ?? []).some((a) => a.status === "pending");
 
-  function handleLogout() {
-    clearToken();
-    router.replace("/login");
+  const { pinned, groups } = useMemo(() => resolveNav(pinnedNav), [pinnedNav]);
+
+  // The group holding the current route counts as open unless the user
+  // explicitly closed it. Derived, never written during render — a store write
+  // in render would persist to localStorage on every mount.
+  const activeGroupKey = useMemo(() => {
+    const current = NAV_ITEMS.find((i) => isActiveRoute(i.href, pathname));
+    if (!current || pinnedNav.includes(current.href)) return undefined;
+    return groupKeyFor(current.href);
+  }, [pathname, pinnedNav]);
+
+  const isGroupOpen = (key: string) => navGroupState[key] ?? key === activeGroupKey;
+
+  useEffect(() => {
+    if (!ctx) return;
+    const close = () => setCtx(null);
+    document.addEventListener("click", close);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [ctx]);
+
+  /** Badge for a route — only real state, never decoration. */
+  function badgeFor(href: string): { text?: string; alert?: boolean } {
+    if (!metrics) return {};
+    if (href === "/tasks" && metrics.tasks.active > 0) return { text: String(metrics.tasks.active) };
+    if (href === "/agents") return { text: `${metrics.agents.online}/${metrics.agents.total}` };
+    if (href === "/inbox" && metrics.approvals.pending > 0) return { alert: true };
+    return {};
   }
 
-  const sidebarWidth = sidebarCollapsed ? 48 : 240;
+  function movePin(href: string, delta: number) {
+    const i = pinnedNav.indexOf(href);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= pinnedNav.length) return;
+    const next = [...pinnedNav];
+    [next[i], next[j]] = [next[j], next[i]];
+    setPinnedNav(next);
+  }
+
+  const width = sidebarCollapsed ? 64 : 248;
+
+  // ── one nav row, used for pins and for group children ─────────────────────
+  function Row({ item, nested = false }: { item: NavItem; nested?: boolean }) {
+    const active = isActiveRoute(item.href, pathname);
+    const { text, alert } = badgeFor(item.href);
+    const Icon = item.icon;
+    const isPinned = pinnedNav.includes(item.href);
+    const label = t(item.labelKey) || item.label;
+
+    if (sidebarCollapsed) {
+      return (
+        <Link
+          href={item.href}
+          title={label}
+          aria-current={active ? "page" : undefined}
+          className="group relative grid place-items-center shrink-0"
+          style={{
+            width: 44,
+            height: 38,
+            borderRadius: "12px",
+            backgroundColor: active ? "var(--color-accent-subtle)" : "transparent",
+            color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+          }}
+        >
+          <Icon size={16} strokeWidth={active ? 2 : 1.75} />
+          {alert && (
+            <span
+              className="absolute"
+              style={{
+                top: 6,
+                right: 9,
+                width: 6,
+                height: 6,
+                borderRadius: "999px",
+                backgroundColor: "var(--color-p2-err)",
+              }}
+            />
+          )}
+          <span
+            className="absolute left-full ml-2 px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50"
+            style={{
+              ...MONO,
+              fontSize: "11px",
+              backgroundColor: "var(--color-p2-pan2)",
+              border: "1px solid var(--color-p2-line)",
+              borderRadius: "8px",
+              color: "var(--color-p2-txt)",
+              boxShadow: "var(--shadow-elevated)",
+            }}
+          >
+            {label}
+          </span>
+        </Link>
+      );
+    }
+
+    return (
+      <Link
+        href={item.href}
+        aria-current={active ? "page" : undefined}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setCtx({ href: item.href, x: e.clientX, y: e.clientY, pinned: isPinned });
+        }}
+        className="group flex items-center gap-2.5"
+        style={{
+          height: nested ? 32 : 38,
+          padding: nested ? "0 12px 0 30px" : "0 12px",
+          borderRadius: "12px",
+          ...MONO,
+          fontSize: nested ? "11.5px" : "12.5px",
+          fontWeight: active ? 700 : 400,
+          color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+          backgroundColor: active ? "var(--color-accent-subtle)" : "transparent",
+          transition: "background-color 160ms ease, color 160ms ease",
+        }}
+        onMouseEnter={(e) => {
+          if (!active) {
+            const el = e.currentTarget as HTMLElement;
+            el.style.backgroundColor = "var(--color-p2-pan2)";
+            el.style.color = "var(--color-p2-txt)";
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!active) {
+            const el = e.currentTarget as HTMLElement;
+            el.style.backgroundColor = "transparent";
+            el.style.color = "var(--color-p2-dim)";
+          }
+        }}
+      >
+        <Icon size={nested ? 14 : 16} strokeWidth={active ? 2 : 1.75} className="shrink-0" />
+        <span className="truncate">{label}</span>
+
+        {alert ? (
+          <span
+            className="ml-auto shrink-0"
+            style={{ width: 6, height: 6, borderRadius: "999px", backgroundColor: "var(--color-p2-err)" }}
+          />
+        ) : text ? (
+          <span
+            className="ml-auto shrink-0 tabular-nums"
+            style={{ fontSize: "10px", color: active ? "var(--color-p2-dim)" : "var(--color-p2-faint)" }}
+          >
+            {text}
+          </span>
+        ) : null}
+
+        {/* Pin toggle — appears on hover, never competes with the badge */}
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            togglePin(item.href);
+          }}
+          aria-label={`${label} — ${isPinned ? t("unpin") : t("pin")}`}
+          title={isPinned ? t("unpin") : t("pin")}
+          className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer grid place-items-center"
+          style={{
+            width: 18,
+            height: 18,
+            marginLeft: alert || text ? 6 : "auto",
+            borderRadius: "6px",
+            color: "var(--color-p2-faint)",
+          }}
+        >
+          {isPinned ? <PinOff size={11} /> : <Pin size={11} />}
+        </button>
+      </Link>
+    );
+  }
 
   return (
     <motion.aside
-      animate={{ width: sidebarWidth }}
-      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+      animate={{ width }}
+      transition={{ duration: 0.2, ease: EASE }}
       className="flex flex-col h-full overflow-hidden shrink-0"
       style={{
         backgroundColor: "var(--color-p2-pan)",
-        borderRight: "1px solid var(--color-p2-line2)",
+        // A card rather than a full-bleed column: the rows inside are rounded,
+        // so a hard-edged container around them reads as unfinished.
+        border: "1px solid var(--color-p2-line2)",
+        borderRadius: "16px",
+        padding: sidebarCollapsed ? "10px 0" : "10px",
       }}
     >
-      {/* Logo area — Space-Mono-Wordmark, Akzent */}
-      <div
-        className="shrink-0 flex items-center gap-3 px-3 h-14"
-        style={{ borderBottom: "1px solid var(--color-p2-line2)" }}
-      >
-        <AnimatePresence initial={false} mode="wait">
-          {sidebarCollapsed ? (
-            <motion.span
-              key="short"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.12 }}
-              style={{
-                color: "var(--color-p2-txt)",
-                fontFamily: "var(--font-p2-display)",
-                fontWeight: 700,
-                fontSize: "14px",
-                letterSpacing: "0.02em",
-              }}
-            >
-              M<span style={{ color: P2.amb }}>/</span>
-            </motion.span>
-          ) : (
-            <motion.span
-              key="full"
-              initial={{ opacity: 0, width: 0 }}
-              animate={{ opacity: 1, width: "auto" }}
-              exit={{ opacity: 0, width: 0 }}
-              transition={{ duration: 0.15 }}
-              className="whitespace-nowrap overflow-hidden"
-              style={{
-                color: "var(--color-p2-txt)",
-                fontFamily: "var(--font-p2-display)",
-                fontWeight: 700,
-                fontSize: "15px",
-                letterSpacing: "0.02em",
-              }}
-            >
-              {BRAND_MAIN}
-              <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
-            </motion.span>
-          )}
-        </AnimatePresence>
-
-        {/* Voice Assistant — fuellt den restlichen Platz nach rechts */}
+      {/* Zone 1 — where am I, and the voice assistant.
+          The mic used to sit inside the search field, where it read as "search
+          by voice" — it starts Jarvis and has nothing to do with search. */}
+      <div className={sidebarCollapsed ? "px-2.5" : "flex items-center gap-2"}>
+        <div className={sidebarCollapsed ? "" : "flex-1 min-w-0"}>
+          <BoardPicker collapsed={sidebarCollapsed} />
+        </div>
         {!sidebarCollapsed && (
-          <div className="ml-auto">
-            <VoiceButton size={32} variant="sidebar" />
-          </div>
+          <VoiceButton size={34} variant="sidebar" enforceTouchTarget={false} />
         )}
       </div>
 
-      {/* Collapsed-State: kleiner Voice-Button als Zeile (sidebar-collapsed=48px) */}
-      {sidebarCollapsed && (
-        <div className="flex justify-center py-2" style={{ borderBottom: "1px solid var(--color-p2-line2)" }}>
-          <VoiceButton size={32} variant="sidebar" />
+      {/* Zone 2 — search / jump */}
+      {sidebarCollapsed ? (
+        <div className="flex flex-col items-center gap-1 mt-2">
+          <button
+            onClick={() => setCommandPaletteOpen(true)}
+            aria-label={`${tShell("search")} (⌘K)`}
+            title={`${tShell("search")} · ⌘K`}
+            className="grid place-items-center cursor-pointer"
+            style={{ width: 44, height: 38, borderRadius: "12px", color: "var(--color-p2-dim)" }}
+          >
+            <Search size={16} />
+          </button>
+          <VoiceButton size={30} variant="sidebar" enforceTouchTarget={false} />
         </div>
+      ) : (
+        // Auslöser der Befehlspalette — bewusst als KNOPF gestaltet, nicht als
+        // Suchfeld (Operator-Entscheid 23.08.2026, Variante B).
+        //
+        // Vorher trug er einen eingesenkten Grund (`p2-inset`) und sah damit aus
+        // wie ein Eingabefeld. Auf der Task-Seite steht direkt daneben ein
+        // ECHTES Suchfeld — zwei fast gleiche Formen mit völlig verschiedenem
+        // Verhalten: in die eine tippt man, die andere öffnet ein Overlay.
+        //
+        // Jetzt die Ghost-Button-Regel aus DESIGN.md: transparent, 1px Rahmen,
+        // beim Überfahren Fläche + hellerer Text — dieselbe Rückmeldung wie die
+        // Navigationszeilen darunter. Das Tastenkürzel wird zur Hauptaussage
+        // statt zur Fussnote, denn es IST die Bedienung.
+        <button
+          onClick={() => setCommandPaletteOpen(true)}
+          className="flex items-center gap-2 mt-2 shrink-0 w-full cursor-pointer text-left px-3"
+          style={{
+            height: 36,
+            borderRadius: "12px",
+            backgroundColor: "transparent",
+            border: "1px solid var(--color-p2-line)",
+            ...MONO,
+            fontSize: "11.5px",
+            color: "var(--color-p2-dim)",
+            transition: "background-color 160ms ease, color 160ms ease",
+          }}
+          onMouseEnter={(e) => {
+            const el = e.currentTarget as HTMLElement;
+            el.style.backgroundColor = "var(--color-p2-pan2)";
+            el.style.color = "var(--color-p2-txt)";
+          }}
+          onMouseLeave={(e) => {
+            const el = e.currentTarget as HTMLElement;
+            el.style.backgroundColor = "transparent";
+            el.style.color = "var(--color-p2-dim)";
+          }}
+        >
+          <Search size={13} className="shrink-0" />
+          <span className="truncate">{tShell("search")}</span>
+          <kbd
+            className="ml-auto shrink-0 px-1.5 py-0.5"
+            style={{
+              border: "1px solid var(--color-p2-line)",
+              borderRadius: "6px",
+              fontSize: "10px",
+              color: "var(--color-p2-txt)",
+              backgroundColor: "var(--color-p2-pan2)",
+            }}
+          >
+            ⌘K
+          </kbd>
+        </button>
       )}
 
-      {/* Navigation — gruppiert, Text-first; Icons nur im Collapsed-Modus */}
-      <nav className="flex-1 py-2 overflow-y-auto overflow-x-hidden">
-        {NAV_GROUPS.map((group) => {
-          if (group.items.length === 0) return null;
-          return (
-            <div key={t(group.labelKey)}>
-              {!sidebarCollapsed && (
-                <div
-                  className="px-4 pt-3 pb-1 select-none first:pt-1"
-                  style={{
-                    fontFamily: "var(--font-p2-display)",
-                    fontWeight: 700,
-                    fontSize: "9px",
-                    letterSpacing: "0.2em",
-                    color: "var(--color-p2-faint)",
-                  }}
-                >
-                  {t(group.labelKey)}
-                </div>
-              )}
-              <ul className={sidebarCollapsed ? "space-y-px px-1" : "space-y-px px-2"}>
-                {group.items.map(({ href, icon: Icon, labelKey }) => {
-                  const label = t(labelKey);
-                  const isActive =
-                    href === "/" ? pathname === "/" : pathname.startsWith(href);
-                  const showBadge = href === "/inbox" && hasPendingApprovals;
-
-                  return (
-                    <li key={href}>
-                      <Link
-                        href={href}
-                        className="group relative flex items-center gap-2 cursor-pointer"
-                        style={{
-                          minHeight: sidebarCollapsed ? "40px" : "36px",
-                          justifyContent: sidebarCollapsed ? "center" : "flex-start",
-                          padding: sidebarCollapsed ? 0 : "0 9px",
-                          ...MONO,
-                          fontSize: sidebarCollapsed ? undefined : "12px",
-                          fontWeight: isActive ? 700 : 400,
-                          // System A: der Aktivzustand war eine volle Akzent-
-                          // Fläche pro Zeile — auf 224px Sidebar-Breite ein
-                          // Bone-Block, der die Navigation zum lautesten
-                          // Element machte. Jetzt: dunkle Fläche + Gewicht,
-                          // der Akzent bleibt als schmaler Marker (unten).
-                          backgroundColor: isActive ? "var(--color-p2-pan2)" : "transparent",
-                          color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-                        }}
-                        title={sidebarCollapsed ? label : undefined}
-                      >
-                        {isActive && (
-                          <span
-                            aria-hidden
-                            className="absolute left-0 top-0 bottom-0 w-[2px]"
-                            style={{ backgroundColor: "var(--color-p2-amb)" }}
-                          />
-                        )}
-                        {sidebarCollapsed ? (
-                          <span className="relative shrink-0 flex items-center justify-center">
-                            <Icon
-                              size={17}
-                              strokeWidth={isActive ? 2 : 1.75}
-                              style={{ color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)" }}
-                            />
-                            {showBadge && (
-                              <span
-                                className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
-                                style={{
-                                  backgroundColor: "var(--color-p2-err)",
-                                }}
-                              />
-                            )}
-                          </span>
-                        ) : (
-                          <>
-                            <span className="flex-1 whitespace-nowrap overflow-hidden">{label}</span>
-                            {showBadge && (
-                              <span
-                                className="w-2 h-2 rounded-full shrink-0"
-                                style={{
-                                  backgroundColor: "var(--color-p2-err)",
-                                }}
-                              />
-                            )}
-                          </>
-                        )}
-
-                        {/* Tooltip for collapsed state */}
-                        {sidebarCollapsed && (
-                          <div
-                            className="absolute left-full ml-2 px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50"
-                            style={{
-                              ...MONO,
-                              fontSize: "11px",
-                              backgroundColor: "var(--color-p2-pan2)",
-                              border: "1px solid var(--color-p2-line)",
-                              color: "var(--color-p2-txt)",
-                              boxShadow: "var(--shadow-elevated)",
-                            }}
-                          >
-                            {label}
-                          </div>
-                        )}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          );
-        })}
-      </nav>
-
-      {/* Bottom: user info + logout */}
-      <div
-        className="shrink-0"
-        style={{ borderTop: "1px solid var(--color-p2-line2)" }}
+      {/* Zones 3 + 4 — pinned rows, then the rest of the tree one click deep */}
+      <nav
+        className={`flex-1 overflow-y-auto overflow-x-hidden mt-4 flex flex-col ${
+          sidebarCollapsed ? "items-center gap-1" : "gap-0.5"
+        }`}
       >
-        {currentUser && !sidebarCollapsed && (
-          <div className="px-4 pt-3 pb-1">
-            <div
-              className="truncate"
-              style={{ ...MONO, fontSize: "12px", fontWeight: 700, color: "var(--color-p2-txt)" }}
-            >
-              {currentUser.name}
-            </div>
-            <div
-              className="truncate"
-              style={{ ...MONO, fontSize: "10px", color: "var(--color-p2-dim)" }}
-            >
-              {currentUser.email}
-            </div>
-          </div>
+        {pinned.map((item) => (
+          <Row key={item.href} item={item} />
+        ))}
+
+        {pinned.length > 0 && groups.length > 0 && (
+          <div
+            style={{
+              height: 1,
+              backgroundColor: "var(--color-p2-line2)",
+              margin: sidebarCollapsed ? "8px 0 4px" : "10px 12px 6px",
+              width: sidebarCollapsed ? 34 : "auto",
+            }}
+          />
         )}
 
-        <button
-          onClick={handleLogout}
-          title={t("logout")}
-          className="flex items-center gap-2 w-full px-4 min-h-touch cursor-pointer"
-          style={{
-            ...MONO,
-            fontSize: "11px",
-            letterSpacing: "0.08em",
-            color: "var(--color-p2-dim)",
-            justifyContent: sidebarCollapsed ? "center" : "flex-start",
-          }}
-          onMouseEnter={(e) =>
-            ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-err)")
-          }
-          onMouseLeave={(e) =>
-            ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-dim)")
-          }
-        >
-          {sidebarCollapsed ? <LogOut size={15} /> : <span>{t("logout").toUpperCase()} →</span>}
-        </button>
-      </div>
+        {sidebarCollapsed && groups.length > 0 && (
+          <button
+            onClick={() => setCommandPaletteOpen(true)}
+            title={`${t("moreAreas")} (${groups.reduce((n, g) => n + g.children.length, 0)}) · ⌘K`}
+            aria-label={t("moreAreas")}
+            className="grid place-items-center cursor-pointer shrink-0"
+            style={{ width: 44, height: 38, borderRadius: "12px", color: "var(--color-p2-faint)" }}
+          >
+            <MoreHorizontal size={16} />
+          </button>
+        )}
+
+        {sidebarCollapsed
+          ? // Collapsed shows the pins and nothing else — a 64px column of all
+            // 19 icons would be the old wall of choices in miniature. Everything
+            // unpinned is one ⌘K away.
+            null
+          : groups.map((group) => {
+              const open = isGroupOpen(group.key);
+              const GroupIcon = group.icon;
+              const holdsActive = group.children.some((c) => isActiveRoute(c.href, pathname));
+              return (
+                <div key={group.key}>
+                  <button
+                    onClick={() => setNavGroupOpen(group.key, !open)}
+                    aria-expanded={open}
+                    className="w-full flex items-center gap-2.5 cursor-pointer"
+                    style={{
+                      height: 34,
+                      padding: "0 12px",
+                      borderRadius: "12px",
+                      ...MONO,
+                      fontSize: "12px",
+                      color: holdsActive && !open ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+                      transition: "color 160ms ease, background-color 160ms ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-p2-pan2)";
+                      (e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                      (e.currentTarget as HTMLElement).style.color =
+                        holdsActive && !open ? "var(--color-p2-txt)" : "var(--color-p2-dim)";
+                    }}
+                  >
+                    <GroupIcon size={15} strokeWidth={1.75} className="shrink-0" />
+                    <span className="truncate">{t(group.rowLabelKey) || group.label}</span>
+                    {holdsActive && !open && (
+                      <span
+                        className="shrink-0"
+                        style={{
+                          width: 5,
+                          height: 5,
+                          borderRadius: "999px",
+                          backgroundColor: "var(--color-p2-amb)",
+                        }}
+                      />
+                    )}
+                    <motion.span
+                      className="ml-auto shrink-0 grid place-items-center"
+                      animate={{ rotate: open ? 180 : 0 }}
+                      transition={{ duration: 0.18, ease: EASE }}
+                    >
+                      <ChevronDown size={12} />
+                    </motion.span>
+                  </button>
+
+                  <AnimatePresence initial={false}>
+                    {open && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2, ease: EASE }}
+                        className="overflow-hidden"
+                      >
+                        <div className="flex flex-col gap-0.5 pt-0.5">
+                          {group.children.map((child) => (
+                            <Row key={child.href} item={child} nested />
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+      </nav>
+
+      {/* Zone 5 — who am I, is everything running */}
+      <SidebarFooter collapsed={sidebarCollapsed} />
+
+      {/* Right-click menu: pin, unpin, reorder */}
+      <AnimatePresence>
+        {ctx && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.12 }}
+            className="fixed z-[60] p-1"
+            style={{
+              left: ctx.x,
+              top: ctx.y,
+              minWidth: 168,
+              backgroundColor: "var(--color-p2-pan2)",
+              border: "1px solid var(--color-p2-line)",
+              borderRadius: "10px",
+              boxShadow: "var(--shadow-elevated)",
+            }}
+          >
+            <CtxItem
+              icon={ctx.pinned ? <PinOff size={12} /> : <Pin size={12} />}
+              label={ctx.pinned ? t("unpin") : t("pin")}
+              onClick={() => togglePin(ctx.href)}
+            />
+            {ctx.pinned && (
+              <>
+                <CtxItem
+                  icon={<ArrowUp size={12} />}
+                  label={t("moveUp")}
+                  disabled={pinnedNav.indexOf(ctx.href) === 0}
+                  onClick={() => movePin(ctx.href, -1)}
+                />
+                <CtxItem
+                  icon={<ArrowDown size={12} />}
+                  label={t("moveDown")}
+                  disabled={pinnedNav.indexOf(ctx.href) === pinnedNav.length - 1}
+                  onClick={() => movePin(ctx.href, 1)}
+                />
+              </>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.aside>
+  );
+}
+
+function CtxItem({
+  icon,
+  label,
+  onClick,
+  disabled = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full flex items-center gap-2.5 cursor-pointer disabled:opacity-35 disabled:cursor-default"
+      style={{
+        height: 30,
+        padding: "0 10px",
+        borderRadius: "7px",
+        ...MONO,
+        fontSize: "11.5px",
+        color: "var(--color-p2-txt)",
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-p2-pan)";
+      }}
+      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.backgroundColor = "transparent")}
+    >
+      <span className="shrink-0" style={{ color: "var(--color-p2-faint)" }}>
+        {icon}
+      </span>
+      {label}
+    </button>
   );
 }

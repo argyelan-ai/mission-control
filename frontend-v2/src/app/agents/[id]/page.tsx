@@ -1890,7 +1890,7 @@ export default function AgentDetailPage() {
 
   return (
     <AppShell>
-      <div className="space-y-6 max-w-5xl mx-auto">
+      <div className="space-y-6 max-w-5xl">
         {/* Back */}
         <Link
           href="/agents"
