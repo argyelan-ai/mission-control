@@ -110,18 +110,29 @@ vi.mock("@/components/chat/ChatView", () => ({
       )}
     </div>
   ),
+  // Gleiche Form wie chatOptions.ts: Katalog-Schluessel, keine fertigen
+  // Beschriftungen — die Seite liest ohnehin nur `.key`.
   DETAIL_LEVELS: [
-    { key: "compact", label: "Kompakt" },
-    { key: "normal", label: "Normal" },
-    { key: "verbose", label: "Ausführlich" },
+    { key: "compact", labelKey: "detailCompact" },
+    { key: "normal", labelKey: "detailNormal" },
+    { key: "verbose", labelKey: "detailVerbose" },
   ],
   CENTER_VIEWS: [
-    { key: "chat", label: "Chat" },
-    { key: "terminal", label: "Terminal" },
+    { key: "chat", labelKey: "chat" },
+    { key: "terminal", labelKey: "terminal" },
   ],
 }));
 
 import SessionsPage from "../page";
+import { C } from "@/lib/colors";
+
+/** Token value as jsdom reports it — derived from the single source in
+ *  lib/colors.ts, so a palette change never breaks this assertion. */
+function rgbOf(hex: string): string {
+  const h = hex.replace("#", "");
+  const n = parseInt(h, 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
 
 function mkAgent(
   overrides: Partial<Agent> & {
@@ -641,7 +652,7 @@ describe("SessionsPage — islands sit a step above the page ground", () => {
     vi.restoreAllMocks();
   });
 
-  const BG_SURFACE = "rgb(23, 23, 23)";
+  const BG_SURFACE = rgbOf(C.bgSurface);
 
   it("lifts the chat island above a ground it does NOT paint itself", async () => {
     renderPage();

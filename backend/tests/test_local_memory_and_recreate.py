@@ -15,6 +15,34 @@ from app.routers.cli_terminal import _validate_local_memory_filename
 from fastapi import HTTPException
 
 
+@pytest.fixture(autouse=True)
+def _kein_compose_preflight():
+    """Der Compose-Preflight des force-recreate-Endpunkts wird fuer dieses
+    Modul stillgelegt.
+
+    Er verlangt ``docker/docker-compose.agents.yml`` unter
+    ``settings.mc_repo_path``. Seit diese Datei nicht mehr eingecheckt ist —
+    sie beschreibt die Flotte des Betreibers, nicht das Projekt; nur die
+    ``.example`` bleibt getrackt — fehlt sie in einem frischen Checkout, und
+    der Endpunkt antwortet zu RECHT mit 503.
+
+    Lokal faellt das nicht auf, weil dort eine ungetrackte Kopie herumliegt.
+    Auf CI fiel deshalb erst ein Test um, nach dessen Behebung der naechste
+    (pytest haelt nach dem ersten Fehler an) — darum die Vorrichtung fuer das
+    ganze Modul statt einer Stilllegung je Test.
+
+    Was diese Tests pruefen, ist der Endpunkt selbst: Beschaeftigt-Sperre,
+    Home-Verzeichnis, Namenspruefung. Nicht die Vollstaendigkeit des
+    Checkouts — dafuer gibt es den Fresh-boot-E2E-Lauf.
+    """
+    with patch(
+        "app.services.docker_agent_sync.compose_preflight_error",
+        new=lambda *a, **k: None,
+    ):
+        yield
+
+
+
 # ── _validate_local_memory_filename ───────────────────────────────────────
 
 def test_validate_rejects_path_traversal():

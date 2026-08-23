@@ -58,13 +58,68 @@ afterEach(() => {
 });
 
 describe("ResultDocPanel", () => {
-  it("renders the current document content as markdown", async () => {
-    documentMock.mockResolvedValue(mkDoc("# Verdict\n\nDFlash2 wins on throughput."));
+  it("puts the verdict in the header instead of burying it under the goal", async () => {
+    // Der ganze Zweck des Umbaus (22.08.2026): wer das Panel öffnet, will EINE
+    // Sache wissen. Vorher stand ganz oben der Vorspann für den Lead-Agenten,
+    // dann das selbst getippte Ziel — die Antwort kam erst an dritter Stelle.
+    documentMock.mockResolvedValue(
+      mkDoc(
+        "# Spark\n\n> Engine note for the lead.\n\n## Goal\n\nDecide the engine.\n\n" +
+          "## Verdict\n\nDFlash2 wins on throughput.\n",
+      ),
+    );
     render(<ResultDocPanel groupId="g1" latestVersion={null} />);
 
-    expect(await screen.findByText("Verdict")).toBeInTheDocument();
-    expect(screen.getByText("DFlash2 wins on throughput.")).toBeInTheDocument();
+    expect(await screen.findByTestId("result-verdict")).toHaveTextContent(
+      "DFlash2 wins on throughput.",
+    );
     expect(documentMock).toHaveBeenCalledWith("g1");
+  });
+
+  it("keeps every section shut and opens the one that is asked for", async () => {
+    documentMock.mockResolvedValue(
+      mkDoc("# S\n\n## Verdict\n\nShort answer.\n\n## Evidence\n\nThe long proof.\n"),
+    );
+    render(<ResultDocPanel groupId="g1" latestVersion={null} />);
+
+    await screen.findByTestId("result-verdict");
+    // Zugeklappt heisst: kein Rumpf im Dokument. Die Vorschauzeile bleibt
+    // sichtbar — sie ist der Grund, warum man weiss, was sich zu öffnen lohnt.
+    expect(screen.queryByTestId("result-section-body")).not.toBeInTheDocument();
+
+    const evidence = screen.getAllByTestId("result-section-toggle")[1];
+    fireEvent.click(evidence);
+
+    const body = await screen.findByTestId("result-section-body");
+    expect(body).toHaveTextContent("The long proof.");
+    // Nur DER angeklickte Abschnitt geht auf, nicht alle.
+    expect(screen.getAllByTestId("result-section-body")).toHaveLength(1);
+  });
+
+  it("moves the goal behind the sections that carry the answer", async () => {
+    documentMock.mockResolvedValue(
+      mkDoc("# S\n\n## Goal\n\nDecide.\n\n## Verdict\n\nDone.\n"),
+    );
+    render(<ResultDocPanel groupId="g1" latestVersion={null} />);
+
+    await screen.findByTestId("result-verdict");
+    const titles = screen.getAllByTestId("result-section-toggle").map((b) => b.textContent);
+    expect(titles[0]).toContain("Verdict");
+    expect(titles[titles.length - 1]).toContain("Goal");
+  });
+
+  it("tucks the engine's preamble away instead of leading with it", async () => {
+    documentMock.mockResolvedValue(
+      mkDoc("# S\n\n> Only the lead agent writes this file.\n\n## Verdict\n\nDone.\n"),
+    );
+    render(<ResultDocPanel groupId="g1" latestVersion={null} />);
+
+    await screen.findByTestId("result-verdict");
+    // Sichtbar ist nur der Knopf — der Text erst auf Wunsch. Weggeworfen wird
+    // er nicht: er erklärt dem Lead seine Pflichten und gehört zum Dokument.
+    expect(screen.queryByTestId("result-note-body")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("result-note-toggle"));
+    expect(await screen.findByTestId("result-note-body")).toHaveTextContent("lead agent");
   });
 
   it("shows the empty state when the document has no content", async () => {
@@ -84,53 +139,51 @@ describe("ResultDocPanel", () => {
     expect(
       await screen.findByText("No result yet — it grows with the first round."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/Version/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("result-timeline")).not.toBeInTheDocument();
   });
 
-  it("hides the version stepper while no round has a snapshot", async () => {
+  it("hides the timeline while no round has a snapshot", async () => {
     roundsMock.mockResolvedValue({ rounds: [mkRound(1, false)] });
     documentMock.mockResolvedValue(mkDoc("live text"));
     render(<ResultDocPanel groupId="g1" latestVersion={null} />);
 
-    expect(await screen.findByText("live text")).toBeInTheDocument();
-    expect(screen.queryByTestId("result-prev")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("result-verdict")).toHaveTextContent("live text");
+    expect(screen.queryByTestId("result-timeline")).not.toBeInTheDocument();
   });
 
-  it("stepping back loads the older round snapshot", async () => {
+  it("loads a round's snapshot when its point on the timeline is tapped", async () => {
+    // Zeitleiste statt `‹ 2 von 3 ›`: auf dem Handy passt eine Reihe
+    // antippbarer Punkte in eine Zeile, und man sieht, WIE VIELE Runden es gab.
     roundsMock.mockResolvedValue({ rounds: [mkRound(1), mkRound(2)] });
     documentMock.mockImplementation(async (_id: string, version?: number) =>
       version === 1 ? mkDoc("snapshot of round one", 1) : mkDoc("newest text"),
     );
     render(<ResultDocPanel groupId="g1" latestVersion={2} />);
 
-    expect(await screen.findByText("newest text")).toBeInTheDocument();
-    expect(await screen.findByText("Version 2 of 2")).toBeInTheDocument();
+    expect(await screen.findByTestId("result-verdict")).toHaveTextContent("newest text");
 
-    fireEvent.click(screen.getByTestId("result-prev"));
+    fireEvent.click(screen.getByRole("button", { name: "Older version (round 1)" }));
 
     await waitFor(() => expect(documentMock).toHaveBeenCalledWith("g1", 1));
-    expect(await screen.findByText("snapshot of round one")).toBeInTheDocument();
-    expect(screen.getByText("Version 1 of 2")).toBeInTheDocument();
+    expect(await screen.findByTestId("result-verdict")).toHaveTextContent("snapshot of round one");
   });
 
-  it("shows the older-version band and jumps back to the newest file", async () => {
+  it("jumps back to the live file, which is not the last snapshot", async () => {
     roundsMock.mockResolvedValue({ rounds: [mkRound(1), mkRound(2)] });
     documentMock.mockImplementation(async (_id: string, version?: number) =>
       version === 1 ? mkDoc("snapshot of round one", 1) : mkDoc("newest text"),
     );
     render(<ResultDocPanel groupId="g1" latestVersion={2} />);
 
-    await screen.findByText("newest text");
-    fireEvent.click(screen.getByTestId("result-prev"));
-
-    expect(await screen.findByText("Older version (round 1)")).toBeInTheDocument();
+    await screen.findByTestId("result-verdict");
+    fireEvent.click(screen.getByRole("button", { name: "Older version (round 1)" }));
+    await waitFor(() => expect(documentMock).toHaveBeenCalledWith("g1", 1));
 
     documentMock.mockClear();
     fireEvent.click(screen.getByTestId("result-newest"));
 
     await waitFor(() => expect(documentMock).toHaveBeenCalledWith("g1"));
-    expect(await screen.findByText("newest text")).toBeInTheDocument();
-    expect(screen.queryByText("Older version (round 1)")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("result-verdict")).toHaveTextContent("newest text");
   });
 
   it("drops the previous group's document immediately when the group changes", async () => {
@@ -141,27 +194,32 @@ describe("ResultDocPanel", () => {
     });
     const { rerender } = render(<ResultDocPanel groupId="g1" latestVersion={2} />);
 
-    await screen.findByText("g1 newest");
-    fireEvent.click(screen.getByTestId("result-prev"));
-    await screen.findByText("g1 snapshot");
+    await waitFor(() =>
+      expect(screen.getByTestId("result-verdict")).toHaveTextContent("g1 newest"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Older version (round 1)" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("result-verdict")).toHaveTextContent("g1 snapshot"),
+    );
 
     documentMock.mockClear();
     rerender(<ResultDocPanel groupId="g2" latestVersion={2} />);
 
     // Kein einziger Frame mit dem Dokument der alten Gruppe unter dem neuen Kopf.
-    expect(screen.queryByText("g1 snapshot")).not.toBeInTheDocument();
-    expect(screen.queryByText("Older version (round 1)")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("result-verdict")).not.toBeInTheDocument();
 
     await waitFor(() => expect(documentMock).toHaveBeenCalledWith("g2"));
     expect(documentMock).not.toHaveBeenCalledWith("g2", 1);
-    expect(await screen.findByText("g2 newest")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("result-verdict")).toHaveTextContent("g2 newest"),
+    );
   });
 
   it("shows the rewriting hint only while updating", async () => {
     documentMock.mockResolvedValue(mkDoc("body"));
     const { rerender } = render(<ResultDocPanel groupId="g1" latestVersion={1} />);
 
-    await screen.findByText("body");
+    await screen.findByTestId("result-verdict");
     expect(screen.queryByText("being rewritten…")).not.toBeInTheDocument();
 
     rerender(<ResultDocPanel groupId="g1" latestVersion={1} updating />);
@@ -174,7 +232,7 @@ describe("ResultDocPanel", () => {
     documentMock.mockResolvedValue(mkDoc("copy me"));
     render(<ResultDocPanel groupId="g1" latestVersion={null} />);
 
-    await screen.findByText("copy me");
+    await screen.findByTestId("result-verdict");
     fireEvent.click(screen.getByTestId("result-copy"));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("copy me"));
@@ -186,7 +244,7 @@ describe("ResultDocPanel", () => {
     documentMock.mockResolvedValue(mkDoc("copy me"));
     render(<ResultDocPanel groupId="g1" latestVersion={null} />);
 
-    await screen.findByText("copy me");
+    await screen.findByTestId("result-verdict");
     fireEvent.click(screen.getByTestId("result-copy"));
 
     await waitFor(() => expect(screen.getByText("Copy")).toBeInTheDocument());

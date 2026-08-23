@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Board, BoardGroup } from "./types";
+import { DEFAULT_PINS } from "./nav";
 
 // ── Notification Store ─────────────────────────────────────────────────────────
 
@@ -69,6 +70,19 @@ interface AppState {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
+  /** Pinned nav routes in the user's order. An empty list is a valid choice. */
+  pinnedNav: string[];
+  setPinnedNav: (hrefs: string[]) => void;
+  togglePin: (href: string) => void;
+
+  /**
+   * Explicit open/closed decisions per nav group. A key only appears once the
+   * user clicked it — everything else falls back to "the group holding the
+   * current route is open", so rendering never writes to persisted state.
+   */
+  navGroupState: Record<string, boolean>;
+  setNavGroupOpen: (key: string, open: boolean) => void;
+
   // Command palette
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
@@ -94,6 +108,19 @@ export const useAppStore = create<AppState>()(
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
+      pinnedNav: DEFAULT_PINS,
+      setPinnedNav: (pinnedNav) => set({ pinnedNav }),
+      togglePin: (href) =>
+        set((s) => ({
+          pinnedNav: s.pinnedNav.includes(href)
+            ? s.pinnedNav.filter((h) => h !== href)
+            : [...s.pinnedNav, href],
+        })),
+
+      navGroupState: {},
+      setNavGroupOpen: (key, open) =>
+        set((s) => ({ navGroupState: { ...s.navGroupState, [key]: open } })),
+
       commandPaletteOpen: false,
       setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
 
@@ -111,6 +138,8 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         activeBoardId: state.activeBoardId,
         sidebarCollapsed: state.sidebarCollapsed,
+        pinnedNav: state.pinnedNav,
+        navGroupState: state.navGroupState,
       }),
     }
   )

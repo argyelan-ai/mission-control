@@ -18,7 +18,7 @@ const statusColors: Record<Status, string> = {
   warning: C.warning,  // #A67F3E
   error: C.error,      // #FA4942
   busy: STATUS.busy,   // #5890CA — busy is an info state, not the accent
-  idle: C.textDim,     // #666666
+  idle: C.textDim,     // #8A8A8A
   offline: STATUS.offline, // #3A3A3A
 };
 

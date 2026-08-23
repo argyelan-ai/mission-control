@@ -16,24 +16,28 @@ normalen Datei-Tools — kein eigener Schreib-Endpoint.
 """
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 
+from sqlalchemy import delete as sa_delete
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.group import (
+    ACTIVE_GROUP_STATUSES,
     GROUP_LIFECYCLES,
     AgentGroup,
     GroupMember,
+    GroupRound,
 )
 from app.models.reference_file import ReferenceFile
-from app.models.thread import Message, Thread
+from app.models.thread import AgentThreadCursor, Message, Thread
 from app.services import reference_ingest
 from app.services.chat_inbound import _fold, parse_handles
 from app.services.messaging import post_message
-from app.utils import slugify
+from app.utils import slugify, utcnow
 
 
 # Rundfunk-Handles: "@alle" adressiert die ganze Gruppe. MC ist zweisprachig
@@ -44,8 +48,16 @@ from app.utils import slugify
 BROADCAST_HANDLES = frozenset({"alle", "all", "everyone"})
 
 
+logger = logging.getLogger(__name__)
+
+
 class GroupValidationError(ValueError):
     """Ungültige Eingabe — der Router antwortet 422."""
+
+
+class GroupRunningError(Exception):
+    """Löschen einer laufenden Gruppe — der Router antwortet 409. Erst
+    anhalten: sonst zöge man Agenten mitten im Turn den Thread weg."""
 
 
 class GroupMemberNotCapable(Exception):
@@ -309,3 +321,116 @@ async def remove_member(
         return
     await session.delete(member)
     await session.commit()
+
+
+# ── Abschluss: archivieren, löschen, ins Gedächtnis übernehmen ─────────────
+# Operator-Wunsch 22.08.2026: selbst bestimmen, ob mit oder ohne Daten gelöscht
+# wird — und das Ergebnis soll wie ein Task im Memory landen (eingebettet).
+#
+# Drei Stufen, weil sie drei verschiedene Absichten sind:
+#   archivieren      → nur aus der Liste (reversibel, der Normalfall)
+#   Chat löschen     → Verlauf weg, Ergebnis-Dokument bleibt
+#   alles löschen    → Gruppe, Runden, Verlauf und Datei weg
+#
+# Die Memory-Übernahme steht bewusst DANEBEN und nicht darin: eine Erkenntnis
+# darf ihr Arbeitsmaterial überleben.
+
+
+async def archive_group(session: AsyncSession, group: AgentGroup) -> AgentGroup:
+    group.archived_at = utcnow()
+    group.updated_at = utcnow()
+    session.add(group)
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+async def unarchive_group(session: AsyncSession, group: AgentGroup) -> AgentGroup:
+    group.archived_at = None
+    group.updated_at = utcnow()
+    session.add(group)
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+def _assert_not_running(group: AgentGroup) -> None:
+    """Eine laufende Gruppe zu löschen zöge Agenten mitten im Turn den Thread
+    unter den Füssen weg — sie würden in einen 404 antworten. Erst anhalten."""
+    if group.status in ACTIVE_GROUP_STATUSES:
+        raise GroupRunningError(
+            "Die Gruppe läuft noch. Halte sie erst an, dann kann sie weg."
+        )
+
+
+async def delete_group_chat(session: AsyncSession, group: AgentGroup) -> AgentGroup:
+    """Nur den Verlauf: Nachrichten und Lese-Zeiger weg, Gruppe und Dokument
+    bleiben. Der Chat war Arbeitsmaterial, das Ergebnis zählt."""
+    _assert_not_running(group)
+    await session.exec(
+        sa_delete(AgentThreadCursor).where(AgentThreadCursor.thread_id == group.thread_id)
+    )
+    await session.exec(sa_delete(Message).where(Message.thread_id == group.thread_id))
+    # Runden-Berichte zeigen per brief_seq auf gelöschte Nachrichten; die
+    # Zeiger würden ins Leere laufen und die Runden-Ansicht mit Teilern an
+    # Stellen füllen, an denen nichts mehr steht.
+    for row in (
+        await session.exec(select(GroupRound).where(GroupRound.group_id == group.id))
+    ).all():
+        row.brief_seq = None
+        row.lead_prompt_seq = None
+        session.add(row)
+    group.archived_at = utcnow()
+    group.updated_at = utcnow()
+    session.add(group)
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+async def delete_group_completely(session: AsyncSession, group: AgentGroup) -> None:
+    """Alles: Gruppe, Mitglieder, Runden, Thread samt Nachrichten und die
+    Ergebnis-Datei. Ein etwaiger Memory-Eintrag bleibt — das ist der Punkt."""
+    _assert_not_running(group)
+    rel_path = group.result_doc_rel_path
+    thread_id = group.thread_id
+
+    await session.exec(
+        sa_delete(AgentThreadCursor).where(AgentThreadCursor.thread_id == thread_id)
+    )
+    await session.exec(sa_delete(Message).where(Message.thread_id == thread_id))
+    await session.exec(sa_delete(GroupRound).where(GroupRound.group_id == group.id))
+    await session.exec(sa_delete(GroupMember).where(GroupMember.group_id == group.id))
+    if rel_path:
+        await session.exec(
+            sa_delete(ReferenceFile).where(ReferenceFile.rel_path == rel_path)
+        )
+    await session.delete(group)
+    thread = await session.get(Thread, thread_id)
+    if thread is not None:
+        await session.delete(thread)
+    await session.commit()
+
+    # Datei zuletzt und best effort: eine Datei, die nicht mehr wegzubekommen
+    # ist, darf den Datenbank-Teil nicht rückgängig machen.
+    if rel_path:
+        abs_path = os.path.join(reference_ingest.references_root(), rel_path)
+        try:
+            if os.path.isfile(abs_path):
+                os.remove(abs_path)
+            parent = os.path.dirname(abs_path)
+            if os.path.isdir(parent) and not os.listdir(parent):
+                os.rmdir(parent)
+        except OSError as exc:  # pragma: no cover - Dateisystem-Sonderfall
+            logger.warning("Ergebnis-Datei %s liess sich nicht löschen: %s", rel_path, exc)
+
+
+async def read_result_document(group: AgentGroup) -> str:
+    if not group.result_doc_rel_path:
+        return ""
+    abs_path = os.path.join(reference_ingest.references_root(), group.result_doc_rel_path)
+    try:
+        with open(abs_path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""

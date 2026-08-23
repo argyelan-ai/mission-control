@@ -116,6 +116,105 @@ Ergebnis-Dokument ist V1 (nur der Lead schreibt, Datei unter
   ein eigenes Modul gezogen, damit Gruppenraum und 1:1-Chat nicht
   auseinanderdriften (Verhalten unverändert, bestehende Tests grün).
 
+## Nachtrag Live-Betrieb — was erst der Echtbetrieb gezeigt hat (2026-08-22)
+
+Vier Fehler überlebten die gesamte Testabdeckung und fielen erst im ersten
+echten Lauf auf. Sie stehen hier, weil sie ein Muster bilden: **grüne Tests
+prüfen die Mechanik, nicht die Umwelt.**
+
+1. **Der Lead konnte das Ergebnis-Dokument gar nicht schreiben.** Der Plan
+   ging davon aus, er editiere es „mit normalen Datei-Tools, kein neuer
+   Schreib-Endpoint nötig" — der References-Mount ist in den
+   Agenten-Containern aber **read-only**. Lesen ja, schreiben nie. Der
+   tragende Teil des Entwurfs war unmöglich. Korrektur:
+   `PUT /agent/groups/{id}/document` (nur der Lead, sonst 403) plus das Verb
+   `mc group-doc <id> --file <datei>`.
+2. **Kein `mc group-doc`.** Der Lead lief live in `mc help | grep group`. Ein
+   Backend-Endpunkt allein erreicht die Container nie — das `mc`-CLI ist in
+   die Agent-Images eingebacken.
+3. **Der Lead war nicht wechselbar.** Ein hängender Lead legte die Gruppe
+   dauerhaft still. Korrektur: `lead_agent_id` per `PATCH` umsetzbar.
+4. **Falsche Reihenfolge der Lead-Pflichten:** erst Dokument, dann Verdikt.
+   Scheiterte Schritt 1, kam nie ein Verdikt — drei Runden verbrannt.
+
+## Nachtrag Kursänderung — der Chat ist das Protokoll, nicht das Produkt (2026-08-22)
+
+Operator-Befund nach dem ersten vollständigen Lauf: „die Agenten schreiben
+extrem viel, das überlädt den ganzen Chat." Gemessen: 1600–4900 Zeichen je
+Beitrag, 30 000–41 800 Token je Runde.
+
+Es war **kein Agenten-Problem**. Der Runden-Brief verlangte Quellen-Pflicht,
+Dissens-Ausweis und Zwangsformat — und sagte kein Wort über Länge. Ein so
+beauftragter Agent schreibt einen Aufsatz; er tut genau, was dasteht. Dahinter
+lag eine unausgesprochene Vermischung: Hermes' Bot Mode baut ein *Gespräch*,
+wir bauen einen *Auftrag mit Ergebnis* — hatten die Tiefe aber im
+Gesprächskanal abgeladen.
+
+**Leitsatz:** Der Chat trägt die Meinungsbildung, das Ergebnis-Dokument trägt
+die Substanz.
+
+- Längenbudget im Brief (2–4 Sätze); der Lead postet kurz und schreibt lang
+  ins Dokument.
+- `PASS` wird eine vollwertige Antwort (Hermes-Muster) statt des kleinlauten
+  „NICHTS NEUES"; die deutsche Altform bleibt gültig, damit laufende Gruppen
+  mit älteren Briefen im Thread nicht brechen.
+- Passen **alle** Sprecher, endet der Lauf regulär (`all_passed` →
+  `room_settled`), ohne den teuersten Turn zu wecken. Das **ergänzt** die
+  Fortschritts-Bremse, ersetzt sie nicht: den Teil-Fall (halbe Runde passt,
+  Lead urteilt trotzdem WEITER) deckt weiterhin nur `continue_stale` ab. Wer
+  per Timeout übersprungen wurde, zählt nicht als Passer — er ist nicht
+  einverstanden, sondern unbekannt.
+- Kontext als Delta (Beiträge 2000 → 400 Zeichen).
+- Turn-Timeout 600 → **900 s**, bewusst gegen die Hermes-Vorlage (180 s):
+  lokale Motoren brauchen bei langem Kontext lange bis zum ersten Token, und
+  unsere Turns schliessen Recherche und Werkzeug-Aufrufe ein. Ein zu knapper
+  Deckel kostet die Runde einen ganzen Beitrag; Warten kostet nur Zeit.
+- UI: lange Beiträge klappen im Raum zu — das Netz für den Fall, dass ein
+  Agent die Längenvorgabe ignoriert.
+
+Bewusst **nicht** von Hermes übernommen: „alle antworten, wenn niemand
+erwähnt wird" (bricht den Sturm-Schutz) und das reine Gesprächsmodell ohne
+Ziel (unser Pflicht-Ziel ist der Grund, warum eine Runde überhaupt endet).
+
+## Nachtrag Abschluss — merken, archivieren, löschen (2026-08-22)
+
+Operator-Befund: „ich habe keine Möglichkeit die Gruppen zu löschen … wenn ich
+am Schluss die Ergebnisse abnehme sollte ich in der Lage sein selber zu
+bestimmen ob ich es mit den Daten oder ohne Daten löschen/archivieren möchte,
+nur den Chat. Diese Ergebnisse sollten auch in unserem Memorysystem
+aufgenommen werden, embedded, wie die Tasks."
+
+Nachgesehen und bestätigt: es gab nur `DELETE /groups/{id}/members/{agent_id}`.
+Eine Gruppe blieb für immer in der Liste, und das Ergebnis-Dokument lag
+ausschliesslich als Datei unter `~/.mc/references/groups/…` — im Gedächtnis
+tauchte es nie auf.
+
+**Entscheidung: zwei getrennte Fragen beim Abschluss, in dieser Reihenfolge.**
+
+1. **Kommt das Ergebnis ins Gedächtnis?** Als `BoardMemory` (`source="group"`,
+   `memory_type` wählbar) plus `index_memory()` — dieselbe Ablage und dieselbe
+   Einbettung, die Tasks nutzen. Das *Ziel* wandert in den Inhalt mit: ohne die
+   Frage ist die Antwort in einem halben Jahr nicht mehr einzuordnen, und die
+   Einbettung findet sie schlechter.
+2. **Was passiert mit dem Arbeitsmaterial?**
+   - `archivieren` → nur aus der Liste; vollständig lesbar, umkehrbar. Vorauswahl.
+   - `nur den Chat` → Verlauf und Lese-Zeiger weg, Ergebnis-Dokument bleibt.
+   - `alles` → Gruppe, Mitglieder, Runden, Thread und Datei weg.
+
+**Der Kern ist die Trennung.** Eine Erkenntnis darf ihr Arbeitsmaterial
+überleben. Wäre das Merken an „archivieren" gekoppelt, müsste man Müll
+aufheben, um Wissen zu behalten. Gemerkt wird deshalb VOR dem Räumen — bricht
+das Merken ab, wird nichts gelöscht; sonst verlöre man beides: die Notiz und
+das Material, aus dem man sie neu schreiben könnte.
+
+**`archived_at` ist bewusst ein eigenes Feld und kein weiterer `status`-Wert.**
+`status` beschreibt, was die Engine tut (läuft, wartet, fertig); das Archiv
+beschreibt, was der Operator noch sehen will. In einer Spalte vermischt hätte
+eine archivierte Gruppe ihren Ausgang vergessen.
+
+Eine laufende Gruppe wird nicht gelöscht (409): das zöge Agenten mitten im Turn
+den Thread unter den Füssen weg — sie antworteten in einen 404.
+
 ## Referenzen
 
 - Betroffene Dateien: `app/models/group.py`, `alembic/versions/0181_agent_groups.py`,

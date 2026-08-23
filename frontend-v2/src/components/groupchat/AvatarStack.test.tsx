@@ -17,26 +17,26 @@ function mkMembers(names: string[]): Member[] {
 
 describe("AvatarStack", () => {
   it("renders one circle per member when the list fits within max", () => {
-    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Sparky"])} />);
+    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Alpha"])} />);
     expect(screen.getAllByTestId("avatar-stack-item")).toHaveLength(3);
     expect(screen.queryByTestId("avatar-stack-more")).not.toBeInTheDocument();
   });
 
   it('shows "+2" as a trailing circle when 5 members exceed the default max of 3', () => {
-    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Sparky", "Hermes", "Mia"])} />);
+    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Alpha", "Hermes", "Mia"])} />);
     expect(screen.getAllByTestId("avatar-stack-item")).toHaveLength(3);
     expect(screen.getByText("+2")).toBeInTheDocument();
   });
 
   it("honours a custom max instead of the default", () => {
-    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Sparky", "Hermes", "Mia"])} max={4} />);
+    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Alpha", "Hermes", "Mia"])} max={4} />);
     expect(screen.getAllByTestId("avatar-stack-item")).toHaveLength(4);
     expect(screen.getByText("+1")).toBeInTheDocument();
   });
 
   it("names every member — including the hidden ones — for screen readers", () => {
-    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Sparky", "Hermes"])} />);
-    expect(screen.getByRole("img", { name: "Rex, Cody, Sparky, Hermes" })).toBeInTheDocument();
+    render(<AvatarStack members={mkMembers(["Rex", "Cody", "Alpha", "Hermes"])} />);
+    expect(screen.getByRole("img", { name: "Rex, Cody, Alpha, Hermes" })).toBeInTheDocument();
   });
 
   it("renders nothing at all for an empty member list", () => {
