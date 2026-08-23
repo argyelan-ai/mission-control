@@ -89,7 +89,12 @@ class AgentGroup(SQLModel, table=True):
     operator_reports: bool = True
 
     # ── Gruppen-spezifisch ──────────────────────────────────────────────
-    speaker_timeout_seconds: int = 600  # Säumige werden ehrlich übersprungen
+    # Säumige werden ehrlich übersprungen. 900 s statt 600 (Operator-Korrektur
+    # 22.08.2026): lokale Motoren brauchen bei langem Kontext lange bis zum
+    # ersten Token, und ein Gruppen-Turn schliesst Recherche und Werkzeug-Aufrufe
+    # ein. Ein zu knapper Deckel überspringt Agenten, die noch am Denken sind —
+    # das kostet die Runde einen ganzen Beitrag, während Warten nur Zeit kostet.
+    speaker_timeout_seconds: int = 900
     live_max_turns_per_impulse: int = 2  # Kappung der Live-Antwortkette (Hermes-Muster)
     # Relativ zu ~/.mc/references/ — z.B. "groups/spark-vergleich/result.md".
     result_doc_rel_path: str | None = None
@@ -105,6 +110,13 @@ class AgentGroup(SQLModel, table=True):
     )
     finished_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    # Archiv ≠ Status. `status` sagt, was die Engine tut (läuft, wartet,
+    # fertig); `archived_at` sagt, was der Operator noch sehen will. In einer
+    # Spalte vermischt hätte eine archivierte Gruppe ihren Ausgang vergessen.
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
     )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
@@ -175,7 +187,10 @@ class GroupRound(SQLModel, table=True):
             Uuid, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
         ),
     )
-    outcome: str | None = None  # goal_reached | continue | ask_operator | failed | stopped
+    # goal_reached | continue | continue_stale | all_passed | ask_operator |
+    # failed | stopped. all_passed = stille Runde (alle Sprecher haben gepasst,
+    # der Lead wurde nicht geweckt) — reguläres Ende, keine Fehlrunde.
+    outcome: str | None = None
     report: str | None = None  # kompakter Runden-Report (Brief-Historie, Muster Loop)
     # Snapshot des Ergebnis-Dokuments nach dem Lead-Turn (Cap 64 KB) —
     # Versions-Verlauf fürs UI ohne Git-Maschinerie.

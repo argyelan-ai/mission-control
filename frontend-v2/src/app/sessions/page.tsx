@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
@@ -176,7 +176,25 @@ function SessionsPageContent() {
     setSidebarCollapsedState(loadSidebarCollapsed());
   }, []);
 
+  // Nie drei Inhaltsspalten gleichzeitig (Operator-Befund 22.08.2026).
+  // Gemessen bei 1440px mit offenem Panel: Liste 258 · Chat 265 · Panel 497.
+  // 265px sind rund 30 Zeichen je Zeile — angenehm liest man ab 45. Eine
+  // einzelne URL brach dort über vier Zeilen. Kein Feintuning rettet das, die
+  // Spalte ist zu schmal; also weicht die Liste, sobald ein Panel aufgeht.
+  //
+  // Der vorherige Zustand wird gemerkt und beim Schliessen zurückgegeben: wer
+  // die Liste bewusst offen hatte, bekommt sie wieder — die Regel greift ein,
+  // sie übernimmt nicht.
+  const sidebarBeforePanel = useRef<boolean | null>(null);
+
   function setActivePanel(panel: PanelKind | null) {
+    if (panel && !activePanel) {
+      sidebarBeforePanel.current = sidebarCollapsed;
+      if (!sidebarCollapsed) setSidebarCollapsed(true);
+    } else if (!panel && activePanel) {
+      if (sidebarBeforePanel.current === false) setSidebarCollapsed(false);
+      sidebarBeforePanel.current = null;
+    }
     setActivePanelState(panel);
     saveActivePanel(panel);
   }
@@ -464,8 +482,19 @@ function SessionsPageContent() {
               the island tone — on mobile it IS the whole screen, edge to edge,
               and it carries the same tone as the list screen so switching
               between them is not a colour jump. */}
+          {/* Chat, Schiene und Panel bilden EINE Insel (Operator-Befund
+              22.08.2026: „vier gerahmte Kästen nebeneinander"). Vier gleich
+              starke Rahmen geben dem Auge keinen Hauptdarsteller — innen
+              trennen jetzt Linien, aussen umfasst ein Rahmen das Ganze.
+              Der Tonschritt zum Grund bleibt: die Insel ist bg-surface, nicht
+              der Seitengrund (bewusst so entschieden, langes Lesen auf
+              Fast-Schwarz war anstrengend). */}
           <div
-            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:rounded-xl md:border md:border-[var(--color-border)]`}
+            className={`${onChatScreen || activePanel ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:rounded-xl md:border md:border-[var(--color-border)]`}
+            data-testid="chat-island"
+          >
+          <div
+            className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col`}
             style={{ background: C.bgSurface }}
             data-testid="chat-column"
           >
@@ -479,6 +508,13 @@ function SessionsPageContent() {
                 onBack={() => setMobileView("list")}
                 onGroupChanged={handleGroupChanged}
                 onOpenResult={() => setActivePanel(activePanel === "doc" ? null : "doc")}
+                onGroupGone={() => {
+                  // Erst die Auswahl raeumen, dann neu laden: sonst rendert die
+                  // Seite fuer einen Frame den Raum einer geloeschten Gruppe.
+                  setSelectedGroupId(null);
+                  setActivePanel(null);
+                  qc.invalidateQueries({ queryKey: ["groups"] });
+                }}
               />
             ) : isLoading && !selectedLive ? null : (
               // `key` stays on the id, not the object: re-keying on every
@@ -505,11 +541,19 @@ function SessionsPageContent() {
               On mobile the same panels are reached from the chat header's
               options sheet; the rail used to be a `fixed bottom-0` bar there,
               which covered the app's own bottom tab bar. */}
-          <PanelRail
-            active={activePanel}
-            onSelect={setActivePanel}
-            only={selectedGroupId ? ["doc"] : ["diff", "browser"]}
-          />
+          {/* Bei einer Gruppe hätte die Schiene GENAU einen Knopf — und
+              denselben Knopf trägt der Gruppen-Kopf bereits. Sie wäre eine
+              Navigationsleiste ohne Navigation: 58px breit, null Information,
+              und sie stand als loser Balken zwischen Chat und Panel
+              (Operator-Befund 22.08.2026). Für Agenten bleibt sie: dort führt
+              sie zu Diff UND Browser, also trägt sie eine echte Wahl. */}
+          {!selectedGroupId && (
+            <PanelRail
+              active={activePanel}
+              onSelect={setActivePanel}
+              only={["diff", "browser"]}
+            />
+          )}
 
           {/* Panel content — desktop: its own island column; mobile: full-
               screen overlay with its own close button (single markup block,
@@ -527,7 +571,12 @@ function SessionsPageContent() {
               // `mobileChromeless`), sonst die App-Leiste. Mit einem festen
               // Bezug auf die App-Leiste bliebe im Chat ein Streifen frei,
               // der zu keiner Leiste mehr gehoert.
-              className={`fixed inset-x-0 bottom-0 z-40 flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[45%] md:max-w-[720px] md:rounded-xl md:border ${
+              //
+              // Desktop: innerhalb der gemeinsamen Insel trennt eine LINIE
+              // statt eines zweiten Rahmens — der äussere Rahmen umfasst Chat
+              // und Panel zusammen (sonst stünden vier gerahmte Kästen
+              // nebeneinander, Operator-Befund 22.08.2026).
+              className={`fixed inset-x-0 bottom-0 z-40 flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[45%] md:max-w-[720px] md:border-l ${
                 onChatScreen ? "top-[var(--mobile-chat-topbar-h)]" : "top-[var(--mobile-appbar-h)]"
               }`}
               style={{ background: C.bgSurface, borderColor: C.border }}
@@ -564,6 +613,7 @@ function SessionsPageContent() {
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
 

@@ -12,7 +12,9 @@ Runden-Steuerung (start/pause/stop) kommt mit der Engine in PR B.
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -21,14 +23,19 @@ from app.auth import require_user
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.group import AgentGroup, GroupMember
+from app.models.memory import BoardMemory
 from app.models.thread import Message
 from app.redis_client import RedisKeys
 from app.services import group_service, reference_ingest
 from app.services.group_service import (
     GroupMemberNotCapable,
+    GroupRunningError,
     GroupValidationError,
 )
+from app.services.memory_indexing import index_memory
 from app.services.sse import broadcast
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["groups"])
 
@@ -126,6 +133,7 @@ async def _serialize_group(session: AsyncSession, group: AgentGroup) -> dict:
         "rounds_completed": group.rounds_completed,
         "current_round_no": group.current_round_no,
         "result_doc_rel_path": group.result_doc_rel_path,
+        "archived_at": group.archived_at.isoformat() if group.archived_at else None,
         "created_at": group.created_at.isoformat() if group.created_at else None,
         "members": [_serialize_member(m, a) for m, a in members],
     }
@@ -162,14 +170,16 @@ async def eligible_members(
 
 @router.get("/groups")
 async def list_groups(
+    include_archived: bool = False,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    groups = (
-        await session.exec(
-            select(AgentGroup).order_by(AgentGroup.created_at.desc())  # type: ignore[union-attr]
-        )
-    ).all()
+    # Archivierte Gruppen sind nicht geloescht, nur weggeraeumt — die Liste
+    # zeigt sie auf Wunsch wieder (Operator-Wunsch 22.08.2026).
+    query = select(AgentGroup).order_by(AgentGroup.created_at.desc())  # type: ignore[union-attr]
+    if not include_archived:
+        query = query.where(AgentGroup.archived_at.is_(None))  # type: ignore[union-attr]
+    groups = (await session.exec(query)).all()
     out = []
     for group in groups:
         members = await _members_with_agents(session, group)
@@ -539,3 +549,111 @@ async def group_document(
         "version": None,
         "mtime": os.path.getmtime(abs_path),
     }
+
+
+# ── Abschluss: archivieren, löschen, ins Gedächtnis übernehmen ─────────────
+# Operator-Wunsch 22.08.2026. Drei Stufen mit klar verschiedener Bedeutung,
+# plus eine Memory-Übernahme, die von allen dreien unabhängig ist.
+
+
+class MemorizeGroupPayload(BaseModel):
+    title: str | None = None
+    memory_type: str = "research"
+    tags: list[str] = []
+
+
+@router.post("/groups/{group_id}/archive")
+async def archive_group(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    group = await _get_group_or_404(session, group_id)
+    group = await group_service.archive_group(session, group)
+    return await _serialize_group(session, group)
+
+
+@router.post("/groups/{group_id}/unarchive")
+async def unarchive_group(
+    group_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    group = await _get_group_or_404(session, group_id)
+    group = await group_service.unarchive_group(session, group)
+    return await _serialize_group(session, group)
+
+
+@router.post("/groups/{group_id}/memorize", status_code=status.HTTP_201_CREATED)
+async def memorize_group_result(
+    group_id: uuid.UUID,
+    payload: MemorizeGroupPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Das Ergebnis-Dokument als BoardMemory ablegen — dieselbe Ablage, die
+    Tasks nutzen, damit dieselbe Einbettung greift.
+
+    Bewusst ein eigener Aufruf und kein Anhängsel des Löschens: eine
+    Erkenntnis soll ihr Arbeitsmaterial überleben können.
+    """
+    group = await _get_group_or_404(session, group_id)
+    content = await group_service.read_result_document(group)
+    if not content.strip():
+        raise HTTPException(
+            status_code=422, detail="Es gibt noch kein Ergebnis zum Übernehmen"
+        )
+
+    memory = BoardMemory(
+        title=(payload.title or group.name or "Gruppen-Ergebnis")[:200],
+        # Das Ziel wandert mit: ohne die Frage ist die Antwort in einem halben
+        # Jahr nicht mehr einzuordnen — und die Einbettung findet sie schlechter.
+        content=f"# {group.name}\n\n**Ziel:** {group.goal}\n\n---\n\n{content}",
+        tags=list(payload.tags),
+        source="group",
+        memory_type=payload.memory_type,
+        auto_generated=True,
+    )
+    session.add(memory)
+    await session.commit()
+    await session.refresh(memory)
+
+    # Einbetten best effort: der Eintrag steht schon in der Datenbank, ein
+    # ausgefallener Embedding-Dienst darf ihn nicht wieder wegnehmen.
+    # index_memory kümmert sich selbst um Wiederholungen.
+    try:
+        await index_memory(memory)
+    except Exception as exc:  # pragma: no cover - Netz-/Dienst-Sonderfall
+        logger.warning("Einbettung des Gruppen-Ergebnisses %s fehlgeschlagen: %s", memory.id, exc)
+
+    return {"memory_id": str(memory.id), "title": memory.title}
+
+
+@router.delete("/groups/{group_id}")
+async def delete_group(
+    group_id: uuid.UUID,
+    scope: str = "all",
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """`scope=chat` löscht nur den Verlauf (Ergebnis bleibt), `scope=all` alles.
+
+    Zwei Antwortformen, weil zwei Dinge zurückkommen: bei `chat` gibt es die
+    Gruppe noch, bei `all` nicht mehr.
+    """
+    if scope not in ("all", "chat"):
+        raise HTTPException(status_code=422, detail="scope muss 'all' oder 'chat' sein")
+    group = await _get_group_or_404(session, group_id)
+    try:
+        if scope == "chat":
+            group = await group_service.delete_group_chat(session, group)
+            await broadcast(
+                RedisKeys.group_events(str(group.id)),
+                "group.group_changed",
+                {"group_id": str(group.id), "reason": "chat_deleted"},
+            )
+            return await _serialize_group(session, group)
+        await group_service.delete_group_completely(session, group)
+    except GroupRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
