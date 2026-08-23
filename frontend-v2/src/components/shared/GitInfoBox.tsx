@@ -131,7 +131,7 @@ export function GitInfoBox({
                   if (e.key === "Escape") { setShowCreateRepo(false); setNewRepoName(""); }
                 }}
                 placeholder="repo-name"
-                className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded"
+                className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded-sm"
                 style={{ color: textPrimary, border: `1px solid ${accent}44` }}
               />
               <button
@@ -160,7 +160,7 @@ export function GitInfoBox({
                 if (e.target.value === "__create__") { setShowCreateRepo(true); return; }
                 onRepoIdChange?.(e.target.value || null);
               }}
-              className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded cursor-pointer"
+              className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded-sm cursor-pointer"
               style={{
                 color: repoId ? textPrimary : textSecondary,
                 border: `1px solid ${repoId ? `${accent}44` : border}`,
@@ -187,7 +187,7 @@ export function GitInfoBox({
                 onChange={(e) => onBranchNameChange(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingBranch(false); }}
                 onBlur={() => setEditingBranch(false)}
-                className="flex-1 bg-transparent text-[11px] outline-none px-1 py-0.5 rounded"
+                className="flex-1 bg-transparent text-[11px] outline-none px-1 py-0.5 rounded-sm"
                 style={{ color: textPrimary, border: `1px solid ${accent}44` }}
               />
               <Check size={10} style={{ color: accent }} />
@@ -234,7 +234,7 @@ export function GitInfoBox({
                   aria-label="Link existing repository"
                   value={linkRepoId}
                   onChange={(e) => setLinkRepoId(e.target.value)}
-                  className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded cursor-pointer"
+                  className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded-sm cursor-pointer"
                   style={{ color: linkRepoId ? textPrimary : textSecondary, border: `1px solid ${border}` }}
                 >
                   <option value="">Select repository&hellip;</option>
@@ -320,7 +320,7 @@ export function GitInfoBox({
             {visibleBranches.map((b) => (
               <span
                 key={b}
-                className="px-1.5 py-0.5 rounded text-[9px]"
+                className="px-1.5 py-0.5 rounded-sm text-[9px]"
                 style={{ backgroundColor: `${accent}11`, color: textSecondary, border: `1px solid ${border}` }}
               >
                 {b}
@@ -343,7 +343,7 @@ export function GitInfoBox({
                 onChange={(e) => onBranchNameChange(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingBranch(false); }}
                 onBlur={() => setEditingBranch(false)}
-                className="flex-1 bg-transparent text-[11px] outline-none px-1 py-0.5 rounded"
+                className="flex-1 bg-transparent text-[11px] outline-none px-1 py-0.5 rounded-sm"
                 style={{ color: textPrimary, border: `1px solid ${accent}44` }}
               />
             </div>

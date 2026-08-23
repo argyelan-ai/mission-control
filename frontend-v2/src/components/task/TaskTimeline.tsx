@@ -117,7 +117,7 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
       <div className="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
         {entry.actor && (
           <span
-            className="inline-flex items-center rounded px-1.5 py-0.5"
+            className="inline-flex items-center rounded-sm px-1.5 py-0.5"
             style={{ background: C.bgHover, color: C.textSecondary }}
           >
             {entry.actor}

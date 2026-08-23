@@ -159,7 +159,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
           {/* Dispatch phase badges */}
           {task.dispatch_phase === "planning" && (
             <span
-              className="text-[10px] font-semibold tracking-wider uppercase shrink-0 px-1 py-0.5 rounded"
+              className="text-[10px] font-semibold tracking-wider uppercase shrink-0 px-1 py-0.5 rounded-sm"
               style={{ color: C.accentHover, backgroundColor: C.accentSubtle }}
             >
               PLAN
@@ -167,7 +167,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
           )}
           {task.dispatch_phase === "ready" && (
             <span
-              className="text-[10px] font-semibold tracking-wider uppercase shrink-0 px-1 py-0.5 rounded"
+              className="text-[10px] font-semibold tracking-wider uppercase shrink-0 px-1 py-0.5 rounded-sm"
               style={{ color: C.online, backgroundColor: `${C.online}1F` }}
             >
               READY
@@ -181,7 +181,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
                 {task.tags.slice(0, 2).map((tag, i) => (
                   <span
                     key={i}
-                    className="text-[10px] px-1.5 py-0.5 rounded leading-none shrink-0"
+                    className="text-[10px] px-1.5 py-0.5 rounded-sm leading-none shrink-0"
                     style={{
                       color: tag.color || C.textSecondary,
                       backgroundColor: `${tag.color || C.textSecondary}26`,
@@ -199,7 +199,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
             )}
             {(task.priority === "critical" || task.priority === "high") && (
               <span
-                className="text-[10px] px-1 py-0.5 rounded uppercase tracking-wide font-semibold shrink-0"
+                className="text-[10px] px-1 py-0.5 rounded-sm uppercase tracking-wide font-semibold shrink-0"
                 style={{
                   color: task.priority === "critical" ? C.error : C.warning,
                   backgroundColor: task.priority === "critical"

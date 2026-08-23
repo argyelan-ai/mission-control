@@ -742,7 +742,7 @@ export function ChatView({
           <span
             data-testid="session-badge"
             data-aliveness={aliveness}
-            className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded font-mono shrink-0"
+            className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded-sm font-mono shrink-0"
             style={{
               background: aliveness === "active" ? `${C.online}1A` : C.bgHover,
               color: aliveness === "active" ? C.online : C.textMuted,

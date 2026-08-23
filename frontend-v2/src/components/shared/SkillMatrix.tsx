@@ -224,7 +224,7 @@ export function SkillMatrix() {
                     <td key={agent.id} className="px-2 py-2 text-center">
                       <button
                         onClick={() => toggle(agent.id, skill.name)}
-                        className="w-5 h-5 rounded flex items-center justify-center cursor-pointer transition-colors mx-auto"
+                        className="w-5 h-5 rounded-sm flex items-center justify-center cursor-pointer transition-colors mx-auto"
                         style={{
                           background: enabled ? `${C.accent}33` : "var(--color-bg-hover)",
                           border: changed

@@ -166,7 +166,7 @@ export function AgentLessonMatrix({
                       {timeAgo(lesson.created_at, locale)}
                     </span>
                     {lesson.auto_generated && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
                         Auto
                       </span>
                     )}
@@ -180,7 +180,7 @@ export function AgentLessonMatrix({
                   {lesson.tags?.length > 0 && (
                     <div className="flex gap-1 flex-wrap mt-2">
                       {lesson.tags.slice(0, 4).map((tag) => (
-                        <span key={tag} className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
+                        <span key={tag} className="px-1.5 py-0.5 rounded-sm text-[10px]" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
                           {tag}
                         </span>
                       ))}

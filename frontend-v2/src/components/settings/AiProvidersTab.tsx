@@ -55,7 +55,7 @@ function OverriddenBadge({ shown }: { shown: boolean }) {
   return (
     <span
       data-testid="overridden-badge"
-      className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+      className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-sm"
       style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
     >
       {t("overridden")}

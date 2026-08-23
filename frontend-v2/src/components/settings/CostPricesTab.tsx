@@ -173,7 +173,7 @@ function PriceRow({
           <button
             onClick={onEdit}
             aria-label={t("editAria", { pattern: price.model_pattern })}
-            className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+            className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
             style={{
               color: "var(--color-text-secondary)",
               minHeight: 32,
@@ -185,7 +185,7 @@ function PriceRow({
           <button
             onClick={onDelete}
             aria-label={t("deleteAria", { pattern: price.model_pattern })}
-            className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+            className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
             style={{ color: C.error, minHeight: 32, minWidth: 32 }}
           >
             <Trash2 size={12} />
@@ -566,7 +566,7 @@ export function CostPricesTab() {
                 {t("unmatchedTitle")}
               </span>
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded tabular-nums"
+                className="text-[10px] px-1.5 py-0.5 rounded-sm tabular-nums"
                 style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
               >
                 {unmatched!.length}

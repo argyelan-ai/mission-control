@@ -77,7 +77,7 @@ export function SubagentGroup({ events }: { events: ChatEvent[] }) {
           Agent: {headerTitle}
         </span>
         <span
-          className="ml-auto shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded"
+          className="ml-auto shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
           style={{ background: C.bgHover, color: C.textMuted }}
         >
           {events.length}
