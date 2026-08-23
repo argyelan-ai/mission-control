@@ -237,13 +237,13 @@ function echo(overrides: Partial<PendingEcho> = {}): PendingEcho {
 }
 
 
-describe("gemischte Bloecke unter einer uuid (omp/Sparky)", () => {
+describe("gemischte Bloecke unter einer uuid (omp)", () => {
   it("behaelt Denken UND Antwort, wenn beide dieselbe Eintrags-uuid tragen", () => {
-    // LIVE gemessen an Sparkys echtem omp-Transkript (21.08.2026): 10 von 25
+    // LIVE gemessen an dem echten omp-Transkript eines Agenten (21.08.2026): 10 von 25
     // Eintraegen tragen `thinking` UND `message` unter derselben uuid — der
     // omp-Adapter schreibt beide Bloecke in EINE Zeile. Mit der uuid allein
     // als Schluessel galt die Antwort als Dublette des Denkens und wurde
-    // verworfen: Sparky dachte im Chat sichtbar nach und sagte nie etwas.
+    // verworfen: der Agent dachte im Chat sichtbar nach und sagte nie etwas.
     //
     // Bei Claude Code faellt das nicht auf (eine Zeile je Block), der
     // Backend-Parser unterstuetzt gemischte Bloecke aber ausdruecklich —

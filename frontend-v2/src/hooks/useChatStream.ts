@@ -245,8 +245,8 @@ function eventKey(ev: TimelineChatEvent): string {
      Eintrag kann MEHRERE Bloecke tragen (Denken und Antwort in derselben
      Zeile), und alle erben dieselbe Eintrags-uuid. Ohne die Art galt die
      Antwort als Dublette des Denkens und wurde verworfen.
-     Live gemessen an Sparkys omp-Transkript (21.08.2026): 10 von 25
-     Eintraegen betroffen — Sparky dachte im Chat sichtbar nach und sagte
+     Live gemessen an dem omp-Transkript eines Agenten (21.08.2026): 10 von 25
+     Eintraegen betroffen — der Agent dachte im Chat sichtbar nach und sagte
      nie etwas. Claude Code schreibt je Block eine eigene Zeile, deshalb
      fiel es bis zum ersten fremden Adapter nicht auf. */
   return `${ev.kind}:${ev.uuid}`;
