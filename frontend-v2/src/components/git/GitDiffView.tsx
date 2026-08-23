@@ -54,7 +54,7 @@ function FileStatusBadge({ status }: { status: string }) {
 
   return (
     <span
-      className="text-[9px] font-bold rounded px-1 py-0.5 shrink-0 leading-none"
+      className="text-[9px] font-bold rounded-sm px-1 py-0.5 shrink-0 leading-none"
       style={{ color: cfg.color, background: cfg.bg, fontFamily: "var(--font-geist-mono), monospace" }}
     >
       {cfg.label}
@@ -68,7 +68,7 @@ function LangBadge({ ext }: { ext: string }) {
   if (!label) return null;
   return (
     <span
-      className="text-[9px] font-semibold px-1 py-0.5 rounded shrink-0 leading-none"
+      className="text-[9px] font-semibold px-1 py-0.5 rounded-sm shrink-0 leading-none"
       style={{ color, background: `${color}18`, border: `1px solid ${color}30`, fontFamily: "var(--font-geist-mono), monospace" }}
     >
       {label}

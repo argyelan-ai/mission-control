@@ -109,7 +109,7 @@ function HangupChip() {
     <button
       type="button"
       onClick={() => endSession()}
-      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:opacity-90 cursor-pointer transition-opacity"
+      className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:opacity-90 cursor-pointer transition-opacity"
       style={{
         background: `linear-gradient(135deg, ${C.error}CC 0%, ${C.error} 100%)`,
         color: C.textPrimary,
@@ -174,7 +174,7 @@ function NoteSheet({
               href={openInVaultHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/5 cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:bg-white/5 cursor-pointer"
               style={{ color: "var(--color-text-secondary)" }}
               title="Open in Vault (new tab)"
             >
@@ -184,7 +184,7 @@ function NoteSheet({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded hover:bg-white/5 cursor-pointer"
+            className="p-1.5 rounded-sm hover:bg-white/5 cursor-pointer"
             aria-label="Close"
           >
             <X size={14} style={{ color: "var(--color-text-secondary)" }} />
@@ -267,7 +267,7 @@ function TaskSheet({
             href={openHref}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/5 cursor-pointer"
+            className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:bg-white/5 cursor-pointer"
             style={{ color: "var(--color-text-secondary)" }}
             title="Open in tasks board (new tab)"
           >
@@ -276,7 +276,7 @@ function TaskSheet({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded hover:bg-white/5 cursor-pointer"
+            className="p-1.5 rounded-sm hover:bg-white/5 cursor-pointer"
             aria-label="Close"
           >
             <X size={14} style={{ color: "var(--color-text-secondary)" }} />

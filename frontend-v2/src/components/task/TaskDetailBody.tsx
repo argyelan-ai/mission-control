@@ -338,7 +338,7 @@ function OverflowMenu({
                   <button
                     onClick={onDelete}
                     disabled={deleteLoading}
-                    className="px-2 py-1 rounded text-[10px] font-semibold cursor-pointer"
+                    className="px-2 py-1 rounded-sm text-[10px] font-semibold cursor-pointer"
                     style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                   >
                     {deleteLoading ? "…" : t("deleteTask")}
@@ -348,7 +348,7 @@ function OverflowMenu({
                       setConfirm(false);
                       setOpen(false);
                     }}
-                    className="px-2 py-1 rounded text-[10px] cursor-pointer"
+                    className="px-2 py-1 rounded-sm text-[10px] cursor-pointer"
                     style={{ color: C.textMuted }}
                   >
                     {t("cancel")}

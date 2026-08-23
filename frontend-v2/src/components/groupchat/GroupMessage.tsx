@@ -130,7 +130,7 @@ export function GroupMessage({
           {systemOpen && (
             <pre
               data-testid="group-system-body"
-              className="mt-1.5 ml-5 max-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-[1.7] p-2 rounded scroll-quiet"
+              className="mt-1.5 ml-5 max-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-[1.7] p-2 rounded-sm scroll-quiet"
               style={{
                 background: "var(--color-bg-elevated)",
                 color: C.textMuted,

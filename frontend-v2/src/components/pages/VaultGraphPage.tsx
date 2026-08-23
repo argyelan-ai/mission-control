@@ -135,7 +135,7 @@ function EmptyState() {
           </p>
           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
             Agents write notes to{" "}
-            <code className="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">~/.mc/vault/</code>{" "}
+            <code className="font-mono text-xs bg-white/5 px-1 py-0.5 rounded-sm">~/.mc/vault/</code>{" "}
             — the graph will populate as they work.
           </p>
         </div>
@@ -397,7 +397,7 @@ export function VaultGraphPage({
           <select
             value={colorMode}
             onChange={(e) => setColorMode(e.target.value as "type" | "community")}
-            className="text-xs font-mono uppercase bg-transparent border border-white/10 px-2 py-1 rounded"
+            className="text-xs font-mono uppercase bg-transparent border border-white/10 px-2 py-1 rounded-sm"
             style={{
               background: "rgba(10,10,10,0.85)",
               color: "var(--color-text-secondary)",

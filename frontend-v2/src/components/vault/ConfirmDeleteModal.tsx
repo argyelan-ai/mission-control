@@ -152,7 +152,7 @@ export function ConfirmDeleteModal({
                 onClick={onClose}
                 disabled={deleteMutation.isPending}
                 aria-label={t("cancel")}
-                className="shrink-0 rounded p-1"
+                className="shrink-0 rounded-sm p-1"
                 style={{
                   color: "var(--color-text-muted)",
                   background: "transparent",

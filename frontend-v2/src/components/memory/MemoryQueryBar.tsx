@@ -99,7 +99,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
         {query && (
           <button
             onClick={clear}
-            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+            className="p-1 rounded-sm hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
             aria-label="Clear"
           >
             <X size={14} />
@@ -144,7 +144,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
               <span className="text-xs text-[var(--color-text-muted)]">
                 {totalHits} hits for &ldquo;{result.query}&rdquo;
                 {result.fallback && (
-                  <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(184,135,10,0.15)", color: STATUS_TEXT.warning }}>
+                  <span className="ml-2 px-1.5 py-0.5 rounded-sm text-[10px]" style={{ background: "rgba(184,135,10,0.15)", color: STATUS_TEXT.warning }}>
                     keyword fallback
                   </span>
                 )}
@@ -188,7 +188,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                               </span>
                             )}
                             <span
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
                               style={{
                                 background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "var(--color-bg-elevated)",
                                 color: hit.score > 0.75 ? C.online : C.textSecondary,

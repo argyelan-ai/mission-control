@@ -113,7 +113,7 @@ function ActivePill({
         type="button"
         onClick={onRemove}
         aria-label={t("removeFilter", { label })}
-        className="flex items-center justify-center rounded cursor-pointer min-h-touch min-w-touch -my-2 -mr-1 hover:opacity-70 transition-opacity"
+        className="flex items-center justify-center rounded-sm cursor-pointer min-h-touch min-w-touch -my-2 -mr-1 hover:opacity-70 transition-opacity"
         style={{ color: C.accent }}
       >
         <X size={11} strokeWidth={2.5} />

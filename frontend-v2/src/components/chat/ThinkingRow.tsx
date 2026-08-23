@@ -43,7 +43,7 @@ export function ThinkingRow({
 
       {expanded && (
         <pre
-          className="mt-1.5 ml-5 max-h-[320px] overflow-auto whitespace-pre-wrap text-[13px] italic leading-relaxed font-sans p-2 rounded scroll-quiet"
+          className="mt-1.5 ml-5 max-h-[320px] overflow-auto whitespace-pre-wrap text-[13px] italic leading-relaxed font-sans p-2 rounded-sm scroll-quiet"
           style={{ background: "var(--color-bg-elevated)", color: C.textMuted, border: `1px solid ${C.border}` }}
         >
           {ev.text}

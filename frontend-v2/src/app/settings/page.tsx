@@ -757,7 +757,7 @@ function AutonomySection() {
                   </span>
                   {!isDefault && (
                     <span
-                      className="text-[10px] px-1 py-0.5 rounded"
+                      className="text-[10px] px-1 py-0.5 rounded-sm"
                       style={{ color: C.accent, backgroundColor: C.accentSubtle }}
                     >
                       {t("autonomy.custom")}
@@ -1272,7 +1272,7 @@ function ApiKeysSection({
                         {tmpl.label}
                       </span>
                       <span
-                        className="text-[10px] px-1.5 py-0.5 rounded uppercase"
+                        className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
                         style={{
                           backgroundColor: isSet
                             ? `${C.online}1A`
@@ -1305,14 +1305,14 @@ function ApiKeysSection({
                             setEditingKey(isEditing ? null : tmpl.key);
                             setEditValue("");
                           }}
-                          className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                          className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
                           style={{ color: "var(--color-text-secondary)" }}
                         >
                           {isEditing ? t("cancel") : t("change")}
                         </button>
                         <button
                           onClick={() => setDeleteTarget(tmpl)}
-                          className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                          className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
                           style={{ color: C.error }}
                         >
                           <Trash2 size={12} />
@@ -1324,7 +1324,7 @@ function ApiKeysSection({
                           setAddingKey(isAdding ? null : tmpl.key);
                           setNewValue("");
                         }}
-                        className="flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
                         style={{
                           backgroundColor: isAdding
                             ? "var(--color-bg-elevated)"
@@ -1461,7 +1461,7 @@ function GithubSourceBadge({ source }: { source: "vault" | "env" | null }) {
   if (!source) return null;
   return (
     <span
-      className="text-[10px] px-1.5 py-0.5 rounded uppercase"
+      className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
       style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
     >
       {source === "vault" ? "App" : ".env"}
@@ -1916,7 +1916,7 @@ function UserRow({
             </span>
             {isSelf && (
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded"
+                className="text-[10px] px-1.5 py-0.5 rounded-sm"
                 style={{
                   backgroundColor: "var(--color-bg-elevated)",
                   color: "var(--color-text-muted)",
@@ -1927,7 +1927,7 @@ function UserRow({
             )}
             {!user.is_active && (
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded"
+                className="text-[10px] px-1.5 py-0.5 rounded-sm"
                 style={{
                   backgroundColor: `${C.error}1F`,
                   color: C.error,
@@ -1939,7 +1939,7 @@ function UserRow({
             {/* Role badge — inline with name */}
             {!editing ? (
               <span
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium uppercase"
+                className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium uppercase"
                 style={{ backgroundColor: rc.bg, color: rc.text }}
               >
                 {user.role}
@@ -1949,7 +1949,7 @@ function UserRow({
                 aria-label={t("roleChangeAria")}
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
-                className="rounded px-2 py-1 text-xs outline-none cursor-pointer"
+                className="rounded-sm px-2 py-1 text-xs outline-none cursor-pointer"
                 style={{
                   backgroundColor: C.bgDeep,
                   border: "1px solid var(--color-border)",
@@ -1976,7 +1976,7 @@ function UserRow({
               <button
                 onClick={() => updateMutation.mutate({ role })}
                 disabled={updateMutation.isPending}
-                className="px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
+                className="px-2 py-1 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
                 style={{ background: C.accent }}
               >
                 {updateMutation.isPending ? (
@@ -1991,7 +1991,7 @@ function UserRow({
                   setRole(user.role);
                   setError("");
                 }}
-                className="px-2 py-1 rounded text-xs cursor-pointer"
+                className="px-2 py-1 rounded-sm text-xs cursor-pointer"
                 style={{ color: "var(--color-text-muted)" }}
               >
                 {t("cancel")}
@@ -2001,7 +2001,7 @@ function UserRow({
             <>
               <button
                 onClick={() => setEditing(true)}
-                className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {t("edit")}
@@ -2010,7 +2010,7 @@ function UserRow({
                 onClick={() =>
                   updateMutation.mutate({ is_active: !user.is_active })
                 }
-                className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{
                   color: user.is_active ? C.error : C.online,
                 }}
@@ -2082,7 +2082,7 @@ function ShortcutsSection() {
                       </span>
                     )}
                     <kbd
-                      className="inline-block px-2 py-1 rounded text-xs font-mono"
+                      className="inline-block px-2 py-1 rounded-sm text-xs font-mono"
                       style={{
                         backgroundColor: "var(--color-bg-elevated)",
                         border: "1px solid var(--color-border)",

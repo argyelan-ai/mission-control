@@ -83,15 +83,15 @@ export function VaultNotesList({
             {/* Marginalia placeholder */}
             <div className="shrink-0 w-[92px] py-5 pl-3 pr-4 flex flex-col items-end gap-1.5">
               <div
-                className="h-7 w-9 rounded"
+                className="h-7 w-9 rounded-sm"
                 style={{ background: "var(--color-bg-hover)" }}
               />
               <div
-                className="h-2.5 w-8 rounded"
+                className="h-2.5 w-8 rounded-sm"
                 style={{ background: "var(--color-bg-elevated)" }}
               />
               <div
-                className="h-2 w-10 rounded"
+                className="h-2 w-10 rounded-sm"
                 style={{ background: "var(--color-bg-surface)" }}
               />
             </div>
@@ -108,20 +108,20 @@ export function VaultNotesList({
                   style={{ background: "var(--color-bg-elevated)" }}
                 />
                 <div
-                  className="h-2.5 w-14 rounded"
+                  className="h-2.5 w-14 rounded-sm"
                   style={{ background: "var(--color-bg-elevated)" }}
                 />
               </div>
               <div
-                className="h-4 w-3/5 rounded mb-2"
+                className="h-4 w-3/5 rounded-sm mb-2"
                 style={{ background: "var(--color-bg-hover)" }}
               />
               <div
-                className="h-3 w-full rounded mb-1.5"
+                className="h-3 w-full rounded-sm mb-1.5"
                 style={{ background: "var(--color-bg-elevated)" }}
               />
               <div
-                className="h-3 w-4/5 rounded"
+                className="h-3 w-4/5 rounded-sm"
                 style={{ background: "var(--color-bg-elevated)" }}
               />
             </div>

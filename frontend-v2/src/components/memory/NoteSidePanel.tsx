@@ -85,7 +85,7 @@ function RelatedNotesMini({
             <button
               type="button"
               onClick={() => onSelect(n.path)}
-              className="w-full text-left flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-white/[0.05]"
+              className="w-full text-left flex items-center gap-1.5 rounded-sm px-1 py-0.5 transition-colors hover:bg-white/[0.05]"
               style={{ fontSize: "11px" }}
             >
               <span
@@ -156,7 +156,7 @@ function SkeletonNote() {
       {[85, 65, 90, 55, 75, 80, 60].map((w, i) => (
         <div
           key={i}
-          className="h-2.5 rounded"
+          className="h-2.5 rounded-sm"
           style={{
             background: "var(--color-bg-elevated)",
             width: `${w}%`,
@@ -350,7 +350,7 @@ export function NoteSidePanel({
                       type="button"
                       onClick={cancelEdit}
                       disabled={saveMutation.isPending}
-                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
+                      className="rounded-sm p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -367,7 +367,7 @@ export function NoteSidePanel({
                       type="button"
                       onClick={handleSave}
                       disabled={saveMutation.isPending}
-                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
+                      className="rounded-sm p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: C.online,
                         background: "rgba(52,211,153,0.10)",
@@ -397,7 +397,7 @@ export function NoteSidePanel({
                     <button
                       type="button"
                       onClick={startEdit}
-                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
+                      className="rounded-sm p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -424,7 +424,7 @@ export function NoteSidePanel({
                     <button
                       type="button"
                       onClick={() => setConfirmOpen(true)}
-                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
+                      className="rounded-sm p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -450,7 +450,7 @@ export function NoteSidePanel({
                     <button
                       type="button"
                       onClick={onClose}
-                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
+                      className="rounded-sm p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -577,7 +577,7 @@ export function NoteSidePanel({
                   {tags.map((tag) => (
                     <span
                       key={tag}
-                      className="font-mono rounded px-1.5 py-0.5"
+                      className="font-mono rounded-sm px-1.5 py-0.5"
                       style={{
                         fontSize: "10px",
                         background: "var(--color-bg-elevated)",
