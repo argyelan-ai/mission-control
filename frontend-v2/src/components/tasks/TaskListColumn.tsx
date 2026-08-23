@@ -217,19 +217,19 @@ function GroupHeader({
 }) {
   const t = useTranslations("tasks");
   return (
-    // Sticky braucht einen Grund, damit Rows beim Scrollen darunter verschwinden.
-    // Aber NICHT opak: der Seitengrund trägt den Ambient-Schleier (Helligkeits-
-    // Gradient + Grain), und jede opake Füllung stanzt dort ein dunkles Rechteck
-    // heraus — die eingeklappten Gruppen verschmolzen zu einer abgesetzten Platte
-    // hinter der Liste (Operator-Befund 23.08.). Darum das MonthMarker-Rezept
-    // aus VaultNoteRow: transluzent + Blur, im Ruhezustand unsichtbar.
+    // Sticky braucht einen Grund, damit Zeilen beim Scrollen darunter
+    // verschwinden. Seit die Liste auf einer Insel liegt (ADR-076-Umfeld,
+    // Operator-Entscheid 23.08.2026) ist das trivial: die Insel IST eine
+    // glatte Fläche, der Kopf malt schlicht ihre Farbe.
+    //
+    // Vorher stand hier transluzent + Weichzeichner, weil der Kopf auf dem
+    // Seitengrund lag — der trägt den Ambient-Schleier, und jede Füllung
+    // darauf blieb sichtbar (deckend als dunkles, geblurrt als glattes
+    // Rechteck in gekörnter Umgebung). Auf der Insel gibt es weder Verlauf
+    // noch Korn, also auch nichts, wogegen der Kopf abstechen könnte.
     <div
       className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0"
-      style={{
-        background: "var(--surface-sticky)",
-        backdropFilter: "blur(10px)",
-        WebkitBackdropFilter: "blur(10px)",
-      }}
+      style={{ background: C.bgSurface }}
     >
       <button
         type="button"

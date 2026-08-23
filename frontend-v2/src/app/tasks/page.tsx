@@ -1124,7 +1124,27 @@ function TasksPageContent() {
   const detailOpen = !!selectedTask || !!projectView;
 
   return (
-    <div className="flex md:-m-6 md:h-[calc(100dvh-theme(spacing.6)*2)]">
+    // Die Liste liegt seit 23.08.2026 auf einer INSEL statt nackt auf dem
+    // Seitengrund (Operator-Entscheid, Variante A).
+    //
+    // Vorgeschichte: die klebenden Gruppen-Köpfe brauchen einen Grund, damit
+    // Zeilen beim Scrollen darunter verschwinden. Auf dem Seitengrund ging das
+    // nicht sauber — der trägt den Ambient-Schleier (Verlauf + Korn), und jede
+    // Füllung darauf blieb sichtbar: deckend als dunkles Rechteck, transluzent
+    // mit Weichzeichner als glattes Rechteck in gekörnter Umgebung. Gemessen:
+    // Grund 30,6 mit Körnung 0,64 gegen Band 29,2 mit Körnung ~0. Kein
+    // Farbwert löst das, weil nicht der Ton stört, sondern die fehlende Körnung.
+    //
+    // Auf einer Insel verschwindet das Problem, statt kaschiert zu werden: die
+    // Insel ist selbst eine glatte Fläche, der Kopf malt schlicht ihre Farbe,
+    // und das Rechteck ist gewollt — mit Rahmen und Radius. Genau so macht es
+    // die Sessions-Seite seit jeher.
+    <div className="flex md:-m-6 md:h-[calc(100dvh-theme(spacing.6)*2)] md:p-3">
+      <div
+        className="flex flex-1 min-h-0 min-w-0 md:rounded-xl md:border md:overflow-hidden"
+        style={{ background: C.bgSurface, borderColor: C.border }}
+        data-testid="tasks-island"
+      >
       {/* ── Task list (primary column) ── */}
       <div
         className={`${mobileView === "list" ? "flex" : "hidden"} md:flex flex-1 md:flex-none md:w-[340px] md:border-r min-h-0 min-w-0`}
@@ -1258,6 +1278,7 @@ function TasksPageContent() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
