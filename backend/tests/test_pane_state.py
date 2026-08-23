@@ -289,9 +289,10 @@ def test_esc_to_interrupt_scrolled_out_of_view_does_not_match():
 
 
 class _StubAgent:
-    def __init__(self, agent_runtime: str, slug: str | None = None):
+    def __init__(self, agent_runtime: str, slug: str | None = None, harness: str | None = None):
         self.agent_runtime = agent_runtime
         self.slug = slug
+        self.harness = harness
 
 
 @pytest.mark.asyncio
@@ -394,6 +395,48 @@ async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
         "docker", "exec", "-u", "agent", "mc-agent-rex", "pgrep", "-x", "claude",
     ]
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_process_alive_looks_for_the_openclaude_binary(monkeypatch):
+    """``pgrep -x`` vergleicht den Basenamen EXAKT — ``openclaude`` matcht
+    ``claude`` NICHT (steht woertlich in docker/mc-claude-agent/recycler.sh).
+    Ohne diese Unterscheidung meldete pgrep rc=1 = "nachweislich weg", die
+    Sitzung galt nach 60s Stille als beendet, und der Composer blendete
+    Senden UND Stop aus: jeder openclaude-Agent war nach einer Minute Stille
+    nicht mehr ansprechbar."""
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    captured_argv: list[str] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_argv.extend(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="openclaude-agent", harness="openclaude")
+    result = await process_alive(agent)
+
+    assert captured_argv[-1] == "openclaude", captured_argv
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_process_alive_unknown_harness_keeps_looking_for_claude(monkeypatch):
+    """Rueckfall unveraendert: ein Harness ohne eigenen Eintrag (auch
+    ``None``) wird weiter als ``claude`` gesucht — der Stand vor der
+    Tabelle, damit dieser Fix nichts anderes mitverschiebt."""
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    captured_argv: list[str] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_argv.extend(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    await process_alive(_StubAgent(agent_runtime="cli-bridge", slug="rex", harness=None))
+    assert captured_argv[-1] == "claude"
 
 
 @pytest.mark.asyncio

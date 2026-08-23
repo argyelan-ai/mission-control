@@ -88,11 +88,29 @@ and only sends ``Escape`` as a cleanup safety net if that fresh check is
 clear, before raising ``EffortSwitchFailedError`` for the router to turn
 into 409 ``{"reason": "effort_switch_failed"}``.
 
+**openclaude (19.08.2026).** Ein Claude-Code-Fork — der Eingabe-Kanal traegt
+unveraendert, die Capabilities nicht. Drei Stellen mussten aufmachen, und
+jede aus einem eigenen, live erhobenen Grund:
+
+- ``_EFFORT_LEVELS_BY_HARNESS``: openclaude kennt ``ultracode`` NICHT
+  (``/effort zzz`` -> "Valid options are: low, medium, high, max, xhigh,
+  auto"). Die Claude-Liste weiterzureichen haette einen Regler mit einer
+  Stufe gebaut, die diese CLI zurueckweist.
+- ``effort_capabilities``: **Effort haengt am MODELL**, nicht am Harness.
+  Derselbe Agent meldet fuer sein Spark-Modell "Effort not supported", fuer
+  ``gpt-5.2-codex`` "Medium effort (default)". Mechanisch WUERDE ``/effort
+  low`` trotzdem greifen (live geprueft: die Stufe landete in der
+  settings.json) — nur ignoriert das Modell sie. Darum kein Regler, dafuer
+  ein ``effortReason``, den das UI vorlesen kann.
+- ``_wait_for_send_readiness``: die Pane-Marker sind identisch (am echten
+  Pane eines openclaude-Agenten gegengeprueft, nur gelesen) — das Gate gilt hier also
+  mit, statt ausgerechnet dem Harness zu fehlen, der es erfuellen kann.
+
 ``slash_command_capabilities`` (composer command palette) merges a static
-built-in list (``model``, ``effort``, ``clear``, ``compact``, ``context``,
-``status``, ``help``, ``resume`` — Claude Code's well-known standard
-commands; ``model``/``effort``'s descriptions are live-verified from Phase-0
-discovery, the rest are generic) with this agent's installed skills, each
+built-in list PER HARNESS (Claude Code: ``model``, ``effort``, ``clear``,
+``compact``, ``context``, ``status``, ``help``, ``resume``; openclaude: eine
+eigene, deutlich groessere Liste, live durch den Kommando-Picker
+geblaettert) with this agent's installed skills, each
 one becoming a slash-command entry (Claude Code invokes a skill the same
 way a command is invoked — ``/<skill-name>``). Skills are discovered by
 scanning ``<claude-config>/skills/*/SKILL.md`` (the SAME per-agent directory
@@ -119,6 +137,7 @@ import websockets as ws_client
 from app.config import settings
 from app.redis_client import RedisKeys, get_redis
 from app.services.harness_catalog import (
+    discover_effort_support,
     discover_model_catalog,
     get_observed_model_windows,
     resolve_cli_version,
@@ -166,12 +185,48 @@ _RECYCLER_MARKER_PATH = "/home/agent/.claude/last-task.marker"
 # (fix round 2, reproduced live: text landed but never submitted for hours).
 _BOSS_ENTER_DELAY_SECONDS = 0.15
 
-# Effort switching (v1, docker-only). All 6 discrete levels the CLI's own
-# /effort argument validator accepts (see module docstring for the discovery
-# evidence and why the 7th accepted value, "auto", is deliberately excluded).
-# Single source of truth — reused by set_effort's validation AND
-# effort_capabilities' GET /chat/history payload.
-ALLOWED_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
+# Effort switching (v1, docker-only). Die Stufen, die der Argument-Validator
+# der jeweiligen CLI selbst akzeptiert — erhoben mit dem persistenzfreien
+# Trick aus dem Adapter-Skill (ein ungueltiges Argument fuettern und die
+# Fehlermeldung lesen; sie listet die gueltigen Werte auf, ohne etwas zu
+# schreiben).
+#
+# claude (2.1.234): low, medium, high, xhigh, max, ultracode
+# openclaude (0.7.0): ``/effort zzz`` -> "Invalid argument: zzz. Valid
+#   options are: low, medium, high, max, xhigh, auto" (live 19.08.2026) —
+#   also OHNE ``ultracode``. Wer die Claude-Liste weiterreicht, baut einen
+#   Regler mit einer Stufe, die diese CLI zurueckweist.
+#
+# ``auto`` fehlt in beiden Listen mit Absicht: es LOESCHT den Override, statt
+# eine Stufe zu setzen (siehe Modul-Docstring) — es passt nicht in den
+# "waehle eine von N"-Vertrag dieses Endpunkts.
+#
+# ⚠️ Die REIHENFOLGE ist eine Leiter (sparsam -> gruendlich), keine Kopie der
+# Fehlermeldung: openclaude listet dort "max, xhigh", was semantisch keine
+# Rangfolge sein duerfte (Claude Code, von dem openclaude abzweigt,
+# dokumentiert xhigh unterhalb von max). Der Regler zeigt Ordnung — darum
+# hier bewusst die Claude-Ordnung uebernommen. Das ist die eine ANNAHME in
+# dieser Tabelle; alles andere ist gemessen.
+_EFFORT_LEVELS_BY_HARNESS: dict[str, tuple[str, ...]] = {
+    "claude": ("low", "medium", "high", "xhigh", "max", "ultracode"),
+    "openclaude": ("low", "medium", "high", "xhigh", "max"),
+}
+
+# Rueckwaertskompatibler Name (Claude Code) — bestehende Aufrufer/Tests.
+ALLOWED_EFFORT_LEVELS = _EFFORT_LEVELS_BY_HARNESS["claude"]
+
+
+def effort_levels_for(harness: str | None) -> tuple[str, ...]:
+    """Die Stufenleiter DIESES Harness — leer fuer jede CLI, die ``/effort``
+    gar nicht kennt (kimi, omp). Leer heisst: nichts anbieten, nichts tippen."""
+    return _EFFORT_LEVELS_BY_HARNESS.get(harness or "", ())
+
+
+# Harnesses, deren Pane sich mit den Claude-Code-Regeln lesen laesst
+# (``pane_state.parse_pane_state``). Nur fuer die darf ein Zustands-Gate
+# ueberhaupt eine Aussage treffen — bei jeder anderen TUI waere jedes
+# Ergebnis ``unknown`` und damit eine Ablehnung ohne Erkenntnis.
+_PANE_READABLE_HARNESSES = frozenset(_EFFORT_LEVELS_BY_HARNESS)
 
 # Polling budget for _verify_effort_applied: a docker-exec capture-pane round
 # trip is fast (<100ms typically) but not instant, and the CLI needs a brief
@@ -416,13 +471,22 @@ async def send_text(agent, text: str) -> None:
 
     if kind == "docker":
         await _touch_recycler_marker(slug)
-        if getattr(agent, "harness", None) == "claude":
+        if getattr(agent, "harness", None) in _PANE_READABLE_HARNESSES:
             # Das Gate liest den Pane mit CLAUDE-Regeln (Prompt-Marker,
             # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — der omp-Agent
             # war dadurch dauerhaft unerreichbar (jeder Send: 409
             # agent_starting; Operator-Befund 19.08.2026). Fuer fremde
             # Harnesses gilt wieder blindes Zustellen wie vor dem Gate: keine
             # Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung.
+            #
+            # openclaude gehoert seit 19.08.2026 dazu: seine Marker sind
+            # nachweislich dieselben — am ECHTEN Pane eines openclaude-Agenten
+            # gegengeprueft (nur gelesen, nichts getippt), ``parse_pane_state``
+            # liefert dort ``idle``, und der Fuss zeigt ``⏵⏵ bypass
+            # permissions on`` bzw. ``esc to interrupt`` wie bei Claude Code.
+            # Damit greift der Schutz vor einem Send in eine noch bootende TUI
+            # auch hier, statt ihn ausgerechnet dem Harness zu verweigern, der
+            # ihn erfuellen kann.
             await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
@@ -480,7 +544,11 @@ async def set_effort(agent, level: str) -> None:
 
     Validates ``level`` against ``ALLOWED_EFFORT_LEVELS`` before doing
     anything (raises ``ValueError``, matching ``send_keys``'s allowlist-first
-    convention), then a PREFLIGHT: refuses to send anything at all into a
+    convention), dann BEIDE Tore aus ``effort_capabilities`` gespiegelt —
+    kennt der Harness ``/effort``, und kennt das MODELL des Agenten Stufen?
+    Beide Male ``InputNotSupportedError`` (409), damit ein direkter
+    POST nicht tippen kann, was die Oberflaeche gar nicht anbietet. Dann ein
+    PREFLIGHT: refuses to send anything at all into a
     pane that's mid-turn (``working``) or showing an open
     ``permission_prompt`` — raises ``AgentBusyError`` untouched (wave-review
     I-1). ``Escape`` is this app's INTERRUPT key, not a neutral cleanup
@@ -511,11 +579,19 @@ async def set_effort(agent, level: str) -> None:
       there's no live process left to interrupt, matching
       ``_run_docker_exec``'s own fail-silent contract for a target that no
       longer exists."""
-    if level not in ALLOWED_EFFORT_LEVELS:
+    harness = getattr(agent, "harness", None)
+    # Gegen die Leiter DIESES Harness, nicht pauschal gegen die von Claude
+    # Code: ``ultracode`` gibt es bei openclaude nicht, und die CLI wuerde es
+    # mit "Invalid argument" zurueckweisen — dann tippen wir es gar nicht erst
+    # in ihre Eingabe. Bei unbekanntem Harness bleibt die breiteste bekannte
+    # Liste stehen, damit ein unsinniger Wert weiterhin als FEHLERHAFTE
+    # ANFRAGE (422) auffaellt und nicht erst am Harness-Gate (409) haengt —
+    # die Reihenfolge ist die von vorher.
+    if level not in (effort_levels_for(harness) or ALLOWED_EFFORT_LEVELS):
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
     kind = _target_kind(agent)
-    if getattr(agent, "harness", None) != "claude":
+    if harness not in _EFFORT_LEVELS_BY_HARNESS:
         # Spiegel des Capabilities-Gates: selbst wenn ein Client den Endpoint
         # direkt trifft, tippen wir kein /effort in eine fremde CLI.
         raise InputNotSupportedError()
@@ -525,6 +601,25 @@ async def set_effort(agent, level: str) -> None:
         return
 
     slug = agent.slug
+
+    # Zweiter Spiegel, seit 20.08.2026: das MODELL-Tor aus
+    # ``effort_capabilities``. Ohne ihn war der Docstring-Anspruch "Spiegel
+    # des Capabilities-Gates" nur halb wahr — ein direkter POST
+    # /chat/effort {"level":"high"} kam bei einem Agenten auf einem Modell
+    # ohne Effort-Stufen durch beide bisherigen Pruefungen und tippte
+    # ``/effort high`` in den Live-Pane. Die Stufe landet dann in der
+    # settings.json und das Modell ignoriert sie — genau die luegende
+    # Anzeige, gegen die das Tor gebaut wurde. Gleiche Quelle, gleicher
+    # Cache-Schluessel (Modell inklusive) wie im Capabilities-Pfad, also
+    # kein zusaetzliches Wegwerf-Fenster.
+    #
+    # ``supported is None`` (kalter Cache, Lock, Probe gescheitert) bleibt
+    # BEWUSST erlaubt — identisch zum Capabilities-Gate: "noch nicht
+    # ermittelt" ist kein Grund, einen funktionierenden Wechsel abzulehnen.
+    model = await asyncio.to_thread(_persisted_model, slug)
+    support = await discover_effort_support(agent, model)
+    if support.get("supported") is False:
+        raise InputNotSupportedError()
 
     if await _pane_is_busy(agent):
         raise AgentBusyError()
@@ -776,7 +871,7 @@ async def _verify_effort_applied(agent, level: str) -> bool:
 # possibly-stale level list. A drift just gets logged, once per cli_version
 # fleet-wide (Redis SET NX EX dedup, same TTL as the model catalog), as a
 # signal that a manual Phase-0 re-verification pass is due.
-_EFFORT_LEVELS_VERIFIED_CLI_VERSION = "2.1.234"
+_EFFORT_LEVELS_VERIFIED_CLI_VERSION = {"claude": "2.1.234", "openclaude": "0.7.0"}
 _EFFORT_DRIFT_LOG_DEDUP_TTL_SECONDS = 24 * 3600  # matches the model catalog's own TTL
 
 
@@ -789,7 +884,9 @@ async def _check_effort_levels_version_drift(agent) -> None:
         cli_version = await resolve_cli_version(agent)
     except Exception:
         return
-    if not cli_version or cli_version == _EFFORT_LEVELS_VERIFIED_CLI_VERSION:
+    harness = getattr(agent, "harness", None) or ""
+    verified = _EFFORT_LEVELS_VERIFIED_CLI_VERSION.get(harness)
+    if not cli_version or verified is None or cli_version == verified:
         return
 
     try:
@@ -804,47 +901,101 @@ async def _check_effort_levels_version_drift(agent) -> None:
     if not claimed:
         return
     logger.warning(
-        "agent_chat_input: ALLOWED_EFFORT_LEVELS was verified against Claude "
-        "Code %s but slug=%s runs %s — the level list/verification wording "
-        "may be stale and needs a manual Phase-0 re-verification pass "
-        "(never auto-probed: /effort persists to settings.json).",
-        _EFFORT_LEVELS_VERIFIED_CLI_VERSION, getattr(agent, "slug", None), cli_version,
+        "agent_chat_input: die Effort-Stufen fuer harness=%s wurden gegen %s "
+        "geprueft, slug=%s faehrt aber %s — Liste/Bestaetigungstext koennen "
+        "veraltet sein und brauchen einen manuellen Phase-0-Nachlauf "
+        "(nie automatisch nachgeprobt: /effort persistiert in die "
+        "settings.json des Agenten).",
+        harness, verified, getattr(agent, "slug", None), cli_version,
     )
 
 
 async def effort_capabilities(agent) -> dict[str, object]:
-    """Effort-switching capability for the composer chip:
-    ``{"effortLevels": [...], "canSwitchEffort": bool}`` — consumed by
+    """Effort-switching capability for the composer chip: ``{"effortLevels":
+    [...], "canSwitchEffort": bool, "effortReason": str|None}`` — consumed by
     ``routers/agent_chat.get_chat_history`` to let the frontend build the
     chip dynamically from what the agent's actual harness supports, instead
-    of hardcoding a level list. Docker/cli-bridge agents get
-    ``ALLOWED_EFFORT_LEVELS`` verbatim (the single source of truth ``
-    set_effort`` validates against too) — and trigger the version-drift
-    check above; every other runtime (Boss, any other host agent) gets an
-    empty list and ``canSwitchEffort=False`` — no pane probe exists for
-    them, the same v1 boundary ``set_effort`` itself enforces via
-    ``InputNotSupportedError``. Never raises: an unsupported runtime is a
-    normal, expected answer here (unlike ``set_effort``, where it's a
-    request the caller made in error), so it's handled as data, not an
-    exception."""
+    of hardcoding a level list. Docker/cli-bridge agents get die Stufenleiter
+    IHRES Harness (``effort_levels_for`` — die gleiche, gegen die
+    ``set_effort`` validiert) und loesen die Versions-Drift-Pruefung oben
+    aus; jede andere Runtime (Boss, sonstige Host-Agenten) bekommt eine leere
+    Liste und ``canSwitchEffort=False`` — es gibt dort keine Pane-Sonde,
+    dieselbe v1-Grenze, die ``set_effort`` selbst via
+    ``InputNotSupportedError`` zieht.
+
+    ZWEI Bedingungen, seit 19.08.2026: der Harness muss ``/effort`` kennen
+    UND das MODELL des Agenten muss Stufen haben. Die zweite ist neu und war
+    der eigentliche Befund dieser Runde — sie kommt aus dem ``/model``-Picker
+    selbst (``harness_catalog.discover_effort_support``), nicht aus einer
+    Tabelle. Faellt eine der beiden aus, steht das WARUM in ``effortReason``
+    (Codes siehe ``_no_effort``): das UI erklaert es am Chip, statt das
+    Bedienelement wortlos verschwinden zu lassen.
+
+    Never raises: an unsupported runtime is a normal, expected answer here
+    (unlike ``set_effort``, where it's a request the caller made in error),
+    so it's handled as data, not an exception."""
     try:
         kind = _target_kind(agent)
     except InputNotSupportedError:
         kind = None
 
-    if kind == "docker" and getattr(agent, "harness", None) != "claude":
+    harness = getattr(agent, "harness", None)
+    levels = effort_levels_for(harness)
+
+    if kind == "docker" and not levels:
         # Fremde CLI im Container (kimi, omp): /effort ist ein Claude-Kommando.
         # Weder Leiter noch Schaltrecht behaupten — sonst tippt ein Klick
         # Kauderwelsch in eine TUI, die es nicht versteht (kritischer
         # Test-Durchgang 18.08.2026).
-        return {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+        return _no_effort("foreign_harness")
 
     if kind == "docker":
         await _check_effort_levels_version_drift(agent)
         slug = getattr(agent, "slug", None) or ""
-        effort = await asyncio.to_thread(_persisted_effort_level, slug) if slug else None
+        effort = (
+            await asyncio.to_thread(_persisted_effort_level, slug, levels) if slug else None
+        )
+        # Effort haengt am MODELL, nicht nur am Harness (Befund 19.08.2026):
+        # derselbe openclaude-Agent meldet fuer sein Spark-Modell
+        # "Effort not supported for qwen38-27b-unsloth-nvfp4", fuer
+        # gpt-5.2-codex dagegen "Medium effort (default)". Die ehrliche
+        # Quelle ist der Picker selbst — sie faellt beim Katalog-Lauf ab,
+        # ohne zweites Wegwerf-Fenster.
+        #
+        # Das eingestellte Modell geht MIT in den Cache-Schluessel: die
+        # Antwort gilt nur fuer dieses Modell, und ohne es servierte der
+        # 24h-Cache nach einem Wechsel weiter die Aussage des alten
+        # (Details in ``RedisKeys.model_catalog``).
+        model = await asyncio.to_thread(_persisted_model, slug) if slug else None
+        support = await discover_effort_support(agent, model)
+        if support.get("supported") is False:
+            # Mechanisch WUERDE ``/effort low`` hier sogar greifen (live
+            # geprueft: die Stufe landete in der settings.json, obwohl der
+            # Picker "not supported" sagt) — aber das Modell ignoriert sie.
+            # Ein Regler, der eine Einstellung schreibt, die nichts bewirkt,
+            # ist eine luegende Anzeige. Stattdessen: kein Regler, dafuer ein
+            # GRUND, den das UI vorlesen kann.
+            return {
+                "effortLevels": list(levels),
+                "canSwitchEffort": False,
+                # KEINE Stufe zurueckgeben, obwohl eine in der settings.json
+                # steht: das Frontend fuellt daraus die Saeule des Chips, und
+                # eine gefuellte Saeule fuer eine Stufe, die dieses Modell
+                # ignoriert, ist genau die luegende Anzeige, gegen die das Tor
+                # gebaut wurde (ein Agent mit "xhigh" in der Datei zeigte 100%).
+                # Leer heisst hier ehrlich "keine wirksame Stufe".
+                "effort": None,
+                "effortShared": False,
+                "effortReason": "model_no_effort",
+                # Das Modell, ueber das die CLI diese Aussage gemacht hat —
+                # aus der Picker-Zeile selbst. Das UI setzt es in den
+                # Erklaertext ein, statt das gerade angezeigte Modell zu
+                # nehmen: nur so kann der Satz nicht ueber ein anderes Modell
+                # sprechen als die Messung.
+                "effortModel": support.get("model"),
+            }
         return {
-            "effortLevels": list(ALLOWED_EFFORT_LEVELS),
+            "effortLevels": list(levels),
             "canSwitchEffort": True,
             # Startwert fuer den Chip, solange die Session noch kein usage-Ereignis
             # geschrieben hat. Ein spaeteres usage gewinnt immer (es kennt auch die
@@ -853,6 +1004,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
             # Container-Agenten haben ihre EIGENE settings.json — ein
             # persistierender Wechsel bleibt beim Agenten.
             "effortShared": False,
+            # ``supported is None`` (kalter Cache, Lock, Probe gescheitert)
+            # bleibt bewusst schaltbar: das war der Zustand vor dieser Runde
+            # fuer die ganze Flotte, und "noch nicht ermittelt" ist kein
+            # Grund, ein funktionierendes Bedienelement wegzunehmen.
+            "effortReason": None,
         }
 
     # Host-Agenten mit Claude-Code-Harness (Boss): seit 19.08.2026 SCHALTBAR
@@ -866,25 +1022,52 @@ async def effort_capabilities(agent) -> dict[str, object]:
     # Eine persistierende Stufe (low..xhigh) aendert damit auch den Standard
     # von Marks EIGENEN Claude-Sessions — das UI muss das am Wert sagen,
     # nicht verschweigen.
-    # kind == "boss", NICHT bloss harness == "claude" (Review 20.08.2026):
-    # ``_target_kind`` liefert "boss" nur fuer host + einen Slug aus
-    # _BOSS_SLUGS, alles andere wirft InputNotSupportedError -> kind None.
+    # Beide Bedingungen zusammen — jede fuer sich hat eine echte Luecke:
+    #
+    # ``kind == "boss"`` statt bloss ``harness == "claude"`` (Review
+    # 20.08.2026): ``_target_kind`` liefert "boss" nur fuer host + einen Slug
+    # aus _BOSS_SLUGS, alles andere wirft InputNotSupportedError -> kind None.
     # Migration 0163 setzt harness='claude' aber auf JEDEN Host-Agenten mit
     # Anthropic-Runtime. Am Harness allein haette so ein Agent
     # canSwitchEffort=true gemeldet, die PERSOENLICHE ~/.claude/settings.json
     # des Operators fuer den Chip gelesen — und jeder Zug am Regler haette
     # 409 input_not_supported gegeben: genau der "klicke drauf, passiert
     # nichts"-Fehler, den diese Runde beheben sollte.
-    if kind == "boss" and getattr(agent, "harness", None) == "claude":
+    #
+    # ``levels`` zusaetzlich (openclaude-Runde): die Stufenleiter haengt am
+    # Harness. Ohne Stufen gibt es keinen Regler, den man anbieten koennte —
+    # und ``list(levels)`` unten waere leer, also ein Chip ohne Inhalt.
+    if kind == "boss" and levels:
         effort = await asyncio.to_thread(_persisted_effort_level_at,
-                                         _host_home() / ".claude" / "settings.json")
+                                         _host_home() / ".claude" / "settings.json",
+                                         levels)
         return {
-            "effortLevels": list(ALLOWED_EFFORT_LEVELS),
+            "effortLevels": list(levels),
             "canSwitchEffort": True,
             "effort": effort,
             "effortShared": True,
+            "effortReason": None,
         }
-    return {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+    return _no_effort("no_pane" if kind is None else "foreign_harness")
+
+
+def _no_effort(reason: str) -> dict[str, object]:
+    """Die "kein Effort"-Antwort MIT Begruendung. Der Grund ist der ganze
+    Unterschied zwischen "das Bedienelement fehlt" und "das Bedienelement
+    fehlt, WEIL …" — das UI kann es erklaeren statt nur auszublenden.
+
+    Codes (maschinenlesbar, der Text gehoert ins Frontend):
+    - ``foreign_harness``: diese CLI kennt ``/effort`` gar nicht (kimi, omp).
+    - ``no_pane``: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis).
+    - ``model_no_effort``: Harness kann es, das MODELL des Agenten nicht.
+
+    ``effortModel`` ist hier immer ``None``: nur beim modellbedingten Fall
+    hat die CLI ueberhaupt ein Modell genannt. Das Feld steht trotzdem in
+    JEDER Antwort mit Grund, damit das Frontend eine feste Form hat."""
+    return {
+        "effortLevels": [], "canSwitchEffort": False, "effort": None,
+        "effortShared": False, "effortReason": reason, "effortModel": None,
+    }
 
 
 # Built-in slash commands — static, not discovered (no CLI-side enumeration
@@ -892,7 +1075,7 @@ async def effort_capabilities(agent) -> dict[str, object]:
 # discovery, exact CLI autocomplete text); the rest are Claude Code's
 # well-known standard commands, described generically since they weren't
 # individually probed live.
-_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str], ...] = (
+_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
     {"name": "model", "description": "Set the AI model for Claude Code"},
     {"name": "effort", "description": "Set effort level for model usage"},
     {"name": "clear", "description": "Clear the conversation history"},
@@ -903,11 +1086,43 @@ _BUILTIN_SLASH_COMMANDS: tuple[dict[str, str], ...] = (
     {"name": "resume", "description": "Resume a previous session"},
 )
 
+# openclaude bringt eine EIGENE, deutlich groessere Builtin-Liste mit — live
+# durch den Kommando-Picker geblaettert (19.08.2026). Der Picker mischt
+# Builtins und installierte Skills; hier stehen NUR die Builtins, weil die
+# Skills bereits ueber ``_discover_skill_commands`` kommen (sonst behaupten
+# wir Skills, die dieser Agent gar nicht installiert hat).
+#
+# Beschreibungen: bewusst ``None``, ausser wo der Picker sie woertlich
+# gezeigt hat (``/effort``, eigene Aufnahme). Erfundene Einzeiler waeren
+# genau die Sorte plausibler Falschaussage, die spaeter niemand mehr
+# nachprueft — ein leeres Feld ist ehrlicher.
+_OPENCLAUDE_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = tuple(
+    {"name": name, "description": "Set effort level for model usage" if name == "effort" else None}
+    for name in (
+        "add-dir", "agents", "branch", "btw", "buddy", "cache-probe", "cache-stats",
+        "clear", "color", "compact", "config", "context", "copy", "cost", "debug",
+        "diff", "doctor", "effort", "exit", "export", "feedback", "help", "hooks",
+        "ide", "init", "insights", "knowledge", "loop", "mcp", "memory", "mobile",
+        "model", "onboard-github", "permissions", "plan", "plugin", "pr-comments",
+        "provider", "release-notes", "reload-plugins", "rename", "resume", "review",
+        "rewind", "security-review", "skills", "stats", "status", "statusline",
+        "stickers", "summarize", "tasks", "terminal-setup", "theme", "usage", "vim",
+        "wiki",
+    )
+)
+
+_BUILTIN_SLASH_COMMANDS_BY_HARNESS: dict[str, tuple[dict[str, str | None], ...]] = {
+    "claude": _BUILTIN_SLASH_COMMANDS,
+    "openclaude": _OPENCLAUDE_BUILTIN_SLASH_COMMANDS,
+}
+
 _SLASH_COMMANDS_CACHE_TTL_SECONDS = 60
 _slash_commands_cache: dict[str, tuple[float, list[dict[str, str | None]]]] = {}
 
 
-def _persisted_effort_level_at(path: Path) -> str | None:
+def _persisted_effort_level_at(
+    path: Path, levels: tuple[str, ...] = ALLOWED_EFFORT_LEVELS
+) -> str | None:
     """Wie ``_persisted_effort_level``, aber fuer einen expliziten Pfad —
     Boss' effektive Config ist ~/.claude/settings.json (geteilt mit dem
     Operator), nicht das mc-Agenten-Muster. Fail-silent -> None."""
@@ -916,10 +1131,12 @@ def _persisted_effort_level_at(path: Path) -> str | None:
             level = json.load(f).get("effortLevel")
     except Exception:
         return None
-    return level if level in ALLOWED_EFFORT_LEVELS else None
+    return level if level in levels else None
 
 
-def _persisted_effort_level(slug: str) -> str | None:
+def _persisted_effort_level(
+    slug: str, levels: tuple[str, ...] = ALLOWED_EFFORT_LEVELS
+) -> str | None:
     """Die im ``settings.json`` des Agenten hinterlegte Effort-Stufe — der
     Standard, mit dem JEDE neue Session startet.
 
@@ -931,6 +1148,10 @@ def _persisted_effort_level(slug: str) -> str | None:
     gilt bis eine Session es ueberschreibt (``max``/``ultracode`` tun das nur
     fuer sich selbst und stehen darum korrekt NICHT in der Datei).
 
+    ``levels`` ist die Leiter des jeweiligen Harness: ein ``ultracode`` in der
+    Datei eines openclaude-Agenten ist fuer DESSEN CLI kein gueltiger Wert
+    und darf nicht als aktuelle Stufe durchgereicht werden.
+
     Fail-silent: fehlende Datei, kaputtes JSON oder ein unbekannter Wert geben
     ``None`` — das UI zeigt dann ``auto``, statt etwas zu behaupten."""
     try:
@@ -939,7 +1160,7 @@ def _persisted_effort_level(slug: str) -> str | None:
             level = json.load(f).get("effortLevel")
     except Exception:
         return None
-    return level if level in ALLOWED_EFFORT_LEVELS else None
+    return level if level in levels else None
 
 
 def _persisted_model_at(path: Path) -> str | None:
@@ -1013,13 +1234,14 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     — builtins merged with this agent's installed skills. Docker/cli-bridge
     only: every other runtime gets builtins alone (no ``claude-config``
     mount to scan for skills)."""
-    # Die Builtins sind Claude-Code-Vokabular (/effort, /model, /compact, …).
-    # Fuer eine fremde CLI (kimi, omp) sind sie falsche Versprechen — dort
-    # bleibt die Liste leer, bis deren Harness eigene Kommandos meldet.
-    if getattr(agent, "harness", None) != "claude":
+    # Die Builtins sind CLI-Vokabular und pro Harness verschieden. Fuer eine
+    # fremde CLI (kimi, omp) waeren sie falsche Versprechen — dort bleibt die
+    # Liste leer, bis deren Harness eigene Kommandos meldet.
+    builtins = _BUILTIN_SLASH_COMMANDS_BY_HARNESS.get(getattr(agent, "harness", None) or "")
+    if builtins is None:
         return {"slashCommands": []}
 
-    commands: list[dict[str, str | None]] = list(_BUILTIN_SLASH_COMMANDS)
+    commands: list[dict[str, str | None]] = list(builtins)
 
     slug = getattr(agent, "slug", None)
     runtime = getattr(agent, "agent_runtime", None)
@@ -1053,39 +1275,23 @@ async def model_options_capabilities(agent) -> dict[str, object]:
     ``model_aliases`` fallback every agent gets when its catalog is
     unavailable. Never raises — catalog discovery is fully fail-silent on
     its own (see ``harness_catalog``)."""
-    if getattr(agent, "harness", None) != "claude":
+    harness = getattr(agent, "harness", None)
+    if harness not in _EFFORT_LEVELS_BY_HARNESS:
         # Claude-Aliasse ("/model sonnet") in einer fremden CLI sind
         # Kauderwelsch — lieber gar keine Auswahl anbieten. Das persistierte
-        # Modell wird unten trotzdem nur fuer docker+claude gelesen.
+        # Modell wird unten trotzdem nur fuer docker+bekannten Harness gelesen.
         return {"modelOptions": [], "model": None}
 
-    catalog = await discover_model_catalog(agent)
-    observed = await get_observed_model_windows()
-
-    if catalog:
-        rows = catalog
-    else:
-        rows = [
-            {"command": command, "label": command.capitalize()}
-            for command in settings.model_aliases
-        ]
-
-    alias_to_model_id = settings.model_aliases
-    options = []
-    for row in rows:
-        command = row["command"]
-        model_id = alias_to_model_id.get(command, command)
-        options.append({
-            "command": command,
-            "label": row["label"],
-            "contextWindow": resolve_context_window(model_id, observed),
-        })
     # Persistiertes Modell NUR fuer docker/cli-bridge lesen: nur dort IST
     # ~/.mc/agents/<slug>/claude-config die effektive Config. Boss (host)
     # unsetzt CLAUDE_CONFIG_DIR und liest ~/.claude/ — sein alter
     # ~/.mc/agents/boss-Ordner liegt seit April brach und lieferte beim
     # ersten Live-Test prompt ein Geister-Modell ("glm-5.1:cloud"), das Boss
     # nie faehrt. Lieber ehrliches None als eine falsche Behauptung.
+    #
+    # Steht VOR dem Katalog-Aufruf, weil das Modell in dessen Cache-Schluessel
+    # gehoert — und weil es derselbe Wert sein muss wie in
+    # ``effort_capabilities``, sonst zahlt ein Request zwei Erkennungslaeufe.
     try:
         kind = _target_kind(agent)
     except InputNotSupportedError:
@@ -1104,6 +1310,35 @@ async def model_options_capabilities(agent) -> dict[str, object]:
         )
     else:
         model = None
+
+    catalog = await discover_model_catalog(agent, model if kind == "docker" else None)
+    observed = await get_observed_model_windows()
+
+    if catalog:
+        rows = catalog
+    elif harness == "claude":
+        rows = [
+            {"command": command, "label": command.capitalize()}
+            for command in settings.model_aliases
+        ]
+    else:
+        # ``settings.model_aliases`` ist Claude-Code-Vokabular aus der
+        # Konfiguration. Bei openclaude waere es geraten — und openclaude
+        # VALIDIERT (``Model 'x' not found``), setzt aber sofort und dauerhaft,
+        # was es annimmt. Ein leeres Dropdown, bis der Katalog steht, ist
+        # billiger als ein Klick, der einen echten Agenten umschaltet.
+        rows = []
+
+    alias_to_model_id = settings.model_aliases
+    options = []
+    for row in rows:
+        command = row["command"]
+        model_id = alias_to_model_id.get(command, command)
+        options.append({
+            "command": command,
+            "label": row["label"],
+            "contextWindow": resolve_context_window(model_id, observed),
+        })
     # Startwert fuers Modell-Label, solange die Session noch kein usage-Ereignis
     # geschrieben hat — ein spaeteres usage gewinnt immer (es kennt das Modell
     # des laufenden Zuges, nicht nur den persistierten Standard).
