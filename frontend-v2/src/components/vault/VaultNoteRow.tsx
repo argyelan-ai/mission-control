@@ -229,7 +229,7 @@ export function MonthMarker({ label }: { label: string }) {
         // Translucent + blur so the list bg shines through. Solid
         // var(--color-bg-base) created a hard dark stripe that sat
         // visually outside the surrounding layout — the operator called it out.
-        background: "rgba(10,10,10,0.55)",
+        background: "var(--surface-sticky)",
         backdropFilter: "blur(10px)",
         WebkitBackdropFilter: "blur(10px)",
       }}

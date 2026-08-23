@@ -249,7 +249,7 @@ export function SectionNav({ items }: { items: SectionNavItem[] }) {
       className="sticky top-0 z-20 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 flex items-center gap-1 overflow-x-auto sm:flex-wrap mb-4 sm:mb-6 py-2 sm:py-0 sm:pb-3"
       style={{
         borderBottom: `1px solid ${C.borderSubtle}`,
-        background: "rgba(10,10,10,0.55)",
+        background: "var(--surface-sticky)",
         backdropFilter: "blur(10px)",
         WebkitBackdropFilter: "blur(10px)",
       }}
