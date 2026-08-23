@@ -419,14 +419,14 @@ function TaskRow({
             <button
               onClick={handleForceDispatch}
               disabled={dispatchMutation.isPending}
-              className="px-2 py-1 rounded text-[11px] font-medium cursor-pointer"
+              className="px-2 py-1 rounded-sm text-[11px] font-medium cursor-pointer"
               style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
             >
               {t("yesDispatch")}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); setShowDoneWarning(false); }}
-              className="px-2 py-1 rounded text-[11px] cursor-pointer"
+              className="px-2 py-1 rounded-sm text-[11px] cursor-pointer"
               style={{ color: C.textMuted }}
             >
               {t("cancel")}
@@ -1211,7 +1211,7 @@ function TasksPageContent() {
                     </button>
                     <button
                       onClick={() => setConfirmDeleteProject(false)}
-                      className="px-2 py-1 rounded text-[11px] cursor-pointer"
+                      className="px-2 py-1 rounded-sm text-[11px] cursor-pointer"
                       style={{ color: C.textMuted }}
                     >
                       {t("cancel")}

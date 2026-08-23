@@ -1,6 +1,6 @@
 ---
 name: Mission Control
-description: Dunkle, achromatische Operations-Konsole für eine AI-Agent-Flotte — der einzige Akzent ist ein fast-weisses Off-Cream (#EBE8DE), das über Helligkeit trägt; Farbe bedeutet ausschliesslich Status. Neutrale Off-Blacks, eckige Präzision, Mono-Instrumentenstimme.
+description: Dunkle, achromatische Operations-Konsole für eine AI-Agent-Flotte — der einzige Akzent ist ein fast-weisses Off-Cream (#EBE8DE), das über Helligkeit trägt; Farbe bedeutet ausschliesslich Status. Neutrale Off-Blacks, runde Flächen bei eckigem Raster, Mono-Instrumentenstimme.
 colors:
   accent: "#EBE8DE"
   accent-hover: "#F9F7EF"
@@ -54,10 +54,12 @@ typography:
     fontSize: "12px"
     fontWeight: 400
 rounded:
-  sm: "2px"
-  md: "4px"
-  lg: "6px"
-  xl: "10px"
+  dense: "4px"
+  sm: "6px"
+  md: "10px"
+  lg: "14px"
+  xl: "20px"
+  2xl: "28px"
   full: "9999px"
 spacing:
   xs: "4px"
@@ -106,7 +108,7 @@ components:
 
 **Creative North Star: „Der Leitstand — Signal"**
 
-Mission Control ist der ruhige, dunkle Instrumentenraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. v4 „Signal" zieht die Konsole radikal achromatisch: Struktur und Interaktion sprechen ausschliesslich über Helligkeit und Fläche, **Farbe ist allein den vier Statustönen vorbehalten**. Der Primär-Akzent ist kein Farbton, sondern ein fast-weisses Off-Cream (#EBE8DE) — es trägt über Leuchtkraft und Position, nie über Buntheit. Off-Blacks sind neutral (nie blaustichig, nie reines #000), die Formensprache bleibt eckig, und eine Mono-Instrumentenstimme (JetBrains Mono) kennzeichnet jede Ansicht als Präzisionsgerät. Referenzen: Bloomberg Terminal (Dichte + Ernsthaftigkeit), Linear.app (Präzision + Reduktion), Stripe Dashboard (Klarheit). Die Doktrin steht wörtlich im Kopf von `colors.ts`: „Serious. Dark. Achromatic. Colour means status — nothing else."
+Mission Control ist der ruhige, dunkle Instrumentenraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. v4 „Signal" zieht die Konsole radikal achromatisch: Struktur und Interaktion sprechen ausschliesslich über Helligkeit und Fläche, **Farbe ist allein den vier Statustönen vorbehalten**. Der Primär-Akzent ist kein Farbton, sondern ein fast-weisses Off-Cream (#EBE8DE) — es trägt über Leuchtkraft und Position, nie über Buntheit. Off-Blacks sind neutral (nie blaustichig, nie reines #000), die Formensprache ist rund für alles Anfassbare und eckig nur noch für dichte Daten, und eine Mono-Instrumentenstimme (JetBrains Mono) kennzeichnet jede Ansicht als Präzisionsgerät. Referenzen: Bloomberg Terminal (Dichte + Ernsthaftigkeit), Linear.app (Präzision + Reduktion), Stripe Dashboard (Klarheit). Die Doktrin steht wörtlich im Kopf von `colors.ts`: „Serious. Dark. Achromatic. Colour means status — nothing else."
 
 Dieses System lehnt explizit ab: das generische AI-Tool-Lila, Farb-Gradients, Neon-Glow, Glassmorphism/`backdrop-blur` als Deko, farbige Schatten und SaaS-Marketing-Ästhetik.
 
@@ -116,7 +118,7 @@ Dieses System lehnt explizit ab: das generische AI-Tool-Lila, Farb-Gradients, Ne
 - Neutrale Off-Black-Schichtung (#0A0A0A → #2C2C2C) — Tiefe durch Flächenton, nie durch Schatten
 - Ein Akzent, achromatisch hell (#EBE8DE): trägt über Helligkeit + Fläche, ≤10% jeder Fläche; Text darauf immer dunkel (#151411)
 - Farbe = Status. Nur vier bunte Töne existieren (Grün/Ocker/Rot/Blau); Fehler schlägt Warnung über Buntheit, nicht Helligkeit
-- Eckige Radien (2–10px), 1px-Linien, Corner-Ticks als Positionsmarken
+- Runde Radien (6–28px) für Anfassbares, 4px im Raster; 1px-Linien, Corner-Ticks als Positionsmarken
 - JetBrains Mono als Signatur: Micro-Labels (`.label-sys`), IDs, Stats, Datastream — Clash Display für Titel/Wordmark, General Sans für UI-Text
 - Ruhige Motion: kurze Fades/Slides mit ease-out, kein Bounce, kein Glow
 
@@ -187,13 +189,35 @@ Flach per Doktrin. Tiefe entsteht durch tonale Schichtung (bg-deep → bg-hover)
 
 ## Shapes
 
-Eckige Formensprache und wiedererkennbare Instrumenten-Marken.
+Runde Formensprache für alles Anfassbare, eckig nur im Raster — plus die
+wiedererkennbaren Instrumenten-Marken.
 
-- **Eckige Radien:** sm 2px, md 4px, lg 6px, xl 10px. Karten/Buttons/Chips liegen bei md–lg; nur Pills/Switch-Tracks/Status-Dots sind `full` (9999px).
+**Die Regel (ADR-076, Operator-Entscheid 23.08.2026):** Rund bekommt, was man
+anfässt oder was schwebt. Eckig bleibt, was dicht im Raster liegt — dort kämpft
+ein Radius gegen die Kante, kostet Platz, den Daten brauchen, und macht weich,
+wo man Präzision liest.
+
+Gewählt wird die **Rolle**, nicht die Zahl. Die Werte hängen an den Tokens in
+`globals.css`; eine Nachkalibrierung passiert dort und nirgends sonst.
+
+| Rolle | Klasse | Wert | Wofür |
+|---|---|---|---|
+| Dicht / Raster | `rounded-dense` | 4px | Tabellenzelle, Terminal, Code-Block, Log-Zeile |
+| Marker | `rounded-sm` | 6px | Punkt, Mini-Chip, Badge |
+| Bedienelement | `rounded-md` | 10px | Knopf, Eingabefeld |
+| Karte | `rounded-lg` | 14px | Listenzeile, Kachel |
+| Fläche | `rounded-xl` | 20px | Insel, Panel |
+| Schwebend | `rounded-2xl` | 28px | Dialog, Sheet |
+| Pill | `rounded-full` | ∞ | Chip, Avatar, Switch-Track |
+
+**Nie eine freie Zahl** (`rounded-[13px]`) und **nie das nackte `rounded`** —
+beides umgeht die Skala. Genau das war der Grund für den Bruch: 166 nackte
+`rounded` und ein undefiniertes `rounded-2xl` liefen an den Tokens vorbei,
+während die Doku „eckig" vorschrieb und die Praxis längst rundete.
 - **1px-Linien:** Rahmen, Hairline-Trenner (`border-subtle`), Sektions-Unterkanten. Struktur zeigt sich in Linien, nicht in Flächenschmuck.
-- **Corner-Ticks** (`.corner-ticks`): 10px-Eckmarken (oben-links + unten-rechts) in `border-accent` auf hero-artigen/aktiven Panels. Signatur-Detail — sparsam, max 1–2 pro View.
+- **Corner-Ticks** (`.corner-ticks`): 10px-Eckmarken (oben-links + unten-rechts) in `border-accent` auf hero-artigen/aktiven Panels. Sie folgen dem Radius ihres Trägers (`border-radius: inherit` je Ecke) — sonst schwebte der scharfe Winkel neben der runden Kante. Signatur-Detail — sparsam, max 1–2 pro View.
 - **Akzent-Kante:** 2px `accent`-Streifen oben auf Modals/Sheets — die „Gehäuse-Markierung" von Overlays.
-- **Status-Dot:** kleiner Punkt (rund; in Instrument-Kontexten eckig) in STATUS-Farbe, immer mit Textlabel — Farbe trägt nie allein.
+- **Status-Dot:** kleiner Punkt (rund; im dichten Raster `dense`) in STATUS-Farbe, immer mit Textlabel — Farbe trägt nie allein.
 - **Mono-Datastream:** StatusBar als Instrumentenzeile in JetBrains Mono uppercase.
 
 ## Components
@@ -201,18 +225,18 @@ Eckige Formensprache und wiedererkennbare Instrumenten-Marken.
 Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im aktiven Zustand.
 
 ### Buttons
-- **Shape:** Eckig (md 4px, Pills lg 6px)
+- **Shape:** `rounded-md` (10px); echte Pills `rounded-full`
 - **Primary:** Akzent-Fläche (#EBE8DE) mit dunklem Text (#151411, `on-accent`); Hover = brightness/`accent-hover`. Kein Gradient.
 - **Ghost / Sekundär:** Transparent, 1px Rahmen (`border-active`), Text secondary; Hover → bg-hover + Text primary.
 - **Focus:** global 2px Akzent-Ring mit 2px Offset (`:focus-visible`).
 - **Destruktiv:** Fehler-Rot #FA4942 nur für endgültige Aktionen, sonst Ghost mit rotem Text.
 
 ### Chips / Pills
-- **Aktiv-Muster:** `${farbe}22` Hintergrund + `${farbe}55` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `${farbe}1F` / `${farbe}26`. Eckig (rounded-md/sm), kein text-shadow.
+- **Aktiv-Muster:** `${farbe}22` Hintergrund + `${farbe}55` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `${farbe}1F` / `${farbe}26`. `rounded-sm` (6px) für Badges, `rounded-full` für echte Pills; kein text-shadow.
 - **State:** Aktiv-Zustand immer über Fläche UND Rahmen, nie nur über Text. Auswahl-Chips ohne Statusbedeutung nutzen den Akzent als Farbe.
 
 ### Cards / Panels
-- **Corner:** md–lg (4–6px)
+- **Corner:** `rounded-lg` (14px); ganze Inseln/Panels `rounded-xl` (20px)
 - **Background:** bg-surface (#171717) oder bg-elevated (#222222), je eine Stufe über dem Seitengrund
 - **Border:** 1px `border` (rgba(168,168,168,0.10)); Hover → bg-elevated + `border-active`
 - **Shadow:** keine (Flach-Regel)

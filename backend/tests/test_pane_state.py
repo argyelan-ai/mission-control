@@ -12,6 +12,7 @@ import subprocess
 import pytest
 
 from app.services import pane_state
+from app.services.transcript_adapters import adapter_for
 from app.services.pane_state import capture_pane, parse_pane_state, process_alive
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -55,6 +56,22 @@ IDLE_PROMPT = """\
 │ ❯                                                      │
 ╰──────────────────────────────────────────────────────╯
   ? for shortcuts
+"""
+
+# Echter FreeCode-Pane vom 18.08.2026 (docker exec tmux capture-pane), Claude
+# Code 2.1.234 MIT Statuszeile. Unter der Eingabezeile stehen inzwischen DREI
+# Zeilen: Trennlinie, Statuszeile (Modell) und Bypass-Hinweis. Mit dem alten
+# "letzte 3 nicht-leere Zeilen"-Fenster fiel "❯" heraus -> "unknown" -> das
+# Readiness-Gate in send_text lehnte jede Chat-Nachricht mit 409 agent_starting
+# ab. Genau dieser Text ist der Grund fuer _PROMPT_WINDOW_LINES.
+IDLE_PROMPT_WITH_STATUSLINE_FOOTER = """\
+⏺ Fertig.
+
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  Sonnet 5
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
 """
 
 GARBAGE_OUTPUT = """\
@@ -273,9 +290,10 @@ def test_esc_to_interrupt_scrolled_out_of_view_does_not_match():
 
 
 class _StubAgent:
-    def __init__(self, agent_runtime: str, slug: str | None = None):
+    def __init__(self, agent_runtime: str, slug: str | None = None, harness: str | None = None):
         self.agent_runtime = agent_runtime
         self.slug = slug
+        self.harness = harness
 
 
 @pytest.mark.asyncio
@@ -361,6 +379,18 @@ async def test_capture_pane_truncates_to_last_40_lines(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_alive_demands_a_process_name():
+    """Kein ``claude``-Standard mehr. Ein Aufrufer, der den Namen vergisst,
+    suchte sonst still den falschen Prozess — und rc=1 heisst „nachweislich
+    weg": eine laufende omp-Sitzung laese sich als ``ended``. Live geprueft
+    an ``mc-agent-omp-agent``: ``pgrep -x omp`` findet den Prozess,
+    ``pgrep -x claude`` nicht."""
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    with pytest.raises(TypeError):
+        await process_alive(agent)
+
+
+@pytest.mark.asyncio
 async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
     monkeypatch.setattr(pane_state, "_process_alive_cache", {})
     captured_argv: list[str] = []
@@ -372,12 +402,67 @@ async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert captured_argv == [
         "docker", "exec", "-u", "agent", "mc-agent-rex", "pgrep", "-x", "claude",
     ]
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_process_alive_looks_for_the_openclaude_binary(monkeypatch):
+    """``pgrep -x`` vergleicht den Basenamen EXAKT — ``openclaude`` matcht
+    ``claude`` NICHT (steht woertlich in docker/mc-claude-agent/recycler.sh).
+    Ohne diese Unterscheidung meldete pgrep rc=1 = "nachweislich weg", die
+    Sitzung galt nach 60s Stille als beendet, und der Composer blendete
+    Senden UND Stop aus: jeder openclaude-Agent war nach einer Minute Stille
+    nicht mehr ansprechbar."""
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    captured_argv: list[str] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_argv.extend(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    # Ueber die ECHTE Kette, nicht ueber eine Tabelle daneben: der Harness
+    # waehlt den Adapter, der Adapter nennt den Prozess, ``process_alive``
+    # sucht ihn. Genau dieser Weg laeuft in Produktion — eine Hilfsfunktion
+    # direkt zu pruefen liesse die Verdrahtung ungeprueft.
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="openclaude-agent", harness="openclaude")
+    result = await process_alive(agent, adapter_for(agent).process_name)
+
+    assert captured_argv[-1] == "openclaude", captured_argv
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_process_alive_unknown_harness_keeps_looking_for_claude(monkeypatch):
+    """Rueckfall unveraendert: ein Harness ohne eigenen Adapter (auch
+    ``None``) wird weiter als ``claude`` gesucht — der Stand vor der
+    Harness-Unterscheidung, damit sie nichts anderes mitverschiebt.
+    Kimi faellt heute genau hierunter."""
+    monkeypatch.setattr(pane_state, "_process_alive_cache", {})
+    captured_argv: list[str] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_argv.extend(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex", harness=None)
+    await process_alive(agent, adapter_for(agent).process_name)
+    assert captured_argv[-1] == "claude"
+
+    # Gegenprobe mit einem echten, aber nicht registrierten Harness — der
+    # Rueckfall darf nicht nur fuer ``None`` gelten.
+    captured_argv.clear()
+    kimi = _StubAgent(agent_runtime="cli-bridge", slug="kimi", harness="kimi")
+    await process_alive(kimi, adapter_for(kimi).process_name)
+    assert captured_argv[-1] == "claude"
 
 
 @pytest.mark.asyncio
@@ -390,7 +475,7 @@ async def test_process_alive_false_when_pgrep_finds_nothing(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is False
 
@@ -399,7 +484,7 @@ async def test_process_alive_false_when_pgrep_finds_nothing(monkeypatch):
 async def test_process_alive_none_for_host_runtime():
     agent = _StubAgent(agent_runtime="host", slug="boss")
 
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is None
 
@@ -414,7 +499,7 @@ async def test_process_alive_none_on_subprocess_exception(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is None
 
@@ -431,7 +516,7 @@ async def test_process_alive_none_on_unexpected_returncode(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    result = await process_alive(agent)
+    result = await process_alive(agent, "claude")
 
     assert result is None
 
@@ -448,8 +533,8 @@ async def test_process_alive_result_is_cached(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    first = await process_alive(agent)
-    second = await process_alive(agent)
+    first = await process_alive(agent, "claude")
+    second = await process_alive(agent, "claude")
 
     assert first is True
     assert second is True
@@ -471,8 +556,93 @@ async def test_process_alive_cache_expires_after_ttl(monkeypatch):
     monkeypatch.setattr(pane_state.time, "time", lambda: fake_now["t"])
 
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
-    await process_alive(agent)
+    await process_alive(agent, "claude")
     fake_now["t"] += 31  # past the 30s TTL
-    await process_alive(agent)
+    await process_alive(agent, "claude")
 
     assert call_count["n"] == 2
+
+
+def test_idle_prompt_survives_multi_line_statusline_footer():
+    """Regression (Operator-Befund 18.08.2026): Chat-Nachrichten kamen bei
+    Container-Agenten nicht an. Der Pane war voellig normal — nur stand die
+    Eingabezeile wegen der gewachsenen Fusszeilen nicht mehr unter den letzten
+    drei nicht-leeren Zeilen, und ein ruhender Agent galt als bootend."""
+    assert parse_pane_state(IDLE_PROMPT_WITH_STATUSLINE_FOOTER, transcript_active=False) == {
+        "status": "idle",
+        "prompt": None,
+    }
+    assert parse_pane_state(IDLE_PROMPT_WITH_STATUSLINE_FOOTER, transcript_active=True) == {
+        "status": "working",
+        "prompt": None,
+    }
+
+
+def test_quoted_line_in_output_is_not_mistaken_for_a_prompt():
+    """Gegenprobe zum groesseren Fenster: der Marker muss am ZEILENANFANG
+    stehen. Sonst macht ein Zitat oder Diff in der Ausgabe aus einem
+    unlesbaren Pane einen scheinbar ruhenden — und das Readiness-Gate wuerde
+    genau in die bootende TUI tippen, die es verhindern soll."""
+    pane = """\
+irgendeine Ausgabe mit einem Zitat > so sieht das aus
+und noch eine Zeile darunter
+und eine dritte
+"""
+    assert parse_pane_state(pane, transcript_active=False)["status"] == "unknown"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Review 20.08.2026 — Befund 6: _PROMPT_LINE_RE traf jede Zeile, die mit "> "
+# BEGINNT (Markdown-Zitat, verschachteltes Zitat, Pipe-Operator). Der
+# Kommentar behauptete das Gegenteil, und der Regressionstest darueber prueft
+# nur "> " MITTEN in einer Zeile. Mit dem auf 8 Zeilen erweiterten Fenster
+# werden vier Zeilen echter Ausgabe UEBER der Eingabebox mitgelesen: ein
+# bootender Pane, dessen Scrollback auf so einer Zeile endet, galt als "idle",
+# das Readiness-Gate liess durch, die Nachricht landete in einer halb
+# gestarteten TUI — der im PR selbst benannte Worst Case.
+#
+# Die echte Gestalt der Eingabezeile ist an der laufenden Flotte abgelesen
+# (20.08.2026, docker exec … tmux capture-pane):
+#   Claude Code / openclaude : "❯\xa0"            (nbsp, ohne Rahmen)
+#   kimi                     : " │ >           │" (">" NUR in einer Rahmenbox)
+# Ein blankes "> " am Zeilenanfang ohne Rahmen kommt in der Flotte nicht vor —
+# ein Markdown-Zitat dagegen staendig.
+
+def test_markdown_quote_lines_are_not_prompts():
+    from app.services.pane_state import _PROMPT_LINE_RE
+
+    for zeile in (
+        "> zitierte Markdown-Zeile",
+        "   > eingerueckter Blockquote",
+        "> > verschachteltes Zitat",
+        "|> Pipe-Operator",
+        ">>> Python-REPL-Ausgabe",
+    ):
+        assert _PROMPT_LINE_RE.match(zeile) is None, zeile
+
+
+def test_real_prompt_shapes_still_match():
+    from app.services.pane_state import _PROMPT_LINE_RE
+
+    for zeile in (
+        "❯ ",                     # Claude Code / openclaude, nbsp
+        "❯ Try \"fix lint errors\"",   # mit Platzhaltertext
+        "│ ❯            │",  # in einer Rahmenbox
+        " │ >                     │",  # kimi
+    ):
+        assert _PROMPT_LINE_RE.match(zeile) is not None, zeile
+
+
+def test_booting_pane_ending_on_a_quote_line_stays_unknown():
+    """Die Bug-Form am ganzen Parser: ein bootender Pane, dessen sichtbarer
+    Rest auf einem Markdown-Zitat endet. Muss "unknown" bleiben (das
+    Readiness-Gate haelt dann an), nicht "idle"."""
+    from app.services.pane_state import parse_pane_state
+
+    pane = """\
+Starte Sitzung…
+Aus der Anleitung:
+> Zuerst das Repo klonen
+> dann die Abhaengigkeiten installieren
+"""
+    assert parse_pane_state(pane, transcript_active=False)["status"] == "unknown"

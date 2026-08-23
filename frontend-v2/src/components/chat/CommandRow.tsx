@@ -68,7 +68,7 @@ export function CommandRow({
       {expanded && (
         <pre
           data-testid="command-row-result"
-          className="mt-1.5 ml-5 max-h-[320px] overflow-auto scroll-quiet whitespace-pre-wrap text-xs font-mono p-2 rounded"
+          className="mt-1.5 ml-5 max-h-[320px] overflow-auto scroll-quiet whitespace-pre-wrap text-xs font-mono p-2 rounded-sm"
           style={{ background: C.bgElevated, color: C.textSecondary, border: `1px solid ${C.border}` }}
         >
           {result}

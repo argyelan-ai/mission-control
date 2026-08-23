@@ -166,7 +166,7 @@ export function SessionSidebar({
             onClick={onCreateGroup}
             aria-label={t("newGroup")}
             title={t("newGroup")}
-            className="ml-auto flex items-center justify-center w-6 h-6 rounded cursor-pointer transition-colors"
+            className="ml-auto flex items-center justify-center w-6 h-6 rounded-sm cursor-pointer transition-colors"
             style={{ color: C.textMuted }}
           >
             <Plus size={14} />
@@ -228,7 +228,7 @@ export function SessionSidebar({
                     // 52px, not 60: with no task subtitle a 60px row wasted a
                     // third of its height on air and only ~8 sessions fit a
                     // phone screen. Still comfortably past the 44px touch floor.
-                    stack ? "px-4 min-h-[52px] py-2" : "px-3 py-2 rounded"
+                    stack ? "px-4 min-h-[52px] py-2" : "px-3 py-2 rounded-sm"
                   }`}
                   style={{
                     background: selected ? C.accentSubtle : "transparent",
@@ -254,7 +254,7 @@ export function SessionSidebar({
                   </span>
                   {showTerminalChip && (
                     <span
-                      className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded"
+                      className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
                       style={{ background: C.bgHover, color: C.textMuted, border: `1px solid ${C.border}` }}
                     >
                       Terminal

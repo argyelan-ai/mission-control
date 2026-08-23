@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle, Clock, Users } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { splitAttachments } from "./attachments";
+import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import type { MessageEvent } from "@/lib/chatTypes";
 import type { EchoStatus } from "@/hooks/useChatStream";
 
@@ -83,6 +85,9 @@ function ClampedUserContent({ text }: { text: string }) {
  * visible "Du" label; it stays as screen-reader text, since alignment is not
  * information a screen reader can hear.
  */
+/** Anhang-Zeilen aus dem Text holen: im Verlauf soll eine Kachel stehen, kein
+ *  roher Pfad. Der Text bleibt die einzige Quelle — der Verlauf ist das
+ *  Transkript der CLI, nicht unsere Datenbank (siehe attachments.ts). */
 export function ChatMessage({
   ev,
   showModel = false,
@@ -95,9 +100,56 @@ export function ChatMessage({
    *  message, which needs no qualifier. */
   echoStatus?: EchoStatus;
 }) {
-  const isUser = ev.role === "user";
+  // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
+  // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
+  // als rechtsbuendige Blase, also als etwas, das der Operator selbst getippt
+  // hat (Operator-Befund 19.08.2026: "ganz komische sachen"). Sie bekommt
+  // darum eine eigene, ruhige Zeile: erkennbar fremd, ohne den Verlauf zu
+  // dominieren.
+  if (ev.role === "teammate") {
+    return (
+      <div className="w-full px-4 md:px-5 py-1.5">
+        <div
+          data-testid="teammate-row"
+          className="flex items-start gap-2 px-3 py-2 rounded-lg text-[13px] leading-[1.5]"
+          style={{ background: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+        >
+          <Users size={13} className="mt-0.5 shrink-0" style={{ color: C.textMuted }} aria-hidden="true" />
+          <div className="min-w-0">
+            {ev.teammate && (
+              <span className="font-mono text-[11px] mr-2" style={{ color: C.textMuted }}>
+                {ev.teammate}
+              </span>
+            )}
+            {/* Der Text stand hier in einem blanken <span>, und globals.css
+                hat keine globale Umbruch-Regel. In Chromium bei 390px
+                nachgemessen: ein wirklich unbrechbares Wort (122 Zeichen ohne
+                Satzzeichen) wird 947,9px breit und gibt der SEITE einen
+                waagerechten Rollbalken; mehrzeilige Nutzlasten kollabieren zu
+                einer Zeile. Das haeufigste JSON bricht Chromium an seinen
+                Kommata zwar von selbst um — Rueckmeldungen sind aber
+                beliebiger Text, und seit gebuendelte Bloecke einzeln
+                ankommen, sind mehrzeilige Nutzlasten der Normalfall. */}
+            <span
+              data-testid="teammate-text"
+              className="break-words whitespace-pre-wrap"
+              style={{ color: C.textSecondary }}
+            >
+              {ev.text}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  if (isUser) {
+  // `splitAttachments` steht bewusst HIER und nicht oben: gelesen wird sein
+  // Ergebnis nur in diesem Zweig. Oben lief es fuer jede Teamkollegen- und
+  // Assistenten-Zeile mit — voller `split("\n")`, Regex je Zeile, `join` — und
+  // wurde restlos weggeworfen. ChatMessage ist nicht memoisiert, das fiel also
+  // bei jedem Stream-Tick fuer jede sichtbare Zeile an.
+  if (ev.role === "user") {
+    const parsed = splitAttachments(ev.text);
     const unconfirmed = echoStatus === "unconfirmed";
     // Queued and starting are WAITS, not problems: the CLI genuinely holds a
     // message sent mid-turn until the turn ends, and a booting agent will get it
@@ -127,7 +179,14 @@ export function ChatMessage({
           }}
         >
           <span className="sr-only">Du</span>
-          <ClampedUserContent text={ev.text} />
+          {parsed.attachments.length > 0 && (
+            <div className="flex flex-col gap-1.5 mb-1.5">
+              {parsed.attachments.map((a) => (
+                <ChatAttachmentTile key={a.path} att={a} />
+              ))}
+            </div>
+          )}
+          {parsed.text && <ClampedUserContent text={parsed.text} />}
           {unconfirmed && (
             // Truthful, not reassuring: after the timeout we genuinely do not
             // know whether the CLI received this, so it says so and names the

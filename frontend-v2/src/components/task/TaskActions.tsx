@@ -70,7 +70,7 @@ function ReviewDecisionSection({
         </span>
         {task.review_decision && (
           <span
-            className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
             style={{
               color: decisionLabels[task.review_decision].color,
               backgroundColor: `${decisionLabels[task.review_decision].color}26`,
@@ -88,7 +88,7 @@ function ReviewDecisionSection({
             key={reason}
             type="button"
             onClick={() => setReviewComment(reason)}
-            className="px-2 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer"
+            className="px-2 py-1 rounded-sm text-[10px] font-medium transition-colors cursor-pointer"
             style={{
               backgroundColor: C.bgElevated,
               color: C.textSecondary,

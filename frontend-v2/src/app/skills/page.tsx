@@ -72,7 +72,7 @@ function MdContent({ content }: { content: string }) {
           <code className="block px-4 py-3 rounded-xl text-xs font-mono mb-3 overflow-x-auto whitespace-pre"
             style={{ background: "var(--color-bg-deep)", color: C.accent, border: `1px solid ${C.border}` }}>{children}</code>
         ) : (
-          <code className="px-1.5 py-0.5 rounded text-[11px] font-mono"
+          <code className="px-1.5 py-0.5 rounded-sm text-[11px] font-mono"
             style={{ background: "var(--color-bg-elevated)", color: C.accent }}>{children}</code>
         );
       },
@@ -255,7 +255,7 @@ function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={(e) => { e.stopPropagation(); setShowContent(true); }}
-            className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 cursor-pointer touch-visible"
+            className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 cursor-pointer touch-visible"
             style={{ color: "var(--color-text-muted)" }} title={t("showSkillMd")}>
             <FileText size={12} />
           </button>
@@ -387,7 +387,7 @@ export default function SkillsPage() {
 
   return (
     <AppShell>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl">
 
         {/* ── Header ── */}
         <div className="flex items-start justify-between mb-6 gap-4">

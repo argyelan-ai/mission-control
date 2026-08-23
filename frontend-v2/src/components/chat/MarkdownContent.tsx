@@ -65,7 +65,7 @@ export function MarkdownContent({ content, compact = false }: { content: string;
         code: ({ children, className }) => {
           const isBlock = className?.includes("language-");
           return isBlock ? (
-            <code className="block px-4 py-3 rounded-lg text-xs font-mono mb-3 overflow-x-auto"
+            <code className="block px-4 py-3 rounded-dense text-xs font-mono mb-3 overflow-x-auto"
               style={{ background: "var(--color-bg-elevated)", color: C.accent, border: "1px solid var(--color-border)" }}>
               {children}
             </code>
@@ -75,7 +75,7 @@ export function MarkdownContent({ content, compact = false }: { content: string;
             // flag, a container name). At 390px those ran past the right edge
             // and — since the page itself must never scroll sideways — got
             // clipped, so the end of the identifier was simply unreadable.
-            <code className="px-1.5 py-0.5 rounded text-xs font-mono"
+            <code className="px-1.5 py-0.5 rounded-sm text-xs font-mono"
               style={{ background: C.accentSubtle, color: C.accent, overflowWrap: "anywhere" }}>
               {children}
             </code>

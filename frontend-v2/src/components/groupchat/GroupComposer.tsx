@@ -239,7 +239,7 @@ export function GroupComposer({
           <div className="max-h-56 overflow-y-auto p-1.5">
             {matches.map((entry, i) => {
               // Der Name steht nur dann daneben, wenn er mehr sagt als der
-              // Handle — „@sparky Sparky" ist Lärm, „@alle all" nicht.
+              // Handle — „@alpha Alpha" ist Lärm, „@alle all" nicht.
               const showLabel = fold(entry.label) !== fold(entry.handle);
               return (
                 <button

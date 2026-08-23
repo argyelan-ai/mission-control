@@ -4,7 +4,7 @@ Sturm-Schutz mechanisch (Plan §4.2): Eine Group-Message wird Mitglied X nur
 zugestellt, wenn X in message.mentions steht — alles andere schiebt den
 Cursor still weiter (exakt das _is_own_message-Muster: Cursor rückt vor,
 Payload gefiltert). Verglichen wird fold-tolerant (chat_inbound._fold):
-"@Free-Code", "free_code" und "FreeCode" sind derselbe Agent.
+"@Beta-One", "beta_one" und "BetaOne" sind derselbe Agent.
 
 Damit können sich Agenten nicht gegenseitig aufwecken: nur wer explizit das
 Wort bekommt (Engine-Brief, Marks @-Mention, Agenten-@-Mention), erhält die
@@ -116,19 +116,19 @@ async def test_group_message_delivered_only_to_mentioned(
 async def test_mention_matching_is_fold_tolerant(
     client: AsyncClient, async_session: AsyncSession
 ):
-    """"@Free-Code" trifft den Agenten mit Slug "freecode" (Gross/Klein,
+    """"@Beta-One" trifft den Agenten mit Slug "betaone" (Gross/Klein,
     Bindestrich/Unterstrich fallen aus dem Vergleich — chat_inbound._fold)."""
-    freecode, token = await _make_member(async_session, "FreeCode", "freecode")
+    betaone, token = await _make_member(async_session, "BetaOne", "betaone")
     other, _ = await _make_member(async_session, "Beta", "beta")
-    _group, thread = await _make_group(async_session, [freecode, other])
+    _group, thread = await _make_group(async_session, [betaone, other])
 
     msg = await post_message(
         async_session,
         thread_id=thread.id,
         sender_type="user",
         message_type="message",
-        body="@Free-Code schau mal",
-        mentions=["Free-Code"],
+        body="@Beta-One schau mal",
+        mentions=["Beta-One"],
     )
 
     resp = await _poll(client, token)

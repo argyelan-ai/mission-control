@@ -191,7 +191,7 @@ export default function ReposPage() {
 
   return (
     <AppShell>
-      <div className="p-6 max-w-4xl mx-auto">
+      <div className="py-6 max-w-4xl">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div>

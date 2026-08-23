@@ -1,27 +1,36 @@
 /**
- * Static org-chart data for Mission Control.
+ * Static org-chart data for Mission Control — an EXAMPLE crew, not a roster.
  *
- * The operator explicitly approved a static source for v1. When the time comes to
- * back this with the live DB, swap `ORG_CHART` for a fetch from
- * `/api/v1/agents` (+ a hierarchy field on the agent table) and keep the
- * `OrgNode` shape. Consumers should not need to change.
+ * This is what `/office` renders on a fresh install, so every node here is a
+ * ROLE: "Reviewer", "Writer", "Tester". It used to be the author's actual
+ * fleet — real agent names, real models, live on every installation that
+ * downloaded this. A crew of roles shows a new operator the shape without
+ * handing them somebody else's team.
+ *
+ * A static source was approved for v1. When the time comes to back this with
+ * the live DB, swap `ORG_CHART` for a fetch from `/api/v1/agents` (+ a
+ * hierarchy field on the agent table) and keep the `OrgNode` shape — then it
+ * shows the operator's OWN agents and this file goes away. Consumers should
+ * not need to change.
  *
  * Notes on hierarchy:
  *   - The operator sits at the root.
  *   - Jarvis branches off as a SEPARATE child of the operator — voice layer,
  *     parallel to Boss, not under him.
  *   - Boss is the central orchestrator. All workers sit under Boss.
+ *   - `jarvis` and `boss` are looked up BY ID in ./index.tsx — renaming those
+ *     two empties the chart.
  */
 
 import {
   User,                 // Operator
   Mic,                  // Jarvis (voice)
   Crown,                // Boss
-  Code2,                // FreeCode
-  Zap,                  // Sparky
-  ShieldCheck,          // Rex
-  Clapperboard,         // Davinci
-  PenLine,              // Shakespeare
+  Code2,                // Developer
+  Zap,                  // Local Dev
+  ShieldCheck,          // Reviewer
+  Clapperboard,         // Media
+  PenLine,              // Writer
   Telescope,            // Researcher
   Rocket,               // Deployer
   FlaskConical,         // Tester
@@ -35,13 +44,13 @@ export const ORG_CHART: OrgChartData = {
   nodes: [
     // ── Root ──────────────────────────────────────────────────────────────
     {
-      id: "mark",
+      id: "operator",
       name: "Operator",
       roleKey: "roleOperator",
       runtime: "human",
       status: "online",
       icon: User,
-      taglineKey: "taglineMark",
+      taglineKey: "taglineOperator",
       tier: "operator",
       parentId: null,
     },
@@ -57,7 +66,7 @@ export const ORG_CHART: OrgChartData = {
       icon: Mic,
       taglineKey: "taglineJarvis",
       tier: "voice",
-      parentId: "mark",
+      parentId: "operator",
     },
 
     // ── Lead (under Jarvis — visually: operator→Jarvis→Boss vertical line) ──
@@ -79,62 +88,62 @@ export const ORG_CHART: OrgChartData = {
 
     // ── Workers (under Boss) ─────────────────────────────────────────────
     {
-      id: "freecode",
-      name: "FreeCode",
+      id: "developer",
+      name: "Developer",
       roleKey: "roleDeveloper",
       runtime: "docker",
       status: "online",
       model: "sonnet-4.6",
       icon: Code2,
-      taglineKey: "taglineFreecode",
+      taglineKey: "taglineDeveloper",
       tier: "worker",
       parentId: "boss",
     },
     {
-      id: "sparky",
-      name: "Sparky",
+      id: "local-dev",
+      name: "Local Dev",
       roleKey: "roleDeveloper",
       runtime: "docker",
       status: "online",
       model: "qwen3.6-35b",
       icon: Zap,
-      taglineKey: "taglineSparky",
+      taglineKey: "taglineLocalDev",
       tier: "worker",
       parentId: "boss",
     },
     {
-      id: "rex",
-      name: "Rex",
+      id: "reviewer",
+      name: "Reviewer",
       roleKey: "roleReviewer",
       runtime: "docker",
       status: "online",
       model: "sonnet-4.6",
       icon: ShieldCheck,
-      taglineKey: "taglineRex",
+      taglineKey: "taglineReviewer",
       tier: "worker",
       parentId: "boss",
     },
     {
-      id: "davinci",
-      name: "Davinci",
+      id: "media",
+      name: "Media",
       roleKey: "roleContent",
       runtime: "docker",
       status: "online",
       model: "qwen3.6-35b",
       icon: Clapperboard,
-      taglineKey: "taglineDavinci",
+      taglineKey: "taglineMedia",
       tier: "worker",
       parentId: "boss",
     },
     {
-      id: "shakespeare",
-      name: "Shakespeare",
+      id: "writer",
+      name: "Writer",
       roleKey: "roleContent",
       runtime: "docker",
       status: "online",
       model: "qwen3.6-35b",
       icon: PenLine,
-      taglineKey: "taglineShakespeare",
+      taglineKey: "taglineWriter",
       tier: "worker",
       parentId: "boss",
     },
