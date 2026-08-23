@@ -910,7 +910,18 @@ async def test_send_text_gates_on_readiness_for_openclaude(monkeypatch):
     await agent_chat_input.send_text(_agent(), "hallo")
     assert gated["n"] == 1
 
-    # Fremde CLI (der omp-Agent/omp): weiterhin ohne Gate zustellen — ihre TUI
-    # erfuellt die Claude-Marker nie und war dadurch dauerhaft unerreichbar.
+    # omp bekommt das Tor seit der Zusammenfuehrung EBENFALLS — nicht weil
+    # seine TUI Claude-Marker zeigt, sondern weil es einen eigenen Adapter
+    # mit eigener Sonde hat; das Tor liest mit DESSEN Regeln. Vorher stand
+    # hier das Gegenteil, und das stimmte auch: solange omp keine Sonde
+    # hatte, waere jede Aussage ``unknown`` und damit eine Ablehnung ohne
+    # Erkenntnis gewesen.
     await agent_chat_input.send_text(_agent(harness="omp"), "hallo")
-    assert gated["n"] == 1
+    assert gated["n"] == 2
+
+    # Kimi hat weiterhin KEINEN Adapter — und bekommt darum kein Tor.
+    # Das ist die Absicherung gegen eine handgepflegte Liste: waere das Tor
+    # nicht aus der Registrierung abgeleitet, wuerde hier still gegen
+    # Claude-Regeln geprueft, die Kimis TUI nie erfuellt.
+    await agent_chat_input.send_text(_agent(harness="kimi"), "hallo")
+    assert gated["n"] == 2

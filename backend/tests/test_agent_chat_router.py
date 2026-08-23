@@ -56,10 +56,10 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     tdir.mkdir()
     (tdir / "sess1.jsonl").write_text(_user_line("hello from fixture") + "\n")
 
-    import app.routers.agent_chat as agent_chat_mod
+    import app.services.transcript_chat as transcript_chat_mod
     import app.services.agent_chat_input as agent_chat_input_mod
 
-    monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    monkeypatch.setattr(transcript_chat_mod, "resolve_transcript_dir", lambda a: tdir)
     # "rex" existiert wirklich in der Flotte — capabilities.model/effort nie
     # aus der LIVE settings.json des Hosts lesen (Real-Host-Leak).
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
@@ -152,14 +152,14 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     tdir.mkdir()
     (tdir / "sess1.jsonl").write_text(_user_line("hi from boss") + "\n")
 
-    import app.routers.agent_chat as agent_chat_mod
+    import app.services.transcript_chat as transcript_chat_mod
     import app.services.agent_chat_input as agent_chat_input_mod
 
-    monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    monkeypatch.setattr(transcript_chat_mod, "resolve_transcript_dir", lambda a: tdir)
     # Only the capabilities derivation is under test here — bypass the A2
     # Boss privacy heuristic (cwd/branch sniffing) entirely rather than
     # constructing a transcript line that would satisfy it.
-    monkeypatch.setattr(agent_chat_mod, "transcript_allowed", lambda a, p: True)
+    monkeypatch.setattr(transcript_chat_mod, "transcript_allowed", lambda a, p: True)
     # Echte Fleet-Slugs — der capabilities.model/effort-Zweig darf nie die
     # settings.json des LAUFENDEN Agenten vom Host lesen (Real-Host-Leak).
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
@@ -210,9 +210,9 @@ async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: A
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
 
-    import app.routers.agent_chat as agent_chat_mod
+    import app.services.transcript_chat as transcript_chat_mod
 
-    monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: empty_dir)
+    monkeypatch.setattr(transcript_chat_mod, "resolve_transcript_dir", lambda a: empty_dir)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
@@ -270,6 +270,44 @@ def manager():
     m = ChatTailerManager()
     m.POLL_INTERVAL = 0.02
     return m
+
+
+async def test_tailer_seeds_the_parser_off_the_event_loop(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """``new_parser(initial_path)`` darf nicht auf der Schleife laufen.
+
+    Fuer omp ist das ``OmpLineParser.seed_from`` — es liest die GANZE
+    Sitzungsdatei mit ``open()``. Einmal je Agent beim ersten SSE-Verbinden,
+    und solange steht die komplette FastAPI-Schleife. Dieselbe Regel, die
+    ``_run`` weiter unten fuer ``transcript_allowed`` selbst formuliert
+    („same rule as every other disk read in this loop")."""
+    import dataclasses
+    import threading
+
+    import app.services.transcript_adapters as transcript_adapters
+
+    loop_thread = threading.get_ident()
+    seeded_in: list[int] = []
+    base = transcript_adapters.adapter_for(None)
+
+    def _spy_new_parser(session_path=None):
+        seeded_in.append(threading.get_ident())
+        return base.new_parser(session_path)
+
+    spy = dataclasses.replace(base, new_parser=_spy_new_parser)
+    monkeypatch.setattr(transcript_adapters, "adapter_for", lambda agent: spy)
+
+    session_file = tmp_path / "sess1.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        assert await _wait_until(lambda: bool(seeded_in))
+    finally:
+        await manager.release("agent-1")
+
+    assert seeded_in and loop_thread not in seeded_in
 
 
 async def test_tailer_publishes_appended_line(manager, fake_broadcast, tmp_path):

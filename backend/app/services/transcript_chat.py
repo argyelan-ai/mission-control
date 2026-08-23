@@ -67,7 +67,7 @@ from typing import Any
 from app.config import settings
 from app.services import sse
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
-from app.services.pane_state import capture_pane, parse_pane_state, process_alive
+from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
 
@@ -820,7 +820,7 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     return newest_path, meta
 
 
-async def resolve_aliveness(agent, session_path: Path) -> str:
+async def resolve_aliveness(agent, session_path: Path, adapter: Any | None = None) -> str:
     """Classifies a session's liveness for the history/tailer meta —
     ``"active" | "idle" | "ended"``. Fixes the old live-only semantics
     (mtime<60s == the ONLY signal, so an idle-but-still-running CLI read as
@@ -841,7 +841,17 @@ async def resolve_aliveness(agent, session_path: Path) -> str:
     4. Otherwise (Boss/host — no process channel at all — or the docker
        check itself came back unknown): a transcript-age fallback. Within
        ``_ALIVENESS_IDLE_MAX_AGE_SECONDS`` -> ``"idle"``; older -> ``"ended"``.
+
+    ``adapter`` (omp-Runde): liefert Session-Suche und Prozessnamen des
+    Harness. ``None`` = Claude Code. Ohne ihn suchte Schritt 3 immer nach
+    einem ``claude``-Prozess — bei omp fand ``pgrep`` nichts und die
+    laufende Sitzung galt faelschlich als beendet.
     """
+    if adapter is None:
+        from app.services.transcript_adapters import adapter_for
+
+        adapter = adapter_for(agent)
+
     try:
         mtime = session_path.stat().st_mtime
     except OSError:
@@ -850,14 +860,18 @@ async def resolve_aliveness(agent, session_path: Path) -> str:
     if mtime is not None and (time.time() - mtime) < _LIVE_WINDOW_SECONDS:
         return "active"
 
+    # Rollover-Pruefung ueber der Transkript-WURZEL des Harness — bei omp
+    # liegt die Session eine Ebene tiefer als die Wurzel.
     try:
-        active = await asyncio.to_thread(find_active_session, session_path.parent)
+        active = await asyncio.to_thread(
+            adapter.find_active_session, adapter.session_scan_root(session_path)
+        )
     except OSError:
         active = None
     if active is not None and active[0] != session_path:
         return "ended"
 
-    alive = await process_alive(agent)
+    alive = await process_alive(agent, adapter.process_name)
     if alive is True:
         return "idle"
     if alive is False:
@@ -1033,12 +1047,23 @@ _STATS_TOOLS = ("Edit", "Write")
 
 def read_history(
     path: Path,
+    adapter: Any,
     limit: int = 200,
     before_uuid: str | None = None,
     observed_windows: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Reads a transcript file top-to-bottom and returns one page of chat
     events plus session metadata.
+
+    ``adapter`` (omp round) is the harness-specific half —
+    ``transcript_adapters.adapter_for(agent)`` — and it is REQUIRED. It used
+    to default to ``None`` -> ``adapter_for(None)``, i.e. the Claude Code
+    parser for whatever wrote ``path``. On a real omp transcript that
+    returned ZERO events with ``startedAt`` set: a session that looks
+    healthy and empty. That silent wrong answer is exactly what the adapter
+    round removes, so it must not survive as a default — the more so since
+    ``resolve_aliveness`` falls back the other way (``adapter_for(agent)``),
+    and two contradicting fallbacks are worse than none.
 
     ``observed_windows`` (harness-catalog round): a pre-fetched
     model->context-window map (``harness_catalog.get_observed_model_windows()``)
@@ -1065,8 +1090,13 @@ def read_history(
     that entry's start and excludes the whole entry from the page, never
     just part of it. An unknown ``before_uuid`` yields an empty page.
     """
+    # Ohne Pfad: diese Funktion liest die Datei ohnehin von Zeile 1 an, ein
+    # zustandsbehafteter Parser sammelt seinen Zustand also unterwegs selbst.
+    # (Der Live-Tailer steigt am Dateiende ein und braucht deshalb die
+    # Vorgabe — siehe dort.)
+    parse_line = adapter.new_parser()
+
     session_id = path.stem
-    claude_config_root = _claude_config_root(path)
     try:
         live = (time.time() - path.stat().st_mtime) < _LIVE_WINDOW_SECONDS
     except OSError:
@@ -1096,7 +1126,7 @@ def read_history(
                 if not isinstance(d, dict):
                     continue
 
-                entry_uuid = d.get("uuid")
+                entry_uuid = adapter.peek_entry_id(raw_line)
                 if entry_uuid is not None:
                     if entry_uuid in seen_uuids:
                         continue
@@ -1105,7 +1135,7 @@ def read_history(
                 if started_at is None and d.get("timestamp"):
                     started_at = d["timestamp"]
 
-                for ev in parse_transcript_line(raw_line, observed_windows):
+                for ev in parse_line(raw_line, observed_windows):
                     if ev["kind"] == "_tool_result":
                         tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
                         if tool_ev is not None:
@@ -1128,7 +1158,7 @@ def read_history(
                     elif ev["kind"] == "command":
                         command_events_by_uuid[ev["uuid"]] = ev
                     elif ev["kind"] == "usage":
-                        _stamp_usage_source(ev, claude_config_root, session_id)
+                        adapter.stamp_usage(ev, path)
 
                     events.append(ev)
 
@@ -1285,8 +1315,26 @@ class ChatTailerManager:
         initial_offset: int,
         agent: Any | None = None,
     ) -> None:
+        from app.services.transcript_adapters import adapter_for
+
+        # Der Harness des Agenten entscheidet, WIE gelesen wird (Parser,
+        # Dedup-Feld, Session-Suche, Pane-Regeln). ``agent`` ist nur in
+        # Tests None — dann gilt der Claude-Adapter wie bisher.
+        adapter = adapter_for(agent)
+        # ``new_parser`` darf die Sitzungsdatei LESEN, um seinen Anfangs-
+        # zustand zu laden (omp: ``seed_from`` liest die ganze Datei, damit
+        # der am Dateiende einsteigende Tailer die Effort-Stufe vom
+        # Session-ANFANG kennt). Das ist ein Platten-Lesevorgang wie jeder
+        # andere in dieser Schleife und gehoert deshalb in einen Thread —
+        # sonst steht die gesamte FastAPI-Schleife, waehrend ein langes
+        # Transkript eingelesen wird (einmal je Agent beim ersten
+        # SSE-Verbinden).
+        parse_line = await asyncio.to_thread(adapter.new_parser, initial_path)
         channel = RedisKeys.agent_chat_channel(agent_id)
-        tdir = initial_path.parent
+        # omp legt seine Sessions eine Ebene tief in pro-cwd-Ordnern ab, der
+        # Rollover-Scan muss also ueber der WURZEL laufen, nicht ueber dem
+        # Ordner der aktuellen Datei.
+        tdir = adapter.session_scan_root(initial_path)
         current_path = initial_path
         tick = 0
         last_pane_state: dict[str, Any] | None = None
@@ -1325,7 +1373,9 @@ class ChatTailerManager:
 
                 try:
                     if agent is not None and tick % self.STATE_PROBE_EVERY_N_TICKS == 0:
-                        new_state = await self._compute_pane_state(agent, current_path)
+                        new_state = await self._compute_pane_state(
+                            agent, current_path, adapter
+                        )
                         if new_state != last_pane_state:
                             last_pane_state = new_state
                             await sse.broadcast(
@@ -1333,7 +1383,7 @@ class ChatTailerManager:
                             )
 
                     try:
-                        active = await asyncio.to_thread(find_active_session, tdir)
+                        active = await asyncio.to_thread(adapter.find_active_session, tdir)
                     except OSError:
                         active = None
                     if active is not None and active[0] != current_path:
@@ -1352,7 +1402,7 @@ class ChatTailerManager:
                         allowed = True
                         if agent is not None:
                             allowed = await asyncio.to_thread(
-                                transcript_allowed, agent, active[0]
+                                adapter.transcript_allowed, agent, active[0]
                             )
                         if not allowed:
                             if active[0] != rejected_rollover_path:
@@ -1373,6 +1423,11 @@ class ChatTailerManager:
                             command_events_by_uuid = {}
                             seen_uuids = set()
                             last_pane_state = None
+                            # Frischer Parser: sein Zustand (bei omp die
+                            # Effort-Stufe) gehoert zur ALTEN Session. Die
+                            # NEUE Datei wird ab Offset 0 gelesen, also
+                            # braucht er auch keine Vorgabe daraus.
+                            parse_line = adapter.new_parser()
                             # aliveness is hardcoded "active" here rather than
                             # a fresh resolve_aliveness() call: a rollover
                             # only fires for a file find_active_session JUST
@@ -1410,13 +1465,13 @@ class ChatTailerManager:
                         if not raw_line:
                             continue
 
-                        entry_uuid = _peek_uuid(raw_line)
+                        entry_uuid = adapter.peek_entry_id(raw_line)
                         if entry_uuid is not None:
                             if entry_uuid in seen_uuids:
                                 continue
                             seen_uuids.add(entry_uuid)
 
-                        for ev in parse_transcript_line(raw_line, observed_windows):
+                        for ev in parse_line(raw_line, observed_windows):
                             if ev["kind"] == "_tool_result":
                                 tool_ev = tool_events_by_id.pop(ev.get("tool_use_id"), None)
                                 if tool_ev is not None:
@@ -1448,10 +1503,7 @@ class ChatTailerManager:
                                 # per event (not hoisted) since a rollover mid-
                                 # tick swaps it.
                                 await asyncio.to_thread(
-                                    _stamp_usage_source,
-                                    ev,
-                                    _claude_config_root(current_path),
-                                    current_path.stem,
+                                    adapter.stamp_usage, ev, current_path
                                 )
                                 # A fresh statusline read (source=="cli") is
                                 # ground truth for THIS model's window right
@@ -1569,7 +1621,9 @@ class ChatTailerManager:
         except Exception:
             return False
 
-    async def _compute_pane_state(self, agent: Any, current_path: Path) -> dict[str, Any]:
+    async def _compute_pane_state(
+        self, agent: Any, current_path: Path, adapter: Any | None = None
+    ) -> dict[str, Any]:
         """One probe tick's worth of state classification (A6). Computes
         ``transcript_active`` from the current session file's mtime (used
         both as ``parse_pane_state``'s disambiguation signal and as the
@@ -1581,7 +1635,14 @@ class ChatTailerManager:
         into the result — cheap to add here since it rides the same already-
         throttled probe tick (``STATE_PROBE_EVERY_N_TICKS``) rather than
         polling on its own cadence, and its own docker-side check
-        (``pane_state.process_alive``) is itself cached ~30s."""
+        (``pane_state.process_alive``) is itself cached ~30s.
+
+        ``adapter`` (omp-Runde) liefert die harness-eigenen Pane-Regeln, die
+        Zug-Ende-Probe und den Prozessnamen. ``None`` = Claude Code."""
+        if adapter is None:
+            from app.services.transcript_adapters import adapter_for
+
+            adapter = adapter_for(agent)
         try:
             mtime = await asyncio.to_thread(lambda: current_path.stat().st_mtime)
             transcript_active = (time.time() - mtime) < self.STATE_ACTIVE_WINDOW_SECONDS
@@ -1595,11 +1656,11 @@ class ChatTailerManager:
         # working-Aufloesung als auch dem pane-losen Boss-Zweig den
         # 20s-Nachlauf.
         if transcript_active and await asyncio.to_thread(
-            self._transcript_suggests_turn_ended, current_path
+            adapter.transcript_suggests_turn_ended, current_path
         ):
             transcript_active = False
 
-        aliveness = await resolve_aliveness(agent, current_path)
+        aliveness = await resolve_aliveness(agent, current_path, adapter)
 
         pane_text = await capture_pane(agent)
         if pane_text is None:
@@ -1609,7 +1670,10 @@ class ChatTailerManager:
                 "aliveness": aliveness,
             }
 
-        return {**parse_pane_state(pane_text, transcript_active), "aliveness": aliveness}
+        return {
+            **adapter.parse_pane_state(pane_text, transcript_active),
+            "aliveness": aliveness,
+        }
 
 
 def _read_new_chunk(path: Path, offset: int) -> tuple[int, bytes | None]:

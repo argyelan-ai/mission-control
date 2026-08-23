@@ -337,7 +337,7 @@ async def test_resolve_aliveness_idle_when_docker_process_alive(tmp_path, monkey
     _touch(f, mtime_offset_seconds=300)
     agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
 
-    async def _fake_process_alive(a):
+    async def _fake_process_alive(a, process_name):
         return True
 
     monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
@@ -350,7 +350,7 @@ async def test_resolve_aliveness_ended_when_docker_process_dead(tmp_path, monkey
     _touch(f, mtime_offset_seconds=300)
     agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
 
-    async def _fake_process_alive(a):
+    async def _fake_process_alive(a, process_name):
         return False
 
     monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
@@ -387,12 +387,31 @@ async def test_resolve_aliveness_idle_fallback_when_docker_process_check_unknown
     _touch(f, mtime_offset_seconds=300)
     agent = SimpleNamespace(slug="rex", agent_runtime="cli-bridge")
 
-    async def _fake_process_alive(a):
+    async def _fake_process_alive(a, process_name):
         return None
 
     monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
 
     assert await tc.resolve_aliveness(agent, f) == "idle"
+
+
+async def test_resolve_aliveness_asks_for_the_harness_process(tmp_path, monkeypatch):
+    """Der Prozessname kommt aus dem Adapter, nicht aus einem Standardwert.
+    Bei omp ist ``pgrep -x claude`` immer leer, und rc=1 heisst
+    „nachweislich weg" — eine laufende Sitzung galte als beendet."""
+    f = tmp_path / "session.jsonl"
+    _touch(f, mtime_offset_seconds=300)
+    agent = SimpleNamespace(slug="omp-agent", agent_runtime="cli-bridge", harness="omp")
+    gefragt: list[str] = []
+
+    async def _fake_process_alive(a, process_name):
+        gefragt.append(process_name)
+        return True
+
+    monkeypatch.setattr(tc, "process_alive", _fake_process_alive)
+
+    assert await tc.resolve_aliveness(agent, f) == "idle"
+    assert gefragt == ["omp"]
 
 
 async def test_resolve_aliveness_ended_when_file_missing(tmp_path):
@@ -643,7 +662,7 @@ async def test_state_probe_reports_idle_right_after_final_answer(tmp_path, monke
     async def _fake_pane(agent):
         return "⏺ Fertig.\n\n❯ \n"
 
-    async def _fake_aliveness(agent, path):
+    async def _fake_aliveness(agent, path, adapter=None):
         return "active"
 
     monkeypatch.setattr(tc, "capture_pane", _fake_pane)

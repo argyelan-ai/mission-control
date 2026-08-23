@@ -968,7 +968,7 @@ async def test_set_effort_ignores_stale_confirmation_from_earlier_attempt(monkey
 
 
 async def test_set_effort_explicit_rejection_raises_distinct_error_no_escape(monkeypatch):
-    """Live-verified on a container agent (2026-08-18): the CLI can answer a switch
+    """Live-verified on ein Container-Agent (2026-08-18): the CLI can answer a switch
     attempt with "Kept effort level as <X>" instead of "Set effort level to
     <X>" — an explicit decline, not a verification timeout. Must raise
     EffortSwitchRejectedError (-> router 409 effort_switch_rejected) WITH
@@ -1115,7 +1115,7 @@ async def test_effort_capabilities_ignores_unusable_settings(monkeypatch, tmp_pa
 
 
 async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
-    """Kimi und der omp-Agent sind cli-bridge, aber KEIN Claude: /effort- und
+    """Kimi/der omp-Agent sind cli-bridge, aber KEIN Claude: /effort- und
     /model-Vokabular darf dort weder angeboten noch getippt werden
     (kritischer Test-Durchgang 18.08.2026 — vorher galt jeder
     cli-bridge-Agent als Claude)."""
@@ -1241,24 +1241,69 @@ async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
     assert sent == []
 
 
-async def test_send_text_skips_readiness_gate_for_foreign_cli(monkeypatch):
-    """omp-Befund (19.08.2026): das Readiness-Gate liest mit Claude-Regeln —
-    eine omp/kimi-TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
-    Fuer fremde Harnesses wird blind zugestellt."""
+async def test_send_text_skips_readiness_gate_for_a_harness_without_a_pane_probe(monkeypatch):
+    """der omp-Agent-Befund (19.08.2026): das Readiness-Gate las mit Claude-Regeln —
+    eine fremde TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
+    Fuer einen Harness OHNE eigene Pane-Sonde (kimi) bleibt es deshalb aus:
+    keine Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung."""
     from app.services import agent_chat_input
 
     calls: list[list[str]] = []
     async def _fake_run(argv): calls.append(argv)
     async def _fake_marker(slug): pass
     async def _boom(agent):
-        raise AssertionError("readiness gate darf fuer fremde CLIs nicht laufen")
+        raise AssertionError("readiness gate darf ohne eigene Pane-Sonde nicht laufen")
     monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
     monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
     monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _boom)
 
+    agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness="kimi")
+    await agent_chat_input.send_text(agent, "hallo kimi")
+    assert any("hallo kimi" in " ".join(c) for c in calls)
+
+
+async def test_send_text_runs_the_readiness_gate_for_omp(monkeypatch):
+    """Seit es eine omp-Pane-Sonde gibt, gilt das Tor auch dort — sonst
+    landet eine Nachricht wieder in einer bootenden TUI (genau der Befund,
+    fuer den das Tor ueberhaupt gebaut wurde)."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    gated: list[object] = []
+    async def _fake_run(argv): calls.append(argv)
+    async def _fake_marker(slug): pass
+    async def _gate(agent): gated.append(agent)
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
+    monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _gate)
+
     agent = _StubAgent(slug="omp-agent", agent_runtime="cli-bridge", harness="omp")
-    await agent_chat_input.send_text(agent, "hallo omp")
-    assert any("hallo omp" in " ".join(c) for c in calls)
+    await agent_chat_input.send_text(agent, "hallo omp-agent")
+    assert gated == [agent]
+    assert any("hallo omp-agent" in " ".join(c) for c in calls)
+    # Text und das absendende Enter sind ZWEI getrennte send-keys-Aufrufe —
+    # die Separate-Enter-Regel gilt fuer jeden Transportpfad einzeln.
+    assert calls[-1][-1] == "Enter"
+    assert "Enter" not in calls[-2]
+
+
+async def test_readiness_gate_uses_the_omp_pane_rules(monkeypatch):
+    """Der Kern des Befunds: derselbe Pane heisst fuer Claude ``unknown``
+    (-> 409) und fuer omp ``idle`` (-> durchlassen)."""
+    from app.services import agent_chat_input
+    from tests.test_omp_chat import PANE_IDLE
+
+    async def _capture(agent): return PANE_IDLE
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    omp_agent = _StubAgent(slug="omp-agent", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input._wait_for_send_readiness(omp_agent)  # kein Fehler
+
+    claude_agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="claude")
+    monkeypatch.setattr(agent_chat_input, "_SEND_READINESS_POLL_ATTEMPTS", 1)
+    monkeypatch.setattr(agent_chat_input, "_SEND_READINESS_POLL_INTERVAL_SECONDS", 0)
+    with pytest.raises(agent_chat_input.AgentStartingError):
+        await agent_chat_input._wait_for_send_readiness(claude_agent)
 
 
 async def test_effort_capabilities_host_without_claude_harness_gets_nothing():
@@ -2051,7 +2096,7 @@ async def test_post_chat_effort_409_agent_busy(auth_client: AsyncClient, make_ag
 
 async def test_post_chat_effort_409_switch_rejected_with_cli_message(auth_client: AsyncClient, make_agent, monkeypatch):
     """Distinct from effort_switch_failed: the CLI explicitly declined the
-    switch (live-verified on a container agent), and its own message text is surfaced
+    switch (live-verified on ein Container-Agent), and its own message text is surfaced
     so the UI can show the operator WHY."""
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
 

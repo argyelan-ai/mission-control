@@ -222,12 +222,6 @@ def effort_levels_for(harness: str | None) -> tuple[str, ...]:
     return _EFFORT_LEVELS_BY_HARNESS.get(harness or "", ())
 
 
-# Harnesses, deren Pane sich mit den Claude-Code-Regeln lesen laesst
-# (``pane_state.parse_pane_state``). Nur fuer die darf ein Zustands-Gate
-# ueberhaupt eine Aussage treffen — bei jeder anderen TUI waere jedes
-# Ergebnis ``unknown`` und damit eine Ablehnung ohne Erkenntnis.
-_PANE_READABLE_HARNESSES = frozenset(_EFFORT_LEVELS_BY_HARNESS)
-
 # Polling budget for _verify_effort_applied: a docker-exec capture-pane round
 # trip is fast (<100ms typically) but not instant, and the CLI needs a brief
 # moment to render its confirmation line after processing the /effort command.
@@ -255,7 +249,7 @@ class EffortSwitchRejectedError(Exception):
     """Raised when the CLI EXPLICITLY declined the switch (its own inline
     message says so) rather than the verification just timing out.
 
-    Root cause investigated live on a throwaway window on a container agent
+    Root cause investigated live on a throwaway window on mc-agent-alpha
     (2026-08-18): a real operator's `/effort low` was answered "Kept effort
     level as auto" instead of "Set effort level to low" — the switch
     genuinely did not apply. Reproducing the exact same command sequence
@@ -296,10 +290,14 @@ _BUSY_PANE_STATUSES = frozenset({"working", "permission_prompt"})
 # respawn's previous write, and an earlier ping lost entirely into a
 # still-booting CLI. ~20s at 1s steps mirrors the fleet's own boot/respawn
 # timing (docker_agent_sync's own window-ready wait is in the same range).
+# Harnesses mit einer eigenen Pane-Sonde (``transcript_adapters``). Nur fuer
+# sie darf das Bereitschafts-Tor unten laufen — ein Harness ohne Sonde liefert
+# fuer JEDEN Pane ``unknown`` und wuerde damit jede Nachricht ablehnen.
+
 _SEND_READINESS_POLL_ATTEMPTS = 20
 _SEND_READINESS_POLL_INTERVAL_SECONDS = 1.0
 
-# The CLI's own explicit-rejection wording (live-verified, container agent
+# The CLI's own explicit-rejection wording (live-verified, ein Container-Agent
 # 2026-08-18: "Kept effort level as auto") — distinct from its
 # apply-confirmation wording ("Set effort level to <level>"). Captures the
 # CLI's whole response line so the operator sees exactly what it said.
@@ -433,10 +431,16 @@ async def _wait_for_send_readiness(agent) -> None:
     resolves to ``"working"`` vs ``"idle"`` — and this gate treats both
     identically anyway, so the choice is moot here beyond staying
     consistent with the rest of the module."""
+    from app.services.transcript_adapters import adapter_for
+
+    # Die Pane-Regeln des jeweiligen Harness — Claude-Glyphen erkennen die
+    # omp-TUI nicht (und umgekehrt).
+    read_state = adapter_for(agent).parse_pane_state
+
     for _ in range(_SEND_READINESS_POLL_ATTEMPTS):
         pane = await capture_pane(agent)
         if pane is not None:
-            status = parse_pane_state(pane, transcript_active=False)["status"]
+            status = read_state(pane, False)["status"]
             if status != "unknown":
                 return
         await asyncio.sleep(_SEND_READINESS_POLL_INTERVAL_SECONDS)
@@ -470,23 +474,29 @@ async def send_text(agent, text: str) -> None:
     slug = agent.slug
 
     if kind == "docker":
+        from app.services.transcript_adapters import PANE_PROBED_HARNESSES
+
         await _touch_recycler_marker(slug)
-        if getattr(agent, "harness", None) in _PANE_READABLE_HARNESSES:
-            # Das Gate liest den Pane mit CLAUDE-Regeln (Prompt-Marker,
-            # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — der omp-Agent
+        if getattr(agent, "harness", None) in PANE_PROBED_HARNESSES:
+            # Das Tor liest den Pane mit den Regeln DIESES Harness. Solange es
+            # nur Claude-Regeln gab, erfuellte eine fremde TUI sie nie — der omp-Agent
             # war dadurch dauerhaft unerreichbar (jeder Send: 409
-            # agent_starting; Operator-Befund 19.08.2026). Fuer fremde
-            # Harnesses gilt wieder blindes Zustellen wie vor dem Gate: keine
-            # Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung.
+            # agent_starting; Operator-Befund 19.08.2026).
             #
-            # openclaude gehoert seit 19.08.2026 dazu: seine Marker sind
-            # nachweislich dieselben — am ECHTEN Pane eines openclaude-Agenten
-            # gegengeprueft (nur gelesen, nichts getippt), ``parse_pane_state``
-            # liefert dort ``idle``, und der Fuss zeigt ``⏵⏵ bypass
-            # permissions on`` bzw. ``esc to interrupt`` wie bei Claude Code.
-            # Damit greift der Schutz vor einem Send in eine noch bootende TUI
-            # auch hier, statt ihn ausgerechnet dem Harness zu verweigern, der
-            # ihn erfuellen kann.
+            # Wer das Tor bekommt, steht NICHT hier, sondern faellt mit der
+            # Adapter-Registrierung: ein Harness mit Adapter hat eine Sonde,
+            # also kann das Tor eine Aussage treffen. Zwei Runden hatten dafuer
+            # unabhaengig je eine eigene Liste gebaut (eine aus den
+            # Effort-Stufen abgeleitet — eine ANDERE Frage, eine handgepflegt);
+            # beim Zusammenfuehren liefen sie prompt auseinander.
+            #
+            # openclaude erfuellt die Claude-Marker nachweislich: am ECHTEN
+            # Pane eines openclaude-Agenten gegengeprueft (nur gelesen, nichts
+            # getippt) — ``parse_pane_state`` liefert dort ``idle``, der Fuss
+            # zeigt ``esc to interrupt`` wie bei Claude Code.
+            #
+            # Harnesses OHNE Adapter (kimi) bleiben aussen vor: keine Aussage
+            # ueber Bereitschaft ist besser als eine falsche Ablehnung.
             await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
@@ -565,7 +575,7 @@ async def set_effort(agent, level: str) -> None:
     inline confirmation before this returns success. Two distinct failure
     modes:
     - The CLI EXPLICITLY declined the switch (``"Kept effort level as
-      <X>"``, live-verified on a container agent — see ``EffortSwitchRejectedError``'s
+      <X>"``, live-verified on ein Container-Agent — see ``EffortSwitchRejectedError``'s
       docstring for the investigation) -> that error, immediately, carrying
       the CLI's own message. No Escape cleanup — the CLI already answered
       and left the pane in a normal ready state.
@@ -857,13 +867,13 @@ async def _verify_effort_applied(agent, level: str) -> bool:
             # for) — stop polling immediately rather than burning the rest
             # of the attempt budget waiting for a confirmation that will
             # never come. See EffortSwitchRejectedError's docstring for the
-            # live investigation behind this (container agent, 2026-08-18).
+            # live investigation behind this (ein Container-Agent, 2026-08-18).
             raise EffortSwitchRejectedError(rejected.group(0))
     return False
 
 
 # ALLOWED_EFFORT_LEVELS was empirically verified (Phase-0 discovery +
-# fix-round live reproduction attempts on a container agent) against this exact CLI
+# fix-round live reproduction attempts on ein Container-Agent) against this exact CLI
 # build. Deliberately NOT auto-re-probed on a version mismatch: /effort
 # argument commands persist to the agent's settings.json (see the module
 # docstring), so an unattended reprobe on every new CLI version would
