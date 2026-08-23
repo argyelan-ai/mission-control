@@ -75,13 +75,13 @@ describe("ChatOptionsSheet", () => {
     renderSheet({ onDetailLevelChange });
 
     expect(screen.getByRole("radio", { name: "Normal" })).toHaveAttribute("aria-checked", "true");
-    await user.click(screen.getByRole("radio", { name: "Ausführlich" }));
+    await user.click(screen.getByRole("radio", { name: "Verbose" }));
     expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
   });
 
   it("hides the detail level in terminal view — there is no timeline to filter", () => {
     renderSheet({ centerView: "terminal" });
-    expect(screen.queryByRole("radio", { name: "Kompakt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Compact" })).not.toBeInTheDocument();
   });
 
   it("closes on the explicit close button", async () => {
@@ -89,7 +89,7 @@ describe("ChatOptionsSheet", () => {
     const user = userEvent.setup();
     renderSheet({ onClose });
 
-    await user.click(screen.getByRole("button", { name: "Optionen schliessen" }));
+    await user.click(screen.getByRole("button", { name: "Close options" }));
     expect(onClose).toHaveBeenCalled();
   });
 });

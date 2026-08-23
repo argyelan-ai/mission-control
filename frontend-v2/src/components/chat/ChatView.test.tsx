@@ -15,13 +15,40 @@
  * verbatim move covered by its own future test surface / manual live-gate).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ChatView, buildTimelineItems, modelBadgeUuids, ACTIVITY_GROUP_MIN_SIZE } from "./ChatView";
+import {
+  ChatView,
+  buildTimelineItems,
+  modelBadgeUuids,
+  ACTIVITY_GROUP_MIN_SIZE,
+  headerSideReservation,
+  MOBILE_HEADER_METRICS,
+} from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
 import type { MessageEvent, ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// jsdom rechnet kein Layout — eine Trefferflaeche laesst sich hier nur ueber
+// die Klassen UND die dahinterliegende CSS-Regel festhalten. Darum lesen die
+// Kopfzeilen-Tests globals.css als Text mit.
+// (Nicht `new URL(..., import.meta.url)`: genau diese Form schreibt Vite in
+// eine Asset-URL um, die dann kein file:-Pfad mehr ist.)
+const GLOBALS_CSS = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../styles/globals.css"),
+  "utf-8"
+);
+
+/** Der sichtbare Kreis IM Knopf (der Knopf selbst ist die Trefferflaeche). */
+function circleOf(label: string): HTMLElement {
+  const el = screen.getByLabelText(label).firstElementChild;
+  if (!(el instanceof HTMLElement)) throw new Error(`kein Kreis in "${label}"`);
+  return el;
+}
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
 vi.mock("@/lib/api", () => ({
@@ -35,6 +62,17 @@ vi.mock("@/lib/api", () => ({
       setEffort: vi.fn().mockResolvedValue(undefined),
     },
   },
+}));
+// Die echte VoiceButton haengt an <VoiceProvider>, und der baut beim Mounten
+// einen LiveKit-Room auf — fuer einen Kopfzeilen-Test viel zu schwer. Der Stub
+// haelt genau das fest, was ChatView zu verantworten hat: dass auf dem Handy
+// ueberhaupt ein Zugang zur Sprachbedienung im Kopf steht.
+vi.mock("@/components/voice/VoiceWidget", () => ({
+  VoiceButton: () => (
+    <button type="button" aria-label="Start voice assistant">
+      mic
+    </button>
+  ),
 }));
 vi.mock("./TerminalPanel", async () => {
   const actual = await vi.importActual<typeof import("./TerminalPanel")>("./TerminalPanel");
@@ -331,7 +369,7 @@ describe("ChatView", () => {
 
     expect(screen.getByTestId("terminal-panel-stub")).toHaveTextContent("Terminal-Panel: Cody");
     expect(screen.queryByText("Hallo!")).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("Nachricht an den Agenten…")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Message the agent…")).not.toBeInTheDocument();
   });
 
   it("switching back to Chat calls onCenterViewChange('chat')", async () => {
@@ -347,13 +385,17 @@ describe("ChatView", () => {
   it("hides the detail-level switcher while in terminal mode", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView({ centerView: "terminal" });
-    expect(screen.queryByRole("button", { name: "Kompakt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
   });
 
   it("shows the detail-level switcher in chat mode", () => {
+    // Seit 19.08.2026 ist der Umschalter EIN Knopf mit Klappliste statt drei
+    // Segmenten (Operator-Wunsch, Kopfzeile entlasten). Die Stufen sind erst
+    // nach dem Klick da — die Abdeckung dafuer steht in
+    // "Desktop-Kopfzeile — Detailgrad eingeklappt".
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView({ centerView: "chat" });
-    expect(screen.getByRole("button", { name: "Kompakt" })).toBeInTheDocument();
+    expect(screen.getByTestId("detail-level-trigger")).toBeInTheDocument();
   });
 
   it("no-transcript agents force terminal mode and disable the Chat segment", () => {
@@ -433,7 +475,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onDetailLevelChange: onChange });
 
-    await user.click(screen.getByRole("button", { name: "Ausführlich" }));
+    await user.click(screen.getByTestId("detail-level-trigger"));
+    await user.click(screen.getByRole("option", { name: "Verbose" }));
     expect(onChange).toHaveBeenCalledWith("verbose");
   });
 
@@ -493,8 +536,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "Hi");
-    await user.click(screen.getByRole("button", { name: "Senden" }));
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "Hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
     expect(api.chat.sendText).toHaveBeenCalledWith("agent-1", "Hi");
   });
 
@@ -505,6 +548,207 @@ describe("ChatView", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]);
+  });
+
+  // Regression (Operator-Befund 20.08.2026): "wenn man den Chat wieder
+  // oeffnet, beginnt er ganz am Anfang des Gespraechs".
+  //
+  // Ursache war ein Wettlauf: Erst rendern nur die letzten 30 Eintraege, einen
+  // Frame spaeter mounten ALLE — oberhalb des Sichtfensters. Die Hoehe springt,
+  // `scrollTop` bleibt stehen, der Browser feuert dafuer ein Scroll-Ereignis,
+  // und `handleScroll` deutete das als "der Nutzer hat hochgescrollt" und
+  // schaltete das Mitlaufen ab. Danach sprang nichts mehr ans Ende.
+  //
+  // Die Regel lautet jetzt: Mitlaufen wird NUR durch eine echte Geste beendet.
+  // Hilfsmittel: die ResizeObserver-Rueckmeldung ist der reale "naechste
+  // Anlass", bei dem die Ansicht wieder ans Ende springt, wenn sie mitlaeuft.
+  function mitBeobachter(
+    fn: (el: HTMLElement, ausloesen: () => void, setzeHoehe: (h: number) => void) => void
+  ) {
+    const original = window.ResizeObserver;
+    const observed: Element[] = [];
+    let fire: (() => void) | null = null;
+    class Capturing {
+      constructor(cb: ResizeObserverCallback) {
+        fire = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe(el: Element) { observed.push(el); }
+      unobserve() {}
+      disconnect() {}
+    }
+    window.ResizeObserver = Capturing as unknown as typeof ResizeObserver;
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+      const el = observed[0] as HTMLElement;
+      Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
+      fn(el, () => fire!(), (h: number) =>
+        Object.defineProperty(el, "scrollHeight", { value: h, configurable: true })
+      );
+    } finally {
+      window.ResizeObserver = original;
+    }
+  }
+
+  it("bleibt am Ende, wenn der Inhalt oberhalb waechst (kein Nutzer-Scroll)", () => {
+    mitBeobachter((el, ausloesen, setzeHoehe) => {
+      // Genau der Umbruch — und zwar so, wie er im Browser wirklich aussieht:
+      // die HOEHE springt (hier 950 -> 6000), `scrollTop` bleibt stehen, der
+      // Browser feuert dafuer ein Scroll-Ereignis. OHNE Geste.
+      //
+      // Frueher stand hier stattdessen `el.scrollTop = 350` bei
+      // gleichbleibender Hoehe. Das ist aber das Bild einer verschobenen
+      // ANSICHT (Seitensuche, scrollIntoView), nicht das eines Layout-Umbruchs
+      // — die Nachstellung traf den Fehler also gar nicht.
+      setzeHoehe(950);
+      el.scrollTop = 350; // am Ende: 950 - 350 - 600 = 0
+      fireEvent.scroll(el);
+
+      setzeHoehe(6000);
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(6000);
+    });
+  });
+
+  // ── Loecher im ersten Anlauf (Review 20.08.2026) ───────────────────────────
+
+  it("ein Antippen im Verlauf ist keine Scroll-Absicht", () => {
+    mitBeobachter((el, ausloesen, setzeHoehe) => {
+      // Nachricht antippen zum Kopieren, "Mehr anzeigen", Fehlgriff: der erste
+      // Anlauf bewaffnete die Geste schon beim blossen Aufsetzen des Fingers
+      // (`onPointerDown`) und raeumte sie nur im `atBottom`-Zweig wieder ab.
+      // Einmal bewaffnet, galt der naechste layoutbedingte Scroll (spaetes
+      // Markdown-/Bild-/Schrift-Reflow) wieder als Geste — also genau der
+      // Fehler, den der Fix beheben sollte.
+      setzeHoehe(950);
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      fireEvent.pointerDown(el, { buttons: 1 });
+      fireEvent.pointerUp(el);
+
+      setzeHoehe(6000); // spaetes Reflow
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(6000);
+    });
+  });
+
+  it("ein Ziehen im Verlauf ist eine Scroll-Absicht", () => {
+    mitBeobachter((el, ausloesen) => {
+      // Die Rollbalken-Geste mit der Maus erzeugt weder `wheel` noch
+      // `touchmove` — nur gedrueckte Zeigerbewegung. Die muss weiterhin zaehlen.
+      fireEvent.pointerDown(el, { buttons: 1 });
+      fireEvent.pointerMove(el, { buttons: 1 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(350);
+    });
+  });
+
+  it("eine verschobene Ansicht ohne Geste beendet das Mitlaufen auch", () => {
+    mitBeobachter((el, ausloesen) => {
+      // Spiegelfall: Seitensuche im Browser, `scrollIntoView`, wiederhergestellte
+      // Scroll-Position. Kein Eingabegeraet meldet sich, die Hoehe bleibt
+      // gleich — trotzdem steht die Ansicht jetzt woanders. Wer sie beim
+      // naechsten Ereignis nach unten reisst, hat den Text weggezogen, den der
+      // Operator gerade liest.
+      el.scrollTop = 6000 - 600; // am Ende, Mitlaufen an
+      fireEvent.scroll(el);
+
+      el.scrollTop = 350; // Sprung nach oben, Hoehe UNVERAENDERT
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(350);
+    });
+  });
+
+  it("eine Geste ueberlebt den Nachlauf", () => {
+    // iOS scrollt nach dem Loslassen bis zu rund zwei Sekunden weiter, ohne
+    // dass ein weiteres Geraete-Ereignis kommt. Verfiele die Bewaffnung sofort,
+    // wuerde der Verlauf mitten im Nachlauf wieder ans Ende gerissen.
+    vi.useFakeTimers();
+    try {
+      mitBeobachter((el, ausloesen, setzeHoehe) => {
+        setzeHoehe(950);
+        el.scrollTop = 350;
+        fireEvent.scroll(el);
+
+        fireEvent.touchMove(el); // Wisch nach oben
+        setzeHoehe(6000);
+        el.scrollTop = 300;
+        fireEvent.scroll(el);
+
+        vi.advanceTimersByTime(800);
+        el.scrollTop = 250;
+        fireEvent.scroll(el); // Nachlauf, dieselbe Geste
+
+        ausloesen();
+        expect(el.scrollTop).toBe(250);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("eine Geste, auf die kein Scroll folgt, verfaellt", () => {
+    // Das eigentliche Leck: eine Geste, die NICHTS scrollt — Wisch am unteren
+    // Anschlag, Wisch auf einem nicht scrollenden Bereich. Sie bewaffnete das
+    // Flag, und weil kein Scroll-Ereignis folgte, raeumte auch der
+    // `atBottom`-Zweig es nie wieder ab. Das naechste Reflow, Minuten spaeter,
+    // erbte die Bewaffnung und schaltete das Mitlaufen ab.
+    vi.useFakeTimers();
+    try {
+      mitBeobachter((el, ausloesen, setzeHoehe) => {
+        setzeHoehe(950);
+        el.scrollTop = 350;
+        fireEvent.scroll(el); // am Ende, Mitlaufen an
+
+        fireEvent.wheel(el, { deltaY: -400 }); // Geste ohne Wirkung
+        vi.advanceTimersByTime(60_000);
+
+        setzeHoehe(6000); // spaetes Reflow
+        fireEvent.scroll(el);
+
+        ausloesen();
+        expect(el.scrollTop).toBe(6000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("beendet das Mitlaufen, wenn der Nutzer wirklich hochscrollt", () => {
+    mitBeobachter((el, ausloesen) => {
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(350);
+    });
+  });
+
+  it("nimmt das Mitlaufen wieder auf, wenn der Nutzer ans Ende zurueckkehrt", () => {
+    mitBeobachter((el, ausloesen) => {
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      // Zurueck ans Ende gescrollt — Geste gilt damit als beendet.
+      el.scrollTop = 6000 - 600;
+      fireEvent.scroll(el);
+
+      ausloesen();
+      expect(el.scrollTop).toBe(6000);
+    });
   });
 
   // Regression: the mobile stack keeps the off-screen pane mounted with
@@ -548,7 +792,7 @@ describe("ChatView", () => {
   it("shows no back chevron when the caller has no list to go back to (desktop)", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView();
-    expect(screen.queryByRole("button", { name: "Zurück zur Sessionliste" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to sessions" })).not.toBeInTheDocument();
   });
 
   it("the back chevron reports the intent to return to the list", async () => {
@@ -557,7 +801,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onBack });
 
-    await user.click(screen.getByRole("button", { name: "Zurück zur Sessionliste" }));
+    await user.click(screen.getByRole("button", { name: "Back to sessions" }));
     expect(onBack).toHaveBeenCalled();
   });
 
@@ -573,7 +817,7 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.queryByTestId("chat-options-sheet")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
+    await user.click(screen.getByRole("button", { name: "Chat options" }));
     expect(screen.getByTestId("chat-options-sheet")).toBeInTheDocument();
   });
 
@@ -582,7 +826,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ hasTranscript: false, centerView: "chat" });
 
-    await user.click(screen.getByRole("button", { name: "Chat-Optionen" }));
+    await user.click(screen.getByRole("button", { name: "Chat options" }));
     expect(screen.getByRole("radio", { name: /Chat/ })).toBeDisabled();
     expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
   });
@@ -605,8 +849,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "los gehts");
-    await user.click(screen.getByRole("button", { name: "Senden" }));
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "los gehts");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(sendResolved).toBe(true);
   });
@@ -618,8 +862,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "geht nicht");
-    await user.click(screen.getByRole("button", { name: "Senden" }));
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "geht nicht");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     // A bubble that outlived a failed send would claim a delivery that never
     // happened — worse than the delay it was meant to hide.
@@ -665,7 +909,7 @@ describe("ChatView", () => {
     );
     renderChatView();
 
-    expect(screen.queryByText("Noch keine Nachrichten")).not.toBeInTheDocument();
+    expect(screen.queryByText("No messages yet")).not.toBeInTheDocument();
     expect(screen.getByTestId("echo-bubble")).toBeInTheDocument();
   });
 
@@ -754,7 +998,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "start doch");
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "start doch");
     await user.click(screen.getByTestId("send-button"));
 
     await waitFor(() => expect(echoAgentStarting).toHaveBeenCalled());
@@ -774,7 +1018,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView();
 
-    await user.type(screen.getByPlaceholderText("Nachricht an den Agenten…"), "nochmal");
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "nochmal");
     await user.click(screen.getByTestId("send-button"));
     await waitFor(() => expect(retryFn).not.toBeNull());
 
@@ -887,14 +1131,14 @@ describe("ChatView", () => {
     mockUseChatStream.mockReturnValue(mkStream({ loading: true }));
     renderChatView();
     expect(screen.getByTestId("timeline-skeleton")).toBeInTheDocument();
-    expect(screen.getByText("Transkript wird geladen…")).toBeInTheDocument();
+    expect(screen.getByText("Loading transcript…")).toBeInTheDocument();
   });
 
   it("names both ways forward in the empty state instead of just reporting emptiness", () => {
     mockUseChatStream.mockReturnValue(mkStream({ loading: false }));
     renderChatView();
-    expect(screen.getByText("Noch keine Nachrichten")).toBeInTheDocument();
-    expect(screen.getByText(/Schreib unten die erste Nachricht an Cody/)).toBeInTheDocument();
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
+    expect(screen.getByText(/Write the first message to Cody/)).toBeInTheDocument();
     expect(screen.queryByTestId("timeline-skeleton")).not.toBeInTheDocument();
   });
 
@@ -917,6 +1161,300 @@ describe("ChatView", () => {
         onCenterViewChange={noop}
       />
     );
-    expect(screen.getByText("Wähle eine Session in der Seitenleiste.")).toBeInTheDocument();
+    expect(screen.getByText("Pick a session in the sidebar.")).toBeInTheDocument();
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Handy-Kopfzeile — mittiger Name, runde Knöpfe (19.08.2026)
+  // ══════════════════════════════════════════════════════════════════════════
+
+
+  describe("Desktop-Kopfzeile — Detailgrad eingeklappt", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("zeigt statt drei Segmenten einen Knopf mit dem aktuellen Wert", () => {
+      // Operator-Wunsch 19.08.2026: "diese viele buttons und switche rechts
+      // oben irgendwie verpacken". Der Detailgrad wird einmal eingestellt und
+      // selten angefasst — Chat/Terminal dagegen staendig, das bleibt offen.
+      renderChatView({ detailLevel: "normal" });
+      const trigger = screen.getByTestId("detail-level-trigger");
+      expect(trigger.textContent).toContain("Normal");
+      // Die anderen Stufen sind erst nach dem Klick da.
+      expect(screen.queryByRole("option", { name: "Compact" })).toBeNull();
+    });
+
+    it("beschriftet Knopf und Liste aus dem Katalog, nicht deutsch fest verdrahtet", async () => {
+      // Der Review-Befund zu PR #331: `aria-label="Detailgrad"` stand deutsch
+      // in der englischen Standard-Oberflaeche. Vorleseprogramme lesen genau
+      // dieses Label vor — es muss durch t() laufen wie jeder andere UI-Text
+      // (docs/i18n.md). Der Test rendert gegen messages/en.json.
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "verbose" });
+
+      expect(screen.getByTestId("detail-level-trigger")).toHaveAttribute(
+        "aria-label",
+        "Detail level: Verbose"
+      );
+      await user.click(screen.getByTestId("detail-level-trigger"));
+      expect(screen.getByRole("listbox")).toHaveAttribute("aria-label", "Detail level");
+    });
+
+    it("oeffnet die Liste erst auf Klick und meldet die Wahl", async () => {
+      const onDetailLevelChange = vi.fn();
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "normal", onDetailLevelChange });
+
+      await user.click(screen.getByTestId("detail-level-trigger"));
+      await user.click(screen.getByRole("option", { name: "Verbose" }));
+
+      expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
+    });
+
+    it("markiert die aktive Stufe fuer Vorleseprogramme", async () => {
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "compact" });
+
+      await user.click(screen.getByTestId("detail-level-trigger"));
+
+      expect(screen.getByRole("option", { name: "Compact" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("option", { name: "Normal" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("lässt den Hover der Einträge wirklich durch", async () => {
+      // Inline-Stil schlaegt jede Klasse, auch `hover:`. Mit
+      // `backgroundColor: "transparent"` an jedem Eintrag war
+      // `hover:bg-[var(--color-bg-hover)]` ein Nichts — im Browser
+      // gegengeprueft: gehovert meldet getComputedStyle rgba(0,0,0,0) statt
+      // der Hover-Farbe, ohne Inline-Stil dagegen die Farbe.
+      // jsdom rechnet keine Kaskade, also wird hier die URSACHE geprueft:
+      // nicht gewaehlte Eintraege tragen gar keine Inline-Flaeche.
+      const user = userEvent.setup();
+      renderChatView({ detailLevel: "normal" });
+      await user.click(screen.getByTestId("detail-level-trigger"));
+
+      const gewaehlt = screen.getByRole("option", { name: "Normal" });
+      const andere = screen.getByRole("option", { name: "Compact" });
+      expect(andere.style.backgroundColor).toBe("");
+      // Die Auswahl muss dagegen immer sichtbar bleiben.
+      expect(gewaehlt.style.backgroundColor).not.toBe("");
+    });
+
+    it("gibt es im Terminal-Modus gar nicht", () => {
+      // Der Detailgrad betrifft nur die geparste Chat-Ansicht.
+      renderChatView({ centerView: "terminal" });
+      expect(screen.queryByTestId("detail-level-trigger")).toBeNull();
+    });
+
+    it("laesst Chat/Terminal sichtbar", () => {
+      renderChatView({});
+      expect(screen.getByRole("button", { name: "Terminal" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+    });
+  });
+
+  // Reine Rechenfunktion — hier prueft der Test WIRKUNG, nicht Klassennamen.
+  // jsdom rechnet kein Layout, aber diese Zahlen entscheiden ueber die
+  // Ueberdeckung, und sie sind ohne Browser pruefbar.
+  describe("Handy: Home-Balken", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("hält den Streifen auch im Terminal-Modus frei", () => {
+      // Die Tab-Leiste trug `paddingBottom: env(safe-area-inset-bottom)`.
+      // `mobileChromeless` nimmt sie weg, und der Ausgleich ging nur an den
+      // Composer — im Terminal-Modus rendert ChatView aber gar keinen
+      // Composer. Betrifft auch jeden Agenten ohne Transkript (Hermes/Jarvis
+      // erzwingen Terminal ueber `canChat`): die unterste Zeile lag unter dem
+      // Home-Balken.
+      renderChatView({ centerView: "terminal" });
+      const box = screen.getByTestId("terminal-safe-area");
+      expect(box.className).toContain("pb-safe-bottom");
+    });
+
+    it("und `pb-safe-bottom` reserviert wirklich den Systemstreifen", () => {
+      // Zweite Haelfte: ohne sie koennte die Klasse ein leerer Name sein.
+      // Der Zuschlag muss auf `env(safe-area-inset-bottom)` liegen und nur
+      // auf dem Handy gelten — auf dem Desktop gibt es keinen Home-Balken.
+      const mobileBlock = GLOBALS_CSS.split("@media (max-width: 767px)")
+        .find((chunk) => chunk.includes(".pb-safe-bottom"));
+      expect(mobileBlock).toBeDefined();
+      expect(mobileBlock).toMatch(/padding-bottom:\s*calc\(env\(safe-area-inset-bottom\)/);
+    });
+  });
+
+  describe("Handy-Kopfzeile — Platz fuer den Titel", () => {
+    const M = MOBILE_HEADER_METRICS;
+
+    it("reserviert rechts so viel, wie die Knopfgruppe wirklich braucht", () => {
+      // Vorher stand dort pauschal px-14 (56px). Im Browser gemessen
+      // (390x844): die rechte Gruppe belegt mit dem Abzeichen "beendet"
+      // 152px — die Aufgaben-Zeile lief 50px in sie hinein, und das Abzeichen
+      // hat `relative z-10` samt deckendem Hintergrund, malte also ueber den
+      // Namen.
+      const r = headerSideReservation({ hasBack: true, badge: "ended" });
+      expect(r.right).toBe(
+        M.headerPaddingRight + M.control + M.gap + M.control + M.gap + M.badgeEnded
+      );
+      expect(r.right).toBe(152);
+      expect(r.right).toBeGreaterThan(56);
+    });
+
+    it("gibt den Platz wieder frei, wenn das Abzeichen schrumpft", () => {
+      const ended = headerSideReservation({ hasBack: true, badge: "ended" });
+      const dot = headerSideReservation({ hasBack: true, badge: "dot" });
+      const none = headerSideReservation({ hasBack: true, badge: "none" });
+      expect(dot.right).toBeLessThan(ended.right);
+      expect(none.right).toBeLessThan(dot.right);
+      // Ohne Abzeichen bleiben genau Mikrofon + "…" plus Polster.
+      expect(none.right).toBe(M.headerPaddingRight + M.control + M.gap + M.control);
+    });
+
+    it("reserviert links nur, was der Zurück-Pfeil braucht", () => {
+      expect(headerSideReservation({ hasBack: true, badge: "none" }).left).toBe(
+        M.headerPaddingLeft + M.control
+      );
+      expect(headerSideReservation({ hasBack: false, badge: "none" }).left).toBe(
+        M.headerPaddingLeft
+      );
+    });
+
+    it("lässt auf einem 390px-Telefon im schlimmsten Fall noch Text übrig", () => {
+      // Der schlimmste Fall ist "beendet" + Zurück-Pfeil. Bliebe hier nichts
+      // uebrig, waere die Reservierung zwar ueberdeckungsfrei, aber nutzlos —
+      // der Name waere auf ein Ellipsen-Zeichen zusammengeschnitten.
+      const r = headerSideReservation({ hasBack: true, badge: "ended" });
+      expect(390 - r.left - r.right).toBeGreaterThanOrEqual(180);
+    });
+  });
+
+  // ACHTUNG, Reichweite dieser Gruppe: jsdom rechnet KEIN Layout. Was hier
+  // steht, prueft den Aufbau — welche Klasse an welchem Element haengt, und
+  // (wo es geht) dass die zugehoerige Regel in globals.css wirklich das tut,
+  // was ihr Name verspricht. Was diese Tests NICHT sehen koennen: ob am Ende
+  // etwas etwas anderes ueberdeckt, wie hoch der Kopf wirklich ist, oder ob
+  // eine Kaskade eine Klasse aussticht.
+  //
+  // Genau dafuer gibt es zwei Ergaenzungen: die Gruppe "Platz fuer den Titel"
+  // weiter oben prueft die Ueberdeckung als reine Rechenfunktion, und die
+  // Zahlen darin sind in Chromium (390x844) nachgemessen und in den Kommentaren
+  // festgehalten. Wer hier etwas Sichtbares aendert, misst nach — gruene Tests
+  // in dieser Gruppe sind kein Beweis fuer das Aussehen.
+  describe("Handy-Kopfzeile — Aufbau (kein Layout-Beweis)", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("legt den Namen in einen eigenen Block, der aus dem Fluss genommen ist", () => {
+      renderChatView({ onBack: vi.fn() });
+      const title = screen.getByTestId("chat-header-title");
+      // Absolut, damit die Knopfgruppen seine Position nicht verschieben; die
+      // Zentrierung traegt `items-center` (siehe eigener Test).
+      expect(title.className).toContain("absolute");
+      expect(title.className).toContain("items-center");
+      // `text-center` stand hier frueher — tote Klasse: die beiden Spannen
+      // sind `whitespace`-frei umbruchlos und schrumpfen auf ihren Inhalt,
+      // eine Textausrichtung hat daran nichts auszurichten (nachgemessen).
+      expect(title.className).not.toContain("text-center");
+    });
+
+    it("hält oben den Notch frei, weil keine App-Leiste mehr darüber liegt", () => {
+      renderChatView({ onBack: vi.fn() });
+      const header = screen.getByTestId("chat-header");
+      expect(header.className).toContain("pt-safe-top");
+      // Zweite Haelfte, sonst prueft der Test nur, dass eine Zeichenkette in
+      // einem Attribut steht: die Klasse muss es in globals.css auch geben,
+      // sie muss auf `env(safe-area-inset-top)` liegen, und sie darf nur
+      // unterhalb von md gelten (ueber md gibt es keinen Notch).
+      const mobileBlock = GLOBALS_CSS.split("@media (max-width: 767px)")
+        .find((chunk) => chunk.includes(".pt-safe-top"));
+      expect(mobileBlock).toBeDefined();
+      expect(mobileBlock).toMatch(/padding-top:\s*calc\(env\(safe-area-inset-top\)/);
+    });
+
+    it("gibt Zurück und Optionen eine runde Form", () => {
+      renderChatView({ onBack: vi.fn() });
+      // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
+      // der ist die (groessere, unsichtbare) Trefferflaeche, siehe unten.
+      expect(circleOf("Back to sessions").className).toContain("rounded-full");
+      expect(circleOf("Chat options").className).toContain("rounded-full");
+    });
+
+    it("gibt beiden Knöpfen eine Trefferfläche von mindestens 44px", () => {
+      // DESIGN.md („Mobile-Disziplin: Touch-Targets ≥44px", WCAG 2.5.5). Beim
+      // Umbau auf runde Knoepfe waren beide auf 36px geschrumpft — das ist die
+      // taegliche Bedienung des Betreibers auf dem Telefon.
+      // Der sichtbare Kreis darf klein bleiben (36px), die Trefferflaeche des
+      // <button> nicht: `min-w-touch`/`min-h-touch` sind die WCAG-Utilities
+      // aus globals.css, der Kreis liegt als Kind mittig darin.
+      renderChatView({ onBack: vi.fn() });
+      for (const label of ["Back to sessions", "Chat options"]) {
+        const btn = screen.getByLabelText(label);
+        expect(btn.className).toContain("min-w-touch");
+        expect(btn.className).toContain("min-h-touch");
+      }
+      // Zweite Haelfte der Zusicherung: die Utility muss auch wirklich 44px
+      // sein. Ohne diese Zeile koennte jemand `.min-h-touch` auf 36px setzen
+      // und alle Klassen-Pruefungen blieben gruen.
+      expect(GLOBALS_CSS).toMatch(/\.min-h-touch\s*\{\s*min-height:\s*44px/);
+      expect(GLOBALS_CSS).toMatch(/\.min-w-touch\s*\{\s*min-width:\s*44px/);
+    });
+
+    it("macht den Kopf durch die grössere Trefferfläche nicht höher", () => {
+      // Die 44px ragen ueber `-m-1` (je 4px) in die Polsterung der Kopfzeile
+      // hinein: Aussenmass bleibt 36px, der Kopf also
+      // safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem.
+      // Genau diesen Wert fuehrt --mobile-chat-topbar-h, und daran haengen die
+      // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
+      // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
+      renderChatView({ onBack: vi.fn() });
+      for (const label of ["Back to sessions", "Chat options"]) {
+        expect(screen.getByLabelText(label).className).toContain("-m-1");
+      }
+      expect(GLOBALS_CSS).toContain(
+        "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem)"
+      );
+    });
+
+    it("zentriert den Namen NUR auf dem Handy, nicht auf dem Desktop", () => {
+      // Operator-Befund 19.08.2026 (Screenshot): auf dem Desktop stand "Boss"
+      // weiterhin mittig. Der Test prueft jetzt den MECHANISMUS, der die
+      // Zentrierung wirklich traegt: auf dem Handy ist der Block eine Spalte
+      // mit `items-center`, ab md eine Zeile mit `md:items-baseline`.
+      //
+      // Frueher stand hier `justify-center`. Das war eine tote Klasse — im
+      // Browser nachgemessen (390x844): mit und ohne sie sitzt der Name bei
+      // exakt x=120.4/w=149.2. Der Block ist `absolute` ohne `top`/`bottom`,
+      // seine Hoehe ergibt sich aus dem Inhalt, es gibt nichts zu verteilen.
+      // Der Test waere also rot geworden, sobald jemand richtig aufgeraeumt
+      // haette.
+      renderChatView({ onBack: vi.fn() });
+      const title = screen.getByTestId("chat-header-title");
+      expect(title.className).toContain("items-center");
+      expect(title.className).toContain("md:items-baseline");
+      expect(title.className).not.toContain("justify-center");
+    });
+
+    it("behält auf dem Handy einen Zugang zur Sprachbedienung", () => {
+      // Der Chat-Schirm blendet die App-Leiste aus (AppShell `mobileChromeless`),
+      // und deren Knopf war der EINZIGE Zugang zur Sprachbedienung auf dem
+      // Handy — Sidebar ist `hidden md:flex`, ein Tastenkuerzel gibt es nicht.
+      // Ohne Ersatz war die Sprachbedienung auf dem Telefon schlicht weg.
+      renderChatView({ onBack: vi.fn() });
+      const mic = screen.getByLabelText("Start voice assistant");
+      expect(mic).toBeInTheDocument();
+      // Nur auf dem Handy: auf dem Desktop steht der Knopf in der Sidebar,
+      // zweimal derselbe Schalter waere ein Duplikat im Dokument.
+      expect(mic.parentElement?.className).toContain("md:hidden");
+    });
+
+    it("zeigt die Aufgaben-Zeile mittig unter dem Namen", () => {
+      renderChatView({ onBack: vi.fn(), contextLine: "Login reparieren" });
+      const title = screen.getByTestId("chat-header-title");
+      expect(title.textContent).toContain("Login reparieren");
+    });
+  });
+
 });
