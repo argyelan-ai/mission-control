@@ -175,7 +175,8 @@ touch_recycler_marker() {
 # + Marker-Touch bei state=working), aber ein Chat-Turn (comm_v2-Nudge/Message,
 # Sessions-Chat-Eingabe) lief voellig unsichtbar fuer den Recycler — der killte
 # Agenten mitten im Turn, sobald sie vorher >= RECYCLER_IDLE_MIN untaetig waren
-# (Live-Beleg Gruppenlauf 22.08.: Davinci/Rex-Kill 2s nach ihrem Suchergebnis).
+# (Live-Beleg Gruppenlauf 22.08.: zwei Sprecher wurden 2s nach ihrem
+# Suchergebnis gekillt — der Turn war noch nicht fertig.)
 #
 # Bewusst SELBSTBEGRENZEND, damit der Recycler seinen Zweck behaelt (Speicher-
 # Hygiene): getoucht wird NUR solange detect_turn_state wirklich "working"

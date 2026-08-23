@@ -5,7 +5,8 @@ recycler.sh misst "untaetig" ausschliesslich an der mtime von
 Marker NUR im Board-Task-Pfad (run_task + state=working) — eine comm_v2-
 Zustellung (Nudge, Message-Flush, Kommentare) startete einen Turn ohne jedes
 Aktivitaets-Signal. Folge: Agenten wurden mitten im Chat-Turn gekillt
-(Live-Beleg Gruppenlauf 22.08.: Davinci/Rex-Kill 2s nach dem Suchergebnis).
+(Live-Beleg Gruppenlauf 22.08.: zwei Sprecher wurden 2s nach ihrem
+Suchergebnis gekillt, ein dritter kam mit schnellerem Werkzeug durch.)
 
 Der Fix ist bewusst SELBSTBEGRENZEND — das unterscheidet ihn vom (falschen)
 naiven Weg "Marker bei jeder Nachricht anfassen", der den Recycler dauerhaft
@@ -138,7 +139,7 @@ def test_nudge_paste_touches_marker(tmp_path):
 
     Ohne den Touch startet der Chat-Turn mit der alten Idle-Zeit — war der
     Agent vorher >= RECYCLER_IDLE_MIN untaetig, killt der Recycler ihn
-    Sekunden nach dem Nudge (Davinci 09:20:44, Rex 09:20:46 am 22.08.).
+    Sekunden nach dem Nudge (gemessen 09:20:44 und 09:20:46 am 22.08.).
     """
     work = _make_workspace(tmp_path)
     resp = _resp(_msg(5)).replace('"', '\\"')
