@@ -129,6 +129,108 @@ _LOCAL_COMMAND_STDERR_RE = re.compile(
 )
 
 
+# Teamkollegen-Nachricht (Operator-Befund 19.08.2026): Startet ein Agent
+# Subagenten, schreibt Claude Code deren Rueckmeldungen als gewoehnliche
+# USER-Turns ins Transkript. Der Chat zeigte sie darum als Nachrichten des
+# Operators an — inklusive eines langen Sicherheits-Hinweises, der sich an das
+# MODELL richtet und in jeder solchen Nachricht identisch ist.
+#
+# Bewusst ENG gefasst: der Text muss AB SEINEM ANFANG den Umschlag tragen
+# (eine Einleitungszeile davor ist erlaubt, aber nicht noetig). Eine echte
+# Nachricht, die zufaellig ueber Teamkollegen spricht, darf nicht still
+# verschwinden.
+#
+# Warum der Anker am UMSCHLAG haengt und nicht an der Einleitungszeile: live
+# nachgezaehlt (19.08.2026, 610 echte Turns) beginnen 5 Turns direkt mit
+# ``<teammate-message …>``, ganz ohne Prosa-Vorspann — die landeten vorher als
+# rechtsbuendige Blase, die der Operator nie getippt hat. Ausserdem ist die
+# Prosa Text von Claude Code selbst und aendert sich ohne Ankuendigung.
+_TEAMMATE_INTRO_RE = re.compile(r"^Another Claude session sent a message:[ \t]*\n?")
+_TEAMMATE_OPEN_RE = re.compile(r"<teammate-message(?P<attrs>[^>]*)>")
+_TEAMMATE_CLOSE_TAG = "</teammate-message>"
+# Auf Wort-/Zeichengrenze verankert: ohne den Vorlauf fand ``search`` in
+# ``from_teammate_id="spoof" teammate_id="real"`` zuerst ``spoof`` und schrieb
+# die Kachel dem falschen Absender zu.
+_TEAMMATE_ID_RE = re.compile(r'(?:^|\s)teammate_id="(?P<id>[^"]*)"')
+
+
+def _parse_teammate_message(
+    text: str, msg_uuid: str, ts: str, sidechain: bool
+) -> list[dict[str, Any]] | None:
+    """Erkennt eingespeiste Teamkollegen-Nachrichten und macht daraus Ereignisse
+    mit eigener Rolle — EINES JE UMSCHLAG. ``None`` = keine solche Nachricht,
+    der Aufrufer behandelt die Zeile normal weiter.
+
+    Behalten wird, was der Operator wissen will: WER geschrieben hat und WAS.
+    Der Boilerplate-Absatz dahinter faellt weg — er ist Anweisung an das Modell,
+    kein Gespraechsinhalt, und in jeder Nachricht identisch.
+
+    Zwei teuer bezahlte Details:
+
+    * **Ein Ereignis je Block.** Claude Code buendelt mehrere Rueckmeldungen
+      unter EINER Einleitungszeile — live 62 von 610 Turns, Spitzenwert 41
+      Bloecke. Das fruehere lazy ``(?P<payload>.*?)`` stoppte am ersten
+      Schluss-Tag und ersetzte den ganzen Turn durch ein Ereignis mit nur
+      dieser ersten Nutzlast: alles danach war still geloescht.
+    * **``find`` statt Rueckverfolgung.** Der Scan laeuft hier synchron auf dem
+      asyncio-Loop (``ChatTailerManager._run``) und blockiert damit alle
+      anderen Tailer mit. Ein Subagenten-Bericht ist gut und gern hunderte KB;
+      gemessen kostete das lazy Muster dort 9,4 ms je Zeile, ``str.find`` plus
+      Slicing 0,02 ms."""
+    pos = 0
+    intro = _TEAMMATE_INTRO_RE.match(text)
+    if intro is not None:
+        pos = intro.end()
+    # Ab hier MUSS der Umschlag stehen — nur fuehrender Leerraum davor. Damit
+    # bleibt die Erkennung eng: wer ueber die Zeichenfolge schreibt, statt sie
+    # als Umschlag zu fuehren, bekommt keine Kachel.
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+
+    events: list[dict[str, Any]] = []
+    while True:
+        open_m = _TEAMMATE_OPEN_RE.match(text, pos)
+        if open_m is None:
+            break
+        attrs = open_m.group("attrs") or ""
+        id_match = _TEAMMATE_ID_RE.search(attrs)
+        if attrs.endswith("/"):
+            # Selbstschliessend: kein Inhalt, aber sicher nicht der Operator.
+            payload = ""
+            pos = open_m.end()
+        else:
+            close = text.find(_TEAMMATE_CLOSE_TAG, open_m.end())
+            if close == -1:
+                # Abgeschnittene Zeile. Der Umschlag ist da, also gehoert der
+                # Rest dem Teamkollegen — lieber vollstaendig als Kachel zeigen
+                # als faelschlich als Nachricht des Operators.
+                payload = text[open_m.end() :]
+                pos = len(text)
+            else:
+                payload = text[open_m.end() : close]
+                pos = close + len(_TEAMMATE_CLOSE_TAG)
+        events.append(
+            {
+                "kind": "message",
+                # Eigene, stabile uuid je Block: ``seen_uuids`` (Dedup) und der
+                # React-Key im Verlauf wuerfen Geschwister mit gleicher uuid
+                # sonst wieder weg. Der erste Block behaelt die Zeilen-uuid,
+                # damit alles, was sie schon referenziert, unveraendert passt.
+                "uuid": msg_uuid if not events else f"{msg_uuid}#tm{len(events)}",
+                "ts": ts,
+                "role": "teammate",
+                "teammate": id_match.group("id") if id_match else None,
+                "text": payload.strip(),
+                "model": None,
+                "sidechain": sidechain,
+            }
+        )
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+
+    return events or None
+
+
 def _parse_local_command_wrapper(
     text: str, msg_uuid: str, ts: str, parent_uuid: str | None
 ) -> list[dict[str, Any]] | None:
@@ -311,7 +413,10 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
             text = block.get("text")
             if text is None:
                 continue
-            if text.startswith("/") and "\n" not in text:
+            teammate_evs = _parse_teammate_message(text, msg_uuid, ts, sidechain)
+            if teammate_evs is not None:
+                events.extend(teammate_evs)
+            elif text.startswith("/") and "\n" not in text:
                 events.append(
                     {
                         "kind": "command",

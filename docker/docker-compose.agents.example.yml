@@ -1,0 +1,118 @@
+# docker/docker-compose.agents.example.yml
+#
+# VORLAGE für die eigene Agenten-Flotte — enthält bewusst KEINE Agenten.
+#
+# `./setup.sh` kopiert diese Datei nach `docker/docker-compose.agents.yml`,
+# falls die dort noch nicht existiert (`scripts/start-all.sh` springt bei
+# jedem Start nochmal ein, falls sie doch fehlt).
+# Ab dann gehört die Kopie DIR: Mission Control trägt jeden Agenten, den du
+# in der Oberfläche anlegst, selbst dort ein (siehe
+# `backend/app/services/compose_renderer.py`). Die Kopie ist deshalb aus der
+# Versionsverwaltung ausgenommen (`.gitignore`) — sie beschreibt deine
+# Maschine, nicht das Projekt.
+#
+# Warum das getrennt ist: Diese Datei wird zur Laufzeit fortgeschrieben. Läge
+# sie in der Versionsverwaltung, würde jeder Commit die Flotte ihres Autors
+# mitveröffentlichen — Agentennamen, Kunden-/Projektbezüge, Mount-Pfade.
+#
+# Du musst hier nichts von Hand eintragen. Lege Agenten in der Oberfläche an.
+#
+# ── Was ein Agent bekommt (Mount-Layout, ADR-022) ────────────────────────
+#   /workspace          rw  → ~/.mc/workspaces/<slug>/      Arbeitszone
+#   /deliverables       rw  → ~/.mc/deliverables/<slug>/     Ergebnis-Ablage
+#   /home/agent/.claude rw  → ~/.mc/agents/<slug>/claude-config/   CLI-Config
+#   /mc-servers         ro  → ~/.mc/mcp-servers/             MCP-Server
+#   /vault              rw  → ~/.mc/vault/                   gemeinsames Wissen
+#
+# ── Zugangsdaten ─────────────────────────────────────────────────────────
+#   CLAUDE_CODE_OAUTH_TOKEN  Anthropic-OAuth (`claude setup-token`) → root .env
+#   MC_TOKEN_<SLUG>          pro Agent, aus dem Vault → docker/.env.agents
+#   GH_TOKEN                 GitHub, optional → root .env
+#   Beide .env-Dateien erzeugt `scripts/start-all.sh`.
+
+# ── Vier Vorlagen, eine je Harness ───────────────────────────────────────
+# Jeder Agenten-Block erbt eine davon (`<<: *claude-agent-base`). Welche,
+# entscheidet Mission Control anhand des Harness, das du dem Agenten gibst.
+
+# Die beiden veroeffentlichten Images kommen per Default aus der Registry —
+# genau wie `compose_renderer._agent_image()` sie schreibt. Ein Agent, der hier
+# kein eigenes `image:` bekommt, erbt seinen Namen ueber `<<: *anchor`; stuende
+# hier ein nackter Name, suchte docker einen Tag, den es in keiner Registry
+# gibt (`pull access denied`). Entwicklermodus: `MC_AGENT_IMAGE_PREFIX=` (leer)
+# in der `.env` → nackte lokale Namen. Siehe `.env.example`.
+
+# Claude Code (Anthropic-Protokoll, OAuth)
+x-claude-agent-base: &claude-agent-base
+  image: "${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}mc-claude-agent:${MC_AGENT_IMAGE_TAG:-latest}"
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  # env_file laedt docker/.env.shared IMMER — auch bei ad-hoc `docker compose
+  # up` ohne --env-file flags. Verhindert silent CLAUDE_CODE_OAUTH_TOKEN=
+  # <EMPTY> Container-Erstellung. .env.shared wird von start-all.sh aus root
+  # .env generiert (nur Agent-relevante globale Tokens, keine DB-/Backend-
+  # Secrets). PFAD ist relativ zum project-directory (= cwd des compose
+  # call). Siehe SKILL mc-container-lifecycle.
+  env_file:
+    - docker/.env.shared
+
+# OpenClaude (OpenAI-kompatible Anbieter, z. B. lokale Modelle)
+x-openclaude-agent-base: &openclaude-agent-base
+  image: "${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}mc-agent-base:${MC_AGENT_IMAGE_TAG:-latest}"
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  # docker/.env.shared brings TAVILY_API_KEY (used by openclaude 0.7+ built-in
+  # WebSearch adapter), GH_TOKEN, etc. — same source as the Anthropic fleet.
+  env_file:
+    - docker/.env.shared
+  environment:
+    - CLAUDE_CODE_USE_OPENAI=1
+    # Nur fuer Ollama Cloud als Anbieter (mc-agent-base aktiviert den Zweig,
+    # wenn die Variable gesetzt ist — docker/mc-agent-base/Dockerfile). Der
+    # leere Default ist wichtig: ohne ihn warnt JEDER compose-Aufruf auf einer
+    # frischen Installation. Wer Ollama Cloud nutzt, traegt den Schluessel in
+    # der `.env` ein (siehe `.env.example`).
+    - OLLAMA_API_KEY=${OLLAMA_API_KEY:-}
+
+# omp (ADR-045) — headless. Fenster 0 fährt `bridge.py --serve`, keine
+# interaktive Oberflaeche. Spricht OpenAI-Completions direkt.
+# Nackter Name mit Absicht: omp und kimi sind arm64-gepinnt und werden nie
+# veroeffentlicht — ein Registry-Prefix schickte compose auf einen Pull, der
+# nur scheitern kann.
+x-omp-agent-base: &omp-agent-base
+  image: mc-omp-agent:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  env_file:
+    - docker/.env.shared
+
+# Kimi Code — tmux+poll.sh wie claude, Binary `kimi`, Moonshot-OAuth als
+# Datei-Grant im per-Agent kimi-config-Mount (kein Env-Token, siehe
+# docker/mc-kimi-agent/Dockerfile).
+x-kimi-agent-base: &kimi-agent-base
+  image: mc-kimi-agent:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  env_file:
+    - docker/.env.shared
+
+# Hier stehen nach dem ersten Agenten deine eigenen Blöcke — von Mission
+# Control eingetragen, nicht von Hand. Die leere Abbildung darunter hält die
+# Datei bis dahin gültig (ein blankes `services:` ohne Klammern wäre ungültiges
+# Compose). Der Renderer ersetzt sie beim ersten Eintrag und legt sie zurück,
+# sobald der letzte Agent wieder gelöscht ist.
+services: {}
+
+networks:
+  mission-control_default:
+    external: true  # Created by main docker-compose.yml — start main stack first: docker compose up -d
+
+volumes:
+  # Shared volume mit mc-playwright Screenshots (rw vom mc-playwright,
+  # ro fuer Worker-Agents). Wird vom main docker-compose.yml erstellt.
+  mc_shared_deliverables:
+    external: true
+    name: mission-control_mc_shared_deliverables
