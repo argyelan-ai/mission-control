@@ -23,6 +23,7 @@ import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { GroupRow } from "@/components/groupchat/GroupRow";
+import { ArchivedGroupsSection } from "@/components/groupchat/ArchivedGroupsSection";
 import { AvatarStack } from "@/components/groupchat/AvatarStack";
 import { sortGroups, type GroupSummary } from "@/lib/groupTypes";
 import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
@@ -98,6 +99,10 @@ interface SessionSidebarProps {
   selectedGroupId?: string | null;
   onSelectGroup?: (groupId: string) => void;
   onCreateGroup?: () => void;
+  /** Archivierte Gruppen (ADR-075, Nachtrag) — eigene, zugeklappte Sektion
+   *  UNTER den Agenten. Leer/weggelassen = die Sektion existiert gar nicht. */
+  archivedGroups?: GroupSummary[];
+  onUnarchiveGroup?: (groupId: string) => void;
   /** Rail = fixed desktop column. List = the mobile stack's first screen (a
    *  full-height list you tap into). Sheet = the older collapsed dropdown,
    *  kept for callers that still embed the picker above content. */
@@ -122,6 +127,8 @@ export function SessionSidebar({
   selectedGroupId = null,
   onSelectGroup,
   onCreateGroup,
+  archivedGroups,
+  onUnarchiveGroup,
   variant = "rail",
   hasTranscript = () => true,
   collapsed = false,
@@ -262,6 +269,18 @@ export function SessionSidebar({
           </div>
         </div>
       ))}
+      {/* Archiv zuunterst und zugeklappt: Weggeräumtes darf auffindbar sein,
+          aber nie mit dem aktiven Tagesgeschäft um Aufmerksamkeit ringen.
+          Ohne archivierte Gruppen rendert die Sektion selbst gar nichts. */}
+      {showGroupSection && onUnarchiveGroup && (
+        <ArchivedGroupsSection
+          groups={archivedGroups ?? []}
+          selectedGroupId={selectedGroupId}
+          onSelectGroup={onSelectGroup!}
+          onUnarchive={onUnarchiveGroup}
+          variant={stack ? "list" : "rail"}
+        />
+      )}
     </div>
   );
 

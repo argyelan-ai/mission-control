@@ -528,6 +528,7 @@
       "finishNoResult": "Es gibt noch kein Ergebnis zum Übernehmen.",
       "finishRunningBlocked": "Die Gruppe läuft noch — halte sie erst an.",
       "unarchive": "Aus dem Archiv holen",
+      "unarchived": "Aus dem Archiv geholt",
       "archivedSection": "Archiv",
       "composerPlaceholder": "Nachricht an die Gruppe… (@ erwähnt)",
       "composerQueuedNote": "Wird der Gruppe zur nächsten Runde zugestellt.",

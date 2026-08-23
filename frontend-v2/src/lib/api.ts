@@ -1479,7 +1479,13 @@ export const api = {
   // `eligibleMembers` entscheidet das Backend (comm_v2-Fähigkeit) — die UI
   // re-implementiert diese Regel bewusst nicht.
   groups: {
-    list: () => request<import("./groupTypes").GroupSummary[]>("/api/v1/groups"),
+    // include_archived: Archiviertes kommt mit `archived_at` gesetzt in
+    // DERSELBEN Liste zurück — ein Request für aktive UND Archiv-Sektion,
+    // statt zwei Listen gegeneinander zu diffen.
+    list: (opts?: { includeArchived?: boolean }) =>
+      request<import("./groupTypes").GroupSummary[]>(
+        `/api/v1/groups${opts?.includeArchived ? "?include_archived=true" : ""}`,
+      ),
     get: (id: string) => request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}`),
     create: (data: import("./groupTypes").GroupCreatePayload) =>
       request<import("./groupTypes").GroupDetail>("/api/v1/groups", {

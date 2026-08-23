@@ -528,6 +528,7 @@
       "finishNoResult": "There is no result to save yet.",
       "finishRunningBlocked": "The group is still running — pause it first.",
       "unarchive": "Restore from archive",
+      "unarchived": "Restored from the archive",
       "archivedSection": "Archive",
       "composerPlaceholder": "Message the group… (@ mentions)",
       "composerQueuedNote": "Will reach the group with the next round.",

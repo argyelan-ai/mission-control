@@ -224,6 +224,10 @@ async def list_groups(
                 "rounds_completed": group.rounds_completed,
                 "current_round_no": group.current_round_no,
                 "max_rounds": group.max_rounds,
+                # Bei include_archived=true stehen aktive und archivierte
+                # Zeilen in EINER Liste — ohne dieses Feld könnte die
+                # Archiv-Sektion im Frontend sie nicht auseinanderhalten.
+                "archived_at": group.archived_at.isoformat() if group.archived_at else None,
                 "created_at": group.created_at.isoformat() if group.created_at else None,
             }
         )
