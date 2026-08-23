@@ -271,35 +271,57 @@ export default function Sidebar() {
           <VoiceButton size={30} variant="sidebar" enforceTouchTarget={false} />
         </div>
       ) : (
-        <div
-          className="flex items-center mt-2 shrink-0"
+        // Auslöser der Befehlspalette — bewusst als KNOPF gestaltet, nicht als
+        // Suchfeld (Operator-Entscheid 23.08.2026, Variante B).
+        //
+        // Vorher trug er einen eingesenkten Grund (`p2-inset`) und sah damit aus
+        // wie ein Eingabefeld. Auf der Task-Seite steht direkt daneben ein
+        // ECHTES Suchfeld — zwei fast gleiche Formen mit völlig verschiedenem
+        // Verhalten: in die eine tippt man, die andere öffnet ein Overlay.
+        //
+        // Jetzt die Ghost-Button-Regel aus DESIGN.md: transparent, 1px Rahmen,
+        // beim Überfahren Fläche + hellerer Text — dieselbe Rückmeldung wie die
+        // Navigationszeilen darunter. Das Tastenkürzel wird zur Hauptaussage
+        // statt zur Fussnote, denn es IST die Bedienung.
+        <button
+          onClick={() => setCommandPaletteOpen(true)}
+          className="flex items-center gap-2 mt-2 shrink-0 w-full cursor-pointer text-left px-3"
           style={{
             height: 36,
             borderRadius: "12px",
-            backgroundColor: "var(--color-p2-inset)",
-            border: "1px solid var(--color-p2-line2)",
+            backgroundColor: "transparent",
+            border: "1px solid var(--color-p2-line)",
+            ...MONO,
+            fontSize: "11.5px",
+            color: "var(--color-p2-dim)",
+            transition: "background-color 160ms ease, color 160ms ease",
+          }}
+          onMouseEnter={(e) => {
+            const el = e.currentTarget as HTMLElement;
+            el.style.backgroundColor = "var(--color-p2-pan2)";
+            el.style.color = "var(--color-p2-txt)";
+          }}
+          onMouseLeave={(e) => {
+            const el = e.currentTarget as HTMLElement;
+            el.style.backgroundColor = "transparent";
+            el.style.color = "var(--color-p2-dim)";
           }}
         >
-          <button
-            onClick={() => setCommandPaletteOpen(true)}
-            className="flex items-center gap-2 flex-1 min-w-0 h-full cursor-pointer text-left px-3"
-            style={{ ...MONO, fontSize: "11.5px", color: "var(--color-p2-faint)" }}
+          <Search size={13} className="shrink-0" />
+          <span className="truncate">{tShell("search")}</span>
+          <kbd
+            className="ml-auto shrink-0 px-1.5 py-0.5"
+            style={{
+              border: "1px solid var(--color-p2-line)",
+              borderRadius: "6px",
+              fontSize: "10px",
+              color: "var(--color-p2-txt)",
+              backgroundColor: "var(--color-p2-pan2)",
+            }}
           >
-            <Search size={13} className="shrink-0" />
-            <span className="truncate">{tShell("search")}</span>
-            <kbd
-              className="ml-auto shrink-0 px-1.5"
-              style={{
-                border: "1px solid var(--color-p2-line)",
-                borderRadius: "6px",
-                fontSize: "9.5px",
-                color: "var(--color-p2-dim)",
-              }}
-            >
-              ⌘K
-            </kbd>
-          </button>
-        </div>
+            ⌘K
+          </kbd>
+        </button>
       )}
 
       {/* Zones 3 + 4 — pinned rows, then the rest of the tree one click deep */}
