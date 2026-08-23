@@ -228,11 +228,16 @@ function SessionsPageContent() {
 
   // Gruppen (ADR-075). Eigene Abfrage neben den Agenten — eine Gruppe hängt
   // an keinem Board und keinem Agenten, sie ist ein eigener Raum.
+  // include_archived, damit EINE Abfrage die aktive Liste UND die
+  // Archiv-Sektion speist — und eine geöffnete archivierte Gruppe nicht vom
+  // „Gruppe verschwunden"-Aufräumer unten abgewählt wird.
   const { data: groups = [] } = useQuery({
     queryKey: ["groups"],
-    queryFn: () => api.groups.list(),
+    queryFn: () => api.groups.list({ includeArchived: true }),
     refetchInterval: 10_000,
   });
+  const activeGroups = groups.filter((g) => !g.archived_at);
+  const archivedGroups = groups.filter((g) => g.archived_at);
 
   const { data: selectedGroup = null } = useQuery({
     queryKey: ["group", selectedGroupId],
@@ -360,6 +365,19 @@ function SessionsPageContent() {
     qc.invalidateQueries({ queryKey: ["groups"] });
   }
 
+  // Zurückholen wählt bewusst NICHT aus: wer aufräumt, will in seiner Liste
+  // bleiben — die Gruppe taucht einfach wieder bei den aktiven auf.
+  async function handleUnarchiveGroup(groupId: string) {
+    try {
+      const updated = await api.groups.unarchive(groupId);
+      qc.setQueryData(["group", groupId], updated);
+      qc.invalidateQueries({ queryKey: ["groups"] });
+      notify.success(t("groups.unarchived"));
+    } catch {
+      notify.error(t("groups.actionFailed"));
+    }
+  }
+
   const panelTitle =
     activePanel === "diff"
       ? "Diff"
@@ -433,10 +451,12 @@ function SessionsPageContent() {
               projects={projects}
               selectedId={selectedGroupId ? null : selectedLive?.id ?? null}
               onSelect={handleSelect}
-              groups={groups}
+              groups={activeGroups}
               selectedGroupId={selectedGroupId}
               onSelectGroup={handleSelectGroup}
               onCreateGroup={() => setCreateGroupOpen(true)}
+              archivedGroups={archivedGroups}
+              onUnarchiveGroup={handleUnarchiveGroup}
               variant="list"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
             />
@@ -466,10 +486,12 @@ function SessionsPageContent() {
               projects={projects}
               selectedId={selectedGroupId ? null : selectedLive?.id ?? null}
               onSelect={handleSelect}
-              groups={groups}
+              groups={activeGroups}
               selectedGroupId={selectedGroupId}
               onSelectGroup={handleSelectGroup}
               onCreateGroup={() => setCreateGroupOpen(true)}
+              archivedGroups={archivedGroups}
+              onUnarchiveGroup={handleUnarchiveGroup}
               variant="rail"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
               collapsed={sidebarCollapsed}

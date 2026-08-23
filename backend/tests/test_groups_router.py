@@ -400,6 +400,11 @@ async def test_archive_hides_the_group_but_keeps_everything(
     assert (await auth_client.get(f"/api/v1/groups/{group['id']}")).status_code == 200
     with_archived = (await auth_client.get("/api/v1/groups?include_archived=true")).json()
     assert any(g["id"] == group["id"] for g in with_archived)
+    # Die Liste muss Archiviertes MARKIEREN, nicht nur mitliefern — sonst kann
+    # die Archiv-Sektion im Frontend aktive und archivierte Zeilen nicht
+    # auseinanderhalten und müsste zwei Listen gegeneinander diffen.
+    ours = next(g for g in with_archived if g["id"] == group["id"])
+    assert ours["archived_at"] is not None
 
     resp = await auth_client.post(f"/api/v1/groups/{group['id']}/unarchive")
     assert resp.status_code == 200
