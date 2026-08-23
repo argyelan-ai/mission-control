@@ -251,8 +251,13 @@
      Zahl abgeschrieben. Sobald jemand die Palette ändert (aktuell läuft genau
      das auf einem Teststand: #1C1C1C statt #0A0A0A), bricht die Mischung —
      und zwar UNSICHTBAR: sie sieht dann wieder aus wie der Fehler, den sie
-     beheben sollte. Über `color-mix` folgt sie jedem Grundton von selbst. */
-  --surface-sticky: color-mix(in srgb, var(--color-bg-deep) 55%, transparent);
+     beheben sollte. Über `color-mix` folgt sie jedem Grundton von selbst.
+
+     Gemischt wird `--color-p2-bg` und NICHT `--color-bg-deep`: den Seitengrund
+     malt die AppShell (AppShell.tsx:66) mit p2-bg. Heute tragen beide denselben
+     Wert — bindet man aber an den falschen, driftet die Mischung, sobald eine
+     Palette nur einen der beiden verschiebt. Genau diese Falle war der Anlass. */
+  --surface-sticky: color-mix(in srgb, var(--color-p2-bg) 55%, transparent);
 
   /* Accent — achromatisch (System A): trägt über Helligkeit + Fläche, nie Hue */
   --color-accent: #ebe8de;
