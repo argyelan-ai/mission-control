@@ -241,6 +241,26 @@
    ============================================================ */
 
 :root {
+  /* ---- Sticky-Maskierung ---------------------------------------------------
+     Eine klebende Leiste braucht einen Grund, damit Inhalt beim Scrollen
+     darunter verschwindet. Sie darf ihn aber NICHT deckend malen: der
+     Seitengrund trägt den Ambient-Schleier (Helligkeitsverlauf + Korn), und
+     jede opake Füllung stanzt dort ein flaches Rechteck heraus — sichtbar als
+     dunkle Platte (Operator-Befund 23.08.2026).
+
+     Warum ein Token und keine Zahl: dieselbe Mischung stand hartcodiert an
+     drei Stellen als `rgba(10,10,10,0.55)` — also der Wert von `bg-deep` als
+     Zahl abgeschrieben. Sobald jemand die Palette ändert (aktuell läuft genau
+     das auf einem Teststand: #1C1C1C statt #0A0A0A), bricht die Mischung —
+     und zwar UNSICHTBAR: sie sieht dann wieder aus wie der Fehler, den sie
+     beheben sollte. Über `color-mix` folgt sie jedem Grundton von selbst.
+
+     Gemischt wird `--color-p2-bg` und NICHT `--color-bg-deep`: den Seitengrund
+     malt die AppShell (AppShell.tsx:66) mit p2-bg. Heute tragen beide denselben
+     Wert — bindet man aber an den falschen, driftet die Mischung, sobald eine
+     Palette nur einen der beiden verschiebt. Genau diese Falle war der Anlass. */
+  --surface-sticky: color-mix(in srgb, var(--color-p2-bg) 55%, transparent);
+
   /* Accent — achromatisch (System A): trägt über Helligkeit + Fläche, nie Hue */
   --color-accent: #ebe8de;
   --color-accent-light: #f9f7ef;
