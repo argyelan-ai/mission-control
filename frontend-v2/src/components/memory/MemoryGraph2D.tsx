@@ -435,7 +435,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     const nodeLabel = useCallback((node: object) => {
       const n = node as GraphNode;
       // HTML tooltip emitted by the library on hover.
-      return `<div style="font-family:'Geist Mono',monospace;font-size:11px;color:${C.textPrimary};background:rgba(10,10,10,0.92);padding:4px 8px;border-radius:4px;line-height:1.4;pointer-events:none;">${n.label}<br/><span style="opacity:0.55">${n.type} · ${n.agent}</span></div>`;
+      return `<div style="font-family:'Geist Mono',monospace;font-size:11px;color:${C.textPrimary};background:${C.bgElevated};padding:4px 8px;border-radius:4px;line-height:1.4;pointer-events:none;">${n.label}<br/><span style="opacity:0.55">${n.type} · ${n.agent}</span></div>`;
     }, []);
 
     // ── Link color — filter-aware + hover-fade + traversal highlight ──────────

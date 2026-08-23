@@ -23,7 +23,17 @@
     "groupKnowledge": "KNOWLEDGE",
     "groupStudio": "STUDIO",
     "groupSystem": "SYSTEM",
-    "logout": "Log out"
+    "logout": "Log out",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "moreAreas": "More areas",
+    "navGroupOverview": "Overview",
+    "navGroupWork": "Work",
+    "navGroupKnowledge": "Knowledge",
+    "navGroupStudio": "Studio",
+    "navGroupSystem": "System"
   },
   "settingsProfile": {
     "email": "Email",
@@ -639,7 +649,17 @@
     "boardNamePlaceholder": "Board name",
     "creating": "CREATING…",
     "createBoard": "CREATE BOARD",
-    "commandPaletteLabel": "PALETTE"
+    "commandPaletteLabel": "PALETTE",
+    "search": "Search",
+    "systemOk": "All systems go",
+    "systemChecking": "Checking…",
+    "systemNoContact": "No contact",
+    "systemDbDegraded": "Database struggling",
+    "systemRedisDegraded": "Redis struggling",
+    "settings": "Settings",
+    "boardPicker": "Choose board",
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar"
   },
   "login": {
     "consoleAccess": "Console · Access",

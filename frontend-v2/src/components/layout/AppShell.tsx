@@ -6,10 +6,7 @@ import { useAppStore } from "@/lib/store";
 import { getToken, getStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
-import WorkspaceSwitcher from "./WorkspaceSwitcher";
 import MobileNav, { MobileNavProvider, MobileTabBar } from "./MobileNav";
-import StatusBar from "./StatusBar";
-import TopBar from "./TopBar";
 import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
@@ -86,16 +83,15 @@ export default function AppShell({
       {/* Mobile navigation */}
       {!mobileChromeless && <MobileNav />}
 
-      {/* Desktop: WorkspaceSwitcher + Sidebar */}
-      <div className="hidden md:flex h-full relative z-10">
-        <WorkspaceSwitcher />
+      {/* Desktop: one column carries board, search, navigation and status
+          (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar
+          folded into it — see components/layout/Sidebar.tsx. */}
+      <div className="hidden md:flex h-full relative z-10 p-2 pr-0">
         <Sidebar />
       </div>
 
       {/* Main content area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative z-10">
-        {/* P2 desktop chrome: channel strip above the content column */}
-        <TopBar />
         {fullHeight ? (
           // Full-height mode: no page scroll, but KEEP main-content-pt,
           // horizontal padding, AND the max-w-[1600px] mx-auto wrap so
@@ -126,12 +122,11 @@ export default function AppShell({
             </div>
           </main>
         )}
-        <StatusBar />
         {/* Mobile-Tab-Leiste: bewusst KEIN position:fixed. Als Flex-Kind der
             h-dvh-Box sitzt sie zuverlässig am unteren Rand — auch auf iOS,
-            wo der Viewport-Bezug von `fixed` unzuverlässig ist. StatusBar ist
-            auf Mobil ausgeblendet (hidden md:flex), die Tab-Leiste auf Desktop
-            (md:hidden) — sie schliessen sich also gegenseitig aus. */}
+            wo der Viewport-Bezug von `fixed` unzuverlässig ist. Auf Desktop
+            ausgeblendet (md:hidden); dort trägt die Sidebar-Fusszeile den
+            Systemzustand. */}
         {!mobileChromeless && <MobileTabBar />}
       </div>
 

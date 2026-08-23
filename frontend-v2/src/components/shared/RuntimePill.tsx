@@ -30,7 +30,7 @@ export const RUNTIME_TYPE_COLOR: Record<string, string> = {
   vllm_docker: C.online,     // #55A964 — running container, online-green
   unsloth: C.warning,        // #A67F3E — fine-tune, warm-amber
   openai_compatible: C.accent, // #EBE8DE — achromatic accent
-  cloud: C.textDim,          // #666666 — external, neutral
+  cloud: C.textDim,          // #8A8A8A — external, neutral
   // Phase 24 (Hermes) — separated from openai_compatible by BRIGHTNESS, not hue
   // (System A): accentDeep is the dimmed accent step, still clearly not accent.
   hermes: C.accentDeep, // #C1BEB2 — gedimmte Akzentstufe
