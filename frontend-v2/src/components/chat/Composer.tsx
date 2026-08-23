@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Square, ArrowUp, Check, ChevronDown } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
+import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import {
+  type ChatAttachment,
   extractErrorMessage,
   isAgentBusyError,
   isEffortSwitchFailedError,
@@ -65,7 +67,12 @@ export function resolveEffortLevels(capabilities: ChatCapabilities | null | unde
 export function resolveSlashCommands(
   reported: ChatSlashCommand[] | null | undefined,
 ): SlashCommand[] {
-  if (!reported || reported.length === 0) return SLASH_COMMANDS;
+  // null/undefined = aelteres Backend ohne das Feld -> statische Claude-Liste.
+  // Ein EXPLIZIT leeres Array ist dagegen eine Aussage: dieser Harness (kimi,
+  // omp) hat diese Kommandos nicht — dann darf die Palette nichts Falsches
+  // versprechen (kritischer Test-Durchgang 18.08.2026).
+  if (reported == null) return SLASH_COMMANDS;
+  if (reported.length === 0) return [];
   const normalized = reported
     .filter((cmd): cmd is ChatSlashCommand => typeof cmd?.name === "string" && cmd.name.trim().length > 0)
     .map((cmd) => {
@@ -73,7 +80,7 @@ export function resolveSlashCommands(
       return { command: `/${bare}`, description: cmd.description?.trim() || "" };
     })
     .filter((cmd) => cmd.command.length > 1);
-  return normalized.length > 0 ? normalized : SLASH_COMMANDS;
+  return normalized;
 }
 
 /** One row of the model switcher, after normalization. */
@@ -98,7 +105,11 @@ export function resolveModelOptions(
   reported: ChatModelOption[] | null | undefined,
 ): ModelChoice[] {
   const fallback = CLAUDE_MODELS.map((m) => ({ name: m.name, label: m.label, contextWindow: null }));
-  if (!reported || reported.length === 0) return fallback;
+  // Gleiche Unterscheidung wie bei den Slash-Kommandos: fehlendes Feld =
+  // altes Backend -> Fallback; explizit leer = dieser Harness kennt unsere
+  // /model-Aliasse nicht -> nichts anbieten.
+  if (reported == null) return fallback;
+  if (reported.length === 0) return [];
   const normalized = reported
     .map((option) => {
       const name = (option.command ?? option.name ?? "").trim();
@@ -108,7 +119,7 @@ export function resolveModelOptions(
       return { name, label: option.label?.trim() || name, contextWindow: window };
     })
     .filter((option) => option.name.length > 0);
-  return normalized.length > 0 ? normalized : fallback;
+  return normalized;
 }
 
 type RingThreshold = "normal" | "warning" | "error";
@@ -139,6 +150,13 @@ interface ComposerProps {
    *  `true` so a caller that hasn't wired the real value yet keeps a usable
    *  composer instead of silently losing its only control. */
   sessionLive?: boolean;
+  /** Kann MC den Bildschirm des Agenten lesen? Nur fuer `cli-bridge` (Docker+tmux)
+   *  liefert `capture_pane` echten Text. Bei Host-Agenten (Boss, Hermes, Jarvis)
+   *  gibt es diesen Kanal nicht: `_compute_pane_state` leitet dort `working`/`idle`
+   *  allein aus der Transkript-mtime ab und ist sich dabei IMMER sicher — ein Boss,
+   *  der denkt ohne zu schreiben, liest sich als `idle`. Genau dann fehlte bisher
+   *  der Stop-Knopf, obwohl er der einzige noetige Griff ist. */
+  paneObservable?: boolean;
   /** Server-derived harness capabilities. Drives the effort chip: no
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
    *  read-only rather than as a picker that cannot work. */
@@ -162,15 +180,39 @@ interface ComposerProps {
  * `search` state simply stayed empty forever and every item was shown
  * unfiltered — the bug this component was rewritten to fix.
  */
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true }: ComposerProps) {
+  const t = useTranslations("sessions");
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const modelBoxRef = useRef<HTMLDivElement | null>(null);
+  const effortBoxRef = useRef<HTMLDivElement | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
+  /** Vorschau-Position des Reglers waehrend des Ziehens; `null` = zeige den
+   *  echten aktuellen Wert. Erst das Loslassen schickt den Wechsel los. */
+  const [draftIndex, setDraftIndex] = useState<number | null>(null);
   /** The level asked for, while the request is in flight. Never used as the
    *  chip's label — the label stays transcript truth. */
   const [pendingEffort, setPendingEffort] = useState<string | null>(null);
+  /** Die Stufe, die das Backend zuletzt BESTAETIGT hat — zusammen mit dem
+   *  usage-Ereignis, das in dem Moment galt.
+   *
+   *  Warum es das braucht (Review 20.08.2026): `capabilities` kommt aus
+   *  historyQuery.data und wird nur bei `session_changed` neu geholt. Eine
+   *  frische Sitzung hat noch kein usage-Ereignis, der Chip stand also auf dem
+   *  persistierten Standard — und blieb dort, auch nachdem der Operator
+   *  umgeschaltet hatte und das Backend den Wechsel an der CLI verifiziert
+   *  hatte. Ein ruhender Agent schickt evtl. NIE ein usage; die Saeule blieb
+   *  dann die ganze Sitzung falsch, und der Weg zurueck auf den alten Wert
+   *  wurde von `level === currentEffort` stumm verschluckt.
+   *
+   *  Keine optimistische Umbenennung: gesetzt wird erst NACH dem 204, das das
+   *  Backend nur gibt, wenn die CLI ihre eigene Bestaetigungszeile geschrieben
+   *  hat. Und es gewinnt nur, solange kein NEUERES usage-Ereignis da ist —
+   *  das kennt den laufenden Zug und damit auch die session-only-Stufen. */
+  const [confirmedEffort, setConfirmedEffort] =
+    useState<{ level: string; usageAt: UsageEvent | null } | null>(null);
   /** Flips to false the first time the backend answers `input_not_supported`
    *  (host agents have no pane to drive). Only the backend knows, so the chip
    *  starts interactive and demotes itself to a labelled read-only value —
@@ -190,8 +232,94 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    *  pane — treating it as unknown would flash a Stop on every mount. */
   const statusUnknown = state?.status === "unknown";
   /** Empty input leaves nothing to send, so the button carries the interrupt. */
-  const showStop = !hasText && (isWorking || statusUnknown);
+  /* Stop wird angeboten, sobald "arbeitet" nicht widerlegbar ist: bestaetigtes
+   * `working`, ein unlesbares Pane (`unknown`) — und neu auch jeder Agent, dessen
+   * Pane wir grundsaetzlich nicht lesen koennen. Ein deaktivierter Senden-Knopf
+   * behauptet dort eine Ruhe, die wir nie festgestellt haben. */
+  const showStop = !hasText && (isWorking || statusUnknown || !paneObservable);
   const effortLevels = resolveEffortLevels(capabilities);
+  /* Welche Stufe der Chip anzeigt. Das usage-Ereignis der laufenden Session
+   * gewinnt (nur es kennt die session-only-Stufen max/ultracode); solange es
+   * fehlt — eine frisch gestartete Session hat noch keines — faellt der Chip auf
+   * den persistierten Standard aus settings.json zurueck, den das Backend in
+   * capabilities.effort mitliefert. Kennt niemand einen Wert, steht dort "auto":
+   * genau das, was die CLI ohne Override tut. Vorher hing der GANZE Chip an
+   * usage?.effort — ohne usage war der Effort schlicht nicht schaltbar
+   * (Operator-Befund 18.08.2026). */
+  /* Popovers schliessen wie ueberall sonst im System: Klick daneben oder
+   * Escape. Vorher blieben Modell-Dropdown und Effort-Regler offen, bis man
+   * den Chip erneut traf (kritischer Test-Durchgang 18.08.2026). Escape
+   * verwirft beim Regler auch die Zieh-Vorschau, damit der anschliessende
+   * blur-Commit nichts Ungewolltes sendet (draftIndex zuerst nullen). */
+  useEffect(() => {
+    if (!modelOpen && !effortOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (modelBoxRef.current?.contains(t) || effortBoxRef.current?.contains(t)) return;
+      setDraftIndex(null);
+      setModelOpen(false);
+      setEffortOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setDraftIndex(null);
+      setModelOpen(false);
+      setEffortOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [modelOpen, effortOpen]);
+
+  /* Reihenfolge der Wahrheit: ein usage-Ereignis, das NACH unserer letzten
+   * Bestaetigung kam > unsere eigene bestaetigte Stufe > der persistierte
+   * Standard aus settings.json. `usageAt` haelt fest, welches usage bei der
+   * Bestaetigung galt; kommt ein anderes, ist es das juengere Wissen. */
+  const confirmedIsNewest = confirmedEffort != null && confirmedEffort.usageAt === usage;
+  const currentEffort =
+    (confirmedIsNewest ? confirmedEffort!.level : null) ?? usage?.effort ?? capabilities?.effort ?? null;
+
+  /* Der Agent im Composer kann wechseln, ohne dass die Komponente neu
+   * montiert wird — eine Bestaetigung fuer den vorigen Agenten darf dann
+   * nicht stehenbleiben. */
+  useEffect(() => {
+    setConfirmedEffort(null);
+  }, [agentId]);
+
+  /* Position des Reglers: waehrend des Ziehens die Vorschau, sonst der aktuelle
+   * Wert. Kennt der Agent noch keine Stufe (frische Session, kein usage), steht
+   * der Regler auf der ersten — angezeigt wird trotzdem, was wirklich gilt. */
+  const currentEffortIndex = currentEffort ? effortLevels.indexOf(currentEffort) : -1;
+  const sliderIndex = draftIndex ?? (currentEffortIndex >= 0 ? currentEffortIndex : 0);
+
+  /* Fuellstand der Saeule im Brain-Knopf: Anteil der aktuellen Stufe an der
+   * Stufenleiter des Harness. +1, damit schon "low" sichtbar gefuellt ist —
+   * eine leere Saeule ist fuer "unbekannt/auto" reserviert. */
+  /* Leiter fuer die reine ANZEIGE — unabhaengig vom Schaltrecht. resolveEffortLevels
+   * gated bewusst auf canSwitchEffort (der Regler darf nur Schaltbares anbieten);
+   * die Saeule des read-only-Chips braucht die Leiter trotzdem. */
+  const displayLevels = (capabilities?.effortLevels ?? [])
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const staticFillPct = (() => {
+    const idx = currentEffort ? displayLevels.indexOf(currentEffort) : -1;
+    return idx >= 0 && displayLevels.length > 0 ? ((idx + 1) / displayLevels.length) * 100 : 0;
+  })();
+
+  const effortFillPct =
+    currentEffortIndex >= 0 && effortLevels.length > 0
+      ? ((currentEffortIndex + 1) / effortLevels.length) * 100
+      : 0;
+
+  const commitSlider = () => {
+    if (draftIndex == null) return;
+    const level = effortLevels[draftIndex];
+    setDraftIndex(null);
+    if (level) selectEffort(level);
+  };
   const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
   const modelOptions = resolveModelOptions(capabilities?.modelOptions);
 
@@ -224,10 +352,82 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, [text]);
 
+  // ── Anhänge ─────────────────────────────────────────────────────────────
+  //
+  // Der Weg ist bewusst simpel: Datei hoch, absoluten Pfad zurück, Pfad an
+  // die Nachricht hängen — die CLI liest die Datei selbst. Kein neues
+  // Protokoll, keine Bild-Kodierung im Prompt.
+  //
+  // Hochgeladen wird SOFORT beim Anhängen, nicht erst beim Senden: sonst
+  // steht man nach dem Tippen vor einer Wartezeit, deren Grund man nicht
+  // sieht, und ein Fehlschlag käme genau dann, wenn man ihn am wenigsten
+  // gebrauchen kann.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setUploading((n) => n + files.length);
+      for (const file of files) {
+        try {
+          const stored = await api.chat.uploadAttachment(agentId, file);
+          setAttachments((prev) => [...prev, stored]);
+        } catch (err) {
+          // Sichtbar, nicht still: "zu gross" ist die eine Ablehnung, die
+          // beim Auswählen niemand sehen konnte.
+          notify.error(err instanceof Error ? err.message : t("attachmentFailed"));
+        } finally {
+          setUploading((n) => Math.max(0, n - 1));
+        }
+      }
+    },
+    [agentId, t],
+  );
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    // Marks realer Weg: Cmd+Shift+4, dann Cmd+V ins Feld. Nur wenn wirklich
+    // Dateien im Zwischenspeicher liegen — sonst bliebe normales Text-
+    // Einfügen auf der Strecke.
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addFiles(files);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    setDragging(false);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addFiles(files);
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    setDragging(true);
+  }
+
+  function removeAttachment(path: string) {
+    // Nur aus dem Composer nehmen — die Datei auf der Platte bleibt liegen.
+    // Ein Löschen-Aufruf hier würde eine Datei entfernen, die eine bereits
+    // gesendete Nachricht noch referenzieren kann. Sie gehört dem Agenten und
+    // verschwindet mit ihm (`delete_references_for(agent_id=…)`).
+    setAttachments((prev) => prev.filter((a) => a.path !== path));
+  }
+
   function send() {
-    if (text.trim().length === 0) return;
-    onSend(text);
+    // Ein Anhang allein ist eine vollwertige Nachricht ("schau dir das an") —
+    // Text ist dann nicht nötig.
+    if (text.trim().length === 0 && attachments.length === 0) return;
+    const lines = attachments.map((a) => `[Anhang: ${a.path}]`);
+    const body = [text.trim(), ...lines].filter(Boolean).join("\n");
+    onSend(body);
     setText("");
+    setAttachments([]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -285,13 +485,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
 
   async function selectEffort(level: string) {
     setEffortOpen(false);
-    if (level === usage?.effort) return;
+    if (level === currentEffort) return;
     setPendingEffort(level);
     try {
       await api.chat.setEffort(agentId, level);
-      // Deliberately no optimistic relabel: the next transcript turn reports
-      // the level the agent is actually running, and that is the only figure
-      // the chip is allowed to show.
+      // Keine optimistische Umbenennung — aber eine BESTAETIGTE ist keine
+      // Behauptung: das Backend antwortet erst 204, nachdem es die eigene
+      // Bestaetigungszeile der CLI gelesen hat. Bis ein neueres
+      // usage-Ereignis etwas anderes sagt, ist das die ehrlichste Zahl, die
+      // wir haben (s. confirmedEffort).
+      setConfirmedEffort({ level, usageAt: usage });
     } catch (err) {
       if (isInputNotSupportedError(err)) {
         setEffortSupported(false);
@@ -322,7 +525,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     textareaRef.current?.focus();
   }
 
-  const modelLabel = usage?.model ?? "—";
+  /* Modell-Label: laufende Session > persistierter Standard aus settings.json
+   * (capabilities.model) > "—". Gleiche Kette wie beim Effort — vorher zeigte
+   * jede frische Session "—", obwohl das Modell laengst feststand (Operator-
+   * Befund 18.08.2026). Steht dort ein Kurz-Alias ("sonnet"), zeigen wir das
+   * Label des passenden Dropdown-Eintrags ("Sonnet"); eine volle ID bleibt
+   * verbatim. */
+  const currentModel = usage?.model ?? capabilities?.model ?? null;
+  const modelLabel = currentModel
+    ? modelOptions.find((m) => m.name === currentModel)?.label ?? currentModel
+    : "—";
   // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
   const win = usage?.contextWindow;
   const hasWin = typeof win === "number" && win > 0;
@@ -432,20 +644,78 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           against the pill — perceivable per WCAG 2.4.11 without being a halo,
           and unmistakably grey rather than white). */}
       <div
-        className="flex flex-col transition-colors"
+        data-testid="composer-dropzone"
+        onDragOver={handleDragOver}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        className="flex flex-col transition-colors relative"
         // One step above the island tone: the panel is bg-surface, so the
         // control lifts to bg-elevated rather than sinking into it.
         style={{
           backgroundColor: C.bgElevated,
           borderRadius: "var(--radius-xl)",
-          border: `1px solid ${focused ? C.textMuted : C.border}`,
+          // Beim Ziehen tritt derselbe Rahmen in die Akzentfarbe — kein
+          // zusaetzliches Overlay, das die Pille verdeckt und beim Loslassen
+          // flackert. Die Pille SELBST ist das Ziel, das sagt sie damit.
+          border: `1px solid ${dragging ? C.accent : focused ? C.textMuted : C.border}`,
         }}
       >
+        {(attachments.length > 0 || uploading > 0) && (
+          /* Kacheln ueber dem Textfeld, innerhalb der Pille: der Anhang
+             gehoert sichtbar zur Nachricht, die man gerade schreibt — nicht
+             in eine eigene Leiste daneben. */
+          <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+            {attachments.map((a) => (
+              <div
+                key={a.path}
+                data-testid="attachment-tile"
+                className="group flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-lg max-w-[200px]"
+                style={{ backgroundColor: C.bgHover, border: `1px solid ${C.border}` }}
+              >
+                {a.isImage ? (
+                  <span
+                    aria-hidden
+                    className="w-6 h-6 rounded shrink-0 flex items-center justify-center text-[10px]"
+                    style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+                  >
+                    IMG
+                  </span>
+                ) : (
+                  <FileText size={14} className="shrink-0" style={{ color: C.textMuted }} />
+                )}
+                <span className="text-[11px] truncate min-w-0" style={{ color: C.textPrimary }}>
+                  {a.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.path)}
+                  aria-label={t("removeAttachment", { name: a.name })}
+                  className="shrink-0 w-5 h-5 flex items-center justify-center rounded cursor-pointer"
+                  style={{ color: C.textMuted }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            {uploading > 0 && (
+              <div
+                data-testid="attachment-uploading"
+                className="flex items-center px-2 py-1 rounded-lg text-[11px]"
+                style={{ backgroundColor: C.bgHover, color: C.textMuted }}
+              >
+                {uploading === 1
+                  ? t("attachmentUploadingOne")
+                  : t("attachmentUploadingMany", { count: uploading })}
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           rows={1}
@@ -475,11 +745,56 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
         />
 
         <div className="flex items-center gap-1.5 px-2.5 pb-2.5 pt-1.5">
-          <div className="relative">
+          {/* Anhaengen — ganz links, nur Symbol. Die Stelle, an der WhatsApp,
+              Slack und die Claude-App ihn haben (Operator-Entscheid
+              19.08.2026, Vorbild-Screenshot): man sucht ihn dort nicht, man
+              greift hin.
+
+              KEIN `accept`-Filter und KEIN `capture`: beides schneidet auf
+              dem Handy Wege ab. Ohne sie zeigt iOS von selbst die Auswahl
+              "Fotomediathek · Aufnehmen · Datei waehlen" — ein Knopf, alle
+              drei Faelle. Und jeder Dateityp ist ohnehin erlaubt; ob der
+              Agent ihn liest, ist seine Sache, nicht das Versprechen des UI. */}
+          <input
+            ref={fileInputRef}
+            data-testid="attachment-input"
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              void addFiles(Array.from(e.target.files ?? []));
+              // Zuruecksetzen, sonst loest dieselbe Datei beim zweiten Mal
+              // kein change-Ereignis aus.
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label={t("attachFile")}
+            title={t("attachFile")}
+            className="shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            style={{ color: C.textSecondary }}
+          >
+            <Paperclip size={15} />
+          </button>
+          <div className="relative" ref={modelBoxRef}>
+            {modelOptions.length === 0 ? (
+              /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
+                 /model-Aliasse — dann ist der Chip ein ehrliches Label statt
+                 eines Dropdowns, das Kauderwelsch in die TUI tippen wuerde. */
+              <span
+                data-testid="model-chip-static"
+                className="inline-flex items-center font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                {modelLabel}
+              </span>
+            ) : (
             <button
               type="button"
               onClick={() => setModelOpen((v) => !v)}
-              aria-haspopup="listbox"
+              aria-haspopup="dialog"
               aria-expanded={modelOpen}
               // Quiet by default: this is a switcher, not an active state, so
               // it doesn't get the accent tint (which in this system means
@@ -498,7 +813,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 style={{ transform: modelOpen ? "rotate(180deg)" : undefined }}
               />
             </button>
-            {modelOpen && (
+            )}
+            {modelOptions.length > 0 && modelOpen && (
               <div
                 role="listbox"
                 className="absolute bottom-full left-0 mb-1.5 w-36 rounded-lg overflow-hidden z-20 p-1"
@@ -513,13 +829,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                     key={m.name}
                     type="button"
                     role="option"
-                    aria-selected={m.name === usage?.model}
+                    aria-selected={m.name === currentModel}
                     data-model={m.name}
                     onClick={() => selectModel(m.name)}
                     className="w-full flex items-center gap-3 text-left px-2 py-1.5 text-[12px] font-mono rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                     style={{
-                      color: m.name === usage?.model ? C.accent : C.textPrimary,
-                      backgroundColor: m.name === usage?.model ? C.accentSubtle : "transparent",
+                      color: m.name === currentModel ? C.accent : C.textPrimary,
+                      backgroundColor: m.name === currentModel ? C.accentSubtle : "transparent",
                     }}
                   >
                     <span className="min-w-0 truncate">{m.label}</span>
@@ -541,109 +857,6 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               </div>
             )}
           </div>
-
-          {usage?.effort &&
-            // A picker needs levels to offer. No capabilities, `canSwitchEffort:
-            // false`, or an empty list all mean the same thing here: show the
-            // level, don't pretend it can be changed.
-            (effortSupported && effortLevels.length > 0 ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setEffortOpen((v) => !v)}
-                  aria-haspopup="listbox"
-                  aria-expanded={effortOpen}
-                  aria-label="Effort-Stufe"
-                  data-testid="effort-chip"
-                  data-pending={pendingEffort != null}
-                  disabled={pendingEffort != null}
-                  className="inline-flex items-center gap-1 font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors disabled:cursor-wait"
-                  style={{
-                    backgroundColor: effortOpen ? C.bgHover : "transparent",
-                    color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
-                    border: `1px solid ${C.border}`,
-                    opacity: pendingEffort != null ? 0.6 : 1,
-                  }}
-                >
-                  {usage.effort}
-                  <ChevronDown
-                    size={11}
-                    className="transition-transform duration-150"
-                    style={{ transform: effortOpen ? "rotate(180deg)" : undefined }}
-                  />
-                </button>
-                {effortOpen && (
-                  <div
-                    role="listbox"
-                    aria-label="Effort-Stufe"
-                    data-testid="effort-menu"
-                    className="absolute bottom-full left-0 mb-1.5 w-60 rounded-lg overflow-hidden z-20 p-1"
-                    style={{
-                      backgroundColor: C.bgElevated,
-                      border: `1px solid ${C.border}`,
-                      boxShadow: "var(--shadow-elevated)",
-                    }}
-                  >
-                    {effortLevels.map((level) => {
-                      const isCurrent = usage.effort === level;
-                      const isPending = pendingEffort === level;
-                      return (
-                        <button
-                          key={level}
-                          type="button"
-                          role="option"
-                          aria-selected={isCurrent}
-                          // The level verbatim, so callers (and tests) can
-                          // address a row without parsing its label — "high"
-                          // is otherwise a substring of "xhigh".
-                          data-level={level}
-                          onClick={() => selectEffort(level)}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-mono rounded-md cursor-pointer text-left transition-colors hover:bg-[var(--color-bg-hover)]"
-                          style={{
-                            color: isCurrent ? C.accent : C.textPrimary,
-                            backgroundColor: isCurrent ? C.accentSubtle : "transparent",
-                          }}
-                        >
-                          <span className="min-w-0 truncate">{level}</span>
-                          {/* Per level, not one blanket line: low/medium/high/
-                              xhigh rewrite the agent's persisted default, while
-                              max/ultracode are session-only by CLI design
-                              (agent_chat_input.py documents the split from
-                              empirical testing). Which one the operator is
-                              picking is the whole question the original "does
-                              this outlive my session?" concern was about. */}
-                          <span
-                            className="ml-auto shrink-0 font-sans text-[10px]"
-                            style={{ color: C.textMuted }}
-                          >
-                            {isSessionOnlyEffort(level) ? "nur diese Session" : "wird Standard"}
-                          </span>
-                          {/* "…" while the switch is in flight, a check only
-                              once the transcript confirms it — the chip never
-                              claims a level the agent hasn't reported. */}
-                          {isPending ? (
-                            <span className="shrink-0" style={{ color: C.textMuted }}>…</span>
-                          ) : isCurrent ? (
-                            <Check size={12} className="shrink-0" style={{ color: C.accent }} />
-                          ) : (
-                            <span className="shrink-0 w-3" aria-hidden="true" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <span
-                data-testid="effort-chip-static"
-                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
-                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
-                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-              >
-                {usage.effort}
-              </span>
-            ))}
 
           {usage && pct != null && (
             // The ring stays the compact indicator and the tooltip stays the
@@ -736,13 +949,185 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               Nothing at all once the session has ended — neither sending nor
               interrupting can reach a session that is over.
 
-              NOTE this does NOT cover Boss. For host agents `capture_pane`
-              returns None, so `_compute_pane_state` reports a confident
-              `working`/`idle` from transcript mtime alone and never `unknown`
-              (transcript_chat.py:1285-1291) — a Boss that thinks without
-              writing reads as `idle` and offers the disabled Send. Closing that
-              needs the runtime, not this flag. */}
+              Host agents (Boss, Hermes, Jarvis) are covered via
+              `paneObservable={false}`: `capture_pane` returns None for them, so
+              `_compute_pane_state` reports a confident `working`/`idle` from
+              transcript mtime alone and never `unknown`
+              (transcript_chat.py:1285-1291) — a Boss that thinks without writing
+              read as `idle` and left no way to interrupt. The cost is a Stop that
+              is also visible while such an agent rests; operator-decided
+              (18.08.2026): a control that is missing when you need it is worse
+              than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
+          {(currentEffort || (effortSupported && effortLevels.length > 0)) &&
+            // A picker needs levels to offer. No capabilities, `canSwitchEffort:
+            // false`, or an empty list all mean the same thing here: show the
+            // level, don't pretend it can be changed. Umgekehrt gilt: kann der
+            // Agent umschalten, gehoert der Chip hin — auch bevor die Session
+            // ihr erstes usage-Ereignis geschrieben hat.
+            (effortSupported && effortLevels.length > 0 ? (
+              <div className="relative" ref={effortBoxRef}>
+                <button
+                  type="button"
+                  onClick={() => setEffortOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={effortOpen}
+                  aria-label={`Effort-Stufe: ${currentEffort ?? "auto"}`}
+                  data-testid="effort-chip"
+                  data-level={currentEffort ?? "auto"}
+                  data-pending={pendingEffort != null}
+                  disabled={pendingEffort != null}
+                  className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-pointer transition-colors disabled:cursor-wait"
+                  style={{
+                    backgroundColor: effortOpen ? C.bgHover : "transparent",
+                    color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
+                    border: `1px solid ${C.border}`,
+                    opacity: pendingEffort != null ? 0.6 : 1,
+                  }}
+                >
+                  <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
+                  {/* Fuellstands-Saeule (Vorbild Claude-Desktop-App): die Hoehe
+                      des gruenen Segments IST die Stufe — von unten gefuellt,
+                      low = kleiner Rest, ultracode = voll. Ohne bekannte Stufe
+                      ("auto") bleibt die Saeule leer: nichts behaupten. Der
+                      exakte Wert steht beim Oeffnen am Regler und fuer
+                      Screenreader im aria-label. */}
+                  <span
+                    aria-hidden="true"
+                    className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
+                    style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+                  >
+                    <span
+                      data-testid="effort-gauge-fill"
+                      className="absolute bottom-0 left-0 right-0 rounded-full transition-[height] duration-200"
+                      style={{
+                        height: `${effortFillPct}%`,
+                        backgroundColor: STATUS.online,
+                      }}
+                    />
+                  </span>
+                </button>
+                {effortOpen && (
+                  /* Schieberegler statt Liste (Operator-Wunsch 18.08.2026, nach
+                     dem Vorbild der Claude-Desktop-App). Die Stufen sind eine
+                     ECHTE Reihenfolge — von sparsam nach gruendlich — und ein
+                     Regler zeigt diese Ordnung, wo eine Liste sie nur behauptet.
+                     Die Stufen kommen weiterhin ausschliesslich aus den
+                     Capabilities des Harness, nichts davon steht hier fest. */
+                  <div
+                    data-testid="effort-menu"
+                    className="absolute bottom-full right-0 mb-1.5 w-64 rounded-lg z-20 p-3"
+                    style={{
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                    }}
+                  >
+                    <input
+                      type="range"
+                      min={0}
+                      max={effortLevels.length - 1}
+                      step={1}
+                      value={sliderIndex}
+                      list="effort-ticks"
+                      data-testid="effort-slider"
+                      aria-label="Effort-Stufe"
+                      aria-valuetext={effortLevels[sliderIndex]}
+                      disabled={pendingEffort != null}
+                      autoFocus
+                      /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
+                         Loslassen — sonst schickt ein einziger Zug ueber den
+                         Regler fuenf Umschalt-Befehle in die TUI. */
+                      onChange={(e) => setDraftIndex(Number(e.target.value))}
+                      onPointerUp={commitSlider}
+                      /* Tastatur: Pfeiltasten sind VORSCHAU — sonst schickt
+                         jede einzelne Pfeiltaste einen Umschalt-Befehl in die
+                         TUI. Bestaetigt wird mit Enter (oder implizit beim
+                         Verlassen des Reglers); Escape verwirft (siehe
+                         Dokument-Listener oben, der draftIndex zuerst nullt). */
+                      onKeyUp={(e) => { if (e.key === "Enter") commitSlider(); }}
+                      onBlur={commitSlider}
+                      className="w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-wait"
+                    />
+                    <div className="flex justify-between mt-1 font-mono text-[10px]" style={{ color: C.textMuted }}>
+                      <span>{effortLevels[0]}</span>
+                      <span>{effortLevels[effortLevels.length - 1]}</span>
+                    </div>
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span
+                        data-testid="effort-slider-value"
+                        className="font-mono text-xs"
+                        style={{ color: C.accent }}
+                      >
+                        {effortLevels[sliderIndex]}
+                      </span>
+                      {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
+                          schreiben den persistierten Standard des Agenten um,
+                          max/ultracode gelten nur fuer die laufende Session
+                          (CLI-Design, empirisch belegt in agent_chat_input.py).
+                          Genau diese Frage — "ueberlebt das meine Session?" —
+                          muss am gewaehlten Wert stehen, nicht im Kleingedruckten. */}
+                      <span className="text-[10px]" style={{ color: C.textMuted }}>
+                        {isSessionOnlyEffort(effortLevels[sliderIndex])
+                          ? "nur diese Session"
+                          : capabilities?.effortShared
+                            ? "wird Standard — auch für deine lokalen Claude-Sessions (geteilte Config)"
+                            : "wird Standard"}
+                      </span>
+                      {pendingEffort != null && (
+                        /* "…" solange der Wechsel unterwegs ist. Ein Haken
+                           erscheint nie vorab — bestaetigt wird erst, was das
+                           Transkript meldet. */
+                        <span className="ml-auto text-[10px]" style={{ color: C.textMuted }}>
+                          wird gesetzt …
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : displayLevels.length > 0 ? (
+              /* Read-only-Variante des Brain-Chips (Operator-Wunsch 18.08.2026:
+                 Boss zeigte das nackte Alt-Label). Gleiche Optik wie der
+                 schaltbare Knopf — Gehirn + Saeule — aber als span ohne Aktion:
+                 die Leiter kommt vom Backend (canSwitchEffort=false heisst
+                 "kennt der Harness", nicht "darfst du druecken"), die Stufe aus
+                 dem usage-Ereignis. Der Tooltip sagt ehrlich, warum hier nichts
+                 zu klicken ist. */
+              <span
+                data-testid="effort-chip-static"
+                data-level={currentEffort ?? "auto"}
+                aria-label={`Effort-Stufe: ${currentEffort ?? "auto"} (nicht umschaltbar)`}
+                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
+                <span
+                  aria-hidden="true"
+                  className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
+                  style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+                >
+                  <span
+                    data-testid="effort-gauge-fill-static"
+                    className="absolute bottom-0 left-0 right-0 rounded-full"
+                    style={{ height: `${staticFillPct}%`, backgroundColor: STATUS.online }}
+                  />
+                </span>
+              </span>
+            ) : (
+              /* Aeltere Backends ohne Stufenleiter in den Capabilities: ohne
+                 Leiter waere jede Saeulen-Fuellung geraten — dann lieber der
+                 ehrliche Text. */
+              <span
+                data-testid="effort-chip-static"
+                title="Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal."
+                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                {currentEffort}
+              </span>
+            ))}
             {sessionLive && (
               !showStop ? (
                 <button
@@ -772,7 +1157,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-label="Stop"
                   title="Unterbrechen (ESC)"
                   data-testid="stop-button-prominent"
-                  data-reason={isWorking ? "working" : "unknown"}
+                  data-reason={isWorking ? "working" : !paneObservable ? "unobservable" : "unknown"}
                   /* The pulse is a claim of live activity, so it only runs when
                      the probe actually confirmed "working". On an unreadable
                      pane the control is offered without animating something we

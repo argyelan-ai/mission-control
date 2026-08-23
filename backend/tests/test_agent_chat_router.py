@@ -20,10 +20,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from tests.conftest import test_engine
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,7 +50,7 @@ def _user_line(text: str, msg_uuid: str = "u1", ts: str = "2026-08-13T00:00:00Z"
 
 
 async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     tdir = tmp_path / "rex-transcripts"
     tdir.mkdir()
@@ -55,6 +60,10 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     import app.services.agent_chat_input as agent_chat_input_mod
 
     monkeypatch.setattr(agent_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    # "rex" existiert wirklich in der Flotte — capabilities.model/effort nie
+    # aus der LIVE settings.json des Hosts lesen (Real-Host-Leak).
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
     # This test is about the transcript page + effort capabilities, not skill
     # discovery — point the skills scan at a dir that doesn't exist so the
     # result is deterministic (builtins only) regardless of whatever real
@@ -107,6 +116,11 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
     assert body["capabilities"] == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        # Startwerte fuer den Composer, solange die Session noch kein
+        # usage-Ereignis hat. Der Fixture-Agent hat keine settings.json -> None.
+        "effort": None,
+        "effortShared": False,
+        "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
             "modelOptions"
@@ -115,11 +129,14 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
 
 
 async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    """Boss (host runtime) has no pane probe — capabilities must say so
-    explicitly rather than the frontend guessing from agent_runtime alone.
+    """Boss (host runtime) has no pane probe — SWITCHING must stay off. Seit
+    18.08.2026 liefert das Backend fuer host+harness=claude trotzdem die
+    Stufenleiter (canSwitchEffort=false = "kennt der Harness, darfst du aber
+    nicht druecken"): das Frontend proportioniert damit die Saeule des
+    read-only Brain-Chips, statt Boss das nackte Alt-Label zu zeigen.
     slashCommands still shows the builtins (those aren't docker-gated),
     just no skill discovery (host has no claude-config mount to scan)."""
-    agent = await make_agent(name="Boss", agent_runtime="host", slug="boss")
+    agent = await make_agent(name="Boss", agent_runtime="host", slug="boss", harness="claude")
 
     tdir = tmp_path / "boss-transcripts"
     tdir.mkdir()
@@ -133,13 +150,26 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
     # Boss privacy heuristic (cwd/branch sniffing) entirely rather than
     # constructing a transcript line that would satisfy it.
     monkeypatch.setattr(agent_chat_mod, "transcript_allowed", lambda a, p: True)
+    # Echte Fleet-Slugs — der capabilities.model/effort-Zweig darf nie die
+    # settings.json des LAUFENDEN Agenten vom Host lesen (Real-Host-Leak).
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["capabilities"] == {
-        "effortLevels": [],
-        "canSwitchEffort": False,
+        "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
+        # Seit 19.08.2026 schaltbar: die Bridge tippt, das Transkript
+        # verifiziert. effortShared sagt dem UI, dass eine persistierende
+        # Stufe auch die lokalen Claude-Sessions des Operators umstellt
+        # (geteilte ~/.claude/settings.json).
+        "canSwitchEffort": True,
+        "effort": None,
+        "effortShared": True,
+        "model": None,
         "slashCommands": list(agent_chat_input_mod._BUILTIN_SLASH_COMMANDS),
         # modelOptions: Boss has no harness (host runtime) -> catalog is
         # empty, no subprocess attempted at all -> static-alias fallback,
@@ -162,7 +192,7 @@ async def test_history_404_no_transcript_for_host_agent_without_dir(auth_client:
 
 
 async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: AsyncClient, make_agent, tmp_path, monkeypatch):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -178,7 +208,7 @@ async def test_history_404_no_transcript_when_dir_has_no_sessions(auth_client: A
 
 
 async def test_history_requires_auth(client: AsyncClient, make_agent):
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
     resp = await client.get(f"/api/v1/agents/{agent.id}/chat/history")
 
@@ -748,3 +778,240 @@ async def test_tailer_boss_state_from_mtime_never_permission_prompt(manager, fak
         await manager.release("agent-1")
 
     assert not any(d.get("status") == "permission_prompt" for _, _, d in fake_broadcast)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Router: /agents/{id}/chat/attachment  (Chat-Anhänge, 19.08.2026)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def attachment_root(tmp_path, monkeypatch):
+    """Anhang-Root nach tmp_path — nie in den echten ~/.mc schreiben.
+
+    Es ist derselbe Root, den auch Task-/Projekt-Referenzen benutzen: der
+    Chat legt seine Anhaenge als AGENTEN-Referenzen ab (reference_files.
+    agent_id, Migration 0172), nicht in einer zweiten Ablage daneben."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "home_host", str(tmp_path))
+    return tmp_path / ".mc" / "references"
+
+
+async def test_attachment_upload_returns_the_absolute_path(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("foto.png", b"\x89PNG-bytes", "image/png")},
+    )
+
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["name"] == "foto.png"
+    assert body["isImage"] is True
+    assert body["bytes"] == len(b"\x89PNG-bytes")
+    # Der zurueckgegebene Pfad ist absolut und zeigt auf eine echte Datei —
+    # genau diesen String haengt der Composer an die Nachricht, und genau ihn
+    # oeffnet die CLI (Host- und Container-Pfad sind identisch, 1:1-Mount).
+    assert body["path"].startswith(str(attachment_root))
+    assert os.path.isfile(body["path"])
+    assert open(body["path"], "rb").read() == b"\x89PNG-bytes"
+
+
+async def test_attachment_belongs_to_the_agent(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Besitzer ist der Agent — die Ownership-Art, die es fuer genau diesen
+    Fall schon gibt. Damit raeumt das Loeschen des Agenten die Datei mit ab,
+    statt sie verwaist liegen zu lassen."""
+    from app.models.reference_file import ReferenceFile
+
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("foto.png", b"bytes", "image/png")},
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        rows = (await s.exec(
+            select(ReferenceFile).where(ReferenceFile.agent_id == agent.id)
+        )).all()
+    assert len(rows) == 1
+    assert rows[0].original_name == "foto.png"
+    assert rows[0].uploaded_by == "chat"
+    # Root + Unterpfad kommen aus der Ablage, damit das Frontend sie nicht
+    # aus dem absoluten Pfad zurueckrechnen muss.
+    assert body["root"] == "references"
+    assert body["subpath"] == rows[0].rel_path
+    assert body["path"] == os.path.join(str(attachment_root), rows[0].rel_path)
+
+
+async def test_deleting_the_agent_removes_his_attachments(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Der eigentliche Grund fuer die Agenten-Ownership: Anhaenge bleiben
+    nicht verwaist liegen. `delete_agent` ruft `delete_references_for(
+    agent_id=…)` — Zeile UND Datei verschwinden mit ihrem Agenten.
+
+    Vorher lagen Chat-Anhaenge in einer eigenen Ablage ohne DB-Zeile; niemand
+    hat sie je wieder angefasst."""
+    from unittest.mock import patch
+
+    from app.utils import utcnow
+
+    agent = await make_agent(
+        name="Rex", agent_runtime="cli-bridge", harness="claude",
+        archived_at=utcnow(),  # der Delete-Gate verlangt archiviert
+    )
+    up = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("foto.png", b"bytes", "image/png")},
+    )
+    assert up.status_code == 201, up.text
+    path = up.json()["path"]
+    assert os.path.isfile(path)
+
+    with patch("app.services.docker_agent_sync.remove_docker_agent_container",
+               return_value={"ok": "true"}):
+        res = await auth_client.delete(f"/api/v1/agents/{agent.id}")
+    assert res.status_code == 204, res.text
+
+    assert not os.path.exists(path), "Anhang ueberlebt seinen Agenten"
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.reference_file import ReferenceFile
+        rows = (await s.exec(
+            select(ReferenceFile).where(ReferenceFile.agent_id == agent.id)
+        )).all()
+    assert rows == []
+
+
+async def test_attachment_accepts_any_file_type(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Operator-Entscheid 19.08.2026: keine Typen-Liste. Ob der Agent die
+    Datei lesen kann, ist nicht unsere Zusage. Die strenge Allowlist von
+    reference_ingest bleibt fuer References-Upload und Slack unveraendert —
+    nur dieser Aufrufer schaltet sie ab."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    for name, mime in (("a.heic", "image/heic"), ("b.mov", "video/quicktime"),
+                       ("c.html", "text/html"), ("d.xyz", "application/x-unknown")):
+        res = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/chat/attachment",
+            files={"file": (name, b"payload", mime)},
+        )
+        assert res.status_code == 201, f"{name}: {res.text}"
+
+
+async def test_attachment_has_no_files_per_agent_cap(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Der 20er-Deckel von reference_ingest passt fuer einen laufenden Chat
+    nicht — nach 20 Screenshots waere Schluss."""
+    from app.services.reference_ingest import MAX_FILES_PER_ENTITY
+
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    for i in range(MAX_FILES_PER_ENTITY + 2):
+        res = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/chat/attachment",
+            files={"file": (f"n{i}.png", f"inhalt-{i}".encode(), "image/png")},
+        )
+        assert res.status_code == 201, f"#{i}: {res.text}"
+
+
+async def test_attachment_works_for_every_harness(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Operator-Entscheid 19.08.2026: alle Agenten, nicht nur Claude."""
+    for harness in ("claude", "openclaude", "omp", "kimi"):
+        agent = await make_agent(
+            name=f"A-{harness}", agent_runtime="cli-bridge", harness=harness
+        )
+        res = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/chat/attachment",
+            files={"file": ("x.png", b"x", "image/png")},
+        )
+        assert res.status_code == 201, f"{harness}: {res.text}"
+
+
+async def test_attachment_413_when_too_large(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    from app.services.reference_ingest import MAX_BYTES
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("gross.bin", b"x" * (MAX_BYTES + 1), "application/octet-stream")},
+    )
+
+    assert res.status_code == 413
+    # Die Meldung muss die Grenze nennen — stilles Verschlucken war der
+    # ausdrueckliche Abnahme-Punkt.
+    assert "25" in res.json()["detail"]
+
+
+async def test_attachment_409_for_agents_that_cannot_receive_input(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Hermes ist ein Host-Agent ausserhalb der Boss-Allowlist — er nimmt
+    ueberhaupt keinen Chat-Text an. Dann ist auch ein Anhang sinnlos, und das
+    UI erfaehrt den Grund statt einer Datei, die nie jemand liest."""
+    agent = await make_agent(name="Hermes", agent_runtime="host", harness="hermes")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("x.png", b"x", "image/png")},
+    )
+
+    assert res.status_code == 409
+    assert res.json()["reason"] == "input_not_supported"
+
+
+async def test_attachment_422_on_traversal_name(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("../../etc/passwd", b"x", "text/plain")},
+    )
+
+    assert res.status_code == 422
+
+
+async def test_attachment_422_on_empty_file(
+    auth_client: AsyncClient, make_agent, attachment_root
+):
+    """Eine leere Datei ist keine Datei — der Agent bekaeme einen Pfad auf 0
+    Bytes und keinen Hinweis, warum nichts drinsteht."""
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+
+    res = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("leer.png", b"", "image/png")},
+    )
+
+    assert res.status_code == 422
+
+
+async def test_attachment_requires_auth(client: AsyncClient, make_agent, attachment_root):
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
+    res = await client.post(
+        f"/api/v1/agents/{agent.id}/chat/attachment",
+        files={"file": ("x.png", b"x", "image/png")},
+    )
+    assert res.status_code == 401
+
+
+async def test_attachment_404_for_unknown_agent(auth_client: AsyncClient, attachment_root):
+    res = await auth_client.post(
+        f"/api/v1/agents/{uuid.uuid4()}/chat/attachment",
+        files={"file": ("x.png", b"x", "image/png")},
+    )
+    assert res.status_code == 404

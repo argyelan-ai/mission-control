@@ -37,6 +37,30 @@ from typing import Any
 logger = logging.getLogger("mc.pane_state")
 
 _PANE_TAIL_LINES = 40
+# Siehe parse_pane_state: Fenster, in dem die Eingabezeile ueber dem Fuss stehen darf.
+_PROMPT_WINDOW_LINES = 8
+# Die Eingabezeile BEGINNT mit dem Marker — optional hinter Rahmenzeichen, weil
+# manche CLI-Versionen den Prompt in eine Box zeichnen (``│ ❯   …   │``). Ein
+# "> " mitten in einer Ausgabe (Zitat, Diff, Log) ist dagegen keine
+# Eingabeaufforderung und darf den Ruhezustand nicht vortaeuschen.
+#
+# ``>`` ist bewusst KEIN erlaubtes Praefix-Zeichen mehr und ``> `` allein kein
+# Marker mehr (Review 20.08.2026): das alte Muster traf jede Zeile, die mit
+# "> " BEGINNT — "> zitierte Zeile", "  > Blockquote", "> > verschachtelt",
+# "|> Pipe". Mit dem auf 8 Zeilen erweiterten Fenster stehen vier Zeilen echter
+# Ausgabe ueber der Eingabebox: ein bootender Pane, dessen Scrollback auf so
+# einer Zeile endet, galt als "idle" und das Readiness-Gate liess in die halb
+# gestartete TUI tippen.
+#
+# Wie die Eingabezeile in der Flotte WIRKLICH aussieht (20.08.2026 an den
+# laufenden Containern abgelesen):
+#   Claude Code / openclaude : "❯\xa0"              (nbsp, ohne Rahmen)
+#   kimi                     : " │ >            │"  (">" nur INNERHALB der Box)
+# Darum: "❯" darf hinter Einrueckung/Rahmen stehen, ">" nur hinter einem
+# echten Rahmenzeichen plus Abstand. Faellt eine kuenftige CLI mit blankem
+# "> "-Prompt durchs Raster, ist das Ergebnis "unknown" — das Readiness-Gate
+# haelt dann an, statt in einen ungelesenen Pane zu tippen.
+_PROMPT_LINE_RE = re.compile(r"^[\s│┃]*❯|^\s*[│┃|]\s+>")
 _QUESTION_LOOKBACK_LINES = 6
 _FOOTER_LOOKAHEAD_LINES = 6
 
@@ -101,7 +125,8 @@ def parse_pane_state(pane_text: str, transcript_active: bool) -> dict[str, Any]:
        description line directly below it, see ``_find_question_fallback``).
     2. The Claude Code spinner footer (``esc to interrupt``) anywhere in the
        captured text -> ``working``.
-    3. An input-prompt marker (``❯ `` or ``> ``) on one of the last 3
+    3. An input-prompt marker (``❯ `` or ``> ``) at the START of one of the
+       last ``_PROMPT_WINDOW_LINES`` non-empty
        non-empty lines, OR a prompt line carrying DRAFT/QUEUED text anywhere
        in the tail (``❯ `` immediately followed by non-whitespace — the
        operator "steered" a follow-up in while the agent was still working;
@@ -125,9 +150,23 @@ def parse_pane_state(pane_text: str, transcript_active: bool) -> dict[str, Any]:
     if _ESC_TO_INTERRUPT in tail_text:
         return {"status": "working", "prompt": None}
 
+    # Wie weit ueber der letzten Zeile die Eingabezeile stehen darf. Frueher 3 —
+    # das reichte, solange unter dem Prompt nur der Rahmen stand. Claude Code
+    # rendert dort inzwischen MEHRERE Fusszeilen (Trennlinie, Statuszeile mit
+    # Modell/Kontext, Bypass-Hinweis), womit "❯" auf Platz 4+ rutschte und ein
+    # voellig normaler Ruhezustand als "unknown" galt. Folge im Betrieb
+    # (Operator-Befund 18.08.2026): das Readiness-Gate von send_text hielt JEDE
+    # Nachricht an Container-Agenten mit Statuszeile fuer einen bootenden Agenten
+    # und lehnte sie mit 409 agent_starting ab — im Chat kam nichts an.
+    # Grosszuegig gewaehlt, weil zusaetzliche Fusszeilen jederzeit dazukommen
+    # koennen; die Praezision liefert stattdessen der Zeilenanfang unten.
     non_empty = [line for line in tail if line.strip()]
-    last_three = non_empty[-3:]
-    has_bare_prompt = any(("❯" in line) or ("> " in line) for line in last_three)
+    prompt_window = non_empty[-_PROMPT_WINDOW_LINES:]
+    # Zeilenanfang statt "irgendwo enthalten": die Eingabezeile BEGINNT mit dem
+    # Marker. Ein "> " mitten in einer Ausgabe (Zitat, Diff, Log) ist keine
+    # Eingabeaufforderung — mit dem groesseren Fenster waere die alte
+    # Enthaelt-Pruefung sonst deutlich falsch-positiver geworden.
+    has_bare_prompt = any(_PROMPT_LINE_RE.match(line) for line in prompt_window)
     has_queued_draft_prompt = any(_QUEUED_DRAFT_PROMPT_RE.search(line) for line in tail)
     if has_bare_prompt or has_queued_draft_prompt:
         return {"status": "working" if transcript_active else "idle", "prompt": None}

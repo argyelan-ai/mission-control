@@ -107,6 +107,7 @@ just yields builtins alone) and cached ~60s per agent slug (real file I/O).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import subprocess
@@ -175,8 +176,15 @@ ALLOWED_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 # Polling budget for _verify_effort_applied: a docker-exec capture-pane round
 # trip is fast (<100ms typically) but not instant, and the CLI needs a brief
 # moment to render its confirmation line after processing the /effort command.
-_EFFORT_VERIFY_ATTEMPTS = 5
-_EFFORT_VERIFY_DELAY_SECONDS = 0.2
+# 12 x 0.5s = 6s Budget (Boss-Transkriptpfad: x2 = 12s). Die erste Fassung
+# (5 x 0.2s = 1s!) gab regelmaessig auf, BEVOR die CLI ihre Bestaetigung
+# gerendert hatte — Operator-Befund 19.08.2026 am Tester: Wechsel angewendet
+# (Pane zeigte "Set effort level to medium"), Toast meldete trotzdem "Nicht
+# bestaetigt" — und der Timeout-Pfad tippte obendrein ein aufraeumendes
+# Escape in eine voellig gesunde TUI. Ein Pane-Capture ist billig; lieber
+# 6s geduldig pollen als einen gelungenen Wechsel als Fehlschlag melden.
+_EFFORT_VERIFY_ATTEMPTS = 12
+_EFFORT_VERIFY_DELAY_SECONDS = 0.5
 
 
 class InputNotSupportedError(Exception):
@@ -241,6 +249,8 @@ _SEND_READINESS_POLL_INTERVAL_SECONDS = 1.0
 # apply-confirmation wording ("Set effort level to <level>"). Captures the
 # CLI's whole response line so the operator sees exactly what it said.
 _EFFORT_REJECTED_RE = re.compile(r"Kept effort level as \S+")
+# Bestaetigungsdialog bei Sessions mit gecachtem Verlauf (s. _verify_effort_applied).
+_EFFORT_CONFIRM_DIALOG_MARKER = "Change effort level?"
 
 
 def _docker_argv(slug: str, *tail: str) -> list[str]:
@@ -326,6 +336,18 @@ def _target_kind(agent) -> str:
     raise InputNotSupportedError()
 
 
+def can_receive_input(agent) -> bool:
+    """Kann dieser Agent ueberhaupt Chat-Text empfangen? Oeffentliche,
+    ausnahmefreie Form von ``_target_kind`` — der Anhang-Endpunkt fragt das
+    vorab, weil eine Datei fuer einen Agenten, der nie eine Nachricht
+    bekommt, nur Platte kostet und ein leeres Versprechen ist."""
+    try:
+        _target_kind(agent)
+        return True
+    except InputNotSupportedError:
+        return False
+
+
 async def _wait_for_send_readiness(agent) -> None:
     """Readiness gate before typing into a docker agent's pane. Live
     measurement (wave-review) found a real send landing in a session file
@@ -394,7 +416,14 @@ async def send_text(agent, text: str) -> None:
 
     if kind == "docker":
         await _touch_recycler_marker(slug)
-        await _wait_for_send_readiness(agent)
+        if getattr(agent, "harness", None) == "claude":
+            # Das Gate liest den Pane mit CLAUDE-Regeln (Prompt-Marker,
+            # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — Sparky
+            # war dadurch dauerhaft unerreichbar (jeder Send: 409
+            # agent_starting; Operator-Befund 19.08.2026). Fuer fremde
+            # Harnesses gilt wieder blindes Zustellen wie vor dem Gate: keine
+            # Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung.
+            await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
             await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted))
@@ -430,8 +459,15 @@ async def send_keys(agent, keys: list[str]) -> None:
                 await _run_docker_exec(_docker_argv(slug, "-l", "--", ALLOWED_KEYS[key]))
         return
 
-    # kind == "boss"
-    await _send_boss_bytes(*(ALLOWED_KEYS[key].encode() for key in keys))
+    # kind == "boss" — delay_before_last wirkt auch bei EINEM Frame: connect,
+    # kurz setzen lassen, dann schreiben. Ohne den Settle-Moment verpufft ein
+    # einzelnes Byte im Attach-Handshake der Bridge (live gesehen 19.08.2026:
+    # Enter auf den Effort-Bestaetigungsdialog kam nie an, waehrend Text+Enter
+    # mit Frame-Abstand immer funktionierte).
+    await _send_boss_bytes(
+        *(ALLOWED_KEYS[key].encode() for key in keys),
+        delay_before_last=_BOSS_ENTER_DELAY_SECONDS,
+    )
 
 
 async def set_effort(agent, level: str) -> None:
@@ -479,8 +515,15 @@ async def set_effort(agent, level: str) -> None:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
     kind = _target_kind(agent)
-    if kind != "docker":
+    if getattr(agent, "harness", None) != "claude":
+        # Spiegel des Capabilities-Gates: selbst wenn ein Client den Endpoint
+        # direkt trifft, tippen wir kein /effort in eine fremde CLI.
         raise InputNotSupportedError()
+
+    if kind == "boss":
+        await _set_effort_boss(agent, level)
+        return
+
     slug = agent.slug
 
     if await _pane_is_busy(agent):
@@ -493,6 +536,137 @@ async def set_effort(agent, level: str) -> None:
         if not await _pane_is_busy(agent):
             await _run_docker_exec(_docker_argv(slug, "Escape"))
         raise EffortSwitchFailedError()
+
+
+def _read_since(path: Path, offset: int | None) -> tuple[int, str]:
+    """Liest den ZUWACHS einer Transkript-Datei ab ``offset`` und gibt
+    ``(neuer_offset, text)`` zurueck. Blockierend — Aufrufer wrappt in
+    ``asyncio.to_thread``.
+
+    ``offset is None`` heisst "diese Datei zum ersten Mal gesehen, und wir
+    wissen nicht, wie gross sie beim Absenden des Kommandos war". Dann wird
+    der AKTUELLE Stand als Nullpunkt genommen und nichts gelesen: alles davor
+    koennte aus einem frueheren Wechsel stammen, und eine alte
+    "Set effort level to <X>"- oder "Kept effort level as <X>"-Zeile als
+    eigenes Ergebnis zu lesen ist der teurere Fehler (falsches 204 bzw.
+    falsche Ablehnung) als eine verpasste Bestaetigung — die faellt auf
+    409 zurueck, also auf die ehrliche Seite. Betrifft genau zwei Faelle:
+    Rollover mitten im Wechsel und den stat-Race beim Baseline-Read.
+    """
+    size = path.stat().st_size
+    if offset is None or offset > size:  # None = Erstsichtung; > = Datei gekuerzt
+        return size, ""
+    if size == offset:
+        return offset, ""
+    with open(path, "rb") as f:
+        f.seek(offset)
+        data = f.read()
+    return offset + len(data), data.decode("utf-8", errors="replace")
+
+
+async def _set_effort_boss(agent, level: str) -> None:
+    """Boss-Variante von ``set_effort`` (19.08.2026, Operator: Chip bei Boss
+    ohne Funktion). Kein Pane-Kanal — darum:
+
+    - PREFLIGHT ueber das Transkript statt den Pane: mtime frisch UND der Zug
+      laeuft noch (letzte inhaltliche Zeile ist keine reine Antwort) -> busy.
+      In eine arbeitende TUI getippt wuerde /effort nur als Muell-Prompt
+      queuen — exakt die Docker-Preflight-Begruendung.
+    - TIPPEN ueber die WS-Bridge (gleiche Frame-Trennung wie send_text).
+    - VERIFY ueber das TRANSKRIPT: /effort schreibt seine Bestaetigung als
+      local-command-stdout-Zeile in die Session-Datei (R12b, gleiche CLI).
+      Gelesen wird NUR was nach der vorab notierten Dateigroesse dazukommt —
+      dieselbe Stale-Zeilen-Lektion wie beim Pane-Verify (18.08.).
+    - KEIN Escape bei Timeout: ohne Pane ist "safe to Escape" nicht
+      feststellbar, und ein Escape in Marks arbeitenden Boss wuerde echte
+      Arbeit abbrechen. Ein evtl. gequeutes /effort ist das kleinere Uebel.
+    """
+    from app.services.transcript_chat import (  # lazy: Import-Zyklus vermeiden
+        ChatTailerManager, find_active_session, resolve_transcript_dir,
+    )
+
+    tdir = resolve_transcript_dir(agent)
+    if tdir is None:
+        raise InputNotSupportedError()
+    active = await asyncio.to_thread(find_active_session, tdir)
+    baseline_path: Path | None = None
+    # None heisst "Groesse unbekannt", NICHT 0 (Review 20.08.2026): frueher
+    # setzte der OSError-Zweig nur die Groesse auf 0 und liess den Pfad stehen —
+    # die Verify-Schleife las die Datei dann ab Byte 0 und hielt eine
+    # "Set effort level to <X>"-Zeile von vor einer Stunde fuer die eigene
+    # Bestaetigung (204 ohne Wirkung); umgekehrt loeste ein altes "Kept effort
+    # level as <X>" eine Ablehnung fuer einen Wechsel aus, der geklappt hat.
+    baseline_size: int | None = None
+    if active is not None:
+        baseline_path = active[0]
+        try:
+            stat = await asyncio.to_thread(baseline_path.stat)
+            baseline_size = stat.st_size
+            fresh = (time.time() - stat.st_mtime) < 20
+            ended = await asyncio.to_thread(
+                ChatTailerManager._transcript_suggests_turn_ended, baseline_path
+            )
+            if fresh and not ended:
+                raise AgentBusyError()
+        except OSError:
+            baseline_size = None
+
+    await _send_boss_bytes(
+        f"/effort {level}".encode(), b"\r",
+        delay_before_last=_BOSS_ENTER_DELAY_SECONDS,
+    )
+
+    marker = f"effort level to {level}"
+    confirmed_dialog = False
+    # Pro Datei der Byte-Stand, bis zu dem schon gelesen wurde. Gelesen wird
+    # ausschliesslich der ZUWACHS und der wird aufsummiert — nie die ganze
+    # Datei (Review 20.08.2026): Boss' echtes Transkript-Verzeichnis hat 53
+    # Dateien / 981 MB, die groesste 124,9 MB. Ohne bekannten Baseline-Pfad
+    # lief frueher in JEDER der 24 Runden ein voller read_text, also ~3 GB
+    # Lesen und 24 aufeinanderfolgende ~125-MB-Allokationen in EINEM
+    # POST /chat/effort — auf einer Docker-VM mit 5 GB Deckel.
+    # Aufsummiert statt pro Runde geprueft, damit die Bestaetigungszeile auch
+    # dann gefunden wird, wenn sie zwischen zwei Polls zerschnitten wurde.
+    offsets: dict[Path, int] = {}
+    if baseline_path is not None and baseline_size is not None:
+        offsets[baseline_path] = baseline_size
+    fresh_parts: list[str] = []
+    for attempt in range(_EFFORT_VERIFY_ATTEMPTS * 2):  # Transkript ist traeger als der Pane
+        await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
+        if attempt == 2 and not confirmed_dialog:
+            # Ohne Pane ist der Bestaetigungsdialog (s. _verify_effort_applied)
+            # nicht sichtbar — nach ~1.5s ohne Transkript-Bestaetigung wird er
+            # EINMAL blind mit Enter beantwortet (Option "Yes" ist vorgewaehlt).
+            # Ist kein Dialog da, ist das Enter auf leerem Eingabefeld ein
+            # No-Op. Restrisiko, dokumentiert: ein im Terminal halb getippter
+            # Entwurf wuerde abgeschickt — akzeptiert, weil der Operator den
+            # Wechsel gerade selbst ausgeloest hat und das Eingabefeld dafuer
+            # ohnehin frei sein muss.
+            confirmed_dialog = True
+            await _send_boss_bytes(b"\r", delay_before_last=_BOSS_ENTER_DELAY_SECONDS)
+            continue
+        try:
+            current = await asyncio.to_thread(find_active_session, tdir)
+        except OSError:
+            continue
+        if current is None:
+            continue
+        path = current[0]
+        try:
+            offsets[path], zuwachs = await asyncio.to_thread(
+                _read_since, path, offsets.get(path)
+            )
+        except OSError:
+            continue
+        if zuwachs:
+            fresh_parts.append(zuwachs)
+        fresh_text = "".join(fresh_parts)
+        if marker in fresh_text:
+            return
+        rejected = _EFFORT_REJECTED_RE.search(fresh_text)
+        if rejected is not None:
+            raise EffortSwitchRejectedError(rejected.group(0))
+    raise EffortSwitchFailedError()
 
 
 async def _pane_is_busy(agent) -> bool:
@@ -539,14 +713,50 @@ async def _verify_effort_applied(agent, level: str) -> bool:
     the module that needs a real success/failure signal instead of the
     usual "log a warning and move on" contract."""
     marker = f"effort level to {level}"
+    command_echo = f"/effort {level}"
+    confirmed_dialog = False
     for _ in range(_EFFORT_VERIFY_ATTEMPTS):
         await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
         pane = await capture_pane(agent)
         if not pane:
             continue
-        if marker in pane:
+        # Sessions MIT gecachtem Verlauf fragen zurueck ("Change effort
+        # level? … 1. Yes, switch … 2. No, go back", Option 1 vorgewaehlt) —
+        # auf frischen Wegwerf-Sessions erschien der Dialog nie, weshalb die
+        # R12b-Reproduktion scheiterte und "Kept effort level as X" raetselhaft
+        # blieb: das IST die Antwort der CLI, wenn der Dialog verneint wird
+        # (gefunden 19.08.2026 am Boss). Der Operator hat den Wechsel bereits
+        # im Regler entschieden — der Dialog wird EINMAL bestaetigt, dann
+        # normal weiter verifiziert.
+        # NUR hinter dem Echo DIESES Kommandos lesen (Operator-Live-Bug
+        # 18.08.2026 abends): der Pane zeigt Verlauf. Eine "Kept effort
+        # level as <X>"-Zeile eines FRUEHEREN Versuchs blieb sichtbar und
+        # liess jeden neuen Versuch sofort als abgelehnt enden — jeder
+        # "Erneut versuchen"-Klick scheiterte identisch, bis die Zeile
+        # zufaellig aus dem Fenster scrollte. rfind nimmt das LETZTE Echo:
+        # das ist unseres, auch wenn ein aelterer Versuch derselben Stufe
+        # weiter oben steht. Solange das Echo noch nicht gerendert ist,
+        # gibt es nichts auszuwerten -> weiter pollen.
+        #
+        # Der Zuschnitt steht seit dem Review 20.08.2026 VOR dem Dialog-Zweig,
+        # nicht mehr danach: der suchte den GANZEN Pane und fiel damit auf
+        # exakt denselben Alt-Scrollback herein. Beim zweiten Wechsel
+        # innerhalb eines Scrollbacks feuerte er beim ERSTEN Poll auf die
+        # "Change effort level?"-Zeile des vorigen Wechsels — ein Streu-Enter
+        # ins LIVE-Fenster des Agenten (schickt ab, was der Operator gerade
+        # tippt), ``confirmed_dialog`` verbraucht, der ECHTE Dialog nie
+        # beantwortet, 409 nach Budget-Ablauf.
+        echo_idx = pane.rfind(command_echo)
+        if echo_idx < 0:
+            continue
+        tail = pane[echo_idx + len(command_echo):]
+        if marker in tail:
             return True
-        rejected = _EFFORT_REJECTED_RE.search(pane)
+        if not confirmed_dialog and _EFFORT_CONFIRM_DIALOG_MARKER in tail:
+            confirmed_dialog = True
+            await _run_docker_exec(_docker_argv(agent.slug, "Enter"))
+            continue
+        rejected = _EFFORT_REJECTED_RE.search(tail)
         if rejected is not None:
             # The CLI answered definitively (just not with what was asked
             # for) — stop polling immediately rather than burning the rest
@@ -622,10 +832,59 @@ async def effort_capabilities(agent) -> dict[str, object]:
     except InputNotSupportedError:
         kind = None
 
+    if kind == "docker" and getattr(agent, "harness", None) != "claude":
+        # Fremde CLI im Container (kimi, omp): /effort ist ein Claude-Kommando.
+        # Weder Leiter noch Schaltrecht behaupten — sonst tippt ein Klick
+        # Kauderwelsch in eine TUI, die es nicht versteht (kritischer
+        # Test-Durchgang 18.08.2026).
+        return {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+
     if kind == "docker":
         await _check_effort_levels_version_drift(agent)
-        return {"effortLevels": list(ALLOWED_EFFORT_LEVELS), "canSwitchEffort": True}
-    return {"effortLevels": [], "canSwitchEffort": False}
+        slug = getattr(agent, "slug", None) or ""
+        effort = await asyncio.to_thread(_persisted_effort_level, slug) if slug else None
+        return {
+            "effortLevels": list(ALLOWED_EFFORT_LEVELS),
+            "canSwitchEffort": True,
+            # Startwert fuer den Chip, solange die Session noch kein usage-Ereignis
+            # geschrieben hat. Ein spaeteres usage gewinnt immer (es kennt auch die
+            # session-only-Stufen max/ultracode, die nie in der Datei landen).
+            "effort": effort,
+            # Container-Agenten haben ihre EIGENE settings.json — ein
+            # persistierender Wechsel bleibt beim Agenten.
+            "effortShared": False,
+        }
+
+    # Host-Agenten mit Claude-Code-Harness (Boss): seit 19.08.2026 SCHALTBAR
+    # (Operator: "klicke drauf, passiert nichts"). Kanal: die WS-Bridge tippt,
+    # verifiziert wird ueber das TRANSKRIPT statt ueber den Pane (den es hier
+    # nicht gibt) — /effort schreibt seine Bestaetigung als local-command-
+    # stdout-Zeile in die Session-Datei (R12b-Befund, gleiche CLI).
+    #
+    # effortShared=True traegt die WICHTIGE Eigenheit dieses Setups: Boss
+    # unsetzt CLAUDE_CONFIG_DIR und nutzt Marks eigene ~/.claude/settings.json.
+    # Eine persistierende Stufe (low..xhigh) aendert damit auch den Standard
+    # von Marks EIGENEN Claude-Sessions — das UI muss das am Wert sagen,
+    # nicht verschweigen.
+    # kind == "boss", NICHT bloss harness == "claude" (Review 20.08.2026):
+    # ``_target_kind`` liefert "boss" nur fuer host + einen Slug aus
+    # _BOSS_SLUGS, alles andere wirft InputNotSupportedError -> kind None.
+    # Migration 0163 setzt harness='claude' aber auf JEDEN Host-Agenten mit
+    # Anthropic-Runtime. Am Harness allein haette so ein Agent
+    # canSwitchEffort=true gemeldet, die PERSOENLICHE ~/.claude/settings.json
+    # des Operators fuer den Chip gelesen — und jeder Zug am Regler haette
+    # 409 input_not_supported gegeben: genau der "klicke drauf, passiert
+    # nichts"-Fehler, den diese Runde beheben sollte.
+    if kind == "boss" and getattr(agent, "harness", None) == "claude":
+        effort = await asyncio.to_thread(_persisted_effort_level_at,
+                                         _host_home() / ".claude" / "settings.json")
+        return {
+            "effortLevels": list(ALLOWED_EFFORT_LEVELS),
+            "canSwitchEffort": True,
+            "effort": effort,
+            "effortShared": True,
+        }
+    return {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
 
 
 # Built-in slash commands — static, not discovered (no CLI-side enumeration
@@ -646,6 +905,76 @@ _BUILTIN_SLASH_COMMANDS: tuple[dict[str, str], ...] = (
 
 _SLASH_COMMANDS_CACHE_TTL_SECONDS = 60
 _slash_commands_cache: dict[str, tuple[float, list[dict[str, str | None]]]] = {}
+
+
+def _persisted_effort_level_at(path: Path) -> str | None:
+    """Wie ``_persisted_effort_level``, aber fuer einen expliziten Pfad —
+    Boss' effektive Config ist ~/.claude/settings.json (geteilt mit dem
+    Operator), nicht das mc-Agenten-Muster. Fail-silent -> None."""
+    try:
+        with open(path) as f:
+            level = json.load(f).get("effortLevel")
+    except Exception:
+        return None
+    return level if level in ALLOWED_EFFORT_LEVELS else None
+
+
+def _persisted_effort_level(slug: str) -> str | None:
+    """Die im ``settings.json`` des Agenten hinterlegte Effort-Stufe — der
+    Standard, mit dem JEDE neue Session startet.
+
+    Warum das hier gebraucht wird (Operator-Befund 18.08.2026): Der Effort-Chip
+    im Composer hing allein am ``usage``-Ereignis aus dem Transkript. Eine frisch
+    gestartete Session hat noch keines — also fehlte das Bedienelement komplett,
+    und der Effort war schlicht nicht schaltbar, bis der Agent zufaellig einmal
+    gearbeitet hatte. Die Datei ist die ehrliche Zweitquelle: was in ihr steht,
+    gilt bis eine Session es ueberschreibt (``max``/``ultracode`` tun das nur
+    fuer sich selbst und stehen darum korrekt NICHT in der Datei).
+
+    Fail-silent: fehlende Datei, kaputtes JSON oder ein unbekannter Wert geben
+    ``None`` — das UI zeigt dann ``auto``, statt etwas zu behaupten."""
+    try:
+        path = _host_home() / ".mc" / "agents" / slug / "claude-config" / "settings.json"
+        with open(path) as f:
+            level = json.load(f).get("effortLevel")
+    except Exception:
+        return None
+    return level if level in ALLOWED_EFFORT_LEVELS else None
+
+
+def _persisted_model_at(path: Path) -> str | None:
+    """Wie ``_persisted_model``, aber fuer einen expliziten Pfad — Boss'
+    effektive Config ist ~/.claude/settings.json (geteilt mit dem Operator).
+    Fail-silent -> None."""
+    try:
+        with open(path) as f:
+            model = json.load(f).get("model")
+    except Exception:
+        return None
+    return model if isinstance(model, str) and model.strip() else None
+
+
+def _persisted_model(slug: str) -> str | None:
+    """Das im ``settings.json`` des Agenten hinterlegte Modell — der Standard,
+    mit dem jede neue Session startet. Gleiche Rolle wie
+    ``_persisted_effort_level`` (Operator-Befund 18.08.2026 abends): das
+    Modell-Label im Composer hing allein am usage-Ereignis, eine frische
+    Session zeigte darum "—" statt des tatsaechlich eingestellten Modells.
+
+    Der Wert kommt in ZWEI Gestalten vor, beide echt beobachtet in der Flotte:
+    als Kurz-Alias ("sonnet", von ``/model sonnet`` geschrieben) oder als volle
+    Modell-ID ("claude-sonnet-5", vom Config-Renderer). Beide werden verbatim
+    durchgereicht — die Zuordnung zum Dropdown-Eintrag macht das Frontend
+    (Alias == command; volle ID via settings.model_aliases hier NICHT
+    aufloesen, sonst behaupten wir eine Zuordnung, die der Renderer nie
+    getroffen hat). Fail-silent: fehlt/kaputt/leer -> None."""
+    try:
+        path = _host_home() / ".mc" / "agents" / slug / "claude-config" / "settings.json"
+        with open(path) as f:
+            model = json.load(f).get("model")
+    except Exception:
+        return None
+    return model if isinstance(model, str) and model.strip() else None
 
 
 def _agent_skills_dir(slug: str) -> Path:
@@ -684,6 +1013,12 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     — builtins merged with this agent's installed skills. Docker/cli-bridge
     only: every other runtime gets builtins alone (no ``claude-config``
     mount to scan for skills)."""
+    # Die Builtins sind Claude-Code-Vokabular (/effort, /model, /compact, …).
+    # Fuer eine fremde CLI (kimi, omp) sind sie falsche Versprechen — dort
+    # bleibt die Liste leer, bis deren Harness eigene Kommandos meldet.
+    if getattr(agent, "harness", None) != "claude":
+        return {"slashCommands": []}
+
     commands: list[dict[str, str | None]] = list(_BUILTIN_SLASH_COMMANDS)
 
     slug = getattr(agent, "slug", None)
@@ -718,6 +1053,12 @@ async def model_options_capabilities(agent) -> dict[str, object]:
     ``model_aliases`` fallback every agent gets when its catalog is
     unavailable. Never raises — catalog discovery is fully fail-silent on
     its own (see ``harness_catalog``)."""
+    if getattr(agent, "harness", None) != "claude":
+        # Claude-Aliasse ("/model sonnet") in einer fremden CLI sind
+        # Kauderwelsch — lieber gar keine Auswahl anbieten. Das persistierte
+        # Modell wird unten trotzdem nur fuer docker+claude gelesen.
+        return {"modelOptions": [], "model": None}
+
     catalog = await discover_model_catalog(agent)
     observed = await get_observed_model_windows()
 
@@ -739,4 +1080,31 @@ async def model_options_capabilities(agent) -> dict[str, object]:
             "label": row["label"],
             "contextWindow": resolve_context_window(model_id, observed),
         })
-    return {"modelOptions": options}
+    # Persistiertes Modell NUR fuer docker/cli-bridge lesen: nur dort IST
+    # ~/.mc/agents/<slug>/claude-config die effektive Config. Boss (host)
+    # unsetzt CLAUDE_CONFIG_DIR und liest ~/.claude/ — sein alter
+    # ~/.mc/agents/boss-Ordner liegt seit April brach und lieferte beim
+    # ersten Live-Test prompt ein Geister-Modell ("glm-5.1:cloud"), das Boss
+    # nie faehrt. Lieber ehrliches None als eine falsche Behauptung.
+    try:
+        kind = _target_kind(agent)
+    except InputNotSupportedError:
+        kind = None
+    slug = getattr(agent, "slug", None) or ""
+    if kind == "docker" and slug:
+        model = await asyncio.to_thread(_persisted_model, slug)
+    elif kind == "boss":
+        # Boss liest ~/.claude/settings.json (CLAUDE_CONFIG_DIR unset) — NICHT
+        # das mc-Agenten-Muster, aus dem frueher ein Geister-Modell kam.
+        # Ohne diesen Zweig stand nach /clear ein "—" im Composer, bis die
+        # erste Nachricht ein usage-Ereignis erzeugte (Operator-Befund
+        # 19.08.2026, Screenshot).
+        model = await asyncio.to_thread(
+            _persisted_model_at, _host_home() / ".claude" / "settings.json"
+        )
+    else:
+        model = None
+    # Startwert fuers Modell-Label, solange die Session noch kein usage-Ereignis
+    # geschrieben hat — ein spaeteres usage gewinnt immer (es kennt das Modell
+    # des laufenden Zuges, nicht nur den persistierten Standard).
+    return {"modelOptions": options, "model": model}

@@ -569,7 +569,15 @@
     "connected": "connected",
     "disconnected": "disconnected",
     "agentsBack": "Agents",
-    "selectAgent": "Select an agent"
+    "selectAgent": "Select an agent",
+    "attachFile": "Attach file",
+    "removeAttachment": "Remove attachment {name}",
+    "attachmentUploadingOne": "uploading…",
+    "attachmentUploadingMany": "uploading {count}…",
+    "attachmentFailed": "Attachment failed",
+    "attachmentExpandImage": "Enlarge image {name}",
+    "attachmentCollapseImage": "Shrink image {name}",
+    "attachmentUnavailable": "no longer available"
   },
   "shell": {
     "searchPlaceholder": "Search or command...",

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import uuid
 
+import json
+
 import pytest
 from httpx import AsyncClient
 
@@ -26,9 +28,13 @@ class _StubAgent:
     ``agent.slug`` / ``agent.agent_runtime`` contract ``_target_kind`` reads,
     same convention as ``transcript_chat.resolve_transcript_dir``'s tests."""
 
-    def __init__(self, slug: str, agent_runtime: str):
+    def __init__(self, slug: str, agent_runtime: str, harness: str = "claude"):
+        # harness default "claude" = der Flotten-Mainstream; die Harness-Gates
+        # (18.08.2026: kein /effort//model in fremde CLIs) testen Abweichler
+        # explizit mit harness="kimi"/"omp".
         self.slug = slug
         self.agent_runtime = agent_runtime
+        self.harness = harness
 
 
 class _FakeWSConn:
@@ -686,7 +692,9 @@ async def test_set_effort_accepts_all_six_discovered_levels(monkeypatch):
     for level in agent_chat_input.ALLOWED_EFFORT_LEVELS:
         calls = await _patch_effort_deps(
             monkeypatch, agent_chat_input,
-            pane_sequence=[f"  ⎿  Set effort level to {level} (...)"],
+            # Mit Kommando-Echo wie im echten Pane: seit dem Stale-Zeilen-Fix
+            # (18.08.2026) zaehlt eine Bestaetigung nur HINTER dem eigenen Echo.
+            pane_sequence=[f"❯ /effort {level}\n  ⎿  Set effort level to {level} (...)"],
         )
         agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
         await agent_chat_input.set_effort(agent, level)
@@ -720,19 +728,15 @@ async def test_set_effort_non_docker_agent_raises_input_not_supported(monkeypatc
     assert calls == []  # no docker exec attempted for an unsupported runtime
 
 
-async def test_set_effort_boss_raises_input_not_supported(monkeypatch):
-    """v1 scope: Boss has no pane probe (mirrors pane_state.capture_pane's
-    own v1 scope) — effort switching stays docker-only even though Boss has
-    an input channel for send_text/send_keys."""
+async def test_set_effort_host_without_claude_harness_not_supported(monkeypatch):
+    """Host-Agent OHNE Claude-Harness bleibt unschaltbar — der alte
+    Boss-Fall (harness=claude) ist seit 19.08.2026 ein eigener Schaltweg
+    (Bridge + Transkript-Verify, eigene Tests oben)."""
     from app.services import agent_chat_input
 
-    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_sequence=[None])
-
-    agent = _StubAgent(slug="boss", agent_runtime="host")
+    agent = _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
     with pytest.raises(agent_chat_input.InputNotSupportedError):
         await agent_chat_input.set_effort(agent, "high")
-
-    assert calls == []
 
 
 async def test_set_effort_preflight_blocks_when_working(monkeypatch):
@@ -776,7 +780,7 @@ async def test_set_effort_preflight_allows_idle_pane(monkeypatch):
 
     calls = await _patch_effort_deps(
         monkeypatch, agent_chat_input,
-        pane_sequence=[_IDLE_PANE, "  ⎿  Set effort level to low (saved as your default for new sessions): ..."],
+        pane_sequence=[_IDLE_PANE, "❯ /effort low\n  ⎿  Set effort level to low (saved as your default for new sessions): ..."],
     )
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
@@ -833,6 +837,115 @@ async def test_set_effort_verification_timeout_working_pane_skips_escape(monkeyp
     assert len(calls) == 2
     assert calls[0][-3:] == ["-l", "--", "/effort high"]
     assert calls[1][-1] == "Enter"
+
+
+async def test_set_effort_confirms_cached_conversation_dialog(monkeypatch):
+    """Sessions mit gecachtem Verlauf fragen zurueck ("Change effort level?",
+    Option "Yes" vorgewaehlt) — gefunden 19.08.2026 am Boss, erklaert auch das
+    R12b-Raetsel: "Kept effort level as X" ist die Antwort auf ein verneintes
+    Dialogfeld. Der Verify bestaetigt den Dialog EINMAL per Enter und pollt
+    dann normal weiter."""
+    from app.services import agent_chat_input
+
+    dialog = (
+        "❯ /effort low\n"
+        "   Change effort level?\n"
+        "   ❯ 1. Yes, switch to low\n"
+        "     2. No, go back"
+    )
+    confirmed = dialog + "\n  ⎿  Set effort level to low (saved as your default for new sessions): ..."
+    polls = {"n": 0}
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    idle = "⏺ ok\n\n❯ \n"
+
+    async def _fake_capture_pane(agent):
+        polls["n"] += 1
+        # Poll 1 = Preflight (ruhiger Prompt — der Dialog erscheint erst als
+        # ANTWORT auf unser /effort); Poll 2 sieht den Dialog; nach dem
+        # Enter (Poll 3) steht die Bestaetigung.
+        if polls["n"] == 1:
+            return idle
+        return dialog if polls["n"] == 2 else confirmed
+
+    async def _sleep(d): pass
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "low")
+    # /effort low + Enter + genau EIN Dialog-Enter
+    enters = [c for c in calls if c[-1] == "Enter"]
+    assert len(enters) == 2
+    assert len(calls) == 3
+
+
+async def test_set_effort_ignores_stale_rejection_from_earlier_attempt(monkeypatch):
+    """Operator-Live-Bug (18.08.2026 abends): eine "Kept effort level as
+    auto"-Zeile eines FRUEHEREN Versuchs stand noch sichtbar im Pane. Der
+    Verify-Poll durchsuchte den GANZEN Pane und meldete jeden neuen Versuch
+    sofort als abgelehnt — jeder "Erneut versuchen"-Klick scheiterte
+    identisch. Die Auswertung darf nur lesen, was hinter dem Echo des
+    EIGENEN Kommandos steht."""
+    from app.services import agent_chat_input
+
+    # Exakt die Bug-Form: die alte Ablehnung steht sichtbar da, die Antwort
+    # auf UNSER Kommando ist noch nicht gerendert. Der ungescopte Poll las
+    # hier sofort "abgelehnt" — noch bevor die CLI ueberhaupt antworten
+    # konnte. Erst der Folge-Poll bringt die echte Bestaetigung.
+    stale_pending = (
+        "❯ /effort low\n"
+        "  ⎿  Kept effort level as auto\n"        # Leiche des alten Versuchs
+        "❯ /effort low"                             # UNSER Echo, noch unbeantwortet
+    )
+    answered = stale_pending + "\n  ⎿  Set effort level to low (saved as your default for new sessions): ..."
+    calls = await _patch_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[stale_pending, stale_pending, answered],
+    )
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "low")  # darf NICHT ablehnen
+    assert len(calls) == 2  # kein Escape — normaler Erfolg
+
+
+async def test_set_effort_ignores_stale_confirmation_from_earlier_attempt(monkeypatch):
+    """Gegenprobe zum Stale-Fix: auch eine ALTE Bestaetigung derselben Stufe
+    darf keinen sofortigen Falsch-Erfolg liefern. Erst wenn hinter dem
+    letzten Echo wirklich die Bestaetigung erscheint, gilt der Wechsel."""
+    from app.services import agent_chat_input
+
+    stale_conf_only = (
+        "❯ /effort high\n"
+        "  ⎿  Set effort level to high (saved as your default for new sessions): ...\n"
+        "❯ /effort high"                            # neuer Versuch, noch ohne Antwort
+    )
+    real_conf = stale_conf_only + "\n  ⎿  Set effort level to high (saved as your default for new sessions): ..."
+    polls = {"n": 0}
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        polls["n"] += 1
+        # Poll 1 = Preflight (busy-Check), Poll 2 = Verify sieht nur das alte
+        # Ergebnis + unser unbeantwortetes Echo, Poll 3 = echte Bestaetigung.
+        return stale_conf_only if polls["n"] <= 2 else real_conf
+
+    async def _fake_sleep(delay):
+        pass
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "high")
+    # Poll 2 durfte den alten Erfolg NICHT zaehlen -> es brauchte Poll 3.
+    assert polls["n"] == 3
 
 
 async def test_set_effort_explicit_rejection_raises_distinct_error_no_escape(monkeypatch):
@@ -900,7 +1013,7 @@ async def test_set_effort_verification_absent_pane_counts_as_not_applied(monkeyp
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch):
+async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch, tmp_path):
     from app.services import agent_chat_input
 
     # Docker agent -> triggers the version-drift check -> resolve_cli_version
@@ -910,6 +1023,8 @@ async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch
         return None
 
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    # Siehe unten: "rex" existiert wirklich — nie gegen das echte ~/.mc lesen.
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     caps = await agent_chat_input.effort_capabilities(agent)
@@ -917,27 +1032,228 @@ async def test_effort_capabilities_docker_agent_gets_full_level_list(monkeypatch
     assert caps == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        # Kein settings.json im tmp-Home -> ehrliches None statt Ratewert.
+        "effort": None,
+        "effortShared": False,
     }
     # Same single-source constant set_effort validates against — no drift.
     assert caps["effortLevels"] == list(agent_chat_input.ALLOWED_EFFORT_LEVELS)
 
 
-async def test_effort_capabilities_boss_cannot_switch():
+async def test_effort_capabilities_reports_persisted_default(monkeypatch, tmp_path):
+    """Der Chip im Composer hing frueher allein am usage-Ereignis des
+    Transkripts — eine frisch gestartete Session hat noch keines, also fehlte das
+    Bedienelement komplett und der Effort war nicht schaltbar (Operator-Befund
+    18.08.2026). Die settings.json des Agenten ist die ehrliche Zweitquelle."""
     from app.services import agent_chat_input
 
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+
+    cfg = tmp_path / ".mc" / "agents" / "rex" / "claude-config"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "xhigh", "model": "opus"}))
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+
+    caps = await agent_chat_input.effort_capabilities(_StubAgent(slug="rex", agent_runtime="cli-bridge"))
+    assert caps["effort"] == "xhigh"
+
+
+async def test_effort_capabilities_ignores_unusable_settings(monkeypatch, tmp_path):
+    """Fail-silent statt Behauptung: fehlende Datei, kaputtes JSON und ein
+    unbekannter Wert muessen alle None ergeben — das UI zeigt dann `auto`."""
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+
+    # 1) Datei fehlt ganz
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] is None
+
+    cfg = tmp_path / ".mc" / "agents" / "rex" / "claude-config"
+    cfg.mkdir(parents=True)
+
+    # 2) kaputtes JSON
+    (cfg / "settings.json").write_text("{ das ist kein json")
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] is None
+
+    # 3) Wert, den set_effort nie akzeptieren wuerde
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "turbo"}))
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] is None
+
+    # 4) gueltiger Wert -> kommt durch
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "low"}))
+    assert (await agent_chat_input.effort_capabilities(agent))["effort"] == "low"
+
+
+async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
+    """Kimi/Sparky sind cli-bridge, aber KEIN Claude: /effort- und
+    /model-Vokabular darf dort weder angeboten noch getippt werden
+    (kritischer Test-Durchgang 18.08.2026 — vorher galt jeder
+    cli-bridge-Agent als Claude)."""
+    from app.services import agent_chat_input
+
+    for harness in ("kimi", "omp"):
+        agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness=harness)
+        caps = await agent_chat_input.effort_capabilities(agent)
+        assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
+        slash = await agent_chat_input.slash_command_capabilities(agent)
+        assert slash == {"slashCommands": []}
+        models = await agent_chat_input.model_options_capabilities(agent)
+        assert models == {"modelOptions": [], "model": None}
+        with pytest.raises(agent_chat_input.InputNotSupportedError):
+            await agent_chat_input.set_effort(agent, "high")
+
+
+async def test_effort_capabilities_host_claude_gets_ladder_but_no_switch(monkeypatch, tmp_path):
+    """Boss-Gestalt (host + harness=claude, 18.08.2026): die Stufenleiter des
+    Harness kommt mit, das Schaltrecht nicht — das Frontend proportioniert
+    damit die Saeule des read-only Brain-Chips statt Boss das nackte
+    Alt-Label zu zeigen."""
+    from app.services import agent_chat_input
+
+    # Vierte Sichtung des Real-Host-Leak-Musters: der Boss-Zweig liest
+    # ~/.claude/settings.json — ohne tmp-Home stuende hier Marks ECHTE Stufe.
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
     agent = _StubAgent(slug="boss", agent_runtime="host")
+    agent.harness = "claude"
+    caps = await agent_chat_input.effort_capabilities(agent)
+    assert caps == {
+        "effortLevels": list(agent_chat_input.ALLOWED_EFFORT_LEVELS),
+        "canSwitchEffort": True,   # seit 19.08.2026: Bridge tippt, Transkript verifiziert
+        "effort": None,
+        "effortShared": True,      # Boss teilt ~/.claude/settings.json mit dem Operator
+    }
+
+
+async def test_set_effort_boss_types_via_bridge_and_verifies_in_transcript(monkeypatch, tmp_path):
+    """Boss-Schaltweg (19.08.2026): Bridge tippt, das TRANSKRIPT bestaetigt —
+    /effort schreibt seine stdout-Zeile in die Session-Datei. Gelesen wird nur,
+    was nach der vorab notierten Dateigroesse dazukommt (Stale-Lektion)."""
+    import json as _json
+    from app.services import agent_chat_input
+
+    f = tmp_path / "sess.jsonl"
+    stale = _json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Set effort level to high (alt)"}]}}) + "\n"
+    f.write_text(stale)
+    import os, time as _t
+    os.utime(f, (_t.time() - 300, _t.time() - 300))  # alt -> Preflight nicht busy
+
+    sent: list[bytes] = []
+    async def _fake_bridge(*payloads, delay_before_last=0.0):
+        sent.extend(payloads)
+        # CLI "antwortet" ins Transkript
+        with open(f, "a") as fh:
+            fh.write(_json.dumps({"type": "user", "message": {"content": "cmd"}}) + "\n")
+            fh.write(_json.dumps({"type": "system", "text": "Set effort level to max (this session only)"}) + "\n")
+
+    async def _sleep(d): pass
+    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.set_effort(agent, "max")
+    assert sent and sent[0] == b"/effort max"
+
+
+async def test_set_effort_boss_ignores_stale_confirmation(monkeypatch, tmp_path):
+    """Steht die (identische) Bestaetigung nur VOR der Baseline, ist das kein
+    Erfolg — ohne neue Zeilen laeuft das Budget ab, OHNE Escape (kein Pane,
+    ein Escape koennte echte Boss-Arbeit abbrechen)."""
+    import json as _json
+    from app.services import agent_chat_input
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text(_json.dumps({"type": "system", "text": "Set effort level to max (this session only)"}) + "\n")
+    import os, time as _t
+    os.utime(f, (_t.time() - 300, _t.time() - 300))
+
+    sent: list[bytes] = []
+    async def _fake_bridge(*payloads, delay_before_last=0.0):
+        sent.extend(payloads)
+    async def _sleep(d): pass
+    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "max")
+    # Kommando + Enter + EIN blinder Dialog-Enter — aber KEIN Escape-Byte
+    assert b"\x1b" not in b"".join(sent)
+    assert sent.count(b"\r") == 2  # Submit-Enter + einmalige Dialog-Bestaetigung
+
+
+async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
+    """Frisches Transkript + Zug laeuft (letzte inhaltliche Zeile kein reiner
+    Antwort-Text) -> AgentBusyError, es wird NICHTS getippt."""
+    import json as _json
+    from app.services import agent_chat_input
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text(_json.dumps({"type": "user", "message": {"content": "mach was"}}) + "\n")
+
+    sent: list[bytes] = []
+    async def _fake_bridge(*payloads, delay_before_last=0.0):
+        sent.extend(payloads)
+    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.AgentBusyError):
+        await agent_chat_input.set_effort(agent, "max")
+    assert sent == []
+
+
+async def test_send_text_skips_readiness_gate_for_foreign_cli(monkeypatch):
+    """Sparky-Befund (19.08.2026): das Readiness-Gate liest mit Claude-Regeln —
+    eine omp/kimi-TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
+    Fuer fremde Harnesses wird blind zugestellt."""
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+    async def _fake_run(argv): calls.append(argv)
+    async def _fake_marker(slug): pass
+    async def _boom(agent):
+        raise AssertionError("readiness gate darf fuer fremde CLIs nicht laufen")
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
+    monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _boom)
+
+    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input.send_text(agent, "hallo sparky")
+    assert any("hallo sparky" in " ".join(c) for c in calls)
+
+
+async def test_effort_capabilities_host_without_claude_harness_gets_nothing():
+    """Host-Agent OHNE Claude-Harness (unset/legacy): weder Leiter noch
+    Schaltrecht — der Boss-Fall mit harness=claude bekommt die Leiter
+    (eigener Test oben)."""
+    from app.services import agent_chat_input
+
+    agent = _StubAgent(slug="boss", agent_runtime="host", harness=None)
     caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert caps == {"effortLevels": [], "canSwitchEffort": False}
+    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
 
 
 async def test_effort_capabilities_other_host_agent_cannot_switch():
     from app.services import agent_chat_input
 
-    agent = _StubAgent(slug="hermes", agent_runtime="host")
+    agent = _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
     caps = await agent_chat_input.effort_capabilities(agent)
 
-    assert caps == {"effortLevels": [], "canSwitchEffort": False}
+    assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1026,6 +1342,11 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
         return "2.9.999"
 
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _newer_version)
+    # "rex" ist ein echter Fleet-Slug: ohne dieses Patch liest der Test die
+    # settings.json des LAUFENDEN Agenten vom Host und wird von dessen aktueller
+    # Effort-Stufe abhaengig (gleiche Real-Host-Leak-Klasse wie die gemockten
+    # Subprozess-Aufrufe weiter oben).
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
 
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     caps = await agent_chat_input.effort_capabilities(agent)
@@ -1033,6 +1354,8 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
     assert caps == {
         "effortLevels": ["low", "medium", "high", "xhigh", "max", "ultracode"],
         "canSwitchEffort": True,
+        "effort": None,
+        "effortShared": False,
     }
 
 
@@ -1045,13 +1368,18 @@ async def test_effort_capabilities_still_returns_levels_despite_drift(monkeypatc
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def _patch_model_options_deps(monkeypatch, agent_chat_input, *, catalog, observed):
+async def _patch_model_options_deps(monkeypatch, agent_chat_input, *, catalog, observed, model=None):
     monkeypatch.setattr(
         agent_chat_input, "discover_model_catalog", _async_return(catalog)
     )
     monkeypatch.setattr(
         agent_chat_input, "get_observed_model_windows", _async_return(observed)
     )
+    # "rex" ist ein echter Fleet-Slug: ohne dieses Patch laese der neue
+    # capabilities.model-Zweig die settings.json des LAUFENDEN Agenten vom Host
+    # (Real-Host-Leak, dritte Sichtung heute — gleiche Klasse wie bei den
+    # gemockten Subprozessen und den Effort-Tests).
+    monkeypatch.setattr(agent_chat_input, "_persisted_model", lambda slug: model)
 
 
 def _async_return(value):
@@ -1087,6 +1415,56 @@ async def test_model_options_capabilities_falls_back_to_static_aliases_when_cata
     assert options["default"]["contextWindow"] == 1_000_000
 
 
+async def test_model_options_capabilities_boss_reads_shared_operator_config(monkeypatch, tmp_path):
+    """Boss liest ~/.claude/settings.json (CLAUDE_CONFIG_DIR unset). Ohne
+    diesen Zweig stand nach /clear ein "—" im Composer, bis die erste
+    Nachricht ein usage-Ereignis erzeugte (Operator-Screenshot 19.08.2026).
+    Gegenstueck zum Geister-Modell-Test darunter: DIESER Pfad ist der
+    richtige, das mc-Agenten-Muster der falsche."""
+    import json as _json
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "discover_model_catalog", _async_return([]))
+    monkeypatch.setattr(agent_chat_input, "get_observed_model_windows", _async_return({}))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(_json.dumps({"model": "opus"}))
+    # Geister-Config im mc-Muster daneben — darf NICHT gewinnen.
+    ghost = tmp_path / ".mc" / "agents" / "boss" / "claude-config"
+    ghost.mkdir(parents=True)
+    (ghost / "settings.json").write_text(_json.dumps({"model": "glm-5.1:cloud"}))
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+    assert caps["model"] == "opus"
+
+
+async def test_model_options_capabilities_host_agent_never_reads_stale_config(monkeypatch, tmp_path):
+    """Live-Fund direkt nach dem Deploy (18.08.2026): Boss' capabilities.model
+    war "glm-5.1:cloud" — aus ~/.mc/agents/boss/claude-config, einem seit
+    April brachliegenden Ordner, den Boss (host, CLAUDE_CONFIG_DIR unset)
+    nie liest. Persistiertes Modell darf NUR fuer docker/cli-bridge gelesen
+    werden; fuer Host-Agenten ist None die einzige ehrliche Antwort."""
+    from app.services import agent_chat_input
+
+    # BEWUSST nicht _patch_model_options_deps: das wuerde _persisted_model
+    # stubben — und genau dessen echtes Verhalten ist hier der Pruefling.
+    # (Erste Fassung dieses Tests tappte in die Falle: der "Restore" der
+    # echten Funktion griff den bereits gesetzten Stub — Sabotage-Probe
+    # bestand nicht. Darum nur die beiden Discovery-Abhaengigkeiten stubben.)
+    monkeypatch.setattr(agent_chat_input, "discover_model_catalog", _async_return([]))
+    monkeypatch.setattr(agent_chat_input, "get_observed_model_windows", _async_return({}))
+    # Geister-Config anlegen — sie DARF nicht gelesen werden.
+    cfg = tmp_path / ".mc" / "agents" / "boss" / "claude-config"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text('{"model": "glm-5.1:cloud"}')
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+    assert caps["model"] is None
+
+
 async def test_model_options_capabilities_unknown_model_id_yields_null_window(monkeypatch):
     from app.services import agent_chat_input
     from app.config import settings
@@ -1100,6 +1478,7 @@ async def test_model_options_capabilities_unknown_model_id_yields_null_window(mo
     caps = await agent_chat_input.model_options_capabilities(agent)
 
     assert caps == {
+        "model": None,
         "modelOptions": [
             {"command": "mystery", "label": "Mystery", "contextWindow": None},
         ]
@@ -1664,3 +2043,270 @@ async def test_post_chat_effort_requires_auth(client: AsyncClient, make_agent):
     )
 
     assert resp.status_code == 401
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Review-Runde 20.08.2026 — Befunde aus dem PR-Review von #325
+# ══════════════════════════════════════════════════════════════════════════
+
+async def test_set_effort_dialog_marker_only_counts_behind_the_command_echo(monkeypatch):
+    """Befund 2: der Dialog-Zweig durchsuchte den GANZEN Pane und lief VOR dem
+    Zuschnitt hinter das Kommando-Echo — also genau der Alt-Scrollback-Fehler,
+    den die Ablehnungszeile zwei Zeilen weiter unten schon behebt.
+
+    Gestalt: zweimal Effort umschalten innerhalb eines Scrollbacks. Beim
+    ERSTEN Verify-Poll steht die "Change effort level?"-Zeile des FRUEHEREN
+    Wechsels noch sichtbar ueber dem neuen Echo. Vor dem Fix feuerte dort ein
+    Streu-Enter ins LIVE-Fenster des Agenten (schickt ab, was der Operator
+    gerade tippt) und verbrauchte ``confirmed_dialog`` — der ECHTE Dialog
+    wurde nie beantwortet, das Budget lief ab, der Operator bekam 409."""
+    from app.services import agent_chat_input
+
+    alter_verlauf = (
+        "❯ /effort low\n"
+        "   Change effort level?\n"
+        "   ❯ 1. Yes, switch to low\n"
+        "     2. No, go back\n"
+        "  ⎿  Set effort level to low (saved as your default for new sessions): ...\n"
+    )
+    # Poll 1: neues Echo gerendert, dahinter noch nichts.
+    poll1 = alter_verlauf + "❯ /effort high\n"
+    # Poll 2: die Bestaetigung des NEUEN Wechsels steht hinter dem Echo.
+    poll2 = poll1 + "  ⎿  Set effort level to high (saved as your default for new sessions): ...\n"
+
+    polls = {"n": 0}
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    async def _fake_capture_pane(agent):
+        polls["n"] += 1
+        if polls["n"] == 1:
+            return _IDLE_PANE  # Preflight
+        return poll1 if polls["n"] == 2 else poll2
+
+    async def _sleep(d): pass
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.set_effort(agent, "high")
+
+    # NUR /effort high + das Submit-Enter. Kein Streu-Enter aus dem Alt-Dialog.
+    assert len(calls) == 2, calls
+    assert calls[0][-3:] == ["-l", "--", "/effort high"]
+    assert calls[1][-1] == "Enter"
+
+
+async def _boss_effort_env(monkeypatch, tmp_path, agent_chat_input):
+    """Gemeinsame Verdrahtung der Boss-Effort-Tests: Bridge-Bytes sammeln,
+    nicht schlafen, Transkript-Verzeichnis auf tmp_path."""
+    sent: list[bytes] = []
+
+    async def _fake_bridge(*payloads, delay_before_last=0.0):
+        sent.extend(payloads)
+
+    async def _sleep(d): pass
+    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
+    import app.services.transcript_chat as tc
+    monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
+    return sent
+
+
+async def test_set_effort_boss_never_reads_whole_files(monkeypatch, tmp_path):
+    """Befund 3: lieferte ``find_active_session`` beim Eintritt None (Boss
+    frisch gestartet, Verzeichnis noch leer, stat-Race), blieb baseline_path
+    None — und der else-Zweig las in JEDER der 24 Runden die GANZE Datei.
+    Boss' echtes Verzeichnis hat 53 Dateien / 981 MB, die groesste 124,9 MB:
+    das waeren ~3 GB Lesen und 24 aufeinanderfolgende ~125-MB-Allokationen in
+    EINEM POST /chat/effort — auf einer Docker-VM mit 5 GB Deckel.
+
+    Der Test haelt die Eigenschaft fest, nicht die Zahl: es wird NIE eine
+    ganze Datei gelesen. Vor dem Fix schlug er mit 24 read_text-Aufrufen
+    auf einer 2-MB-Datei fehl."""
+    import json as _json
+    from pathlib import Path as _Path
+    from app.services import agent_chat_input
+    import app.services.transcript_chat as tc
+
+    gross = tmp_path / "gross.jsonl"
+    fuellzeile = _json.dumps({"type": "system", "text": "x" * 2000}) + "\n"
+    gross.write_text(fuellzeile * 1000)  # ~2 MB
+
+    read_text_calls: list[str] = []
+    _orig_read_text = _Path.read_text
+
+    def _spy_read_text(self, *a, **k):
+        read_text_calls.append(str(self))
+        return _orig_read_text(self, *a, **k)
+
+    monkeypatch.setattr(_Path, "read_text", _spy_read_text)
+
+    sent = await _boss_effort_env(monkeypatch, tmp_path, agent_chat_input)
+
+    # Erst NACH dem Tippen wird die Datei als aktive Session sichtbar —
+    # exakt die Lage, in der baseline_path None blieb.
+    sessions = {"n": 0}
+
+    def _fake_find(_dir):
+        sessions["n"] += 1
+        return None if sessions["n"] == 1 else (gross, 0.0)
+
+    monkeypatch.setattr(tc, "find_active_session", _fake_find)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "max")
+
+    assert sent and sent[0] == b"/effort max"
+    assert [c for c in read_text_calls if str(gross) in c] == [], read_text_calls
+
+
+async def test_set_effort_boss_finds_confirmation_appended_after_first_sighting(monkeypatch, tmp_path):
+    """Gegenstueck zum Test darueber: der Zuwachs wird sehr wohl gelesen.
+    Die Datei taucht erst in der Verify-Schleife auf; was DANACH angehaengt
+    wird, muss die Bestaetigung tragen und zu 204 fuehren."""
+    import json as _json
+    from app.services import agent_chat_input
+    import app.services.transcript_chat as tc
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text(_json.dumps({"type": "system", "text": "alter Kram"}) + "\n")
+
+    sent = await _boss_effort_env(monkeypatch, tmp_path, agent_chat_input)
+
+    sessions = {"n": 0}
+
+    def _fake_find(_dir):
+        sessions["n"] += 1
+        if sessions["n"] == 1:
+            return None
+        if sessions["n"] == 3:
+            with open(f, "a") as fh:
+                fh.write(_json.dumps({
+                    "type": "system", "text": "Set effort level to max (this session only)"
+                }) + "\n")
+        return (f, 0.0)
+
+    monkeypatch.setattr(tc, "find_active_session", _fake_find)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.set_effort(agent, "max")
+    assert sent and sent[0] == b"/effort max"
+
+
+async def test_set_effort_boss_stat_race_does_not_trust_old_lines(monkeypatch, tmp_path):
+    """Befund 4: ``baseline_path`` wurde VOR dem try gesetzt, im ``except
+    OSError`` aber nur ``baseline_size = 0`` zurueckgesetzt. Die Schleife nahm
+    danach den ``path == baseline_path``-Zweig mit Offset 0 und las die GANZE
+    Datei — eine "Set effort level to max"-Zeile von vor einer Stunde erfuellte
+    den Marker und ergab 204 Erfolg, obwohl nichts angewendet wurde.
+
+    Hier: das Baseline-stat schlaegt fehl, die Datei traegt nur eine ALTE
+    Bestaetigung. Erwartung: kein falscher Erfolg."""
+    import json as _json
+    from pathlib import Path as _Path
+    from app.services import agent_chat_input
+    import app.services.transcript_chat as tc
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text(_json.dumps({
+        "type": "system", "text": "Set effort level to max (this session only)"
+    }) + "\n")
+
+    sent = await _boss_effort_env(monkeypatch, tmp_path, agent_chat_input)
+    monkeypatch.setattr(tc, "find_active_session", lambda _dir: (f, 0.0))
+
+    # Genau EIN stat-Fehlschlag: der des Baseline-Reads.
+    _orig_stat = _Path.stat
+    race = {"done": False}
+
+    def _racing_stat(self, *a, **k):
+        if not race["done"] and self == f:
+            race["done"] = True
+            raise OSError(2, "No such file or directory")
+        return _orig_stat(self, *a, **k)
+
+    monkeypatch.setattr(_Path, "stat", _racing_stat)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "max")
+    assert sent and sent[0] == b"/effort max"
+
+
+async def test_set_effort_boss_stat_race_does_not_fake_a_rejection(monkeypatch, tmp_path):
+    """Kehrseite desselben Befunds: eine ALTE "Kept effort level as low"-Zeile
+    darf einen Wechsel, der gerade funktioniert hat, nicht als abgelehnt
+    melden. Nach dem stat-Race zaehlt nur, was danach dazukommt."""
+    import json as _json
+    from pathlib import Path as _Path
+    from app.services import agent_chat_input
+    import app.services.transcript_chat as tc
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text(_json.dumps({
+        "type": "system", "text": "Kept effort level as low"
+    }) + "\n")
+
+    sent = await _boss_effort_env(monkeypatch, tmp_path, agent_chat_input)
+
+    zaehler = {"n": 0}
+
+    def _fake_find(_dir):
+        zaehler["n"] += 1
+        if zaehler["n"] == 3:
+            with open(f, "a") as fh:
+                fh.write(_json.dumps({
+                    "type": "system", "text": "Set effort level to max (this session only)"
+                }) + "\n")
+        return (f, 0.0)
+
+    monkeypatch.setattr(tc, "find_active_session", _fake_find)
+
+    _orig_stat = _Path.stat
+    race = {"done": False}
+
+    def _racing_stat(self, *a, **k):
+        if not race["done"] and self == f:
+            race["done"] = True
+            raise OSError(2, "No such file or directory")
+        return _orig_stat(self, *a, **k)
+
+    monkeypatch.setattr(_Path, "stat", _racing_stat)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.set_effort(agent, "max")
+    assert sent and sent[0] == b"/effort max"
+
+
+async def test_effort_capabilities_non_boss_host_claude_agent_gets_no_switch(monkeypatch, tmp_path):
+    """Befund 5: ``_target_kind`` liefert "boss" NUR fuer host + einen Slug aus
+    _BOSS_SLUGS; alles andere wirft InputNotSupportedError, das
+    ``effort_capabilities`` zu kind=None verschluckt — und dann fiel es in den
+    harness=="claude"-Zweig. Migration 0163 setzt harness='claude' auf JEDEN
+    Host-Agenten mit Anthropic-Runtime, nicht nur auf Boss. So ein Agent
+    meldete canSwitchEffort=true, las die PERSOENLICHE ~/.claude/settings.json
+    des Operators fuer den Chip — und jeder Zug am Regler gab 409
+    input_not_supported: genau der "klicke drauf, passiert nichts"-Fehler, den
+    #325 beheben wollte."""
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text('{"effortLevel": "xhigh"}')
+
+    agent = _StubAgent(slug="jarvis", agent_runtime="host")
+    agent.harness = "claude"
+
+    caps = await agent_chat_input.effort_capabilities(agent)
+    assert caps == {
+        "effortLevels": [], "canSwitchEffort": False, "effort": None, "effortShared": False,
+    }
+
+    # Und der Endpunkt haette ihn ohnehin abgewiesen — das Versprechen war leer.
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.set_effort(agent, "high")

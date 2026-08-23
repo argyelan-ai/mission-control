@@ -27,6 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     python3-pip \
     pandoc \
+    # poppler-utils: das `Read`-Werkzeug der CLIs rendert PDF-Seiten mit
+    # `pdftoppm`. Ohne das Paket bricht jedes mehrseitige PDF mit
+    # "pdftoppm is not installed" ab — und der naheliegende Ausweg (macOS
+    # `sips`) rendert nur Seite 1, ein mehrseitiges Dokument bleibt also
+    # unlesbar. Aufgefallen 19.08.2026, als der erste Datei-Anhang im
+    # Sessions-Chat ein PDF war: Bilder las der Agent sofort, PDFs gar nicht.
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Python-Libraries fuer Office-Formate (Word/Excel/PowerPoint). Pure Python,
