@@ -447,17 +447,23 @@ body {
   pointer-events: none;
   z-index: 1;
 }
+/* Die Ticks folgen der Rundung ihres Trägers (ADR-076). Vorher zeichneten sie
+   einen scharfen 90°-Winkel bei -1px — auf einer runden Fläche schwebte der
+   frei neben der Kante. `inherit` holt sich den Radius der jeweiligen Ecke vom
+   Element selbst, damit die Marke bei jeder Nachkalibrierung mitwandert. */
 .corner-ticks::before {
   top: -1px;
   left: -1px;
   border-top: 1px solid var(--color-border-accent);
   border-left: 1px solid var(--color-border-accent);
+  border-top-left-radius: inherit;
 }
 .corner-ticks::after {
   bottom: -1px;
   right: -1px;
   border-bottom: 1px solid var(--color-border-accent);
   border-right: 1px solid var(--color-border-accent);
+  border-bottom-right-radius: inherit;
 }
 
 /* ── Display-Headline (Clash Display), enger Tracking */

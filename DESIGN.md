@@ -215,7 +215,7 @@ beides umgeht die Skala. Genau das war der Grund für den Bruch: 166 nackte
 `rounded` und ein undefiniertes `rounded-2xl` liefen an den Tokens vorbei,
 während die Doku „eckig" vorschrieb und die Praxis längst rundete.
 - **1px-Linien:** Rahmen, Hairline-Trenner (`border-subtle`), Sektions-Unterkanten. Struktur zeigt sich in Linien, nicht in Flächenschmuck.
-- **Corner-Ticks** (`.corner-ticks`): 10px-Eckmarken (oben-links + unten-rechts) in `border-accent` auf hero-artigen/aktiven Panels. Signatur-Detail — sparsam, max 1–2 pro View.
+- **Corner-Ticks** (`.corner-ticks`): 10px-Eckmarken (oben-links + unten-rechts) in `border-accent` auf hero-artigen/aktiven Panels. Sie folgen dem Radius ihres Trägers (`border-radius: inherit` je Ecke) — sonst schwebte der scharfe Winkel neben der runden Kante. Signatur-Detail — sparsam, max 1–2 pro View.
 - **Akzent-Kante:** 2px `accent`-Streifen oben auf Modals/Sheets — die „Gehäuse-Markierung" von Overlays.
 - **Status-Dot:** kleiner Punkt (rund; im dichten Raster `dense`) in STATUS-Farbe, immer mit Textlabel — Farbe trägt nie allein.
 - **Mono-Datastream:** StatusBar als Instrumentenzeile in JetBrains Mono uppercase.
