@@ -414,7 +414,7 @@ async def test_process_alive_looks_for_the_openclaude_binary(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    agent = _StubAgent(agent_runtime="cli-bridge", slug="shakespeare", harness="openclaude")
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="openclaude-agent", harness="openclaude")
     result = await process_alive(agent)
 
     assert captured_argv[-1] == "openclaude", captured_argv

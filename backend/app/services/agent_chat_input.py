@@ -103,7 +103,7 @@ jede aus einem eigenen, live erhobenen Grund:
   settings.json) — nur ignoriert das Modell sie. Darum kein Regler, dafuer
   ein ``effortReason``, den das UI vorlesen kann.
 - ``_wait_for_send_readiness``: die Pane-Marker sind identisch (am echten
-  Pane von Shakespeare gegengeprueft, nur gelesen) — das Gate gilt hier also
+  Pane eines openclaude-Agenten gegengeprueft, nur gelesen) — das Gate gilt hier also
   mit, statt ausgerechnet dem Harness zu fehlen, der es erfuellen kann.
 
 ``slash_command_capabilities`` (composer command palette) merges a static
@@ -255,7 +255,7 @@ class EffortSwitchRejectedError(Exception):
     """Raised when the CLI EXPLICITLY declined the switch (its own inline
     message says so) rather than the verification just timing out.
 
-    Root cause investigated live on a throwaway window on mc-agent-davinci
+    Root cause investigated live on a throwaway window on a container agent
     (2026-08-18): a real operator's `/effort low` was answered "Kept effort
     level as auto" instead of "Set effort level to low" — the switch
     genuinely did not apply. Reproducing the exact same command sequence
@@ -299,7 +299,7 @@ _BUSY_PANE_STATUSES = frozenset({"working", "permission_prompt"})
 _SEND_READINESS_POLL_ATTEMPTS = 20
 _SEND_READINESS_POLL_INTERVAL_SECONDS = 1.0
 
-# The CLI's own explicit-rejection wording (live-verified, Davinci
+# The CLI's own explicit-rejection wording (live-verified, container agent
 # 2026-08-18: "Kept effort level as auto") — distinct from its
 # apply-confirmation wording ("Set effort level to <level>"). Captures the
 # CLI's whole response line so the operator sees exactly what it said.
@@ -473,14 +473,14 @@ async def send_text(agent, text: str) -> None:
         await _touch_recycler_marker(slug)
         if getattr(agent, "harness", None) in _PANE_READABLE_HARNESSES:
             # Das Gate liest den Pane mit CLAUDE-Regeln (Prompt-Marker,
-            # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — Sparky
+            # Spinner). Eine fremde TUI (omp, kimi) erfuellt sie nie — der omp-Agent
             # war dadurch dauerhaft unerreichbar (jeder Send: 409
             # agent_starting; Operator-Befund 19.08.2026). Fuer fremde
             # Harnesses gilt wieder blindes Zustellen wie vor dem Gate: keine
             # Aussage ueber Bereitschaft ist besser als eine falsche Ablehnung.
             #
             # openclaude gehoert seit 19.08.2026 dazu: seine Marker sind
-            # nachweislich dieselben — am ECHTEN Pane von Shakespeare
+            # nachweislich dieselben — am ECHTEN Pane eines openclaude-Agenten
             # gegengeprueft (nur gelesen, nichts getippt), ``parse_pane_state``
             # liefert dort ``idle``, und der Fuss zeigt ``⏵⏵ bypass
             # permissions on`` bzw. ``esc to interrupt`` wie bei Claude Code.
@@ -565,7 +565,7 @@ async def set_effort(agent, level: str) -> None:
     inline confirmation before this returns success. Two distinct failure
     modes:
     - The CLI EXPLICITLY declined the switch (``"Kept effort level as
-      <X>"``, live-verified on Davinci — see ``EffortSwitchRejectedError``'s
+      <X>"``, live-verified on a container agent — see ``EffortSwitchRejectedError``'s
       docstring for the investigation) -> that error, immediately, carrying
       the CLI's own message. No Escape cleanup — the CLI already answered
       and left the pane in a normal ready state.
@@ -857,13 +857,13 @@ async def _verify_effort_applied(agent, level: str) -> bool:
             # for) — stop polling immediately rather than burning the rest
             # of the attempt budget waiting for a confirmation that will
             # never come. See EffortSwitchRejectedError's docstring for the
-            # live investigation behind this (Davinci, 2026-08-18).
+            # live investigation behind this (container agent, 2026-08-18).
             raise EffortSwitchRejectedError(rejected.group(0))
     return False
 
 
 # ALLOWED_EFFORT_LEVELS was empirically verified (Phase-0 discovery +
-# fix-round live reproduction attempts on Davinci) against this exact CLI
+# fix-round live reproduction attempts on a container agent) against this exact CLI
 # build. Deliberately NOT auto-re-probed on a version mismatch: /effort
 # argument commands persist to the agent's settings.json (see the module
 # docstring), so an unattended reprobe on every new CLI version would

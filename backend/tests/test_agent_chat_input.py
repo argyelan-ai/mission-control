@@ -968,7 +968,7 @@ async def test_set_effort_ignores_stale_confirmation_from_earlier_attempt(monkey
 
 
 async def test_set_effort_explicit_rejection_raises_distinct_error_no_escape(monkeypatch):
-    """Live-verified on Davinci (2026-08-18): the CLI can answer a switch
+    """Live-verified on a container agent (2026-08-18): the CLI can answer a switch
     attempt with "Kept effort level as <X>" instead of "Set effort level to
     <X>" — an explicit decline, not a verification timeout. Must raise
     EffortSwitchRejectedError (-> router 409 effort_switch_rejected) WITH
@@ -994,7 +994,7 @@ async def test_set_effort_explicit_rejection_raises_distinct_error_no_escape(mon
     monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
     monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
 
-    agent = _StubAgent(slug="davinci", agent_runtime="cli-bridge")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge")
     with pytest.raises(agent_chat_input.EffortSwitchRejectedError) as exc_info:
         await agent_chat_input.set_effort(agent, "low")
 
@@ -1115,7 +1115,7 @@ async def test_effort_capabilities_ignores_unusable_settings(monkeypatch, tmp_pa
 
 
 async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
-    """Kimi/Sparky sind cli-bridge, aber KEIN Claude: /effort- und
+    """Kimi und der omp-Agent sind cli-bridge, aber KEIN Claude: /effort- und
     /model-Vokabular darf dort weder angeboten noch getippt werden
     (kritischer Test-Durchgang 18.08.2026 — vorher galt jeder
     cli-bridge-Agent als Claude)."""
@@ -1242,7 +1242,7 @@ async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
 
 
 async def test_send_text_skips_readiness_gate_for_foreign_cli(monkeypatch):
-    """Sparky-Befund (19.08.2026): das Readiness-Gate liest mit Claude-Regeln —
+    """omp-Befund (19.08.2026): das Readiness-Gate liest mit Claude-Regeln —
     eine omp/kimi-TUI erfuellt sie nie, jeder Send endete 409 agent_starting.
     Fuer fremde Harnesses wird blind zugestellt."""
     from app.services import agent_chat_input
@@ -1256,9 +1256,9 @@ async def test_send_text_skips_readiness_gate_for_foreign_cli(monkeypatch):
     monkeypatch.setattr(agent_chat_input, "_touch_recycler_marker", _fake_marker)
     monkeypatch.setattr(agent_chat_input, "_wait_for_send_readiness", _boom)
 
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
-    await agent_chat_input.send_text(agent, "hallo sparky")
-    assert any("hallo sparky" in " ".join(c) for c in calls)
+    agent = _StubAgent(slug="omp-agent", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input.send_text(agent, "hallo omp")
+    assert any("hallo omp" in " ".join(c) for c in calls)
 
 
 async def test_effort_capabilities_host_without_claude_harness_gets_nothing():
@@ -2051,7 +2051,7 @@ async def test_post_chat_effort_409_agent_busy(auth_client: AsyncClient, make_ag
 
 async def test_post_chat_effort_409_switch_rejected_with_cli_message(auth_client: AsyncClient, make_agent, monkeypatch):
     """Distinct from effort_switch_failed: the CLI explicitly declined the
-    switch (live-verified on Davinci), and its own message text is surfaced
+    switch (live-verified on a container agent), and its own message text is surfaced
     so the UI can show the operator WHY."""
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
 

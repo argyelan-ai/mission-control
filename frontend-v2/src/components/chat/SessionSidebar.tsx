@@ -17,10 +17,14 @@
  * standalone.
  */
 import { useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { GroupRow } from "@/components/groupchat/GroupRow";
+import { AvatarStack } from "@/components/groupchat/AvatarStack";
+import { sortGroups, type GroupSummary } from "@/lib/groupTypes";
 import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
 
 const ADHOC_KEY = "__adhoc__";
@@ -86,6 +90,14 @@ interface SessionSidebarProps {
   projects: Project[];
   selectedId: string | null;
   onSelect: (agentId: string) => void;
+  /** Multi-Agent-Gruppen (ADR-075) — eigene Sektion ÜBER den 1:1-Sessions:
+   *  eine wartende Gruppe ist das Dringendste auf dieser Seite. Alle vier
+   *  Gruppen-Props sind optional, damit bestehende Aufrufer (und die
+   *  bestehenden Tests) unverändert weiterlaufen. */
+  groups?: GroupSummary[];
+  selectedGroupId?: string | null;
+  onSelectGroup?: (groupId: string) => void;
+  onCreateGroup?: () => void;
   /** Rail = fixed desktop column. List = the mobile stack's first screen (a
    *  full-height list you tap into). Sheet = the older collapsed dropdown,
    *  kept for callers that still embed the picker above content. */
@@ -106,14 +118,21 @@ export function SessionSidebar({
   projects,
   selectedId,
   onSelect,
+  groups: chatGroups,
+  selectedGroupId = null,
+  onSelectGroup,
+  onCreateGroup,
   variant = "rail",
   hasTranscript = () => true,
   collapsed = false,
   onToggleCollapse,
 }: SessionSidebarProps) {
+  const t = useTranslations("sessions.groups");
   const [sheetOpen, setSheetOpen] = useState(false);
   const groups = buildGroups(agents, tasks, projects);
   const selectedAgent = agents.find((a) => a.id === selectedId) ?? null;
+  const showGroupSection = !!onSelectGroup;
+  const sortedChatGroups = chatGroups ? sortGroups(chatGroups) : [];
 
   function handleSelect(agentId: string) {
     onSelect(agentId);
@@ -125,8 +144,54 @@ export function SessionSidebar({
   // has structure. The desktop rail keeps its dense rhythm.
   const stack = variant === "list";
 
+  // Gruppen-Sektion: eigener Kopf mit „+", darunter die Räume. Wartende
+  // Gruppen sortiert `sortGroups` nach oben — sie sind der Grund, warum diese
+  // Sektion überhaupt oben steht.
+  const groupSection = showGroupSection ? (
+    <div>
+      <div className={`flex items-center gap-2 pb-1.5 ${stack ? "px-4" : "px-3"}`}>
+        <span className="label-sys truncate" style={{ color: C.textMuted }}>
+          {t("sectionTitle")}
+        </span>
+        {onCreateGroup && (
+          <button
+            type="button"
+            onClick={onCreateGroup}
+            aria-label={t("newGroup")}
+            title={t("newGroup")}
+            className="ml-auto flex items-center justify-center w-6 h-6 rounded cursor-pointer transition-colors"
+            style={{ color: C.textMuted }}
+          >
+            <Plus size={14} />
+          </button>
+        )}
+      </div>
+      {sortedChatGroups.length === 0 ? (
+        <div
+          className={`pb-1 text-[12px] ${stack ? "px-4" : "px-3"}`}
+          style={{ color: C.textDim }}
+        >
+          {t("emptyList")}
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {sortedChatGroups.map((group) => (
+            <GroupRow
+              key={group.id}
+              group={group}
+              selected={group.id === selectedGroupId}
+              onSelect={onSelectGroup!}
+              variant={stack ? "list" : "rail"}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  ) : null;
+
   const list = (
     <div role="listbox" aria-label="Sessions" className="flex flex-col gap-3">
+      {groupSection}
       {groups.length === 0 && (
         <div className="px-4 py-8 text-[13px]" style={{ color: C.textMuted }}>
           Keine Sessions aktiv.
@@ -268,6 +333,39 @@ export function SessionSidebar({
           >
             <ChevronRight size={14} />
           </button>
+        )}
+        {/* Gruppen zuerst, auch schmal: ein wartender Raum darf nicht
+            unsichtbar werden, nur weil die Leiste eingeklappt ist. Der
+            needs-you-Punkt sitzt an derselben Ecke wie der Status-Punkt der
+            Agenten — gleiche Stelle, gleiche Bedeutung. */}
+        {showGroupSection && sortedChatGroups.length > 0 && (
+          <div className="flex flex-col items-center gap-1 w-full pb-1 mb-1" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
+            {sortedChatGroups.map((group) => {
+              const selected = group.id === selectedGroupId;
+              return (
+                <button
+                  key={group.id}
+                  type="button"
+                  title={group.name}
+                  aria-label={group.name}
+                  onClick={() => onSelectGroup?.(group.id)}
+                  className="relative flex items-center justify-center w-10 h-10 rounded-md shrink-0 cursor-pointer"
+                  style={{
+                    background: selected ? C.accentSubtle : "transparent",
+                    border: `1px solid ${selected ? C.borderAccent : "transparent"}`,
+                  }}
+                >
+                  <AvatarStack members={group.member_avatars ?? []} max={2} size={16} />
+                  {group.status === "waiting_gate" && (
+                    <span
+                      className="absolute bottom-0.5 right-0.5 w-1.5 h-1.5 rounded-full animate-pulse"
+                      style={{ background: C.accent }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         )}
         <div role="listbox" aria-label="Sessions" className="flex flex-col items-center gap-1 w-full">
           {agents.map((agent) => {

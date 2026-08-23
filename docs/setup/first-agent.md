@@ -195,6 +195,13 @@ On the agent's detail page:
    #       --env-file .env --env-file docker/.env.agents up -d
    ```
 
+   > `docker/docker-compose.agents.yml` is your own file — MC writes every
+   > agent you create into it, and it is git-ignored because it describes your
+   > machine. `./setup.sh` creates it from the empty
+   > `docker/docker-compose.agents.example.yml` on first run; `start-all.sh`
+   > does the same if it is somehow still missing. If a compose command
+   > complains that the file is not there, run `./setup.sh` once.
+
 ## 6. Watch it come alive
 
 - **ProvisionBadge** on the agent card turns "Live" once the container is

@@ -1667,6 +1667,15 @@ async def force_recreate_agent_container(
     env_agents = repo_root / "docker" / ".env.agents"
     env_shared = repo_root / "docker" / ".env.shared"
 
+    # Same preflight as the runtime-switch path: an unreadable compose file
+    # (stale Docker Desktop bind mount) or a missing agents file produces an
+    # opaque compose error that says nothing about the actual fix.
+    from app.services.docker_agent_sync import compose_preflight_error
+
+    preflight = compose_preflight_error(compose_main, compose_agents)
+    if preflight:
+        raise HTTPException(status_code=503, detail=preflight)
+
     # Multiple --env-file flags: agents-compose references ${MC_TOKEN_*},
     # ${OPENAI_API_KEY_*} etc. — without .env.agents these are all empty and
     # the agent comes up without a token (mc CLI: 'MC_AGENT_TOKEN missing').
