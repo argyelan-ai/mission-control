@@ -675,7 +675,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 {a.isImage ? (
                   <span
                     aria-hidden
-                    className="w-6 h-6 rounded shrink-0 flex items-center justify-center text-[10px]"
+                    className="w-6 h-6 rounded-sm shrink-0 flex items-center justify-center text-[10px]"
                     style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                   >
                     IMG
@@ -690,7 +690,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   type="button"
                   onClick={() => removeAttachment(a.path)}
                   aria-label={t("removeAttachment", { name: a.name })}
-                  className="shrink-0 w-5 h-5 flex items-center justify-center rounded cursor-pointer"
+                  className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm cursor-pointer"
                   style={{ color: C.textMuted }}
                 >
                   <X size={12} />

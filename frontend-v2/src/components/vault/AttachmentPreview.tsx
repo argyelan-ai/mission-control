@@ -191,7 +191,7 @@ export function AttachmentPreview({
             <button
               type="button"
               onClick={() => setFullsizeOpen(false)}
-              className="absolute top-6 right-6 p-3 rounded"
+              className="absolute top-6 right-6 p-3 rounded-sm"
               style={{ background: "var(--color-bg-hover)" }}
               aria-label="Close"
             >

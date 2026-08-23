@@ -112,7 +112,7 @@ function MarkdownContent({ content }: { content: string }) {
               {children}
             </code>
           ) : (
-            <code className="px-1.5 py-0.5 rounded text-xs font-mono"
+            <code className="px-1.5 py-0.5 rounded-sm text-xs font-mono"
               style={{ background: _C.accentSubtle, color: _C.accent }}>
               {children}
             </code>

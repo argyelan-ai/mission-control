@@ -235,7 +235,7 @@ function SetupGuide() {
                 <button
                   onClick={() => copy("scopes", SCOPE_LIST)}
                   aria-label={t("copyScopesAria")}
-                  className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer"
+                  className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs cursor-pointer"
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
                   {copied === "scopes" ? <Check size={12} /> : <Copy size={12} />}
@@ -270,7 +270,7 @@ function SetupGuide() {
                 <button
                   onClick={() => copy("events", EVENTS.join(", "))}
                   aria-label={t("copyEventsAria")}
-                  className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer"
+                  className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs cursor-pointer"
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
                   {copied === "events" ? <Check size={12} /> : <Copy size={12} />}
@@ -310,7 +310,7 @@ function GuideStep({ n, title, children }: { n: number; title: string; children:
   return (
     <li className="flex gap-3">
       <span
-        className="shrink-0 w-5 h-5 rounded flex items-center justify-center text-[11px] font-mono mt-0.5"
+        className="shrink-0 w-5 h-5 rounded-sm flex items-center justify-center text-[11px] font-mono mt-0.5"
         style={{ backgroundColor: C.bgElevated, color: "var(--color-text-secondary)" }}
       >
         {n}

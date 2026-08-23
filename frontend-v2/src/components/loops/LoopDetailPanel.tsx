@@ -177,7 +177,7 @@ function RoundCard({ round }: { round: LoopRound }) {
           {t("detail.round", { number: round.round_no })}
         </span>
         <span
-          className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+          className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
           style={{ background: `${outcomeMeta.color}22`, color: outcomeMeta.color }}
         >
           {outcomeMeta.label}

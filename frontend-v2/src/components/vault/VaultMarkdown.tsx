@@ -153,7 +153,7 @@ export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) 
             </pre>
           ) : (
             <code
-              className="px-1.5 py-0.5 rounded font-mono text-[0.9em]"
+              className="px-1.5 py-0.5 rounded-sm font-mono text-[0.9em]"
               style={{
                 background: C.accentSubtle,
                 color: C.accent,

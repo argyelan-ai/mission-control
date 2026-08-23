@@ -75,7 +75,7 @@ export function GitPanel({
 
         {gitInfo.uncommitted && (
           <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
+            className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium shrink-0"
             style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}
           >
             uncommitted
@@ -88,7 +88,7 @@ export function GitPanel({
               href={repoUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium hover:opacity-80 transition-opacity font-mono"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-medium hover:opacity-80 transition-opacity font-mono"
               style={{ background: C.bgElevated, color: C.textMuted, border: `1px solid ${C.border}` }}
               title={repoUrl}
             >
@@ -100,7 +100,7 @@ export function GitPanel({
               href={gitInfo.pr_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
+              className="flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
               style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
             >
               <ExternalLink size={9} />
@@ -110,7 +110,7 @@ export function GitPanel({
           {hasCommits && (
             <button
               onClick={() => setExpanded((x) => !x)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] transition-colors cursor-pointer"
               style={{
                 background: expanded ? C.accentSubtle : "transparent",
                 color: expanded ? C.accent : C.textDim,

@@ -120,7 +120,7 @@ export function SemanticCardGrid({
             {item.tags.slice(0, 3).map((tag) => (
               <span
                 key={tag}
-                className="px-1.5 py-0.5 rounded text-[10px]"
+                className="px-1.5 py-0.5 rounded-sm text-[10px]"
                 style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
               >
                 {tag}

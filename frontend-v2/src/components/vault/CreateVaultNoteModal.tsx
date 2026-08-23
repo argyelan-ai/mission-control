@@ -378,7 +378,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                       {tags.map((t) => (
                         <span
                           key={t}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-mono"
+                          className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono"
                           style={{
                             color: C.accent,
                             background: `${C.accent}12`,

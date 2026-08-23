@@ -80,7 +80,7 @@ function TypeChip({ type, selected, onToggle }: TypeChipProps) {
     <button
       type="button"
       onClick={() => onToggle(type)}
-      className="flex items-center gap-1.5 w-full rounded px-2 py-1 text-left transition-colors"
+      className="flex items-center gap-1.5 w-full rounded-sm px-2 py-1 text-left transition-colors"
       style={{
         background: selected
           ? `rgba(${rgb},0.15)`
@@ -128,7 +128,7 @@ function AgentChip({ agent, selected, onToggle }: AgentChipProps) {
     <button
       type="button"
       onClick={() => onToggle(agent)}
-      className="flex items-center gap-1.5 w-full rounded px-2 py-1 text-left transition-colors"
+      className="flex items-center gap-1.5 w-full rounded-sm px-2 py-1 text-left transition-colors"
       style={{
         background: selected ? C.accentSubtle : "var(--color-bg-surface)",
         border: selected ? `1px solid ${C.borderAccent}` : "1px solid transparent",
@@ -168,7 +168,7 @@ function ToggleRow({ label, enabled, onToggle }: ToggleRowProps) {
     <button
       type="button"
       onClick={() => onToggle(!enabled)}
-      className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-left transition-colors"
+      className="flex items-center gap-2 w-full rounded-sm px-2 py-1.5 text-left transition-colors"
       style={{
         background: enabled ? C.accentSubtle : "transparent",
         border: enabled ? `1px solid ${C.borderAccent}` : "1px solid transparent",
@@ -338,7 +338,7 @@ export function GraphFilterSidebar({
                     value={searchQuery}
                     onChange={(e) => onSearchChange?.(e.target.value)}
                     placeholder="node label…"
-                    className="w-full rounded px-2 py-1 pl-6 font-mono text-[11px] outline-none"
+                    className="w-full rounded-sm px-2 py-1 pl-6 font-mono text-[11px] outline-none"
                     style={{
                       background: "var(--color-bg-elevated)",
                       border: "1px solid var(--color-border)",
@@ -404,7 +404,7 @@ export function GraphFilterSidebar({
                   type="button"
                   onClick={handleReset}
                   disabled={!hasActiveFilters}
-                  className="flex items-center gap-1.5 w-full rounded px-2 py-1.5 font-mono text-[11px] transition-opacity"
+                  className="flex items-center gap-1.5 w-full rounded-sm px-2 py-1.5 font-mono text-[11px] transition-opacity"
                   style={{
                     background: hasActiveFilters ? "rgba(239,68,68,0.08)" : "transparent",
                     border: hasActiveFilters

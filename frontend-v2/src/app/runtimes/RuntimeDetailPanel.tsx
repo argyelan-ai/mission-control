@@ -165,7 +165,7 @@ function RuntimeModelEditor({
             if (e.key === "Enter") save();
             if (e.key === "Escape") cancel();
           }}
-          className="font-mono text-xs px-1.5 py-1 rounded min-w-0 flex-1"
+          className="font-mono text-xs px-1.5 py-1 rounded-sm min-w-0 flex-1"
           style={{
             background: C.bgDeep,
             border: `1px solid ${C.borderAccent}`,
@@ -547,7 +547,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
                     </span>
                     {live.drift && (
                       <span
-                        className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                        className="rounded-sm px-1.5 py-0.5 text-[10px] font-medium shrink-0"
                         style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
                         title={t("driftTitle", { model: runtime.model_identifier ?? "—" })}
                       >
@@ -571,7 +571,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
                 most, since its display_name is hand-typed. */}
             {runtime.display_name_drift && runtime.display_name_drift.length > 0 && (
               <span
-                className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                className="rounded-sm px-1.5 py-0.5 text-[10px] font-medium shrink-0"
                 style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
                 title={t("nameDriftTitle", {
                   versions: runtime.display_name_drift.join(", "),

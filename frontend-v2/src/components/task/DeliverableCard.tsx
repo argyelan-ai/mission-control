@@ -105,14 +105,14 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium" style={{ color: C.textPrimary }}>{d.title}</span>
             <span
-              className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wider shrink-0"
+              className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wider shrink-0"
               style={{ background: C.bgElevated, color: C.textMuted }}
             >
               {d.deliverable_type}
             </span>
             {hasContent && (
               <span
-                className="text-[9px] px-1.5 py-0.5 rounded shrink-0"
+                className="text-[9px] px-1.5 py-0.5 rounded-sm shrink-0"
                 style={{ background: `${C.online}1A`, color: C.online }}
               >
                 content
@@ -122,7 +122,7 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
                 Zeigt dem Reviewer woher der Output kommt ohne extra Navigation. */}
             {(d.source_depth ?? 0) > 0 && d.source_task_title && (
               <span
-                className="text-[9px] px-1.5 py-0.5 rounded shrink-0 truncate"
+                className="text-[9px] px-1.5 py-0.5 rounded-sm shrink-0 truncate"
                 title={`From subtask: ${d.source_task_title}`}
                 style={{
                   background: C.accentSubtle,

@@ -172,7 +172,7 @@ export function PluginsShellTab() {
           </span>
           {connected && (
             <span
-              className="text-[10px] px-1.5 py-0.5 rounded"
+              className="text-[10px] px-1.5 py-0.5 rounded-sm"
               style={{ background: `${C.online}1A`, color: C.online }}
             >
               {t("connected")}
