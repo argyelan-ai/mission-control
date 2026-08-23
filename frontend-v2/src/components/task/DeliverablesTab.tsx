@@ -150,7 +150,7 @@ export function DeliverablesTab({
     <div className="space-y-4">
       {fromSubtasks > 0 && (
         <div
-          className="text-[10px] px-2.5 py-1.5 rounded flex items-center gap-2"
+          className="text-[10px] px-2.5 py-1.5 rounded-sm flex items-center gap-2"
           style={{
             background: C.accentSubtle,
             border: `1px solid ${C.borderAccent}`,

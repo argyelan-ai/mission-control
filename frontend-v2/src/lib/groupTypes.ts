@@ -57,6 +57,10 @@ export interface GroupDetail extends Omit<GroupSummary, "member_count"> {
   budget_usd: number | null;
   budget_tokens: number | null;
   result_doc_rel_path: string | null;
+  /** Gesetzt = aus der Liste geräumt, aber vollständig lesbar. Bewusst kein
+   *  Status-Wert: `status` sagt, was die Engine tut, das Archiv, was der
+   *  Operator noch sehen will. */
+  archived_at?: string | null;
   members: GroupMemberInfo[];
 }
 

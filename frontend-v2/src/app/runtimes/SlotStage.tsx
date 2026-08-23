@@ -201,7 +201,7 @@ function AgentChipsRow({ runtime }: { runtime: Runtime }) {
         <Link
           key={a.id}
           href={`/agents/${a.id}`}
-          className="inline-flex items-center gap-1 rounded px-2 py-1 font-mono text-[11px] leading-none hover:bg-[var(--color-bg-hover)] transition-colors"
+          className="inline-flex items-center gap-1 rounded-sm px-2 py-1 font-mono text-[11px] leading-none hover:bg-[var(--color-bg-hover)] transition-colors"
           style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
         >
           <EntityIcon value="🤖" size={12} className="inline-block align-[-2px] mr-1" />{a.name}
@@ -404,14 +404,14 @@ function SwitchRow({
                 ? switchMutation.mutate(confirm.name)
                 : startMutation.mutate(confirm.rt)
             }
-            className="rounded px-2 py-1 text-[10px] font-semibold cursor-pointer"
+            className="rounded-sm px-2 py-1 text-[10px] font-semibold cursor-pointer"
             style={{ background: C.accent, color: C.bgDeep }}
           >
             {tRecipe("confirmSwitch")}
           </button>
           <button
             onClick={() => setConfirm(null)}
-            className="rounded px-2 py-1 text-[10px] cursor-pointer"
+            className="rounded-sm px-2 py-1 text-[10px] cursor-pointer"
             style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
           >
             {tRecipe("cancel")}
@@ -484,7 +484,7 @@ function NowBlock({ serving, live, sizeGb }: { serving: Runtime | null; live?: R
         {hasDrift && (
           <div className="flex items-end pb-0.5">
             <span
-              className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+              className="rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
               style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}` }}
               title={tr("driftTitle", { model: serving.model_identifier ?? "—" })}
             >

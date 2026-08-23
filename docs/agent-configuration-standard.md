@@ -10,7 +10,7 @@
 
 ## Übersicht
 
-Der MC Fleet besteht aus 10 aktiven Agents in 8 verschiedenen Rollen. Jede Rolle hat definierte:
+Ein Fleet besteht aus Agenten in verschiedenen Rollen. Jede Rolle hat definierte:
 
 1. **Scopes** — welche API-Endpoints der Agent nutzen darf (durchgesetzt via TOOLS.md + `require_scope()`)
 2. **CLI Plugins** — welche Claude Code Plugins im `settings.json` aktiviert sind
@@ -18,6 +18,13 @@ Der MC Fleet besteht aus 10 aktiven Agents in 8 verschiedenen Rollen. Jede Rolle
 4. **Runtime** — wie der Agent gestartet und gemanagt wird
 
 Ziel dieses Dokuments: Jeder Operator oder Entwickler kann die Frage "Was bekommt ein Tester-Agent?" ohne Reverse Engineering beantworten.
+
+**Welche Agenten du betreibst, steht nicht hier.** Dieses Dokument beschreibt
+ROLLEN, keine konkrete Flotte. Deine eigenen Agenten, ihre Modelle und
+Container zeigt Mission Control unter **Agents**; der Container heisst immer
+`mc-agent-<slug>`, das Image ergibt sich aus dem Harness (siehe
+`backend/app/services/compose_renderer.py`). Eine Liste an dieser Stelle waere
+die Flotte ihres Autors — und beim naechsten Modellwechsel falsch.
 
 ---
 
@@ -36,17 +43,17 @@ Henry (relay, OpenClaw Gateway) ist eine Sonderrolle — MCP-Konzepte gelten nic
 
 ## Rollenarchitektur
 
-| Rolle (AgentRole enum) | Zweck | Aktive Agents |
-|------------------------|-------|---------------|
-| `orchestrator` | Autonomer Orchestrator, verteilt Tasks, trifft Entscheidungen | Boss |
-| `relay` | OpenClaw Gateway Relay, Frontdoor für den Operator | Henry |
-| `reviewer` | Code-Review, Security, Qualitätssicherung | Rex |
-| `writer` | Content-Erstellung, Dokumentation, Video/Grafik | Davinci, Shakespeare |
-| `developer` | Feature-Implementierung, Bugfixing | FreeCode, Sparky |
-| `tester` | QA, Browser-Automatisierung, E2E-Tests | Tester |
-| `deployer` | Deployment zu Vercel, Docker, Infra | Deployer |
-| `researcher` | Recherche, Knowledge-Synthesis, Lessons | Researcher |
-| `planner` | **RETIRED** — siehe unten | — |
+| Rolle (AgentRole enum) | Zweck |
+|------------------------|-------|
+| `orchestrator` | Autonomer Orchestrator, verteilt Tasks, trifft Entscheidungen |
+| `relay` | OpenClaw Gateway Relay, Frontdoor für den Operator |
+| `reviewer` | Code-Review, Security, Qualitätssicherung |
+| `writer` | Content-Erstellung, Dokumentation, Video/Grafik |
+| `developer` | Feature-Implementierung, Bugfixing |
+| `tester` | QA, Browser-Automatisierung, E2E-Tests |
+| `deployer` | Deployment zu Vercel, Docker, Infra |
+| `researcher` | Recherche, Knowledge-Synthesis, Lessons |
+| `planner` | **RETIRED** — siehe unten |
 
 ---
 
@@ -125,12 +132,6 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Boss-spezifische Identität: autonomer Orchestrator, Entscheidungsträger, kein direktes Implementieren.
 
-### Aktive Agents
-
-| Agent | Modell | Workspace |
-|-------|--------|-----------|
-| Boss | claude-opus-4-7 | `~/.mc/agents/boss-host/claude-config/` |
-
 ### Runtime-Notizen
 
 - **Runtime:** `host` — kein Docker, läuft direkt auf dem Mac Mini
@@ -184,12 +185,6 @@ Branch in `backend/templates/SOUL.md.j2`:
 ```
 
 Henry-spezifische Identität: persönliche rechte Hand vom Operator, Koordinator, Kommunikations-Hub.
-
-### Aktive Agents
-
-| Agent | Modell | Gateway Agent ID |
-|-------|--------|-----------------|
-| Henry | OpenClaw Gateway (kein lokales Modell) | `main` |
 
 ### Runtime-Notizen
 
@@ -251,17 +246,11 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Rex-spezifische Identität: kritisch, präzise, sicherheitsbewusst. Kennt gute Code-Qualität.
 
-### Aktive Agents
-
-| Agent | Modell | Container |
-|-------|--------|-----------|
-| Rex | claude-sonnet-4-6 | `mc-agent-rex` |
-
 ### Runtime-Notizen
 
 - **Runtime:** `cli-bridge` — Docker-Container, `mc-claude-agent:latest` Image
 - **Binary:** `claude` (native Anthropic CLI) + `CLAUDE_CODE_OAUTH_TOKEN`
-- **Workspace:** `~/.mc/agents/rex/claude-config/` (bind-gemountet als `/home/agent/.claude/`)
+- **Workspace:** `~/.mc/agents/<slug>/claude-config/` (bind-gemountet als `/home/agent/.claude/`)
 - **sync-config:** Läuft via `docker_agent_sync.sync_docker_agent_files()` — schreibt direkt in den Bind-Mount
 - **Container-Neustart:** Nach `PATCH mcp-servers` muss der Container neu gestartet werden, damit `.claude.json` eingelesen wird
 
@@ -323,18 +312,11 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Writer-spezifische Identität: kreativ, stilbewusst. Unterschiedliche Personas je Agent (Davinci = Künstler, Shakespeare = Schreiber).
 
-### Aktive Agents
-
-| Agent | Spezialisierung | Modell | Container |
-|-------|----------------|--------|-----------|
-| Davinci | Video, Grafik, UI/Motion | claude-sonnet-4-6 | `mc-agent-davinci` |
-| Shakespeare | Texte, Dokumentation, Content | claude-sonnet-4-6 | `mc-agent-shakespeare` |
-
 ### Runtime-Notizen
 
 - **Runtime:** `cli-bridge` — Docker-Container, `mc-claude-agent:latest` Image
 - **Binary:** `claude` (native Anthropic CLI) + `CLAUDE_CODE_OAUTH_TOKEN`
-- **Workspace je Agent:** `~/.mc/agents/davinci/claude-config/` und `~/.mc/agents/shakespeare/claude-config/`
+- **Workspace je Agent:** `~/.mc/agents/<slug>/claude-config/`
 - **Hinweis:** `remotion-superpowers` Plugin ist nur bei Davinci — bei neuen Writer-Agents prüfen ob das Plugin benötigt wird
 
 ---
@@ -401,19 +383,10 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Developer-spezifische Identität: pragmatisch, lösungsorientiert, kennt die MC-Codebase.
 
-### Aktive Agents
-
-| Agent | Spezialisierung | Modell | Container |
-|-------|----------------|--------|-----------|
-| FreeCode | Allrounder, Full-Stack | claude-sonnet-4-6 | `mc-agent-freecode` |
-| Sparky | Workhorse, Backend/Infra | qwen3-coder-next (LM Studio/Ollama) | `mc-agent-sparky` |
-
 ### Runtime-Notizen
 
-- **FreeCode Runtime:** `docker` (`mc-agent-base:latest`, openclaude shim auf claude sonnet) — `exec openclaude --append-system-prompt`
-- **Sparky Runtime:** `docker` (`mc-agent-base:latest`, openclaude + OpenAI-Shim → LM Studio) — `exec openclaude --append-system-prompt`
-- **Workspace FreeCode:** `~/.mc/agents/freecode/claude-config/`
-- **Workspace Sparky:** `~/.mc/agents/sparky/claude-config/`
+- **Runtime:** `docker` (`mc-agent-base:latest`, openclaude — gegen ein Cloud-Modell oder gegen eine lokale OpenAI-kompatible Runtime) — `exec openclaude --append-system-prompt`
+- **Workspace:** `~/.mc/agents/<slug>/claude-config/`
 - **sync-config Sparky:** Routing über OpenClaw-Pfad via `gateway_agent_id="spark"` — pusht SOUL.md via RPC. `.claude.json` wird via `PATCH mcp-servers` direkt in den Bind-Mount geschrieben
 - **sync-config FreeCode:** Routing über OpenClaw-Pfad via `gateway_agent_id="free-code"` — beide sind im Gateway registriert
 
@@ -472,19 +445,13 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Tester-spezifische Identität: methodisch, Detail-orientiert, kennt Testing Best Practices.
 
-### Aktive Agents
-
-| Agent | Modell | Container |
-|-------|--------|-----------|
-| Tester | claude-sonnet-4-6 | `mc-agent-tester` |
-
 ### Runtime-Notizen
 
 - **Runtime:** `cli-bridge` — Docker-Container, `mc-claude-agent:latest` Image
 - **Binary:** `claude` (native Anthropic CLI) + `CLAUDE_CODE_OAUTH_TOKEN`
-- **Workspace:** `~/.mc/agents/tester/claude-config/`
+- **Workspace:** `~/.mc/agents/<slug>/claude-config/`
 - **playwright MCP Voraussetzung:** `mcr.microsoft.com/playwright/mcp` Docker-Image muss laufen und vom Tester-Container erreichbar sein
-- **Nach `PATCH mcp-servers`:** Container-Neustart erforderlich (`docker compose -f docker/docker-compose.agents.yml restart mc-agent-tester`)
+- **Nach `PATCH mcp-servers`:** Container-Neustart erforderlich (`docker compose -f docker/docker-compose.agents.yml restart mc-agent-<slug>`)
 
 ---
 
@@ -538,17 +505,11 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Deployer-spezifische Identität: präzise, versteht Deployment-Risiken, bestätigt vor irreversiblen Operationen.
 
-### Aktive Agents
-
-| Agent | Modell | Container |
-|-------|--------|-----------|
-| Deployer | claude-sonnet-4-6 | `mc-agent-deployer` |
-
 ### Runtime-Notizen
 
 - **Runtime:** `cli-bridge` — Docker-Container, `mc-claude-agent:latest` Image
 - **Binary:** `claude` (native Anthropic CLI) + `CLAUDE_CODE_OAUTH_TOKEN`
-- **Workspace:** `~/.mc/agents/deployer/claude-config/`
+- **Workspace:** `~/.mc/agents/<slug>/claude-config/`
 - **Vercel-Auth:** Via `credentials:read` + Credentials Vault (kein hardcodierter Token)
 - **GitHub-Auth:** Via `GH_TOKEN` Env-Var im Container
 
@@ -604,17 +565,11 @@ Branch in `backend/templates/SOUL.md.j2`:
 
 Researcher-spezifische Identität: analytisch, quellenorientiert, strukturiert.
 
-### Aktive Agents
-
-| Agent | Modell | Container |
-|-------|--------|-----------|
-| Researcher | claude-sonnet-4-6 | `mc-agent-researcher` |
-
 ### Runtime-Notizen
 
 - **Runtime:** `cli-bridge` — Docker-Container, `mc-claude-agent:latest` Image
 - **Binary:** `claude` (native Anthropic CLI) + `CLAUDE_CODE_OAUTH_TOKEN`
-- **Workspace:** `~/.mc/agents/researcher/claude-config/`
+- **Workspace:** `~/.mc/agents/<slug>/claude-config/`
 
 ---
 

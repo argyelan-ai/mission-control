@@ -260,7 +260,7 @@ function SkillRow({
             href={skill.homepage}
             target="_blank"
             rel="noopener noreferrer"
-            className="p-1 rounded transition-colors"
+            className="p-1 rounded-sm transition-colors"
             style={{ color: "var(--color-text-muted)" }}
             title={t("detail.homepage")}
           >
@@ -671,7 +671,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs font-mono text-[var(--color-text-muted)]">{t("runtimeLabel")}</span>
           <span
-            className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wide"
+            className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide"
             style={{
               backgroundColor: "var(--color-bg-elevated)",
               color: C.textSecondary,
@@ -1005,7 +1005,7 @@ function ConfigTab({
             {activeFileConfig?.label}
             {isReadonly && (
               <span
-                className="ml-2 px-1.5 py-0.5 rounded text-[10px]"
+                className="ml-2 px-1.5 py-0.5 rounded-sm text-[10px]"
                 style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
               >
                 {t("readonly")}
@@ -1196,7 +1196,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
             </p>
             <p className="text-xs text-center max-w-xs text-[var(--color-text-muted)]">
               {t("memoryUpdateHint")}{" "}
-              <code className="px-1 rounded" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
+              <code className="px-1 rounded-sm" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
                 PATCH /api/v1/agent/me/memory
               </code>
             </p>
@@ -1599,7 +1599,7 @@ function OverviewTab({
                         {job.schedule_type === "interval" ? `${job.schedule_interval_hours}h` : job.schedule_time ?? job.schedule_type}
                       </span>
                       {!job.enabled && (
-                        <span className="text-[10px] px-1 rounded text-[var(--color-text-muted)]" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
+                        <span className="text-[10px] px-1 rounded-sm text-[var(--color-text-muted)]" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
                           {t("off")}
                         </span>
                       )}
@@ -1890,7 +1890,7 @@ export default function AgentDetailPage() {
 
   return (
     <AppShell>
-      <div className="space-y-6 max-w-5xl mx-auto">
+      <div className="space-y-6 max-w-5xl">
         {/* Back */}
         <Link
           href="/agents"

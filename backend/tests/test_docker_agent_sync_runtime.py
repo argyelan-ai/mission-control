@@ -242,10 +242,12 @@ def test_restart_force_recreate_runs_docker_compose_up(tmp_path, monkeypatch):
     from app.config import settings
     from app.services.docker_agent_sync import restart_docker_agent_container
 
-    # Satisfy the B2.1 stale-bind-mount preflight: it stats
-    # settings.mc_repo_path/docker-compose.yml, which exists on a real
-    # deployment but not on a CI runner (locally it passes by accident).
+    # Satisfy the B2.1 preflight: it stats BOTH compose files under
+    # settings.mc_repo_path, which exist on a real deployment but not on a CI
+    # runner (locally it used to pass by accident).
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    (tmp_path / "docker").mkdir(exist_ok=True)
+    (tmp_path / "docker" / "docker-compose.agents.yml").write_text("services: {}\n")
     monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
 
     agent = Agent(name="Sparky", agent_runtime="cli-bridge")
@@ -325,6 +327,8 @@ def test_restart_force_recreate_readable_compose_main_proceeds(tmp_path, monkeyp
     from app.config import settings
 
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    (tmp_path / "docker").mkdir(exist_ok=True)
+    (tmp_path / "docker" / "docker-compose.agents.yml").write_text("services: {}\n")
     monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
 
     agent = Agent(name="Sparky", agent_runtime="cli-bridge")
@@ -337,6 +341,33 @@ def test_restart_force_recreate_readable_compose_main_proceeds(tmp_path, monkeyp
 
     run_mock.assert_called_once()
     assert result["status"] == "recreated"
+
+
+def test_restart_force_recreate_missing_agents_compose_returns_clear_error(
+    tmp_path, monkeypatch
+):
+    """The agents compose file left version control, so on a fresh install it
+    can legitimately be ABSENT — and then the fix is ./setup.sh, not a backend
+    restart. Without the preflight this produced the same opaque compose error
+    as a stale mount, and docker compose was invoked for nothing."""
+    from app.services.docker_agent_sync import restart_docker_agent_container
+    from app.config import settings
+
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    (tmp_path / "docker").mkdir(exist_ok=True)  # Verzeichnis da, Datei nicht
+    monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
+
+    agent = Agent(name="Sparky", agent_runtime="cli-bridge")
+
+    with patch("subprocess.run") as run_mock:
+        result = restart_docker_agent_container(agent, force_recreate=True)
+
+    run_mock.assert_not_called()
+    assert result["status"].startswith("error:")
+    assert "docker-compose.agents.yml" in result["status"]
+    assert "setup.sh" in result["status"]
+    assert result["container"] == "mc-agent-sparky"
+    assert result["mode"] == "recreate"
 
 
 def test_restart_default_mode_skips_preflight():

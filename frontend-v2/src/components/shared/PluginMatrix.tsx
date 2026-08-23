@@ -65,7 +65,7 @@ function GithubSkillsSection() {
                   {repo.source} · {repo.version}
                 </span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: `${C.accent}1F`, color: C.accentHover }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ backgroundColor: `${C.accent}1F`, color: C.accentHover }}>
                 {t("skillCount", { count: repo.skills.length })}
               </span>
               {isOpen ? <ChevronDown size={12} style={{ color: "var(--color-text-muted)" }} /> : <ChevronRight size={12} style={{ color: "var(--color-text-muted)" }} />}
@@ -322,7 +322,7 @@ export function PluginMatrix() {
                     <td key={agent.id} className="p-3 text-center">
                       <button
                         onClick={() => handleToggle(agent.id, plugin.key)}
-                        className="w-5 h-5 rounded cursor-pointer flex items-center justify-center mx-auto transition-colors"
+                        className="w-5 h-5 rounded-sm cursor-pointer flex items-center justify-center mx-auto transition-colors"
                         style={{
                           backgroundColor: isActive
                             ? `${C.accent}33`

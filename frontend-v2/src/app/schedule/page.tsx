@@ -281,7 +281,7 @@ function WeekCalendar({
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         onClick={() => onJobSelect(job.id)}
-                        className="w-full text-left px-1.5 py-1 rounded border text-[10px] transition-all hover:scale-[1.02] cursor-pointer"
+                        className="w-full text-left px-1.5 py-1 rounded-sm border text-[10px] transition-all hover:scale-[1.02] cursor-pointer"
                         style={{
                           background: c.bg,
                           borderColor: c.border,
@@ -397,7 +397,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                   )}
                 </div>
                 <div
-                  className="text-xs font-mono px-2 py-1 rounded flex-shrink-0"
+                  className="text-xs font-mono px-2 py-1 rounded-sm flex-shrink-0"
                   style={{
                     background: `${C.error}1F`,
                     color: C.error,
@@ -550,14 +550,14 @@ export default function SchedulePage() {
   return (
     <AppShell>
       <div className="flex flex-col h-full overflow-hidden">
-        {/* Tab switcher header */}
+        {/* Tab switcher header — no px here: AppShell's main already pads the
+            content column, and a second inset pushed the title 24px past the
+            left edge every other page starts at. */}
         <div
-          className="flex items-center gap-3 px-6 py-3 flex-shrink-0"
+          className="flex items-center gap-3 py-3 flex-shrink-0"
         >
-          <Clock
-            size={16}
-            style={{ color: C.accent }}
-          />
+          {/* No decorative icon before the title: no other page has one, and it
+              pushed the heading 28px past the shared left edge. */}
           <div>
             <div className="label-sys mb-1">{t("operationsSchedule")}</div>
             <h1

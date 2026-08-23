@@ -140,7 +140,7 @@ export function JobsTable({
             <button
               type="button"
               onClick={() => setSearch("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1"
               style={{ color: C.textDim }}
               aria-label={t("clearSearch")}
             >

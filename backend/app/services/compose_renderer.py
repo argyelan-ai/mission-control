@@ -134,6 +134,62 @@ DEFAULT_COMPOSE_PATH = (
     Path(settings.mc_repo_path) / "docker" / "docker-compose.agents.yml"
 )
 
+# The shipped template next to it. The file above left version control with
+# the OSS split — it describes its owner's fleet. What ships instead is this
+# agent-free template; `setup.sh` makes the personal copy from it.
+# The rendered file lists the operator's agents, the projects they touch and
+# where their mounts point. Same class of content as docker/.env.shared next to
+# it, which the project already keeps at 0600 — so does this, on every write.
+# Without it the hardening would last exactly until the next runtime switch.
+COMPOSE_FILE_MODE = 0o600
+
+COMPOSE_TEMPLATE_FILENAME = "docker-compose.agents.example.yml"
+DEFAULT_COMPOSE_TEMPLATE_PATH = DEFAULT_COMPOSE_PATH.with_name(
+    COMPOSE_TEMPLATE_FILENAME
+)
+
+
+def _read_compose_or_template(path: Path) -> str:
+    """Read the operator's own agents file — falling back to the template.
+
+    Why the fallback exists: anyone who skips `setup.sh` (e.g. plain
+    `docker compose up -d` straight from the README quickstart) does not have
+    the file. The first runtime bind then calls `write_compose_agents` → here,
+    and a hard `FileNotFoundError` disappears into provisioning's BackgroundTask
+    logger — the user sees a silent non-effect. With the template as scaffolding
+    the render goes through and writes a valid file of their own.
+    """
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+
+    # Guard: if the whole directory is gone, the explanation is not "no agent
+    # created yet" but a lost mount. Rendering from the template would then
+    # replace a real fleet with a generated one — hand edits included. Fail
+    # loudly instead.
+    if not path.parent.exists():
+        raise FileNotFoundError(
+            f"{path.parent} does not exist — the docker/ directory is not "
+            "visible inside the backend container (lost mount). Deliberately "
+            "NOT rendering from the template: that would replace your own fleet "
+            "with a generated one. Fix: docker compose restart backend"
+        )
+
+    for template in (path.with_name(COMPOSE_TEMPLATE_FILENAME),
+                     DEFAULT_COMPOSE_TEMPLATE_PATH):
+        if template.exists():
+            logger.warning(
+                "compose_renderer: %s missing — rendering from template %s "
+                "(normal for the first agent; ./setup.sh creates the copy otherwise)",
+                path, template,
+            )
+            return template.read_text(encoding="utf-8")
+
+    raise FileNotFoundError(
+        f"neither the agents file ({path}) nor the template "
+        f"{COMPOSE_TEMPLATE_FILENAME} next to it was found — ./setup.sh in the "
+        "project directory creates the copy"
+    )
+
 
 def pick_image_for_runtime(runtime: Runtime | None) -> str | None:
     """Resolve the docker image required for a given runtime.
@@ -493,6 +549,33 @@ def _ensure_env_file_entry(body_lines: list[str]) -> list[str]:
     return body
 
 
+def _anchor_images(content: str) -> dict[str, str]:
+    """Map ``anchor name → the image it declares`` from the file itself.
+
+    Read the anchors rather than assume them: what the module constants resolve
+    to and what the operator's file actually says can differ. A file written
+    before the registry prefix carries the bare ``mc-claude-agent:latest`` while
+    the renderer now resolves ``ghcr.io/…/mc-claude-agent:latest`` — an agent
+    that inherits the anchor in that file ends up on a tag no registry has.
+    """
+    lines = content.splitlines(keepends=False)
+    n = len(lines)
+    images: dict[str, str] = {}
+    for j, line in enumerate(lines):
+        decl = re.match(
+            r"^\s*x-(?P<aname>[a-z0-9_-]+):\s*&(?P<aanchor>[a-z0-9_-]+)\s*$", line
+        )
+        if not decl:
+            continue
+        # Look ahead for `  image: ...` within the anchor block.
+        for k in range(j + 1, min(j + 20, n)):
+            m = re.match(r"^\s+image:\s*(\S+)\s*$", lines[k])
+            if m:
+                images[decl.group("aanchor")] = m.group(1).strip('"\'')
+                break
+    return images
+
+
 def _rewrite_compose(
     content: str,
     image_overrides: dict[str, str],
@@ -525,17 +608,8 @@ def _rewrite_compose(
     i = 0
     n = len(lines)
 
-    # Map anchor name → its image (read from existing anchor blocks).
-    anchor_images: dict[str, str] = {}
-    for j, line in enumerate(lines):
-        anchor_decl = re.match(r"^\s*x-(?P<aname>[a-z0-9_-]+):\s*&(?P<aanchor>[a-z0-9_-]+)\s*$", line)
-        if anchor_decl:
-            # Look ahead for `  image: ...` within the anchor block (until next top-level key).
-            for k in range(j + 1, min(j + 20, n)):
-                m = re.match(r"^\s+image:\s*(\S+)\s*$", lines[k])
-                if m:
-                    anchor_images[anchor_decl.group("aanchor")] = m.group(1)
-                    break
+    # Map anchor name → its image, read from the anchor blocks in THIS file.
+    anchor_images = _anchor_images(content)
 
     while i < n:
         line = lines[i]
@@ -647,14 +721,61 @@ def _rewrite_compose(
     return rendered
 
 
-def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) -> str:
+def _needs_explicit_image(
+    image: str | None,
+    anchor: str,
+    anchor_default_image: str,
+    anchor_images: dict[str, str] | None,
+) -> bool:
+    """Would inheriting ``*anchor`` put this agent on the wrong image?
+
+    Three cases, and the middle one is the bug this replaces:
+
+    * The anchor in the file declares a plain image name that differs from the
+      resolved one → spell it out. This is the fresh-install failure: the file
+      says ``mc-claude-agent:latest``, MC_AGENT_IMAGE_PREFIX defaults to the
+      GHCR registry, and the container comes up with ``pull access denied``.
+    * The anchor computes its image from ``${MC_AGENT_IMAGE_PREFIX…}`` — the
+      same two variables the renderer uses. Inheriting is then not just safe
+      but better: a fixed line would freeze the value at render time and take
+      away developer mode (``MC_AGENT_IMAGE_PREFIX=``).
+    * The anchor is not in the file at all (older file, newer harness) → there
+      is nothing to inherit, so write it.
+
+    Without ``anchor_images`` (direct unit calls) we fall back to comparing
+    against the module constant, which for claude/openclaude is the same value
+    by construction — i.e. the old, image-less behaviour.
+    """
+    if image is None:
+        return False
+    if anchor_images is None:
+        return image != anchor_default_image
+
+    declared = anchor_images.get(anchor)
+    if declared is None:
+        return True  # nothing to inherit
+    if "${" in declared:
+        return False  # the anchor resolves itself, from the same variables
+    return declared != image
+
+
+def _build_new_agent_block(
+    slug: str,
+    image: str | None,
+    is_vault_writer: bool,
+    anchor_images: dict[str, str] | None = None,
+) -> str:
     """Render a full service block for a new cli-bridge agent not present in the
     static compose template.
 
     - Anchor: ``*claude-agent-base`` for CLAUDE_IMAGE (default), or
       ``*openclaude-agent-base`` for OPENCLAUDE_IMAGE. An explicit ``image:``
-      line is emitted only when the resolved image differs from the anchor's
-      default.
+      line is emitted only when inheriting the anchor would land the agent on
+      the wrong image — see ``_needs_explicit_image``.
+    - ``anchor_images``: what the anchors in the TARGET FILE declare, from
+      ``_anchor_images()``. Defaults to None for direct unit calls, which then
+      falls back to comparing against the module constants (i.e. never emit) —
+      production callers pass the real map.
     - Env: standard 7-var set (AGENT_NAME, MC_API_URL, MC_TOKEN, RECYCLER,
       VAULT_PATH, VAULT_INBOX, AGENT_SLUG).
     - Volumes: 4 standard mounts + optional vault :rw when ``is_vault_writer``.
@@ -682,8 +803,7 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
         f"  mc-agent-{slug}:",
         f"    <<: *{anchor}",
     ]
-    # Only emit explicit image: when it differs from the anchor default.
-    if image is not None and image != anchor_default_image:
+    if _needs_explicit_image(image, anchor, anchor_default_image, anchor_images):
         lines.append(f"    image: {image}")
 
     lines += [
@@ -743,9 +863,7 @@ async def render_compose_agents(
     - Returns the rendered string (does not write).
     """
     path = compose_path or DEFAULT_COMPOSE_PATH
-    if not path.exists():
-        raise FileNotFoundError(f"compose template not found: {path}")
-    static = path.read_text(encoding="utf-8")
+    static = _read_compose_or_template(path)
 
     result = await session.exec(
         select(Agent).where(Agent.agent_runtime == "cli-bridge")
@@ -790,7 +908,9 @@ async def render_compose_agents(
     if new_agents:
         rendered = _insert_new_agent_blocks(rendered, new_agents, vault_writers)
 
-    return rendered
+    # Self-healing: a file left behind by the older code with a bare
+    # ``services:`` and no agents becomes valid again on the next render.
+    return _restore_empty_services_map(rendered)
 
 
 def _insert_new_agent_blocks(
@@ -817,10 +937,22 @@ def _insert_new_agent_blocks(
     # that starts with a non-space, non-comment character and ends with ``:``.
     # We start scanning from the line after ``services:`` until we find a
     # sibling top-level key.
+    # ``services: {}`` is matched too, not just ``services:``. Reason: the
+    # shipped template (docker-compose.agents.example.yml) deliberately carries
+    # NO agents — otherwise every installation would start with its author's
+    # fleet. A bare ``services:`` would be invalid compose though ("services
+    # must be a mapping", verified live), so the empty mapping sits there.
+    # Without this branch the renderer would not find the section and would
+    # append the first agent at the END OF THE FILE — behind
+    # ``networks:``/``volumes:``, where it lands as a top-level key and
+    # destroys the file.
     services_header_idx: int | None = None
+    services_header_is_empty_map = False
     for i, line in enumerate(lines):
-        if re.match(r"^services:\s*$", line):
+        m = re.match(r"^services:\s*(\{\s*\})?\s*$", line)
+        if m:
             services_header_idx = i
+            services_header_is_empty_map = m.group(1) is not None
             break
 
     # Default: insert at end of file content.
@@ -836,17 +968,28 @@ def _insert_new_agent_blocks(
                     insert_before = j
                     break
 
+    # What the anchors in THIS file declare — not what the constants resolve to.
+    anchors = _anchor_images(content)
+
     # Build the text to insert (one block per new agent, blank-line separated).
     blocks_to_insert: list[str] = []
     for slug, resolved_image in new_agents:
         if f"mc-agent-{slug}:" in content:
             continue  # Already present — skip (dedup guard).
         is_vault_writer = slug in vault_writers
-        block = _build_new_agent_block(slug, resolved_image, is_vault_writer)
+        block = _build_new_agent_block(
+            slug, resolved_image, is_vault_writer, anchor_images=anchors
+        )
         blocks_to_insert.append(block)
 
     if not blocks_to_insert:
         return content
+
+    # First agent into an empty template: the empty mapping has to go, or
+    # ``services: {}`` would sit above real entries — YAML then takes the empty
+    # mapping and ignores everything below it.
+    if services_header_is_empty_map and services_header_idx is not None:
+        lines[services_header_idx] = "services:"
 
     # Insert all blocks at the computed position, each preceded by a blank line.
     insert_text = "\n" + "\n\n".join(blocks_to_insert) + "\n"
@@ -919,7 +1062,12 @@ async def write_compose_agents(
 
         if target.exists():
             bak.write_text(previous, encoding="utf-8")
+            os.chmod(bak, COMPOSE_FILE_MODE)  # same fleet, same mode
         tmp.write_text(rendered, encoding="utf-8")
+        # chmod the tmpfile BEFORE the rename: after os.replace the target is
+        # live, and a window where it sits world-readable is the thing we are
+        # closing.
+        os.chmod(tmp, COMPOSE_FILE_MODE)
         os.replace(tmp, target)
         logger.info("compose_renderer wrote %s (%d bytes)", target, len(rendered))
         return {
@@ -930,6 +1078,42 @@ async def write_compose_agents(
         }
     finally:
         await redis.delete(COMPOSE_WRITE_LOCK_KEY)
+
+
+def _restore_empty_services_map(content: str) -> str:
+    """Put ``services: {}`` back when no entry is left.
+
+    ``_insert_new_agent_blocks`` replaces the empty mapping with a bare
+    ``services:`` for the first agent. Without this way back that is a one-way
+    street: remove the last agent again and a naked ``services:`` remains —
+    invalid compose ("services must be a mapping", verified live). From then on
+    EVERY compose command fails: start-all.sh step 3, the container recreate,
+    the runtime switch.
+
+    Pure function. Changes nothing while an entry still sits under
+    ``services:``, and nothing when ``{}`` is already there.
+    """
+    lines = content.splitlines(keepends=True)
+    header_idx: int | None = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^services:[ \t]*$", line.rstrip("\n").rstrip("\r")):
+            header_idx = idx
+            break
+    if header_idx is None:
+        return content
+
+    for line in lines[header_idx + 1:]:
+        stripped = line.strip()
+        # Blank lines and comments are not entries — YAML does not see them.
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not line[0].isspace():
+            break  # next top-level key: the section ends with no entry
+        return content  # a real entry is still there
+
+    eol = "\n" if lines[header_idx].endswith("\n") else ""
+    lines[header_idx] = "services: {}" + eol
+    return "".join(lines)
 
 
 def prune_compose_agent_block(content: str, slug: str) -> tuple[str, bool]:
@@ -974,7 +1158,9 @@ def prune_compose_agent_block(content: str, slug: str) -> tuple[str, bool]:
             break
 
     del lines[start:end]
-    return "".join(lines), True
+    # If that was the last agent the empty mapping has to come back — a bare
+    # ``services:`` would leave the file invalid.
+    return _restore_empty_services_map("".join(lines)), True
 
 
 async def prune_compose_agent(slug: str, compose_path: Path | None = None) -> dict:
@@ -1015,7 +1201,9 @@ async def prune_compose_agent(slug: str, compose_path: Path | None = None) -> di
         tmp = path.with_suffix(path.suffix + ".tmp")
         bak = path.with_suffix(path.suffix + ".bak")
         bak.write_text(previous, encoding="utf-8")
+        os.chmod(bak, COMPOSE_FILE_MODE)
         tmp.write_text(rendered, encoding="utf-8")
+        os.chmod(tmp, COMPOSE_FILE_MODE)
         os.replace(tmp, path)
         logger.info("compose_renderer pruned mc-agent-%s from %s", slug, path)
         return {"removed": "true", "path": str(path), "changed": "true"}

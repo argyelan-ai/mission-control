@@ -179,7 +179,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                       {p.task_title && <span>{p.task_title}</span>}
                     </p>
                   )}
-                  <span className="inline-block text-[10px] px-2 py-0.5 rounded font-medium" style={{ backgroundColor: `${blockerType.color}18`, color: blockerType.color, border: `1px solid ${blockerType.color}30` }}>
+                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-sm font-medium" style={{ backgroundColor: `${blockerType.color}18`, color: blockerType.color, border: `1px solid ${blockerType.color}30` }}>
                     {t(blockerType.labelKey)}
                   </span>
                   {p.description && (

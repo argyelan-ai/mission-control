@@ -26,6 +26,7 @@ from app.models.thread import Message
 from app.services import group_service
 from app.services.group_runner import (
     GroupRunnerService,
+    _is_pass,
     apply_group_gate_decision,
     pause_group,
     start_group,
@@ -153,6 +154,24 @@ async def test_first_round_brief_is_blind_and_mentions_all_speakers(
 
 
 @pytest.mark.asyncio
+async def test_brief_carries_length_budget(async_session: AsyncSession):
+    """Kursänderung (ADR-075, 22.08.): der Chat trägt die Meinungsbildung,
+    das Dokument die Substanz. Der Brief MUSS die Länge deckeln — ohne
+    Vorgabe schreiben die Agenten Aufsätze (Live-Befund: 1600–4900 Zeichen)."""
+    group, *_ = await _make_running_group(async_session)
+    await _tick(async_session)
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    brief = next(m for m in msgs if m.seq == round_row.brief_seq)
+
+    assert "2–4 Sätzen" in brief.body                  # Längenbudget
+    assert "Ergebnis-Dokument" in brief.body           # wohin die Substanz gehört
+    assert "Quellen-URL" in brief.body                 # Quellen-Pflicht bleibt
+    # Der Brief selbst bleibt knapp — er ist der grösste Kostenhebel je Runde.
+    assert len(brief.body) < 1400
+
+
+@pytest.mark.asyncio
 async def test_tick_without_answers_changes_nothing(async_session: AsyncSession):
     """Sammeln ist geduldig: solange Antworten fehlen und kein Timeout
     greift, postet der Tick nichts Neues (idempotent)."""
@@ -214,6 +233,198 @@ async def test_speaker_timeout_skips_with_honest_note(async_session: AsyncSessio
     assert "gamma" in note.body.lower()
 
 
+@pytest.mark.asyncio
+async def test_speaker_timeout_default_is_generous(async_session: AsyncSession):
+    """Operator-Korrektur 22.08.: die First-Token-Latenz lokaler Motoren ist
+    bei langem Kontext hoch — der Turn-Timeout gehört HÖHER, nicht tiefer.
+    Ein zu kurzer Deckel überspringt Agenten, die noch am Denken sind."""
+    group, *_ = await _make_running_group(async_session)
+    assert group.speaker_timeout_seconds == 900
+
+
+@pytest.mark.asyncio
+async def test_lead_prompt_shortens_contributions(async_session: AsyncSession):
+    """Kontext als Delta statt Volltext: 2000 Zeichen je Beitrag waren der
+    Hauptgrund für 30 000+ Token pro Runde. Deckel jetzt 400."""
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(
+        async_session, group, beta, "A" * 1000 + " Quelle: https://x.org"
+    )
+    await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
+    assert "A" * 350 in lead_prompt.body      # der Anfang steht drin
+    assert "A" * 500 not in lead_prompt.body  # aber gekürzt
+
+
+@pytest.mark.asyncio
+async def test_lead_prompt_demands_short_verdict_and_long_document(
+    async_session: AsyncSession,
+):
+    """Der Lead postet kurz und schreibt lang ins Dokument — sein
+    Synthese-Beitrag war die grösste einzelne Textwand im Raum."""
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "A. Quelle: https://x.org")
+    await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
+    assert "zwei bis drei Sätze" in lead_prompt.body
+    assert "mc group-doc" in lead_prompt.body   # die Substanz geht ins Dokument
+    # Reihenfolge bleibt: erst Urteil, dann Dokument.
+    assert "Zuerst das Urteil, dann das Dokument" in lead_prompt.body
+
+
+# ── PASS: passen ist eine vollwertige Antwort ──────────────────────────────
+
+
+def test_pass_is_recognised_tolerantly():
+    """Hermes-Muster `/^\\(?\\s*pass\\s*\\)?\\.?$/i` plus die deutsche Altform
+    NICHTS NEUES (laufende Gruppen dürfen nicht brechen)."""
+    assert _is_pass("PASS")
+    assert _is_pass("pass")
+    assert _is_pass("(pass)")
+    assert _is_pass(" pass. ")
+    assert _is_pass("")            # Schweigen zählt wie passen
+    assert _is_pass("NICHTS NEUES")
+    assert _is_pass("nichts neues — sehe ich genauso")  # Altform, prefix-tolerant
+    # Kein Freibrief: wer PASS nur erwähnt, hat trotzdem etwas gesagt.
+    assert not _is_pass("PASS wäre hier falsch, denn Quelle: https://x.org")
+    assert not _is_pass("Ich bin dagegen.")
+
+
+@pytest.mark.asyncio
+async def test_pass_counts_as_delivered_not_as_failed_round(
+    async_session: AsyncSession,
+):
+    """Ein PASS ist geliefert: kein Timeout, keine Fehlrunde — und der Text
+    des Passenden belastet den Lead-Auftrag nicht."""
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "PASS")
+    await _agent_says(async_session, group, gamma, "Einwand X. Quelle: https://y.org")
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    assert round_row.pending_speakers == []
+    assert round_row.lead_prompt_seq is not None   # Lead-Turn kommt trotzdem
+    msgs = await _thread_messages(async_session, group.thread_id)
+    assert not any("übersprungen" in m.body for m in msgs)  # kein Timeout
+    lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
+    assert "@beta" in lead_prompt.body            # als gepasst ausgewiesen
+    assert "### @beta" not in lead_prompt.body    # aber nicht als Beitrag
+
+    await _agent_says(async_session, group, alpha, "WEITER: noch offen")
+    await _tick(async_session)
+    await async_session.refresh(group)
+    assert group.consecutive_failed_rounds == 0
+
+
+@pytest.mark.asyncio
+async def test_all_speakers_pass_ends_group_regularly(async_session: AsyncSession):
+    """Hermes: „the room settles when a full round stays silent."
+    Passen ALLE, ist nichts mehr zu synthetisieren — die Gruppe endet
+    regulär, ohne den teuren Lead-Turn."""
+    group, alpha, beta, gamma = await _make_running_group(
+        async_session, max_rounds=10
+    )
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "PASS")
+    await _agent_says(async_session, group, gamma, "(pass)")
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    assert round_row.outcome == "all_passed"
+    assert round_row.finished_at is not None
+    assert round_row.lead_prompt_seq is None      # der Lead wurde nicht geweckt
+    await async_session.refresh(group)
+    assert group.status == "done"                # one_shot: Lauf beendet
+    assert group.consecutive_failed_rounds == 0  # passen ist keine Fehlrunde
+    msgs = await _thread_messages(async_session, group.thread_id)
+    settle = next(m for m in msgs if "still" in m.body.lower())
+    assert settle.mentions == []                 # Sturm-Schutz: weckt niemanden
+
+
+@pytest.mark.asyncio
+async def test_legacy_nichts_neues_still_settles_the_room(
+    async_session: AsyncSession,
+):
+    """Laufende Gruppen tragen die alte Anweisung im Brief — die deutsche
+    Altform muss weiter als PASS zählen."""
+    group, alpha, beta, gamma = await _make_running_group(
+        async_session, max_rounds=10
+    )
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "NICHTS NEUES")
+    await _agent_says(async_session, group, gamma, "NICHTS NEUES")
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    assert round_row.outcome == "all_passed"
+    await async_session.refresh(group)
+    assert group.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_timeout_speaker_does_not_settle_the_room(
+    async_session: AsyncSession,
+):
+    """Ein per Timeout Übersprungener ist NICHT einverstanden, sondern
+    unbekannt — die Runde läuft dann normal zum Lead."""
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "PASS")
+
+    round_row = await _current_round(async_session, group)
+    round_row.started_at = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(
+        seconds=group.speaker_timeout_seconds + 60
+    )
+    async_session.add(round_row)
+    await async_session.commit()
+
+    await _tick(async_session)
+    round_row = await _current_round(async_session, group)
+    assert round_row.outcome is None              # Runde läuft weiter
+    assert round_row.lead_prompt_seq is not None  # Lead urteilt
+
+
+@pytest.mark.asyncio
+async def test_lead_learns_who_was_skipped(async_session: AsyncSession):
+    """Der Lead muss erfahren, WER gefehlt hat.
+
+    Die Liste war immer leer: der Timeout-Zweig räumt `pending_speakers`
+    selbst, bevor `_prompt_lead` sie ausliest — der Lead bekam nie einen Namen
+    zu sehen und hielt jede Runde für vollzählig. Ein Synthese-Urteil über
+    zwei Meinungen, das drei gehört zu haben glaubt, ist genau der stille
+    Fehler, den kein Statuswert anzeigt.
+    """
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "Position B. Quelle: https://b.org")
+
+    round_row = await _current_round(async_session, group)
+    round_row.started_at = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(
+        seconds=group.speaker_timeout_seconds + 60
+    )
+    async_session.add(round_row)
+    await async_session.commit()
+
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
+    assert "Übersprungen (Timeout): @gamma" in lead_prompt.body
+    assert "### @beta" in lead_prompt.body   # der Anwesende zählt normal
+
+
 # ── Verdikte ───────────────────────────────────────────────────────────────
 
 
@@ -250,9 +461,36 @@ async def test_weiter_verdict_starts_next_round_with_delta_and_antilob(
     msgs = await _thread_messages(async_session, group.thread_id)
     brief2 = next(m for m in msgs if m.seq == round2.brief_seq)
     assert "offen ist der Kontext-Tradeoff" in brief2.body  # Lead-Delta
-    assert "Zustimmung ist kein Beitrag" in brief2.body      # Anti-Lob
-    assert "NICHTS NEUES" in brief2.body
+    # Ab Runde 2 ersetzt die PASS-Klausel die alte Anti-Lob-Formel: passen ist
+    # eine normale Option, kein Eingeständnis (Kursänderung 22.08.).
+    assert "PASS" in brief2.body
     assert "denkt an den 1M-Kontext!" in brief2.body         # Operator-Einwurf
+
+
+@pytest.mark.asyncio
+async def test_lead_delta_and_operator_notes_are_shortened(
+    async_session: AsyncSession,
+):
+    """Auch der Brief-Kopf bleibt knapp: Vorrunden-Delta und Operator-Einwürfe
+    je ~300 Zeichen — sonst wächst der Brief mit jeder Runde."""
+    group, alpha, beta, gamma = await _make_running_group(
+        async_session, max_rounds=5
+    )
+    await _tick(async_session)
+    await group_service.post_user_message(async_session, group, "O" * 800)
+    await _agent_says(async_session, group, beta, "A. Quelle: https://x.org")
+    await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+    await _tick(async_session)
+    await _agent_says(async_session, group, alpha, "WEITER: " + "D" * 800)
+    await _tick(async_session)
+
+    round2 = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    brief2 = next(m for m in msgs if m.seq == round2.brief_seq)
+    assert "D" * 250 in brief2.body
+    assert "D" * 400 not in brief2.body
+    assert "O" * 250 in brief2.body
+    assert "O" * 400 not in brief2.body
 
 
 @pytest.mark.asyncio
@@ -396,8 +634,12 @@ async def test_max_rounds_is_hard_cap(async_session: AsyncSession):
 async def test_progress_brake_stops_after_two_stale_rounds(
     async_session: AsyncSession,
 ):
-    """≥ Hälfte der Sprecher meldet NICHTS NEUES, 2 Runden in Folge →
-    Auto-Stopp vor dem Deckel («Entscheidung oder Abbruch»)."""
+    """≥ Hälfte der Sprecher passt, 2 Runden in Folge → Auto-Stopp vor dem
+    Deckel («Entscheidung oder Abbruch»).
+
+    Der TEIL-Fall: passen ALLE, endet die Gruppe schon in derselben Runde
+    (test_all_speakers_pass_ends_group_regularly) — die Bremse deckt genau
+    die Lücke dazwischen ab, in der die Runde noch zum Lead geht."""
     group, alpha, beta, gamma = await _make_running_group(
         async_session, max_rounds=10
     )
@@ -405,8 +647,8 @@ async def test_progress_brake_stops_after_two_stale_rounds(
         await _run_full_round(
             async_session, group, alpha, beta, gamma,
             lead_verdict="WEITER: weiter suchen",
-            beta_text="NICHTS NEUES",
-            gamma_text="NICHTS NEUES",
+            beta_text="PASS",
+            gamma_text="Immer noch offen. Quelle: https://y.org",
         )
     await async_session.refresh(group)
     assert group.status == "done"

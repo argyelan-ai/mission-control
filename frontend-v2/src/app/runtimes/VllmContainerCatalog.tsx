@@ -105,7 +105,7 @@ function AddVllmModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded cursor-pointer"
+            className="p-1 rounded-sm cursor-pointer"
             style={{ color: C.textMuted }}
             aria-label={t("close")}
           >

@@ -192,7 +192,7 @@ export default function ScheduleJobDetailPage() {
             <Link
               href="/schedule"
               aria-label={t("backToSchedule")}
-              className="flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors shrink-0"
+              className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-sm transition-colors shrink-0"
               style={{ color: C.textMuted }}
             >
               <ArrowLeft size={13} />
@@ -208,7 +208,7 @@ export default function ScheduleJobDetailPage() {
             </h1>
             <button
               onClick={() => updateMutation.mutate({ enabled: !job.enabled })}
-              className="px-2.5 py-1 rounded text-[11px] font-mono transition-colors cursor-pointer shrink-0"
+              className="px-2.5 py-1 rounded-sm text-[11px] font-mono transition-colors cursor-pointer shrink-0"
               style={{
                 color: job.enabled ? C.online : C.textMuted,
                 border: `1px solid ${C.borderActive}`,
@@ -219,7 +219,7 @@ export default function ScheduleJobDetailPage() {
             <button
               onClick={() => setEditOpen(true)}
               aria-label={t("editJob")}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors cursor-pointer shrink-0"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs transition-colors cursor-pointer shrink-0"
               style={{
                 color: C.textSecondary,
                 border: `1px solid ${C.borderActive}`,
@@ -529,7 +529,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
         <Link
           href={`/tasks/${run.task_id}`}
           title={t("goToTask")}
-          className="flex-shrink-0 p-1 rounded transition-colors"
+          className="flex-shrink-0 p-1 rounded-sm transition-colors"
           style={{ color: C.textMuted }}
         >
           <ExternalLink size={11} />
@@ -550,7 +550,7 @@ function TaskRow({ task, agentName }: { task: Task; agentName: string | null }) 
       style={{ borderColor: C.border }}
     >
       <span
-        className="text-[10px] uppercase font-medium px-1.5 py-0.5 rounded flex-shrink-0"
+        className="text-[10px] uppercase font-medium px-1.5 py-0.5 rounded-sm flex-shrink-0"
         style={{
           background: TASK_STATUS_COLOR[status] ?? C.borderActive,
           color: TASK_STATUS_TEXT[status] ?? C.textSecondary,

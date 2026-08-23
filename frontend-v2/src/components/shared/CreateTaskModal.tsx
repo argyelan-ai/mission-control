@@ -349,7 +349,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                   <span id="create-task-title" className="text-sm font-semibold" style={{ color: C.textPrimary }}>New task</span>
                   {currentTemplate && (
                     <span
-                      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium"
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[9px] font-medium"
                       style={{
                         color: currentTemplate.color,
                         background: `${currentTemplate.color}18`,

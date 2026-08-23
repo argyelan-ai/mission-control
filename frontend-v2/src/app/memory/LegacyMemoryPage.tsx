@@ -112,7 +112,7 @@ function MarkdownContent({ content }: { content: string }) {
               {children}
             </code>
           ) : (
-            <code className="px-1.5 py-0.5 rounded text-xs font-mono"
+            <code className="px-1.5 py-0.5 rounded-sm text-xs font-mono"
               style={{ background: _C.accentSubtle, color: _C.accent }}>
               {children}
             </code>
@@ -695,7 +695,7 @@ export default function LegacyMemoryPage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-6">
           <div>

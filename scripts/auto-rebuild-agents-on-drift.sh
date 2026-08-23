@@ -19,25 +19,43 @@
 
 set -euo pipefail
 
-REPO="${HOME}/Workspace/Projects/mission-control"
+# The checkout this script belongs to. Derived from the script location, so it
+# works whatever the directory is called and on whoever's machine; MC_REPO_PATH
+# overrides it (same variable the backend uses). It used to be one hardcoded
+# path — for everyone else the script hit `cd "$REPO" || exit 0` and silently
+# did nothing, which is the worst thing a watchdog can do.
+REPO="${MC_REPO_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOG="/tmp/mc-auto-rebuild.log"
 
-# Agent containers and their image variant (mc-agent-base vs mc-claude-agent).
+# Agent containers and their image variant, discovered from what is RUNNING —
+# never a list in this file. A hardcoded fleet only ever describes its author's
+# machine, and goes stale on the next agent either way.
 # macOS ships bash 3.2 — no associative arrays — so encode as
 # "container:variant" lines and look up via a function.
-ALL_AGENTS="mc-agent-sparky:base
-mc-agent-shakespeare:base
-mc-agent-freecode:base
-mc-agent-researcher:base
-mc-agent-rex:claude
-mc-agent-davinci:claude
-mc-agent-deployer:claude
-mc-agent-tester:claude"
+discover_agents() {
+    # `docker ps` gives us name + image; the image decides which scripts the
+    # container carries. omp/kimi images bring their own entrypoints and have
+    # no poll.sh/recycler.sh to compare, so they are deliberately skipped.
+    docker ps --format '{{.Names}}\t{{.Image}}' --filter 'name=^/mc-agent-' 2>/dev/null \
+    | while IFS="$(printf '\t')" read -r name image; do
+        [ -n "$name" ] || continue
+        case "$image" in
+            *mc-claude-agent*) echo "$name:claude" ;;
+            *mc-agent-base*)   echo "$name:base"   ;;
+        esac
+    done
+}
 
 variant_for() {
     # Echo "base" or "claude" for the given container name, empty if unknown.
     echo "$ALL_AGENTS" | awk -F: -v c="$1" '$1==c{print $2; exit}'
 }
+
+# --print-repo / --list make the watchdog inspectable: it normally runs as a
+# Stop hook and says nothing, so there was no way to see what it watches.
+case "${1:-}" in
+    --print-repo) echo "$REPO"; exit 0 ;;
+esac
 
 # Files watched per image variant (repo path → container path)
 # poll.sh is the SHARED source — synced into both contexts by build-agent-images.sh
@@ -89,6 +107,17 @@ container_md5() {
 # Pre-flight
 cd "$REPO" 2>/dev/null || exit 0
 docker info >/dev/null 2>&1 || exit 0   # Docker daemon down → silent exit
+
+ALL_AGENTS="$(discover_agents || true)"
+
+if [ "${1:-}" = "--list" ]; then
+    if [ -n "$ALL_AGENTS" ]; then
+        echo "$ALL_AGENTS"
+    fi
+    exit 0
+fi
+
+[ -n "$ALL_AGENTS" ] || exit 0   # no agent containers running → nothing to watch
 
 # Pass 1: detect drift per container
 ALL_DRIFTED=()

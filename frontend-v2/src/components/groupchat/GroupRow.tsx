@@ -61,7 +61,7 @@ export function GroupRow({ group, selected, onSelect, variant = "rail" }: GroupR
       aria-selected={selected}
       onClick={() => onSelect(group.id)}
       className={`flex items-center gap-2.5 text-left w-full transition-colors cursor-pointer ${
-        stack ? "px-4 min-h-[52px] py-2" : "px-3 py-2 rounded"
+        stack ? "px-4 min-h-[52px] py-2" : "px-3 py-2 rounded-sm"
       }`}
       style={{
         background: selected ? C.accentSubtle : "transparent",
@@ -86,7 +86,7 @@ export function GroupRow({ group, selected, onSelect, variant = "rail" }: GroupR
       {chipText && (
         <span
           data-testid="group-chip"
-          className="shrink-0 flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
+          className="shrink-0 flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
           style={{ color: chipColor, border: `1px solid ${C.border}` }}
         >
           {waiting && (

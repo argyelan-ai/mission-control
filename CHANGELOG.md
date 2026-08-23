@@ -6,6 +6,32 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+### Changed
+- **Your agent fleet leaves version control.**
+  `docker/docker-compose.agents.yml` describes your machine — agent names,
+  project references, mount paths — and Mission Control rewrites it while it
+  runs. It sat in the repo anyway, so every commit published its author's
+  fleet. Shipped from now on is the agent-free template
+  `docker/docker-compose.agents.example.yml`; `setup.sh` makes your copy from
+  it, and the copy is git-ignored.
+
+  **Upgrade note for existing installs (one time, required):** a plain
+  `git pull` either deletes your file without a word or refuses to run — so
+  `./install.sh --update` on the installer you currently have stops at the
+  pull. Carry your fleet across by hand once:
+
+  ```bash
+  cp docker/docker-compose.agents.yml ../my-agent-fleet.yml
+  git checkout -- docker/docker-compose.agents.yml
+  git pull --ff-only
+  cp ../my-agent-fleet.yml docker/docker-compose.agents.yml
+  ```
+
+  Your hand-added mounts survive that; the renderer would not have recreated
+  them. From then on `./install.sh --update` wraps every pull in
+  `scripts/migrate-agents-yml.sh save` / `restore` and you never think about
+  it again. Details: [docs/setup/updating.md](docs/setup/updating.md).
+
 ## [0.2.0] - 2026-08-06
 
 **Release highlights:** problem-first README + 18-page user handbook ·

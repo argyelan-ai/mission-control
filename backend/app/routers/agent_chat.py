@@ -9,6 +9,7 @@ import asyncio
 import re
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
@@ -43,13 +44,11 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.services.sse import _sse_generator
+from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import (
-    find_active_session,
     read_history,
     resolve_aliveness,
-    resolve_transcript_dir,
     tailer_manager,
-    transcript_allowed,
 )
 from app.services.workspace_diff import NoWorkspaceError, resolve_workspace_path, workspace_diff
 
@@ -84,7 +83,7 @@ class ChatEffortBody(BaseModel):
 
 async def _resolve_transcript_path(
     agent_id: uuid.UUID, session: AsyncSession
-) -> tuple[Agent, Path] | JSONResponse:
+) -> tuple[Agent, Path, Any] | JSONResponse:
     """Loads the agent and its live session's transcript path, or the exact
     404 body the frontend keys on (``{"reason": "no_transcript"}``) for
     every "nothing to show" case: no transcript dir for this agent/runtime,
@@ -92,24 +91,33 @@ async def _resolve_transcript_path(
     rejecting the newest session's cwd. A genuinely unknown ``agent_id``
     raises a plain 404 instead — that's a routing error, not a "no session
     yet" state the frontend renders specially.
+
+    Welcher Adapter das beantwortet, entscheidet der Harness des Agenten
+    (``transcript_adapters.adapter_for``) — Claude Code liest flach aus
+    ``~/.mc/agents/<slug>/claude-config/projects/…``, omp eine Ebene tief
+    aus ``~/.mc/agents/<slug>/omp-sessions/<cwd>/…``. Der Adapter wird
+    mitgegeben, damit History-Seite und Tailer garantiert denselben
+    benutzen.
     """
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    tdir = resolve_transcript_dir(agent)
+    adapter = adapter_for(agent)
+
+    tdir = adapter.resolve_transcript_dir(agent)
     if tdir is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
-    active = find_active_session(tdir)
+    active = adapter.find_active_session(tdir)
     if active is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
     path, _meta = active
-    if not transcript_allowed(agent, path):
+    if not adapter.transcript_allowed(agent, path):
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
-    return agent, path
+    return agent, path, adapter
 
 
 @router.get("/agents/{agent_id}/chat/history")
@@ -140,12 +148,16 @@ async def get_chat_history(
     if isinstance(resolved, JSONResponse):
         return resolved
 
-    agent, path = resolved
+    agent, path, adapter = resolved
     observed_windows = await get_observed_model_windows()
     history = read_history(
-        path, limit=limit, before_uuid=before_uuid, observed_windows=observed_windows
+        path,
+        adapter,
+        limit=limit,
+        before_uuid=before_uuid,
+        observed_windows=observed_windows,
     )
-    history["session"]["aliveness"] = await resolve_aliveness(agent, path)
+    history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
     history["capabilities"] = {
         **await effort_capabilities(agent),
         **await slash_command_capabilities(agent),
@@ -169,7 +181,7 @@ async def stream_agent_chat(
     if isinstance(resolved, JSONResponse):
         return resolved
 
-    agent, path = resolved
+    agent, path, _adapter = resolved
     channel = RedisKeys.agent_chat_channel(str(agent_id))
 
     async def _generator():
