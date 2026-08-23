@@ -73,19 +73,19 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
           aria-label={t("expandSidebar")}
           title={`${t("expandSidebar")} · ⌘B`}
           className="grid place-items-center cursor-pointer"
-          style={{ width: 30, height: 30, borderRadius: "999px", color: "var(--color-p2-dim)" }}
+          style={{ width: 30, height: 30, borderRadius: "var(--radius-full)", color: "var(--color-p2-dim)" }}
         >
           <PanelLeftOpen size={14} />
         </button>
         <span
           title={health}
-          style={{ width: 7, height: 7, borderRadius: "999px", backgroundColor: toneColor }}
+          style={{ width: 7, height: 7, borderRadius: "var(--radius-full)", backgroundColor: toneColor }}
         />
         <Link
           href="/settings"
           aria-label={t("settings")}
           className="grid place-items-center"
-          style={{ width: 30, height: 30, borderRadius: "999px", color: "var(--color-p2-dim)" }}
+          style={{ width: 30, height: 30, borderRadius: "var(--radius-full)", color: "var(--color-p2-dim)" }}
         >
           <Settings size={14} />
         </Link>
@@ -95,7 +95,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
           style={{
             width: 28,
             height: 28,
-            borderRadius: "999px",
+            borderRadius: "var(--radius-full)",
             backgroundColor: "var(--color-p2-amb)",
             color: "var(--color-p2-inv)",
             fontFamily: "var(--font-p2-mono)",
@@ -109,7 +109,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
           onClick={handleLogout}
           aria-label={tNav("logout")}
           className="grid place-items-center cursor-pointer mb-1"
-          style={{ width: 30, height: 30, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+          style={{ width: 30, height: 30, borderRadius: "var(--radius-full)", color: "var(--color-p2-faint)" }}
         >
           <LogOut size={13} />
         </button>
@@ -128,7 +128,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
           style={{
             width: 30,
             height: 30,
-            borderRadius: "999px",
+            borderRadius: "var(--radius-full)",
             backgroundColor: "var(--color-p2-amb)",
             color: "var(--color-p2-inv)",
             fontFamily: "var(--font-p2-mono)",
@@ -147,7 +147,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
             bottom: -1,
             width: 9,
             height: 9,
-            borderRadius: "999px",
+            borderRadius: "var(--radius-full)",
             backgroundColor: toneColor,
             border: "2px solid var(--color-p2-pan)",
           }}
@@ -168,7 +168,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         aria-label={t("collapseSidebar")}
         title={`${t("collapseSidebar")} · ⌘B`}
         className="grid place-items-center shrink-0 cursor-pointer"
-        style={{ width: 26, height: 26, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        style={{ width: 26, height: 26, borderRadius: "var(--radius-full)", color: "var(--color-p2-faint)" }}
         onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
       >
@@ -178,7 +178,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         href="/settings"
         aria-label={t("settings")}
         className="grid place-items-center shrink-0"
-        style={{ width: 26, height: 26, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        style={{ width: 26, height: 26, borderRadius: "var(--radius-full)", color: "var(--color-p2-faint)" }}
         onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-txt)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
       >
@@ -188,7 +188,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         onClick={handleLogout}
         aria-label={tNav("logout")}
         className="grid place-items-center shrink-0 cursor-pointer"
-        style={{ width: 26, height: 26, borderRadius: "999px", color: "var(--color-p2-faint)" }}
+        style={{ width: 26, height: 26, borderRadius: "var(--radius-full)", color: "var(--color-p2-faint)" }}
         onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-err)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-faint)")}
       >

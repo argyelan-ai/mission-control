@@ -126,7 +126,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
           height: collapsed ? "38px" : "38px",
           padding: collapsed ? 0 : "0 12px",
           justifyContent: collapsed ? "center" : "flex-start",
-          borderRadius: "12px",
+          borderRadius: "var(--radius-md)",
           backgroundColor: collapsed ? "transparent" : "var(--color-p2-pan2)",
           border: `1px solid ${open ? "var(--color-p2-amb-d)" : collapsed ? "transparent" : "var(--color-p2-line2)"}`,
           ...MONO,
@@ -139,7 +139,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
           style={{
             width: collapsed ? 20 : 10,
             height: collapsed ? 20 : 10,
-            borderRadius: "999px",
+            borderRadius: "var(--radius-full)",
             backgroundColor: collapsed ? "transparent" : activeColor,
             color: activeColor,
           }}
@@ -176,7 +176,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                 width: anchor.width,
                 backgroundColor: "var(--color-p2-pan2)",
                 border: "1px solid var(--color-p2-line)",
-                borderRadius: "12px",
+                borderRadius: "var(--radius-md)",
                 boxShadow: "var(--shadow-elevated)",
               }}
             >
@@ -195,7 +195,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                   style={{
                     height: "32px",
                     padding: "0 10px",
-                    borderRadius: "9px",
+                    borderRadius: "var(--radius-md)",
                     ...MONO,
                     fontSize: "11.5px",
                     fontWeight: isActive ? 700 : 400,
@@ -214,7 +214,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                     style={{
                       width: 9,
                       height: 9,
-                      borderRadius: "999px",
+                      borderRadius: "var(--radius-full)",
                       backgroundColor: board.color ?? P2.amb,
                     }}
                   />
@@ -233,7 +233,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                 style={{
                   height: "32px",
                   padding: "0 10px",
-                  borderRadius: "9px",
+                  borderRadius: "var(--radius-md)",
                   ...MONO,
                   fontSize: "11.5px",
                   color: "var(--color-p2-faint)",
@@ -259,7 +259,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                   style={{
                     ...MONO,
                     fontSize: "11.5px",
-                    borderRadius: "8px",
+                    borderRadius: "var(--radius-sm)",
                     backgroundColor: "var(--color-p2-inset)",
                     border: "1px solid var(--color-p2-line)",
                     color: "var(--color-p2-txt)",
@@ -274,7 +274,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                       style={{
                         width: 16,
                         height: 16,
-                        borderRadius: "999px",
+                        borderRadius: "var(--radius-full)",
                         backgroundColor: c,
                         border: color === c ? "2px solid var(--color-p2-txt)" : "1px solid transparent",
                       }}
@@ -291,7 +291,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                       style={{
                         width: 22,
                         height: 22,
-                        borderRadius: "7px",
+                        borderRadius: "var(--radius-sm)",
                         border: `1px solid ${icon === k ? "var(--color-p2-amb-d)" : "var(--color-p2-line2)"}`,
                         color: icon === k ? "var(--color-p2-amb)" : "var(--color-p2-dim)",
                       }}
@@ -306,7 +306,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                   className="w-full cursor-pointer disabled:opacity-40"
                   style={{
                     height: 30,
-                    borderRadius: "9px",
+                    borderRadius: "var(--radius-md)",
                     backgroundColor: "var(--color-p2-amb)",
                     color: "var(--color-p2-inv)",
                     fontFamily: "var(--font-p2-display)",

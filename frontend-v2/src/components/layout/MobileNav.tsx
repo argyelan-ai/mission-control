@@ -231,7 +231,7 @@ function MobileNavRow({
         minHeight: "44px",
         paddingLeft: nested ? "26px" : "12px",
         paddingRight: "12px",
-        borderRadius: "12px",
+        borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-p2-mono)",
         fontSize: nested ? "12px" : "12.5px",
         fontWeight: active ? 700 : 400,
@@ -429,7 +429,7 @@ export default function MobileNav() {
                         className="flex items-center gap-2 w-full px-3 cursor-pointer"
                         style={{
                           minHeight: "44px",
-                          borderRadius: "12px",
+                          borderRadius: "var(--radius-md)",
                           ...MONO,
                           fontSize: "12.5px",
                           color:
@@ -447,7 +447,7 @@ export default function MobileNav() {
                             style={{
                               width: 5,
                               height: 5,
-                              borderRadius: "999px",
+                              borderRadius: "var(--radius-full)",
                               backgroundColor: "var(--color-p2-amb)",
                             }}
                           />
