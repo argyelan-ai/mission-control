@@ -21,6 +21,13 @@ jobs:
           docker run --rm -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb \
             dir /repo --no-banner --exit-code 1
+      # Namen statt Adressen: die eigene Flotte des Autors. gitleaks oben faehrt
+      # Null-Toleranz fuer /Users/<name>, 100.64.0.0/10 und *.ts.net — der Baum
+      # ist darunter sauber. Bei den Agentennamen ist er das NICHT, darum hier
+      # eine Baseline (docs/privacy-sweep-backlog.md): heute gruen, aber jede
+      # NEUE Fundstelle rot.
+      - name: privacy-scan (Flottennamen gegen die Baseline)
+        run: python3 scripts/privacy-scan.py
 
   backend:
     name: Backend Tests

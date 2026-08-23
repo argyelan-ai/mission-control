@@ -26,7 +26,7 @@ function renderMessage(
   return render(
     <GroupMessage
       message={message}
-      senderName={props.senderName !== undefined ? props.senderName : "Sparky"}
+      senderName={props.senderName !== undefined ? props.senderName : "Alpha"}
       senderEmoji={props.senderEmoji !== undefined ? props.senderEmoji : "🤖"}
       isOwn={props.isOwn ?? false}
       groupWithPrevious={props.groupWithPrevious}
@@ -37,7 +37,7 @@ function renderMessage(
 describe("GroupMessage — agent register", () => {
   it("shows the speaker's name above their contribution", () => {
     renderMessage(mkMessage({ body: "Ich habe gemessen." }));
-    expect(screen.getByText("Sparky")).toBeInTheDocument();
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText("Ich habe gemessen.")).toBeInTheDocument();
   });
 
@@ -50,7 +50,7 @@ describe("GroupMessage — agent register", () => {
 
   it("drops the header when the previous message came from the same speaker", () => {
     renderMessage(mkMessage({ body: "…und weiter." }), { groupWithPrevious: true });
-    expect(screen.queryByText("Sparky")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
     expect(screen.getByText("…und weiter.")).toBeInTheDocument();
   });
 
@@ -74,11 +74,11 @@ describe("GroupMessage — agent register", () => {
 
   it("does not repeat mentions outside the body text", () => {
     // Absendername bewusst verschieden vom Erwähnten, sonst zählt die Kopfzeile mit.
-    renderMessage(mkMessage({ body: "@sparky bitte messen.", mentions: ["sparky"] }), {
+    renderMessage(mkMessage({ body: "@alpha bitte messen.", mentions: ["alpha"] }), {
       senderName: "Mia",
     });
-    expect(screen.getAllByText(/sparky/i)).toHaveLength(1);
-    expect(screen.getByText("@sparky bitte messen.")).toBeInTheDocument();
+    expect(screen.getAllByText(/alpha/i)).toHaveLength(1);
+    expect(screen.getByText("@alpha bitte messen.")).toBeInTheDocument();
   });
 });
 
@@ -127,7 +127,7 @@ describe("GroupMessage — system register", () => {
 
   it("shows no speaker name for a system line", () => {
     renderMessage(mkMessage({ sender_type: "system", sender_id: null, body: "Gate geöffnet." }));
-    expect(screen.queryByText("Sparky")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
   });
 });
 

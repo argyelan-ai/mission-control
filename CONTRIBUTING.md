@@ -53,9 +53,14 @@ maintainers run. (Early releases were published as squashed snapshots from a
 private repo; since 2026-07-03 this repo is the single source of truth. The
 pre-launch history remains private because it contained credentials.)
 
-- New code comments and docs are written in **English** (existing German
-  comments are being migrated gradually — PRs welcome, see the language note
-  in the README).
+- Code comments, docstrings and ADRs may be **German or English**. This
+  codebase grew in a German-speaking home lab and most of it — including the
+  ADRs in `docs/decisions/` — is German. **Match the file you are editing:** a
+  file that switches language halfway through is worse than either choice. See
+  the language note in the README.
+- **User-facing strings are the exception** and always go through `t()`
+  (`docs/i18n.md`) — never hardcode UI text in either language. A German label
+  in the English default UI is a bug, not a style preference.
 - CI runs a **leak gate** (gitleaks + forbidden-file check) on every push and
   PR in addition to tests.
 - Maintainer-private modules (e.g. a personal news pipeline) live in private

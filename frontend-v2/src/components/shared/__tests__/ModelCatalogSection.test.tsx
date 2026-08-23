@@ -191,7 +191,7 @@ describe("ModelCatalogSection", () => {
           protocol: "openai",
           display_name: "qwen-general",
           status: "unreachable",
-          reason: "connection refused: 100.67.20.66:8000",
+          reason: "connection refused: 198.51.100.7:8000",
           models: [],
           new_count: 0,
         }),
