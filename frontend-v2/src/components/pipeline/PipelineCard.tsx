@@ -66,7 +66,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
     <SpotlightCard
       as="button"
       onClick={onClick}
-      className="shrink-0 rounded-lg text-left group pipeline-card"
+      className="rounded-lg text-left group pipeline-card"
       style={{
         transition: "transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
       }}
@@ -214,10 +214,12 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
         </div>
       </div>
 
-      {/* Sizing + Hover via CSS */}
+      {/* Sizing + Hover via CSS — Breite kommt vom Grid-Track in PipelineView
+          (minmax 180/210px, 1fr), damit die Reihe bündig mit dem Panel darüber
+          abschliesst; hier nur noch Höhe + Hover. */}
       <style>{`
-        .pipeline-card { width: 180px; min-width: 180px; height: 120px; }
-        @media (min-width: 768px) { .pipeline-card { width: 210px; min-width: 210px; height: 130px; } }
+        .pipeline-card { min-width: 0; height: 120px; }
+        @media (min-width: 768px) { .pipeline-card { height: 130px; } }
         .pipeline-card:hover { transform: translateY(-2px) scale(1.02); }
       `}</style>
     </SpotlightCard>

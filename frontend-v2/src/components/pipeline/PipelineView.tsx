@@ -153,6 +153,12 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
 
   return (
     <>
+      {/* Track-Minimum spiegelt die alte Kachelbreite (180/210px) — die Kacheln
+          selbst haben keine feste Breite mehr, sie füllen ihren Track. */}
+      <style>{`
+        .pipeline-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); }
+        @media (min-width: 768px) { .pipeline-row { grid-auto-columns: minmax(210px, 1fr); } }
+      `}</style>
       <div className="flex flex-col gap-4">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -201,9 +207,12 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
                     </span>
                   </div>
 
-                  {/* Horizontal scroll row */}
+                  {/* Horizontal scroll row — Grid statt Flex: die Tracks wachsen
+                      gleichmässig auf Containerbreite, damit die Kachel-Reihe
+                      bündig mit dem System-Health-Panel darüber abschliesst
+                      (Operator, 23.08.). Bei Überlauf scrollen 210px-Tracks. */}
                   <div
-                    className="flex gap-2.5 overflow-x-auto pb-1"
+                    className="pipeline-row gap-2.5 overflow-x-auto pb-1"
                     style={{ scrollbarWidth: "none", cursor: "grab" }}
                     onWheel={(e) => {
                       const el = e.currentTarget;
