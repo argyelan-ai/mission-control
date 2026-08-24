@@ -7,8 +7,10 @@ Diese Tests halten die Weichenstellung fest.
 """
 import pytest
 
+import dataclasses
+from pathlib import Path
 from app.services import omp_chat, pane_state, transcript_chat
-from app.services.transcript_adapters import adapter_for
+from app.services.transcript_adapters import TranscriptAdapter, adapter_for
 
 
 class _Agent:
@@ -67,16 +69,35 @@ def test_omp_parser_factory_returns_a_fresh_instance_each_time():
 
 def test_every_adapter_offers_the_full_contract():
     """Ein neuer Harness darf kein Feld auslassen — sonst faellt der Kern erst
-    im Betrieb auf die Nase."""
-    for harness in ("claude", "omp"):
+    im Betrieb auf die Nase.
+
+    Die Feldliste wird aus der Dataclass GELESEN, nicht hier gepflegt. Die
+    Vorfassung zaehlte acht Namen von Hand auf und uebersah dadurch bereits
+    ``name`` und ``session_scan_root``; ein neu ergaenztes Feld waere still
+    ungeprueft geblieben — also genau in dem Moment blind, fuer den der
+    Waechter gedacht ist.
+    """
+    for harness in ("claude", "openclaude", "omp", "kimi", None):
         a = adapter_for(_Agent(harness=harness))
-        for field in (
-            "resolve_transcript_dir", "find_active_session", "transcript_allowed",
-            "new_parser", "peek_entry_id", "stamp_usage",
-            "transcript_suggests_turn_ended", "parse_pane_state",
-        ):
-            assert callable(getattr(a, field)), (harness, field)
-        assert isinstance(a.process_name, str) and a.process_name
+        for field in dataclasses.fields(TranscriptAdapter):
+            value = getattr(a, field.name)
+            if field.name in ("name", "process_name"):
+                assert isinstance(value, str) and value, (harness, field.name)
+            else:
+                assert callable(value), (harness, field.name)
+
+
+def test_only_claude_shaped_adapters_look_for_subagent_runs():
+    """Subagenten-Dateien schreibt nur Claude Code (und sein Fork openclaude).
+    omp hat nachweislich keine Sidechains — es bekommt den leeren Standard,
+    ohne dass irgendwo ein ``if harness ==`` noetig waere."""
+    for harness in ("claude", "openclaude"):
+        a = adapter_for(_Agent(harness=harness))
+        assert a.subagent_runs is transcript_chat.subagent_runs, harness
+
+    for harness in ("omp",):
+        a = adapter_for(_Agent(harness=harness))
+        assert a.subagent_runs(Path("/gibt/es/nicht.jsonl")) == [], harness
 
 
 def test_claude_stamp_usage_still_reaches_the_statusline_reader(tmp_path, monkeypatch):

@@ -825,6 +825,23 @@ export const api = {
   // chatTypes.ts) — callers check `err instanceof Error` + message parsing,
   // same as every other `request()` 404 in this file (no typed error class).
   chat: {
+    /** Der Verlauf eines Subagenten-Laufs dieser Sitzung.
+     *  `runId` wird kodiert, obwohl der Endpunkt ohnehin nur bekannte Werte
+     *  akzeptiert — ein Wert, der als Pfad-Teil in eine URL wandert, wird
+     *  kodiert, ohne dass man vorher darueber nachdenken muss. */
+    subagentHistory: (
+      agentId: string,
+      runId: string,
+      params?: { limit?: number; beforeUuid?: string },
+    ) => {
+      const qs = new URLSearchParams();
+      if (params?.limit != null) qs.set("limit", String(params.limit));
+      if (params?.beforeUuid) qs.set("before_uuid", params.beforeUuid);
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      return request<import("./chatTypes").SubagentHistoryResponse>(
+        `/api/v1/agents/${agentId}/chat/subagent/${encodeURIComponent(runId)}${suffix}`,
+      );
+    },
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));
