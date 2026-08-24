@@ -48,6 +48,11 @@ export interface GroupSummary {
   last_message?: { body: string; sender: string; created_at: string | null } | null;
   /** Avatare für den AvatarStack; optional aus demselben Grund. */
   member_avatars?: { id: string; emoji: string | null; name: string }[];
+  /** Gesetzt = aus der Liste geräumt, aber vollständig lesbar. Bewusst kein
+   *  Status-Wert: `status` sagt, was die Engine tut, das Archiv, was der
+   *  Operator noch sehen will. Bei `include_archived=true` stehen aktive und
+   *  archivierte Zeilen in EINER Antwort — dieses Feld trennt sie. */
+  archived_at?: string | null;
 }
 
 /** Detail (`GET /groups/{id}`) — enthält die Mitglieder. */
@@ -57,6 +62,10 @@ export interface GroupDetail extends Omit<GroupSummary, "member_count"> {
   budget_usd: number | null;
   budget_tokens: number | null;
   result_doc_rel_path: string | null;
+  /** Gesetzt = aus der Liste geräumt, aber vollständig lesbar. Bewusst kein
+   *  Status-Wert: `status` sagt, was die Engine tut, das Archiv, was der
+   *  Operator noch sehen will. */
+  archived_at?: string | null;
   members: GroupMemberInfo[];
 }
 

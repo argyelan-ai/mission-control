@@ -10,6 +10,15 @@ import { describe, it, expect, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { StatusLine, WORKING_WORDS, WORKING_WORD_INTERVAL_MS } from "./StatusLine";
 import type { StateEvent } from "@/lib/chatTypes";
+import { C } from "@/lib/colors";
+
+/** Token value as jsdom reports it — derived from the single source in
+ *  lib/colors.ts, so a palette change never breaks this assertion. */
+function rgbOf(hex: string): string {
+  const h = hex.replace("#", "");
+  const n = parseInt(h, 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
 
 const mkState = (status: StateEvent["status"]): StateEvent => ({
   kind: "state",
@@ -99,7 +108,7 @@ describe("StatusLine", () => {
     const line = container.firstElementChild as HTMLElement;
     // C.textMuted, not STATUS_TEXT.warning — amber stays reserved for
     // "live but unreadable", the one case that needs the operator's attention.
-    expect(line.style.color).toBe("rgb(143, 143, 143)");
+    expect(line.style.color).toBe(rgbOf(C.textMuted));
   });
 
   it("never pulses on an ended session", () => {

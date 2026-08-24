@@ -625,3 +625,104 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
     expect(screen.getByRole("button", { name: "Spark-Runde" })).toBeInTheDocument();
   });
 });
+
+// ── Archiv-Sektion (ADR-075, Nachtrag) ──────────────────────────────────────
+// Archivierte Gruppen sind weggeräumt, nicht weg: die Sektion sitzt UNTER den
+// Agenten, ist zugeklappt, und existiert ohne archivierte Gruppen gar nicht.
+describe("SessionSidebar — Archiv-Sektion", () => {
+  it("renders no archive section at all when nothing is archived", () => {
+    render(
+      <SessionSidebar
+        agents={[mkAgent()]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[mkGroup()]}
+        onSelectGroup={() => {}}
+        archivedGroups={[]}
+        onUnarchiveGroup={() => {}}
+      />
+    );
+    expect(screen.queryByTestId("archived-groups-section")).not.toBeInTheDocument();
+  });
+
+  it("puts the archive section below the agent list", () => {
+    render(
+      <SessionSidebar
+        agents={[mkAgent({ name: "Agent One" })]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[mkGroup()]}
+        onSelectGroup={() => {}}
+        archivedGroups={[mkGroup({ id: "grp-alt", name: "Alte Runde", archived_at: "2026-08-22T10:00:00Z" })]}
+        onUnarchiveGroup={() => {}}
+      />
+    );
+    const listbox = screen.getByRole("listbox", { name: "Sessions" });
+    const text = listbox.textContent ?? "";
+    expect(text.indexOf("Archive")).toBeGreaterThan(text.indexOf("Agent One"));
+  });
+
+  it("forwards open and restore from the archive section", async () => {
+    const onSelectGroup = vi.fn();
+    const onUnarchiveGroup = vi.fn();
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[]}
+        onSelectGroup={onSelectGroup}
+        archivedGroups={[mkGroup({ id: "grp-alt", name: "Alte Runde", archived_at: "2026-08-22T10:00:00Z" })]}
+        onUnarchiveGroup={onUnarchiveGroup}
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Archive/ }));
+    await userEvent.click(screen.getByText("Alte Runde"));
+    expect(onSelectGroup).toHaveBeenCalledWith("grp-alt");
+    await userEvent.click(screen.getByRole("button", { name: "Restore from archive" }));
+    expect(onUnarchiveGroup).toHaveBeenCalledWith("grp-alt");
+  });
+
+  it("keeps the archive out of the collapsed rail — the strip shows only active work", () => {
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[]}
+        onSelectGroup={() => {}}
+        archivedGroups={[mkGroup({ id: "grp-alt", name: "Alte Runde", archived_at: "2026-08-22T10:00:00Z" })]}
+        onUnarchiveGroup={() => {}}
+        collapsed
+        onToggleCollapse={() => {}}
+      />
+    );
+    expect(screen.queryByTestId("archived-groups-section")).not.toBeInTheDocument();
+  });
+
+  it("shows the archive section on the mobile list screen too", () => {
+    render(
+      <SessionSidebar
+        agents={[]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[]}
+        onSelectGroup={() => {}}
+        archivedGroups={[mkGroup({ id: "grp-alt", name: "Alte Runde", archived_at: "2026-08-22T10:00:00Z" })]}
+        onUnarchiveGroup={() => {}}
+        variant="list"
+      />
+    );
+    expect(screen.getByRole("button", { name: /Archive/ }).className).toContain("min-h-[44px]");
+  });
+});

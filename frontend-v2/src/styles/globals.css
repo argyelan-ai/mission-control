@@ -108,18 +108,18 @@
 
 @theme {
   /* ---- Backgrounds (Stufung = Tiefe: deep → hover, neutral) ---- */
-  --color-bg-dark: #0a0a0a;
-  --color-bg-deep: #0a0a0a;
-  --color-bg-base: #101010;
-  --color-bg-surface: #171717;
-  --color-bg-elevated: #222222;
-  --color-bg-hover: #2c2c2c;
+  --color-bg-dark: #1c1c1c;
+  --color-bg-deep: #1c1c1c;
+  --color-bg-base: #181818;
+  --color-bg-surface: #262626;
+  --color-bg-elevated: #313131;
+  --color-bg-hover: #3a3a3a;
 
   /* ---- Text (mirrors colors.ts — alle ≥4.5:1 auf bg-deep–bg-elevated) ---- */
-  --color-text-primary: #eeeeee;
-  --color-text-secondary: #bababa;
-  --color-text-muted: #8f8f8f;
-  --color-text-body: #eeeeee;
+  --color-text-primary: #f2f2f2;
+  --color-text-secondary: #c9c9c9;
+  --color-text-muted: #a3a3a3;
+  --color-text-body: #f2f2f2;
 
   /* ---- Borders (neutral, Basisfarbe #a8a8a8, mirrors colors.ts) ---- */
   --color-border-subtle: rgba(168, 168, 168, 0.05);
@@ -130,15 +130,17 @@
      Die Shell (Sidebar/TopBar/StatusBar/MobileNav) nutzt ausschliesslich diese
      Tokens. v4: von warm-phosphor auf die System-A-Werte gezogen — der helle
      Akzent #ebe8de wäre gegen das alte Creme-Textweiss unsichtbar gewesen. */
-  --color-p2-bg: #0a0a0a;
-  --color-p2-pan: #171717;
-  --color-p2-pan2: #222222;
-  --color-p2-inset: #101010;
+  --color-p2-bg: #1c1c1c;
+  --color-p2-pan: #262626;
+  --color-p2-pan2: #313131;
+  --color-p2-inset: #181818;
   --color-p2-line: rgba(168, 168, 168, 0.16);
   --color-p2-line2: rgba(168, 168, 168, 0.08);
-  --color-p2-txt: #eeeeee;
-  --color-p2-dim: #8f8f8f;
-  --color-p2-faint: #666666;
+  --color-p2-txt: #f2f2f2;
+  --color-p2-dim: #a3a3a3;
+  --color-p2-faint: #8A8A8A;
+  --color-p2-glass: rgba(38, 38, 38, 0.7);
+  --color-p2-glass-line: rgba(255, 255, 255, 0.1);
   --color-p2-amb: #ebe8de;
   --color-p2-amb-d: #c1beb2;
   --color-p2-inv: #151411;
@@ -239,6 +241,26 @@
    ============================================================ */
 
 :root {
+  /* ---- Sticky-Maskierung ---------------------------------------------------
+     Eine klebende Leiste braucht einen Grund, damit Inhalt beim Scrollen
+     darunter verschwindet. Sie darf ihn aber NICHT deckend malen: der
+     Seitengrund trägt den Ambient-Schleier (Helligkeitsverlauf + Korn), und
+     jede opake Füllung stanzt dort ein flaches Rechteck heraus — sichtbar als
+     dunkle Platte (Operator-Befund 23.08.2026).
+
+     Warum ein Token und keine Zahl: dieselbe Mischung stand hartcodiert an
+     drei Stellen als `rgba(10,10,10,0.55)` — also der Wert von `bg-deep` als
+     Zahl abgeschrieben. Sobald jemand die Palette ändert (aktuell läuft genau
+     das auf einem Teststand: #1C1C1C statt #0A0A0A), bricht die Mischung —
+     und zwar UNSICHTBAR: sie sieht dann wieder aus wie der Fehler, den sie
+     beheben sollte. Über `color-mix` folgt sie jedem Grundton von selbst.
+
+     Gemischt wird `--color-p2-bg` und NICHT `--color-bg-deep`: den Seitengrund
+     malt die AppShell (AppShell.tsx:66) mit p2-bg. Heute tragen beide denselben
+     Wert — bindet man aber an den falschen, driftet die Mischung, sobald eine
+     Palette nur einen der beiden verschiebt. Genau diese Falle war der Anlass. */
+  --surface-sticky: color-mix(in srgb, var(--color-p2-bg) 55%, transparent);
+
   /* Accent — achromatisch (System A): trägt über Helligkeit + Fläche, nie Hue */
   --color-accent: #ebe8de;
   --color-accent-light: #f9f7ef;
@@ -246,8 +268,8 @@
   --color-accent-subtle: rgba(235, 232, 222, 0.1);
   --color-border-accent: rgba(235, 232, 222, 0.3);
   --color-on-accent: #151411; /* Text auf Akzent-Fläche — 15.0:1 */
-  --color-text: #eeeeee; /* alias used by a few components */
-  --color-text-dim: #666666; /* Deko/inaktive Icons — nie für Fliesstext */
+  --color-text: #f2f2f2; /* alias used by a few components */
+  --color-text-dim: #8A8A8A; /* Deko/inaktive Icons — nie für Fliesstext */
 
   /* Gerenderte Höhe der mobilen App-Kopfleiste (MobileNav <header>):
      pt-island (safe + 0.75rem) + Link h-11 (2.75rem) + 0.5rem padding-bottom
@@ -354,6 +376,23 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* The command palette's input is the panel's only field and is focused the
+   moment the panel opens, so a 2px ring around the whole row shouts without
+   telling the user anything new. Focus moves to the divider underneath — still
+   visible, far quieter. Note this rule sits outside @layer utilities on
+   purpose: so does the ring above, and layer-less rules beat any utility
+   regardless of specificity, which is why `outline-none` alone did nothing. */
+.palette-input-row {
+  border-bottom: 1px solid var(--color-border);
+  transition: border-color 160ms ease;
+}
+.palette-input-row:focus-within {
+  border-bottom-color: var(--color-accent);
+}
+.palette-input-row [cmdk-input]:focus-visible {
+  outline: none;
+}
+
 /* ============================================================
    Keyframe Animations
    ============================================================ */
@@ -439,7 +478,7 @@ body {
   color: var(--color-text-muted);
 }
 .label-sys--accent { color: var(--color-accent); }
-.label-sys--dim { color: var(--color-text-dim, #666666); }
+.label-sys--dim { color: var(--color-text-dim, #8A8A8A); }
 
 /* ── Corner-Ticks: eckige Positions-Markierungen (TL + BR) auf Panels.
    Signatur-Detail der argyelan-Formensprache — sparsam einsetzen:
@@ -914,4 +953,16 @@ option {
    only on hover. --action-hover is set per button by the component. */
 .action-btn:hover:not(:disabled) {
   background-color: var(--action-hover);
+}
+
+/* ── Weiche Schnittkante für geklemmte Beiträge ────────────────────────────
+   Ein fester Pixel-Deckel auf Markdown kann nicht auf einer Zeilenkante
+   landen — Überschrift, Absatz und Liste haben verschiedene Zeilenhöhen. Live
+   schnitt der Deckel darum mitten durch die Buchstaben (Befund 22.08.2026).
+   Der Verlauf macht aus der zufälligen Kante eine sichtbare Absicht.
+   Als Klasse und nicht als Inline-Stil, weil `mask-image` in jsdom gar nicht
+   existiert — eine Behauptung darüber wäre im Test unsichtbar. */
+.clamp-fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
 }

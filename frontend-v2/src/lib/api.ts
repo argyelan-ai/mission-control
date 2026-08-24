@@ -1526,7 +1526,13 @@ export const api = {
   // `eligibleMembers` entscheidet das Backend (comm_v2-Fähigkeit) — die UI
   // re-implementiert diese Regel bewusst nicht.
   groups: {
-    list: () => request<import("./groupTypes").GroupSummary[]>("/api/v1/groups"),
+    // include_archived: Archiviertes kommt mit `archived_at` gesetzt in
+    // DERSELBEN Liste zurück — ein Request für aktive UND Archiv-Sektion,
+    // statt zwei Listen gegeneinander zu diffen.
+    list: (opts?: { includeArchived?: boolean }) =>
+      request<import("./groupTypes").GroupSummary[]>(
+        `/api/v1/groups${opts?.includeArchived ? "?include_archived=true" : ""}`,
+      ),
     get: (id: string) => request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}`),
     create: (data: import("./groupTypes").GroupCreatePayload) =>
       request<import("./groupTypes").GroupDetail>("/api/v1/groups", {
@@ -1545,6 +1551,26 @@ export const api = {
       }),
     removeMember: (id: string, agentId: string) =>
       request<void>(`/api/v1/groups/${id}/members/${agentId}`, { method: "DELETE" }),
+    archive: (id: string) =>
+      request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}/archive`, {
+        method: "POST",
+      }),
+    unarchive: (id: string) =>
+      request<import("./groupTypes").GroupDetail>(`/api/v1/groups/${id}/unarchive`, {
+        method: "POST",
+      }),
+    memorize: (id: string, data: { title?: string; memory_type?: string; tags?: string[] }) =>
+      request<{ memory_id: string; title: string }>(`/api/v1/groups/${id}/memorize`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    // `scope=chat` laesst das Ergebnis-Dokument stehen und gibt die Gruppe
+    // zurueck; `scope=all` loescht sie und antwortet 204 (kein Rumpf).
+    remove: (id: string, scope: "all" | "chat") =>
+      request<import("./groupTypes").GroupDetail>(
+        `/api/v1/groups/${id}?scope=${scope}`,
+        { method: "DELETE" },
+      ),
     messages: (id: string, params?: { sinceSeq?: number; limit?: number }) => {
       const qs = new URLSearchParams();
       if (params?.sinceSeq != null) qs.set("since_seq", String(params.sinceSeq));
