@@ -44,6 +44,11 @@ OPENCLAUDE = "openclaude"
 OMP = "omp"
 
 
+def _no_subagent_runs(_session_path: Path) -> list[dict[str, Any]]:
+    """Der Standard fuer jeden Harness ohne eigenes Subagenten-Layout."""
+    return []
+
+
 @dataclass(frozen=True)
 class TranscriptAdapter:
     """Die harness-spezifische Haelfte der Chat-Ansicht.
@@ -102,6 +107,17 @@ class TranscriptAdapter:
     #: Prozessname im Container fuer ``pane_state.process_alive``.
     process_name: str
 
+    #: Sitzungspfad -> die Subagenten-Laeufe dieser Sitzung (Steckbriefe).
+    #:
+    #: MIT Standard, und der Standard ist die leere Liste: Subagenten-Dateien
+    #: schreibt nur Claude Code und sein Fork openclaude. omp hat nachweislich
+    #: keine Sidechains (``omp_chat``: ``sidechain=False`` an jeder Stelle),
+    #: kimi hat gar keinen eigenen Adapter. Ein Pflichtfeld zwaenge beide zu
+    #: einer Attrappe — der leere Standard sagt dasselbe ehrlicher. Muss als
+    #: letztes Feld stehen: Python verlangt Felder mit Standard hinter allen
+    #: ohne.
+    subagent_runs: Callable[[Path], list[dict[str, Any]]] = _no_subagent_runs
+
 
 def _claude_adapter(
     name: str = CLAUDE, process_name: str = "claude"
@@ -136,6 +152,7 @@ def _claude_adapter(
         ),
         parse_pane_state=pane_state.parse_pane_state,
         process_name=process_name,
+        subagent_runs=transcript_chat.subagent_runs,
     )
 
 

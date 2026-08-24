@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
 import type {
+  SubagentRun,
   ChatCapabilities,
   ChatEvent,
   ChatSession,
@@ -240,7 +241,15 @@ export function createInitialChatState(): ChatReducerState {
  */
 function eventKey(ev: TimelineChatEvent): string {
   if (ev.kind === "tool" && ev.toolUseId) return `tool:${ev.toolUseId}`;
-  return ev.uuid;
+  /* Die ART gehoert in den Schluessel, nicht nur die uuid: EIN Transkript-
+     Eintrag kann MEHRERE Bloecke tragen (Denken und Antwort in derselben
+     Zeile), und alle erben dieselbe Eintrags-uuid. Ohne die Art galt die
+     Antwort als Dublette des Denkens und wurde verworfen.
+     Live gemessen an dem omp-Transkript eines Agenten (21.08.2026): 10 von 25
+     Eintraegen betroffen — der Agent dachte im Chat sichtbar nach und sagte
+     nie etwas. Claude Code schreibt je Block eine eigene Zeile, deshalb
+     fiel es bis zum ersten fremden Adapter nicht auf. */
+  return `${ev.kind}:${ev.uuid}`;
 }
 
 function reindex(events: TimelineChatEvent[]): Map<string, number> {
@@ -283,21 +292,79 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
     case "usage":
       return { ...state, usage: event };
     case "session_changed":
-      return { ...state, events: [], index: new Map(), sessionChangedAt: state.sessionChangedAt + 1 };
+      /* Der VERBRAUCH gehoerte zum alten Gespraech und wird geleert: nach
+         /clear stand der Kontext-Ring sonst weiter auf dem alten Prozentwert,
+         bis der Agent das naechste Mal antwortete — bei einem ruhenden
+         Agenten beliebig lange. Nichts zeigen ist richtig, ein falscher Wert
+         nicht.
+
+         Der ZUSTAND bleibt: er beschreibt den Agenten und sein Terminal, nicht
+         das Transkript. Ein Rollover wechselt die Datei, nicht den Agenten —
+         ihn hier zu leeren erzeugte nur ein Flackern nach "Status unklar". */
+      return {
+        ...state,
+        events: [],
+        index: new Map(),
+        usage: null,
+        sessionChangedAt: state.sessionChangedAt + 1,
+      };
     case "message":
     case "tool":
     case "thinking":
     case "command":
+    case "notification":
       return pushOrReplace(state, event);
     default:
       return state;
   }
 }
 
+/**
+ * Die Reihenfolge, in der Historie und bereits eingetroffene Live-Ereignisse
+ * in den Reducer gehen.
+ *
+ * Beide Quellen laufen gleichzeitig an: die Historie ist ein HTTP-Rundlauf,
+ * der Live-Strom eine offene Verbindung. Bei einem ARBEITENDEN Agenten
+ * schreibt das Transkript im Sekundentakt — trifft eine Live-Zeile ein,
+ * bevor die Historie da ist, steht sie allein in der Liste, und die Historie
+ * wird danach hinten angehaengt. Der Reducer haengt nur an und sortiert nie
+ * (bewusst: Transkript-Zeilen kommen in Schreibreihenfolge). Sichtbar wird
+ * das als die neueste Zeile GANZ OBEN, das ganze Gespraech darunter — und
+ * der Sprung ans Ende landet dann auf der aeltesten statt der neuesten
+ * Nachricht.
+ *
+ * Darum sammelt der Hook Live-Ereignisse, solange die Historie der aktuellen
+ * Sitzung noch nicht eingespielt ist, und gibt sie erst DANACH weiter. Das
+ * ist auch dann richtig, wenn eine Zeile in beiden Quellen vorkommt (der
+ * Tailer setzt beim Verbinden ans Dateiende auf, die Historie liest bis zum
+ * Lesezeitpunkt): der Reducer verwirft Doppelte anhand des Schluessels.
+ */
+export function seedSequence(
+  history: ChatEvent[],
+  buffered: ChatEvent[],
+): ChatEvent[] {
+  return [...history, ...buffered];
+}
+
+/** Abstand zwischen "die CLI hat den Befehl angenommen" und "sie hat ihn
+ *  angewendet und die Datei geschrieben". Grosszuegig gewaehlt: ein zu
+ *  frueher zweiter Abruf kostet nur einen Rundlauf, ein zu spaeter laesst den
+ *  Chip laenger falsch stehen. */
+const MODEL_SETTLE_MS = 2000;
+
+/** Eine einzige leere Liste statt eines frischen `[]` je Rendern — sonst
+ *  wechselt die Kennung bei jedem Durchlauf und jedes `useMemo` darauf
+ *  rechnet umsonst neu. */
+const EMPTY_RUNS: SubagentRun[] = [];
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export interface UseChatStreamResult {
   events: TimelineChatEvent[];
+  /** Die Subagenten-Laeufe DIESER Sitzung — Handshake-Wert aus dem
+   *  History-Abruf, kein Live-Wert (siehe `read_history` im Backend). Leer
+   *  bei aelteren Backends und bei jedem Harness ohne eigenes Layout. */
+  subagentRuns: SubagentRun[];
   state: StateEvent | null;
   usage: UsageEvent | null;
   session: ChatSession | null;
@@ -342,11 +409,33 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
   const [pendingEchoes, setPendingEchoes] = useState<PendingEcho[]>([]);
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const echoSeqRef = useRef(0);
-  // Tracks which session's history has already been dispatched into the
-  // reducer, so a query re-render with the same data doesn't re-seed (which
-  // would be harmless — pushOrReplace is idempotent for non-tool dupes and
-  // merges for tool dupes — but would still spam replace-work for nothing).
+  /* Welche Sitzung zuletzt eingespeist wurde — Grundlage dafuer, einen
+     Sitzungswechsel zu erkennen, den der Live-Strom verpasst hat. */
   const seededSessionIdRef = useRef<string | null>(null);
+  /* WANN zuletzt eingespeist wurde. Frueher haing der Waechter an der
+     Sitzungs-ID: eine frische Antwort mit DERSELBEN ID wurde verworfen.
+     Genau die ist aber der einzige Lueckenfueller, wenn der Strom weg war
+     (iOS killt SSE im Hintergrund; der Tailer laeuft mit fortlaufendem
+     Offset weiter, die Ereignisse dieser Zeit erreichen den Client nie).
+     Sichtbar als: Handy sperren, entsperren, und der Chat steht fuer immer
+     auf dem alten Stand. `pushOrReplace` ist fuer bekannte Schluessel
+     idempotent, erneutes Einspeisen kostet also nur Arbeit, nie Richtigkeit. */
+  const seededAtRef = useRef(0);
+  const hasSeededRef = useRef(false);
+  /* Live-Zeilen, die vor der ersten Historien-Antwort eintreffen — siehe
+     `seedSequence`. */
+  const liveBufferRef = useRef<TimelineChatEvent[]>([]);
+  /* Laufende Wiederhol-Timer (agent_starting), damit sie beim Verlassen
+     sterben statt an den vorigen Agenten zu senden. */
+  const retryTimersRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    const timers = retryTimersRef.current;
+    return () => {
+      timers.forEach((h) => window.clearTimeout(h));
+      timers.clear();
+    };
+  }, []);
 
   const queryEnabled = enabled && !!agentId;
 
@@ -359,10 +448,34 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
   useEffect(() => {
     const data = historyQuery.data;
     if (!data) return;
-    if (seededSessionIdRef.current === data.session.sessionId) return;
+    if (seededAtRef.current === historyQuery.dataUpdatedAt) return;
+    seededAtRef.current = historyQuery.dataUpdatedAt;
+
+    /* Ein Sitzungswechsel, den der Live-Strom nicht mitbekommen hat (er lag
+       waehrenddessen tot — Hintergrund-Tab, gesperrtes Handy). Ohne dieses
+       Leeren stuenden zwei fremde Gespraeche ohne Trenner untereinander, als
+       waere es eines. */
+    if (hasSeededRef.current && seededSessionIdRef.current !== data.session.sessionId) {
+      dispatch({ kind: "session_changed" });
+    }
     seededSessionIdRef.current = data.session.sessionId;
-    for (const ev of data.events) dispatch(ev);
-  }, [historyQuery.data]);
+    hasSeededRef.current = true;
+
+    const buffered = liveBufferRef.current;
+    liveBufferRef.current = [];
+    for (const ev of seedSequence(data.events, buffered)) dispatch(ev);
+  }, [historyQuery.data, historyQuery.dataUpdatedAt]);
+
+  /* Faellt der Historien-Abruf aus, duerfen die gepufferten Live-Zeilen nicht
+     im Puffer verhungern — sonst waere aus einer falschen Reihenfolge ein
+     leerer Chat geworden. Lieber unsortiert zeigen als gar nichts. */
+  useEffect(() => {
+    if (!historyQuery.isError || hasSeededRef.current) return;
+    hasSeededRef.current = true;
+    const buffered = liveBufferRef.current;
+    liveBufferRef.current = [];
+    for (const ev of buffered) dispatch(ev);
+  }, [historyQuery.isError]);
 
   const echoSent = useCallback((text: string) => {
     echoSeqRef.current += 1;
@@ -394,10 +507,16 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
       return alreadyRetried ? prev : markEchoStarting(prev, text);
     });
     if (alreadyRetried) return;
-    window.setTimeout(() => {
+    /* Der Handle wird gemerkt und beim Verlassen geloescht. Ohne das lief der
+       Timer nach einem Agentenwechsel weiter (ChatView ist auf die Agenten-ID
+       gekeyt, montiert also neu) und schickte 10 s spaeter doch noch an den
+       VORIGEN Agenten — samt Fehler-Toast ohne sichtbaren Bezug. */
+    const handle = window.setTimeout(() => {
+      retryTimersRef.current.delete(handle);
       setPendingEchoes((prev) => markEchoRetried(prev, text));
       retry();
     }, ECHO_RETRY_DELAY_MS);
+    retryTimersRef.current.add(handle);
   }, []);
 
   /** Retires the echo this transcript message corresponds to. Prefers a text
@@ -419,6 +538,11 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     if (!data) return;
     for (const ev of data.events) {
       if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text, true);
+      // Ein getippter Slash-Befehl kommt als `command` zurueck, nicht als
+      // Nachricht — sein Echo wurde darum nie abgeraeumt und stand nach 10 s
+      // dauerhaft als "Nicht bestaetigt" da. Betrifft auch die Modell-Auswahl
+      // im Dropdown: sie sendet `/model <name>` durch denselben Weg.
+      if (ev.kind === "command") reconcileEcho(ev.command, true);
     }
   }, [historyQuery.data, reconcileEcho]);
 
@@ -442,11 +566,53 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   const onSSEEvent = useCallback(
     (eventName: string, data: Record<string, unknown>) => {
+      /* Der Keepalive ist der EINZIGE Verkehr auf einem ruhenden Agenten.
+         Ohne ihn blieb `connected` false, bis zufaellig etwas passierte —
+         und die Statuszeile behauptete solange "Status unklar". Er traegt
+         keine Nutzlast, beruehrt also den Reducer nicht. */
+      if (eventName === "ping") { setConnected(true); return; }
       if (eventName !== "chat_event") return;
       setConnected(true);
       const ev = data as unknown as ChatEvent;
-      dispatch(ev);
+      /* Zeitachsen-Zeilen warten, solange die Historie der aktuellen Sitzung
+         noch nicht eingespeist ist — sonst stuende die neueste Zeile ueber
+         dem ganzen Gespraech (siehe `seedSequence`). Zustand, Verbrauch und
+         der Sitzungswechsel selbst sind keine Zeitachsen-Zeilen und gelten
+         sofort: sie ordnen nichts ein, sie ersetzen ein Anzeigefach. */
+      const isTimeline =
+        ev.kind === "message" || ev.kind === "tool" ||
+        ev.kind === "thinking" || ev.kind === "command" ||
+        ev.kind === "notification";
+      if (isTimeline && !hasSeededRef.current) {
+        liveBufferRef.current.push(ev);
+      } else {
+        dispatch(ev);
+      }
       if (ev.kind === "message" && ev.role === "user") reconcileEcho(ev.text);
+      if (ev.kind === "command") {
+        reconcileEcho(ev.command);
+        /* Ein Modellwechsel aendert die `settings.json` des Agenten — und
+           genau daraus liest `capabilities.model` den Wert fuer den Chip.
+           Ohne erneutes Lesen zeigte er weiter das alte Modell, bis zufaellig
+           etwas anderes einen Abruf ausloeste; bei einem ruhenden Agenten
+           also beliebig lange (Operator-Befund 22.08.2026).
+
+           Zweimal gelesen, nicht geraten: sofort, und einmal nach einer
+           kurzen Weile. Der Befehl steht im Transkript, sobald die CLI die
+           EINGABE angenommen hat — die Datei schreibt sie erst, wenn sie den
+           Wechsel ANWENDET. Der zweite Abruf deckt diesen Abstand ab.
+           Angezeigt wird immer nur, was gelesen wurde: bleibt die CLI
+           laenger haengen, steht kurz der alte Wert da — nie ein erfundener
+           neuer. */
+        if (/^\/model\b/.test(ev.command)) {
+          historyQuery.refetch();
+          const handle = window.setTimeout(() => {
+            retryTimersRef.current.delete(handle);
+            historyQuery.refetch();
+          }, MODEL_SETTLE_MS);
+          retryTimersRef.current.add(handle);
+        }
+      }
       // Ein Sitzungswechsel beantwortet genau die Kommandos, die ihn ausloesen
       // (/clear) — ihre Bestaetigung kaeme sonst nie, weil das alte Transkript
       // weg ist und das neue leer startet.
@@ -462,6 +628,8 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
         // The new session has different history — force a re-seed once the
         // refetch resolves instead of trusting the (now stale) sessionId.
         seededSessionIdRef.current = null;
+        hasSeededRef.current = false;
+        liveBufferRef.current = [];
         historyQuery.refetch();
       }
     },
@@ -478,6 +646,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   return {
     events: chatState.events,
+    subagentRuns: historyQuery.data?.subagentRuns ?? EMPTY_RUNS,
     state: chatState.state,
     usage: chatState.usage,
     session: historyQuery.data?.session ?? null,

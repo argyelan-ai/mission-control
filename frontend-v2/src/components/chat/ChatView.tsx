@@ -18,7 +18,7 @@
  * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
  * orthogonal to this toggle.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -26,7 +26,10 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
 import { isAgentStartingError, isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
-import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
+import type { StateEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import { AgentCard } from "./AgentCard";
+import { NotificationRow } from "./NotificationRow";
+import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
@@ -151,6 +154,11 @@ function isSidechain(ev: TimelineChatEvent): boolean {
 
 function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
   if (level !== "compact") return true;
+  /* Ein delegierter Auftrag ist Gespraechsstruktur, kein Werkzeug-Rauschen:
+     er sagt, WER hier gerade woran arbeitet. Ohne diese Ausnahme verschwaende
+     die Karte in "Kompakt" spurlos — samt dem einzigen Zugang zum Protokoll
+     des Subagenten. */
+  if (isAgentSpawn(ev)) return true;
   // Kompakt: tool/thinking rows are noise for a quick skim — hide entirely
   // rather than collapse (that's what Normal is for). Since no tool/thinking
   // event survives this filter, `Kompakt` also produces no activity groups —
@@ -168,7 +176,9 @@ export type TimelineItem =
   /** A run of consecutive tool/thinking events → one ToolGroup chip. */
   | { kind: "activity"; events: ActivityEvent[] }
   /** A run of consecutive sidechain (subagent) events → one SubagentGroup. */
-  | { kind: "sidechain"; events: TimelineChatEvent[] };
+  | { kind: "sidechain"; events: TimelineChatEvent[] }
+  /** Ein delegierter Auftrag (Werkzeug `Agent`) → eine eigene Karte. */
+  | { kind: "agent"; event: ToolEvent };
 
 /** Runs shorter than this render as plain rows: collapsing a single tool call
  *  behind "1 Befehl ausgeführt" would hide its title (the useful part) and
@@ -211,13 +221,30 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
     activityRun = [];
   }
 
+  const absorbiert = new Set(
+    events.filter(isAgentSpawn).map((ev) => ev.toolUseId).filter(Boolean) as string[],
+  );
+
   for (const ev of events) {
+    if (ev.kind === "notification" && ev.toolUseId && absorbiert.has(ev.toolUseId)) {
+      /* Gehoert zu einer Karte — dort wird sie gezeigt. Zweimal dasselbe
+         nebeneinander war genau das Rauschen, das hier weg soll. */
+      continue;
+    }
     if (isSidechain(ev)) {
       flushActivity();
       sidechainRun.push(ev);
       continue;
     }
     flushSidechain();
+    if (isAgentSpawn(ev)) {
+      /* Muss VOR der Aktivitaets-Sammlung stehen: sonst verschwindet der
+         Auftrag als anonymes "+1 Tool" in einer Werkzeug-Gruppe, weil er in
+         der Praxis fast immer neben Bash/Read steht. */
+      flushActivity();
+      out.push({ kind: "agent", event: ev });
+      continue;
+    }
     if (isActivity(ev)) {
       activityRun.push(ev);
       continue;
@@ -278,6 +305,8 @@ function TimelineSkeleton() {
 
 function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel, showModel = false) {
   switch (ev.kind) {
+    case "notification":
+      return <NotificationRow key={ev.uuid} ev={ev} />;
     case "message":
       return <ChatMessage key={ev.uuid} ev={ev} showModel={showModel} />;
     case "tool":
@@ -559,6 +588,18 @@ export function ChatView({
     // Digit alone, no trailing Enter — numbered pickers accept the bare key.
     api.chat.sendKeys(agent.id, [key]).catch(() => notify.error(t("answerFailed")));
   }
+
+  /* Einmal je Verlauf, nicht je Karte: die Zuordnung laeuft ueber ALLE
+     Ereignisse (nicht nur die sichtbaren), damit ein in "Kompakt"
+     ausgeblendetes Werkzeug keinen Lauf freigibt, der einem spaeteren
+     Aufruf faelschlich zufiele. */
+  const runMatches = useMemo(
+    () => matchRuns(stream.events, stream.subagentRuns),
+    [stream.events, stream.subagentRuns],
+  );
+  /* Meldungen, die zu einem Werkzeugaufruf gehoeren, werden in dessen Karte
+     gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
+  const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
 
   if (!agent) {
     return (
@@ -914,6 +955,17 @@ export function ChatView({
               )
             ) : (
               visibleItems.map((item) => {
+                if (item.kind === "agent") {
+                  return (
+                    <AgentCard
+                      key={item.event.toolUseId ?? item.event.uuid}
+                      ev={item.event}
+                      run={runMatches.get(item.event.toolUseId ?? "")}
+                      notice={toolNotices.get(item.event.toolUseId ?? "")}
+                      agentId={agent.id}
+                    />
+                  );
+                }
                 if (item.kind === "sidechain") {
                   return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
                 }

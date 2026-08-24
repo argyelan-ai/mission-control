@@ -26,6 +26,8 @@ const FILES = [
   "ChatView.tsx",
   "Composer.tsx",
   "ChatOptionsSheet.tsx",
+  "AgentCard.tsx",
+  "NotificationRow.tsx",
   "chatOptions.ts",
   "../layout/AppShell.tsx",
 ];

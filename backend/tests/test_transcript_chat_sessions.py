@@ -147,13 +147,21 @@ def test_probe_session_never_hides_the_real_conversation(tmp_path):
     """Der Operator-Befund vom 19.08.2026: researcher zeigte im Chat 10
     Zeilen / 0 Antworten statt seines echten Gespraechs mit 218 Zeilen / 65
     Antworten — die Proben-Sitzung der Katalog-Erkennung war schlicht die
-    neueste Datei im Ordner."""
-    real = tmp_path / "real.jsonl"
-    probe = tmp_path / "probe.jsonl"
+    neueste Datei im Ordner.
+
+    Der Ordner heisst seit dem 22.08.2026 bewusst `-home-agent`: Genau dort
+    (und nur dort) hat die Erkennung je geschrieben, und nur dort greift der
+    Schutz noch. Vorher lief dieser Test gegen ein beliebiges Verzeichnis und
+    beschrieb damit eine Regel, die auch Host-Agenten traf — bei denen es nie
+    eine Sonde gab und die dadurch ihre frischen Sitzungen verloren."""
+    tdir = tmp_path / "-home-agent"
+    tdir.mkdir()
+    real = tdir / "real.jsonl"
+    probe = tdir / "probe.jsonl"
     _write_session(real, _REAL_SESSION_LINES, mtime_offset_seconds=600)
     _write_session(probe, _PROBE_SESSION_LINES, mtime_offset_seconds=5)
 
-    path, meta = tc.find_active_session(tmp_path)
+    path, meta = tc.find_active_session(tdir)
 
     assert path == real, "die inhaltsleere Probe darf das Gespraech nicht verdecken"
     assert meta["sessionId"] == "real"
@@ -210,6 +218,67 @@ def test_a_very_long_file_is_never_called_a_probe(tmp_path, monkeypatch):
     _write_session(long_probe, _PROBE_SESSION_LINES, mtime_offset_seconds=1)
 
     assert tc.is_command_only_session(long_probe) is False
+
+
+
+def test_a_host_agent_keeps_its_fresh_command_only_session(tmp_path):
+    """Der Sonden-Schutz darf NUR dort greifen, wo je eine Sonde geschrieben hat.
+
+    Operator-Befund 22.08.2026 (Boss): frischer Chat, erster Zug ein
+    Modellwechsel. Die Datei enthielt dann genau `/clear` und `/model` und
+    sonst nichts — also die Form, die der Schutz fuer eine Wegwerf-Sitzung
+    haelt. Der Chat sprang auf die VORIGE Sitzung zurueck. Sichtbare Folgen,
+    beide aus derselben Wurzel: der Befehl erreichte die Oberflaeche nie
+    (das Echo blieb als "Nicht bestaetigt" stehen) und der Modell-Chip las
+    seinen Wert aus der alten Sitzung, zeigte also weiter das alte Modell.
+
+    Die Katalog-Erkennung laeuft ausschliesslich per `docker exec` gegen
+    cli-bridge-Agenten (harness_catalog._tmux) und schreibt seit dem
+    19.08.2026 in den Projektordner von `/workspace`. In den Ordner eines
+    HOST-Agenten hat sie nie geschrieben und kann es nicht. Dort ist eine
+    reine Kommando-Sitzung darum immer die des Operators.
+    """
+    probe_shaped = tmp_path / "frisch.jsonl"
+    older = tmp_path / "alt.jsonl"
+    _write_session(older, _REAL_SESSION_LINES, mtime_offset_seconds=60)
+    _write_session(probe_shaped, _PROBE_SESSION_LINES, mtime_offset_seconds=1)
+
+    # Ordner eines Host-Agenten (Boss): kein `-home-agent` im Pfad.
+    path, _ = tc.find_active_session(tmp_path)
+    assert path == probe_shaped, "die frische Sitzung des Operators wurde versteckt"
+
+
+def test_a_container_agent_still_skips_the_discovery_shell(tmp_path):
+    """Gegenprobe — der Schutz bleibt, wo er gebraucht wird.
+
+    Im Projektordner eines Containers (`-home-agent`) liegen die rund 41
+    Wegwerf-Dateien von vor dem 19.08.2026. Als jeweils neueste Datei
+    verdeckten sie das echte Gespraech (researcher: 10 Zeilen / 0 Antworten
+    statt 218 / 65). Geloescht wird nichts, sie werden weiterhin uebersprungen.
+    """
+    tdir = tmp_path / "-home-agent"
+    tdir.mkdir()
+    probe = tdir / "probe.jsonl"
+    real = tdir / "echt.jsonl"
+    _write_session(real, _REAL_SESSION_LINES, mtime_offset_seconds=60)
+    _write_session(probe, _PROBE_SESSION_LINES, mtime_offset_seconds=1)
+
+    path, _ = tc.find_active_session(tdir)
+    assert path == real, "die Wegwerf-Sitzung verdeckt wieder das echte Gespraech"
+
+
+def test_a_container_agent_with_nothing_but_shells_still_shows_one(tmp_path):
+    """Bleibt nach dem Ueberspringen nichts uebrig, gewinnt doch die neueste
+    Datei — lieber eine magere Sitzung zeigen als gar keine."""
+    tdir = tmp_path / "-home-agent"
+    tdir.mkdir()
+    older = tdir / "a.jsonl"
+    newest = tdir / "b.jsonl"
+    _write_session(older, _PROBE_SESSION_LINES, mtime_offset_seconds=60)
+    _write_session(newest, _PROBE_SESSION_LINES, mtime_offset_seconds=1)
+
+    path, _ = tc.find_active_session(tdir)
+    assert path == newest
 
 
 def test_find_active_session_newest_wins(tmp_path):
