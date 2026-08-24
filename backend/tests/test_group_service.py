@@ -133,23 +133,23 @@ async def test_lead_defaults_to_board_lead_member(async_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_post_user_message_resolves_mentions(async_session: AsyncSession):
     a = await _make_agent(async_session, "Alpha")
-    b = await _make_agent(async_session, "Free-Code")
+    b = await _make_agent(async_session, "Beta-One")
     group = await create_group(
         async_session, name="G", goal="Ziel", member_ids=[a.id, b.id], lead_agent_id=a.id
     )
 
     # Explizite Mention, fold-tolerant → kanonischer Slug des Mitglieds
-    msg = await post_user_message(async_session, group, "@FreeCode bitte prüfen")
-    assert msg.mentions == ["free-code"]
+    msg = await post_user_message(async_session, group, "@BetaOne bitte prüfen")
+    assert msg.mentions == ["beta-one"]
 
     # "@alle" → alle Mitglieder
     msg = await post_user_message(async_session, group, "@alle Status bitte")
-    assert sorted(msg.mentions) == ["alpha", "free-code"]
+    assert sorted(msg.mentions) == ["alpha", "beta-one"]
 
     # MC ist zweisprachig: die englische Oberfläche schickt "@all". Ohne
     # diesen Fall ginge die Nachricht still nur an den Lead.
     msg = await post_user_message(async_session, group, "@all status please")
-    assert sorted(msg.mentions) == ["alpha", "free-code"]
+    assert sorted(msg.mentions) == ["alpha", "beta-one"]
 
     # Keine Mention → Lead (sonst erreicht die Nachricht niemanden)
     msg = await post_user_message(async_session, group, "wie sieht es aus?")

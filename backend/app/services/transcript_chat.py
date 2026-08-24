@@ -67,7 +67,7 @@ from typing import Any
 from app.config import settings
 from app.services import sse
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
-from app.services.pane_state import capture_pane, parse_pane_state, process_alive
+from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
 
@@ -127,6 +127,108 @@ _LOCAL_COMMAND_STDOUT_RE = re.compile(
 _LOCAL_COMMAND_STDERR_RE = re.compile(
     r"^<local-command-stderr>(?P<content>.*)</local-command-stderr>$", re.DOTALL
 )
+
+
+# Teamkollegen-Nachricht (Operator-Befund 19.08.2026): Startet ein Agent
+# Subagenten, schreibt Claude Code deren Rueckmeldungen als gewoehnliche
+# USER-Turns ins Transkript. Der Chat zeigte sie darum als Nachrichten des
+# Operators an — inklusive eines langen Sicherheits-Hinweises, der sich an das
+# MODELL richtet und in jeder solchen Nachricht identisch ist.
+#
+# Bewusst ENG gefasst: der Text muss AB SEINEM ANFANG den Umschlag tragen
+# (eine Einleitungszeile davor ist erlaubt, aber nicht noetig). Eine echte
+# Nachricht, die zufaellig ueber Teamkollegen spricht, darf nicht still
+# verschwinden.
+#
+# Warum der Anker am UMSCHLAG haengt und nicht an der Einleitungszeile: live
+# nachgezaehlt (19.08.2026, 610 echte Turns) beginnen 5 Turns direkt mit
+# ``<teammate-message …>``, ganz ohne Prosa-Vorspann — die landeten vorher als
+# rechtsbuendige Blase, die der Operator nie getippt hat. Ausserdem ist die
+# Prosa Text von Claude Code selbst und aendert sich ohne Ankuendigung.
+_TEAMMATE_INTRO_RE = re.compile(r"^Another Claude session sent a message:[ \t]*\n?")
+_TEAMMATE_OPEN_RE = re.compile(r"<teammate-message(?P<attrs>[^>]*)>")
+_TEAMMATE_CLOSE_TAG = "</teammate-message>"
+# Auf Wort-/Zeichengrenze verankert: ohne den Vorlauf fand ``search`` in
+# ``from_teammate_id="spoof" teammate_id="real"`` zuerst ``spoof`` und schrieb
+# die Kachel dem falschen Absender zu.
+_TEAMMATE_ID_RE = re.compile(r'(?:^|\s)teammate_id="(?P<id>[^"]*)"')
+
+
+def _parse_teammate_message(
+    text: str, msg_uuid: str, ts: str, sidechain: bool
+) -> list[dict[str, Any]] | None:
+    """Erkennt eingespeiste Teamkollegen-Nachrichten und macht daraus Ereignisse
+    mit eigener Rolle — EINES JE UMSCHLAG. ``None`` = keine solche Nachricht,
+    der Aufrufer behandelt die Zeile normal weiter.
+
+    Behalten wird, was der Operator wissen will: WER geschrieben hat und WAS.
+    Der Boilerplate-Absatz dahinter faellt weg — er ist Anweisung an das Modell,
+    kein Gespraechsinhalt, und in jeder Nachricht identisch.
+
+    Zwei teuer bezahlte Details:
+
+    * **Ein Ereignis je Block.** Claude Code buendelt mehrere Rueckmeldungen
+      unter EINER Einleitungszeile — live 62 von 610 Turns, Spitzenwert 41
+      Bloecke. Das fruehere lazy ``(?P<payload>.*?)`` stoppte am ersten
+      Schluss-Tag und ersetzte den ganzen Turn durch ein Ereignis mit nur
+      dieser ersten Nutzlast: alles danach war still geloescht.
+    * **``find`` statt Rueckverfolgung.** Der Scan laeuft hier synchron auf dem
+      asyncio-Loop (``ChatTailerManager._run``) und blockiert damit alle
+      anderen Tailer mit. Ein Subagenten-Bericht ist gut und gern hunderte KB;
+      gemessen kostete das lazy Muster dort 9,4 ms je Zeile, ``str.find`` plus
+      Slicing 0,02 ms."""
+    pos = 0
+    intro = _TEAMMATE_INTRO_RE.match(text)
+    if intro is not None:
+        pos = intro.end()
+    # Ab hier MUSS der Umschlag stehen — nur fuehrender Leerraum davor. Damit
+    # bleibt die Erkennung eng: wer ueber die Zeichenfolge schreibt, statt sie
+    # als Umschlag zu fuehren, bekommt keine Kachel.
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+
+    events: list[dict[str, Any]] = []
+    while True:
+        open_m = _TEAMMATE_OPEN_RE.match(text, pos)
+        if open_m is None:
+            break
+        attrs = open_m.group("attrs") or ""
+        id_match = _TEAMMATE_ID_RE.search(attrs)
+        if attrs.endswith("/"):
+            # Selbstschliessend: kein Inhalt, aber sicher nicht der Operator.
+            payload = ""
+            pos = open_m.end()
+        else:
+            close = text.find(_TEAMMATE_CLOSE_TAG, open_m.end())
+            if close == -1:
+                # Abgeschnittene Zeile. Der Umschlag ist da, also gehoert der
+                # Rest dem Teamkollegen — lieber vollstaendig als Kachel zeigen
+                # als faelschlich als Nachricht des Operators.
+                payload = text[open_m.end() :]
+                pos = len(text)
+            else:
+                payload = text[open_m.end() : close]
+                pos = close + len(_TEAMMATE_CLOSE_TAG)
+        events.append(
+            {
+                "kind": "message",
+                # Eigene, stabile uuid je Block: ``seen_uuids`` (Dedup) und der
+                # React-Key im Verlauf wuerfen Geschwister mit gleicher uuid
+                # sonst wieder weg. Der erste Block behaelt die Zeilen-uuid,
+                # damit alles, was sie schon referenziert, unveraendert passt.
+                "uuid": msg_uuid if not events else f"{msg_uuid}#tm{len(events)}",
+                "ts": ts,
+                "role": "teammate",
+                "teammate": id_match.group("id") if id_match else None,
+                "text": payload.strip(),
+                "model": None,
+                "sidechain": sidechain,
+            }
+        )
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+
+    return events or None
 
 
 def _parse_local_command_wrapper(
@@ -311,7 +413,10 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
             text = block.get("text")
             if text is None:
                 continue
-            if text.startswith("/") and "\n" not in text:
+            teammate_evs = _parse_teammate_message(text, msg_uuid, ts, sidechain)
+            if teammate_evs is not None:
+                events.extend(teammate_evs)
+            elif text.startswith("/") and "\n" not in text:
                 events.append(
                     {
                         "kind": "command",
@@ -567,10 +672,118 @@ def resolve_transcript_dir(agent) -> Path | None:
     return None
 
 
+# Wie viele Zeilen einer Sitzungsdatei hoechstens gelesen werden, um sie als
+# reine Kommando-Huelle zu erkennen. Echte Gespraeche zeigen ihren ersten
+# Inhalt in den ersten paar Zeilen (live nachgesehen: Zeile 8); wer bis hier
+# nichts gezeigt hat, gilt im Zweifel als echt — sichtbar bleiben ist die
+# ungefaehrliche Richtung.
+_PROBE_SCAN_MAX_LINES = 400
+# Memo, damit dieselbe Datei nicht bei jedem Poll neu gelesen wird. Schluessel
+# traegt mtime+size, ein Anwachsen der Datei verwirft den Eintrag also selbst.
+_probe_scan_memo: dict[tuple[str, float, int], bool] = {}
+_PROBE_SCAN_MEMO_MAX = 512
+
+
+def is_command_only_session(path: Path) -> bool:
+    """Hat diese Sitzungsdatei ueberhaupt ein Gespraech — oder nur
+    Kommando-Huellen?
+
+    ``True`` heisst: die Datei enthaelt mindestens eine
+    ``<command-name>``/``<local-command-stdout>``-Zeile, aber KEINE
+    Assistenten-Antwort und keine einzige echte Nutzer-Zeile. Genau die Form
+    hat eine Sitzung, die nur eine Sonde geoeffnet hat (die
+    ``/model``-Katalog-Erkennung tat das 41-mal ueber 8 Agenten hinweg) —
+    und weil sie die NEUESTE Datei im Ordner war, zeigte der Chat sie statt
+    des echten Gespraechs.
+
+    Warum genau dieses Kriterium und kein einfacheres: eine FRISCHE, noch
+    leere Sitzung sieht sonst identisch aus. Ihr fehlt aber die
+    Kommando-Zeile — sie besteht nur aus Kopf-Zeilen (``mode``,
+    ``attachment``, ``file-history-snapshot``, ``last-prompt``). Darum ist
+    das Vorhandensein einer Kommando-Huelle Teil der Bedingung und nicht nur
+    das Fehlen von Inhalt: eine frisch gestartete Sitzung bleibt sichtbar,
+    eine reine Sonden-Sitzung nicht.
+
+    Alles, was nicht sicher als Huelle erkennbar ist, gilt als echt
+    (Lesefehler, kaputte Zeilen, sehr lange Dateien) — eine faelschlich
+    versteckte Sitzung waere schlimmer als eine faelschlich gezeigte."""
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_mtime, stat.st_size)
+    except OSError:
+        return False
+    memo = _probe_scan_memo.get(key)
+    if memo is not None:
+        return memo
+
+    command_seen = False
+    content_seen = False
+    truncated = False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i >= _PROBE_SCAN_MAX_LINES:
+                    # Nicht zu Ende gelesen -> keine sichere Aussage. Eine
+                    # echte Sonden-Sitzung ist winzig (rund 10 Zeilen); wer
+                    # hier ankommt, ist keine.
+                    truncated = True
+                    break
+                if content_seen:
+                    break
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                kind = entry.get("type")
+                if kind == "assistant":
+                    content_seen = True
+                    break
+                if kind != "user":
+                    continue
+                message = entry.get("message")
+                text = (message or {}).get("content") if isinstance(message, dict) else None
+                if not isinstance(text, str):
+                    # Listen-Inhalt = Tool-Ergebnis o.ae. — echter Verlauf.
+                    content_seen = True
+                    break
+                if _LOCAL_COMMAND_CAVEAT_RE.match(text):
+                    continue  # Boilerplate, sagt weder Huelle noch Inhalt
+                if (
+                    _COMMAND_WRAPPER_RE.match(text)
+                    or _LOCAL_COMMAND_STDOUT_RE.match(text)
+                    or _LOCAL_COMMAND_STDERR_RE.match(text)
+                ):
+                    command_seen = True
+                    continue
+                content_seen = True
+                break
+    except OSError:
+        return False
+
+    result = command_seen and not content_seen and not truncated
+    if len(_probe_scan_memo) >= _PROBE_SCAN_MEMO_MAX:
+        _probe_scan_memo.clear()
+    _probe_scan_memo[key] = result
+    return result
+
+
 def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     """Finds the newest ``*.jsonl`` transcript directly under ``tdir`` (does
     NOT recurse into subdirectories — those hold sidechains/artifacts, not
     top-level sessions).
+
+    Sitzungen ohne jeden Gespraechsinhalt werden dabei UEBERSPRUNGEN
+    (``is_command_only_session``). Grund: die ``/model``-Katalog-Erkennung
+    hat monatelang Wegwerf-Sitzungen im Projektordner der Agenten
+    hinterlassen — als jeweils neueste Datei verdeckten sie das echte
+    Gespraech (Operator-Befund 19.08.2026: researcher zeigte 10 Zeilen / 0
+    Antworten statt seiner 218 Zeilen / 65 Antworten). Die Erkennung legt
+    dort inzwischen nichts mehr ab; diese Schicht heilt zusaetzlich die ~41
+    Dateien, die bereits auf der Platte liegen — geloescht wird nichts.
+    Bleibt danach nichts uebrig, gewinnt doch die neueste Datei: lieber eine
+    magere Sitzung zeigen als gar keine.
 
     Returns ``(path, meta)`` where ``meta`` is
     ``{"sessionId": <filename stem>, "mtime": <iso8601>, "live": <bool>}``
@@ -581,19 +794,23 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if not tdir.is_dir():
         return None
 
-    newest_path: Path | None = None
-    newest_mtime = -1.0
+    candidates: list[tuple[float, Path]] = []
     for candidate in tdir.glob("*.jsonl"):
         try:
-            mtime = candidate.stat().st_mtime
+            candidates.append((candidate.stat().st_mtime, candidate))
         except OSError:
             continue
-        if mtime > newest_mtime:
-            newest_mtime = mtime
-            newest_path = candidate
-
-    if newest_path is None:
+    if not candidates:
         return None
+
+    candidates.sort(key=lambda row: (row[0], str(row[1])), reverse=True)
+    newest_mtime, newest_path = candidates[0]
+    for mtime, candidate in candidates:
+        # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
+        # gewinnt, und im Normalfall ist das gleich der erste geprueft.
+        if not is_command_only_session(candidate):
+            newest_mtime, newest_path = mtime, candidate
+            break
 
     meta = {
         "sessionId": newest_path.stem,
@@ -603,7 +820,7 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     return newest_path, meta
 
 
-async def resolve_aliveness(agent, session_path: Path) -> str:
+async def resolve_aliveness(agent, session_path: Path, adapter: Any | None = None) -> str:
     """Classifies a session's liveness for the history/tailer meta —
     ``"active" | "idle" | "ended"``. Fixes the old live-only semantics
     (mtime<60s == the ONLY signal, so an idle-but-still-running CLI read as
@@ -624,7 +841,17 @@ async def resolve_aliveness(agent, session_path: Path) -> str:
     4. Otherwise (Boss/host — no process channel at all — or the docker
        check itself came back unknown): a transcript-age fallback. Within
        ``_ALIVENESS_IDLE_MAX_AGE_SECONDS`` -> ``"idle"``; older -> ``"ended"``.
+
+    ``adapter`` (omp-Runde): liefert Session-Suche und Prozessnamen des
+    Harness. ``None`` = Claude Code. Ohne ihn suchte Schritt 3 immer nach
+    einem ``claude``-Prozess — bei omp fand ``pgrep`` nichts und die
+    laufende Sitzung galt faelschlich als beendet.
     """
+    if adapter is None:
+        from app.services.transcript_adapters import adapter_for
+
+        adapter = adapter_for(agent)
+
     try:
         mtime = session_path.stat().st_mtime
     except OSError:
@@ -633,14 +860,18 @@ async def resolve_aliveness(agent, session_path: Path) -> str:
     if mtime is not None and (time.time() - mtime) < _LIVE_WINDOW_SECONDS:
         return "active"
 
+    # Rollover-Pruefung ueber der Transkript-WURZEL des Harness — bei omp
+    # liegt die Session eine Ebene tiefer als die Wurzel.
     try:
-        active = await asyncio.to_thread(find_active_session, session_path.parent)
+        active = await asyncio.to_thread(
+            adapter.find_active_session, adapter.session_scan_root(session_path)
+        )
     except OSError:
         active = None
     if active is not None and active[0] != session_path:
         return "ended"
 
-    alive = await process_alive(agent)
+    alive = await process_alive(agent, adapter.process_name)
     if alive is True:
         return "idle"
     if alive is False:
@@ -816,12 +1047,23 @@ _STATS_TOOLS = ("Edit", "Write")
 
 def read_history(
     path: Path,
+    adapter: Any,
     limit: int = 200,
     before_uuid: str | None = None,
     observed_windows: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Reads a transcript file top-to-bottom and returns one page of chat
     events plus session metadata.
+
+    ``adapter`` (omp round) is the harness-specific half —
+    ``transcript_adapters.adapter_for(agent)`` — and it is REQUIRED. It used
+    to default to ``None`` -> ``adapter_for(None)``, i.e. the Claude Code
+    parser for whatever wrote ``path``. On a real omp transcript that
+    returned ZERO events with ``startedAt`` set: a session that looks
+    healthy and empty. That silent wrong answer is exactly what the adapter
+    round removes, so it must not survive as a default — the more so since
+    ``resolve_aliveness`` falls back the other way (``adapter_for(agent)``),
+    and two contradicting fallbacks are worse than none.
 
     ``observed_windows`` (harness-catalog round): a pre-fetched
     model->context-window map (``harness_catalog.get_observed_model_windows()``)
@@ -848,8 +1090,13 @@ def read_history(
     that entry's start and excludes the whole entry from the page, never
     just part of it. An unknown ``before_uuid`` yields an empty page.
     """
+    # Ohne Pfad: diese Funktion liest die Datei ohnehin von Zeile 1 an, ein
+    # zustandsbehafteter Parser sammelt seinen Zustand also unterwegs selbst.
+    # (Der Live-Tailer steigt am Dateiende ein und braucht deshalb die
+    # Vorgabe — siehe dort.)
+    parse_line = adapter.new_parser()
+
     session_id = path.stem
-    claude_config_root = _claude_config_root(path)
     try:
         live = (time.time() - path.stat().st_mtime) < _LIVE_WINDOW_SECONDS
     except OSError:
@@ -879,7 +1126,7 @@ def read_history(
                 if not isinstance(d, dict):
                     continue
 
-                entry_uuid = d.get("uuid")
+                entry_uuid = adapter.peek_entry_id(raw_line)
                 if entry_uuid is not None:
                     if entry_uuid in seen_uuids:
                         continue
@@ -888,7 +1135,7 @@ def read_history(
                 if started_at is None and d.get("timestamp"):
                     started_at = d["timestamp"]
 
-                for ev in parse_transcript_line(raw_line, observed_windows):
+                for ev in parse_line(raw_line, observed_windows):
                     if ev["kind"] == "_tool_result":
                         tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
                         if tool_ev is not None:
@@ -911,7 +1158,7 @@ def read_history(
                     elif ev["kind"] == "command":
                         command_events_by_uuid[ev["uuid"]] = ev
                     elif ev["kind"] == "usage":
-                        _stamp_usage_source(ev, claude_config_root, session_id)
+                        adapter.stamp_usage(ev, path)
 
                     events.append(ev)
 
@@ -1068,8 +1315,26 @@ class ChatTailerManager:
         initial_offset: int,
         agent: Any | None = None,
     ) -> None:
+        from app.services.transcript_adapters import adapter_for
+
+        # Der Harness des Agenten entscheidet, WIE gelesen wird (Parser,
+        # Dedup-Feld, Session-Suche, Pane-Regeln). ``agent`` ist nur in
+        # Tests None — dann gilt der Claude-Adapter wie bisher.
+        adapter = adapter_for(agent)
+        # ``new_parser`` darf die Sitzungsdatei LESEN, um seinen Anfangs-
+        # zustand zu laden (omp: ``seed_from`` liest die ganze Datei, damit
+        # der am Dateiende einsteigende Tailer die Effort-Stufe vom
+        # Session-ANFANG kennt). Das ist ein Platten-Lesevorgang wie jeder
+        # andere in dieser Schleife und gehoert deshalb in einen Thread —
+        # sonst steht die gesamte FastAPI-Schleife, waehrend ein langes
+        # Transkript eingelesen wird (einmal je Agent beim ersten
+        # SSE-Verbinden).
+        parse_line = await asyncio.to_thread(adapter.new_parser, initial_path)
         channel = RedisKeys.agent_chat_channel(agent_id)
-        tdir = initial_path.parent
+        # omp legt seine Sessions eine Ebene tief in pro-cwd-Ordnern ab, der
+        # Rollover-Scan muss also ueber der WURZEL laufen, nicht ueber dem
+        # Ordner der aktuellen Datei.
+        tdir = adapter.session_scan_root(initial_path)
         current_path = initial_path
         tick = 0
         last_pane_state: dict[str, Any] | None = None
@@ -1108,7 +1373,9 @@ class ChatTailerManager:
 
                 try:
                     if agent is not None and tick % self.STATE_PROBE_EVERY_N_TICKS == 0:
-                        new_state = await self._compute_pane_state(agent, current_path)
+                        new_state = await self._compute_pane_state(
+                            agent, current_path, adapter
+                        )
                         if new_state != last_pane_state:
                             last_pane_state = new_state
                             await sse.broadcast(
@@ -1116,7 +1383,7 @@ class ChatTailerManager:
                             )
 
                     try:
-                        active = await asyncio.to_thread(find_active_session, tdir)
+                        active = await asyncio.to_thread(adapter.find_active_session, tdir)
                     except OSError:
                         active = None
                     if active is not None and active[0] != current_path:
@@ -1135,7 +1402,7 @@ class ChatTailerManager:
                         allowed = True
                         if agent is not None:
                             allowed = await asyncio.to_thread(
-                                transcript_allowed, agent, active[0]
+                                adapter.transcript_allowed, agent, active[0]
                             )
                         if not allowed:
                             if active[0] != rejected_rollover_path:
@@ -1156,6 +1423,11 @@ class ChatTailerManager:
                             command_events_by_uuid = {}
                             seen_uuids = set()
                             last_pane_state = None
+                            # Frischer Parser: sein Zustand (bei omp die
+                            # Effort-Stufe) gehoert zur ALTEN Session. Die
+                            # NEUE Datei wird ab Offset 0 gelesen, also
+                            # braucht er auch keine Vorgabe daraus.
+                            parse_line = adapter.new_parser()
                             # aliveness is hardcoded "active" here rather than
                             # a fresh resolve_aliveness() call: a rollover
                             # only fires for a file find_active_session JUST
@@ -1193,13 +1465,13 @@ class ChatTailerManager:
                         if not raw_line:
                             continue
 
-                        entry_uuid = _peek_uuid(raw_line)
+                        entry_uuid = adapter.peek_entry_id(raw_line)
                         if entry_uuid is not None:
                             if entry_uuid in seen_uuids:
                                 continue
                             seen_uuids.add(entry_uuid)
 
-                        for ev in parse_transcript_line(raw_line, observed_windows):
+                        for ev in parse_line(raw_line, observed_windows):
                             if ev["kind"] == "_tool_result":
                                 tool_ev = tool_events_by_id.pop(ev.get("tool_use_id"), None)
                                 if tool_ev is not None:
@@ -1231,10 +1503,7 @@ class ChatTailerManager:
                                 # per event (not hoisted) since a rollover mid-
                                 # tick swaps it.
                                 await asyncio.to_thread(
-                                    _stamp_usage_source,
-                                    ev,
-                                    _claude_config_root(current_path),
-                                    current_path.stem,
+                                    adapter.stamp_usage, ev, current_path
                                 )
                                 # A fresh statusline read (source=="cli") is
                                 # ground truth for THIS model's window right
@@ -1352,7 +1621,9 @@ class ChatTailerManager:
         except Exception:
             return False
 
-    async def _compute_pane_state(self, agent: Any, current_path: Path) -> dict[str, Any]:
+    async def _compute_pane_state(
+        self, agent: Any, current_path: Path, adapter: Any | None = None
+    ) -> dict[str, Any]:
         """One probe tick's worth of state classification (A6). Computes
         ``transcript_active`` from the current session file's mtime (used
         both as ``parse_pane_state``'s disambiguation signal and as the
@@ -1364,7 +1635,14 @@ class ChatTailerManager:
         into the result — cheap to add here since it rides the same already-
         throttled probe tick (``STATE_PROBE_EVERY_N_TICKS``) rather than
         polling on its own cadence, and its own docker-side check
-        (``pane_state.process_alive``) is itself cached ~30s."""
+        (``pane_state.process_alive``) is itself cached ~30s.
+
+        ``adapter`` (omp-Runde) liefert die harness-eigenen Pane-Regeln, die
+        Zug-Ende-Probe und den Prozessnamen. ``None`` = Claude Code."""
+        if adapter is None:
+            from app.services.transcript_adapters import adapter_for
+
+            adapter = adapter_for(agent)
         try:
             mtime = await asyncio.to_thread(lambda: current_path.stat().st_mtime)
             transcript_active = (time.time() - mtime) < self.STATE_ACTIVE_WINDOW_SECONDS
@@ -1378,11 +1656,11 @@ class ChatTailerManager:
         # working-Aufloesung als auch dem pane-losen Boss-Zweig den
         # 20s-Nachlauf.
         if transcript_active and await asyncio.to_thread(
-            self._transcript_suggests_turn_ended, current_path
+            adapter.transcript_suggests_turn_ended, current_path
         ):
             transcript_active = False
 
-        aliveness = await resolve_aliveness(agent, current_path)
+        aliveness = await resolve_aliveness(agent, current_path, adapter)
 
         pane_text = await capture_pane(agent)
         if pane_text is None:
@@ -1392,7 +1670,10 @@ class ChatTailerManager:
                 "aliveness": aliveness,
             }
 
-        return {**parse_pane_state(pane_text, transcript_active), "aliveness": aliveness}
+        return {
+            **adapter.parse_pane_state(pane_text, transcript_active),
+            "aliveness": aliveness,
+        }
 
 
 def _read_new_chunk(path: Path, offset: int) -> tuple[int, bytes | None]:

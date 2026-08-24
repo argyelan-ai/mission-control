@@ -10,6 +10,14 @@ import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
+/** Token value as jsdom reports it — derived from the single source in
+ *  lib/colors.ts, so a palette change never breaks this assertion. */
+function rgbOf(hex: string): string {
+  const h = hex.replace("#", "");
+  const n = parseInt(h, 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
 // The effort chip talks to the backend directly (it is the only control in the
 // composer that does), so both the client and the toast helper are stubbed.
 vi.mock("@/lib/api", () => ({
@@ -54,7 +62,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />
     );
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "hallo agent{Enter}");
     expect(onSend).toHaveBeenCalledWith("hallo agent");
     expect(textarea).toHaveValue("");
@@ -66,7 +74,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />
     );
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "zeile1{Shift>}{Enter}{/Shift}zeile2");
     expect(onSend).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("zeile1\nzeile2");
@@ -78,7 +86,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />
     );
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "   {Enter}");
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -120,7 +128,7 @@ describe("Composer", () => {
   it("morphs back to Send as soon as there is text, even mid-turn", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "stopp mal, mach lieber X");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "stopp mal, mach lieber X");
 
     // Steering a working agent with a normal message is the point — the same
     // thing the terminal allows.
@@ -182,7 +190,7 @@ describe("Composer", () => {
     render(
       <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
     );
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "mach bitte X");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "mach bitte X");
     expect(screen.getByTestId("send-button")).toBeEnabled();
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
   });
@@ -200,7 +208,7 @@ describe("Composer", () => {
   it("still yields to Send once there is text on an unknown pane", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={mkState("unknown")} onSend={vi.fn()} onStop={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "bist du da?");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "bist du da?");
 
     expect(screen.getByTestId("send-button")).toBeEnabled();
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
@@ -241,16 +249,16 @@ describe("Composer", () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={onSend} onStop={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "auch mitten im Zug{Enter}");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "auch mitten im Zug{Enter}");
 
     // Wave-review M-9 was the mismatch between a hidden button and a working
     // Enter; both paths now agree.
     expect(onSend).toHaveBeenCalledWith("auch mitten im Zug");
   });
 
-  it('keeps the "Unterbrechen (ESC)" tooltip on the Stop face', () => {
+  it('keeps the "Interrupt (ESC)" tooltip on the Stop face', () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
-    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("title", "Unterbrechen (ESC)");
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("title", "Interrupt (ESC)");
   });
 
   it("hides the Stop button entirely when sessionLive is false, even while working", () => {
@@ -417,7 +425,7 @@ describe("Composer", () => {
     );
     expect(screen.queryByTestId("context-panel")).not.toBeInTheDocument();
 
-    const trigger = screen.getByRole("button", { name: /^Kontext: \d+% belegt$/ });
+    const trigger = screen.getByRole("button", { name: /^Context: \d+% used$/ });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
 
@@ -432,13 +440,13 @@ describe("Composer", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 15 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Kontext: 15% belegt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Context: 15% used" })).toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 92 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Kontext: 92% belegt" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Kontext: 15% belegt" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Context: 92% used" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Context: 15% used" })).not.toBeInTheDocument();
   });
 
   it("keeps the ring itself a progressbar with its tooltip (quick glance stays)", () => {
@@ -456,13 +464,13 @@ describe("Composer", () => {
   it("keeps the send button a ghost outline until there is something to send", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const send = screen.getByRole("button", { name: "Senden" });
+    const send = screen.getByRole("button", { name: "Send" });
     // The accent means "this is the action" — there is no action yet.
     expect(send).toBeDisabled();
     expect(send).toHaveAttribute("data-empty", "true");
     expect(send.style.backgroundColor).toBe("transparent");
 
-    await user.type(screen.getByPlaceholderText(/Nachricht/), "los");
+    await user.type(screen.getByPlaceholderText(/Message the agent/), "los");
     expect(send).toBeEnabled();
     expect(send).toHaveAttribute("data-empty", "false");
     expect(send.style.backgroundColor).not.toBe("transparent");
@@ -473,7 +481,7 @@ describe("Composer", () => {
   it("marks focus with a neutral border step, never a bright frame", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     const pill = textarea.parentElement as HTMLElement;
 
     expect(pill.style.border).toContain("rgba(168, 168, 168, 0.1)");
@@ -484,8 +492,8 @@ describe("Composer", () => {
     // drew before. No accent tint anywhere, and no ring at all.
     // jsdom normalises hex to rgb(), so compare in that form — a hex literal
     // here would make the negative assertion vacuously true.
-    expect(pill.style.border).toContain("rgb(143, 143, 143)");
-    expect(pill.style.border).not.toContain("rgb(235, 232, 222)");
+    expect(pill.style.border).toContain(rgbOf(C.textMuted));
+    expect(pill.style.border).not.toContain(rgbOf(C.accent));
     expect(pill.style.boxShadow).toBe("");
     // The app-wide accent outline is suppressed here on purpose: on a textarea
     // it fires for plain mouse clicks too, which is what produced the frame.
@@ -494,7 +502,7 @@ describe("Composer", () => {
 
   it("gives the input two lines of room at rest without breaking autogrow", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
     // 2 rows floor, 8 rows ceiling — the ceiling is what autogrow stops at.
     expect(textarea.style.minHeight).toBe("44px");
     expect(textarea.style.maxHeight).toBe("176px");
@@ -502,9 +510,9 @@ describe("Composer", () => {
 
   it("lifts the pill above the island tone instead of sinking below it", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const pill = screen.getByPlaceholderText(/Nachricht/).parentElement as HTMLElement;
+    const pill = screen.getByPlaceholderText(/Message the agent/).parentElement as HTMLElement;
     // Panels are bg-surface now, so a bg-surface pill would disappear into them.
-    expect(pill.style.backgroundColor).toBe("rgb(34, 34, 34)");
+    expect(pill.style.backgroundColor).toBe(rgbOf(C.bgElevated));
   });
 
   // Regression: the mobile stack keeps the off-screen pane mounted with
@@ -515,7 +523,7 @@ describe("Composer", () => {
   // the hidden case exactly.
   it("does not pin the textarea height while the element cannot be measured", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
     expect(textarea.style.height).toBe("");
   });
 
@@ -571,7 +579,7 @@ describe("Composer", () => {
       render(
         <Composer agentId="a1" usage={null} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
       );
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
       expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
     });
 
@@ -598,10 +606,10 @@ describe("Composer", () => {
         />
       );
       await user.click(screen.getByTestId("effort-chip"));
-      expect(screen.getByTestId("effort-menu").textContent).toContain("geteilte Config");
+      expect(screen.getByTestId("effort-menu").textContent).toContain("shared config");
       // Session-only-Stufen bleiben harmlos beschriftet:
       fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "4" } });
-      expect(screen.getByTestId("effort-menu").textContent).toContain("nur diese Session");
+      expect(screen.getByTestId("effort-menu").textContent).toContain("this session only");
     });
   });
 
@@ -616,7 +624,7 @@ describe("Composer", () => {
       await user.click(screen.getByTestId("effort-chip"));
       // Vorschau verschieben, dann daneben klicken: nichts darf gesendet werden.
       fireEvent.change(screen.getByTestId("effort-slider"), { target: { value: "5" } });
-      await user.click(screen.getByPlaceholderText(/Nachricht/));
+      await user.click(screen.getByPlaceholderText(/Message the agent/));
       expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
       expect(mockSetEffort).not.toHaveBeenCalled();
     });
@@ -802,6 +810,140 @@ describe("Composer", () => {
       expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
     });
 
+    it("erklaert am Chip, WARUM der Regler fehlt, wenn das Modell keine Stufen kennt", () => {
+      // openclaude-Fall (19.08.2026): die CLI kennt /effort sehr wohl, aber das
+      // Modell des Agenten nicht — der Picker sagt es selbst
+      // ("Effort not supported for <modell>"). Vorher verschwand der Chip
+      // spurlos: keine Stufe, kein Regler, keine Erklaerung. Jetzt bleibt er
+      // sichtbar und traegt den Grund, sonst sucht der Operator den Fehler bei
+      // sich.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effortReason: "model_no_effort",
+            model: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "model_no_effort");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      // Keine Stufe bekannt -> leere Saeule. Nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+      expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+    });
+
+    it("nennt bei einer fremden CLI den Harness als Grund, nicht die Runtime", () => {
+      // Gegenprobe: derselbe leere Chip-Zustand, ein anderer Grund — der Text
+      // darf nicht pauschal "Runtime hat kein Terminal" behaupten, wo die
+      // Runtime sehr wohl eines hat.
+      //
+      // Die Nutzlast ist EXAKT die, die das Backend fuer kimi/omp erzeugt
+      // (`_no_effort("foreign_harness")` -> leere Stufenliste). Die
+      // Vorfassung uebergab hier ["low","medium","high"] — eine Nutzlast, die
+      // es nie gibt; der Test segnete damit Verhalten ab, das nie lief,
+      // waehrend der Chip in Wahrheit gar nicht gerendert wurde.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "foreign_harness",
+            effortModel: null,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("/effort");
+      expect(chip.getAttribute("title")).not.toMatch(/runtime/i);
+      // Ohne Stufenleiter bleibt die Saeule leer — nichts behaupten.
+      expect(screen.getByTestId("effort-gauge-fill-static").style.height).toBe("0%");
+    });
+
+    it("erklaert auch bei einer Runtime ohne Terminal, statt nichts zu zeigen", () => {
+      // Dritte Begruendung, ebenfalls mit leerer Stufenliste vom Backend
+      // (Hermes/Jarvis). Sie erreichte die Oberflaeche vorher nie.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{
+            effortLevels: [],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "no_pane",
+            effortModel: null,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip).toHaveAttribute("data-reason", "no_pane");
+      expect(chip.getAttribute("title")).toMatch(/terminal/i);
+    });
+
+    it("bleibt ohne Grund, ohne Stufen und ohne Wert unsichtbar", () => {
+      // Der Chip erscheint NUR, wenn es etwas zu zeigen gibt: eine Stufe, ein
+      // Schaltrecht oder eine Erklaerung. Liefert das Backend nichts davon
+      // (aeltere Fassung ohne Grund-Feld), bleibt er weg.
+      render(
+        <Composer
+          agentId="a1"
+          usage={null}
+          capabilities={{ effortLevels: [], canSwitchEffort: false }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.queryByTestId("effort-chip-static")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
+    });
+
+    it("nennt im Grund das GEMESSENE Modell, nicht das gerade angezeigte", () => {
+      // Die Effort-Messung liegt im Cache, das Modell-Label nicht. Ohne den
+      // Vorrang von `effortModel` stand nach einem Modellwechsel dort
+      // "Das Modell gpt-5.2-codex kennt keine Effort-Stufen" — eine falsche
+      // Aussage ueber ein Modell, das Stufen sehr wohl kennt.
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ model: "gpt-5.2-codex" })}
+          capabilities={{
+            effortLevels: ["low", "medium", "high", "xhigh", "max"],
+            canSwitchEffort: false,
+            effort: null,
+            effortShared: false,
+            effortReason: "model_no_effort",
+            effortModel: "qwen38-27b-unsloth-nvfp4",
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      const chip = screen.getByTestId("effort-chip-static");
+      expect(chip.getAttribute("title")).toContain("qwen38-27b-unsloth-nvfp4");
+      expect(chip.getAttribute("title")).not.toContain("gpt-5.2-codex");
+    });
+
     it("shows the level read-only when the backend reports no capabilities", () => {
       render(
         <Composer
@@ -855,10 +997,10 @@ describe("Composer", () => {
         fireEvent.change(slider(), { target: { value: String(CAPS.effortLevels.indexOf(level)) } });
         return screen.getByTestId("effort-menu").textContent;
       };
-      expect(hintAt("high")).toContain("wird Standard");
-      expect(hintAt("xhigh")).toContain("wird Standard");
-      expect(hintAt("max")).toContain("nur diese Session");
-      expect(hintAt("ultracode")).toContain("nur diese Session");
+      expect(hintAt("high")).toContain("becomes the default");
+      expect(hintAt("xhigh")).toContain("becomes the default");
+      expect(hintAt("max")).toContain("this session only");
+      expect(hintAt("ultracode")).toContain("this session only");
     });
 
     it("switches to a backend-supplied level the frontend has never heard of", async () => {
@@ -878,7 +1020,7 @@ describe("Composer", () => {
 
       expect(mockSetEffort).toHaveBeenCalledWith("a1", "thorough");
       // Unknown to the frontend, so it cannot claim session-only semantics.
-      expect(screen.queryByText("nur diese Session")).not.toBeInTheDocument();
+      expect(screen.queryByText("this session only")).not.toBeInTheDocument();
     });
 
     it("falls back to read-only when the reported list is all blanks", () => {
@@ -953,7 +1095,7 @@ describe("Composer", () => {
 
       await waitFor(() => expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument());
       expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
-      expect(screen.getByTestId("effort-chip-static")).toHaveAttribute("title", expect.stringContaining("Runtime"));
+      expect(screen.getByTestId("effort-chip-static")).toHaveAttribute("title", expect.stringContaining("runtime"));
       // Not an error the operator caused — no toast.
       expect(mockNotifyError).not.toHaveBeenCalled();
     });
@@ -970,7 +1112,7 @@ describe("Composer", () => {
 
       await waitFor(() =>
         expect(mockNotifyInfo).toHaveBeenCalledWith(
-          "Agent arbeitet gerade — nach dem Zug erneut versuchen"
+          "Agent is working — try again after the turn"
         )
       );
       expect(mockNotifyError).not.toHaveBeenCalled();
@@ -995,7 +1137,7 @@ describe("Composer", () => {
 
       await waitFor(() =>
         expect(mockNotifyError).toHaveBeenCalledWith(
-          "Effort abgelehnt: ultracode requires a reasoning model"
+          "Effort rejected: ultracode requires a reasoning model"
         )
       );
       // Rejection is about this level, not about the runtime — the chip stays.
@@ -1012,7 +1154,7 @@ describe("Composer", () => {
       pick(CAPS.effortLevels, "high");
 
       await waitFor(() =>
-        expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel abgelehnt")
+        expect(mockNotifyError).toHaveBeenCalledWith("Effort change rejected")
       );
     });
 
@@ -1024,7 +1166,7 @@ describe("Composer", () => {
       pick(CAPS.effortLevels, "high");
 
       await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith(
-        "Effort-Wechsel nicht bestätigt — im Terminal prüfen"
+        "Effort change not confirmed — check the terminal"
       ));
       const chip = screen.getByTestId("effort-chip");
       expect(chip).toHaveAttribute("data-level", "medium");
@@ -1038,7 +1180,7 @@ describe("Composer", () => {
       await user.click(screen.getByTestId("effort-chip"));
       pick(CAPS.effortLevels, "high");
 
-      await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("Effort-Wechsel fehlgeschlagen"));
+      await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("Effort change failed"));
       expect(screen.getByTestId("effort-chip")).toBeInTheDocument();
     });
 
@@ -1163,11 +1305,11 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-ring")).toHaveAttribute(
       "title",
-      "≈12k/200k belegt. Quelle: CLI. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt."
+      "≈12k/200k used. Source: CLI. The CLI status line shows what is left until auto-compaction instead — different basis, both correct."
     );
   });
 
-  it('labels the tooltip source "Schätzung" when falling back to the token estimate', () => {
+  it('labels the tooltip source "estimate" when falling back to the token estimate', () => {
     render(
       <Composer
         agentId="a1"
@@ -1179,14 +1321,14 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-ring")).toHaveAttribute(
       "title",
-      expect.stringContaining("Quelle: Schätzung")
+      expect.stringContaining("Source: estimate")
     );
   });
 
   it('opens the slash-command palette when "/" is typed at position 0, listing all commands', async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     expect(screen.getByText("/clear")).toBeInTheDocument();
     expect(screen.getByText("/model")).toBeInTheDocument();
@@ -1195,7 +1337,7 @@ describe("Composer", () => {
   it("does not open the palette for a / that isn't the first character", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "path/to/file");
     expect(screen.queryByText("/clear")).not.toBeInTheDocument();
   });
@@ -1203,7 +1345,7 @@ describe("Composer", () => {
   it('filters live as you type — "/mo" narrows to only /model', async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo");
     expect(screen.getByText("/model")).toBeInTheDocument();
     expect(screen.queryByText("/clear")).not.toBeInTheDocument();
@@ -1214,7 +1356,7 @@ describe("Composer", () => {
   it("filters case-insensitively", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/MO");
     expect(screen.getByText("/model")).toBeInTheDocument();
   });
@@ -1222,7 +1364,7 @@ describe("Composer", () => {
   it("closes the palette entirely when the filter matches nothing", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/xyz");
     expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
   });
@@ -1230,7 +1372,7 @@ describe("Composer", () => {
   it("resets the highlight to the first match on every keystroke", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/c");
     await user.keyboard("{ArrowDown}"); // highlight moves to the 2nd "/c…" match
     await user.type(textarea, "o"); // narrows to "/co…" — highlight must snap back to index 0
@@ -1241,7 +1383,7 @@ describe("Composer", () => {
   it("moves the highlight with ArrowDown/ArrowUp", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     expect(screen.getByTestId("slash-item-/model")).toHaveAttribute("data-highlighted", "true");
 
@@ -1257,7 +1399,7 @@ describe("Composer", () => {
     const user = userEvent.setup();
     const onSend = vi.fn();
     render(<Composer agentId="a1" usage={null} state={null} onSend={onSend} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo{Enter}");
     expect(textarea).toHaveValue("/model ");
     expect(onSend).not.toHaveBeenCalled();
@@ -1266,7 +1408,7 @@ describe("Composer", () => {
   it("inserts the highlighted command on Tab", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo");
     await user.keyboard("{Tab}");
     expect(textarea).toHaveValue("/model ");
@@ -1275,7 +1417,7 @@ describe("Composer", () => {
   it("Escape closes the palette without clearing the input", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/mo");
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
@@ -1285,7 +1427,7 @@ describe("Composer", () => {
   it("inserts the clicked command into the textarea and closes the palette", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     await user.click(screen.getByText("/compact"));
     expect(textarea).toHaveValue("/compact ");
@@ -1318,7 +1460,7 @@ describe("Composer", () => {
         { name: "/mc-tdd", description: "TDD-Skill" },
         { name: "mc-verify" },
       ]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       const palette = screen.getByTestId("slash-palette");
       expect(palette).toHaveTextContent("/clear");
@@ -1331,7 +1473,7 @@ describe("Composer", () => {
     it("normalizes a name that already carries the slash", async () => {
       const user = userEvent.setup();
       withCommands([{ name: "/compact", description: "Kontext komprimieren" }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       // "//compact" would be unreachable by the prefix filter and wrong to send.
       expect(screen.getByTestId("slash-item-/compact")).toBeInTheDocument();
@@ -1340,7 +1482,7 @@ describe("Composer", () => {
     it("filters the reported list as you type", async () => {
       const user = userEvent.setup();
       withCommands([{ name: "mc-tdd" }, { name: "mc-verify" }, { name: "clear" }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/mc-");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/mc-");
 
       const palette = screen.getByTestId("slash-palette");
       expect(palette).toHaveTextContent("/mc-tdd");
@@ -1351,7 +1493,7 @@ describe("Composer", () => {
     it("puts the highlight on the first match after filtering", async () => {
       const user = userEvent.setup();
       withCommands([{ name: "clear" }, { name: "mc-tdd" }, { name: "mc-verify" }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/mc-");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/mc-");
 
       expect(screen.getByTestId("slash-item-/mc-tdd")).toHaveAttribute("data-highlighted", "true");
     });
@@ -1360,7 +1502,7 @@ describe("Composer", () => {
       const user = userEvent.setup();
       // A real fleet agent reports dozens once skills are included.
       withCommands(Array.from({ length: 40 }, (_, i) => ({ name: `cmd-${i}` })));
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       const scroller = screen.getByTestId("slash-palette").firstElementChild as HTMLElement;
       expect(scroller.className).toContain("overflow-y-auto");
@@ -1370,7 +1512,7 @@ describe("Composer", () => {
     it("keeps the static list while the backend does not report one", async () => {
       const user = userEvent.setup();
       withCommands(null);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       expect(screen.getByTestId("slash-item-/model")).toBeInTheDocument();
     });
@@ -1382,7 +1524,7 @@ describe("Composer", () => {
       // Nur ein FEHLENDES Feld (aelteres Backend) faellt noch zurueck.
       const user = userEvent.setup();
       withCommands([{ name: "" }, { name: "   " }]);
-      await user.type(screen.getByPlaceholderText(/Nachricht/), "/");
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
 
       expect(screen.queryByTestId("slash-item-/model")).not.toBeInTheDocument();
       expect(screen.queryByTestId("slash-palette")).not.toBeInTheDocument();
@@ -1392,7 +1534,7 @@ describe("Composer", () => {
   it("anchors the palette directly above the input via absolute positioning (bottom-full) with a 320px floor", async () => {
     const user = userEvent.setup();
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Nachricht/);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
     const palette = screen.getByTestId("slash-palette");
     // Inline style, not just the class — see the comment in Composer.tsx on

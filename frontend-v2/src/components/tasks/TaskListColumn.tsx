@@ -217,12 +217,31 @@ function GroupHeader({
 }) {
   const t = useTranslations("tasks");
   return (
-    <div className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0" style={{ backgroundColor: C.bgBase }}>
+    // Sticky braucht einen Grund, damit Zeilen beim Scrollen darunter
+    // verschwinden. Seit die Liste auf einer Insel liegt (ADR-076-Umfeld,
+    // Operator-Entscheid 23.08.2026) ist das trivial: die Insel IST eine
+    // glatte Fläche, der Kopf malt schlicht ihre Farbe.
+    //
+    // Vorher stand hier transluzent + Weichzeichner, weil der Kopf auf dem
+    // Seitengrund lag — der trägt den Ambient-Schleier, und jede Füllung
+    // darauf blieb sichtbar (deckend als dunkles, geblurrt als glattes
+    // Rechteck in gekörnter Umgebung). Auf der Insel gibt es weder Verlauf
+    // noch Korn, also auch nichts, wogegen der Kopf abstechen könnte.
+    <div
+      className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0"
+      style={{ background: C.bgSurface }}
+    >
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={!collapsed}
-        className="flex items-center gap-1.5 min-w-0 cursor-pointer"
+        // `flex-1`: der Namensblock nimmt den ganzen freien Platz, damit die
+        // Fortschritts-Spalte bei JEDER Zeile an derselben x-Position beginnt.
+        // Vorher richtete sie sich nach der Namenslänge (gemessen 421 bis 432)
+        // — die Balken standen treppenartig versetzt (Operator-Befund 23.08.).
+        // Nebeneffekt, den der Operator ausdrücklich wollte: damit ist auch
+        // festgelegt, wie viel vom Projektnamen sichtbar bleibt.
+        className="flex items-center gap-1.5 min-w-0 flex-1 cursor-pointer"
         style={{ color: C.textMuted }}
       >
         <ChevronRight
@@ -231,7 +250,10 @@ function GroupHeader({
           style={{ transform: collapsed ? "none" : "rotate(90deg)", color: C.textDim }}
         />
         {adHoc && <Zap size={10} style={{ color: C.accent }} />}
-        <span className="label-sys truncate">{label}</span>
+        {/* Der Name dehnt sich, die Zahl rutscht dadurch an die rechte Kante
+            des Blocks — so stehen Zahl UND Balken je in einer festen Spalte
+            statt hinter dem Namen herzuwandern. */}
+        <span className="label-sys truncate flex-1 text-left">{label}</span>
         <span className="text-[10px] font-mono" style={{ color: C.textDim }}>
           {count}
         </span>

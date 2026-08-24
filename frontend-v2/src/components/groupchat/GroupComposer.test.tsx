@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { GroupComposer } from "./GroupComposer";
 
 const MEMBERS = [
-  { slug: "sparky", name: "Sparky", emoji: "⚡" },
+  { slug: "alpha", name: "Alpha", emoji: "⚡" },
   { slug: "rex", name: "Rex", emoji: "🔍" },
   { slug: "mia", name: "Mia Reviewer", emoji: null },
 ];
@@ -55,7 +55,7 @@ describe("GroupComposer", () => {
     const options = screen.getAllByRole("option");
     expect(options).toHaveLength(MEMBERS.length + 1);
     expect(options[0]).toHaveTextContent("all");
-    expect(screen.getByTestId("mention-item-sparky")).toBeInTheDocument();
+    expect(screen.getByTestId("mention-item-alpha")).toBeInTheDocument();
     expect(screen.getByTestId("mention-item-rex")).toBeInTheDocument();
     expect(screen.getByTestId("mention-item-mia")).toBeInTheDocument();
   });
@@ -73,7 +73,7 @@ describe("GroupComposer", () => {
     const { onSend, textarea } = renderComposer();
     await user.type(textarea, "@");
     await user.keyboard("{ArrowDown}{Enter}");
-    expect(textarea).toHaveValue("@sparky ");
+    expect(textarea).toHaveValue("@alpha ");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -92,11 +92,11 @@ describe("GroupComposer", () => {
   it("closes the palette on Escape and keeps the typed text", async () => {
     const user = userEvent.setup({ delay: null });
     const { textarea } = renderComposer();
-    await user.type(textarea, "@sp");
+    await user.type(textarea, "@al");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-    expect(textarea).toHaveValue("@sp");
+    expect(textarea).toHaveValue("@al");
   });
 
   it("does not send while the mention palette is open", async () => {

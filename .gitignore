@@ -14,7 +14,12 @@ __pycache__/
 venv/
 
 # Node
-node_modules/
+# No trailing slash, on purpose: `node_modules/` matches a DIRECTORY only.
+# Working in git worktrees (the norm here) usually means symlinking the deps
+# in from another worktree — and that symlink was NOT ignored: it landed in a
+# commit carrying its absolute host path (caught by the leak gate, 2026-08-20).
+# Without the slash both the directory and the symlink are covered.
+node_modules
 .next/
 out/
 .turbo/
@@ -101,3 +106,16 @@ backend/templates/SOUL.operator.md.j2
 
 # Impeccable design-hook cache (config.json bleibt getrackt)
 .impeccable/hook.cache.json
+
+# Your own agent fleet. This file is rewritten at runtime
+# (backend/app/services/compose_renderer.py) and describes its owner's machine:
+# agent names, project/client references, mount paths. While it was in version
+# control, every commit published its author's fleet. Shipped instead is the
+# agent-free template docker/docker-compose.agents.example.yml; ./setup.sh
+# makes your copy from it on first run.
+# (It stays inside the repo folder rather than under ~/.mc/ as ADR-022 would
+# have it — a documented exception, see that ADR.)
+docker/docker-compose.agents.yml
+# And its sidecars: the renderer writes .tmp/.bak, the update migration writes
+# .pre-oss-split (scripts/migrate-agents-yml.sh). All carry the same fleet.
+docker/docker-compose.agents.yml.*

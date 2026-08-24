@@ -863,6 +863,49 @@ async def _wait_for_window_ready(
     }
 
 
+def compose_preflight_error(compose_main: Path, compose_agents: Path) -> str | None:
+    """Check both compose files BEFORE invoking `docker compose`.
+
+    Returns a message to show the operator, or None when everything is fine.
+
+    Why this exists at all: Docker Desktop single-file bind mounts (each
+    compose file is mounted individually, not as part of a directory mount) go
+    stale — become ENOENT or read as empty — when the HOST file underneath is
+    replaced atomically (git checkout, editor atomic save). `docker compose`
+    then fails with an opaque "no such file or directory" that gives no hint
+    the fix is a backend restart rather than a repo problem. That exact
+    incident happened 2026-07 and cost a full diagnosis session.
+
+    The agents file needs the same guard for a second reason: since it left
+    version control it can legitimately be ABSENT on a fresh install, and the
+    fix there is `./setup.sh`, not a restart. Without the check both cases
+    produce the same unreadable compose error.
+    """
+    def unusable(path: Path) -> bool:
+        try:
+            return not (path.is_file() and path.stat().st_size > 0)
+        except OSError:
+            return True
+
+    if unusable(compose_main):
+        return (
+            "docker-compose.yml is not readable inside the backend container — "
+            "Docker Desktop single-file bind mounts go stale when the host file "
+            "is replaced (git checkout/editor atomic save). "
+            "Fix: docker compose restart backend, then retry."
+        )
+    if unusable(compose_agents):
+        return (
+            f"{compose_agents.name} is missing or unreadable — it is not in "
+            "version control (it describes your own fleet). "
+            "Fix: run ./setup.sh in the project directory to create it from "
+            "docker/docker-compose.agents.example.yml, then retry. If it does "
+            "exist on the host, docker compose restart backend refreshes the "
+            "stale bind mount."
+        )
+    return None
+
+
 def restart_docker_agent_container(
     agent: Agent,
     *,
@@ -930,33 +973,14 @@ def restart_docker_agent_container(
         env_agents = repo_root / "docker" / ".env.agents"
         env_shared = repo_root / "docker" / ".env.shared"
 
-        # Preflight (B2.1): verify compose_main is actually readable and
-        # non-empty from inside the backend container BEFORE invoking
-        # `docker compose`. Docker Desktop single-file bind mounts (compose_main
-        # is mounted individually, not as part of a directory mount) go stale
-        # — become ENOENT or read as empty — when the HOST file underneath is
-        # replaced atomically (git checkout, editor atomic save). Without this
-        # guard, `docker compose` fails with an opaque "no such file or
-        # directory" that gives no hint the fix is a backend restart, not a
-        # repo/checkout problem. This exact incident happened 2026-07 and cost
-        # a full diagnosis session.
-        try:
-            compose_main_readable = compose_main.is_file() and compose_main.stat().st_size > 0
-        except OSError:
-            compose_main_readable = False
-        if not compose_main_readable:
+        # Preflight (B2.1) — see compose_preflight_error().
+        preflight = compose_preflight_error(compose_main, compose_agents)
+        if preflight:
             logger.error(
-                "force_recreate(%s) aborted preflight — %s is not readable/empty "
-                "inside the backend container (stale bind mount)",
-                container_name, compose_main,
+                "force_recreate(%s) aborted preflight — %s", container_name, preflight
             )
             return {
-                "status": (
-                    "error: docker-compose.yml is not readable inside the backend "
-                    "container — Docker Desktop single-file bind mounts go stale "
-                    "when the host file is replaced (git checkout/editor atomic "
-                    "save). Fix: docker compose restart backend, then retry the switch."
-                ),
+                "status": f"error: {preflight}",
                 "container": container_name,
                 "mode": "recreate",
             }

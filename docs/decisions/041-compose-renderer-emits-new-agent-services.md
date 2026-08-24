@@ -8,7 +8,7 @@
 
 `compose_renderer.render_compose_agents` hat bisher nur **Image-Overrides + Vault-Mounts** auf die im statischen Template (`docker/docker-compose.agents.yml`) bereits vorhandenen Agent-Anchor-Services überlagert (`_rewrite_compose`). Ein **neu via API/Provisioning angelegter** cli-bridge-Agent (DB-Row + Token + Workspace) bekam dadurch NIE einen Compose-Service → kein Container → der Runtime-Switch scheiterte mit `no such service: mc-agent-<slug>` + Rollback. Damit war das Anlegen eines 9. (10., …) Fleet-Agenten keine reine Daten-/API-Operation, sondern erforderte stets ein Hand-Edit am generator-managed Compose-File.
 
-Konkret aufgetreten beim Anlegen des dedizierten `estrich-vision`-Agenten (Plan-Vision für den Estrich-Kalkulator).
+Konkret aufgetreten beim Anlegen des dedizierten `blueprint-vision`-Agenten (Plan-Vision für den Blueprint-Kalkulator).
 
 ## Entscheidung
 
@@ -29,4 +29,4 @@ Konkret aufgetreten beim Anlegen des dedizierten `estrich-vision`-Agenten (Plan-
 - Renderer steuert jetzt die Service-Definition neuer Agenten — abgesichert durch Tests (`test_compose_renderer_new_agents.py`): die 8 bestehenden Services unverändert, neuer Block korrekt, YAML valid, kein Duplikat.
 
 ## Verifikation
-6 neue Tests grün; Gesamtsuite 903 passed (7 pre-existing hermes_skill-Fails unrelated). Live: `estrich-vision` bekam `mc-agent-estrichvision` + laufenden Container, verarbeitet Vision-Tasks.
+6 neue Tests grün; Gesamtsuite 903 passed (7 pre-existing hermes_skill-Fails unrelated). Live: `blueprint-vision` bekam `mc-agent-blueprintvision` + laufenden Container, verarbeitet Vision-Tasks.

@@ -368,3 +368,143 @@ async def test_lead_switch_rejects_a_non_member(auth_client: AsyncClient, async_
     )
     assert resp.status_code == 422
     assert "Mitglied" in resp.json()["detail"]
+
+
+# ── Abschluss: archivieren, löschen, ins Memory übernehmen ─────────────────
+# Operator-Wunsch 22.08.2026: „ich sollte in der Lage sein selber zu bestimmen
+# ob ich es mit den Daten oder ohne Daten löschen/archivieren möchte, nur den
+# Chat. Diese Ergebnisse sollten auch in unserem Memorysystem aufgenommen
+# werden, embedded, wie die Tasks."
+#
+# Drei Stufen, weil sie drei verschiedene Dinge bedeuten — und die
+# Memory-Übernahme ist von allen dreien UNABHÄNGIG: eine Erkenntnis darf ein
+# gelöschtes Arbeitsmaterial überleben.
+
+
+@pytest.mark.asyncio
+async def test_archive_hides_the_group_but_keeps_everything(
+    auth_client: AsyncClient, async_session
+):
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    group = await _create_group(auth_client, [a.id, b.id])
+
+    resp = await auth_client.post(f"/api/v1/groups/{group['id']}/archive")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived_at"] is not None
+
+    # Aus der Liste raus …
+    listed = (await auth_client.get("/api/v1/groups")).json()
+    assert all(g["id"] != group["id"] for g in listed)
+    # … aber weiterhin lesbar, und auf Wunsch wieder in der Liste.
+    assert (await auth_client.get(f"/api/v1/groups/{group['id']}")).status_code == 200
+    with_archived = (await auth_client.get("/api/v1/groups?include_archived=true")).json()
+    assert any(g["id"] == group["id"] for g in with_archived)
+    # Die Liste muss Archiviertes MARKIEREN, nicht nur mitliefern — sonst kann
+    # die Archiv-Sektion im Frontend aktive und archivierte Zeilen nicht
+    # auseinanderhalten und müsste zwei Listen gegeneinander diffen.
+    ours = next(g for g in with_archived if g["id"] == group["id"])
+    assert ours["archived_at"] is not None
+
+    resp = await auth_client.post(f"/api/v1/groups/{group['id']}/unarchive")
+    assert resp.status_code == 200
+    assert resp.json()["archived_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_delete_chat_only_keeps_the_result_document(
+    auth_client: AsyncClient, async_session, tmp_path
+):
+    """„Nur den Chat löschen" — der Verlauf war Arbeitsmaterial, das Ergebnis
+    zählt. Genau diese Trennung muss die Sabotage-Probe halten."""
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    group = await _create_group(auth_client, [a.id, b.id])
+
+    await auth_client.post(
+        f"/api/v1/groups/{group['id']}/messages", json={"text": "Ein Zwischenruf."}
+    )
+    before = (await auth_client.get(f"/api/v1/groups/{group['id']}/messages")).json()
+    assert before["messages"], "Vorbedingung: es gibt Nachrichten"
+
+    resp = await auth_client.delete(f"/api/v1/groups/{group['id']}?scope=chat")
+    assert resp.status_code == 200, resp.text
+
+    # Gruppe und Dokument bleiben, der Verlauf ist leer.
+    detail = (await auth_client.get(f"/api/v1/groups/{group['id']}")).json()
+    assert detail["archived_at"] is not None
+    doc = (await auth_client.get(f"/api/v1/groups/{group['id']}/document")).json()
+    assert doc["content"], "Das Ergebnis-Dokument darf NICHT mitgelöscht werden"
+    after = (await auth_client.get(f"/api/v1/groups/{group['id']}/messages")).json()
+    assert after["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_delete_all_removes_the_group_entirely(auth_client: AsyncClient, async_session):
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    group = await _create_group(auth_client, [a.id, b.id])
+
+    resp = await auth_client.delete(f"/api/v1/groups/{group['id']}?scope=all")
+    assert resp.status_code == 204, resp.text
+    assert (await auth_client.get(f"/api/v1/groups/{group['id']}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_running_group_is_not_deleted_by_accident(auth_client: AsyncClient, async_session):
+    """Eine laufende Gruppe zu löschen würde Agenten mitten im Turn den Thread
+    unter den Füssen wegziehen. Erst anhalten, dann löschen."""
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    group = await _create_group(auth_client, [a.id, b.id])
+    await auth_client.post(f"/api/v1/groups/{group['id']}/start")
+
+    resp = await auth_client.delete(f"/api/v1/groups/{group['id']}?scope=all")
+    assert resp.status_code == 409
+    assert (await auth_client.get(f"/api/v1/groups/{group['id']}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_memorize_writes_the_result_into_the_vault(auth_client: AsyncClient, async_session):
+    """Das Ergebnis wandert als BoardMemory ins Gedächtnis — dieselbe Ablage,
+    die auch Tasks nutzen, damit die Einbettung greift."""
+    from sqlmodel import select
+
+    from app.models.memory import BoardMemory
+
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    group = await _create_group(auth_client, [a.id, b.id])
+
+    resp = await auth_client.post(
+        f"/api/v1/groups/{group['id']}/memorize",
+        json={"title": "Spark-Standard", "memory_type": "research", "tags": ["gruppe"]},
+    )
+    assert resp.status_code == 201, resp.text
+    memory_id = resp.json()["memory_id"]
+
+    rows = (await async_session.exec(select(BoardMemory))).all()
+    saved = next(m for m in rows if str(m.id) == memory_id)
+    assert saved.memory_type == "research"
+    assert "gruppe" in saved.tags
+    assert saved.content, "Der Dokument-Inhalt muss mitgehen, nicht nur der Titel"
+
+
+@pytest.mark.asyncio
+async def test_memory_survives_deleting_everything(auth_client: AsyncClient, async_session):
+    """Der Kern des Operator-Wunsches: die Erkenntnis überlebt das
+    Arbeitsmaterial. Wer 'alles löschen' wählt, verliert den Memory-Eintrag
+    NICHT."""
+    from sqlmodel import select
+
+    from app.models.memory import BoardMemory
+
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    group = await _create_group(auth_client, [a.id, b.id])
+    await auth_client.post(f"/api/v1/groups/{group['id']}/memorize", json={})
+
+    await auth_client.delete(f"/api/v1/groups/{group['id']}?scope=all")
+
+    rows = (await async_session.exec(select(BoardMemory))).all()
+    assert rows, "Der Memory-Eintrag darf beim Löschen der Gruppe nicht verschwinden"

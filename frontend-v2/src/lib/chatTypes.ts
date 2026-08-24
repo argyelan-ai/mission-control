@@ -10,10 +10,17 @@ export interface MessageEvent {
   kind: "message";
   uuid: string;
   ts: string;
-  role: "user" | "assistant";
+  /** `teammate` = Rückmeldung eines Subagenten/einer anderen Sitzung. Claude
+   *  Code schreibt die als gewöhnlichen USER-Turn ins Transkript — ohne diese
+   *  dritte Rolle erschiene sie als Nachricht des Operators, die er nie
+   *  getippt hat (Operator-Befund 19.08.2026). */
+  role: "user" | "assistant" | "teammate";
   text: string;
   model: string | null;
   sidechain: boolean;
+  /** Nur bei `role: "teammate"`: wer geschrieben hat. `null`, wenn die
+   *  Nachricht keinen Absender trug — dann wird nichts behauptet. */
+  teammate?: string | null;
 }
 
 export interface ToolEvent {
@@ -188,6 +195,27 @@ export interface ChatCapabilities {
    *  lokalen Claude-Sessions des Operators. Der Regler-Hinweis muss das am
    *  Wert sagen, nicht verschweigen. */
   effortShared?: boolean;
+  /** WARUM sich der Effort nicht umschalten laesst — damit das UI es erklaeren
+   *  kann, statt das Bedienelement wortlos wegzulassen. Nur gesetzt, wenn
+   *  `canSwitchEffort` false ist; `null`/absent = kein Grund noetig oder
+   *  aelteres Backend.
+   *
+   *  - `model_no_effort`: der Harness kann `/effort`, das MODELL des Agenten
+   *    nicht. openclaude sagt das selbst im `/model`-Picker
+   *    ("Effort not supported for <modell>") — der haeufigste Fall bei
+   *    Agenten auf lokalen/eigenen Modellen.
+   *  - `foreign_harness`: diese CLI kennt `/effort` gar nicht (kimi, omp).
+   *  - `no_pane`: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis). */
+  effortReason?: string | null;
+  /** Das MODELL, ueber das die CLI die Effort-Aussage gemacht hat — direkt aus
+   *  ihrer eigenen Picker-Zeile ("Effort not supported for <modell>"). Nur bei
+   *  `effortReason: "model_no_effort"` gesetzt.
+   *
+   *  Der Erklaertext muss dieses Modell nennen, nicht das gerade angezeigte:
+   *  die Messung ist zwischengespeichert, die Anzeige nicht. Sonst stand dort
+   *  schon "Das Modell X kennt keine Effort-Stufen" ueber ein Modell, das
+   *  Stufen sehr wohl kennt. */
+  effortModel?: string | null;
   /** Every slash command this harness actually offers — built-ins AND the
    *  agent's skills. Absent on older backends, where the composer falls back to
    *  its own short static list. `name` may or may not carry the leading slash

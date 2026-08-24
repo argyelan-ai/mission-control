@@ -49,7 +49,10 @@ export function PanelRail({ active, onSelect, only }: PanelRailProps) {
       // Top-aligned, not centred: two icons floating in the middle of a
       // full-height column read as a mistake. They belong next to the chat
       // header they act on.
-      className="hidden md:flex md:flex-col items-center gap-1 md:px-1.5 md:py-3 md:border md:rounded-xl md:overflow-hidden shrink-0"
+      // Kein eigener Rahmen mehr: die Schiene sitzt seit 22.08.2026 INNERHALB
+      // der gemeinsamen Chat-Insel. Ein Rahmen im Rahmen las sich als drittes
+      // konkurrierendes Kästchen; eine Linie links genügt als Trennung.
+      className="hidden md:flex md:flex-col items-center gap-1 md:px-1.5 md:py-3 md:border-l md:overflow-hidden shrink-0"
       style={{ background: C.bgSurface, borderColor: C.border }}
     >
       {PANELS.filter((p) => visible.includes(p.key)).map(({ key, label, icon: Icon }) => {

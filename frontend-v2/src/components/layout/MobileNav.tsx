@@ -4,7 +4,14 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { NAV_GROUPS } from "./Sidebar";
+import {
+  NAV_TREE,
+  CHROME_ITEMS,
+  DEFAULT_PINS,
+  navItem,
+  resolveNav,
+  type NavGroup,
+} from "@/lib/nav";
 import { useTranslations } from "next-intl";
 import { clearToken, api } from "@/lib/api";
 import { useRouter } from "next/navigation";
@@ -106,7 +113,11 @@ export function MobileTabBar() {
       aria-label="Hauptnavigation"
       className="md:hidden shrink-0"
       style={{
-        backgroundColor: "rgba(10,10,10,0.95)",
+        // Panel tone, matching the desktop column — was a hardcoded
+        // rgba(10,10,10,.95) that stayed on the old near-black after the
+        // surfaces were lifted, so the phone chrome no longer matched its
+        // own content. Opaque on purpose (see the header note below).
+        backgroundColor: "var(--color-p2-pan)",
         borderTop: "1px solid var(--color-p2-line)",
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
@@ -193,12 +204,66 @@ export function MobileTabBar() {
  * MobileNav — die beiden Overlays: obere Insel + Index-Drawer.
  * Beide bleiben bewusst `fixed` — das ist für Overlays korrekt.
  */
+/**
+ * One row in the phone menu. Active is an accent-subtle fill with normal text
+ * — the same restraint as the desktop column, where a full-bleed active row
+ * shouted louder than the content beside it.
+ */
+function MobileNavRow({
+  href,
+  label,
+  active,
+  badge = false,
+  nested = false,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+  badge?: boolean;
+  nested?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className="flex items-center gap-2 cursor-pointer"
+      style={{
+        minHeight: "44px",
+        paddingLeft: nested ? "26px" : "12px",
+        paddingRight: "12px",
+        borderRadius: "var(--radius-md)",
+        fontFamily: "var(--font-p2-mono)",
+        fontSize: nested ? "12px" : "12.5px",
+        fontWeight: active ? 700 : 400,
+        backgroundColor: active ? "var(--color-accent-subtle)" : "transparent",
+        color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+      }}
+    >
+      <span className="flex-1">{label}</span>
+      {badge && (
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ backgroundColor: "var(--color-p2-err)" }}
+        />
+      )}
+    </Link>
+  );
+}
+
 export default function MobileNav() {
   const { open, setOpen } = useMobileNav();
   const t = useTranslations("nav");
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, activeBoardId, setActiveBoardId } = useAppStore();
+
+  // The phone menu mirrors the desktop column: same pins, same groups.
+  const [menuOpenGroups, setMenuOpenGroups] = useState<string[]>([]);
+  const pinnedNav = useAppStore((st) => st.pinnedNav) ?? DEFAULT_PINS;
+  const { pinned: menuPinned, groups: menuGroups } = useMemo(
+    () => resolveNav(pinnedNav),
+    [pinnedNav]
+  );
 
   const { data: approvals } = useQuery<Approval[]>({
     queryKey: ["approvals-badge"],
@@ -236,7 +301,7 @@ export default function MobileNav() {
         style={{
           paddingBottom: "0.5rem",
           minHeight: "calc(env(safe-area-inset-top) + 3.5rem)",
-          backgroundColor: "rgba(10,10,10,0.92)",
+          backgroundColor: "var(--color-p2-pan)",
           borderBottom: "1px solid var(--color-p2-line2)",
         }}
       >
@@ -323,58 +388,88 @@ export default function MobileNav() {
                 </button>
               </div>
 
-              <nav className="flex-1 py-3 overflow-y-auto">
-                {NAV_GROUPS.map((group) => {
-                  const items = group.items;
-                  if (items.length === 0) return null;
+              <nav className="flex-1 py-3 px-3 overflow-y-auto">
+                {/* Same shape as the desktop column: the pinned destinations
+                    first, then the rest folded into groups that open in place.
+                    A flat list of seventeen was 924px of scrolling. */}
+                {menuPinned.map((item) => (
+                  <MobileNavRow
+                    key={item.href}
+                    href={item.href}
+                    label={t(item.labelKey) || item.label}
+                    active={isTabActive(pathname, item.href)}
+                    badge={item.href === "/inbox" && hasPendingApprovals}
+                  />
+                ))}
+
+                {menuPinned.length > 0 && menuGroups.length > 0 && (
+                  <div
+                    style={{
+                      height: 1,
+                      backgroundColor: "var(--color-p2-line2)",
+                      margin: "10px 8px 6px",
+                    }}
+                  />
+                )}
+
+                {menuGroups.map((group: NavGroup) => {
+                  const open = menuOpenGroups.includes(group.key);
+                  const holdsActive = group.children.some((c) => isTabActive(pathname, c.href));
                   return (
-                    <div key={group.label} className="px-3">
-                      <div
-                        className="px-2 pt-3 pb-1 select-none"
+                    <div key={group.key}>
+                      <button
+                        onClick={() =>
+                          setMenuOpenGroups((keys) =>
+                            keys.includes(group.key)
+                              ? keys.filter((k) => k !== group.key)
+                              : [...keys, group.key]
+                          )
+                        }
+                        aria-expanded={open}
+                        className="flex items-center gap-2 w-full px-3 cursor-pointer"
                         style={{
-                          fontFamily: "var(--font-p2-display)",
-                          fontWeight: 700,
-                          fontSize: "9px",
-                          letterSpacing: "0.2em",
-                          color: "var(--color-p2-faint)",
+                          minHeight: "44px",
+                          borderRadius: "var(--radius-md)",
+                          ...MONO,
+                          fontSize: "12.5px",
+                          color:
+                            holdsActive && !open
+                              ? "var(--color-p2-txt)"
+                              : "var(--color-p2-dim)",
                         }}
                       >
-                        {t(group.labelKey)}
-                      </div>
-                      <ul>
-                        {items.map(({ href, labelKey }) => {
-                          const label = t(labelKey);
-                          const isActive = isTabActive(pathname, href);
-                          const showBadge = href === "/inbox" && hasPendingApprovals;
-                          return (
-                            <li key={href}>
-                              <Link
-                                href={href}
-                                className="flex items-center gap-2 px-2 cursor-pointer"
-                                style={{
-                                  minHeight: "44px",
-                                  ...MONO,
-                                  fontSize: "12.5px",
-                                  fontWeight: isActive ? 700 : 400,
-                                  backgroundColor: isActive ? "var(--color-p2-pan2)" : "transparent",
-                                  color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-                                  borderLeft: `2px solid ${isActive ? "var(--color-p2-amb)" : "transparent"}`,
-                                }}
-                              >
-                                <span className="flex-1">{label}</span>
-                                {showBadge && (
-                                  <span
-                                    className="w-2 h-2 rounded-full shrink-0"
-                                    style={{
-                                      backgroundColor: "var(--color-p2-err)",
-                                    }}
-                                  />
-                                )}
-                              </Link>
-                            </li>
-                          );
-                        })}
-                      </ul>
+                        <span className="flex-1 text-left">
+                          {t(group.rowLabelKey) || group.label}
+                        </span>
+                        {holdsActive && !open && (
+                          <span
+                            className="shrink-0"
+                            style={{
+                              width: 5,
+                              height: 5,
+                              borderRadius: "var(--radius-full)",
+                              backgroundColor: "var(--color-p2-amb)",
+                            }}
+                          />
+                        )}
+                        <span
+                          className="shrink-0"
+                          style={{ fontSize: "10px", color: "var(--color-p2-faint)" }}
+                        >
+                          {open ? "▴" : "▾"}
+                        </span>
+                      </button>
+                      {open &&
+                        group.children.map(({ href, labelKey, label }) => (
+                          <MobileNavRow
+                            key={href}
+                            href={href}
+                            label={t(labelKey) || label}
+                            active={isTabActive(pathname, href)}
+                            badge={href === "/inbox" && hasPendingApprovals}
+                            nested
+                          />
+                        ))}
                     </div>
                   );
                 })}
@@ -485,6 +580,32 @@ export default function MobileNav() {
                       </div>
                     </div>
                   )}
+                  {/* Settings sits with the account, not in a nav group — the
+                      desktop column puts the same gear in its footer. */}
+                  {CHROME_ITEMS.map((href) => {
+                    const item = navItem(href);
+                    if (!item) return null;
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={href}
+                        href={href}
+                        className="flex items-center gap-2 w-full px-2 cursor-pointer"
+                        style={{
+                          minHeight: "44px",
+                          ...MONO,
+                          fontSize: "12.5px",
+                          fontWeight: isTabActive(pathname, href) ? 700 : 400,
+                          color: isTabActive(pathname, href)
+                            ? "var(--color-p2-txt)"
+                            : "var(--color-p2-dim)",
+                        }}
+                      >
+                        <Icon size={15} strokeWidth={1.75} className="shrink-0" />
+                        {t(item.labelKey) || item.label}
+                      </Link>
+                    );
+                  })}
                   <button
                     onClick={handleLogout}
                     className="flex items-center w-full px-2 cursor-pointer"

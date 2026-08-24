@@ -75,7 +75,10 @@ npm run build && npm run start -- -p 3100   # Prod-Check
 **Größer:**
 8. A11y-Feinschliff: Focus-Trap für Custom-Modals/Drawer, `aria-live` für Toasts.
 9. Reconnect-State (SSE/Queries) sichtbar („reconnecting…") — Mobile-relevant.
-10. Commit-Hygiene main: `docker/cli-versions.json`, `docker-compose.agents.yml` + Untracked-Dateien.
+10. Commit-Hygiene main: `docker/cli-versions.json` + Untracked-Dateien.
+    (`docker-compose.agents.yml` stand hier auch mal — sie gehoert seit dem
+    OSS-Split ausdruecklich NICHT mehr committet: sie beschreibt die eigene
+    Flotte und ist gitignored. Siehe `docs/setup/updating.md`.)
 
 ## 6. Nächste Schritte danach
 
