@@ -66,11 +66,17 @@ def _hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
+_AGENT_INSTALL_PATH = "/usr/local/bin/mc-node-agent.py"
+
+
 def _build_install_command(code: str) -> str:
+    """Downloads to a real path first (not `curl | python3 -`): --install's
+    systemd unit needs a stable ExecStart path, which a stdin-piped script
+    can never have (no __file__ to point at)."""
     base_url = phone_test_url()
     return (
-        f"curl -fsSL {_AGENT_SCRIPT_RAW_URL} | "
-        f"sudo python3 - --mc-url {base_url} --pair {code} --install"
+        f"sudo curl -fsSL {_AGENT_SCRIPT_RAW_URL} -o {_AGENT_INSTALL_PATH} && "
+        f"sudo python3 {_AGENT_INSTALL_PATH} --mc-url {base_url} --pair {code} --install"
     )
 
 
