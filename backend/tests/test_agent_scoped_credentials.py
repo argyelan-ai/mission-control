@@ -42,8 +42,12 @@ async def _setup_agent_with_credentials_read() -> dict:
 
 async def _make_ssh_key_credential() -> uuid.UUID:
     cred_id = uuid.uuid4()
+    # Deliberately NOT a real PEM header — gitleaks' built-in private-key
+    # rule matches on the real key-type label ("OPENSSH PRIVATE KEY")
+    # regardless of the fake content between markers, and
+    # test_oss_scrub_hygiene.py scans this very file.
     encrypted = encrypt(json.dumps({
-        "private_key_pem": "-----BEGIN OPENSSH PRIVATE KEY-----\nsecretkeymaterial\n-----END OPENSSH PRIVATE KEY-----\n",
+        "private_key_pem": "-----BEGIN KEY-----\nsecretkeymaterial\n-----END KEY-----\n",
         "public_key": "ssh-ed25519 AAAAC3Nz mc-fleet gx10",
         "username": "mcfleet",
     }))

@@ -273,7 +273,12 @@ async def test_ssh_key_credential_never_exposes_private_key(auth_client: AsyncCl
     private_key_pem must NEVER leave the backend, not even last-4-chars
     masked — a suffix reveal is fine for a password, not for key material.
     public_key/username are not secrets and stay visible."""
-    private_key_pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecretkeybytes\n-----END OPENSSH PRIVATE KEY-----\n"
+    # Deliberately NOT a real PEM header ("BEGIN KEY", not "BEGIN OPENSSH
+    # PRIVATE KEY") — gitleaks' built-in private-key rule pattern-matches on
+    # the real key-type labels regardless of the (fake) content between them,
+    # and test_oss_scrub_hygiene.py scans this very file. Same convention as
+    # the other ssh_key fixtures below.
+    private_key_pem = "-----BEGIN KEY-----\nsecretkeybytes\n-----END KEY-----\n"
     resp = await auth_client.post(
         "/api/v1/credentials",
         json={
