@@ -1842,6 +1842,12 @@ export interface Runtime {
   // toggle; autostart_flag_path is the file a systemd unit checks on boot.
   autostart_supported?: boolean;
   autostart_flag_path?: string | null;
+  /** Verbund-UI Phase 0 (30.08.2026): server-derived, never re-compute
+   *  client-side (backend/app/routers/runtimes.py::_runtime_locality — a
+   *  real registry host binding always wins, then a small set of always-
+   *  remote runtime_types). "local" = physically reachable from SOME host
+   *  in the fleet; a host-inplace agent can only ever run a "local" one. */
+  locality?: "local" | "cloud";
 }
 
 // Engine Control v0 (ADR-057) — GET/POST .../db/{slug}/autostart response.
@@ -2195,6 +2201,8 @@ export interface CompatMatrixRuntime {
   protocol: string | null;
   compatible_harnesses: Harness[];
   reasons: Record<string, string>;
+  /** Verbund-UI Phase 0 (30.08.2026) — see Runtime.locality. */
+  locality?: "local" | "cloud";
 }
 
 // One entry of the HostHarnessAdapter registry

@@ -299,6 +299,7 @@
       "runtimeSwitchUnsupported": "Runtime-Switch wird für diesen Agenten nicht unterstützt.",
       "fallbackOption": "— Fallback (docker-compose env) —",
       "runtimeDisabled": "deaktiviert",
+      "runtimeCloudUnavailable": "Cloud, nicht auf dieser Box verfügbar",
       "inplaceHint": "In-Place-Switch — kein paralleler Container. Die Runtime-Bindung wird neu geschrieben und die Host-Session startet kurz neu (aktuelle Arbeit geht verloren).",
       "dockerHintBefore": "Der Switch löst",
       "dockerHintAfter": "aus (~5s) — bei Cross-Image-Switches ein Container-Rebuild (~30–90s). Kompatibilitätsprüfung + Warnungen erscheinen im Bestätigungs-Modal.",

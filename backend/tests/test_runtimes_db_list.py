@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.models.host import Host
 from app.models.runtime import Runtime
 
 
@@ -235,3 +236,36 @@ async def test_get_runtimes_groups_by_provider(async_session, auth_client):
     # The unknown local endpoint keeps its curated order and sorts after the
     # recognised cloud providers — where it sat before.
     assert slugs.index("local-vllm") > max(anthropic + ollama), slugs
+
+
+@pytest.mark.asyncio
+async def test_get_runtimes_reports_locality(async_session, auth_client):
+    """Verbund-UI Phase 0 (30.08.2026): GET /runtimes backs the agent detail
+    page's runtime picker directly — it needs `locality` per row so a
+    host-inplace agent's picker can exclude candidates it could never
+    physically reach."""
+    host = Host(slug="worker-b", display_name="Worker B", kind="ssh", ssh_host="192.0.2.41")
+    async_session.add(host)
+    await async_session.commit()
+    await async_session.refresh(host)
+
+    async_session.add(Runtime(
+        slug="host-bound-local", display_name="Host-bound", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.41:8000/v1", ui_order=1, enabled=True, host_id=host.id,
+    ))
+    async_session.add(Runtime(
+        slug="cloud-row", display_name="Cloud", runtime_type="cloud",
+        endpoint="https://api.example.com/v1", ui_order=2, enabled=True,
+    ))
+    await async_session.commit()
+
+    with patch(
+        "app.services.runtime_manager.get_runtime_state",
+        side_effect=_stub_state,
+    ):
+        resp = await auth_client.get("/api/v1/runtimes")
+
+    assert resp.status_code == 200, resp.text
+    rows = {r["slug"]: r["locality"] for r in resp.json()["runtimes"]}
+    assert rows["host-bound-local"] == "local"
+    assert rows["cloud-row"] == "cloud"
