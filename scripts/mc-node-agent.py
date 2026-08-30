@@ -23,7 +23,7 @@ Usage — first run, mint a pairing code via
 POST /api/v1/nodes/pairing-codes (admin, from the MC UI/API), then on the
 target box:
 
-    sudo python3 mc-node-agent.py --mc-url https://mc.example.ts.net \\
+    sudo python3 mc-node-agent.py --mc-url https://mc.tailnet-name.ts.net \\
         --pair ABCD1234 --install
 
 This trades the code for a token (saved to /etc/mc-node-agent/token,
@@ -33,7 +33,7 @@ service, and from then on the service runs the heartbeat loop unattended.
 Manual run (token already paired, e.g. for testing without installing a
 service):
 
-    MC_NODE_TOKEN=... python3 mc-node-agent.py --mc-url https://mc.example.ts.net
+    MC_NODE_TOKEN=... python3 mc-node-agent.py --mc-url https://mc.tailnet-name.ts.net
 
 `--install` needs sudo/root (it writes a unit under /etc/systemd/system and
 calls systemctl) — running it as a normal user prints an error and exits
@@ -639,7 +639,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mc-url",
         default=os.environ.get("MC_URL"),
-        help="Mission-Control-Basis-URL, z.B. https://mc.example.ts.net (oder Env MC_URL)",
+        help="Mission-Control-Basis-URL, z.B. https://mc.tailnet-name.ts.net (oder Env MC_URL)",
     )
     parser.add_argument(
         "--pair",
