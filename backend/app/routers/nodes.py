@@ -351,7 +351,7 @@ async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
 
     token = secrets.token_urlsafe(32)
     host.agent_token_hash = _hash_token(token)
-    if body.agent_version:
+    if body.agent_version is not None:
         host.agent_version = body.agent_version
     session.add(host)
 
@@ -395,7 +395,7 @@ async def heartbeat(
 
     host.agent_telemetry = body.telemetry.model_dump(mode="json")
     host.agent_last_seen_at = now
-    if body.agent_version:
+    if body.agent_version is not None:
         host.agent_version = body.agent_version
     if body.inventory is not None:
         host.agent_inventory = [entry.model_dump(mode="json") for entry in body.inventory]

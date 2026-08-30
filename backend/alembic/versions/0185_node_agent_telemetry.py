@@ -8,8 +8,8 @@ Grundstein:
 
 - `hosts` bekommt vier Spalten für den Agenten-Kanal: der Token wird NUR
   als sha256-Hash gespeichert (agent_token_hash), dazu der letzte gesehene
-  Zeitpunkt, der letzte Telemetrie-Schnappschuss (jsonb) und die gemeldete
-  Agenten-Version.
+  Zeitpunkt, der letzte Telemetrie-Schnappschuss (json — sa.JSON(), nicht
+  jsonb) und die gemeldete Agenten-Version.
 - `host_pairing_codes` ist eine eigene Tabelle statt Spalten auf `hosts`,
   weil ein Code auch VOR der Host-Anlage existieren kann (host_id nullable —
   siehe models/host_pairing_code.py) und weil Codes selbst kurzlebig sind
