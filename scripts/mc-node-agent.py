@@ -563,6 +563,19 @@ def _default_install_user() -> str:
     return pwd.getpwuid(os.getuid()).pw_name
 
 
+def _user_token_path_for(user: str) -> Path:
+    """USER_TOKEN_PATH is computed from Path.home() at import time — under
+    sudo that's root's home, not the invoking user's. This resolves the
+    SAME ~/.config/mc-node-agent/token layout for an arbitrary user, so
+    --install can find a token a plain (non-sudo) `--pair` run saved
+    earlier under the operator's own home (review finding #9, 30.08.2026)."""
+    try:
+        home = Path(pwd.getpwnam(user).pw_dir)
+    except KeyError:
+        return USER_TOKEN_PATH
+    return home / ".config" / "mc-node-agent" / "token"
+
+
 def install_systemd_unit(mc_url: str, run_as_user: str) -> None:
     if os.geteuid() != 0:
         log.error(
@@ -571,9 +584,25 @@ def install_systemd_unit(mc_url: str, run_as_user: str) -> None:
             SYSTEMD_UNIT_PATH,
         )
         raise SystemExit(1)
+
     if not SYSTEM_TOKEN_PATH.exists():
-        log.error("Kein Token unter %s — erst --pair CODE ausführen (oder zusammen mit --install).", SYSTEM_TOKEN_PATH)
-        raise SystemExit(1)
+        # A common two-step flow: `python3 mc-node-agent.py --pair CODE`
+        # WITHOUT sudo first (saves to the user's own home), THEN
+        # `sudo python3 mc-node-agent.py --install` to set up the service.
+        # Without this, --install would only ever look under /etc and fail
+        # even though a perfectly good token already exists.
+        legacy_path = _user_token_path_for(run_as_user)
+        if legacy_path.exists():
+            log.info("Übernehme Token aus %s nach %s.", legacy_path, SYSTEM_TOKEN_PATH)
+            SYSTEM_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            SYSTEM_TOKEN_PATH.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
+            os.chmod(SYSTEM_TOKEN_PATH, 0o600)
+        else:
+            log.error(
+                "Kein Token unter %s oder %s — erst --pair CODE ausführen (oder zusammen mit --install).",
+                SYSTEM_TOKEN_PATH, legacy_path,
+            )
+            raise SystemExit(1)
 
     _chown_to_user(SYSTEM_TOKEN_PATH, run_as_user)
     _chown_to_user(SYSTEM_TOKEN_PATH.parent, run_as_user)

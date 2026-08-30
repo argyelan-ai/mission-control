@@ -401,3 +401,57 @@ class TestRunLoopInventoryCaching:
         agent.run_loop("http://mc.test", "tok")
 
         assert send_calls == [None]  # heartbeat still went out, just without inventory
+
+
+# ── install_systemd_unit's token migration (review finding #9, 30.08.2026) ──
+
+
+class TestInstallSystemdUnitTokenMigration:
+    def test_migrates_legacy_user_token_when_system_token_missing(self, agent, tmp_path, monkeypatch):
+        """A plain `--pair CODE` run WITHOUT sudo saves the token under the
+        operator's own home; a later `sudo ... --install` must pick it up
+        from there instead of failing just because /etc has nothing yet."""
+        system_token = tmp_path / "etc" / "mc-node-agent" / "token"
+        legacy_token = tmp_path / "home" / "mark" / ".config" / "mc-node-agent" / "token"
+        legacy_token.parent.mkdir(parents=True)
+        legacy_token.write_text("secret-token-value\n")
+
+        monkeypatch.setattr(agent, "SYSTEM_TOKEN_PATH", system_token)
+        monkeypatch.setattr(agent, "SYSTEMD_UNIT_PATH", tmp_path / "mc-node-agent.service")
+        monkeypatch.setattr(agent, "_user_token_path_for", lambda user: legacy_token)
+        monkeypatch.setattr(agent, "_chown_to_user", lambda path, user: None)
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: None)
+
+        agent.install_systemd_unit("http://mc.test", "mark")
+
+        assert system_token.read_text(encoding="utf-8").strip() == "secret-token-value"
+        assert oct(system_token.stat().st_mode & 0o777) == oct(0o600)
+
+    def test_fails_cleanly_when_no_token_anywhere(self, agent, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "SYSTEM_TOKEN_PATH", tmp_path / "etc" / "token")
+        monkeypatch.setattr(agent, "_user_token_path_for", lambda user: tmp_path / "nope" / "token")
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+
+        with pytest.raises(SystemExit):
+            agent.install_systemd_unit("http://mc.test", "mark")
+
+    def test_does_not_touch_legacy_path_when_system_token_already_present(
+        self, agent, tmp_path, monkeypatch
+    ):
+        system_token = tmp_path / "etc" / "mc-node-agent" / "token"
+        system_token.parent.mkdir(parents=True)
+        system_token.write_text("already-there\n")
+
+        def _boom(_user):
+            raise AssertionError("must not consult the legacy path when /etc already has a token")
+
+        monkeypatch.setattr(agent, "SYSTEM_TOKEN_PATH", system_token)
+        monkeypatch.setattr(agent, "SYSTEMD_UNIT_PATH", tmp_path / "mc-node-agent.service")
+        monkeypatch.setattr(agent, "_user_token_path_for", _boom)
+        monkeypatch.setattr(agent, "_chown_to_user", lambda path, user: None)
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: None)
+
+        agent.install_systemd_unit("http://mc.test", "mark")
+        assert system_token.read_text(encoding="utf-8").strip() == "already-there"
