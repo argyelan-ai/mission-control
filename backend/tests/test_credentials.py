@@ -123,6 +123,39 @@ async def test_delete_credential_sets_null_on_task(auth_client: AsyncClient, mak
 
 
 @pytest.mark.asyncio
+async def test_delete_credential_sets_null_on_host(auth_client: AsyncClient, async_session):
+    """Review finding #6 (30.08.2026): deleting an ssh_key credential must
+    SET NULL on any host referencing it — same mirror as the Task case
+    above, missing before this fix (SQLite tests don't enforce the real
+    Postgres ON DELETE SET NULL from migration 0188, so the router has to
+    do it explicitly, exactly like it already does for Task.credential_id)."""
+    from app.models.host import Host
+
+    create_resp = await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key", "credential_type": "ssh_key",
+            "data": {"private_key_pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+                     "public_key": "ssh-ed25519 AAAA", "username": "mcfleet"},
+        },
+    )
+    cred_id = create_resp.json()["id"]
+
+    import uuid
+    host = Host(slug="gx10-cred-test", display_name="GX10", kind="ssh",
+                ssh_host="192.0.2.50", ssh_credential_id=uuid.UUID(cred_id))
+    async_session.add(host)
+    await async_session.commit()
+    await async_session.refresh(host)
+
+    resp = await auth_client.delete(f"/api/v1/credentials/{cred_id}")
+    assert resp.status_code == 204
+
+    await async_session.refresh(host)
+    assert host.ssh_credential_id is None
+
+
+@pytest.mark.asyncio
 async def test_login_credential_without_url_rejected_at_create(auth_client: AsyncClient):
     """credential_type='login' without url must raise 422 — prevents a silent
     422 during a later mc verify --login-as vault resolve."""
@@ -232,3 +265,90 @@ async def test_update_existing_login_credential_with_url_passes(auth_client: Asy
     )
     assert resp.status_code == 200
     assert resp.json()["url"] == "https://example.com/login"
+
+
+@pytest.mark.asyncio
+async def test_ssh_key_credential_never_exposes_private_key(auth_client: AsyncClient):
+    """Fleet & Rezepte v2, Phase 2 (Auto-Onboarding) review requirement:
+    private_key_pem must NEVER leave the backend, not even last-4-chars
+    masked — a suffix reveal is fine for a password, not for key material.
+    public_key/username are not secrets and stay visible."""
+    # Deliberately NOT a real PEM header ("BEGIN KEY", not "BEGIN OPENSSH
+    # PRIVATE KEY") — gitleaks' built-in private-key rule pattern-matches on
+    # the real key-type labels regardless of the (fake) content between them,
+    # and test_oss_scrub_hygiene.py scans this very file. Same convention as
+    # the other ssh_key fixtures below.
+    private_key_pem = "-----BEGIN KEY-----\nsecretkeybytes\n-----END KEY-----\n"
+    resp = await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key",
+            "credential_type": "ssh_key",
+            "data": {
+                "private_key_pem": private_key_pem,
+                "public_key": "ssh-ed25519 AAAAC3Nz mc-fleet gx10",
+                "username": "mcfleet",
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["data_masked"]["private_key_pem"] == "[hidden]"
+    assert "secretkeybytes" not in resp.text
+    assert body["data_masked"]["public_key"] == "ssh-ed25519 AAAAC3Nz mc-fleet gx10"
+    assert body["data_masked"]["username"] == "mcfleet"
+
+    # Same guarantee on GET, not just the create response.
+    get_resp = await auth_client.get(f"/api/v1/credentials/{body['id']}")
+    assert get_resp.json()["data_masked"]["private_key_pem"] == "[hidden]"
+    assert "secretkeybytes" not in get_resp.text
+
+
+@pytest.mark.asyncio
+async def test_ssh_key_credential_type_cannot_be_changed_via_patch(auth_client: AsyncClient):
+    """Review finding #2 (30.08.2026): the frontend's edit form used to
+    silently downgrade an ssh_key credential to 'custom' on save — this is
+    the actual backend enforcement so no client (this UI, a fixed one, or a
+    raw API call) can do that."""
+    created = (await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key", "credential_type": "ssh_key",
+            "data": {"private_key_pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+                     "public_key": "ssh-ed25519 AAAA", "username": "mcfleet"},
+        },
+    )).json()
+
+    resp = await auth_client.patch(
+        f"/api/v1/credentials/{created['id']}", json={"credential_type": "custom"}
+    )
+    assert resp.status_code == 422
+    assert "Typ" in resp.json()["detail"]
+
+    unchanged = (await auth_client.get(f"/api/v1/credentials/{created['id']}")).json()
+    assert unchanged["credential_type"] == "ssh_key"
+
+
+@pytest.mark.asyncio
+async def test_ssh_key_credential_private_key_cannot_be_emptied_via_patch(auth_client: AsyncClient):
+    """A data update that drops private_key_pem must be rejected — the host
+    it belongs to would otherwise lose Vault access to its own SSH key."""
+    created = (await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key", "credential_type": "ssh_key",
+            "data": {"private_key_pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+                     "public_key": "ssh-ed25519 AAAA", "username": "mcfleet"},
+        },
+    )).json()
+
+    resp = await auth_client.patch(
+        f"/api/v1/credentials/{created['id']}", json={"data": {"content": "oops, wrong field"}}
+    )
+    assert resp.status_code == 422
+    assert "private_key_pem" in resp.json()["detail"]
+
+    # Renaming (no data touched) still works — the guard is scoped to data/type.
+    resp2 = await auth_client.patch(f"/api/v1/credentials/{created['id']}", json={"name": "Renamed"})
+    assert resp2.status_code == 200
+    assert resp2.json()["name"] == "Renamed"

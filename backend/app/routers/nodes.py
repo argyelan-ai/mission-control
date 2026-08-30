@@ -233,6 +233,48 @@ class InventoryResponse(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
+async def mint_pairing_code(
+    session: AsyncSession,
+    *,
+    host_id: uuid.UUID | None = None,
+    display_name_hint: str | None = None,
+) -> HostPairingCode:
+    """Core of POST /pairing-codes, factored out so services/host_onboarding.py
+    (Phase 2 — the auto-onboarding job mints one internally to install the
+    node-agent over the same SSH session it already has, no HTTP round-trip
+    to itself) can call it directly instead of duplicating the code-gen +
+    collision-safety-net logic. The router below is now a thin HTTP wrapper.
+    """
+    code = _generate_code()
+    for _ in range(5):  # collision safety net — practically never hit at 32^8 codes
+        if not (await session.exec(select(HostPairingCode).where(HostPairingCode.code == code))).first():
+            break
+        code = _generate_code()
+
+    expires_at = utcnow() + timedelta(minutes=PAIRING_CODE_TTL_MINUTES)
+    pairing = HostPairingCode(
+        code=code,
+        host_id=host_id,
+        display_name_hint=display_name_hint,
+        expires_at=expires_at,
+    )
+    session.add(pairing)
+    await session.commit()
+    return pairing
+
+
+def read_agent_script_or_none() -> str | None:
+    """The running instance's own scripts/mc-node-agent.py, or None if the
+    docker-compose bind mount (_AGENT_SCRIPT_PATH) isn't present. Shared by
+    GET /agent-script and services/host_onboarding.py (which writes the file
+    straight over the SSH session it already has — no HTTP round-trip to
+    this same backend)."""
+    try:
+        return _AGENT_SCRIPT_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 @router.post("/pairing-codes", response_model=PairingCodeResponse)
 async def create_pairing_code(
     body: PairingCodeCreate,
@@ -252,27 +294,13 @@ async def create_pairing_code(
         if not host:
             raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' nicht gefunden")
 
-    code = _generate_code()
-    for _ in range(5):  # collision safety net — practically never hit at 32^8 codes
-        if not (await session.exec(select(HostPairingCode).where(HostPairingCode.code == code))).first():
-            break
-        code = _generate_code()
-
-    expires_at = utcnow() + timedelta(minutes=PAIRING_CODE_TTL_MINUTES)
-    pairing = HostPairingCode(
-        code=code,
-        host_id=host_uuid,
-        display_name_hint=body.display_name_hint,
-        expires_at=expires_at,
-    )
-    session.add(pairing)
-    await session.commit()
+    pairing = await mint_pairing_code(session, host_id=host_uuid, display_name_hint=body.display_name_hint)
 
     return PairingCodeResponse(
-        code=code,
-        expires_at=expires_at,
+        code=pairing.code,
+        expires_at=pairing.expires_at,
         host_id=str(host_uuid) if host_uuid else None,
-        install_command=_build_install_command(code),
+        install_command=_build_install_command(pairing.code),
     )
 
 
@@ -289,9 +317,8 @@ async def get_agent_script():
     _AGENT_SCRIPT_PATH) — a plain image run without it is a clean 404, not
     a crash, same as jarvis_core's "feature stays off" fallback.
     """
-    try:
-        return PlainTextResponse(_AGENT_SCRIPT_PATH.read_text(encoding="utf-8"))
-    except OSError:
+    script = read_agent_script_or_none()
+    if script is None:
         raise HTTPException(
             status_code=404,
             detail=(
@@ -299,6 +326,7 @@ async def get_agent_script():
                 "fehlt der docker-compose-Mount ./scripts/mc-node-agent.py:/app/scripts/mc-node-agent.py:ro?"
             ),
         )
+    return PlainTextResponse(script)
 
 
 @router.post("/pair", response_model=PairResponse)

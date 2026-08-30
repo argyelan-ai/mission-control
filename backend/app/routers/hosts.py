@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -30,7 +30,7 @@ from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.host import Host
 from app.models.runtime import Runtime
-from app.services import host_bootstrap, host_probe, launch_template, runtime_manager
+from app.services import host_bootstrap, host_onboarding, host_probe, launch_template, runtime_manager
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -239,6 +239,109 @@ async def probe_host(
         )
 
     return await host_probe.probe_host(resolved)
+
+
+class HostOnboardAuth(BaseModel):
+    """Exactly one of the three."""
+
+    password: str | None = None
+    private_key: str | None = None
+    use_existing_credential_id: str | None = None
+
+    @field_validator("use_existing_credential_id")
+    @classmethod
+    def _credential_id_is_uuid(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            uuid.UUID(v)
+        except ValueError:
+            raise ValueError("use_existing_credential_id ist keine gültige UUID")
+        return v
+
+    @model_validator(mode="after")
+    def _exactly_one(self):
+        provided = [v for v in (self.password, self.private_key, self.use_existing_credential_id) if v]
+        if len(provided) != 1:
+            raise ValueError(
+                "auth braucht genau eines von: password, private_key, use_existing_credential_id"
+            )
+        return self
+
+
+class HostOnboardBody(BaseModel):
+    """POST /hosts/onboard — see services/host_onboarding.py's module
+    docstring for the full flow this kicks off."""
+
+    address: str = Field(min_length=1, max_length=128)
+    username: str = Field(min_length=1, max_length=64)
+    auth: HostOnboardAuth
+    display_name: str | None = Field(default=None, max_length=128)
+    bootstrap: bool = True
+    install_agent: bool = True
+
+
+@router.post("/onboard", status_code=202)
+async def onboard_host(
+    body: HostOnboardBody,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Starts the auto-onboarding job (Fleet & Rezepte v2, Phase 2) and
+    returns immediately — poll GET /onboard/{job_id}/log for progress.
+    Admin-only + rate-limited: this endpoint points MC's own network
+    position at an address the operator supplies, which is exactly the
+    shape of an SSH brute-force tool if left unguarded (see
+    services/host_onboarding.check_rate_limit — max 3 failed auths per
+    address per 10 minutes, checked before a job is even created).
+    """
+    existing_credential_id: uuid.UUID | None = None
+    if body.auth.use_existing_credential_id:
+        existing_credential_id = uuid.UUID(body.auth.use_existing_credential_id)
+        from app.models.credential import Credential
+
+        credential = await session.get(Credential, existing_credential_id)
+        if not credential:
+            raise HTTPException(status_code=404, detail="Credential nicht gefunden.")
+        if credential.credential_type != "ssh_key":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Credential '{credential.name}' hat credential_type='{credential.credential_type}', "
+                "kein ssh_key.",
+            )
+
+    params = host_onboarding.OnboardParams(
+        address=body.address,
+        username=body.username,
+        password=body.auth.password,
+        private_key_pem=body.auth.private_key,
+        existing_credential_id=existing_credential_id,
+        display_name=body.display_name,
+        bootstrap=body.bootstrap,
+        install_agent=body.install_agent,
+    )
+    try:
+        job_id = await host_onboarding.start_onboarding(params)
+    except host_onboarding.RateLimitExceeded:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Zu viele fehlgeschlagene SSH-Logins für '{body.address}' — bitte 10 Minuten warten.",
+        )
+    return {"job_id": job_id}
+
+
+@router.get("/onboard/{job_id}/log")
+async def onboard_log(
+    job_id: str,
+    cursor: int = Query(default=0, ge=0),
+    current_user=Depends(require_user),
+):
+    """Progress of an onboarding run (status + new lines since ``cursor``).
+    Read access for any authenticated role — the job log itself never
+    contains the password (see services/host_onboarding.py's security
+    tests), so there is nothing here a viewer shouldn't see.
+    """
+    return await host_onboarding.read_log(job_id, cursor)
 
 
 class LaunchCommandBody(BaseModel):

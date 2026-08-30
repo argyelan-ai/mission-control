@@ -797,6 +797,15 @@ async def _load_dispatch_context(
                         parts.append(f"Password: {data.get('password', '')}")
                     elif credential.credential_type == "token":
                         parts.append(f"Token: {data.get('token', '')}")
+                    elif credential.credential_type == "ssh_key":
+                        # Vault-backed host SSH keys (Fleet & Rezepte v2,
+                        # Phase 2) are for MC's own fleet access, never for
+                        # a dispatched agent's task context — falling
+                        # through to the generic branch below would have
+                        # been accidentally safe (no "content" key on this
+                        # type) rather than intentionally so; explicit skip
+                        # instead (security review, 30.08.2026).
+                        pass
                     else:
                         parts.append(data.get("content", ""))
                     ctx.credentials_text = "\n".join(parts)

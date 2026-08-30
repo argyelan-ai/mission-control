@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plus, Server, Trash2, Wand2, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Radio, Server, Trash2, Wand2, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind } from "@/lib/types";
@@ -22,6 +22,8 @@ import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
+import { HostOnboardDialog } from "./HostOnboardDialog";
+import { NodePairingDialog } from "./NodePairingDialog";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -473,6 +475,8 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
   const [modalHost, setModalHost] = useState<Host | null | undefined>(undefined);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [onboardOpen, setOnboardOpen] = useState(false);
+  const [pairingOpen, setPairingOpen] = useState(false);
 
   const { data: hosts, isLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],
@@ -538,6 +542,38 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
               <Plus size={11} />
               {t("addHostButton")}
             </button>
+            {/* Fleet & Rezepte v2, Phase 2: IP+User+Passwort rein, MC macht
+                den Rest selbst (SSH-Onboarding) — Alternative für Boxen ohne
+                bereits hinterlegten Key, ergänzt (nicht ersetzt) den Wizard,
+                der einen vorhandenen Key voraussetzt. */}
+            <button
+              data-testid="hosts-onboard"
+              onClick={() => setOnboardOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
+              style={{
+                background: C.borderSubtle,
+                border: `1px solid ${C.border}`,
+                color: C.textMuted,
+              }}
+            >
+              <Server size={11} />
+              {t("onboardButton")}
+            </button>
+            {/* kind=agent — für Boxen, die MC nicht per SSH erreicht: Code +
+                Einzeiler statt Zugangsdaten. */}
+            <button
+              data-testid="hosts-pairing"
+              onClick={() => setPairingOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
+              style={{
+                background: C.borderSubtle,
+                border: `1px solid ${C.border}`,
+                color: C.textMuted,
+              }}
+            >
+              <Radio size={11} />
+              {t("pairingButton")}
+            </button>
           </>
         ) : undefined
       }
@@ -597,6 +633,8 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
       )}
 
       {wizardOpen && <BoxWizard onClose={() => setWizardOpen(false)} />}
+      <HostOnboardDialog open={onboardOpen} onClose={() => setOnboardOpen(false)} />
+      <NodePairingDialog open={pairingOpen} onClose={() => setPairingOpen(false)} />
     </SectionOrFragment>
   );
 }

@@ -1034,7 +1034,9 @@ export interface SecretEntry {
 export interface Credential {
   id: string;
   name: string;
-  credential_type: "login" | "token" | "custom";
+  // ssh_key: Fleet & Rezepte v2, Phase 2 (Auto-Onboarding) — private_key_pem
+  // is always "[hidden]" in data_masked, never the real value.
+  credential_type: "login" | "token" | "custom" | "ssh_key";
   data_masked: Record<string, string>;
   url: string | null;
   notes: string | null;
@@ -2400,6 +2402,10 @@ export interface Host {
   ssh_host: string | null;
   ssh_user: string | null;
   ssh_key_path: string | null;
+  // Vault-backed SSH key (Fleet & Rezepte v2, Phase 2 — Auto-Onboarding).
+  // Only a Credential id reference; the key material itself never reaches
+  // the frontend (see services/encryption.NEVER_EXPOSE_CREDENTIAL_FIELDS).
+  ssh_credential_id: string | null;
   control_url: string | null;      // flask_wol control plane (PORSCHE :5555)
   wol_mac_address: string | null;  // target MAC for the Wake-on-LAN magic packet
   power_managed: boolean;
@@ -2530,6 +2536,67 @@ export interface RecipeInstallLog {
   lines: HostBootstrapLogLine[];
   /** Send this back as `cursor` on the next poll to get only new lines. */
   cursor: number;
+}
+
+// ── Auto-Onboarding (Fleet & Rezepte v2, Phase 2 — POST /hosts/onboard) ─────
+
+/** Exactly one of the three — the backend rejects any other combination. */
+export interface HostOnboardAuthPayload {
+  password?: string;
+  private_key?: string;
+  use_existing_credential_id?: string;
+}
+
+export interface HostOnboardRequest {
+  address: string;
+  username: string;
+  auth: HostOnboardAuthPayload;
+  display_name?: string | null;
+  bootstrap: boolean;
+  install_agent: boolean;
+}
+
+export interface HostOnboardResponse {
+  job_id: string;
+}
+
+/** done = success. auth_failed/unreachable/needs_sudo each carry their own
+ * actionable `message` (spec: "klare Anleitung je Fehlerzustand") — shown
+ * verbatim, not re-worded, since the backend already writes it for a human. */
+export type HostOnboardStatus =
+  | "idle"
+  | "running"
+  | "done"
+  | "failed"
+  | "auth_failed"
+  | "unreachable"
+  | "needs_sudo";
+
+/** Live-Log eines Onboarding-Laufs — gleiche Form wie HostBootstrapLog. */
+export interface HostOnboardLog {
+  job_id: string;
+  status: HostOnboardStatus;
+  phase: string | null;
+  message: string | null;
+  running: boolean;
+  lines: HostBootstrapLogLine[];
+  cursor: number;
+  host_id?: string;
+  host_slug?: string;
+}
+
+// ── mc-node-agent pairing (Fleet & Rezepte v2, Phase 1 — POST /nodes/pairing-codes) ─
+
+export interface NodePairingCodeRequest {
+  host_id?: string | null;
+  display_name_hint?: string | null;
+}
+
+export interface NodePairingCodeResponse {
+  code: string;
+  expires_at: string;
+  host_id: string | null;
+  install_command: string;
 }
 
 // ── CLI Sessions ─────────────────────────────────────────────────────────────

@@ -4455,14 +4455,25 @@ async def agent_get_credential(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent fetches a single credential, fully decrypted.
+    """Agent fetches a single credential, decrypted (login/token/custom —
+    the agent needs the real, usable secret to do its job with it).
 
-    Returns the decrypted data dict (no masking).
+    SECURITY (Phase 2 review, 30.08.2026): this endpoint used to return
+    `data` completely unredacted. For most credential types that is the
+    point — an agent with credentials:read is meant to get a real password
+    or API token. But a `ssh_key` credential's private_key_pem is root-level
+    SSH access to the fleet, not a "log into this website" secret, and
+    NEVER leaves the backend regardless of who's asking (see
+    services/encryption.NEVER_EXPOSE_CREDENTIAL_FIELDS + its docstring for
+    why this is a shared constant, not a local list here or in
+    routers/credentials.py). public_key/username stay visible — they're not
+    secrets.
+
     404 if the credential doesn't exist.
     """
     import json
     from app.models.credential import Credential
-    from app.services.encryption import safe_decrypt
+    from app.services.encryption import redact_never_exposed_fields, safe_decrypt
 
     credential = await session.get(Credential, credential_id)
     if not credential:
@@ -4470,6 +4481,7 @@ async def agent_get_credential(
 
     decrypted = safe_decrypt(credential.encrypted_data)
     data = json.loads(decrypted) if decrypted else {}
+    data = redact_never_exposed_fields(data)
 
     return {
         "id": str(credential.id),

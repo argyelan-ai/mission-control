@@ -34,7 +34,7 @@ function makeRuntime(over: Partial<Runtime>): Runtime {
 function makeHost(over: Partial<Host>): Host {
   return {
     id: over.slug ?? "h", slug: "h", display_name: "H", kind: "ssh",
-    ssh_host: null, ssh_user: null, ssh_key_path: null, control_url: null,
+    ssh_host: null, ssh_user: null, ssh_key_path: null, ssh_credential_id: null, control_url: null,
     wol_mac_address: null, power_managed: false, notes: null, enabled: true,
     ui_order: 0, created_at: "", updated_at: "",
     ...over,

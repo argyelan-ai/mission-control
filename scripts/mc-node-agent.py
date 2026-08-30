@@ -6,18 +6,44 @@ ONE FILE, STANDARD LIBRARY ONLY, Python >= 3.9. Design constraints (Mark,
 30.08.2026 — "der Agent darf das servierende Modell NIE crashen"):
 
 - No third-party dependencies — nothing to `pip install` on a box that is
-  busy serving an LLM. Only stdlib (urllib, json, subprocess, shutil,
-  argparse, ...).
-- Outbound-only HTTPS poll, no listening socket — this agent is never
+  busy serving an LLM. Only stdlib, and a deliberately narrow slice of it —
+  see the "Speicher-Diät" note below.
+- Outbound-only HTTP(S) poll, no listening socket — this agent is never
   something to attack from the network side.
-- `--install` wraps the process in a systemd straightjacket (MemoryMax=128M,
-  CPUQuota=10%, Nice=10, IOSchedulingClass=idle) so a runaway heartbeat loop
-  can only ever starve itself, never the GPU workload sharing the box.
+- `--install` wraps the process in a systemd straightjacket (MemoryHigh/
+  MemoryMax, CPUQuota=10%, Nice=10, IOSchedulingClass=idle) so a runaway
+  heartbeat loop can only ever starve itself, never the GPU workload
+  sharing the box.
 - Every collection step and every network call is wrapped in try/except — a
   stack trace killing the background process is worse than one missed
   heartbeat. Failures go to stderr (the systemd journal), backoff
   exponentially (15s -> 120s cap), and the loop NEVER exits on its own once
   it has started.
+
+Speicher-Diät (Mark, 30.08.2026 — GB10 has UNIFIED memory: every MB this
+agent holds is a MB the LLM's context window doesn't get; measured live on
+GX10 hardware, not estimated):
+
+    Peak RSS (VmHWM) before: 26.7 MB  ->  after: see git log for the exact
+    before/after ru_maxrss/VmHWM measurement this round's commits carry.
+
+- No `urllib.request`/`http.client` (+9.1 MB) — see `_http_post_json` below,
+  a raw-socket HTTP/1.1 client. `ssl` is imported lazily, only inside the
+  https:// branch, so an http:// deployment never pays for it.
+- No `hashlib` (+3.8 MB) — `inventory_hash()` compares canonical
+  `json.dumps(..., sort_keys=True)` strings directly instead of hashing
+  them; two of these are only ever compared for equality, never stored or
+  transmitted, so string equality does the job with zero collision risk.
+- No `logging` (+1.6 MB) — see the tiny `_Log`/`log` below; same call
+  shape (`log.info(...)`, `log.warning(...)`, `log.error(...)`), writes to
+  stderr, which systemd's journal captures exactly like it would logging's.
+- No `argparse` (+1.1 MB) — see `parse_args()`, a ~40-line manual
+  `sys.argv` parser for the 4 flags this agent actually has.
+- `nvidia-smi` is polled only every GPU_POLL_EVERY_N_HEARTBEATS-th
+  heartbeat (~1 min at the 15s interval), not every single one — see
+  run_loop(). On GB10 (unified memory) nvidia-smi never reports
+  memory.used/memory.total anyway (those come from /proc/meminfo above);
+  it only supplies util/temp, which can update a little less often.
 
 Usage — first run, mint a pairing code via
 POST /api/v1/nodes/pairing-codes (admin, from the MC UI/API), then on the
@@ -41,20 +67,14 @@ instead of silently doing nothing.
 """
 from __future__ import annotations
 
-import argparse
-import hashlib
 import json
-import logging
 import os
-import platform
 import pwd
 import shutil
 import socket
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,17 +87,44 @@ CPU_SAMPLE_GAP_S = 0.2
 # Nachtrag 30.08.2026: model-inventory scan cadence — every 40th heartbeat
 # at the 15s interval is ~10 minutes, plus once unconditionally at startup.
 INVENTORY_SCAN_EVERY_N_HEARTBEATS = 40
+# Speicher-Diät 30.08.2026, Punkt 5: nvidia-smi is a fork+exec on every call
+# and (on GB10) never reports memory anyway — repoll only every 4th
+# heartbeat (~1 min at the 15s interval), reuse the cached reading between.
+GPU_POLL_EVERY_N_HEARTBEATS = 4
 
 SYSTEM_TOKEN_PATH = Path("/etc/mc-node-agent/token")
 USER_TOKEN_PATH = Path.home() / ".config" / "mc-node-agent" / "token"
 SYSTEMD_UNIT_PATH = Path("/etc/systemd/system/mc-node-agent.service")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s mc-node-agent %(levelname)s %(message)s",
-    stream=sys.stderr,
-)
-log = logging.getLogger("mc-node-agent")
+
+# ── Logging (stderr only — no `logging` module; systemd's journal captures
+#    a service's stderr exactly the same way it would logging's output, see
+#    Speicher-Diät note above) ────────────────────────────────────────────
+
+
+class _Log:
+    """Drop-in replacement for a `logging.Logger` restricted to the three
+    levels this file actually uses — same call shape (`log.info("x=%s", x)`)
+    so every existing call site needed zero changes."""
+
+    @staticmethod
+    def _emit(level: str, msg: str, *args: object) -> None:
+        if args:
+            msg = msg % args
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{ts} mc-node-agent {level} {msg}", file=sys.stderr, flush=True)
+
+    def info(self, msg: str, *args: object) -> None:
+        self._emit("INFO", msg, *args)
+
+    def warning(self, msg: str, *args: object) -> None:
+        self._emit("WARNING", msg, *args)
+
+    def error(self, msg: str, *args: object) -> None:
+        self._emit("ERROR", msg, *args)
+
+
+log = _Log()
 
 
 # ── Pure parsers — no network/subprocess side effects, unit-tested directly
@@ -232,11 +279,15 @@ def _walk_dir_stats(root: Path, follow_file_symlinks: bool) -> tuple[int, int, f
     count its bytes once. Any unreadable entry (permission error, dangling
     symlink) is skipped, not fatal.
 
-    Review finding #2 (30.08.2026): directories are NEVER traversed through
-    a symlink (`is_dir(follow_symlinks=False)`, unconditionally) — a
-    symlink cycle would otherwise blow Python's recursion limit, and
-    RecursionError isn't an OSError so the per-entry try/except here
-    wouldn't catch it. Only file symlinks are followed (needed for the HF
+    Iterative (explicit stack), not recursive — Speicher-Diät round, review
+    finding #7 (30.08.2026): this eliminates the whole RecursionError
+    failure class outright, rather than just guarding against it. Directory
+    symlinks are still never followed (`is_dir(follow_symlinks=False)`,
+    unconditionally) — that alone already prevented a symlink CYCLE from
+    ever recursing (RecursionError isn't an OSError, so the try/except
+    below couldn't have caught it anyway), but an explicit stack has no
+    depth limit at all, so even a pathologically deep real tree can't
+    exhaust it either. Only file symlinks are followed (needed for the HF
     cache's snapshots/ -> blobs/ layout); a symlinked directory is simply
     skipped rather than descended into.
     """
@@ -245,16 +296,17 @@ def _walk_dir_stats(root: Path, follow_file_symlinks: bool) -> tuple[int, int, f
     file_count = 0
     mtime_max: float | None = None
 
-    def _walk(path: str) -> None:
-        nonlocal total_bytes, file_count, mtime_max
+    stack: list[str] = [str(root)]
+    while stack:
+        path = stack.pop()
         try:
             entries = list(os.scandir(path))
         except OSError:
-            return
+            continue
         for entry in entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    _walk(entry.path)
+                    stack.append(entry.path)
                 elif entry.is_file(follow_symlinks=follow_file_symlinks):
                     key = os.path.realpath(entry.path) if follow_file_symlinks else entry.path
                     if key in seen:
@@ -267,9 +319,7 @@ def _walk_dir_stats(root: Path, follow_file_symlinks: bool) -> tuple[int, int, f
                         mtime_max = st.st_mtime
             except OSError:
                 continue
-        return
 
-    _walk(str(root))
     return total_bytes, file_count, mtime_max
 
 
@@ -360,11 +410,20 @@ def scan_model_inventory(paths: list) -> list[dict]:
 
 
 def inventory_hash(entries: list[dict]) -> str:
-    """Deterministic hash of a scan result — the agent compares this against
-    the hash it last SENT (kept in memory, see run_loop) to decide whether
-    this scan cycle's inventory is worth attaching to the heartbeat."""
-    canonical = json.dumps(entries, sort_keys=True)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    """Canonical fingerprint of a scan result — the agent compares this
+    against the fingerprint it last SENT (kept in memory, see run_loop) to
+    decide whether this scan cycle's inventory is worth attaching to the
+    heartbeat.
+
+    Despite the name (kept for compatibility with existing call sites/
+    tests), this is the canonical JSON string itself, not a hash —
+    Speicher-Diät round, review point #2 (30.08.2026): hashlib costs
+    +3.8 MB RSS on GB10 for zero benefit here, since two of these are only
+    ever compared for equality, never stored, transmitted or indexed.
+    String equality does that exactly as well as hash equality, with no
+    collision risk at all.
+    """
+    return json.dumps(entries, sort_keys=True)
 
 
 # ── Collection (subprocess/filesystem side effects — kept thin around the
@@ -393,10 +452,19 @@ def _run_nvidia_smi() -> str:
         return ""
 
 
-def collect_telemetry() -> dict:
+def collect_telemetry(gpu_fields: dict | None = None) -> dict:
     """One telemetry snapshot — every source is independently guarded, so a
     single failing collector (e.g. no /proc on a non-Linux test box) still
-    lets the rest of the heartbeat go out."""
+    lets the rest of the heartbeat go out.
+
+    `gpu_fields`, if given, is used verbatim instead of polling nvidia-smi
+    fresh — see run_loop's GPU_POLL_EVERY_N_HEARTBEATS gating (Speicher-Diät
+    round, point #5, 30.08.2026): nvidia-smi is a fork+exec on every call,
+    and on GB10 (unified memory) it never reports memory.used/total anyway
+    (those come from /proc/meminfo above) — polling it every 15s bought
+    nothing but four forks a minute. Passing None (the default) polls fresh,
+    which keeps this function's own behaviour/tests unchanged.
+    """
     telemetry: dict = {"ts": datetime.now(timezone.utc).isoformat()}
 
     try:
@@ -432,41 +500,206 @@ def collect_telemetry() -> dict:
         telemetry["disk_used_gb"] = None
         telemetry["disk_total_gb"] = None
 
-    telemetry.update(parse_nvidia_smi(_run_nvidia_smi()))
+    telemetry.update(gpu_fields if gpu_fields is not None else parse_nvidia_smi(_run_nvidia_smi()))
     return telemetry
 
 
-# ── HTTP (urllib only — no requests/httpx dependency) ────────────────────────
+# ── HTTP (raw socket — no urllib.request/http.client; see Speicher-Diät note
+#    at the top of this file) ─────────────────────────────────────────────────
+
+
+class _HTTPError(Exception):
+    """A non-2xx HTTP response. `.status` + `.body` — deliberately not
+    trying to mimic urllib.error.HTTPError's `.code`/`.read()` shape, since
+    both the raise site and the only two catch sites live in this same file."""
+
+    def __init__(self, status: int, body: bytes):
+        self.status = status
+        self.body = body
+        super().__init__(f"HTTP {status}")
+
+
+class _SocketReader:
+    """Thin buffered reader over a raw socket — socket.makefile() would work
+    too, but drags in io.BufferedReader/io.TextIOWrapper machinery this file
+    doesn't otherwise need for parsing a status line, a few headers, and a
+    JSON body."""
+
+    def __init__(self, sock: socket.socket):
+        self._sock = sock
+        self._buf = b""
+
+    def read_until(self, delimiter: bytes, limit: int = 65536) -> bytes:
+        while delimiter not in self._buf:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise ConnectionError(
+                    "Verbindung geschlossen, bevor die Antwort vollständig war"
+                )
+            self._buf += chunk
+            if len(self._buf) > limit:
+                raise ValueError("HTTP-Antwort zu gross (Header/Zeilen-Limit überschritten)")
+        before, _, after = self._buf.partition(delimiter)
+        self._buf = after
+        return before
+
+    def read_exact(self, n: int) -> bytes:
+        while len(self._buf) < n:
+            chunk = self._sock.recv(max(4096, n - len(self._buf)))
+            if not chunk:
+                raise ConnectionError(
+                    "Verbindung geschlossen, bevor der Antwort-Body vollständig war"
+                )
+            self._buf += chunk
+        data, self._buf = self._buf[:n], self._buf[n:]
+        return data
+
+
+class _HTTPResponse:
+    __slots__ = ("status", "headers", "body")
+
+    def __init__(self, status: int, headers: dict, body: bytes):
+        self.status = status
+        self.headers = headers
+        self.body = body
+
+
+def _split_url(url: str) -> tuple[str, str, int, str]:
+    """Minimal http(s)://host[:port][/path] splitter — no urllib.parse (kept
+    out of this file's own import list on purpose; see Speicher-Diät note)."""
+    scheme, sep, rest = url.partition("://")
+    if not sep or scheme not in ("http", "https"):
+        raise ValueError(f"Nicht unterstützte oder fehlende URL-Schema (erwarte http(s)://...): {url!r}")
+    host_port, _, path = rest.partition("/")
+    path = "/" + path
+    if not host_port:
+        raise ValueError(f"URL ohne Host: {url!r}")
+    if ":" in host_port:
+        host, _, port_s = host_port.partition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            raise ValueError(f"Ungültiger Port in URL: {url!r}") from None
+    else:
+        host = host_port
+        port = 443 if scheme == "https" else 80
+    return scheme, host, port, path
+
+
+def _read_chunked_body(reader: _SocketReader) -> bytes:
+    """Reads a `Transfer-Encoding: chunked` body per RFC 7230 §4.1 — each
+    chunk is `<hex-size>\\r\\n<data>\\r\\n`, terminated by a zero-size chunk
+    followed by zero or more trailer header lines and a final blank line."""
+    parts: list[bytes] = []
+    while True:
+        size_line = reader.read_until(b"\r\n")
+        size_str = size_line.split(b";", 1)[0].strip()
+        try:
+            size = int(size_str, 16)
+        except ValueError:
+            raise ValueError(f"Ungültige chunked-Grösse in Antwort: {size_line!r}") from None
+        if size == 0:
+            while reader.read_until(b"\r\n"):
+                pass  # drain optional trailer headers up to the final blank line
+            break
+        parts.append(reader.read_exact(size))
+        reader.read_until(b"\r\n")  # each chunk's data is followed by a bare CRLF
+    return b"".join(parts)
+
+
+def _read_http_response(sock: socket.socket, timeout: float) -> _HTTPResponse:
+    sock.settimeout(timeout)
+    reader = _SocketReader(sock)
+    header_blob = reader.read_until(b"\r\n\r\n")
+    lines = header_blob.split(b"\r\n")
+    status_line = lines[0].decode("ascii", errors="replace")
+    parts = status_line.split(" ", 2)
+    if len(parts) < 2:
+        raise ValueError(f"Ungültige HTTP-Statuszeile: {status_line!r}")
+    try:
+        status = int(parts[1])
+    except ValueError:
+        raise ValueError(f"Ungültiger Statuscode in Antwort: {status_line!r}") from None
+
+    headers: dict[str, str] = {}
+    for line in lines[1:]:
+        if not line:
+            continue
+        name, _, value = line.decode("ascii", errors="replace").partition(":")
+        if name:
+            headers[name.strip().lower()] = value.strip()
+
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        body = _read_chunked_body(reader)
+    else:
+        content_length = int(headers.get("content-length") or 0)
+        body = reader.read_exact(content_length)
+
+    return _HTTPResponse(status, headers, body)
 
 
 def _http_post_json(url: str, payload: dict, token: str | None, timeout: float) -> dict:
-    data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    """HTTP/1.1 POST over a raw socket — see the Speicher-Diät note at the
+    top of this file for why (`urllib.request` alone costs +9.1 MB RSS on
+    GB10 via its http.client/email/ssl import chain).
+
+    Deliberately NOT a general HTTP client: no redirects are followed — a
+    3xx here means MC's own URL is misconfigured, so it is surfaced as an
+    _HTTPError like any other non-2xx status, exactly like every 4xx/5xx.
+    The request body is always sent in one shot with Content-Length (we
+    build it ourselves, it's a small JSON object); the RESPONSE body may
+    legitimately be chunked or Content-Length-delimited — that's the
+    server's choice, both are handled in _read_http_response.
+    """
+    scheme, host, port, path = _split_url(url)
+    body = json.dumps(payload).encode("utf-8")
+    header_lines = [
+        f"POST {path} HTTP/1.1",
+        f"Host: {host}",
+        "Content-Type: application/json",
+        f"Content-Length: {len(body)}",
+        "Connection: close",
+    ]
     if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8")
-        return json.loads(body) if body else {}
+        header_lines.append(f"Authorization: Bearer {token}")
+    request = ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii") + body
+
+    sock = socket.create_connection((host, port), timeout=timeout)
+    try:
+        if scheme == "https":
+            import ssl  # lazy — only paid for by an https:// deployment (~4 MB)
+
+            ctx = ssl.create_default_context()
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+        sock.settimeout(timeout)
+        sock.sendall(request)
+        response = _read_http_response(sock, timeout)
+    finally:
+        sock.close()
+
+    if response.status >= 300:
+        raise _HTTPError(response.status, response.body)
+    return json.loads(response.body.decode("utf-8")) if response.body else {}
 
 
 def pair(mc_url: str, code: str) -> str:
     """Trades a pairing code for a node_token via POST /api/v1/nodes/pair
     (unauthenticated — the code itself is the credential)."""
+    uname = os.uname()
     payload = {
         "code": code,
         "hostname": socket.gethostname(),
-        "os": platform.system().lower(),
-        "arch": platform.machine(),
+        "os": uname.sysname.lower(),
+        "arch": uname.machine,
         "agent_version": AGENT_VERSION,
     }
     try:
         result = _http_post_json(f"{mc_url}/api/v1/nodes/pair", payload, token=None, timeout=HTTP_TIMEOUT_S)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} von {mc_url}/api/v1/nodes/pair: {detail}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"{mc_url} nicht erreichbar: {e.reason}") from e
+    except _HTTPError as e:
+        detail = e.body.decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {e.status} von {mc_url}/api/v1/nodes/pair: {detail}") from e
+    except OSError as e:
+        raise RuntimeError(f"{mc_url} nicht erreichbar: {e}") from e
     token = result.get("node_token")
     if not token:
         raise RuntimeError(f"Antwort ohne node_token: {result}")
@@ -536,16 +769,22 @@ Wants=network-online.target
 [Service]
 Type=simple
 User={user}
-ExecStart={python} {script} --mc-url {mc_url}
+Environment=MALLOC_ARENA_MAX=1
+ExecStart={python} -S -E -I {script} --mc-url {mc_url}
 Restart=always
 RestartSec=30
 
-# Straightjacket (Mark, 30.08.2026): this agent must never be able to
-# starve the model-serving process sharing this box. A runaway loop can
-# only ever hurt itself.
+# Straightjacket (Mark, 30.08.2026, verschärft in der Speicher-Diät-Runde
+# vom selben Tag): this agent must never be able to starve the model-serving
+# process sharing this box. A runaway loop can only ever hurt itself.
+# MemoryHigh is the SOFT limit — it makes the kernel actively reclaim/trim
+# this process's memory under pressure, which is exactly what we want long
+# before MemoryMax (the HARD limit) would ever have to OOM-kill it.
 Nice=10
 IOSchedulingClass=idle
-MemoryMax=128M
+MemoryHigh=16M
+MemoryMax=32M
+TasksMax=8
 CPUQuota=10%
 NoNewPrivileges=true
 
@@ -634,50 +873,63 @@ def run_loop(mc_url: str, token: str) -> None:
     Model-inventory scan (Nachtrag 30.08.2026, hardened per review finding
     #7): runs at startup and then every INVENTORY_SCAN_EVERY_N_HEARTBEATS-th
     successful heartbeat (~10min at the 15s interval). Only attached to the
-    heartbeat body when its hash changed since the last time it was
-    actually SENT SUCCESSFULLY — `last_sent_hash` is only updated after
-    send_heartbeat returns without raising, never before. `cached_scan`
+    heartbeat body when its fingerprint changed since the last time it was
+    actually SENT SUCCESSFULLY — `last_sent_fingerprint` is only updated
+    after send_heartbeat returns without raising, never before. `cached_scan`
     holds the current scan window's result across retries: if a send fails
     (network hiccup), the next attempt reuses the same scan instead of
     re-walking the filesystem, and only clears once that window's heartbeat
     actually went through.
+
+    GPU polling (Speicher-Diät round, point #5, 30.08.2026) follows the
+    exact same "cache across retries, only advance on success" shape: a
+    fresh nvidia-smi read is due at startup and then every
+    GPU_POLL_EVERY_N_HEARTBEATS-th successful heartbeat; a failed send
+    reuses the same cached GPU reading on retry rather than forking a new
+    nvidia-smi process for nothing.
     """
     backoff = HEARTBEAT_INTERVAL_S
     inventory_paths = default_inventory_paths()
     heartbeat_count = 0
-    last_sent_hash: str | None = None
+    last_sent_fingerprint: str | None = None
     cached_scan: tuple[str, list[dict]] | None = None
     scan_due = True  # scan once, unconditionally, at startup
+    cached_gpu: dict | None = None
+    gpu_poll_due = True  # poll once, unconditionally, at startup
 
     while True:
         try:
-            telemetry = collect_telemetry()
+            if gpu_poll_due:
+                cached_gpu = parse_nvidia_smi(_run_nvidia_smi())
+                gpu_poll_due = False
+
+            telemetry = collect_telemetry(gpu_fields=cached_gpu)
 
             if scan_due and cached_scan is None:
                 try:
                     entries = scan_model_inventory(inventory_paths)
                     cached_scan = (inventory_hash(entries), entries)
-                except Exception as e:  # noqa: BLE001 — a broken scan (incl.
-                    # a directory tree pathological enough to still exhaust
-                    # the recursion limit despite the follow_symlinks guard
-                    # in _walk_dir_stats) must never take the heartbeat with it.
+                except Exception as e:  # noqa: BLE001 — a broken scan must
+                    # never take the heartbeat with it.
                     log.warning("Inventar-Scan fehlgeschlagen (%s) — Heartbeat geht ohne Inventar raus", e)
-                    cached_scan = (last_sent_hash, [])  # treat as "unchanged", still resolves this window
+                    cached_scan = (last_sent_fingerprint, [])  # treat as "unchanged", still resolves this window
 
             inventory_to_send: list[dict] | None = None
-            if cached_scan is not None and cached_scan[0] != last_sent_hash:
+            if cached_scan is not None and cached_scan[0] != last_sent_fingerprint:
                 inventory_to_send = cached_scan[1]
 
             send_heartbeat(mc_url, token, telemetry, inventory=inventory_to_send)
 
             if cached_scan is not None:
-                last_sent_hash = cached_scan[0]
+                last_sent_fingerprint = cached_scan[0]
                 cached_scan = None
                 scan_due = False
 
             heartbeat_count += 1
             if heartbeat_count % INVENTORY_SCAN_EVERY_N_HEARTBEATS == 0:
                 scan_due = True
+            if heartbeat_count % GPU_POLL_EVERY_N_HEARTBEATS == 0:
+                gpu_poll_due = True
 
             backoff = HEARTBEAT_INTERVAL_S
             time.sleep(HEARTBEAT_INTERVAL_S)
@@ -690,37 +942,76 @@ def run_loop(mc_url: str, token: str) -> None:
             backoff = min(backoff * 2, MAX_BACKOFF_S)
 
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
+# ── CLI (manual sys.argv parsing — no argparse, see Speicher-Diät note) ──────
+
+_USAGE = """usage: mc-node-agent.py [-h] [--mc-url URL] [--pair CODE] [--install] [--user USER]
+
+Mission Control Node Agent — push telemetry (Fleet & Rezepte v2, Phase 1).
+
+  --mc-url URL   Mission-Control-Basis-URL, z.B. https://mc.tailnet-name.ts.net
+                 (oder Env MC_URL)
+  --pair CODE    Pairing-Code einlösen (aus POST /api/v1/nodes/pairing-codes)
+                 und Token speichern
+  --install      Als systemd-Dienst installieren — braucht sudo/root
+  --user USER    systemd User= für --install (Default: $SUDO_USER, sonst der
+                 aktuelle User)
+  -h, --help     Diese Hilfe anzeigen
+"""
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Mission Control Node Agent — push telemetry (Fleet & Rezepte v2, Phase 1).",
-    )
-    parser.add_argument(
-        "--mc-url",
-        default=os.environ.get("MC_URL"),
-        help="Mission-Control-Basis-URL, z.B. https://mc.tailnet-name.ts.net (oder Env MC_URL)",
-    )
-    parser.add_argument(
-        "--pair",
-        metavar="CODE",
-        help="Pairing-Code einlösen (aus POST /api/v1/nodes/pairing-codes) und Token speichern",
-    )
-    parser.add_argument(
-        "--install",
-        action="store_true",
-        help="Als systemd-Dienst installieren — braucht sudo/root",
-    )
-    parser.add_argument(
-        "--user",
-        help="systemd User= für --install (Default: $SUDO_USER, sonst der aktuelle User)",
-    )
-    return parser
+class _Args:
+    __slots__ = ("mc_url", "pair", "install", "user")
+
+    def __init__(self) -> None:
+        self.mc_url: str | None = os.environ.get("MC_URL")
+        self.pair: str | None = None
+        self.install: bool = False
+        self.user: str | None = None
+
+
+def _arg_error(msg: str) -> "None":
+    print(f"mc-node-agent.py: error: {msg}", file=sys.stderr)
+    print(_USAGE, file=sys.stderr)
+    raise SystemExit(2)
+
+
+def parse_args(argv: list[str] | None = None) -> _Args:
+    """Manual parser for this agent's 4 flags — only the space-separated
+    `--flag value` form is supported (matches every call site in this repo;
+    `--flag=value` is not implemented, kept out on purpose for simplicity)."""
+    argv = sys.argv[1:] if argv is None else argv
+    args = _Args()
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print(_USAGE)
+            raise SystemExit(0)
+        elif arg == "--mc-url":
+            i += 1
+            if i >= len(argv):
+                _arg_error("--mc-url braucht einen Wert")
+            args.mc_url = argv[i]
+        elif arg == "--pair":
+            i += 1
+            if i >= len(argv):
+                _arg_error("--pair braucht einen Wert (den Code)")
+            args.pair = argv[i]
+        elif arg == "--install":
+            args.install = True
+        elif arg == "--user":
+            i += 1
+            if i >= len(argv):
+                _arg_error("--user braucht einen Wert")
+            args.user = argv[i]
+        else:
+            _arg_error(f"Unbekannte Option: {arg}")
+        i += 1
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+    args = parse_args(argv)
 
     if not args.mc_url:
         log.error("--mc-url fehlt (oder Env MC_URL setzen).")

@@ -47,6 +47,10 @@ class ResolvedHost:
     ssh_host: str | None = None
     ssh_user: str | None = None
     ssh_key_path: str | None = None
+    # Vault-backed SSH key (Phase 2 Auto-Onboarding) — a Credential id, not
+    # key material itself (ResolvedHost stays session-free; runtime_manager
+    # decrypts on demand, see _ssh_run's resolution order in its docstring).
+    ssh_credential_id: uuid.UUID | None = None
     tailscale_host: str | None = None
     control_url: str | None = None
     wol_mac_address: str | None = None
@@ -78,6 +82,7 @@ def _from_host_row(host: Host) -> ResolvedHost:
         ssh_host=host.ssh_host,
         ssh_user=host.ssh_user,
         ssh_key_path=host.ssh_key_path,
+        ssh_credential_id=host.ssh_credential_id,
         tailscale_host=host.tailscale_host,
         control_url=host.control_url,
         wol_mac_address=host.wol_mac_address,

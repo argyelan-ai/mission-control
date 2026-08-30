@@ -88,6 +88,11 @@ import type {
   Host,
   HostCreate,
   HostMetrics,
+  HostOnboardLog,
+  HostOnboardRequest,
+  HostOnboardResponse,
+  NodePairingCodeRequest,
+  NodePairingCodeResponse,
   SparkMetrics,
   CliGlobalSession,
   CliPlugin,
@@ -2224,6 +2229,22 @@ export const api = {
       env?: Record<string, string> | null;
     }): Promise<{ launch_command: string; stop_command: string | null }> =>
       request("/api/v1/hosts/launch-command", { method: "POST", body: JSON.stringify(data) }),
+    // Auto-Onboarding (Fleet & Rezepte v2, Phase 2): IP+User+Passwort rein,
+    // MC macht den Rest (Key, Vault, optional Bootstrap + node-agent) als
+    // Hintergrund-Job — siehe onboardLog für den Live-Log-Stream (Muster
+    // bootstrapLog/RecipeInstallLog).
+    onboard: (data: HostOnboardRequest): Promise<HostOnboardResponse> =>
+      request("/api/v1/hosts/onboard", { method: "POST", body: JSON.stringify(data) }),
+    onboardLog: (jobId: string, cursor = 0): Promise<HostOnboardLog> =>
+      request(`/api/v1/hosts/onboard/${jobId}/log?cursor=${cursor}`),
+  },
+
+  // ── mc-node-agent pairing (Fleet & Rezepte v2, Phase 1) ──────────────────────
+  nodes: {
+    // "Gerät meldet sich selbst" — Alternative zu SSH-Onboarding für Boxen,
+    // die MC nicht per SSH erreicht. Liefert den fertigen Install-Einzeiler.
+    createPairingCode: (data: NodePairingCodeRequest): Promise<NodePairingCodeResponse> =>
+      request("/api/v1/nodes/pairing-codes", { method: "POST", body: JSON.stringify(data) }),
   },
 
   // ── CLI Sessions (global) ────────────────────────────────────────────────

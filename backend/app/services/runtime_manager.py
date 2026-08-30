@@ -330,6 +330,57 @@ async def list_vllm_containers(host: ResolvedHost | None = None) -> list[dict]:
 _SSH_COMMAND_TIMEOUT = 60
 
 
+async def _load_vault_ssh_private_key(credential_id) -> str | None:
+    """Decrypts a Credential(credential_type='ssh_key')'s private_key_pem.
+
+    Opens its own short-lived session (Phase 2 Auto-Onboarding) — ResolvedHost
+    stays session-free by design (host_resolver.py docstring), and _ssh_run is
+    called from background jobs as often as from request handlers, so there is
+    no request-scoped session to reuse here. Same pattern as other services
+    managing their own session lifecycle (app.database.async_session_maker).
+    Returns None on any problem (missing row, undecryptable data, wrong
+    shape) — the caller falls back to ssh_key_path/settings, never crashes.
+    """
+    import json
+
+    from app.database import engine
+    from app.models.credential import Credential
+    from app.services.encryption import safe_decrypt
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        credential = await session.get(Credential, credential_id)
+    if not credential:
+        return None
+    decrypted = safe_decrypt(credential.encrypted_data)
+    if not decrypted:
+        return None
+    try:
+        data = json.loads(decrypted)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    pem = data.get("private_key_pem")
+    return pem if isinstance(pem, str) and pem.strip() else None
+
+
+async def _resolve_ssh_client_keys(target: ResolvedHost) -> list:
+    """Fallback chain (Phase 2): Vault credential → ssh_key_path → settings.
+
+    The credential's key is imported straight into memory
+    (asyncssh.import_private_key) — it never touches disk, unlike a tempfile.
+    """
+    if target.ssh_credential_id is not None:
+        pem = await _load_vault_ssh_private_key(target.ssh_credential_id)
+        if pem:
+            try:
+                return [asyncssh.import_private_key(pem)]
+            except asyncssh.KeyImportError as e:
+                logger.warning(
+                    "Host '%s': Vault-Key (Credential %s) unlesbar (%s) — falle auf ssh_key_path zurück.",
+                    target.slug or target.ssh_host, target.ssh_credential_id, e,
+                )
+    return [target.ssh_key_path or settings.dgx_ssh_key_path]
+
+
 async def _ssh_run(
     command: str,
     *,
@@ -352,6 +403,11 @@ async def _ssh_run(
     Raises: asyncssh.Error on connection problems, asyncssh.TimeoutError when
         the command timeout is exceeded, RuntimeError if no host could be
         resolved.
+
+    Key resolution (Phase 2 Auto-Onboarding): host.ssh_credential_id (Vault,
+    Fernet-encrypted) → host.ssh_key_path → settings.dgx_ssh_key_path. Hosts
+    onboarded before Phase 2 have no credential and are unaffected — this
+    only ever ADDS a first-choice source, the old chain stays the fallback.
     """
     target = host or settings_fallback_host()
     if target is None or not target.ssh_host:
@@ -365,7 +421,7 @@ async def _ssh_run(
         # Registry hosts without their own user/key inherit the settings values —
         # same semantics as the seeder (host_seeder.py).
         username=target.ssh_user or settings.dgx_ssh_user,
-        client_keys=[target.ssh_key_path or settings.dgx_ssh_key_path],
+        client_keys=await _resolve_ssh_client_keys(target),
         known_hosts=None,  # No known_hosts check on the local network
         connect_timeout=10,
     ) as conn:

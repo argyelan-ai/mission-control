@@ -39,6 +39,19 @@ class Host(SQLModel, table=True):
     ssh_user: str | None = Field(default=None, max_length=64)
     ssh_key_path: str | None = Field(default=None, max_length=512)  # path inside backend container/host
 
+    # Vault-backed SSH key (Fleet & Rezepte v2, Phase 2 — Auto-Onboarding).
+    # Points at a Credential(credential_type='ssh_key') holding the Fernet-
+    # encrypted {private_key_pem, public_key, username} MC generated for
+    # itself during onboarding (services/host_onboarding.py). ssh_key_path
+    # stays the fallback for hosts set up before this existed — see
+    # runtime_manager._ssh_run's resolution order (credential → path →
+    # settings). ON DELETE SET NULL: a deleted credential must not take the
+    # host down with it, only its auto-access (same reasoning as
+    # host_pairing_codes.host_id, migration 0187).
+    ssh_credential_id: uuid.UUID | None = Field(
+        default=None, foreign_key="credentials.id", ondelete="SET NULL", index=True
+    )
+
     # Tailscale address for this box, when it has one (100.64.0.0/10 or a
     # *.ts.net MagicDNS name — see services/address_classify). Optional and
     # separate from ssh_host on purpose: SSH from the backend container often

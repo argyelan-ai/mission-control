@@ -87,3 +87,26 @@ def mask(value: str, visible_chars: int = 4) -> str:
     if len(value) <= visible_chars:
         return "*" * len(value)
     return "*" * (len(value) - visible_chars) + value[-visible_chars:]
+
+
+# Fields whose value must NEVER leave the backend, in ANY credential
+# response — not the admin Vault UI (routers/credentials.py._mask_data),
+# and not the agent-scoped endpoints (routers/agent_scoped.py), even the one
+# that otherwise hands back real, unmasked secrets on purpose (login/token
+# credentials an agent needs to actually use). A private key is not like a
+# password: routers/agent_scoped.py.agent_get_credential was found (Phase 2
+# security review, 30.08.2026) returning ssh_key credentials fully
+# decrypted — every credential redaction point must import this constant
+# instead of keeping its own list, or the next new field type drifts the
+# same way this one did.
+NEVER_EXPOSE_CREDENTIAL_FIELDS = ("private_key_pem",)
+
+
+def redact_never_exposed_fields(data: dict) -> dict:
+    """Replaces NEVER_EXPOSE_CREDENTIAL_FIELDS values with "[hidden]" —
+    everything else passes through untouched. Apply this to EVERY
+    credential response, including ones that otherwise return real secrets."""
+    return {
+        k: ("[hidden]" if k in NEVER_EXPOSE_CREDENTIAL_FIELDS else v)
+        for k, v in data.items()
+    }

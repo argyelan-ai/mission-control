@@ -130,6 +130,62 @@ def _patched(box, fake_redis):
     )
 
 
+# ── ssh_credential_id round-trips through PrepHandle (review finding #5,
+#    30.08.2026) ─────────────────────────────────────────────────────────────
+#
+# A host onboarded via services/host_onboarding.py (Fleet & Rezepte v2,
+# Phase 2) typically has ssh_key_path=None — its ONLY credential lives in
+# the Vault. Crash recovery (recover_orphaned_preps) has no session and no
+# runtime left after a backend restart, only what PrepHandle.as_host()
+# reconstructs — so if that reconstruction drops ssh_credential_id, such a
+# host can never be authenticated to during recovery, no matter how correct
+# the rest of the handle is.
+
+
+def test_as_host_carries_ssh_credential_id_through():
+    import uuid
+
+    cred_id = uuid.uuid4()
+    handle = memprep.PrepHandle(
+        host_key="192.0.2.50", ssh_host="192.0.2.50", ssh_user="mcfleet",
+        ssh_key_path=None, ssh_credential_id=str(cred_id),
+    )
+    resolved = handle.as_host()
+    assert resolved.ssh_credential_id == cred_id
+    assert resolved.ssh_key_path is None
+
+
+def test_as_host_tolerates_missing_or_malformed_credential_id():
+    handle_missing = memprep.PrepHandle(host_key="192.0.2.50", ssh_host="192.0.2.50")
+    assert handle_missing.as_host().ssh_credential_id is None
+
+    handle_bad = memprep.PrepHandle(
+        host_key="192.0.2.50", ssh_host="192.0.2.50", ssh_credential_id="not-a-uuid"
+    )
+    assert handle_bad.as_host().ssh_credential_id is None  # logs a warning, doesn't raise
+
+
+@pytest.mark.asyncio
+async def test_prepare_host_memory_persists_ssh_credential_id_on_the_handle(box, fake_redis):
+    """The actual construction site (prepare_host_memory) must populate the
+    field from the ResolvedHost it was given — and it must survive the
+    to_json/from_json round-trip the handle takes through Redis."""
+    import uuid
+
+    cred_id = uuid.uuid4()
+    onboarded_host = ResolvedHost(
+        ssh_host="192.0.2.50", ssh_user="mcfleet", ssh_key_path=None,
+        ssh_credential_id=cred_id, kind="ssh", source="registry",
+    )
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        handle = await memprep.prepare_host_memory(onboarded_host, watermark_kb=LOWERED_WATERMARK)
+
+    assert handle.ssh_credential_id == str(cred_id)
+    round_tripped = memprep.PrepHandle.from_json(handle.to_json())
+    assert round_tripped.as_host().ssh_credential_id == cred_id
+
+
 # ── prepare / finish round-trip ──────────────────────────────────────────────
 
 
