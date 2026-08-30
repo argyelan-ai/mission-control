@@ -30,7 +30,9 @@ class Host(SQLModel, table=True):
     #   ssh       — always-on box reached via SSH (nvidia-smi, docker, tmux)
     #   flask_wol — sleeping box woken via WoL + driven over its Flask control server
     #   local     — the MC host itself (no remote control channel)
-    kind: str = Field(max_length=32)  # ssh | flask_wol | local
+    #   agent     — self-registered via routers/nodes.py; no inbound channel at
+    #               all, the box pushes telemetry to us (Fleet & Rezepte v2, Phase 1)
+    kind: str = Field(max_length=32)  # ssh | flask_wol | local | agent
 
     # ssh kind (nullable for flask_wol/local)
     ssh_host: str | None = Field(default=None, max_length=128)  # IP/hostname
