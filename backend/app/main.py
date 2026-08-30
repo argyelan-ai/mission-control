@@ -87,6 +87,7 @@ from app.routers import (
     models,
     local_registry,
     loops,
+    nodes,
     references,
     project_git,
     projects,
@@ -876,6 +877,7 @@ app.include_router(models.router)
 app.include_router(runtimes.router)
 app.include_router(local_registry.router)  # /api/v1/local-registry — curated local model/recipe registry
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
+app.include_router(nodes.router)  # /api/v1/nodes — mc-node-agent pairing + push telemetry (Fleet & Rezepte v2, Phase 1)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
 app.include_router(groups.router)  # /api/v1/groups — Multi-Agent-Gruppenchat (V1)

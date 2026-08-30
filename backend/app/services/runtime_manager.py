@@ -27,7 +27,6 @@ State detection for unsloth:
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from shlex import quote as shlex_quote
 
@@ -39,6 +38,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.models.runtime import Runtime
 from app.services import address_classify, host_memory_prep, runtime_grace, runtime_ownership
+from app.utils import ensure_aware, utcnow
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -2636,10 +2636,7 @@ def _metrics_from_agent_telemetry(telemetry: dict) -> dict:
 def _agent_telemetry_fresh(host: ResolvedHost) -> bool:
     if not host.agent_telemetry or not host.agent_last_seen_at:
         return False
-    last_seen = host.agent_last_seen_at
-    if last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
-    age_s = (datetime.now(timezone.utc) - last_seen).total_seconds()
+    age_s = (utcnow() - ensure_aware(host.agent_last_seen_at)).total_seconds()
     return age_s < _AGENT_TELEMETRY_FRESH_S
 
 
