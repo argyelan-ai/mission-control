@@ -19,7 +19,7 @@ from app.database import get_session
 from app.models.agent import Agent
 from app.models.host import Host
 from app.models.runtime import Runtime
-from app.models.runtime_host import RuntimeHost
+from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
 from app.services import runtime_manager, runtime_readiness, runtime_naming
 from app.services.agent_runtime_switch import (
@@ -539,9 +539,18 @@ async def list_runtimes(
                 select(RuntimeHost, Host)
                 .join(Host, RuntimeHost.host_id == Host.id)
                 .where(RuntimeHost.runtime_id.in_(runtime_ids))
+                .order_by(RuntimeHost.node_rank)
             )
         ).all()
+        runtime_head_ids = {rt.id: rt.host_id for rt in runtimes}
         for rh, member_host in membership_rows:
+            # Defensiv: der Head steht in runtimes.host_id und darf NIE zusätzlich
+            # als member_host auftauchen (Zusage in Doku + Model). Unbekannte Rollen
+            # ebenfalls überspringen — die Frontend-Types deklarieren head|worker hart.
+            if runtime_head_ids.get(rh.runtime_id) == rh.host_id:
+                continue
+            if rh.role not in RUNTIME_HOST_ROLES:
+                continue
             member_hosts_by_runtime.setdefault(rh.runtime_id, []).append({
                 "host_id": str(member_host.id),
                 "slug": member_host.slug,

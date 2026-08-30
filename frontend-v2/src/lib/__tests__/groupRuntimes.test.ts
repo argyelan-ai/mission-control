@@ -51,9 +51,11 @@ describe("groupRuntimesByProvider", () => {
 });
 
 describe("isRuntimeBlockedByLocality", () => {
-  it("blocks a cloud runtime for a host-inplace agent", () => {
+  it("blockt NIE eine Cloud-Runtime fuer host-inplace Agenten (Boss/grok/kimi fahren produktiv Cloud)", () => {
+    // Regressionsschutz: ein Locality-Filter hier wuerde den laufenden Betrieb
+    // blockieren (Boss liesse sich nicht mehr von Opus auf Sonnet umschalten).
     const cloudRt = rt("opus", "Anthropic Pro/Max", { locality: "cloud" });
-    expect(isRuntimeBlockedByLocality(cloudRt, true)).toBe(true);
+    expect(isRuntimeBlockedByLocality(cloudRt, true)).toBe(false);
   });
 
   it("never blocks a local runtime, host-inplace or not", () => {

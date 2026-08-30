@@ -652,7 +652,7 @@ export function SlotStage({
     // Phase 1a (Verbund-UI, 30.08.2026): a kind="agent" host (self-registering
     // node-agent, no SSH/lifecycle path) with nothing bound is real fleet
     // inventory — telemetry-only, not an empty slot to fill.
-    if (group.host.kind === "agent") {
+    if (group.host.kind === "agent" || group.workerOf) {
       return <WorkerTile group={group} />;
     }
     return <StagePlaceholder group={group} />;

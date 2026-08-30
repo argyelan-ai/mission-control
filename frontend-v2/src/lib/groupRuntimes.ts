@@ -43,6 +43,10 @@ export function groupRuntimesByProvider(runtimes: Runtime[]): RuntimeGroup[] {
  * cached response without the field must not suddenly grey out every
  * runtime for a host-inplace agent.
  */
-export function isRuntimeBlockedByLocality(runtime: Runtime, isHostInplace: boolean): boolean {
-  return isHostInplace && runtime.locality === "cloud";
+export function isRuntimeBlockedByLocality(_runtime: Runtime, _isHostInplace: boolean): boolean {
+  // Bewusst immer false: Host-inplace-Agenten (Boss/claude, grok, kimi) fahren
+  // produktiv Cloud-Runtimes — "host-inplace" sagt nichts über Netz-Erreichbarkeit.
+  // Ein Locality-Filter hier würde den laufenden Betrieb blockieren (Review-Finding).
+  // Die Rezept-Auswahl der Slot-Bühne ist ohnehin schon host-gebunden gefiltert.
+  return false;
 }
