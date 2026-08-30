@@ -24,6 +24,8 @@ settings.dgx_ssh_* (the settings fallback is built HERE, in one place).
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -56,6 +58,12 @@ class ResolvedHost:
     enabled: bool = True
     source: str = "settings"  # registry | legacy_host_field | settings
 
+    # kind=agent (Fleet & Rezepte v2, Phase 1) — the last pushed heartbeat
+    # snapshot, so get_host_metrics can answer from it instead of SSH.
+    agent_telemetry: dict[str, Any] | None = None
+    agent_last_seen_at: datetime | None = None
+    agent_version: str | None = None
+
 
 def _get(runtime, key: str):
     """Field access that works for both Runtime rows and registry dicts —
@@ -80,6 +88,9 @@ def _from_host_row(host: Host) -> ResolvedHost:
         host_id=host.id,
         enabled=host.enabled,
         source="registry",
+        agent_telemetry=host.agent_telemetry,
+        agent_last_seen_at=host.agent_last_seen_at,
+        agent_version=host.agent_version,
     )
 
 

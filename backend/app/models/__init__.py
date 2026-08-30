@@ -36,6 +36,7 @@ from app.models.workflow import WorkflowRun, WorkflowStepRun, WorkflowTemplate, 
 from app.models.webhook import Webhook, WebhookPayload
 from app.models.checklist import TaskChecklistItem
 from app.models.host import Host  # noqa: F401
+from app.models.host_pairing_code import HostPairingCode  # noqa: F401
 from app.models.runtime import Runtime  # noqa: F401
 from app.models.local_recipe import LocalRecipe  # noqa: F401
 from app.models.runtime_schedule import RuntimeSchedule, RuntimeScheduleRun  # noqa: F401
@@ -103,6 +104,7 @@ __all__ = [
     "WebhookPayload",
     "TaskChecklistItem",
     "Host",
+    "HostPairingCode",
     "Runtime",
     "RuntimeSchedule",
     "RuntimeScheduleRun",

@@ -12,8 +12,10 @@ need one.
 """
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Text, text
+from sqlalchemy import JSON
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -57,6 +59,20 @@ class Host(SQLModel, table=True):
 
     enabled: bool = Field(default=True, sa_column=Column(Boolean, server_default=text("true"), nullable=False))
     ui_order: int = Field(default=0)
+
+    # ── kind=agent (Fleet & Rezepte v2, Phase 1) ─────────────────────────────
+    #
+    # A self-registered box that pushes telemetry over HTTPS instead of being
+    # pulled over SSH — see routers/nodes.py. `agent_token_hash` is a sha256
+    # hex digest, never the token itself (the token only ever exists on the
+    # device and in the one pairing response). `agent_telemetry` holds only
+    # the LAST heartbeat's snapshot (not a history — that would grow forever).
+    agent_token_hash: str | None = Field(default=None, max_length=64)
+    agent_last_seen_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    agent_telemetry: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_version: str | None = Field(default=None, max_length=32)
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,

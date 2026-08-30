@@ -35,7 +35,7 @@ from app.services.host_resolver import ResolvedHost, resolved_host_from_row
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
-_ALLOWED_KINDS = ("ssh", "flask_wol", "local")
+_ALLOWED_KINDS = ("ssh", "flask_wol", "local", "agent")
 
 
 def _validate_kind(v: str) -> str:
@@ -413,6 +413,8 @@ async def host_metrics(
     """Live metrics for a host (ADR-048).
 
     - ssh       → nvidia-smi + free -m via SSH (get_host_metrics)
+    - agent     → node-agent push telemetry if <60s fresh (routers/nodes.py),
+      otherwise the same SSH probe as above (falls back byte-identically)
     - flask_wol → awake/health of the control server (mirrors unsloth_porsche state)
     - local     → empty object with kind field (the MC host doesn't measure itself)
     """
@@ -438,4 +440,4 @@ async def host_metrics(
         }
 
     metrics = await runtime_manager.get_host_metrics(resolved)
-    return {"kind": "ssh", "slug": host.slug, **metrics}
+    return {"kind": host.kind, "slug": host.slug, **metrics}
