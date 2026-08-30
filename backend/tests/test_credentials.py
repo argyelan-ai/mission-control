@@ -264,3 +264,53 @@ async def test_ssh_key_credential_never_exposes_private_key(auth_client: AsyncCl
     get_resp = await auth_client.get(f"/api/v1/credentials/{body['id']}")
     assert get_resp.json()["data_masked"]["private_key_pem"] == "[hidden]"
     assert "secretkeybytes" not in get_resp.text
+
+
+@pytest.mark.asyncio
+async def test_ssh_key_credential_type_cannot_be_changed_via_patch(auth_client: AsyncClient):
+    """Review finding #2 (30.08.2026): the frontend's edit form used to
+    silently downgrade an ssh_key credential to 'custom' on save — this is
+    the actual backend enforcement so no client (this UI, a fixed one, or a
+    raw API call) can do that."""
+    created = (await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key", "credential_type": "ssh_key",
+            "data": {"private_key_pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+                     "public_key": "ssh-ed25519 AAAA", "username": "mcfleet"},
+        },
+    )).json()
+
+    resp = await auth_client.patch(
+        f"/api/v1/credentials/{created['id']}", json={"credential_type": "custom"}
+    )
+    assert resp.status_code == 422
+    assert "Typ" in resp.json()["detail"]
+
+    unchanged = (await auth_client.get(f"/api/v1/credentials/{created['id']}")).json()
+    assert unchanged["credential_type"] == "ssh_key"
+
+
+@pytest.mark.asyncio
+async def test_ssh_key_credential_private_key_cannot_be_emptied_via_patch(auth_client: AsyncClient):
+    """A data update that drops private_key_pem must be rejected — the host
+    it belongs to would otherwise lose Vault access to its own SSH key."""
+    created = (await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key", "credential_type": "ssh_key",
+            "data": {"private_key_pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+                     "public_key": "ssh-ed25519 AAAA", "username": "mcfleet"},
+        },
+    )).json()
+
+    resp = await auth_client.patch(
+        f"/api/v1/credentials/{created['id']}", json={"data": {"content": "oops, wrong field"}}
+    )
+    assert resp.status_code == 422
+    assert "private_key_pem" in resp.json()["detail"]
+
+    # Renaming (no data touched) still works — the guard is scoped to data/type.
+    resp2 = await auth_client.patch(f"/api/v1/credentials/{created['id']}", json={"name": "Renamed"})
+    assert resp2.status_code == 200
+    assert resp2.json()["name"] == "Renamed"

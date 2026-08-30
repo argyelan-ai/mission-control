@@ -1398,6 +1398,8 @@
         "custom": "Free text"
       },
       "customSummary": "(Free text, {count} characters)",
+      "sshKeySummary": "SSH key ({username}, managed by host onboarding)",
+      "sshKeyNotEditable": "SSH key credentials are managed by device onboarding and can't be edited here.",
       "editAria": "Edit credential",
       "deleteAria": "Delete credential",
       "reallyDelete": "Really?",
