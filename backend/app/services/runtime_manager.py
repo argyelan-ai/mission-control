@@ -2634,6 +2634,14 @@ def _metrics_from_agent_telemetry(telemetry: dict) -> dict:
 
 
 def _agent_telemetry_fresh(host: ResolvedHost) -> bool:
+    """True only for kind=='agent' hosts (review finding #8, 30.08.2026):
+    routers/nodes.py's pairing-codes endpoint lets an admin mint a code
+    against ANY pre-existing host_id regardless of its kind, so an ssh-kind
+    host could in principle end up with agent_telemetry populated too — and
+    without this check, that pushed (possibly stale) snapshot would mask
+    its real SSH probe instead of just being additional, unused data."""
+    if host.kind != "agent":
+        return False
     if not host.agent_telemetry or not host.agent_last_seen_at:
         return False
     age_s = (utcnow() - ensure_aware(host.agent_last_seen_at)).total_seconds()

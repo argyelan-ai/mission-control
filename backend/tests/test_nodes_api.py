@@ -332,6 +332,36 @@ async def test_host_metrics_falls_back_to_ssh_when_telemetry_stale(client, auth_
     ssh_mock.assert_awaited()
 
 
+@pytest.mark.asyncio
+async def test_host_metrics_ignores_agent_telemetry_on_non_agent_kind_host(
+    client, auth_client, async_session
+):
+    """Review finding #8 (30.08.2026): POST /nodes/pairing-codes lets an
+    admin mint a code against ANY pre-existing host_id regardless of kind —
+    if that host is kind='ssh', its agent_telemetry (however it got there)
+    must never mask the real SSH probe."""
+    created = (
+        await auth_client.post(
+            "/api/v1/hosts",
+            json={"slug": "ssh-box", "display_name": "SSH Box", "kind": "ssh", "ssh_host": "192.0.2.10"},
+        )
+    ).json()
+    host = await async_session.get(Host, uuid.UUID(created["id"]))
+    host.agent_telemetry = {"gpu_util_pct": 99, "mem_used_mb": 1}  # fresh, but on the WRONG kind
+    host.agent_last_seen_at = utcnow()
+    async_session.add(host)
+    await async_session.commit()
+
+    with patch(
+        "app.services.runtime_manager._ssh_run",
+        new=AsyncMock(return_value=("35, 8806, 131072, 61\n---\n              total\nMem:          119181       15230       90000", "", 0)),
+    ) as ssh_mock:
+        resp = await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")
+    assert resp.status_code == 200, resp.text
+    ssh_mock.assert_awaited()  # the SSH probe ran — the fresh agent_telemetry was NOT used instead
+    assert resp.json()["gpu_util_pct"] == 35  # real SSH value, not the 99 planted above
+
+
 # ── Model-weights inventory (Nachtrag 30.08.2026) ────────────────────────────
 
 
