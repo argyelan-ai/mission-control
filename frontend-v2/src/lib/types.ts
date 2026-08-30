@@ -2390,7 +2390,7 @@ export interface GithubConfigUpdate {
 
 // ── Hosts (Host Registry, ADR-048) ───────────────────────────────────────────
 
-export type HostKind = "ssh" | "flask_wol" | "local";
+export type HostKind = "ssh" | "flask_wol" | "local" | "agent";
 
 export interface Host {
   id: string;

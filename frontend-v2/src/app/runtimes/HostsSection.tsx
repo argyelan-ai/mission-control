@@ -48,6 +48,7 @@ const KIND_LABEL_KEY: Record<HostKind, string> = {
   ssh: "kindSsh",
   flask_wol: "kindFlaskWol",
   local: "kindLocal",
+  agent: "kindAgent",
 };
 
 // ── Host Form Modal (admin-only) ──────────────────────────────────────────────
