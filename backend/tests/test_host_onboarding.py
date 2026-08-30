@@ -255,6 +255,33 @@ async def test_gegenprobe_failure_persists_nothing():
 
 
 @pytest.mark.asyncio
+async def test_slug_race_returns_clean_failed_status_not_raw_500():
+    """Review finding #7 (30.08.2026): self.host_slug is computed via
+    _unique_slug BEFORE the authorized_keys write + gegenprobe reconnect —
+    long enough for a concurrent run to grab the same slug first. Forced
+    deterministically here (real concurrency isn't meaningfully testable
+    against the shared SQLite test session) by making _unique_slug hand
+    back an ALREADY-taken slug, exactly what a lost race looks like from
+    persist()'s point of view."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        session.add(Host(slug="collision-host", display_name="Taken", kind="ssh", ssh_host="192.0.2.99"))
+        await session.commit()
+
+    patcher, _ = _patch_asyncssh_connect()
+    with patcher, patch("app.routers.nodes._unique_slug", new=AsyncMock(return_value="collision-host")):
+        job_id = await _run_onboarding_and_wait(_params())
+
+    status = await host_onboarding.get_status(job_id)
+    assert status["status"] == "failed"
+    assert "gleichzeitig angelegt" in (status.get("message") or "")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        hosts = (await session.exec(select(Host))).all()
+        assert len(hosts) == 1  # only the pre-existing collision host — rollback was atomic
+        assert (await session.exec(select(Credential))).first() is None
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_failure_downgrades_terminal_status_from_done():
     """Review finding #3 (30.08.2026): a failed host_bootstrap run used to
     only log a warning — the onboarding job still ended STATUS_DONE (a

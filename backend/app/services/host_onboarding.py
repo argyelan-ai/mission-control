@@ -59,6 +59,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import asyncssh
+from sqlalchemy.exc import IntegrityError
 
 from app.models.credential import Credential
 from app.models.host import Host
@@ -414,7 +415,25 @@ class _Run:
                         ssh_credential_id=credential.id,
                     )
                 session.add(host)
-                await session.commit()
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    # Review finding #7 (30.08.2026): self.host_slug was
+                    # computed via _unique_slug BEFORE the authorized_keys
+                    # write and the gegenprobe reconnect — a long enough
+                    # window for a second concurrent onboarding run to grab
+                    # the same slug first. The DB's unique index on
+                    # hosts.slug is the actual referee (same pattern as
+                    # routers/nodes.py.pair's _unique_slug race handling);
+                    # this turns that into a clean retry hint instead of the
+                    # raw SQLAlchemy exception the outer catch-all would
+                    # otherwise have surfaced as the job's failure message.
+                    await session.rollback()
+                    raise OnboardingError(
+                        "failed",
+                        f"Ein Host mit dem Slug '{self.host_slug}' wurde gerade gleichzeitig "
+                        "angelegt — bitte das Onboarding erneut starten.",
+                    )
                 await session.refresh(host)
             self.host_id = str(host.id)
             await self.log(f"Zugang im Vault gespeichert, Host '{self.host_slug}' angelegt/aktualisiert.")
