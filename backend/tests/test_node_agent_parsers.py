@@ -9,8 +9,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import stat
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -355,7 +359,7 @@ class TestRunLoopInventoryCaching:
             return one_entry
 
         monkeypatch.setattr(agent, "scan_model_inventory", fake_scan)
-        monkeypatch.setattr(agent, "collect_telemetry", lambda: {"ts": "now"})
+        monkeypatch.setattr(agent, "collect_telemetry", lambda **_kwargs: {"ts": "now"})
 
         send_calls = []
 
@@ -384,7 +388,7 @@ class TestRunLoopInventoryCaching:
         assert send_calls[2] is None  # steady state: hash unchanged, nothing to attach anymore
 
     def test_broken_scan_does_not_prevent_the_heartbeat_from_sending(self, agent, monkeypatch):
-        monkeypatch.setattr(agent, "collect_telemetry", lambda: {"ts": "now"})
+        monkeypatch.setattr(agent, "collect_telemetry", lambda **_kwargs: {"ts": "now"})
 
         def fake_scan(paths):
             raise RuntimeError("permission denied somewhere deep")
@@ -455,3 +459,215 @@ class TestInstallSystemdUnitTokenMigration:
 
         agent.install_systemd_unit("http://mc.test", "mark")
         assert system_token.read_text(encoding="utf-8").strip() == "already-there"
+
+
+# ── _http_post_json — raw-socket HTTP client (Speicher-Diät round, 30.08.2026,
+#    replaces urllib.request/http.client — see the module docstring). This is
+#    the one item the task explicitly called out as needing thorough testing,
+#    so every response shape it has to handle gets its own real TCP server. ──
+
+
+class _OneShotHTTPServer:
+    """Listens once on 127.0.0.1, hands the accepted connection to `handler`
+    in a background thread, then closes. A real socket (not a mock) is the
+    only faithful way to exercise hand-rolled HTTP parsing — chunked
+    encoding, timeouts, and a mid-response disconnect are all about actual
+    TCP behaviour, not something a mock can stand in for."""
+
+    def __init__(self, handler):
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(1)
+        self.port = self._sock.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, args=(handler,), daemon=True)
+        self._thread.start()
+
+    def _serve(self, handler):
+        conn, _ = self._sock.accept()
+        try:
+            conn.settimeout(5)
+            handler(conn)
+        finally:
+            conn.close()
+            self._sock.close()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def join(self) -> None:
+        self._thread.join(timeout=5)
+
+
+def _read_request_headers(conn: socket.socket) -> bytes:
+    """Drains the request up to the end of its headers — good enough for a
+    test server that doesn't need to inspect the request body."""
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+class TestHttpPostJson:
+    def test_success_content_length(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            body = b'{"node_token": "abc123"}'
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+            )
+
+        server = _OneShotHTTPServer(handler)
+        result = agent._http_post_json(server.url + "/x", {"a": 1}, "tok", 5)
+        server.join()
+        assert result == {"node_token": "abc123"}
+
+    def test_success_chunked_transfer_encoding(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            pieces = [b'{"ok"', b": true, ", b'"n": 42}']
+            chunked = b"".join(b"%x\r\n%s\r\n" % (len(p), p) for p in pieces) + b"0\r\n\r\n"
+            conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked)
+
+        server = _OneShotHTTPServer(handler)
+        result = agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+        assert result == {"ok": True, "n": 42}
+
+    def test_4xx_raises_http_error_with_status_and_body(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            body = b'{"detail": "unbekannter Pairing-Code"}'
+            conn.sendall(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
+            )
+
+        server = _OneShotHTTPServer(handler)
+        with pytest.raises(agent._HTTPError) as exc_info:
+            agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+        assert exc_info.value.status == 404
+        assert b"unbekannter Pairing-Code" in exc_info.value.body
+
+    def test_5xx_raises_http_error(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            body = b'{"detail": "boom"}'
+            conn.sendall(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
+            )
+
+        server = _OneShotHTTPServer(handler)
+        with pytest.raises(agent._HTTPError) as exc_info:
+            agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+        assert exc_info.value.status == 500
+
+    def test_redirect_is_surfaced_as_error_not_followed(self, agent):
+        """A 3xx must never trigger a second connection to Location — this
+        client has no redirect-following logic at all, so a 301 is just
+        another non-2xx failure like any other."""
+        second_connection_made = threading.Event()
+
+        def handler(conn):
+            _read_request_headers(conn)
+            conn.sendall(
+                b"HTTP/1.1 301 Moved Permanently\r\n"
+                b"Location: http://example.invalid/elsewhere\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+
+        server = _OneShotHTTPServer(handler)
+        with pytest.raises(agent._HTTPError) as exc_info:
+            agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+        assert exc_info.value.status == 301
+        assert not second_connection_made.is_set()
+
+    def test_timeout_raises_os_error(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            time.sleep(2)  # never responds within the client's timeout
+
+        server = _OneShotHTTPServer(handler)
+        start = time.monotonic()
+        with pytest.raises(OSError):
+            agent._http_post_json(server.url + "/x", {}, None, 0.3)
+        elapsed = time.monotonic() - start
+        server.join()
+        assert elapsed < 1.5  # actually timed out, didn't wait for the 2s sleep
+
+    def test_connection_dropped_mid_response_raises_connection_error(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            # Claims a 100-byte body, sends 7, then closes — client must not
+            # hang waiting for bytes that will never arrive, nor silently
+            # accept a truncated body as if it were complete.
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial")
+
+        server = _OneShotHTTPServer(handler)
+        with pytest.raises(ConnectionError):
+            agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+
+    def test_empty_body_2xx_returns_empty_dict(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            conn.sendall(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+
+        server = _OneShotHTTPServer(handler)
+        result = agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+        assert result == {}
+
+    def test_token_sent_as_bearer_authorization_header(self, agent):
+        received = {}
+
+        def handler(conn):
+            received["headers"] = _read_request_headers(conn)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+
+        server = _OneShotHTTPServer(handler)
+        agent._http_post_json(server.url + "/x", {}, "secret-tok", 5)
+        server.join()
+        assert b"Authorization: Bearer secret-tok\r\n" in received["headers"]
+
+    def test_https_url_imports_ssl_only_lazily_not_for_http(self, agent, tmp_path):
+        """Speicher-Diät requirement: an http:// deployment must never pay
+        for `ssl` (~4 MB). Run in a FRESH subprocess (this test file's own
+        process may already have ssl imported transitively via other
+        libraries) so `'ssl' in sys.modules` is a meaningful signal."""
+        script = tmp_path / "probe.py"
+        module_path = Path(__file__).resolve().parents[2] / "scripts" / "mc-node-agent.py"
+        script.write_text(
+            "import sys, socket, threading, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('agent', {str(module_path)!r})\n"
+            "agent = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(agent)\n"
+            "assert 'ssl' not in sys.modules, 'ssl must not be imported yet for a plain http:// URL'\n"
+            "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+            "srv.bind(('127.0.0.1', 0))\n"
+            "srv.listen(1)\n"
+            "port = srv.getsockname()[1]\n"
+            "def serve():\n"
+            "    conn, _ = srv.accept()\n"
+            "    buf = b''\n"
+            "    while b'\\r\\n\\r\\n' not in buf:\n"
+            "        buf += conn.recv(4096)\n"
+            "    conn.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\n{}')\n"
+            "    conn.close()\n"
+            "    srv.close()\n"
+            "threading.Thread(target=serve, daemon=True).start()\n"
+            "agent._http_post_json(f'http://127.0.0.1:{port}/x', {}, None, 5)\n"
+            "assert 'ssl' not in sys.modules, 'ssl must stay lazy for an http:// URL'\n"
+            "print('OK')\n"
+        )
+        result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        assert result.stdout.strip() == "OK"
