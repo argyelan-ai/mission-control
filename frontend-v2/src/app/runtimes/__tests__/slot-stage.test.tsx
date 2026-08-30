@@ -138,6 +138,38 @@ describe("SlotStage", () => {
     await waitFor(() => expect(switchRecipe).toHaveBeenCalledWith("rt", "laguna-s21"));
   });
 
+  // T1 (Verbund-UI, 30.08.2026): a verbund recipe's device requirement must
+  // be visible in the row itself, not only discoverable by hovering.
+  it("shows a verbund recipe's device requirement inline, disabled, with a plain-language tooltip", async () => {
+    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({
+      recipes: [
+        { name: "qwen-general", model: "qwen3.6", registry: "official", tp: 1, nodes: 1, solo_capable: true },
+        { name: "glm-verbund", model: "glm-5.3", registry: "official", tp: 2, nodes: 2, solo_capable: false },
+      ],
+    });
+    const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    await act(async () => { trigger.click(); });
+
+    const verbundOption = await screen.findByText("glm-verbund");
+    // Device requirement visible in the row itself (not just on hover).
+    expect(await screen.findByText("Needs tp=2, nodes=2 — cannot run solo")).toBeInTheDocument();
+    // Plain-language reason still available as a tooltip on top of that.
+    const optionButton = verbundOption.closest("button");
+    expect(optionButton).toHaveAttribute("title", "Needs tp=2, nodes=2 — cannot run solo on this host");
+    expect(optionButton).toBeDisabled();
+
+    // Genuinely not clickable through to a switch.
+    optionButton?.click();
+    expect(switchRecipe).not.toHaveBeenCalled();
+  });
+
   it("a sibling engine in the unified dropdown arms a confirm; confirm calls start (slot takeover)", async () => {
     const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });

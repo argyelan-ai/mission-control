@@ -786,14 +786,26 @@ function UnifiedSwitchDropdown({
                     setOpen(false);
                     onSelect({ kind: "recipe", name: r.name });
                   }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
+                  className="flex flex-col w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
                   style={{
                     color: isActive ? C.accent : isDisabled ? C.textDim : C.textPrimary,
                     borderBottom: `1px solid ${C.borderSubtle}`,
                   }}
                 >
-                  <span className="truncate">{r.name}</span>
-                  {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
+                  <div className="flex items-center gap-2 w-full">
+                    <span className="truncate">{r.name}</span>
+                    {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
+                  </div>
+                  {/* T1 (Verbund-UI, 30.08.2026): a verbund recipe isn't just
+                      greyed out — its device requirement is visible in the
+                      row (not only in the hover title above), same wording/
+                      i18n key SparkRecipeSwitcher already uses for the same
+                      concept (needsMoreShort) so the two pickers agree. */}
+                  {isDisabled && gpuHint && (
+                    <span className="text-[10px] mt-0.5" style={{ color: C.warning }}>
+                      {tRecipe("needsMoreShort", { gpuHint })}
+                    </span>
+                  )}
                 </button>
               );
             })}
