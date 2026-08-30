@@ -7,13 +7,17 @@ vorverdrahteten Keys — ein neuer Nutzer ohne SSH-Zugriff sieht nie Metriken.
 Dieser Router dreht das Modell um: ein Gerät meldet sich selbst per
 Pairing-Code an und pusht danach alle 15s seine Telemetrie per HTTPS.
 
-Drei Endpunkte, drei Auth-Stufen:
+Endpunkte, nach Auth-Stufe:
 - POST /pairing-codes  — admin-only (wie hosts.py-Schreibzugriffe): mint
   einen kurzlebigen Code, den der Operator auf das Zielgerät überträgt.
+- GET  /agent-script    — UNAUTHENTIFIZIERT: liefert das mc-node-agent.py
+  dieser laufenden Instanz aus (Install-Einzeiler curlt von hier).
 - POST /pair            — UNAUTHENTIFIZIERT (der Code IST die Auth, einmalig
   und 15 Minuten gültig): tauscht Code gegen node_token.
 - POST /heartbeat        — Bearer node_token, konstantzeitverglichen gegen den
   gespeicherten Hash (nie den Klartext-Token in der DB).
+- GET  /{host_id}/inventory — wie hosts.py-Lesezugriffe: letzter gemeldeter
+  Gewichte-Bestand (Nachtrag, für Phase 2).
 
 Scope Phase 1 ist reines Monitoring: `commands` in der Heartbeat-Antwort ist
 bewusst immer eine leere Liste (Platzhalter für Phase 3 — Befehlsausführung).
