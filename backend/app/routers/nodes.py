@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import Role, require_role
+from app.auth import Role, require_role, require_user
 from app.config import phone_test_url
 from app.database import get_session
 from app.models.host import Host
@@ -89,6 +89,20 @@ async def _unique_slug(session: AsyncSession, hostname: str) -> str:
         slug = f"{base}-{i}"
         i += 1
     return slug
+
+
+async def _resolve_host(session: AsyncSession, host_id: str) -> Host | None:
+    """Slug-or-UUID lookup — mirrors hosts.py's _get_host so /nodes/{host_id}/…
+    accepts the same identifiers as /hosts/{host_id}/…."""
+    host = (await session.exec(select(Host).where(Host.slug == host_id))).first()
+    if not host:
+        try:
+            host_uuid = uuid.UUID(host_id)
+        except ValueError:
+            host_uuid = None
+        if host_uuid is not None:
+            host = await session.get(Host, host_uuid)
+    return host
 
 
 async def _authenticate_node(
@@ -165,9 +179,28 @@ class NodeTelemetry(BaseModel):
     vram_total_mb: int | None = None
 
 
+class InventoryEntry(BaseModel):
+    """One scanned model directory (scripts/mc-node-agent.py's
+    scan_model_inventory). ``hf_repo_id`` is only set for HF-cache-style
+    entries (models--Org--Name); local models-local dirs leave it null and
+    rely on name/size matching in Phase 2 instead."""
+
+    name: str
+    total_bytes: int
+    file_count: int
+    mtime_max: float | None = None
+    hf_repo_id: str | None = None
+    model_type: str | None = None
+
+
 class HeartbeatRequest(BaseModel):
     telemetry: NodeTelemetry
     agent_version: str | None = Field(default=None, max_length=32)
+    # Nachtrag 30.08.2026: the agent only attaches this every ~40th
+    # heartbeat AND only when its own hash of the scan changed — omitted
+    # (None) on every other heartbeat, which must leave the last stored
+    # inventory untouched rather than wiping it (see heartbeat()).
+    inventory: list[InventoryEntry] | None = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -175,6 +208,12 @@ class HeartbeatResponse(BaseModel):
     heartbeat_interval_s: int = HEARTBEAT_INTERVAL_S
     # Phase 3 placeholder (Befehlsausführung) — Phase 1 never populates this.
     commands: list = Field(default_factory=list)
+
+
+class InventoryResponse(BaseModel):
+    host_id: str
+    agent_inventory: list[dict] | None
+    agent_inventory_updated_at: datetime | None
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -295,7 +334,29 @@ async def heartbeat(
     host.agent_last_seen_at = now
     if body.agent_version:
         host.agent_version = body.agent_version
+    if body.inventory is not None:
+        host.agent_inventory = [entry.model_dump(mode="json") for entry in body.inventory]
+        host.agent_inventory_updated_at = now
     session.add(host)
     await session.commit()
 
     return HeartbeatResponse()
+
+
+@router.get("/{host_id}/inventory", response_model=InventoryResponse)
+async def get_inventory(
+    host_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Last reported model-weights inventory (Nachtrag 30.08.2026) — Phase 2
+    reads this to skip re-downloading a recipe's model when it's already on
+    the box. Slug-or-UUID lookup, same as GET /hosts/{host_id}/metrics."""
+    host = await _resolve_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+    return InventoryResponse(
+        host_id=str(host.id),
+        agent_inventory=host.agent_inventory,
+        agent_inventory_updated_at=host.agent_inventory_updated_at,
+    )

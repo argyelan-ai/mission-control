@@ -295,3 +295,93 @@ async def test_host_metrics_falls_back_to_ssh_when_telemetry_stale(client, auth_
     assert resp.status_code == 200
     assert resp.json()["reachable"] is False
     ssh_mock.assert_awaited()
+
+
+# ── Model-weights inventory (Nachtrag 30.08.2026) ────────────────────────────
+
+
+def _inventory() -> list[dict]:
+    return [
+        {
+            "name": "models--meta-llama--Llama-3-70B",
+            "total_bytes": 140_000_000_000,
+            "file_count": 12,
+            "mtime_max": 1_800_000_000.0,
+            "hf_repo_id": "meta-llama/Llama-3-70B",
+            "model_type": "llama",
+        },
+        {
+            "name": "my-local-gguf",
+            "total_bytes": 4_000_000_000,
+            "file_count": 1,
+            "mtime_max": None,
+            "hf_repo_id": None,
+            "model_type": None,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_with_inventory_lands_on_host(client, auth_client):
+    token, host_id = await _paired_token(client, auth_client)
+
+    resp = await client.post(
+        "/api/v1/nodes/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"telemetry": _telemetry(), "inventory": _inventory()},
+    )
+    assert resp.status_code == 200, resp.text
+
+    inv = (await auth_client.get(f"/api/v1/nodes/{host_id}/inventory")).json()
+    assert inv["host_id"] == host_id
+    assert inv["agent_inventory_updated_at"] is not None
+    assert len(inv["agent_inventory"]) == 2
+    by_name = {e["name"]: e for e in inv["agent_inventory"]}
+    assert by_name["models--meta-llama--Llama-3-70B"]["hf_repo_id"] == "meta-llama/Llama-3-70B"
+    assert by_name["my-local-gguf"]["model_type"] is None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_without_inventory_leaves_previous_inventory_untouched(
+    client, auth_client, async_session
+):
+    """The agent only attaches `inventory` every ~40th heartbeat when it
+    changed — every other heartbeat must NOT wipe the last stored snapshot."""
+    token, host_id = await _paired_token(client, auth_client)
+
+    await client.post(
+        "/api/v1/nodes/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"telemetry": _telemetry(), "inventory": _inventory()},
+    )
+    first = (await auth_client.get(f"/api/v1/nodes/{host_id}/inventory")).json()
+
+    # Clear the 5s rate guard so the next heartbeat is actually accepted —
+    # what's under test here is the inventory=None handling, not the guard.
+    host = await async_session.get(Host, uuid.UUID(host_id))
+    host.agent_last_seen_at = utcnow() - timedelta(seconds=10)
+    async_session.add(host)
+    await async_session.commit()
+
+    resp = await client.post(
+        "/api/v1/nodes/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"telemetry": _telemetry()},  # no inventory field this time
+    )
+    assert resp.status_code == 200, resp.text
+
+    second = (await auth_client.get(f"/api/v1/nodes/{host_id}/inventory")).json()
+    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_inventory_endpoint_unknown_host_404(auth_client):
+    resp = await auth_client.get(f"/api/v1/nodes/{uuid.uuid4()}/inventory")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_inventory_endpoint_empty_before_first_heartbeat(client, auth_client):
+    _, host_id = await _paired_token(client, auth_client)
+    inv = (await auth_client.get(f"/api/v1/nodes/{host_id}/inventory")).json()
+    assert inv == {"host_id": host_id, "agent_inventory": None, "agent_inventory_updated_at": None}

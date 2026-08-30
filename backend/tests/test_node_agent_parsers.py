@@ -7,6 +7,10 @@ test twin (test_context_detect_python.py) since the agent lives outside the
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -173,3 +177,131 @@ class TestCollectTelemetry:
         assert expected_keys <= set(telemetry.keys())
         assert telemetry["ts"]  # non-empty ISO timestamp
         assert telemetry["disk_used_gb"] is not None  # shutil.disk_usage('/') always works
+
+
+# ── scan_model_inventory / inventory_hash (Nachtrag 30.08.2026) ─────────────
+
+
+def _write_file(path: Path, size: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x" * size)
+
+
+class TestScanModelInventory:
+    def test_models_local_style_with_config(self, agent, tmp_path):
+        model_dir = tmp_path / "models-local" / "my-model"
+        _write_file(model_dir / "weights.gguf", 1000)
+        _write_file(model_dir / "tokenizer.json", 50)
+        (model_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+
+        entries = agent.scan_model_inventory([tmp_path / "models-local"])
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["name"] == "my-model"
+        assert entry["total_bytes"] == 1000 + 50 + len(json.dumps({"model_type": "llama"}))
+        assert entry["file_count"] == 3  # weights + tokenizer + config.json itself
+        assert entry["hf_repo_id"] is None
+        assert entry["model_type"] == "llama"
+        assert entry["mtime_max"] is not None
+
+    def test_models_local_style_without_config(self, agent, tmp_path):
+        model_dir = tmp_path / "models-local" / "no-config-model"
+        _write_file(model_dir / "weights.bin", 200)
+
+        entries = agent.scan_model_inventory([tmp_path / "models-local"])
+        assert len(entries) == 1
+        assert entries[0]["model_type"] is None
+        assert entries[0]["hf_repo_id"] is None
+
+    def test_hf_cache_style_decodes_repo_id_and_sizes_via_snapshots(self, agent, tmp_path):
+        hub = tmp_path / "hub"
+        repo_dir = hub / "models--meta-llama--Llama-3-70B"
+        blobs = repo_dir / "blobs"
+        _write_file(blobs / "abc123", 5000)
+        snap_dir = repo_dir / "snapshots" / "main"
+        snap_dir.mkdir(parents=True)
+        (snap_dir / "model.safetensors").symlink_to(blobs / "abc123")
+        (snap_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+
+        entries = agent.scan_model_inventory([hub])
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["hf_repo_id"] == "meta-llama/Llama-3-70B"
+        assert entry["model_type"] == "llama"
+        # size comes from the real blob (followed through the symlink) + config.json,
+        # NOT double-counted even though blobs/ also technically holds abc123's bytes
+        assert entry["total_bytes"] == 5000 + len(json.dumps({"model_type": "llama"}))
+
+    def test_hf_cache_style_dedupes_shared_blob_across_revisions(self, agent, tmp_path):
+        """Two snapshot revisions symlinking the SAME blob must count its
+        bytes once, not twice — otherwise total_bytes overstates real disk usage."""
+        hub = tmp_path / "hub"
+        repo_dir = hub / "models--org--shared-blob-model"
+        blobs = repo_dir / "blobs"
+        _write_file(blobs / "sharedhash", 9000)
+        for rev in ("rev1", "rev2"):
+            snap_dir = repo_dir / "snapshots" / rev
+            snap_dir.mkdir(parents=True)
+            (snap_dir / "weights.bin").symlink_to(blobs / "sharedhash")
+
+        entries = agent.scan_model_inventory([hub])
+        assert entries[0]["total_bytes"] == 9000
+
+    def test_hf_cache_style_dirname_without_repo_pattern_has_none_repo_id(self, agent, tmp_path):
+        hub = tmp_path / "hub"
+        weird_dir = hub / "models--onlyorg"  # no second '--' separator
+        (weird_dir / "snapshots").mkdir(parents=True)
+
+        entries = agent.scan_model_inventory([hub])
+        assert entries[0]["hf_repo_id"] is None
+
+    def test_mixed_roots_sorted_by_name(self, agent, tmp_path):
+        local_root = tmp_path / "models-local"
+        _write_file(local_root / "zzz-model" / "w.bin", 10)
+        _write_file(local_root / "aaa-model" / "w.bin", 10)
+
+        entries = agent.scan_model_inventory([local_root])
+        assert [e["name"] for e in entries] == ["aaa-model", "zzz-model"]
+
+    def test_missing_root_is_skipped_not_fatal(self, agent, tmp_path):
+        assert agent.scan_model_inventory([tmp_path / "does-not-exist"]) == []
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="posix permission bits")
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses permission checks")
+    def test_permission_denied_directory_is_skipped_not_fatal(self, agent, tmp_path):
+        readable = tmp_path / "models-local" / "readable-model"
+        _write_file(readable / "w.bin", 10)
+        locked = tmp_path / "models-local" / "locked-model"
+        locked.mkdir(parents=True)
+        _write_file(locked / "w.bin", 10)
+        os.chmod(locked, 0)  # no read/execute — os.scandir(locked) will raise
+
+        try:
+            entries = agent.scan_model_inventory([tmp_path / "models-local"])
+        finally:
+            os.chmod(locked, stat.S_IRWXU)  # restore so tmp_path cleanup can remove it
+
+        names = [e["name"] for e in entries]
+        # The unreadable directory is skipped entirely (its config.json stat
+        # raises PermissionError) — "tolerate per directory" means the scan
+        # keeps going, not that a broken entry gets faked with zero stats.
+        assert names == ["readable-model"]
+
+
+class TestInventoryHash:
+    def test_deterministic_regardless_of_input_order(self, agent):
+        a = [{"name": "a", "total_bytes": 1, "file_count": 1, "mtime_max": None,
+              "hf_repo_id": None, "model_type": None}]
+        b = [{"hf_repo_id": None, "model_type": None, "name": "a", "file_count": 1,
+              "total_bytes": 1, "mtime_max": None}]
+        assert agent.inventory_hash(a) == agent.inventory_hash(b)
+
+    def test_different_content_different_hash(self, agent):
+        a = [{"name": "a", "total_bytes": 1, "file_count": 1, "mtime_max": None,
+              "hf_repo_id": None, "model_type": None}]
+        b = [{"name": "a", "total_bytes": 2, "file_count": 1, "mtime_max": None,
+              "hf_repo_id": None, "model_type": None}]
+        assert agent.inventory_hash(a) != agent.inventory_hash(b)
+
+    def test_empty_list_is_stable(self, agent):
+        assert agent.inventory_hash([]) == agent.inventory_hash([])

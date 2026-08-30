@@ -76,6 +76,15 @@ class Host(SQLModel, table=True):
     agent_telemetry: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     agent_version: str | None = Field(default=None, max_length=32)
 
+    # Model-weights inventory (Nachtrag 30.08.2026, für Phase 2 — "schon auf
+    # dem Gerät, kein erneuter Download"). Sent only when it changed (agent
+    # hashes its own scan result and skips the field otherwise), so this is
+    # also "the last snapshot", updated independently of agent_telemetry.
+    agent_inventory: list[Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_inventory_updated_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), nullable=False),

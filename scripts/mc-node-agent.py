@@ -42,6 +42,7 @@ instead of silently doing nothing.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -63,6 +64,9 @@ MAX_BACKOFF_S = 120
 HTTP_TIMEOUT_S = 10
 NVIDIA_SMI_TIMEOUT_S = 3
 CPU_SAMPLE_GAP_S = 0.2
+# Nachtrag 30.08.2026: model-inventory scan cadence — every 40th heartbeat
+# at the 15s interval is ~10 minutes, plus once unconditionally at startup.
+INVENTORY_SCAN_EVERY_N_HEARTBEATS = 40
 
 SYSTEM_TOKEN_PATH = Path("/etc/mc-node-agent/token")
 USER_TOKEN_PATH = Path.home() / ".config" / "mc-node-agent" / "token"
@@ -196,6 +200,165 @@ def parse_nvidia_smi(stdout: str) -> dict:
     return result
 
 
+# ── Model-weights inventory (Nachtrag 30.08.2026 — Phase 2's "already on the
+#    box, skip the download" check) ──────────────────────────────────────────
+#
+# scan_model_inventory() and everything it calls only ever reads directory
+# metadata (os.scandir/stat) and small config.json files — never a model's
+# weight bytes. Every per-directory step tolerates its own failure (missing
+# path, permission denied, broken symlink) so one bad mount can't take the
+# whole scan down.
+
+
+def _decode_hf_repo_id(dirname: str) -> str | None:
+    """'models--Org--Name' -> 'Org/Name' (huggingface_hub's cache-dir naming:
+    the repo id's single '/' becomes '--'). None if it doesn't match."""
+    prefix = "models--"
+    if not dirname.startswith(prefix):
+        return None
+    rest = dirname[len(prefix):]
+    org, sep, name = rest.partition("--")
+    if not sep or not org or not name:
+        return None
+    return f"{org}/{name}"
+
+
+def _walk_dir_stats(root: Path, follow_symlinks: bool) -> tuple[int, int, float | None]:
+    """Sums file sizes + finds the newest mtime under `root`.
+
+    Dedupes by real path when following symlinks — the HF cache's snapshots/
+    directories are almost entirely symlinks into a shared blobs/ store, and
+    two revisions pointing at the same blob must only count its bytes once.
+    Any unreadable entry (permission error, dangling symlink) is skipped,
+    not fatal.
+    """
+    seen: set[str] = set()
+    total_bytes = 0
+    file_count = 0
+    mtime_max: float | None = None
+
+    def _walk(path: str) -> None:
+        nonlocal total_bytes, file_count, mtime_max
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=follow_symlinks):
+                    _walk(entry.path)
+                elif entry.is_file(follow_symlinks=follow_symlinks):
+                    key = os.path.realpath(entry.path) if follow_symlinks else entry.path
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    st = entry.stat(follow_symlinks=follow_symlinks)
+                    total_bytes += st.st_size
+                    file_count += 1
+                    if mtime_max is None or st.st_mtime > mtime_max:
+                        mtime_max = st.st_mtime
+            except OSError:
+                continue
+        return
+
+    _walk(str(root))
+    return total_bytes, file_count, mtime_max
+
+
+def _read_model_type(config_path: Path) -> str | None:
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return json.load(f).get("model_type")
+    except (OSError, ValueError):
+        return None
+
+
+def _scan_local_model_dir(path: Path) -> dict:
+    """models-local style: the whole subtree is one model; config.json (if
+    present) directly under it names the model_type."""
+    total_bytes, file_count, mtime_max = _walk_dir_stats(path, follow_symlinks=True)
+    config_path = path / "config.json"
+    model_type = _read_model_type(config_path) if config_path.is_file() else None
+    return {
+        "name": path.name,
+        "total_bytes": total_bytes,
+        "file_count": file_count,
+        "mtime_max": mtime_max,
+        "hf_repo_id": None,
+        "model_type": model_type,
+    }
+
+
+def _scan_hf_cache_dir(path: Path) -> dict:
+    """HF-cache style ('models--Org--Name'): size is computed over snapshots/
+    (the blobs/ store is shared + deduped there via _walk_dir_stats), repo id
+    decoded from the directory name, model_type from whichever snapshot
+    revision has a config.json (usually just one — 'main')."""
+    snapshots_dir = path / "snapshots"
+    total_bytes, file_count, mtime_max = _walk_dir_stats(snapshots_dir, follow_symlinks=True)
+    model_type = None
+    if snapshots_dir.is_dir():
+        try:
+            for rev_dir in snapshots_dir.iterdir():
+                config_path = rev_dir / "config.json"
+                if config_path.is_file():
+                    model_type = _read_model_type(config_path)
+                    if model_type is not None:
+                        break
+        except OSError:
+            pass
+    return {
+        "name": path.name,
+        "total_bytes": total_bytes,
+        "file_count": file_count,
+        "mtime_max": mtime_max,
+        "hf_repo_id": _decode_hf_repo_id(path.name),
+        "model_type": model_type,
+    }
+
+
+def scan_model_inventory(paths: list) -> list[dict]:
+    """Inventories model-weight directories under each root in `paths`
+    (production: ~/models-local and ~/.cache/huggingface/hub). Each
+    immediate subdirectory is classified by name: 'models--…' is HF-cache
+    style, everything else is models-local style. A root that doesn't exist
+    or isn't readable is skipped rather than failing the whole scan — most
+    boxes will only ever have one of the two.
+
+    Returns entries sorted by name (deterministic — inventory_hash() below
+    depends on it).
+    """
+    entries: list[dict] = []
+    for root in paths:
+        root = Path(root)
+        try:
+            children = list(root.iterdir())
+        except OSError as e:
+            log.info("Inventar-Scan: %s nicht lesbar (%s) — übersprungen", root, e)
+            continue
+        for child in children:
+            try:
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("models--"):
+                    entries.append(_scan_hf_cache_dir(child))
+                else:
+                    entries.append(_scan_local_model_dir(child))
+            except OSError as e:
+                log.warning("Inventar-Scan: %s übersprungen (%s)", child, e)
+                continue
+    entries.sort(key=lambda e: e["name"])
+    return entries
+
+
+def inventory_hash(entries: list[dict]) -> str:
+    """Deterministic hash of a scan result — the agent compares this against
+    the hash it last SENT (kept in memory, see run_loop) to decide whether
+    this scan cycle's inventory is worth attaching to the heartbeat."""
+    canonical = json.dumps(entries, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 # ── Collection (subprocess/filesystem side effects — kept thin around the
 #    pure parsers above) ─────────────────────────────────────────────────────
 
@@ -302,9 +465,16 @@ def pair(mc_url: str, code: str) -> str:
     return token
 
 
-def send_heartbeat(mc_url: str, token: str, telemetry: dict) -> dict:
+def send_heartbeat(mc_url: str, token: str, telemetry: dict, inventory: list[dict] | None = None) -> dict:
     payload = {"telemetry": telemetry, "agent_version": AGENT_VERSION}
+    if inventory is not None:
+        payload["inventory"] = inventory
     return _http_post_json(f"{mc_url}/api/v1/nodes/heartbeat", payload, token=token, timeout=HTTP_TIMEOUT_S)
+
+
+def default_inventory_paths() -> list[Path]:
+    home = Path.home()
+    return [home / "models-local", home / ".cache" / "huggingface" / "hub"]
 
 
 # ── Token storage ─────────────────────────────────────────────────────────────
@@ -422,12 +592,32 @@ def install_systemd_unit(mc_url: str, run_as_user: str) -> None:
 def run_loop(mc_url: str, token: str) -> None:
     """Runs forever. Every exception is caught here — a missed heartbeat is
     always preferable to a dead process (systemd's Restart=always is only a
-    second line of defense, not the plan)."""
+    second line of defense, not the plan).
+
+    Model-inventory scan (Nachtrag 30.08.2026): runs at startup and then
+    every INVENTORY_SCAN_EVERY_N_HEARTBEATS-th successful heartbeat (~10min
+    at the 15s interval). Only attached to the heartbeat body when its hash
+    changed since the last time it was actually SENT — a restart just
+    re-sends once, which is harmless.
+    """
     backoff = HEARTBEAT_INTERVAL_S
+    inventory_paths = default_inventory_paths()
+    last_sent_inventory_hash: str | None = None
+    heartbeat_count = 0
     while True:
         try:
             telemetry = collect_telemetry()
-            send_heartbeat(mc_url, token, telemetry)
+
+            inventory_to_send: list[dict] | None = None
+            if heartbeat_count % INVENTORY_SCAN_EVERY_N_HEARTBEATS == 0:
+                entries = scan_model_inventory(inventory_paths)
+                current_hash = inventory_hash(entries)
+                if current_hash != last_sent_inventory_hash:
+                    inventory_to_send = entries
+                    last_sent_inventory_hash = current_hash
+
+            send_heartbeat(mc_url, token, telemetry, inventory=inventory_to_send)
+            heartbeat_count += 1
             backoff = HEARTBEAT_INTERVAL_S
             time.sleep(HEARTBEAT_INTERVAL_S)
         except KeyboardInterrupt:
