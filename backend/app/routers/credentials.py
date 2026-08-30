@@ -15,7 +15,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_user
 from app.database import get_session
 from app.models.credential import Credential
-from app.services.encryption import encrypt, safe_decrypt, mask
+from app.services.encryption import encrypt, safe_decrypt, mask, NEVER_EXPOSE_CREDENTIAL_FIELDS
 
 router = APIRouter(prefix="/api/v1", tags=["credentials"])
 
@@ -49,15 +49,12 @@ class CredentialUpdate(BaseModel):
     notes: str | None = None
 
 
-# Fields whose value must NEVER leave the backend, not even a last-4-chars
-# mask (Fleet & Rezepte v2, Phase 2 — Auto-Onboarding, review requirement
-# "Private Keys: API liefert sie NIE aus"). A suffix reveal is fine for a
-# password (an attacker gains nothing from 4 random characters), but a
-# private key's last characters are still key material, and the point of
-# this field is that it never leaves the Vault at all.
-_NEVER_EXPOSE_FIELDS = ("private_key_pem",)
 # Fields that are not secrets in the first place — shown verbatim, same as
-# username always was.
+# username always was. (The "never expose, period" list — private_key_pem —
+# lives in services/encryption.NEVER_EXPOSE_CREDENTIAL_FIELDS, shared with
+# routers/agent_scoped.py so both redaction points can't drift apart again;
+# see that constant's docstring for the incident that made this a shared
+# constant instead of a local one.)
 _NON_SENSITIVE_FIELDS = ("username", "public_key")
 
 
@@ -65,7 +62,7 @@ def _mask_data(data: dict, credential_type: str) -> dict:
     """Mask sensitive fields, keep non-sensitive visible."""
     masked = {}
     for k, v in data.items():
-        if k in _NEVER_EXPOSE_FIELDS:
+        if k in NEVER_EXPOSE_CREDENTIAL_FIELDS:
             masked[k] = "[hidden]"
         elif k in _NON_SENSITIVE_FIELDS:
             masked[k] = v
