@@ -17,7 +17,9 @@ from app.auth import require_user, require_role, Role
 from app.config import settings
 from app.database import get_session
 from app.models.agent import Agent
+from app.models.host import Host
 from app.models.runtime import Runtime
+from app.models.runtime_host import RuntimeHost
 from app.redis_client import RedisKeys, get_redis
 from app.services import runtime_manager, runtime_readiness, runtime_naming
 from app.services.agent_runtime_switch import (
@@ -524,6 +526,30 @@ async def list_runtimes(
     The JSON file `backend/config/runtimes.json` is now only a bootstrap seed.
     """
     runtimes = await runtime_manager.list_db_runtimes(session)
+
+    # Verbund-UI Phase 1b (30.08.2026): member hosts of a multi-node runtime
+    # (runtime_hosts), batched in one query rather than per-row — the
+    # overwhelming majority of runtimes have zero rows here (solo), so this
+    # is empty/cheap in the common case and avoids an N+1 for the rest.
+    member_hosts_by_runtime: dict[uuid.UUID, list[dict]] = {}
+    runtime_ids = [rt.id for rt in runtimes]
+    if runtime_ids:
+        membership_rows = (
+            await session.execute(
+                select(RuntimeHost, Host)
+                .join(Host, RuntimeHost.host_id == Host.id)
+                .where(RuntimeHost.runtime_id.in_(runtime_ids))
+            )
+        ).all()
+        for rh, member_host in membership_rows:
+            member_hosts_by_runtime.setdefault(rh.runtime_id, []).append({
+                "host_id": str(member_host.id),
+                "slug": member_host.slug,
+                "display_name": member_host.display_name,
+                "role": rh.role,
+                "node_rank": rh.node_rank,
+            })
+
     result = []
     for rt in runtimes:
         if not rt.enabled:
@@ -557,6 +583,11 @@ async def list_runtimes(
             # for host-inplace agents, which can only ever run something
             # physically on their own box.
             "locality": _runtime_locality(rt, host),
+            # Verbund-UI Phase 1b (30.08.2026): additional hosts this runtime
+            # spans (a multi-node verbund's workers) — [] for every solo
+            # runtime, which today is all of them. The runtime's OWN host_id
+            # (the head) is NOT duplicated in here, it stays in "host" above.
+            "member_hosts": member_hosts_by_runtime.get(rt.id, []),
         })
     result.sort(key=_grouped_sort_key)
     return {"runtimes": result}

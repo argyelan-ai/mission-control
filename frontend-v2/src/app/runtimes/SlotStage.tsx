@@ -571,11 +571,22 @@ function StagePlaceholder({ group }: { group: HostGroup }) {
 // its own standalone model). This reuses TelemetryColumn as-is instead of
 // rebuilding metric rendering: same offline text, same honesty guarantee
 // (real fields only, no served_model/throughput/own switch — see the file
-// header's HONESTY RULE). Phase 1b will add a "part of <runtime>" line here
-// once runtime_hosts exists to resolve which verbund this worker belongs to.
+// header's HONESTY RULE).
+//
+// Phase 1b (30.08.2026): once runtime_hosts has a row for this host,
+// group.workerOf (grouping.ts) resolves WHICH verbund it belongs to — shown
+// as "Part of: <runtime> · head → <host-slug>" instead of the generic hint.
+// Falls back to the generic hint when workerOf is absent (a paired agent
+// host that isn't (yet) a member of any runtime's declared topology).
 
 function WorkerTile({ group }: { group: HostGroup }) {
   const t = useTranslations("runtimes.slotStage");
+  const workerOf = group.workerOf;
+  const hint = workerOf
+    ? workerOf.headSlug
+      ? t("workerPartOfWithHead", { runtime: workerOf.runtimeDisplayName, head: workerOf.headSlug })
+      : t("workerPartOf", { runtime: workerOf.runtimeDisplayName })
+    : t("workerHint");
   return (
     <div
       className="rounded-xl overflow-hidden"
@@ -597,7 +608,7 @@ function WorkerTile({ group }: { group: HostGroup }) {
       </div>
       <div className="flex flex-col md:flex-row">
         <div className="flex-1 min-w-0 flex items-center px-4 py-6">
-          <span className="text-sm" style={{ color: C.textMuted }}>{t("workerHint")}</span>
+          <span className="text-sm" style={{ color: C.textMuted }}>{hint}</span>
         </div>
         <TelemetryColumn hostId={group.host.id} />
       </div>

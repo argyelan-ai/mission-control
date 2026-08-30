@@ -2514,6 +2514,8 @@
       "placeholderTitle": "Kein Modell eingerichtet",
       "workerBadge": "Verbund-Worker",
       "workerHint": "Kein eigenes Modell — Telemetrie dieser Box",
+      "workerPartOf": "Teil von: {runtime}",
+      "workerPartOfWithHead": "Teil von: {runtime} · head → {head}",
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
       "selectRecipe": "Rezept wählen…",
       "recipeCurrent": "aktiv",

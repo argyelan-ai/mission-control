@@ -171,6 +171,16 @@ class Runtime(SQLModel, table=True):
         ),
     )
 
+    # Verbund-UI Phase 1b (30.08.2026): declarative SOLL-topology for a
+    # multi-node runtime — e.g. {"nodes": 2, "tp_total": 2, "roles":
+    # ["head", "worker"]}. NULL for every solo runtime (the overwhelming
+    # majority) and for every runtime today, since nothing writes this yet —
+    # this phase only adds the field + API pass-through, no logic reads or
+    # enforces it. Member hosts themselves live in RuntimeHost
+    # (models/runtime_host.py), not here — this is the intent, that table is
+    # the fact.
+    topology: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), nullable=False),

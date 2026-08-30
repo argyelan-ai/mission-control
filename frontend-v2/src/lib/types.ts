@@ -1848,6 +1848,31 @@ export interface Runtime {
    *  remote runtime_types). "local" = physically reachable from SOME host
    *  in the fleet; a host-inplace agent can only ever run a "local" one. */
   locality?: "local" | "cloud";
+  /** Verbund-UI Phase 1b (30.08.2026) — additional hosts this runtime spans
+   *  (a multi-node verbund's workers), [] for every solo runtime. The
+   *  runtime's OWN host binding (the head) stays in `host` above, never
+   *  duplicated in here. */
+  member_hosts?: RuntimeMemberHost[];
+  /** Verbund-UI Phase 1b (30.08.2026) — declarative SOLL-topology, e.g.
+   *  {nodes: 2, tp_total: 2, roles: ["head","worker"]}. null for every solo
+   *  runtime and for every runtime today (nothing writes it yet — field +
+   *  pass-through only, no logic reads it in this phase besides T1's
+   *  read-only "N nodes" hint in the recipe picker). */
+  topology?: RuntimeTopology | null;
+}
+
+export interface RuntimeMemberHost {
+  host_id: string;
+  slug: string;
+  display_name: string;
+  role: "head" | "worker";
+  node_rank: number;
+}
+
+export interface RuntimeTopology {
+  nodes: number;
+  tp_total?: number;
+  roles?: string[];
 }
 
 // Engine Control v0 (ADR-057) — GET/POST .../db/{slug}/autostart response.

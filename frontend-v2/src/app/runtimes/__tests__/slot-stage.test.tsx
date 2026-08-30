@@ -199,6 +199,32 @@ describe("SlotStage", () => {
     expect(screen.queryByText(/^0 /)).not.toBeInTheDocument();
   });
 
+  // Verbund-UI Phase 1b (30.08.2026)
+  it("shows which verbund a worker belongs to when grouping resolved a workerOf", async () => {
+    const host = makeHost({ slug: "gx10", display_name: "GX10", kind: "agent" });
+    const group: HostGroup = {
+      host, runtimes: [],
+      workerOf: {
+        runtimeId: "rt-1", runtimeDisplayName: "GLM Verbund",
+        headSlug: "sparky", role: "worker", nodeRank: 1,
+      },
+    };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Part of: GLM Verbund · head → sparky")).toBeInTheDocument();
+    expect(screen.queryByText("No model of its own — telemetry for this box")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the generic worker hint when workerOf is absent", async () => {
+    const host = makeHost({ slug: "gx10", display_name: "GX10", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("No model of its own — telemetry for this box")).toBeInTheDocument();
+  });
+
   it("a non-startable host runtime (e.g. omp) stays visible in the dropdown but disabled", async () => {
     const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const omp = makeRuntime({ slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped" });

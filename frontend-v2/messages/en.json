@@ -2514,6 +2514,8 @@
       "placeholderTitle": "No model set up",
       "workerBadge": "Fleet worker",
       "workerHint": "No model of its own — telemetry for this box",
+      "workerPartOf": "Part of: {runtime}",
+      "workerPartOfWithHead": "Part of: {runtime} · head → {head}",
       "switchFailed": "Switch failed: {message}",
       "selectRecipe": "Switch recipe…",
       "recipeCurrent": "current",
