@@ -12,8 +12,10 @@ need one.
 """
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Text, text
+from sqlalchemy import JSON
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -28,7 +30,9 @@ class Host(SQLModel, table=True):
     #   ssh       — always-on box reached via SSH (nvidia-smi, docker, tmux)
     #   flask_wol — sleeping box woken via WoL + driven over its Flask control server
     #   local     — the MC host itself (no remote control channel)
-    kind: str = Field(max_length=32)  # ssh | flask_wol | local
+    #   agent     — self-registered via routers/nodes.py; no inbound channel at
+    #               all, the box pushes telemetry to us (Fleet & Rezepte v2, Phase 1)
+    kind: str = Field(max_length=32)  # ssh | flask_wol | local | agent
 
     # ssh kind (nullable for flask_wol/local)
     ssh_host: str | None = Field(default=None, max_length=128)  # IP/hostname
@@ -57,6 +61,29 @@ class Host(SQLModel, table=True):
 
     enabled: bool = Field(default=True, sa_column=Column(Boolean, server_default=text("true"), nullable=False))
     ui_order: int = Field(default=0)
+
+    # ── kind=agent (Fleet & Rezepte v2, Phase 1) ─────────────────────────────
+    #
+    # A self-registered box that pushes telemetry over HTTPS instead of being
+    # pulled over SSH — see routers/nodes.py. `agent_token_hash` is a sha256
+    # hex digest, never the token itself (the token only ever exists on the
+    # device and in the one pairing response). `agent_telemetry` holds only
+    # the LAST heartbeat's snapshot (not a history — that would grow forever).
+    agent_token_hash: str | None = Field(default=None, max_length=64)
+    agent_last_seen_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    agent_telemetry: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_version: str | None = Field(default=None, max_length=32)
+
+    # Model-weights inventory (Nachtrag 30.08.2026, für Phase 2 — "schon auf
+    # dem Gerät, kein erneuter Download"). Sent only when it changed (agent
+    # hashes its own scan result and skips the field otherwise), so this is
+    # also "the last snapshot", updated independently of agent_telemetry.
+    agent_inventory: list[Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_inventory_updated_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,

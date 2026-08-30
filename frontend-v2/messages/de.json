@@ -2126,6 +2126,7 @@
       "kindSsh": "SSH",
       "kindFlaskWol": "Flask/WoL",
       "kindLocal": "Lokal",
+      "kindAgent": "Agent",
       "awake": "Wach",
       "sleeping": "Schlafend",
       "unreachable": "{name} nicht erreichbar",

@@ -281,6 +281,13 @@ services:
       # Telegram-inbound import of jarvis_core is lazy + feature-gated, so a
       # pure image run without this mount is unaffected (feature stays off).
       - ./jarvis_core:/app/jarvis_core:ro
+      # mc-node-agent single-file source (Fleet & Rezepte v2, Phase 1) —
+      # same reasoning as jarvis_core above: GET /api/v1/nodes/agent-script
+      # (routers/nodes.py) serves THIS running instance's own copy, so a
+      # paired device's agent always matches the API it talks to instead of
+      # drifting from a hardcoded GitHub URL pinned to `main`. Missing mount
+      # → that endpoint returns 404, feature-gated the same way.
+      - ./scripts/mc-node-agent.py:/app/scripts/mc-node-agent.py:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

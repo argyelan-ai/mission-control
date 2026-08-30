@@ -38,6 +38,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.models.runtime import Runtime
 from app.services import address_classify, host_memory_prep, runtime_grace, runtime_ownership
+from app.utils import ensure_aware, utcnow
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -2607,9 +2608,54 @@ def _parse_spark_metrics(stdout: str) -> dict:
         return dict(_SPARK_UNREACHABLE)
 
 
+_AGENT_TELEMETRY_FRESH_S = 60  # heartbeat interval is 15s — 60s tolerates 3 missed beats
+
+
+def _metrics_from_agent_telemetry(telemetry: dict) -> dict:
+    """Maps the node-agent's push telemetry (routers/nodes.py TelemetrySchema)
+    onto the existing SSH-pull return shape, so TelemetryColumn/UI code needs
+    no changes. Extra fields (cpu_pct, load1, disk_*) are additive — unknown
+    keys in the dict are simply ignored by callers that don't read them."""
+    return {
+        "reachable": True,
+        "gpu_util_pct": telemetry.get("gpu_util_pct"),
+        "vram_used_mb": telemetry.get("vram_used_mb"),
+        "vram_total_mb": telemetry.get("vram_total_mb"),
+        "gpu_temp_c": telemetry.get("gpu_temp_c"),
+        "ram_used_mb": telemetry.get("mem_used_mb"),
+        "ram_total_mb": telemetry.get("mem_total_mb"),
+        "cpu_pct": telemetry.get("cpu_pct"),
+        "load1": telemetry.get("load1"),
+        "mem_available_mb": telemetry.get("mem_available_mb"),
+        "swap_used_mb": telemetry.get("swap_used_mb"),
+        "disk_used_gb": telemetry.get("disk_used_gb"),
+        "disk_total_gb": telemetry.get("disk_total_gb"),
+    }
+
+
+def _agent_telemetry_fresh(host: ResolvedHost) -> bool:
+    """True only for kind=='agent' hosts (review finding #8, 30.08.2026):
+    routers/nodes.py's pairing-codes endpoint lets an admin mint a code
+    against ANY pre-existing host_id regardless of its kind, so an ssh-kind
+    host could in principle end up with agent_telemetry populated too — and
+    without this check, that pushed (possibly stale) snapshot would mask
+    its real SSH probe instead of just being additional, unused data."""
+    if host.kind != "agent":
+        return False
+    if not host.agent_telemetry or not host.agent_last_seen_at:
+        return False
+    age_s = (utcnow() - ensure_aware(host.agent_last_seen_at)).total_seconds()
+    return age_s < _AGENT_TELEMETRY_FRESH_S
+
+
 async def get_host_metrics(host: ResolvedHost | None) -> dict:
     """Fetches live hardware metrics for a host (ADR-048, generic).
 
+    - agent push       → a node-agent (kind=agent, see routers/nodes.py) posts
+      a heartbeat every 15s; if the last snapshot is <60s old we answer from
+      it instead of opening an SSH connection at all (faster, and works for
+      boxes that never got an SSH key wired up). Older/missing telemetry
+      falls through to the SSH probe below, same as before this existed.
     - kind ``ssh``      → nvidia-smi + free -m via SSH (same parsing logic
       as the old get_spark_metrics — now per host instead of hardcoded DGX).
     - kind ``flask_wol`` → no SSH channel: health status of the control server
@@ -2622,6 +2668,8 @@ async def get_host_metrics(host: ResolvedHost | None) -> dict:
         return {**dict(_SPARK_UNREACHABLE), "reachable": reachable}
     if host is not None and host.kind == "local":
         return dict(_SPARK_UNREACHABLE)
+    if host is not None and _agent_telemetry_fresh(host):
+        return _metrics_from_agent_telemetry(host.agent_telemetry)
     try:
         stdout, _, _ = await _ssh_run(_SPARK_METRICS_CMD, host=host)
         return _parse_spark_metrics(stdout)
