@@ -232,3 +232,35 @@ async def test_update_existing_login_credential_with_url_passes(auth_client: Asy
     )
     assert resp.status_code == 200
     assert resp.json()["url"] == "https://example.com/login"
+
+
+@pytest.mark.asyncio
+async def test_ssh_key_credential_never_exposes_private_key(auth_client: AsyncClient):
+    """Fleet & Rezepte v2, Phase 2 (Auto-Onboarding) review requirement:
+    private_key_pem must NEVER leave the backend, not even last-4-chars
+    masked — a suffix reveal is fine for a password, not for key material.
+    public_key/username are not secrets and stay visible."""
+    private_key_pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecretkeybytes\n-----END OPENSSH PRIVATE KEY-----\n"
+    resp = await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key",
+            "credential_type": "ssh_key",
+            "data": {
+                "private_key_pem": private_key_pem,
+                "public_key": "ssh-ed25519 AAAAC3Nz mc-fleet gx10",
+                "username": "mcfleet",
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["data_masked"]["private_key_pem"] == "[hidden]"
+    assert "secretkeybytes" not in resp.text
+    assert body["data_masked"]["public_key"] == "ssh-ed25519 AAAAC3Nz mc-fleet gx10"
+    assert body["data_masked"]["username"] == "mcfleet"
+
+    # Same guarantee on GET, not just the create response.
+    get_resp = await auth_client.get(f"/api/v1/credentials/{body['id']}")
+    assert get_resp.json()["data_masked"]["private_key_pem"] == "[hidden]"
+    assert "secretkeybytes" not in get_resp.text

@@ -49,12 +49,26 @@ class CredentialUpdate(BaseModel):
     notes: str | None = None
 
 
+# Fields whose value must NEVER leave the backend, not even a last-4-chars
+# mask (Fleet & Rezepte v2, Phase 2 — Auto-Onboarding, review requirement
+# "Private Keys: API liefert sie NIE aus"). A suffix reveal is fine for a
+# password (an attacker gains nothing from 4 random characters), but a
+# private key's last characters are still key material, and the point of
+# this field is that it never leaves the Vault at all.
+_NEVER_EXPOSE_FIELDS = ("private_key_pem",)
+# Fields that are not secrets in the first place — shown verbatim, same as
+# username always was.
+_NON_SENSITIVE_FIELDS = ("username", "public_key")
+
+
 def _mask_data(data: dict, credential_type: str) -> dict:
     """Mask sensitive fields, keep non-sensitive visible."""
     masked = {}
     for k, v in data.items():
-        if k in ("username",):
-            masked[k] = v  # username not sensitive
+        if k in _NEVER_EXPOSE_FIELDS:
+            masked[k] = "[hidden]"
+        elif k in _NON_SENSITIVE_FIELDS:
+            masked[k] = v
         else:
             masked[k] = mask(str(v)) if v else ""
     return masked
