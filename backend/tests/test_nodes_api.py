@@ -84,6 +84,41 @@ async def test_create_pairing_code_install_command_preserves_https(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_install_command_serves_agent_script_from_this_instance(auth_client):
+    """Review finding #10 (30.08.2026): no more hardcoded GitHub raw URL —
+    the install one-liner must pull the agent from THIS instance's own
+    /api/v1/nodes/agent-script, so a fork/self-host/different-branch
+    deployment always hands out the agent that actually matches its API."""
+    resp = await auth_client.post("/api/v1/nodes/pairing-codes", json={})
+    install_command = resp.json()["install_command"]
+    assert "/api/v1/nodes/agent-script" in install_command
+    assert "raw.githubusercontent.com" not in install_command
+
+
+@pytest.mark.asyncio
+async def test_agent_script_served_unauthenticated_when_mounted(client):
+    """The endpoint is deliberately auth-free — an unpaired device has no
+    credential yet, that's the whole point of the flow it kicks off."""
+    fake_source = "#!/usr/bin/env python3\nprint('mc-node-agent stand-in for the mount test')\n"
+    with patch("app.routers.nodes._AGENT_SCRIPT_PATH") as mock_path:
+        mock_path.read_text.return_value = fake_source
+        resp = await client.get("/api/v1/nodes/agent-script")
+    assert resp.status_code == 200
+    assert resp.text == fake_source
+    assert resp.headers["content-type"].startswith("text/plain")
+
+
+@pytest.mark.asyncio
+async def test_agent_script_404_when_mount_missing(client):
+    """A plain image run without the docker-compose bind mount must get a
+    clean 404 (feature-gated), never an unhandled 500 (jarvis_core convention)."""
+    with patch("app.routers.nodes._AGENT_SCRIPT_PATH") as mock_path:
+        mock_path.read_text.side_effect = FileNotFoundError("no such file")
+        resp = await client.get("/api/v1/nodes/agent-script")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_create_pairing_code_forbidden_for_viewer(client):
     token = await _viewer_token()
     resp = await client.post(

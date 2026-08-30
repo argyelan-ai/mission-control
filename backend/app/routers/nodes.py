@@ -23,8 +23,10 @@ import hmac
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -51,12 +53,13 @@ _HEARTBEAT_MIN_INTERVAL_S = 5  # rate guard — see heartbeat()
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CODE_LENGTH = 8
 
-# Raw-content URL for the single-file agent — the "fertiger Install-Einzeiler"
-# curls this straight from the public repo (ADR: PUBLIC-UPSTREAM seit 03.07.).
-# Overridable via settings if a fork/self-host ever needs a different source.
-_AGENT_SCRIPT_RAW_URL = (
-    "https://raw.githubusercontent.com/argyelan-ai/mission-control/main/scripts/mc-node-agent.py"
-)
+# Where the docker-compose bind mount (./scripts/mc-node-agent.py ->
+# /app/scripts/mc-node-agent.py:ro) lands inside the backend container —
+# same "soft, feature-gated" convention as jarvis_core's /app/jarvis_core
+# mount (docker-compose.yml). See get_agent_script() below.
+_AGENT_SCRIPT_PATH = Path("/app/scripts/mc-node-agent.py")
+
+_AGENT_INSTALL_PATH = "/usr/local/bin/mc-node-agent.py"
 
 
 def _generate_code() -> str:
@@ -67,16 +70,22 @@ def _hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-_AGENT_INSTALL_PATH = "/usr/local/bin/mc-node-agent.py"
-
-
 def _build_install_command(code: str) -> str:
     """Downloads to a real path first (not `curl | python3 -`): --install's
     systemd unit needs a stable ExecStart path, which a stdin-piped script
-    can never have (no __file__ to point at)."""
+    can never have (no __file__ to point at).
+
+    Review finding #10 (30.08.2026): this used to curl a GitHub raw URL
+    pinned to `main`, which drifts from whatever version THIS backend
+    actually understands (heartbeat schema, endpoint paths) — a fork, a
+    self-host on a different branch, or just this repo's own next release
+    would hand out an agent that doesn't match the API it's talking to.
+    Serving the running instance's own copy (GET /agent-script) makes the
+    two inseparable by construction.
+    """
     base_url = node_agent_base_url()
     return (
-        f"sudo curl -fsSL {_AGENT_SCRIPT_RAW_URL} -o {_AGENT_INSTALL_PATH} && "
+        f"sudo curl -fsSL {base_url}/api/v1/nodes/agent-script -o {_AGENT_INSTALL_PATH} && "
         f"sudo python3 {_AGENT_INSTALL_PATH} --mc-url {base_url} --pair {code} --install"
     )
 
@@ -261,6 +270,31 @@ async def create_pairing_code(
         host_id=str(host_uuid) if host_uuid else None,
         install_command=_build_install_command(code),
     )
+
+
+@router.get("/agent-script", response_class=PlainTextResponse)
+async def get_agent_script():
+    """Serves THIS instance's own scripts/mc-node-agent.py (review finding
+    #10, 30.08.2026) — see _build_install_command's docstring for why that
+    matters. UNAUTHENTICATED on purpose: mission-control is a public repo
+    (PUBLIC-UPSTREAM seit 03.07.2026), this file carries no secrets, and an
+    unpaired device by definition has no credential to authenticate with
+    yet — that's the whole point of the pairing flow this file kicks off.
+
+    Requires the docker-compose bind mount (jarvis_core's convention, see
+    _AGENT_SCRIPT_PATH) — a plain image run without it is a clean 404, not
+    a crash, same as jarvis_core's "feature stays off" fallback.
+    """
+    try:
+        return PlainTextResponse(_AGENT_SCRIPT_PATH.read_text(encoding="utf-8"))
+    except OSError:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "mc-node-agent.py ist auf dieser Instanz nicht verfügbar — "
+                "fehlt der docker-compose-Mount ./scripts/mc-node-agent.py:/app/scripts/mc-node-agent.py:ro?"
+            ),
+        )
 
 
 @router.post("/pair", response_model=PairResponse)
