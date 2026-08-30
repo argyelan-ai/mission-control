@@ -68,6 +68,22 @@ async def test_create_pairing_code_admin(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_create_pairing_code_install_command_preserves_https(auth_client):
+    """Review finding #1 (30.08.2026): the install one-liner must use
+    node_agent_base_url(), not phone_test_url() — the latter hardcodes
+    http:// and would downgrade an https-only box (Tailscale cert)."""
+    from app.config import settings
+
+    with patch.object(settings, "mc_node_agent_base_url", "https://mini-1.tailnet-name.ts.net"), \
+         patch.object(settings, "public_host", "mini-1.tailnet-name.ts.net"):
+        resp = await auth_client.post("/api/v1/nodes/pairing-codes", json={})
+    assert resp.status_code == 200, resp.text
+    install_command = resp.json()["install_command"]
+    assert "https://mini-1.tailnet-name.ts.net" in install_command
+    assert "http://mini-1.tailnet-name.ts.net" not in install_command
+
+
+@pytest.mark.asyncio
 async def test_create_pairing_code_forbidden_for_viewer(client):
     token = await _viewer_token()
     resp = await client.post(

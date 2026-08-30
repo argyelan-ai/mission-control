@@ -158,6 +158,16 @@ class Settings(BaseSettings):
     # MC Base URL (externally reachable, for Telegram URL buttons)
     mc_base_url: str = "http://localhost"
 
+    # Base URL for the mc-node-agent install one-liner (POST
+    # /api/v1/nodes/pairing-codes) — deliberately separate from
+    # phone_test_url(): that helper hardcodes an http:// scheme when
+    # PUBLIC_HOST is set, which is wrong for a box that's only reachable via
+    # https (e.g. a Tailscale cert, Mark's actual setup). Empty (default)
+    # falls back to mc_base_url unchanged — never silently downgrades a
+    # configured https URL to http. Set MC_NODE_AGENT_BASE_URL explicitly
+    # when it needs to differ from mc_base_url.
+    mc_node_agent_base_url: str = ""
+
     # Operator display name — how agents address the human behind MC.
     # Rendered into SOUL.md/USER.md templates. Set OPERATOR_NAME in .env.
     operator_name: str = "Operator"
@@ -528,6 +538,17 @@ def phone_test_url() -> str:
     back to mc_base_url when PUBLIC_HOST is unset.
     """
     return f"http://{settings.public_host}" if settings.public_host else settings.mc_base_url
+
+
+def node_agent_base_url() -> str:
+    """Base URL the mc-node-agent install one-liner uses to reach this MC
+    instance (routers/nodes.py). Deliberately NOT phone_test_url() — that
+    helper always prepends http://, which would downgrade a box that's only
+    reachable via https (Tailscale cert) to a scheme its own heartbeat can't
+    connect through. Falls back to mc_base_url unchanged when
+    MC_NODE_AGENT_BASE_URL is unset.
+    """
+    return settings.mc_node_agent_base_url or settings.mc_base_url
 
 
 def effective_host_ssh_user() -> str:

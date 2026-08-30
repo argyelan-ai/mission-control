@@ -266,6 +266,36 @@ class TestScanModelInventory:
     def test_missing_root_is_skipped_not_fatal(self, agent, tmp_path):
         assert agent.scan_model_inventory([tmp_path / "does-not-exist"]) == []
 
+    def test_symlink_cycle_does_not_recurse_infinitely(self, agent, tmp_path):
+        """Review finding #2 (30.08.2026): a directory symlink cycle must not
+        blow the recursion limit — RecursionError isn't an OSError, so the
+        per-entry try/except inside _walk_dir_stats wouldn't catch it."""
+        model_dir = tmp_path / "models-local" / "cyclic-model"
+        model_dir.mkdir(parents=True)
+        _write_file(model_dir / "real.bin", 10)
+        (model_dir / "self-loop").symlink_to(model_dir)  # symlink back to itself
+
+        entries = agent.scan_model_inventory([tmp_path / "models-local"])
+        assert len(entries) == 1
+        # Only the real file is counted — the symlinked directory is never
+        # descended into (directories only ever traverse real paths now).
+        assert entries[0]["file_count"] == 1
+        assert entries[0]["total_bytes"] == 10
+
+    def test_mutual_symlink_cycle_between_two_dirs(self, agent, tmp_path):
+        """Two directories symlinking into each other — a longer cycle than
+        the direct self-loop above, still must not recurse forever."""
+        root = tmp_path / "models-local"
+        dir_a = root / "model-a"
+        dir_b = root / "model-a" / "sub"
+        dir_b.mkdir(parents=True)
+        _write_file(dir_a / "real.bin", 5)
+        (dir_b / "back-to-a").symlink_to(dir_a)
+
+        entries = agent.scan_model_inventory([root])
+        assert len(entries) == 1
+        assert entries[0]["total_bytes"] == 5
+
     @pytest.mark.skipif(sys.platform == "win32", reason="posix permission bits")
     @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses permission checks")
     def test_permission_denied_directory_is_skipped_not_fatal(self, agent, tmp_path):
@@ -305,3 +335,69 @@ class TestInventoryHash:
 
     def test_empty_list_is_stable(self, agent):
         assert agent.inventory_hash([]) == agent.inventory_hash([])
+
+
+# ── run_loop's inventory caching (review finding #7, 30.08.2026) ────────────
+
+
+class TestRunLoopInventoryCaching:
+    def test_scan_cached_across_retry_and_hash_only_commits_after_send_succeeds(self, agent, monkeypatch):
+        """A failed heartbeat send must not force a re-scan on the immediate
+        retry (the filesystem walk is the expensive part), and the
+        "last sent" hash must only advance once a send actually went
+        through — not the moment the scan finished."""
+        one_entry = [{"name": "m", "total_bytes": 1, "file_count": 1,
+                      "mtime_max": None, "hf_repo_id": None, "model_type": None}]
+        scan_calls = []
+
+        def fake_scan(paths):
+            scan_calls.append(paths)
+            return one_entry
+
+        monkeypatch.setattr(agent, "scan_model_inventory", fake_scan)
+        monkeypatch.setattr(agent, "collect_telemetry", lambda: {"ts": "now"})
+
+        send_calls = []
+
+        def fake_send(mc_url, token, telemetry, inventory=None):
+            send_calls.append(inventory)
+            if len(send_calls) == 1:
+                raise RuntimeError("network blip")
+            return {"ok": True}
+
+        monkeypatch.setattr(agent, "send_heartbeat", fake_send)
+
+        sleep_calls = {"n": 0}
+
+        def fake_sleep(_seconds):
+            sleep_calls["n"] += 1
+            if sleep_calls["n"] >= 3:
+                raise KeyboardInterrupt()
+
+        monkeypatch.setattr(agent.time, "sleep", fake_sleep)
+
+        agent.run_loop("http://mc.test", "tok")
+
+        assert len(scan_calls) == 1  # NOT re-scanned on the retry
+        assert send_calls[0] == one_entry  # first (failing) attempt still carries the fresh scan
+        assert send_calls[1] == one_entry  # retry reuses the SAME cached scan, not a fresh one
+        assert send_calls[2] is None  # steady state: hash unchanged, nothing to attach anymore
+
+    def test_broken_scan_does_not_prevent_the_heartbeat_from_sending(self, agent, monkeypatch):
+        monkeypatch.setattr(agent, "collect_telemetry", lambda: {"ts": "now"})
+
+        def fake_scan(paths):
+            raise RuntimeError("permission denied somewhere deep")
+
+        monkeypatch.setattr(agent, "scan_model_inventory", fake_scan)
+
+        send_calls = []
+        monkeypatch.setattr(
+            agent, "send_heartbeat",
+            lambda mc_url, token, telemetry, inventory=None: send_calls.append(inventory),
+        )
+        monkeypatch.setattr(agent.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+        agent.run_loop("http://mc.test", "tok")
+
+        assert send_calls == [None]  # heartbeat still went out, just without inventory

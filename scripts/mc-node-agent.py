@@ -223,14 +223,22 @@ def _decode_hf_repo_id(dirname: str) -> str | None:
     return f"{org}/{name}"
 
 
-def _walk_dir_stats(root: Path, follow_symlinks: bool) -> tuple[int, int, float | None]:
+def _walk_dir_stats(root: Path, follow_file_symlinks: bool) -> tuple[int, int, float | None]:
     """Sums file sizes + finds the newest mtime under `root`.
 
-    Dedupes by real path when following symlinks — the HF cache's snapshots/
-    directories are almost entirely symlinks into a shared blobs/ store, and
-    two revisions pointing at the same blob must only count its bytes once.
-    Any unreadable entry (permission error, dangling symlink) is skipped,
-    not fatal.
+    Dedupes by real path when following file symlinks — the HF cache's
+    snapshots/ directories are almost entirely symlinks into a shared
+    blobs/ store, and two revisions pointing at the same blob must only
+    count its bytes once. Any unreadable entry (permission error, dangling
+    symlink) is skipped, not fatal.
+
+    Review finding #2 (30.08.2026): directories are NEVER traversed through
+    a symlink (`is_dir(follow_symlinks=False)`, unconditionally) — a
+    symlink cycle would otherwise blow Python's recursion limit, and
+    RecursionError isn't an OSError so the per-entry try/except here
+    wouldn't catch it. Only file symlinks are followed (needed for the HF
+    cache's snapshots/ -> blobs/ layout); a symlinked directory is simply
+    skipped rather than descended into.
     """
     seen: set[str] = set()
     total_bytes = 0
@@ -245,14 +253,14 @@ def _walk_dir_stats(root: Path, follow_symlinks: bool) -> tuple[int, int, float 
             return
         for entry in entries:
             try:
-                if entry.is_dir(follow_symlinks=follow_symlinks):
+                if entry.is_dir(follow_symlinks=False):
                     _walk(entry.path)
-                elif entry.is_file(follow_symlinks=follow_symlinks):
-                    key = os.path.realpath(entry.path) if follow_symlinks else entry.path
+                elif entry.is_file(follow_symlinks=follow_file_symlinks):
+                    key = os.path.realpath(entry.path) if follow_file_symlinks else entry.path
                     if key in seen:
                         continue
                     seen.add(key)
-                    st = entry.stat(follow_symlinks=follow_symlinks)
+                    st = entry.stat(follow_symlinks=follow_file_symlinks)
                     total_bytes += st.st_size
                     file_count += 1
                     if mtime_max is None or st.st_mtime > mtime_max:
@@ -276,7 +284,7 @@ def _read_model_type(config_path: Path) -> str | None:
 def _scan_local_model_dir(path: Path) -> dict:
     """models-local style: the whole subtree is one model; config.json (if
     present) directly under it names the model_type."""
-    total_bytes, file_count, mtime_max = _walk_dir_stats(path, follow_symlinks=True)
+    total_bytes, file_count, mtime_max = _walk_dir_stats(path, follow_file_symlinks=True)
     config_path = path / "config.json"
     model_type = _read_model_type(config_path) if config_path.is_file() else None
     return {
@@ -295,7 +303,7 @@ def _scan_hf_cache_dir(path: Path) -> dict:
     decoded from the directory name, model_type from whichever snapshot
     revision has a config.json (usually just one — 'main')."""
     snapshots_dir = path / "snapshots"
-    total_bytes, file_count, mtime_max = _walk_dir_stats(snapshots_dir, follow_symlinks=True)
+    total_bytes, file_count, mtime_max = _walk_dir_stats(snapshots_dir, follow_file_symlinks=True)
     model_type = None
     if snapshots_dir.is_dir():
         try:
@@ -594,30 +602,54 @@ def run_loop(mc_url: str, token: str) -> None:
     always preferable to a dead process (systemd's Restart=always is only a
     second line of defense, not the plan).
 
-    Model-inventory scan (Nachtrag 30.08.2026): runs at startup and then
-    every INVENTORY_SCAN_EVERY_N_HEARTBEATS-th successful heartbeat (~10min
-    at the 15s interval). Only attached to the heartbeat body when its hash
-    changed since the last time it was actually SENT — a restart just
-    re-sends once, which is harmless.
+    Model-inventory scan (Nachtrag 30.08.2026, hardened per review finding
+    #7): runs at startup and then every INVENTORY_SCAN_EVERY_N_HEARTBEATS-th
+    successful heartbeat (~10min at the 15s interval). Only attached to the
+    heartbeat body when its hash changed since the last time it was
+    actually SENT SUCCESSFULLY — `last_sent_hash` is only updated after
+    send_heartbeat returns without raising, never before. `cached_scan`
+    holds the current scan window's result across retries: if a send fails
+    (network hiccup), the next attempt reuses the same scan instead of
+    re-walking the filesystem, and only clears once that window's heartbeat
+    actually went through.
     """
     backoff = HEARTBEAT_INTERVAL_S
     inventory_paths = default_inventory_paths()
-    last_sent_inventory_hash: str | None = None
     heartbeat_count = 0
+    last_sent_hash: str | None = None
+    cached_scan: tuple[str, list[dict]] | None = None
+    scan_due = True  # scan once, unconditionally, at startup
+
     while True:
         try:
             telemetry = collect_telemetry()
 
+            if scan_due and cached_scan is None:
+                try:
+                    entries = scan_model_inventory(inventory_paths)
+                    cached_scan = (inventory_hash(entries), entries)
+                except Exception as e:  # noqa: BLE001 — a broken scan (incl.
+                    # a directory tree pathological enough to still exhaust
+                    # the recursion limit despite the follow_symlinks guard
+                    # in _walk_dir_stats) must never take the heartbeat with it.
+                    log.warning("Inventar-Scan fehlgeschlagen (%s) — Heartbeat geht ohne Inventar raus", e)
+                    cached_scan = (last_sent_hash, [])  # treat as "unchanged", still resolves this window
+
             inventory_to_send: list[dict] | None = None
-            if heartbeat_count % INVENTORY_SCAN_EVERY_N_HEARTBEATS == 0:
-                entries = scan_model_inventory(inventory_paths)
-                current_hash = inventory_hash(entries)
-                if current_hash != last_sent_inventory_hash:
-                    inventory_to_send = entries
-                    last_sent_inventory_hash = current_hash
+            if cached_scan is not None and cached_scan[0] != last_sent_hash:
+                inventory_to_send = cached_scan[1]
 
             send_heartbeat(mc_url, token, telemetry, inventory=inventory_to_send)
+
+            if cached_scan is not None:
+                last_sent_hash = cached_scan[0]
+                cached_scan = None
+                scan_due = False
+
             heartbeat_count += 1
+            if heartbeat_count % INVENTORY_SCAN_EVERY_N_HEARTBEATS == 0:
+                scan_due = True
+
             backoff = HEARTBEAT_INTERVAL_S
             time.sleep(HEARTBEAT_INTERVAL_S)
         except KeyboardInterrupt:

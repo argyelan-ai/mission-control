@@ -31,7 +31,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Role, require_role, require_user
-from app.config import phone_test_url
+from app.config import node_agent_base_url
 from app.database import get_session
 from app.models.host import Host
 from app.models.host_pairing_code import HostPairingCode
@@ -73,7 +73,7 @@ def _build_install_command(code: str) -> str:
     """Downloads to a real path first (not `curl | python3 -`): --install's
     systemd unit needs a stable ExecStart path, which a stdin-piped script
     can never have (no __file__ to point at)."""
-    base_url = phone_test_url()
+    base_url = node_agent_base_url()
     return (
         f"sudo curl -fsSL {_AGENT_SCRIPT_RAW_URL} -o {_AGENT_INSTALL_PATH} && "
         f"sudo python3 {_AGENT_INSTALL_PATH} --mc-url {base_url} --pair {code} --install"
