@@ -72,6 +72,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -157,6 +158,16 @@ class PrepHandle:
     ssh_host: str | None = None
     ssh_user: str | None = None
     ssh_key_path: str | None = None
+    #: Phase 2 review finding #5 (30.08.2026): a host onboarded via
+    #: services/host_onboarding.py typically has ssh_key_path=None — its ONLY
+    #: credential lives in the Vault, referenced by this id. Without it,
+    #: as_host() reconstructs a ResolvedHost that can't authenticate at all
+    #: for such a host, which is exactly the crash-recovery path this handle
+    #: exists for (see the class docstring: "after a backend restart there
+    #: is no runtime, no session and no resolved host left to ask"). Stored
+    #: as str (not uuid.UUID) — this dataclass round-trips through
+    #: json.dumps(asdict(self)), which doesn't know how to serialize a UUID.
+    ssh_credential_id: str | None = None
     #: PR 10 — the MemAvailable floor this start waited for, or ``None`` when
     #: no wait was requested (e.g. the runtime is not GB10-applicable).
     mem_wait_threshold_kb: int | None = None
@@ -189,10 +200,20 @@ class PrepHandle:
         return cls(**{k: v for k, v in doc.items() if k in known})
 
     def as_host(self) -> ResolvedHost:
+        credential_id: uuid.UUID | None = None
+        if self.ssh_credential_id:
+            try:
+                credential_id = uuid.UUID(self.ssh_credential_id)
+            except ValueError:
+                logger.warning(
+                    "PrepHandle %s: ssh_credential_id %r ist keine gültige UUID — ignoriert.",
+                    self.host_key, self.ssh_credential_id,
+                )
         return ResolvedHost(
             ssh_host=self.ssh_host,
             ssh_user=self.ssh_user,
             ssh_key_path=self.ssh_key_path,
+            ssh_credential_id=credential_id,
             kind="ssh",
             source="memprep_handle",
         )
@@ -516,6 +537,7 @@ async def prepare_host_memory(
         ssh_host=host.ssh_host if host else None,
         ssh_user=host.ssh_user if host else None,
         ssh_key_path=host.ssh_key_path if host else None,
+        ssh_credential_id=str(host.ssh_credential_id) if host and host.ssh_credential_id else None,
     )
 
     handle.original_watermark_kb = await read_watermark_kb(host)
