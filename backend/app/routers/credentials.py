@@ -204,10 +204,21 @@ async def delete_credential(
     if not credential:
         raise HTTPException(404, "Credential not found")
     # Explicitly set NULL (ON DELETE SET NULL is DB-level, doesn't work in SQLite tests)
-    from sqlmodel import select, update
+    from sqlmodel import update
     from app.models.task import Task
+    from app.models.host import Host
     await session.exec(
         update(Task).where(Task.credential_id == credential_id).values(credential_id=None)
+    )
+    # Fleet & Rezepte v2, Phase 2 (review finding #6, 30.08.2026): a host
+    # onboarded via services/host_onboarding.py references its Vault key the
+    # same way a Task references a credential — this mirror was missing,
+    # so SQLite test environments (metadata.create_all, no FK enforcement)
+    # left a dangling ssh_credential_id after a delete that the real
+    # Postgres ON DELETE SET NULL constraint (migration 0188) would have
+    # cleared. Explicit here for the same reason as the Task update above.
+    await session.exec(
+        update(Host).where(Host.ssh_credential_id == credential_id).values(ssh_credential_id=None)
     )
     await session.delete(credential)
     await session.commit()

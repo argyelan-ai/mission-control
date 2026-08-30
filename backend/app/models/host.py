@@ -48,7 +48,9 @@ class Host(SQLModel, table=True):
     # settings). ON DELETE SET NULL: a deleted credential must not take the
     # host down with it, only its auto-access (same reasoning as
     # host_pairing_codes.host_id, migration 0187).
-    ssh_credential_id: uuid.UUID | None = Field(default=None, foreign_key="credentials.id", index=True)
+    ssh_credential_id: uuid.UUID | None = Field(
+        default=None, foreign_key="credentials.id", ondelete="SET NULL", index=True
+    )
 
     # Tailscale address for this box, when it has one (100.64.0.0/10 or a
     # *.ts.net MagicDNS name — see services/address_classify). Optional and

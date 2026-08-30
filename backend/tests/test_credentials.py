@@ -123,6 +123,39 @@ async def test_delete_credential_sets_null_on_task(auth_client: AsyncClient, mak
 
 
 @pytest.mark.asyncio
+async def test_delete_credential_sets_null_on_host(auth_client: AsyncClient, async_session):
+    """Review finding #6 (30.08.2026): deleting an ssh_key credential must
+    SET NULL on any host referencing it — same mirror as the Task case
+    above, missing before this fix (SQLite tests don't enforce the real
+    Postgres ON DELETE SET NULL from migration 0188, so the router has to
+    do it explicitly, exactly like it already does for Task.credential_id)."""
+    from app.models.host import Host
+
+    create_resp = await auth_client.post(
+        "/api/v1/credentials",
+        json={
+            "name": "GX10 SSH key", "credential_type": "ssh_key",
+            "data": {"private_key_pem": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n",
+                     "public_key": "ssh-ed25519 AAAA", "username": "mcfleet"},
+        },
+    )
+    cred_id = create_resp.json()["id"]
+
+    import uuid
+    host = Host(slug="gx10-cred-test", display_name="GX10", kind="ssh",
+                ssh_host="192.0.2.50", ssh_credential_id=uuid.UUID(cred_id))
+    async_session.add(host)
+    await async_session.commit()
+    await async_session.refresh(host)
+
+    resp = await auth_client.delete(f"/api/v1/credentials/{cred_id}")
+    assert resp.status_code == 204
+
+    await async_session.refresh(host)
+    assert host.ssh_credential_id is None
+
+
+@pytest.mark.asyncio
 async def test_login_credential_without_url_rejected_at_create(auth_client: AsyncClient):
     """credential_type='login' without url must raise 422 — prevents a silent
     422 during a later mc verify --login-as vault resolve."""
