@@ -65,6 +65,7 @@ from app.models.host import Host
 from app.services.encryption import encrypt
 from app.services.host_resolver import ResolvedHost
 from app.services.job_log import JobLog
+from app.utils import create_tracked_task
 
 logger = logging.getLogger("mc.host_onboarding")
 
@@ -444,8 +445,16 @@ class _Run:
                     terminal_status = STATUS_NEEDS_SUDO
                     terminal_message = hint
                 elif bstatus == host_bootstrap.STATUS_FAILED:
+                    # Review finding #3 (30.08.2026): this used to only log a
+                    # warning and let terminal_status stay STATUS_DONE — a
+                    # green "done" banner while Docker/NVIDIA setup actually
+                    # failed. Downgrade exactly like the needs_sudo branch
+                    # above; SSH+Vault+host-row still succeeded, so this
+                    # isn't a hard "failed" run, but it must not read as done.
                     msg = bootstrap_status.get("message") or "unbekannter Fehler"
-                    await self.log(f"Box-Vorbereitung fehlgeschlagen: {msg}", level="warn")
+                    await self.log(f"Box-Vorbereitung fehlgeschlagen: {msg}", level="error")
+                    terminal_status = STATUS_FAILED
+                    terminal_message = f"Box-Vorbereitung fehlgeschlagen: {msg}"
                 else:
                     await self.log("Box-Vorbereitung abgeschlossen.")
 
@@ -478,5 +487,13 @@ async def start_onboarding(params: OnboardParams) -> str:
     job = job_for(job_id)
     await job.reset()
     await job.set_status(STATUS_RUNNING, phase="starting", extra={"job_id": job_id})
-    asyncio.create_task(_Run(job_id, params).run())
+    # Review finding #4 (30.08.2026): a bare asyncio.create_task() has no
+    # strong reference anywhere once this function returns — nothing stops
+    # the garbage collector from reaping it mid-run, which would leave the
+    # job silently stuck on "starting" forever. create_tracked_task holds it
+    # in a module-level set and logs any exception that would otherwise be
+    # swallowed on GC. (host_bootstrap.py/recipe_install.py's own
+    # start_*() still use the bare form — worth the same fix separately,
+    # out of scope here.)
+    create_tracked_task(_Run(job_id, params).run(), name=f"host-onboard-{job_id}")
     return job_id

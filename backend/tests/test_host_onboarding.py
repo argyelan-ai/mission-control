@@ -254,6 +254,52 @@ async def test_gegenprobe_failure_persists_nothing():
         assert (await session.exec(select(Credential))).first() is None
 
 
+@pytest.mark.asyncio
+async def test_bootstrap_failure_downgrades_terminal_status_from_done():
+    """Review finding #3 (30.08.2026): a failed host_bootstrap run used to
+    only log a warning — the onboarding job still ended STATUS_DONE (a
+    green "done" banner while Docker/NVIDIA setup actually failed)."""
+    from app.services import host_bootstrap
+
+    patcher, _ = _patch_asyncssh_connect()
+    with patcher, \
+         patch("app.services.host_bootstrap.run_bootstrap", new=AsyncMock(return_value=None)), \
+         patch("app.services.host_bootstrap.get_status", new=AsyncMock(return_value={
+             "status": host_bootstrap.STATUS_FAILED,
+             "message": "Docker-Installation schlug fehl (exit 1)",
+         })):
+        job_id = await _run_onboarding_and_wait(_params(bootstrap=True, install_agent=False))
+
+    status = await host_onboarding.get_status(job_id)
+    assert status["status"] == "failed"
+    assert "Docker-Installation schlug fehl" in (status.get("message") or "")
+
+    # SSH+Vault+host-row still succeeded — this isn't a "nothing persisted" case.
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        assert (await session.exec(select(Host))).first() is not None
+
+
+@pytest.mark.asyncio
+async def test_start_onboarding_uses_tracked_task(monkeypatch):
+    """Review finding #4 (30.08.2026): a bare asyncio.create_task() has no
+    strong reference left once start_onboarding() returns — the event loop
+    is free to garbage-collect it mid-run, leaving the job silently stuck on
+    "starting" forever. Must go through app.utils.create_tracked_task."""
+    calls = []
+
+    def fake_tracked_task(coro, name=None):
+        calls.append(name)
+        coro.close()  # never actually run it — this test only checks the wiring
+        return None
+
+    monkeypatch.setattr(host_onboarding, "create_tracked_task", fake_tracked_task)
+
+    job_id = await host_onboarding.start_onboarding(_params())
+
+    assert len(calls) == 1
+    assert job_id in calls[0]
+
+
 # ── security: password never persisted, never logged ────────────────────────
 
 
