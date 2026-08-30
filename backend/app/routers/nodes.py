@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -265,10 +266,24 @@ async def create_pairing_code(
 @router.post("/pair", response_model=PairResponse)
 async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
     """Trades a pairing code for a node_token. UNAUTHENTICATED — the code
-    itself is the credential (single-use, short-lived, see mint above)."""
-    pairing = (
-        await session.exec(select(HostPairingCode).where(HostPairingCode.code == body.code))
-    ).first()
+    itself is the credential (single-use, short-lived, see mint above).
+
+    Review finding #3 (30.08.2026): this endpoint is unauthenticated, so a
+    code racing against ITSELF (replayed/leaked, or just a flaky client
+    retrying) is the actual threat model — without a row lock, two
+    concurrent requests can both read used_at=None and both redeem it.
+    ``with_for_update()`` closes that (Postgres only — SQLite, used only in
+    tests, has no concurrent writers in-process anyway; see messaging.py's
+    _next_seq for the same pattern). A second, independent race lives in
+    _unique_slug: two different codes for the same hostname can both pass
+    the "not taken" check before either inserts — the DB's unique index on
+    hosts.slug is the actual referee, so IntegrityError there also becomes
+    a 409 (with a retry hint) instead of a raw 500.
+    """
+    stmt = select(HostPairingCode).where(HostPairingCode.code == body.code)
+    if session.bind.dialect.name == "postgresql":
+        stmt = stmt.with_for_update()
+    pairing = (await session.exec(stmt)).first()
     if not pairing:
         raise HTTPException(status_code=404, detail="Pairing-Code unbekannt")
     if pairing.used_at is not None:
@@ -291,7 +306,14 @@ async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
             kind="agent",
         )
         session.add(host)
-        await session.flush()  # host.id needed below, same transaction as used_at
+        try:
+            await session.flush()  # host.id needed below, same transaction as used_at
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Ein Host mit diesem Namen wurde gerade gleichzeitig angelegt — bitte erneut versuchen.",
+            )
 
     token = secrets.token_urlsafe(32)
     host.agent_token_hash = _hash_token(token)
@@ -302,7 +324,14 @@ async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
     pairing.used_at = utcnow()
     session.add(pairing)
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Pairing-Code wurde gerade gleichzeitig eingelöst — bitte erneut versuchen.",
+        )
     await session.refresh(host)
 
     return PairResponse(node_token=token, host_id=str(host.id))

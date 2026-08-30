@@ -190,6 +190,25 @@ async def test_pair_double_redeem_409(client, auth_client):
 
 
 @pytest.mark.asyncio
+async def test_pair_slug_race_returns_409_not_500(client, auth_client):
+    """Review finding #3 (30.08.2026): two concurrent /pair calls for the
+    same hostname can both pass _unique_slug's "not taken" check before
+    either inserts — the DB's unique index on hosts.slug is the actual
+    referee. Forced deterministically here (instead of real concurrency,
+    which SQLite's single test connection can't exercise meaningfully) by
+    making _unique_slug hand back an ALREADY-taken slug, exactly what a
+    lost race would look like from pair()'s point of view."""
+    await auth_client.post(
+        "/api/v1/hosts", json={"slug": "collision-box", "display_name": "Taken", "kind": "agent"}
+    )
+    minted = (await auth_client.post("/api/v1/nodes/pairing-codes", json={})).json()
+
+    with patch("app.routers.nodes._unique_slug", new=AsyncMock(return_value="collision-box")):
+        resp = await client.post("/api/v1/nodes/pair", json=_pair_body(minted["code"], hostname="whatever"))
+    assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.asyncio
 async def test_pair_expired_code_410(client, auth_client, async_session):
     minted = (await auth_client.post("/api/v1/nodes/pairing-codes", json={})).json()
 

@@ -123,6 +123,32 @@ async def _get_host(session: AsyncSession, host_id: str) -> Host | None:
     return host
 
 
+# Fields hidden from GET /hosts (list) for viewers — the operational detail
+# useful to admin/operator, not to a read-only viewer. GET /{host_id}/metrics
+# stays the viewer-safe way to see live numbers (it never touches the raw
+# ORM object, so it was never affected by this).
+_VIEWER_HIDDEN_FIELDS = ("agent_telemetry", "agent_inventory", "agent_inventory_updated_at")
+
+
+def _serialize_host(host: Host, current_user) -> dict:
+    """Host row -> API dict, agent-channel fields filtered by role
+    (review finding #4, 30.08.2026).
+
+    agent_token_hash is NEVER returned to ANY role — it's an implementation
+    detail of heartbeat auth (routers/nodes.py._authenticate_node), no
+    client needs it, and serving a hash widens the attack surface for
+    nothing. Unlike ssh_key_path (a path, not a secret — see module
+    docstring), this field really is sensitive-adjacent and has no reason
+    to ever leave the backend.
+    """
+    data = host.model_dump(mode="json")
+    data.pop("agent_token_hash", None)
+    if current_user.role == Role.VIEWER:
+        for field in _VIEWER_HIDDEN_FIELDS:
+            data.pop(field, None)
+    return data
+
+
 @router.get("")
 async def list_hosts(
     session: AsyncSession = Depends(get_session),
@@ -130,7 +156,8 @@ async def list_hosts(
 ):
     """All hosts, sorted by ui_order (then slug for stable ordering)."""
     hosts = (await session.exec(select(Host))).all()
-    return sorted(hosts, key=lambda h: (h.ui_order, h.slug))
+    ordered = sorted(hosts, key=lambda h: (h.ui_order, h.slug))
+    return [_serialize_host(h, current_user) for h in ordered]
 
 
 @router.post("")
@@ -147,7 +174,7 @@ async def create_host(
     session.add(host)
     await session.commit()
     await session.refresh(host)
-    return host
+    return _serialize_host(host, current_user)
 
 
 # ── Box-Wizard: probe + bootstrap ────────────────────────────────────────────
@@ -374,7 +401,7 @@ async def update_host(
     session.add(host)
     await session.commit()
     await session.refresh(host)
-    return host
+    return _serialize_host(host, current_user)
 
 
 @router.delete("/{host_id}", status_code=204)

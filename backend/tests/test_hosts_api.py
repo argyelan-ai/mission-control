@@ -187,6 +187,58 @@ async def test_host_writes_forbidden_for_viewer(client, auth_client, fake_redis)
     assert (await client.get("/api/v1/hosts", headers=headers)).status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_list_hosts_never_leaks_agent_token_hash(client, auth_client, async_session):
+    """Review finding #4 (30.08.2026): agent_token_hash is an implementation
+    detail of heartbeat auth — no role, not even admin, should ever see it
+    over the API."""
+    host = Host(slug="node-a", display_name="Node A", kind="agent", agent_token_hash="deadbeef" * 8)
+    async_session.add(host)
+    await async_session.commit()
+
+    admin_view = (await auth_client.get("/api/v1/hosts")).json()[0]
+    assert "agent_token_hash" not in admin_view
+
+    token = await _viewer_token()
+    viewer_view = (
+        await client.get("/api/v1/hosts", headers={"Authorization": f"Bearer {token}"})
+    ).json()[0]
+    assert "agent_token_hash" not in viewer_view
+
+
+@pytest.mark.asyncio
+async def test_list_hosts_hides_telemetry_and_inventory_from_viewer_only(
+    client, auth_client, async_session
+):
+    """telemetry/inventory are operational detail for admin/operator — a
+    viewer gets the host row without them (GET /{id}/metrics stays their
+    viewer-safe path to live numbers)."""
+    host = Host(
+        slug="node-b",
+        display_name="Node B",
+        kind="agent",
+        agent_telemetry={"cpu_pct": 12.5},
+        agent_inventory=[{"name": "m", "total_bytes": 1}],
+    )
+    async_session.add(host)
+    await async_session.commit()
+
+    admin_view = (await auth_client.get("/api/v1/hosts")).json()[0]
+    assert admin_view["agent_telemetry"] == {"cpu_pct": 12.5}
+    assert admin_view["agent_inventory"] == [{"name": "m", "total_bytes": 1}]
+
+    token = await _viewer_token()
+    viewer_view = (
+        await client.get("/api/v1/hosts", headers={"Authorization": f"Bearer {token}"})
+    ).json()[0]
+    assert "agent_telemetry" not in viewer_view
+    assert "agent_inventory" not in viewer_view
+    assert "agent_inventory_updated_at" not in viewer_view
+    # Everything else stays visible to a viewer (they can still see the host exists)
+    assert viewer_view["slug"] == "node-b"
+    assert viewer_view["kind"] == "agent"
+
+
 # ── Metrics ──────────────────────────────────────────────────────────────────
 
 
