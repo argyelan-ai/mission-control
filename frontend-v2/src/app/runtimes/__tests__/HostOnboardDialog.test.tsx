@@ -32,7 +32,7 @@ describe("HostOnboardDialog", () => {
   });
 
   it("disables Start until address/username/password are filled", async () => {
-    renderWithQuery(<HostOnboardDialog onClose={vi.fn()} />);
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
     expect(screen.getByTestId("onboard-start")).toBeDisabled();
 
     await userEvent.type(screen.getByTestId("onboard-address"), "192.0.2.50");
@@ -46,7 +46,7 @@ describe("HostOnboardDialog", () => {
   });
 
   it("switching auth method swaps the visible credential field", async () => {
-    renderWithQuery(<HostOnboardDialog onClose={vi.fn()} />);
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
     expect(screen.getByTestId("onboard-password")).toBeInTheDocument();
 
     await userEvent.click(screen.getByText("Private key"));
@@ -71,7 +71,7 @@ describe("HostOnboardDialog", () => {
       lines: [{ ts: 2, level: "info", text: "Zugang im Vault gespeichert." }],
     } as HostOnboardLog);
 
-    renderWithQuery(<HostOnboardDialog onClose={vi.fn()} />);
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
     await userEvent.type(screen.getByTestId("onboard-address"), "192.0.2.50");
     await userEvent.type(screen.getByTestId("onboard-username"), "mcfleet");
     await userEvent.type(screen.getByTestId("onboard-password"), "hunter2");
@@ -107,7 +107,7 @@ describe("HostOnboardDialog", () => {
       lines: [{ ts: 1, level: "error", text: "SSH-Login fehlgeschlagen" }],
     } as HostOnboardLog);
 
-    renderWithQuery(<HostOnboardDialog onClose={vi.fn()} />);
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
     await userEvent.type(screen.getByTestId("onboard-address"), "192.0.2.50");
     await userEvent.type(screen.getByTestId("onboard-username"), "mcfleet");
     await userEvent.type(screen.getByTestId("onboard-password"), "wrong");
@@ -123,7 +123,7 @@ describe("HostOnboardDialog", () => {
       { ...makeCredential({ id: "cred-2", name: "Some login" }), credential_type: "login" },
     ]);
 
-    renderWithQuery(<HostOnboardDialog onClose={vi.fn()} />);
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
     await userEvent.click(screen.getByText("Existing credential"));
 
     expect(await screen.findByText("GX10 key")).toBeInTheDocument();

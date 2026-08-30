@@ -18,7 +18,7 @@ describe("NodePairingDialog", () => {
       install_command: "sudo curl -fsSL https://mc.tailnet-name.ts.net/api/v1/nodes/agent-script -o /usr/local/bin/mc-node-agent.py && sudo python3 /usr/local/bin/mc-node-agent.py --mc-url https://mc.tailnet-name.ts.net --pair ABCD1234 --install",
     });
 
-    render(<NodePairingDialog onClose={vi.fn()} />);
+    render(<NodePairingDialog open onClose={vi.fn()} />);
 
     await userEvent.type(screen.getByTestId("pairing-display-name"), "GX10");
     await userEvent.click(screen.getByTestId("pairing-generate"));
@@ -36,7 +36,7 @@ describe("NodePairingDialog", () => {
       install_command: "sudo python3 /usr/local/bin/mc-node-agent.py --pair WXYZ9876 --install",
     });
 
-    render(<NodePairingDialog onClose={vi.fn()} />);
+    render(<NodePairingDialog open onClose={vi.fn()} />);
     await userEvent.click(screen.getByTestId("pairing-generate"));
     await screen.findByTestId("pairing-code");
 
@@ -53,7 +53,7 @@ describe("NodePairingDialog", () => {
       new Error('API 403: {"detail":"Requires admin role or higher"}')
     );
 
-    render(<NodePairingDialog onClose={vi.fn()} />);
+    render(<NodePairingDialog open onClose={vi.fn()} />);
     await userEvent.click(screen.getByTestId("pairing-generate"));
 
     expect(await screen.findByText("Requires admin role or higher")).toBeInTheDocument();
@@ -61,7 +61,7 @@ describe("NodePairingDialog", () => {
 
   it("calls onClose from the close button", async () => {
     const onClose = vi.fn();
-    render(<NodePairingDialog onClose={onClose} />);
+    render(<NodePairingDialog open onClose={onClose} />);
     // Both the header icon button and the footer text button are labeled
     // "Close" — either one calling onClose proves the wiring.
     const [closeButton] = screen.getAllByRole("button", { name: "Close" });

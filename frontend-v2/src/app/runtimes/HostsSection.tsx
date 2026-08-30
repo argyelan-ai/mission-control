@@ -633,8 +633,8 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
       )}
 
       {wizardOpen && <BoxWizard onClose={() => setWizardOpen(false)} />}
-      {onboardOpen && <HostOnboardDialog onClose={() => setOnboardOpen(false)} />}
-      {pairingOpen && <NodePairingDialog onClose={() => setPairingOpen(false)} />}
+      <HostOnboardDialog open={onboardOpen} onClose={() => setOnboardOpen(false)} />
+      <NodePairingDialog open={pairingOpen} onClose={() => setPairingOpen(false)} />
     </SectionOrFragment>
   );
 }
