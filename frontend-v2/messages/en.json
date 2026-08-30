@@ -2512,6 +2512,8 @@
       "switchLabel": "Switch",
       "addModel": "+ Model",
       "placeholderTitle": "No model set up",
+      "workerBadge": "Fleet worker",
+      "workerHint": "No model of its own — telemetry for this box",
       "switchFailed": "Switch failed: {message}",
       "selectRecipe": "Switch recipe…",
       "recipeCurrent": "current",

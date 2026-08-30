@@ -165,6 +165,40 @@ describe("SlotStage", () => {
     expect(await screen.findByText("No model set up")).toBeInTheDocument();
   });
 
+  // Phase 1a (Verbund-UI, 30.08.2026): a kind="agent" host with zero bound
+  // runtimes (a headless verbund worker, e.g. GX10 as GLM rank1) must NOT
+  // show "No model set up" — it's real fleet inventory, not an empty slot.
+  it("renders a worker tile with real telemetry for a kind=agent host with no runtimes", async () => {
+    const host = makeHost({ slug: "gx10", display_name: "GX10", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Fleet worker")).toBeInTheDocument();
+    expect(screen.queryByText("No model set up")).not.toBeInTheDocument();
+    expect(screen.queryByText("+ Model")).not.toBeInTheDocument();
+    // Real telemetry from the (mocked) beforeEach metrics response — the
+    // honesty rule: only actually-fetched values, never a served_model
+    // or a switch control (neither exists on this tile at all).
+    expect(await screen.findByText("42 %")).toBeInTheDocument();
+    expect(screen.getByText("55 °C")).toBeInTheDocument();
+    expect(screen.queryByText(/served|switch/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the honest unreachable text for a kind=agent worker instead of fabricated zero-values", async () => {
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({
+      reachable: false, gpu_util_pct: null, vram_used_mb: null, vram_total_mb: null, gpu_temp_c: null,
+    });
+    const host = makeHost({ slug: "gx10", display_name: "GX10", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Host unreachable")).toBeInTheDocument();
+    expect(screen.queryByText("0 %")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^0 /)).not.toBeInTheDocument();
+  });
+
   it("a non-startable host runtime (e.g. omp) stays visible in the dropdown but disabled", async () => {
     const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const omp = makeRuntime({ slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped" });

@@ -2512,6 +2512,8 @@
       "switchLabel": "Umschalten",
       "addModel": "+ Modell",
       "placeholderTitle": "Kein Modell eingerichtet",
+      "workerBadge": "Verbund-Worker",
+      "workerHint": "Kein eigenes Modell — Telemetrie dieser Box",
       "switchFailed": "Umschalten fehlgeschlagen: {message}",
       "selectRecipe": "Rezept wählen…",
       "recipeCurrent": "aktiv",

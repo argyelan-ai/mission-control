@@ -562,6 +562,49 @@ function StagePlaceholder({ group }: { group: HostGroup }) {
   );
 }
 
+// ── Worker tile ────────────────────────────────────────────────────────────
+// Verbund-UI Phase 1a (30.08.2026): a kind="agent" host with zero bound
+// runtimes (e.g. a headless GLM verbund's rank1/worker box) is real fleet
+// inventory, not an empty slot — it just doesn't serve its own model through
+// MC's runtime registry. StagePlaceholder's "No model set up" + "add model"
+// CTA is actively wrong there (nothing to add — the box isn't meant to run
+// its own standalone model). This reuses TelemetryColumn as-is instead of
+// rebuilding metric rendering: same offline text, same honesty guarantee
+// (real fields only, no served_model/throughput/own switch — see the file
+// header's HONESTY RULE). Phase 1b will add a "part of <runtime>" line here
+// once runtime_hosts exists to resolve which verbund this worker belongs to.
+
+function WorkerTile({ group }: { group: HostGroup }) {
+  const t = useTranslations("runtimes.slotStage");
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+      >
+        <span className="text-[10px] font-medium uppercase" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
+          {group.host.display_name}
+        </span>
+        <span
+          className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide"
+          style={{ background: C.bgHover, color: C.textSecondary, border: `1px solid ${C.borderSubtle}` }}
+        >
+          {t("workerBadge")}
+        </span>
+      </div>
+      <div className="flex flex-col md:flex-row">
+        <div className="flex-1 min-w-0 flex items-center px-4 py-6">
+          <span className="text-sm" style={{ color: C.textMuted }}>{t("workerHint")}</span>
+        </div>
+        <TelemetryColumn hostId={group.host.id} />
+      </div>
+    </div>
+  );
+}
+
 // ── Root ───────────────────────────────────────────────────────────────────
 
 export function SlotStage({
@@ -595,6 +638,12 @@ export function SlotStage({
   });
 
   if (!serving && readyRuntimes.length === 0) {
+    // Phase 1a (Verbund-UI, 30.08.2026): a kind="agent" host (self-registering
+    // node-agent, no SSH/lifecycle path) with nothing bound is real fleet
+    // inventory — telemetry-only, not an empty slot to fill.
+    if (group.host.kind === "agent") {
+      return <WorkerTile group={group} />;
+    }
     return <StagePlaceholder group={group} />;
   }
 
