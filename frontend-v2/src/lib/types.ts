@@ -2402,6 +2402,10 @@ export interface Host {
   ssh_host: string | null;
   ssh_user: string | null;
   ssh_key_path: string | null;
+  // Vault-backed SSH key (Fleet & Rezepte v2, Phase 2 — Auto-Onboarding).
+  // Only a Credential id reference; the key material itself never reaches
+  // the frontend (see services/encryption.NEVER_EXPOSE_CREDENTIAL_FIELDS).
+  ssh_credential_id: string | null;
   control_url: string | null;      // flask_wol control plane (PORSCHE :5555)
   wol_mac_address: string | null;  // target MAC for the Wake-on-LAN magic packet
   power_managed: boolean;

@@ -31,6 +31,7 @@ const makeHost = (over: Partial<Host> = {}): Host => ({
   ssh_host: "192.0.2.10",
   ssh_user: "operator",
   ssh_key_path: null,
+  ssh_credential_id: null,
   control_url: null,
   wol_mac_address: null,
   power_managed: false,
