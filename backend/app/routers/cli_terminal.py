@@ -1568,17 +1568,44 @@ async def restart_agent_container(
     return {"ok": True, "container": container_name, "state": "running"}
 
 
+async def _create_agent_container(agent: Agent) -> dict[str, str]:
+    """Erzeugt den Container eines Agenten aus der compose-Datei.
+
+    Fuer einen frisch angelegten Agenten existiert noch kein Container:
+    ``POST /agents`` schreibt die DB-Zeile, ``POST /provision`` die Dateien und
+    den compose-Service — der Container selbst entstand bisher erst beim
+    naechsten ``start-all.sh``. Wir gehen denselben Weg wie force-recreate
+    (``docker compose up -d``), der einen fehlenden Container mit anlegt.
+    """
+    from app.services.docker_agent_sync import restart_docker_agent_container
+
+    result = await asyncio.to_thread(
+        restart_docker_agent_container, agent, force_recreate=True
+    )
+    status = result.get("status", "")
+    if status.startswith("error"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Container konnte nicht erzeugt werden: {status}",
+        )
+    return result
+
+
 @router.post("/agents/{agent_id}/start")
 async def start_agent_container(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Start the agent's stopped Docker container."""
+    """Start the agent's Docker container — creating it first if it is missing."""
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     container_name = _container_name_for(agent)
+    if await _get_container_state(container_name) == "not-found":
+        await _create_agent_container(agent)
+        logger.info("Container created + started: %s (agent=%s)", container_name, agent_id)
+        return {"ok": True, "container": container_name, "state": "running", "created": True}
     await _docker_action("start", container_name, timeout=30)
     logger.info("Container started: %s (agent=%s)", container_name, agent_id)
     return {"ok": True, "container": container_name, "state": "running"}
