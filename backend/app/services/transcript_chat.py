@@ -948,6 +948,72 @@ def _parse_task_notification(
 _DISCOVERY_LEGACY_PROJECT_DIR = "-home-agent"
 
 
+_LAST_ENTRY_TAIL_BYTES = 65536
+_LAST_ENTRY_CACHE: dict[tuple[str, int, float], float | None] = {}
+
+
+def last_entry_timestamp(path: Path) -> float | None:
+    """Zeitstempel des LETZTEN Eintrags einer Transkript-Datei (Unix-Sekunden).
+
+    Warum das noetig ist: Der Datei-mtime luegt. Eine alte Sitzungsdatei kann
+    beruehrt werden (Metadaten-Schreiber, Editor, Backup, Rollover-Nachzuegler),
+    ohne dass ein einziger Gespraechs-Eintrag dazukommt — sie sieht dann neuer
+    aus als die Datei, in der tatsaechlich gerade gesprochen wird. Operator-
+    Befund 31.08.2026 (Boss): MC zeigte einen 11 Tage alten Chat, weil dessen
+    Datei einen frischeren mtime trug als die laufende Sitzung.
+
+    Gelesen wird nur das Dateiende (``_LAST_ENTRY_TAIL_BYTES``), rueckwaerts bis
+    zur ersten Zeile mit brauchbarem ``timestamp``. Ergebnis wird pro
+    (Pfad, Groesse, mtime) gecacht — bei unveraenderter Datei kostet der zweite
+    Aufruf nichts. ``None``, wenn die Datei keinen lesbaren Zeitstempel hat
+    (leer, kaputt, fremdes Format) — der Aufrufer faellt dann auf mtime zurueck.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+
+    key = (str(path), st.st_size, st.st_mtime)
+    if key in _LAST_ENTRY_CACHE:
+        return _LAST_ENTRY_CACHE[key]
+
+    ts: float | None = None
+    try:
+        with path.open("rb") as fh:
+            if st.st_size > _LAST_ENTRY_TAIL_BYTES:
+                fh.seek(-_LAST_ENTRY_TAIL_BYTES, 2)
+                fh.readline()  # angeschnittene erste Zeile verwerfen
+            chunk = fh.read()
+        for raw in reversed(chunk.splitlines()):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line.decode("utf-8", errors="replace"))
+            except (ValueError, AttributeError):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            value = entry.get("timestamp")
+            if not isinstance(value, str) or not value:
+                continue
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            ts = parsed.timestamp()
+            break
+    except OSError:
+        ts = None
+
+    if len(_LAST_ENTRY_CACHE) > 512:
+        _LAST_ENTRY_CACHE.clear()
+    _LAST_ENTRY_CACHE[key] = ts
+    return ts
+
+
 def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     """Finds the newest ``*.jsonl`` transcript directly under ``tdir`` (does
     NOT recurse into subdirectories — those hold sidechains/artifacts, not
@@ -994,10 +1060,18 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if not candidates:
         return None
 
-    candidates.sort(key=lambda row: (row[0], str(row[1])), reverse=True)
-    newest_mtime, newest_path = candidates[0]
+    # Sortiert wird nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime
+    # (siehe last_entry_timestamp: der mtime luegt, wenn eine alte Datei nur
+    # beruehrt wurde). Ohne lesbaren Eintrag faellt eine Datei auf ihren mtime
+    # zurueck, damit fremde/kaputte Formate nicht unsichtbar werden.
+    ranked = [
+        (last_entry_timestamp(path) or mtime, mtime, path)
+        for mtime, path in candidates
+    ]
+    ranked.sort(key=lambda row: (row[0], str(row[2])), reverse=True)
+    _, newest_mtime, newest_path = ranked[0]
     if tdir.name == _DISCOVERY_LEGACY_PROJECT_DIR:
-        for mtime, candidate in candidates:
+        for _, mtime, candidate in ranked:
             # Der Reihe nach von neu nach alt — der erste Treffer mit Inhalt
             # gewinnt, und im Normalfall ist das gleich der erste geprueft.
             if not is_command_only_session(candidate):
