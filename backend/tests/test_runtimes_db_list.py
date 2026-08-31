@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
+from app.models.host import Host
 from app.models.runtime import Runtime
+from app.models.runtime_host import RuntimeHost
 
 
 async def _stub_state(*_args, **_kwargs):
@@ -235,3 +237,96 @@ async def test_get_runtimes_groups_by_provider(async_session, auth_client):
     # The unknown local endpoint keeps its curated order and sorts after the
     # recognised cloud providers — where it sat before.
     assert slugs.index("local-vllm") > max(anthropic + ollama), slugs
+
+
+@pytest.mark.asyncio
+async def test_get_runtimes_reports_locality(async_session, auth_client):
+    """Verbund-UI Phase 0 (30.08.2026): GET /runtimes backs the agent detail
+    page's runtime picker directly — it needs `locality` per row so a
+    host-inplace agent's picker can exclude candidates it could never
+    physically reach."""
+    host = Host(slug="worker-b", display_name="Worker B", kind="ssh", ssh_host="192.0.2.41")
+    async_session.add(host)
+    await async_session.commit()
+    await async_session.refresh(host)
+
+    async_session.add(Runtime(
+        slug="host-bound-local", display_name="Host-bound", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.41:8000/v1", ui_order=1, enabled=True, host_id=host.id,
+    ))
+    async_session.add(Runtime(
+        slug="cloud-row", display_name="Cloud", runtime_type="cloud",
+        endpoint="https://api.example.com/v1", ui_order=2, enabled=True,
+    ))
+    await async_session.commit()
+
+    with patch(
+        "app.services.runtime_manager.get_runtime_state",
+        side_effect=_stub_state,
+    ):
+        resp = await auth_client.get("/api/v1/runtimes")
+
+    assert resp.status_code == 200, resp.text
+    rows = {r["slug"]: r["locality"] for r in resp.json()["runtimes"]}
+    assert rows["host-bound-local"] == "local"
+    assert rows["cloud-row"] == "cloud"
+
+
+@pytest.mark.asyncio
+async def test_get_runtimes_reports_member_hosts_and_topology(async_session, auth_client):
+    """Verbund-UI Phase 1b (30.08.2026): a multi-node runtime's workers show
+    up in `member_hosts` (the head stays in `host`, never duplicated here),
+    and `topology` passes through unchanged. A solo runtime (no rows in
+    runtime_hosts) gets an empty list, not a missing key."""
+    head_host = Host(slug="alpha", display_name="Alpha", kind="ssh", ssh_host="192.0.2.50")
+    worker_host = Host(slug="beta", display_name="Beta", kind="agent")
+    async_session.add(head_host)
+    async_session.add(worker_host)
+    await async_session.commit()
+    await async_session.refresh(head_host)
+    await async_session.refresh(worker_host)
+
+    verbund_rt = Runtime(
+        slug="glm-verbund", display_name="GLM Verbund", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.50:8000/v1", ui_order=1, enabled=True, host_id=head_host.id,
+        topology={"nodes": 2, "tp_total": 2, "roles": ["head", "worker"]},
+    )
+    solo_rt = Runtime(
+        slug="solo-rt", display_name="Solo", runtime_type="lmstudio",
+        endpoint="http://192.0.2.51:1234/v1", ui_order=2, enabled=True,
+    )
+    async_session.add(verbund_rt)
+    async_session.add(solo_rt)
+    await async_session.commit()
+    await async_session.refresh(verbund_rt)
+
+    async_session.add(RuntimeHost(
+        runtime_id=verbund_rt.id, host_id=worker_host.id, role="worker", node_rank=1,
+    ))
+    await async_session.commit()
+
+    with patch(
+        "app.services.runtime_manager.get_runtime_state",
+        side_effect=_stub_state,
+    ):
+        resp = await auth_client.get("/api/v1/runtimes")
+
+    assert resp.status_code == 200, resp.text
+    rows = {r["slug"]: r for r in resp.json()["runtimes"]}
+
+    verbund_row = rows["glm-verbund"]
+    assert verbund_row["topology"] == {"nodes": 2, "tp_total": 2, "roles": ["head", "worker"]}
+    assert len(verbund_row["member_hosts"]) == 1
+    member = verbund_row["member_hosts"][0]
+    assert member["slug"] == "beta"
+    assert member["display_name"] == "Beta"
+    assert member["role"] == "worker"
+    assert member["node_rank"] == 1
+    # The head (alpha) is NOT duplicated into member_hosts — it's already
+    # in "host".
+    assert all(m["slug"] != "alpha" for m in verbund_row["member_hosts"])
+    assert verbund_row["host"]["slug"] == "alpha"
+
+    solo_row = rows["solo-rt"]
+    assert solo_row["member_hosts"] == []
+    assert solo_row["topology"] is None

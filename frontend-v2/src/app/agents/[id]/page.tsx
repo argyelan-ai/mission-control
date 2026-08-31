@@ -39,7 +39,7 @@ import type {
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { AgentActions } from "@/components/agent/AgentActions";
 import { EntityIcon } from "@/components/shared/EntityIcon";
-import { groupRuntimesByProvider } from "@/lib/groupRuntimes";
+import { groupRuntimesByProvider, isRuntimeBlockedByLocality } from "@/lib/groupRuntimes";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -725,16 +725,32 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
                   label comes from the server (`provider_label`) — deriving it
                   here would be a second copy of a backend rule. Rows without a
                   recognised vendor (local vLLM, LM Studio) keep their flat
-                  position after the grouped ones. */}
+                  position after the grouped ones.
+
+                  Phase 0 (Verbund-UI, 30.08.2026): a host-inplace agent can
+                  only ever run something physically on ITS OWN box — a cloud
+                  runtime (Anthropic subscription, Ollama Cloud, …) is never a
+                  real candidate there. Disabled-with-reason, not filtered out
+                  entirely, matching the existing !r.enabled pattern below —
+                  the row stays visible so the "why not" is explained instead
+                  of the option just silently disappearing. */}
               {groupRuntimesByProvider(runtimesData?.runtimes ?? []).map(
                 ({ label, runtimes }) => {
-                  const options = runtimes.map((r) => (
-                    <option key={r.id} value={r.id} disabled={!r.enabled}>
-                      {r.display_name} · {r.runtime_type}
-                      {r.model_identifier ? ` · ${r.model_identifier}` : ""}
-                      {r.enabled ? "" : ` · ${t("runtimeDisabled")}`}
-                    </option>
-                  ));
+                  const options = runtimes.map((r) => {
+                    const cloudBlocked = isRuntimeBlockedByLocality(r, isHostInplace);
+                    const disabled = !r.enabled || cloudBlocked;
+                    return (
+                      <option key={r.id} value={r.id} disabled={disabled}>
+                        {r.display_name} · {r.runtime_type}
+                        {r.model_identifier ? ` · ${r.model_identifier}` : ""}
+                        {!r.enabled
+                          ? ` · ${t("runtimeDisabled")}`
+                          : cloudBlocked
+                            ? ` · ${t("runtimeCloudUnavailable")}`
+                            : ""}
+                      </option>
+                    );
+                  });
                   return label ? (
                     <optgroup key={label} label={label}>
                       {options}
@@ -1257,7 +1273,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
 // Shows the .md files in the agent container under
 // /home/agent/.claude/projects/-home-agent/memory/team/.
 // Use case: delete toxic lessons that the operator would otherwise only
-// reach via `docker exec rm` (Sparky 2026-05-12: mc-comment-python3.md
+// reach via `docker exec rm` (Alpha 2026-05-12: mc-comment-python3.md
 // pushed him toward python3 urllib instead of the mc CLI).
 
 function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {

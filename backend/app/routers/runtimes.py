@@ -17,7 +17,9 @@ from app.auth import require_user, require_role, Role
 from app.config import settings
 from app.database import get_session
 from app.models.agent import Agent
+from app.models.host import Host
 from app.models.runtime import Runtime
+from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
 from app.services import runtime_manager, runtime_readiness, runtime_naming
 from app.services.agent_runtime_switch import (
@@ -115,6 +117,39 @@ def _host_ref(host: ResolvedHost | None) -> dict | None:
         "slug": host.slug,
         "display_name": host.display_name,
     }
+
+
+# Runtime types that are ALWAYS a remote API call, regardless of host binding
+# (Verbund-UI Phase 0, 30.08.2026). Deliberately narrow: "hermes" and "omp"
+# look cloud-ish by name but are curated LOCAL runtime_types (see
+# runtime_naming.CURATED_RUNTIME_TYPES — a self-hosted bridge process on a
+# specific box), and "openai_compatible" is genuinely ambiguous (compose_
+# renderer.py notes it can be a local container OR a cloud-hosted endpoint
+# like a remote Ollama) — for that one, host resolution below is the only
+# signal. "anthropic*" runtime_types (e.g. "anthropic_oauth") are matched by
+# prefix, same rule harness_compat.runtime_protocol() already uses.
+CLOUD_RUNTIME_TYPES: frozenset[str] = frozenset({"cloud", "grok", "kimi"})
+
+
+def _runtime_locality(runtime: Runtime, host: ResolvedHost | None) -> str:
+    """"local" | "cloud" — can a host-inplace agent (which can only ever run
+    something physically ON its own box) even reach this runtime?
+
+    A real registry host binding (_host_ref returns non-None) always means
+    local, whatever the runtime_type. Otherwise, a handful of types are
+    inherently remote (CLOUD_RUNTIME_TYPES / an "anthropic*" type). Anything
+    else defaults to local: under-filtering (a stray cloud row slipping
+    through) is far less harmful for a picker than over-filtering (hiding a
+    legitimate local candidate) while host_id coverage across the fleet is
+    still incomplete (many local runtimes still resolve via the legacy
+    string/settings fallback, not a registry row).
+    """
+    if _host_ref(host) is not None:
+        return "local"
+    rt = (runtime.runtime_type or "").strip()
+    if rt in CLOUD_RUNTIME_TYPES or rt.startswith("anthropic"):
+        return "cloud"
+    return "local"
 
 
 # ── DB-backed runtime CRUD ───────────────────────────────────────────────────
@@ -491,6 +526,39 @@ async def list_runtimes(
     The JSON file `backend/config/runtimes.json` is now only a bootstrap seed.
     """
     runtimes = await runtime_manager.list_db_runtimes(session)
+
+    # Verbund-UI Phase 1b (30.08.2026): member hosts of a multi-node runtime
+    # (runtime_hosts), batched in one query rather than per-row — the
+    # overwhelming majority of runtimes have zero rows here (solo), so this
+    # is empty/cheap in the common case and avoids an N+1 for the rest.
+    member_hosts_by_runtime: dict[uuid.UUID, list[dict]] = {}
+    runtime_ids = [rt.id for rt in runtimes]
+    if runtime_ids:
+        membership_rows = (
+            await session.execute(
+                select(RuntimeHost, Host)
+                .join(Host, RuntimeHost.host_id == Host.id)
+                .where(RuntimeHost.runtime_id.in_(runtime_ids))
+                .order_by(RuntimeHost.node_rank)
+            )
+        ).all()
+        runtime_head_ids = {rt.id: rt.host_id for rt in runtimes}
+        for rh, member_host in membership_rows:
+            # Defensiv: der Head steht in runtimes.host_id und darf NIE zusätzlich
+            # als member_host auftauchen (Zusage in Doku + Model). Unbekannte Rollen
+            # ebenfalls überspringen — die Frontend-Types deklarieren head|worker hart.
+            if runtime_head_ids.get(rh.runtime_id) == rh.host_id:
+                continue
+            if rh.role not in RUNTIME_HOST_ROLES:
+                continue
+            member_hosts_by_runtime.setdefault(rh.runtime_id, []).append({
+                "host_id": str(member_host.id),
+                "slug": member_host.slug,
+                "display_name": member_host.display_name,
+                "role": rh.role,
+                "node_rank": rh.node_rank,
+            })
+
     result = []
     for rt in runtimes:
         if not rt.enabled:
@@ -519,6 +587,16 @@ async def list_runtimes(
             "display_name_drift": runtime_naming.display_name_drift(
                 rt.display_name, rt.model_identifier
             ),
+            # Verbund-UI Phase 0 (30.08.2026): "local" | "cloud" — lets the
+            # agent detail page's runtime picker filter cloud candidates out
+            # for host-inplace agents, which can only ever run something
+            # physically on their own box.
+            "locality": _runtime_locality(rt, host),
+            # Verbund-UI Phase 1b (30.08.2026): additional hosts this runtime
+            # spans (a multi-node verbund's workers) — [] for every solo
+            # runtime, which today is all of them. The runtime's OWN host_id
+            # (the head) is NOT duplicated in here, it stays in "host" above.
+            "member_hosts": member_hosts_by_runtime.get(rt.id, []),
         })
     result.sort(key=_grouped_sort_key)
     return {"runtimes": result}
@@ -578,12 +656,18 @@ async def get_compat_matrix(
     for rt in rows:
         compatible = [h for h in HARNESSES if is_compatible(h, rt)]
         reasons = {h: incompat_reason(h, rt) for h in HARNESSES if h not in compatible}
+        # Verbund-UI Phase 0 (30.08.2026) — same host resolution/locality
+        # rule as GET /runtimes, so any future host-inplace consumer of this
+        # matrix (RuntimeSwitchModal, the agent wizard's RuntimeStep) can
+        # apply the same filter without re-deriving it.
+        host = await resolve_host_for_runtime(session, rt)
         runtimes.append({
             "slug": rt.slug,
             "display_name": rt.display_name,
             "protocol": runtime_protocol(rt),
             "compatible_harnesses": compatible,
             "reasons": reasons,
+            "locality": _runtime_locality(rt, host),
         })
     return {
         "harnesses": [{"key": h, "label": HARNESS_LABELS[h]} for h in HARNESSES],

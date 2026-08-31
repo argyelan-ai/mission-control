@@ -74,6 +74,50 @@ describe("groupRuntimes", () => {
     expect(g.unassigned.map((r) => r.slug)).toEqual(["orphan"]);
     expect(g.cloud).toEqual([]);
   });
+
+  // Verbund-UI Phase 1b (30.08.2026)
+  it("marks a member_hosts entry's host as workerOf its verbund runtime", () => {
+    const beta = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const verbund = makeRuntime({
+      slug: "glm-verbund", display_name: "GLM Verbund",
+      host: { id: "spark", slug: "spark", display_name: "Spark" },
+      member_hosts: [
+        { host_id: "beta", slug: "beta", display_name: "Beta", role: "worker", node_rank: 1 },
+      ],
+    });
+    const g = groupRuntimes([verbund], [spark, beta]);
+
+    const betaGroup = g.hosts.find((hg) => hg.host.slug === "beta");
+    expect(betaGroup?.workerOf).toEqual({
+      runtimeId: "glm-verbund",
+      runtimeDisplayName: "GLM Verbund",
+      headSlug: "spark",
+      role: "worker",
+      nodeRank: 1,
+    });
+
+    // The head itself is never marked workerOf its own runtime.
+    const sparkGroup = g.hosts.find((hg) => hg.host.slug === "spark");
+    expect(sparkGroup?.workerOf).toBeUndefined();
+  });
+
+  it("a host with no member_hosts entry anywhere has no workerOf", () => {
+    const g = groupRuntimes([], [spark]);
+    expect(g.hosts[0].workerOf).toBeUndefined();
+  });
+
+  it("workerOf has no headSlug when the runtime's own host binding didn't resolve to a registry host", () => {
+    const beta = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const verbund = makeRuntime({
+      slug: "glm-verbund", display_name: "GLM Verbund",
+      host: null, // legacy string/settings fallback — _host_ref returns null server-side
+      member_hosts: [
+        { host_id: "beta", slug: "beta", display_name: "Beta", role: "worker", node_rank: 1 },
+      ],
+    });
+    const g = groupRuntimes([verbund], [beta]);
+    expect(g.hosts.find((hg) => hg.host.slug === "beta")?.workerOf?.headSlug).toBeNull();
+  });
 });
 
 describe("CLOUD_TYPES", () => {
