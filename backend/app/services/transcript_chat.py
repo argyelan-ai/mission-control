@@ -690,6 +690,16 @@ _probe_scan_memo: dict[tuple[str, float, int], bool] = {}
 _PROBE_SCAN_MEMO_MAX = 512
 
 
+#: Befehle, die nur ein Mensch ausloest — nie die Katalog-Erkennung, die
+#: ausschliesslich `/model` sondiert. Eine Sitzung mit einem dieser Befehle
+#: ist eine echte Sitzung, auch wenn sonst nichts drinsteht.
+_OPERATOR_COMMANDS = frozenset({"clear"})
+
+
+def _is_operator_command(name: str | None) -> bool:
+    return bool(name) and name.strip().lstrip("/").split()[0].lower() in _OPERATOR_COMMANDS
+
+
 def is_command_only_session(path: Path) -> bool:
     """Hat diese Sitzungsdatei ueberhaupt ein Gespraech — oder nur
     Kommando-Huellen?
@@ -756,8 +766,18 @@ def is_command_only_session(path: Path) -> bool:
                     break
                 if _LOCAL_COMMAND_CAVEAT_RE.match(text):
                     continue  # Boilerplate, sagt weder Huelle noch Inhalt
+                wrapper = _COMMAND_WRAPPER_RE.match(text)
+                if wrapper and _is_operator_command(wrapper.group("name")):
+                    # Ein Befehl des Operators ist keine Sonde: `/clear` wirft
+                    # die Sitzung weg und erzeugt eine Datei, die genau wie
+                    # eine Sonde aussieht — solange danach nichts geschrieben
+                    # wird. Wird sie uebersprungen, meldet der Chat den
+                    # Sitzungswechsel nie, und die Nachricht des Operators
+                    # bleibt als "Nicht bestaetigt" stehen (Befund 31.08.2026).
+                    content_seen = True
+                    break
                 if (
-                    _COMMAND_WRAPPER_RE.match(text)
+                    wrapper
                     or _LOCAL_COMMAND_STDOUT_RE.match(text)
                     or _LOCAL_COMMAND_STDERR_RE.match(text)
                 ):
