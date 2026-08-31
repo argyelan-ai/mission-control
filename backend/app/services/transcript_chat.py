@@ -1068,7 +1068,11 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
         (last_entry_timestamp(path) or mtime, mtime, path)
         for mtime, path in candidates
     ]
-    ranked.sort(key=lambda row: (row[0], str(row[2])), reverse=True)
+    # Gleichstand beim Inhalts-Zeitstempel (identische Fixtures, Sitzungs-
+    # Rollover, Sekundengenauigkeit) entscheidet der mtime — sonst gewinnt
+    # zufaellig der alphabetisch groessere Dateiname und ein frischer
+    # Rollover bliebe unsichtbar.
+    ranked.sort(key=lambda row: (row[0], row[1], str(row[2])), reverse=True)
     _, newest_mtime, newest_path = ranked[0]
     if tdir.name == _DISCOVERY_LEGACY_PROJECT_DIR:
         for _, mtime, candidate in ranked:
