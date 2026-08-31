@@ -4,8 +4,8 @@
 A `Runtime` row's own `host_id` stays the HEAD of the verbund (unchanged,
 untouched by this table — host_resolver keeps resolving exactly as before).
 This table only records the ADDITIONAL member hosts of a multi-node runtime
-(e.g. a 2-node GLM TP=2 verbund: sparky as head/rank0 already IS
-runtimes.host_id, GX10 as a worker/rank1 gets one row here). A solo runtime
+(e.g. a 2-node GLM TP=2 verbund: alpha as head/rank0 already IS
+runtimes.host_id, Beta as a worker/rank1 gets one row here). A solo runtime
 (the overwhelming majority today) has ZERO rows in this table — that is the
 whole point: nothing about the existing single-host path changes, and
 nothing here is read unless a runtime actually has member hosts.

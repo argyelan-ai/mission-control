@@ -77,18 +77,18 @@ describe("groupRuntimes", () => {
 
   // Verbund-UI Phase 1b (30.08.2026)
   it("marks a member_hosts entry's host as workerOf its verbund runtime", () => {
-    const gx10 = makeHost({ slug: "gx10", display_name: "GX10", kind: "agent" });
+    const beta = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
     const verbund = makeRuntime({
       slug: "glm-verbund", display_name: "GLM Verbund",
       host: { id: "spark", slug: "spark", display_name: "Spark" },
       member_hosts: [
-        { host_id: "gx10", slug: "gx10", display_name: "GX10", role: "worker", node_rank: 1 },
+        { host_id: "beta", slug: "beta", display_name: "Beta", role: "worker", node_rank: 1 },
       ],
     });
-    const g = groupRuntimes([verbund], [spark, gx10]);
+    const g = groupRuntimes([verbund], [spark, beta]);
 
-    const gx10Group = g.hosts.find((hg) => hg.host.slug === "gx10");
-    expect(gx10Group?.workerOf).toEqual({
+    const betaGroup = g.hosts.find((hg) => hg.host.slug === "beta");
+    expect(betaGroup?.workerOf).toEqual({
       runtimeId: "glm-verbund",
       runtimeDisplayName: "GLM Verbund",
       headSlug: "spark",
@@ -107,16 +107,16 @@ describe("groupRuntimes", () => {
   });
 
   it("workerOf has no headSlug when the runtime's own host binding didn't resolve to a registry host", () => {
-    const gx10 = makeHost({ slug: "gx10", display_name: "GX10", kind: "agent" });
+    const beta = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
     const verbund = makeRuntime({
       slug: "glm-verbund", display_name: "GLM Verbund",
       host: null, // legacy string/settings fallback — _host_ref returns null server-side
       member_hosts: [
-        { host_id: "gx10", slug: "gx10", display_name: "GX10", role: "worker", node_rank: 1 },
+        { host_id: "beta", slug: "beta", display_name: "Beta", role: "worker", node_rank: 1 },
       ],
     });
-    const g = groupRuntimes([verbund], [gx10]);
-    expect(g.hosts.find((hg) => hg.host.slug === "gx10")?.workerOf?.headSlug).toBeNull();
+    const g = groupRuntimes([verbund], [beta]);
+    expect(g.hosts.find((hg) => hg.host.slug === "beta")?.workerOf?.headSlug).toBeNull();
   });
 });
 

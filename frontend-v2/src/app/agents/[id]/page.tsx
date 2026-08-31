@@ -1273,7 +1273,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
 // Shows the .md files in the agent container under
 // /home/agent/.claude/projects/-home-agent/memory/team/.
 // Use case: delete toxic lessons that the operator would otherwise only
-// reach via `docker exec rm` (Sparky 2026-05-12: mc-comment-python3.md
+// reach via `docker exec rm` (Alpha 2026-05-12: mc-comment-python3.md
 // pushed him toward python3 urllib instead of the mc CLI).
 
 function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {

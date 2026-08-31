@@ -2736,7 +2736,7 @@ export type VaultNoteType =
  * space-joined string (FTS5 storage) — split(" ") for an array.
  */
 export interface VaultNote {
-  path: string;          // vault-relative path, e.g. "agents/sparky/lessons/x.md"
+  path: string;          // vault-relative path, e.g. "agents/alpha/lessons/x.md"
   id: string;            // UUID / slug from frontmatter
   agent: string;         // owner slug
   type: VaultNoteType;
@@ -2774,7 +2774,7 @@ export interface VaultTrackViewResponse {
 
 /** One node in the 3D constellation — id = vault-relative path */
 export interface GraphNode {
-  id: string;           // vault-relative path (e.g. "agents/sparky/lessons/x.md")
+  id: string;           // vault-relative path (e.g. "agents/alpha/lessons/x.md")
   label: string;        // file stem (filename without .md)
   type: VaultNoteType;
   agent: string;        // owner slug

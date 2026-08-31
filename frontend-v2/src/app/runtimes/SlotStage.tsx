@@ -136,7 +136,7 @@ function TelemetryColumn({ hostId }: { hostId: string }) {
   }
 
   const gpuPct = data.gpu_util_pct ?? 0;
-  // Unified-memory hosts (DGX Spark GB10): nvidia-smi reports no separate
+  // Unified-memory hosts (GPU-Box GB10): nvidia-smi reports no separate
   // VRAM — the GPU shares system RAM, so the RAM reading IS the GPU memory.
   // Fall back to the ram_* fields (and label the meter accordingly).
   const hasVram = data.vram_total_mb != null;

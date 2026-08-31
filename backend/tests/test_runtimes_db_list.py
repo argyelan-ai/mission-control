@@ -278,8 +278,8 @@ async def test_get_runtimes_reports_member_hosts_and_topology(async_session, aut
     up in `member_hosts` (the head stays in `host`, never duplicated here),
     and `topology` passes through unchanged. A solo runtime (no rows in
     runtime_hosts) gets an empty list, not a missing key."""
-    head_host = Host(slug="sparky", display_name="Sparky", kind="ssh", ssh_host="192.0.2.50")
-    worker_host = Host(slug="gx10", display_name="GX10", kind="agent")
+    head_host = Host(slug="alpha", display_name="Alpha", kind="ssh", ssh_host="192.0.2.50")
+    worker_host = Host(slug="beta", display_name="Beta", kind="agent")
     async_session.add(head_host)
     async_session.add(worker_host)
     await async_session.commit()
@@ -318,14 +318,14 @@ async def test_get_runtimes_reports_member_hosts_and_topology(async_session, aut
     assert verbund_row["topology"] == {"nodes": 2, "tp_total": 2, "roles": ["head", "worker"]}
     assert len(verbund_row["member_hosts"]) == 1
     member = verbund_row["member_hosts"][0]
-    assert member["slug"] == "gx10"
-    assert member["display_name"] == "GX10"
+    assert member["slug"] == "beta"
+    assert member["display_name"] == "Beta"
     assert member["role"] == "worker"
     assert member["node_rank"] == 1
-    # The head (sparky) is NOT duplicated into member_hosts — it's already
+    # The head (alpha) is NOT duplicated into member_hosts — it's already
     # in "host".
-    assert all(m["slug"] != "sparky" for m in verbund_row["member_hosts"])
-    assert verbund_row["host"]["slug"] == "sparky"
+    assert all(m["slug"] != "alpha" for m in verbund_row["member_hosts"])
+    assert verbund_row["host"]["slug"] == "alpha"
 
     solo_row = rows["solo-rt"]
     assert solo_row["member_hosts"] == []

@@ -2,8 +2,8 @@
 
 Beschluss (Mark, 30.08.2026): MC kennt "ein Modell über mehrere Geräte"
 bisher nicht — runtimes.host_id ist eine EINZELNE UUID. Marks GLM-Verbund
-(sparky=head/rank0 mit API, GX10=worker/rank1 headless, TP=2) zeigt das
-konkret: GX10 hat 0 gebundene Runtimes und wirkt auf der Runtimes-Seite wie
+(alpha=head/rank0 mit API, Beta=worker/rank1 headless, TP=2) zeigt das
+konkret: Beta hat 0 gebundene Runtimes und wirkt auf der Runtimes-Seite wie
 ein leeres Gerät, obwohl es die Hälfte eines laufenden Modells trägt.
 
 `runtimes.host_id` BLEIBT der Head — host_resolver bleibt unveraendert,
