@@ -948,8 +948,14 @@ def _parse_task_notification(
 _DISCOVERY_LEGACY_PROJECT_DIR = "-home-agent"
 
 
-_LAST_ENTRY_TAIL_BYTES = 65536
-_LAST_ENTRY_CACHE: dict[tuple[str, int, float], float | None] = {}
+# Eine einzelne Transkript-Zeile kann sehr gross sein (ein tool_result mit
+# Datei-Inhalt oder Kommando-Ausgabe ist EINE Zeile — gemessen bis ~1,2 MB).
+# Ein zu kleines Lese-Fenster landet mitten in so einer Zeile, findet keinen
+# vollstaendigen Eintrag und faellt still auf den mtime zurueck — genau der
+# Fehler, den diese Funktion beheben soll. Darum wird das Fenster verdoppelt,
+# bis ein Eintrag gefunden ist oder die Datei ganz gelesen wurde.
+_LAST_ENTRY_TAIL_STEPS = (65536, 524288, 4194304)
+_LAST_ENTRY_CACHE: dict[str, tuple[int, float, float | None]] = {}
 
 
 def last_entry_timestamp(path: Path) -> float | None:
@@ -973,24 +979,28 @@ def last_entry_timestamp(path: Path) -> float | None:
     except OSError:
         return None
 
-    key = (str(path), st.st_size, st.st_mtime)
-    if key in _LAST_ENTRY_CACHE:
-        return _LAST_ENTRY_CACHE[key]
+    cached = _LAST_ENTRY_CACHE.get(str(path))
+    if cached is not None and cached[0] == st.st_size and cached[1] == st.st_mtime:
+        return cached[2]
 
     ts: float | None = None
-    try:
-        with path.open("rb") as fh:
-            if st.st_size > _LAST_ENTRY_TAIL_BYTES:
-                fh.seek(-_LAST_ENTRY_TAIL_BYTES, 2)
-                fh.readline()  # angeschnittene erste Zeile verwerfen
-            chunk = fh.read()
+    for window in _LAST_ENTRY_TAIL_STEPS:
+        try:
+            with path.open("rb") as fh:
+                if st.st_size > window:
+                    fh.seek(-window, 2)
+                    fh.readline()  # angeschnittene erste Zeile verwerfen
+                chunk = fh.read()
+        except OSError:
+            break
+
         for raw in reversed(chunk.splitlines()):
             line = raw.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line.decode("utf-8", errors="replace"))
-            except (ValueError, AttributeError):
+            except ValueError:
                 continue
             if not isinstance(entry, dict):
                 continue
@@ -1005,12 +1015,20 @@ def last_entry_timestamp(path: Path) -> float | None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             ts = parsed.timestamp()
             break
-    except OSError:
-        ts = None
 
-    if len(_LAST_ENTRY_CACHE) > 512:
-        _LAST_ENTRY_CACHE.clear()
-    _LAST_ENTRY_CACHE[key] = ts
+        if ts is not None or st.st_size <= window:
+            break  # gefunden, oder die ganze Datei war schon im Fenster
+
+    if ts is None:
+        logger.debug(
+            "last_entry_timestamp: kein Zeitstempel in %s (%d Bytes) — mtime gilt",
+            path.name,
+            st.st_size,
+        )
+
+    # Ein Eintrag pro Datei: der Live-Transkript-Pfad wuerde sonst bei jedem
+    # Anhaengen einen neuen Schluessel erzeugen und den Cache aufblaehen.
+    _LAST_ENTRY_CACHE[str(path)] = (st.st_size, st.st_mtime, ts)
     return ts
 
 
@@ -1064,10 +1082,12 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     # (siehe last_entry_timestamp: der mtime luegt, wenn eine alte Datei nur
     # beruehrt wurde). Ohne lesbaren Eintrag faellt eine Datei auf ihren mtime
     # zurueck, damit fremde/kaputte Formate nicht unsichtbar werden.
-    ranked = [
-        (last_entry_timestamp(path) or mtime, mtime, path)
-        for mtime, path in candidates
-    ]
+    ranked = []
+    for mtime, path in candidates:
+        entry_ts = last_entry_timestamp(path)
+        # Explizit: nur "nicht lesbar" faellt auf mtime zurueck. Ein echter
+        # Zeitstempel 0.0 (1970) bliebe mit `or` faelschlich der mtime.
+        ranked.append((mtime if entry_ts is None else entry_ts, mtime, path))
     # Gleichstand beim Inhalts-Zeitstempel (identische Fixtures, Sitzungs-
     # Rollover, Sekundengenauigkeit) entscheidet der mtime — sonst gewinnt
     # zufaellig der alphabetisch groessere Dateiname und ein frischer

@@ -112,3 +112,40 @@ def test_last_entry_timestamp_ueberspringt_eintraege_ohne_zeitstempel(tmp_path):
 
     assert ts is not None
     assert time.strftime("%H", time.gmtime(ts)) == "09"
+
+
+def test_sehr_grosse_zeile_am_ende_wird_trotzdem_gefunden(tmp_path):
+    """Kritischer Review-Fund: eine einzelne Zeile kann ~1 MB gross sein
+    (ein tool_result mit Datei-Inhalt ist EIN Eintrag). Ein zu kleines
+    Lese-Fenster landet mitten darin, findet nichts und faellt still auf den
+    mtime zurueck — womit der urspruengliche Bug zurueckkaeme."""
+    path = tmp_path / "grosse_zeile.jsonl"
+    riesig = {
+        "type": "assistant", "uuid": "gross", "timestamp": "2026-08-31T12:00:00.000Z",
+        "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "x" * 900_000}]},
+    }
+    path.write_text(json.dumps(riesig) + "\n", encoding="utf-8")
+
+    ts = tc.last_entry_timestamp(path)
+
+    assert ts is not None, "grosse letzte Zeile darf nicht durchrutschen"
+    assert time.strftime("%Y-%m-%d", time.gmtime(ts)) == "2026-08-31"
+
+
+def test_grosse_datei_verdeckt_die_laufende_sitzung_nicht(tmp_path):
+    """Derselbe Fall im Zusammenspiel: alte Datei mit Riesenzeile + frischem
+    mtime darf die laufende Sitzung nicht verdecken."""
+    jetzt = time.time()
+    alt = tmp_path / "alt_gross.jsonl"
+    alt.write_text(json.dumps({
+        "type": "assistant", "uuid": "a", "timestamp": "2026-08-20T20:43:59.000Z",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "y" * 900_000}]},
+    }) + "\n", encoding="utf-8")
+    os.utime(alt, (jetzt, jetzt))
+    aktuell = _write_session(tmp_path, "aktuell", "2026-08-31T08:51:00.000Z", mtime=jetzt - 600)
+
+    result = tc.find_active_session(tmp_path)
+
+    assert result is not None
+    assert result[0] == aktuell
