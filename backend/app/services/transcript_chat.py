@@ -968,10 +968,12 @@ def last_entry_timestamp(path: Path) -> float | None:
     Befund 31.08.2026 (Boss): MC zeigte einen 11 Tage alten Chat, weil dessen
     Datei einen frischeren mtime trug als die laufende Sitzung.
 
-    Gelesen wird nur das Dateiende (``_LAST_ENTRY_TAIL_BYTES``), rueckwaerts bis
-    zur ersten Zeile mit brauchbarem ``timestamp``. Ergebnis wird pro
-    (Pfad, Groesse, mtime) gecacht — bei unveraenderter Datei kostet der zweite
-    Aufruf nichts. ``None``, wenn die Datei keinen lesbaren Zeitstempel hat
+    Gelesen wird nur das Dateiende, rueckwaerts bis zur ersten Zeile mit
+    brauchbarem ``timestamp``. Das Fenster waechst dabei (``_LAST_ENTRY_TAIL_STEPS``),
+    weil eine EINZELNE Zeile sehr gross sein kann — ein ``tool_result`` mit
+    Datei-Inhalt ist ein Eintrag, gemessen bis ~1,2 MB. Ergebnis wird pro Pfad
+    gecacht (Groesse + mtime als Gueltigkeits-Marke) — bei unveraenderter Datei
+    kostet der zweite Aufruf nichts. ``None``, wenn die Datei keinen lesbaren Zeitstempel hat
     (leer, kaputt, fremdes Format) — der Aufrufer faellt dann auf mtime zurueck.
     """
     try:
