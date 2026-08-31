@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { groupRuntimesByProvider } from "@/lib/groupRuntimes";
+import { groupRuntimesByProvider, isRuntimeBlockedByLocality } from "@/lib/groupRuntimes";
 import type { Runtime } from "@/lib/types";
 
-const rt = (slug: string, provider_label: string | null): Runtime =>
-  ({ id: slug, slug, display_name: slug, provider_label } as unknown as Runtime);
+const rt = (
+  slug: string,
+  provider_label: string | null,
+  extra: Partial<Runtime> = {},
+): Runtime => ({ id: slug, slug, display_name: slug, provider_label, ...extra } as unknown as Runtime);
 
 describe("groupRuntimesByProvider", () => {
   it("bundles consecutive rows of the same vendor", () => {
@@ -44,5 +47,30 @@ describe("groupRuntimesByProvider", () => {
 
   it("returns nothing for an empty list", () => {
     expect(groupRuntimesByProvider([])).toEqual([]);
+  });
+});
+
+describe("isRuntimeBlockedByLocality", () => {
+  it("blockt NIE eine Cloud-Runtime fuer host-inplace Agenten (Boss/grok/kimi fahren produktiv Cloud)", () => {
+    // Regressionsschutz: ein Locality-Filter hier wuerde den laufenden Betrieb
+    // blockieren (Boss liesse sich nicht mehr von Opus auf Sonnet umschalten).
+    const cloudRt = rt("opus", "Anthropic Pro/Max", { locality: "cloud" });
+    expect(isRuntimeBlockedByLocality(cloudRt, true)).toBe(false);
+  });
+
+  it("never blocks a local runtime, host-inplace or not", () => {
+    const localRt = rt("vllm-box", null, { locality: "local" });
+    expect(isRuntimeBlockedByLocality(localRt, true)).toBe(false);
+    expect(isRuntimeBlockedByLocality(localRt, false)).toBe(false);
+  });
+
+  it("never blocks a cloud runtime for a NON-host-inplace agent (cli-bridge reaches the network fine)", () => {
+    const cloudRt = rt("opus", "Anthropic Pro/Max", { locality: "cloud" });
+    expect(isRuntimeBlockedByLocality(cloudRt, false)).toBe(false);
+  });
+
+  it("treats a missing locality field as local (older cached response must not grey out everything)", () => {
+    const noLocalityRt = rt("legacy-row", null, { locality: undefined });
+    expect(isRuntimeBlockedByLocality(noLocalityRt, true)).toBe(false);
   });
 });

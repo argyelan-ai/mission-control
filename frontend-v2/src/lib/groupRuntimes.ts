@@ -29,3 +29,24 @@ export function groupRuntimesByProvider(runtimes: Runtime[]): RuntimeGroup[] {
   }
   return groups;
 }
+
+/**
+ * Verbund-UI Phase 0 (30.08.2026) — a host-inplace agent can only ever run
+ * something physically on ITS OWN box, so a cloud runtime (Anthropic
+ * subscription, Ollama Cloud, xAI, …) is never a real candidate for it. This
+ * only decides whether to gray a candidate out, never whether the option
+ * disappears — see RuntimeSelectionSection in agents/[id]/page.tsx for the
+ * "why" reason string shown next to it.
+ *
+ * `locality` is server-derived (backend/app/routers/runtimes.py::
+ * _runtime_locality) and absent/undefined is treated as "local" — an older
+ * cached response without the field must not suddenly grey out every
+ * runtime for a host-inplace agent.
+ */
+export function isRuntimeBlockedByLocality(_runtime: Runtime, _isHostInplace: boolean): boolean {
+  // Bewusst immer false: Host-inplace-Agenten (Boss/claude, grok, kimi) fahren
+  // produktiv Cloud-Runtimes — "host-inplace" sagt nichts über Netz-Erreichbarkeit.
+  // Ein Locality-Filter hier würde den laufenden Betrieb blockieren (Review-Finding).
+  // Die Rezept-Auswahl der Slot-Bühne ist ohnehin schon host-gebunden gefiltert.
+  return false;
+}

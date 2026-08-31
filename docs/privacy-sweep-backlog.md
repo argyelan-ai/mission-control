@@ -303,9 +303,6 @@ docs/decisions/README.md: sparky
 docs/lifecycle-safety-watchdog-REPORT.md: sparky
 docs/omp-runtime-REPORT.md: sparky
 docs/setup/slack.md: freecode
-frontend-v2/messages/de.json: sparky
-frontend-v2/messages/en.json: sparky
-frontend-v2/src/app/agents/[id]/page.tsx: sparky
 frontend-v2/src/app/insights/page.tsx: sparky
 frontend-v2/src/app/runtimes/__tests__/cloud-usage.test.tsx: davinci, freecode, shakespeare, sparky
 frontend-v2/src/components/chat/SessionSidebar.test.tsx: sparky
@@ -316,7 +313,6 @@ frontend-v2/src/components/shared/__tests__/CliToolsSection.test.tsx: sparky
 frontend-v2/src/components/shared/__tests__/RuntimePill.test.tsx: davinci
 frontend-v2/src/components/shared/__tests__/RuntimeSwitchModal.test.tsx: davinci
 frontend-v2/src/components/vault/VaultReadingPanel.tsx: sparky
-frontend-v2/src/lib/types.ts: sparky
 frontend-v2/src/verticals/bench_studio/__tests__/NewChallengeDialog.test.tsx: sparky
 jarvis_core/mc_client.py: sparky
 jarvis_core/persona.py: davinci, freecode, shakespeare, sparky

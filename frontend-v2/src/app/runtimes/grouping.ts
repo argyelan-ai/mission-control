@@ -8,9 +8,26 @@ export const CLOUD_TYPES = new Set<string>(["cloud", "grok", "kimi", "openai_com
 
 const ACTIVE_STATES = new Set(["ready", "starting", "warming"]);
 
+// Verbund-UI Phase 1b (30.08.2026) — a host that is a MEMBER (not the head)
+// of some other runtime's multi-node verbund (Runtime.member_hosts). The
+// runtime's own host_id (the head) is never the subject of this — that host
+// gets a normal HostGroup with its own bound runtimes, same as always.
+export interface WorkerMembership {
+  runtimeId: string;
+  runtimeDisplayName: string;
+  headSlug: string | null;
+  role: "head" | "worker";
+  nodeRank: number;
+}
+
 export interface HostGroup {
   host: Host;
   runtimes: Runtime[];
+  /** Set whenever this host appears in SOME runtime's member_hosts, whether
+   *  or not it also has bound runtimes of its own. The stage decides what
+   *  to do with it (Phase 1a's WorkerTile only renders when there is
+   *  nothing else to show — see SlotStage.tsx). */
+  workerOf?: WorkerMembership;
 }
 
 export interface RuntimeGroups {
@@ -53,6 +70,26 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
     (a, b) => a.ui_order - b.ui_order || a.slug.localeCompare(b.slug)
   );
 
+  // Verbund-UI Phase 1b (30.08.2026) — member_hosts lookup by host UUID
+  // (member_hosts.host_id is always a real UUID from runtime_hosts, unlike
+  // the legacy-string-fallback matching above for the head). Only the FIRST
+  // membership per host wins if a host were ever listed twice — shouldn't
+  // happen (runtime_hosts.host_id has no cross-runtime uniqueness, but a
+  // host is realistically a worker of one verbund at a time).
+  const workerOfByHostId = new Map<string, WorkerMembership>();
+  for (const rt of runtimes) {
+    for (const member of rt.member_hosts ?? []) {
+      if (workerOfByHostId.has(member.host_id)) continue;
+      workerOfByHostId.set(member.host_id, {
+        runtimeId: rt.id,
+        runtimeDisplayName: rt.display_name,
+        headSlug: rt.host?.slug ?? null,
+        role: member.role,
+        nodeRank: member.node_rank,
+      });
+    }
+  }
+
   const claimedKeys = new Set<string>();
   const hostGroups = orderedHosts.map((host) => {
     // Runtime.host carries the host UUID in `id`; legacy rows may only match by slug.
@@ -60,7 +97,8 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
     const bySlug = byHost.get(host.slug);
     if (byId) claimedKeys.add(host.id);
     if (bySlug) claimedKeys.add(host.slug);
-    return { runtimes: sortGroup(byId ?? bySlug ?? []), host };
+    const workerOf = workerOfByHostId.get(host.id);
+    return { runtimes: sortGroup(byId ?? bySlug ?? []), host, ...(workerOf ? { workerOf } : {}) };
   });
 
   // Host-bound runtimes whose host_id doesn't resolve against `hosts` (still

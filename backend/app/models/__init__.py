@@ -38,6 +38,7 @@ from app.models.checklist import TaskChecklistItem
 from app.models.host import Host  # noqa: F401
 from app.models.host_pairing_code import HostPairingCode  # noqa: F401
 from app.models.runtime import Runtime  # noqa: F401
+from app.models.runtime_host import RuntimeHost  # noqa: F401
 from app.models.local_recipe import LocalRecipe  # noqa: F401
 from app.models.runtime_schedule import RuntimeSchedule, RuntimeScheduleRun  # noqa: F401
 from app.models.project_phase import ProjectPhase  # noqa: F401

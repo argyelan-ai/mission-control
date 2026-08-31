@@ -67,7 +67,7 @@ describe("SlotStage", () => {
       slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker",
       state: "ready", model_identifier: "deepseek-v4-flash-0731-spark", max_context_len: 262144,
     });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
     const live: Record<string, RuntimeLiveStatus> = {
       rt: {
@@ -89,7 +89,7 @@ describe("SlotStage", () => {
 
   it("switching live status renders a phase indicator", async () => {
     const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
     const live: Record<string, RuntimeLiveStatus> = {
       rt: {
@@ -114,7 +114,7 @@ describe("SlotStage", () => {
       ok: true, message: "Switching…", old_recipe: "qwen-general", new_recipe: "laguna-s21", launch_command: "sparkrun run laguna-s21",
     });
     const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
@@ -138,11 +138,43 @@ describe("SlotStage", () => {
     await waitFor(() => expect(switchRecipe).toHaveBeenCalledWith("rt", "laguna-s21"));
   });
 
+  // T1 (Verbund-UI, 30.08.2026): a verbund recipe's device requirement must
+  // be visible in the row itself, not only discoverable by hovering.
+  it("shows a verbund recipe's device requirement inline, disabled, with a plain-language tooltip", async () => {
+    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({
+      recipes: [
+        { name: "qwen-general", model: "qwen3.6", registry: "official", tp: 1, nodes: 1, solo_capable: true },
+        { name: "glm-verbund", model: "glm-5.3", registry: "official", tp: 2, nodes: 2, solo_capable: false },
+      ],
+    });
+    const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    await act(async () => { trigger.click(); });
+
+    const verbundOption = await screen.findByText("glm-verbund");
+    // Device requirement visible in the row itself (not just on hover).
+    expect(await screen.findByText("Needs tp=2, nodes=2 — cannot run solo")).toBeInTheDocument();
+    // Plain-language reason still available as a tooltip on top of that.
+    const optionButton = verbundOption.closest("button");
+    expect(optionButton).toHaveAttribute("title", "Needs tp=2, nodes=2 — cannot run solo on this host");
+    expect(optionButton).toBeDisabled();
+
+    // Genuinely not clickable through to a switch.
+    optionButton?.click();
+    expect(switchRecipe).not.toHaveBeenCalled();
+  });
+
   it("a sibling engine in the unified dropdown arms a confirm; confirm calls start (slot takeover)", async () => {
     const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
     const stopped = makeRuntime({ slug: "other", display_name: "Qwen 3.6", runtime_type: "lmstudio", state: "stopped" });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving, stopped] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
@@ -157,7 +189,7 @@ describe("SlotStage", () => {
   });
 
   it("renders a placeholder when the host has no runtimes at all", async () => {
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
@@ -165,10 +197,70 @@ describe("SlotStage", () => {
     expect(await screen.findByText("No model set up")).toBeInTheDocument();
   });
 
+  // Phase 1a (Verbund-UI, 30.08.2026): a kind="agent" host with zero bound
+  // runtimes (a headless verbund worker, e.g. Beta as GLM rank1) must NOT
+  // show "No model set up" — it's real fleet inventory, not an empty slot.
+  it("renders a worker tile with real telemetry for a kind=agent host with no runtimes", async () => {
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Fleet worker")).toBeInTheDocument();
+    expect(screen.queryByText("No model set up")).not.toBeInTheDocument();
+    expect(screen.queryByText("+ Model")).not.toBeInTheDocument();
+    // Real telemetry from the (mocked) beforeEach metrics response — the
+    // honesty rule: only actually-fetched values, never a served_model
+    // or a switch control (neither exists on this tile at all).
+    expect(await screen.findByText("42 %")).toBeInTheDocument();
+    expect(screen.getByText("55 °C")).toBeInTheDocument();
+    expect(screen.queryByText(/served|switch/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the honest unreachable text for a kind=agent worker instead of fabricated zero-values", async () => {
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({
+      reachable: false, gpu_util_pct: null, vram_used_mb: null, vram_total_mb: null, gpu_temp_c: null,
+    });
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Host unreachable")).toBeInTheDocument();
+    expect(screen.queryByText("0 %")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^0 /)).not.toBeInTheDocument();
+  });
+
+  // Verbund-UI Phase 1b (30.08.2026)
+  it("shows which verbund a worker belongs to when grouping resolved a workerOf", async () => {
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = {
+      host, runtimes: [],
+      workerOf: {
+        runtimeId: "rt-1", runtimeDisplayName: "GLM Verbund",
+        headSlug: "alpha", role: "worker", nodeRank: 1,
+      },
+    };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Part of: GLM Verbund · head → alpha")).toBeInTheDocument();
+    expect(screen.queryByText("No model of its own — telemetry for this box")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the generic worker hint when workerOf is absent", async () => {
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("No model of its own — telemetry for this box")).toBeInTheDocument();
+  });
+
   it("a non-startable host runtime (e.g. omp) stays visible in the dropdown but disabled", async () => {
     const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
     const omp = makeRuntime({ slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped" });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [omp] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
@@ -225,7 +317,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
       slug: "rt", display_name: "Engine X", runtime_type: "vllm_docker",
       state: "ready", model_identifier: "engine-x",
     });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
     const live: Record<string, RuntimeLiveStatus> = {
       rt: {
@@ -242,7 +334,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
 
   it("shows the FAILED state when the DB state is active but the engine is unreachable", async () => {
     const serving = makeRuntime({ slug: "rt", display_name: "Engine X", runtime_type: "vllm_docker", state: "ready" });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
     const live: Record<string, RuntimeLiveStatus> = {
       rt: {
@@ -262,7 +354,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
       slug: "rt", display_name: "Spark vLLM", runtime_type: "vllm_docker",
       state: "ready", max_context_len: 98304,
     });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
     const live: Record<string, RuntimeLiveStatus> = {
       rt: {
@@ -284,7 +376,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
       slug: "rt", display_name: "Spark vLLM", runtime_type: "vllm_docker",
       state: "ready", max_context_len: 98304,
     });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
     const live: Record<string, RuntimeLiveStatus> = {
       rt: {
@@ -306,7 +398,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
       slug: "rt", display_name: "Claude Opus", runtime_type: "cloud",
       state: "ready", model_identifier: "claude-opus-5", max_context_len: 1_000_000,
     });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
@@ -319,7 +411,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
       slug: "rt", display_name: "Laguna 2.1", runtime_type: "vllm_docker",
       state: "ready", model_identifier: "laguna-2.0", display_name_drift: ["2.1"],
     });
-    const host = makeHost({ slug: "spark", display_name: "DGX Spark" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
     const group: HostGroup = { host, runtimes: [serving] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);

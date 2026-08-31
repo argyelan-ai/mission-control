@@ -136,7 +136,7 @@ function TelemetryColumn({ hostId }: { hostId: string }) {
   }
 
   const gpuPct = data.gpu_util_pct ?? 0;
-  // Unified-memory hosts (DGX Spark GB10): nvidia-smi reports no separate
+  // Unified-memory hosts (GPU-Box GB10): nvidia-smi reports no separate
   // VRAM — the GPU shares system RAM, so the RAM reading IS the GPU memory.
   // Fall back to the ram_* fields (and label the meter accordingly).
   const hasVram = data.vram_total_mb != null;
@@ -562,6 +562,60 @@ function StagePlaceholder({ group }: { group: HostGroup }) {
   );
 }
 
+// ── Worker tile ────────────────────────────────────────────────────────────
+// Verbund-UI Phase 1a (30.08.2026): a kind="agent" host with zero bound
+// runtimes (e.g. a headless GLM verbund's rank1/worker box) is real fleet
+// inventory, not an empty slot — it just doesn't serve its own model through
+// MC's runtime registry. StagePlaceholder's "No model set up" + "add model"
+// CTA is actively wrong there (nothing to add — the box isn't meant to run
+// its own standalone model). This reuses TelemetryColumn as-is instead of
+// rebuilding metric rendering: same offline text, same honesty guarantee
+// (real fields only, no served_model/throughput/own switch — see the file
+// header's HONESTY RULE).
+//
+// Phase 1b (30.08.2026): once runtime_hosts has a row for this host,
+// group.workerOf (grouping.ts) resolves WHICH verbund it belongs to — shown
+// as "Part of: <runtime> · head → <host-slug>" instead of the generic hint.
+// Falls back to the generic hint when workerOf is absent (a paired agent
+// host that isn't (yet) a member of any runtime's declared topology).
+
+function WorkerTile({ group }: { group: HostGroup }) {
+  const t = useTranslations("runtimes.slotStage");
+  const workerOf = group.workerOf;
+  const hint = workerOf
+    ? workerOf.headSlug
+      ? t("workerPartOfWithHead", { runtime: workerOf.runtimeDisplayName, head: workerOf.headSlug })
+      : t("workerPartOf", { runtime: workerOf.runtimeDisplayName })
+    : t("workerHint");
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+      >
+        <span className="text-[10px] font-medium uppercase" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
+          {group.host.display_name}
+        </span>
+        <span
+          className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide"
+          style={{ background: C.bgHover, color: C.textSecondary, border: `1px solid ${C.borderSubtle}` }}
+        >
+          {t("workerBadge")}
+        </span>
+      </div>
+      <div className="flex flex-col md:flex-row">
+        <div className="flex-1 min-w-0 flex items-center px-4 py-6">
+          <span className="text-sm" style={{ color: C.textMuted }}>{hint}</span>
+        </div>
+        <TelemetryColumn hostId={group.host.id} />
+      </div>
+    </div>
+  );
+}
+
 // ── Root ───────────────────────────────────────────────────────────────────
 
 export function SlotStage({
@@ -595,6 +649,12 @@ export function SlotStage({
   });
 
   if (!serving && readyRuntimes.length === 0) {
+    // Phase 1a (Verbund-UI, 30.08.2026): a kind="agent" host (self-registering
+    // node-agent, no SSH/lifecycle path) with nothing bound is real fleet
+    // inventory — telemetry-only, not an empty slot to fill.
+    if (group.host.kind === "agent" || group.workerOf) {
+      return <WorkerTile group={group} />;
+    }
     return <StagePlaceholder group={group} />;
   }
 
@@ -726,14 +786,26 @@ function UnifiedSwitchDropdown({
                     setOpen(false);
                     onSelect({ kind: "recipe", name: r.name });
                   }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
+                  className="flex flex-col w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
                   style={{
                     color: isActive ? C.accent : isDisabled ? C.textDim : C.textPrimary,
                     borderBottom: `1px solid ${C.borderSubtle}`,
                   }}
                 >
-                  <span className="truncate">{r.name}</span>
-                  {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
+                  <div className="flex items-center gap-2 w-full">
+                    <span className="truncate">{r.name}</span>
+                    {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
+                  </div>
+                  {/* T1 (Verbund-UI, 30.08.2026): a verbund recipe isn't just
+                      greyed out — its device requirement is visible in the
+                      row (not only in the hover title above), same wording/
+                      i18n key SparkRecipeSwitcher already uses for the same
+                      concept (needsMoreShort) so the two pickers agree. */}
+                  {isDisabled && gpuHint && (
+                    <span className="text-[10px] mt-0.5" style={{ color: C.warning }}>
+                      {tRecipe("needsMoreShort", { gpuHint })}
+                    </span>
+                  )}
                 </button>
               );
             })}
