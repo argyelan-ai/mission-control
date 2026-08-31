@@ -1,3 +1,4 @@
+import re
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1128,6 +1129,61 @@ async def restore_agent_endpoint(
     return {"id": str(agent.id), "archived_at": agent.archived_at}
 
 
+
+_SQL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+async def _clear_agent_references(session: AsyncSession, agent_id: uuid.UUID) -> None:
+    """Löst jede Fremdschlüssel-Referenz auf diesen Agenten auf.
+
+    Liest die Referenzen aus dem laufenden Schema (SQLAlchemy-Inspector), statt
+    sie in einer Liste zu pflegen: NOT-NULL-Spalten werden mitsamt Zeile
+    gelöscht, nullable Spalten auf NULL gesetzt. Fremdschlüssel, die schon eine
+    ON-DELETE-Regel tragen, bleiben der Datenbank überlassen.
+
+    Die UUID wird in beiden Schreibweisen gebunden — Postgres speichert sie mit
+    Bindestrichen, das SQLite-Testschema als 32 Hex-Zeichen.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+
+    def _referencing_columns(sync_session) -> list[tuple[str, str, bool]]:
+        insp = _sa_inspect(sync_session.get_bind())
+        found: list[tuple[str, str, bool]] = []
+        for table in insp.get_table_names():
+            # Niemals die agents-Tabelle selbst anfassen: eine Selbst-Referenz
+            # würde sonst fremde Agenten treffen.
+            if table == "agents":
+                continue
+            nullable = {c["name"]: c["nullable"] for c in insp.get_columns(table)}
+            for fk in insp.get_foreign_keys(table):
+                if fk.get("referred_table") != "agents":
+                    continue
+                if (fk.get("options") or {}).get("ondelete"):
+                    continue  # die Datenbank räumt selbst auf
+                for col in fk.get("constrained_columns", []):
+                    if not (_SQL_NAME_RE.match(table) and _SQL_NAME_RE.match(col)):
+                        logger.warning(
+                            "FK-Aufräumen übersprungen: unerwarteter Bezeichner %s.%s",
+                            table,
+                            col,
+                        )
+                        continue
+                    found.append((table, col, bool(nullable.get(col, True))))
+        return found
+
+    from sqlalchemy import text as _text
+
+    params = {"dashed": str(agent_id), "hex": agent_id.hex}
+    for table, col, is_nullable in await session.run_sync(_referencing_columns):
+        where = f"{col} IN (:dashed, :hex)"
+        stmt = (
+            f"UPDATE {table} SET {col} = NULL WHERE {where}"
+            if is_nullable
+            else f"DELETE FROM {table} WHERE {where}"
+        )
+        await session.execute(_text(stmt), params)
+
+
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(
     agent_id: uuid.UUID,
@@ -1213,54 +1269,18 @@ async def delete_agent(
     except Exception:  # noqa: BLE001
         logger.warning("Agent-Referenzen nicht löschbar", exc_info=True)
 
-    # FK cleanup — delete NOT NULL rows
-    not_null_deletes = [
-        ("agent_messages", "from_agent_id = :aid OR to_agent_id = :aid"),
-        ("agent_metrics", "agent_id = :aid"),
-        ("approvals", "agent_id = :aid"),
-        ("cost_events", "agent_id = :aid"),
-        ("task_checkpoints", "agent_id = :aid"),
-        ("task_deliverables", "agent_id = :aid"),
-    ]
-    for table, where in not_null_deletes:
-        if table not in existing_tables:
-            continue
-        await session.execute(
-            text(f"DELETE FROM {table} WHERE {where}"),
-            {"aid": str(agent_id)},
-        )
-
-    # FK cleanup — set nullable columns to NULL (only if the column
-    # exists — each statement is idempotent)
-    nullable_updates = [
-        ("activity_events", "agent_id"),
-        ("agent_meeting_messages", "agent_id"),
-        ("board_memory", "agent_id"),
-        ("chat_messages", "sender_agent_id"),
-        ("chat_messages", "agent_id"),
-        ("content_pipelines", "writing_agent_id"),
-        ("content_pipelines", "review_agent_id"),
-        ("content_pipelines", "research_agent_id"),
-        ("deploy_history", "agent_id"),
-        ("playbooks", "default_agent_id"),
-        ("project_phases", "default_agent_id"),
-        ("scheduled_jobs", "agent_id"),
-        ("skill_runs", "agent_id"),
-        ("task_checklist_items", "agent_id"),
-        ("task_comments", "author_agent_id"),
-        ("task_events", "agent_id"),
-        ("tasks", "callback_agent_id"),
-        ("tasks", "owner_agent_id"),
-        ("tasks", "help_request_from"),
-        ("tasks", "assigned_agent_id"),
-    ]
-    for table, col in nullable_updates:
-        if table not in existing_tables:
-            continue
-        await session.execute(
-            text(f"UPDATE {table} SET {col} = NULL WHERE {col} = :aid"),
-            {"aid": str(agent_id)},
-        )
+    # FK-Aufräumen — aus dem Schema abgeleitet, nicht aus einer Liste.
+    #
+    # Bis 31.08.2026 standen hier zwei handgepflegte Tabellenlisten. Jede
+    # Migration, die eine neue Tabelle mit agent_id anlegte, fehlte darin —
+    # still, bis jemand einen Agenten löschen wollte und ein HTTP 500
+    # ForeignKeyViolationError bekam (live belegt an model_usage_events).
+    # Der Schema-Durchgang kennt jede Tabelle, auch die von morgen.
+    #
+    # Regeln: Spalte NOT NULL -> Zeile löschen. Spalte nullable -> auf NULL
+    # setzen. Fremdschlüssel mit eigener ON-DELETE-Regel überspringen — die
+    # erledigt die Datenbank selbst.
+    await _clear_agent_references(session, agent_id)
 
     # External-artifact cleanup (found 2026-07-11 — DELETE only touched the DB,
     # leaving the vault token, the compose service block and the staged host
