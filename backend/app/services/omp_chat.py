@@ -144,15 +144,24 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if not tdir.is_dir():
         return None
 
+    # Rangfolge nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime —
+    # eine beruehrte Altdatei wuerde sonst die laufende Sitzung verdecken
+    # (siehe transcript_chat.last_entry_timestamp; derselbe Fehler galt hier).
+    from app.services.transcript_chat import last_entry_timestamp
+
     newest_path: Path | None = None
     newest_mtime = -1.0
+    newest_rank = -1.0
     for pattern in _SESSION_GLOBS:
         for candidate in tdir.glob(pattern):
             try:
                 mtime = candidate.stat().st_mtime
             except OSError:
                 continue
-            if mtime > newest_mtime:
+            entry_ts = last_entry_timestamp(candidate)
+            rank = mtime if entry_ts is None else entry_ts
+            if (rank, mtime) > (newest_rank, newest_mtime):
+                newest_rank = rank
                 newest_mtime = mtime
                 newest_path = candidate
 

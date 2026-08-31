@@ -110,7 +110,10 @@ async def _resolve_transcript_path(
     if tdir is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
-    active = adapter.find_active_session(tdir)
+    # to_thread: find_active_session liest jetzt Datei-Enden (Inhalts-Rangfolge)
+    # — das darf den Event-Loop nicht blockieren. Alle anderen Aufrufer machen
+    # es bereits so.
+    active = await asyncio.to_thread(adapter.find_active_session, tdir)
     if active is None:
         return JSONResponse(status_code=404, content=_NO_TRANSCRIPT)
 
