@@ -126,3 +126,51 @@ def test_anchor_without_a_match_returns_everything():
 
 def test_empty_stream_yields_no_preview():
     assert PanePreview().text() == ""
+
+
+# ── Bildschirmgroesse (Live-Gate 01.09.2026) ────────────────────────────────
+
+
+def test_screen_takes_the_real_pane_size():
+    """Live gesehen: Sparkys Pane ist 168x45, der Emulator rechnete mit 80 —
+    jede Zeile brach bei Zeichen 80 ab ("…ins Lan")."""
+    long_line = "Ein Fjord ist ein langer, schmaler und tiefer Meeresarm, der sich tief ins Land hineinzieht und dort endet."
+    assert len(long_line) > 80
+    preview = PanePreview(cols=168, rows=45)
+    preview.feed(f"● {long_line}\r\n")
+    assert f"● {long_line}" in preview.text().splitlines()
+    assert len(PanePreview().text().splitlines()) == 0  # Gegenprobe: 80 Spalten wuerden umbrechen
+    narrow = PanePreview()
+    narrow.feed(f"● {long_line}\r\n")
+    assert f"● {long_line}" not in narrow.text().splitlines()
+
+
+def test_fresh_copy_keeps_the_size():
+    """Wird die Strom-Datei geleert, faengt der Emulator von vorn an — mit
+    derselben Groesse, nicht wieder mit 80x24."""
+    fresh = PanePreview(cols=168, rows=45).fresh()
+    assert (fresh.cols, fresh.rows) == (168, 45)
+
+
+def test_anchor_matches_a_wrapped_line_by_its_tail():
+    """Eine lange Transkript-Zeile steht im Terminal umgebrochen ueber mehrere
+    Bildschirmzeilen. Der Schnitt muss HINTER der letzten davon liegen, sonst
+    tropft der Rest der alten Antwort in die Vorschau."""
+    anchor = "Bekannte Beispiele sind der Sognefjord in Norwegen, der mit ueber 1.300 Metern Tiefe einer der tiefsten der Welt ist."
+    preview = PanePreview(cols=40, rows=24)
+    preview.feed(f"● {anchor}\r\n\r\n● Ein Gletscher ist eine Eismasse.\r\n")
+    assert preview.text_after(anchor) == "● Ein Gletscher ist eine Eismasse."
+
+
+def test_steering_box_of_queued_operator_text_is_furniture():
+    """omp zeigt eingereihte Nachrichten in einer 'Steering · N'-Box — das ist
+    das Echo des Operators, nie Inhalt (Echo-Regel im Skill)."""
+    preview = PanePreview()
+    preview.feed(
+        "● Antwort laeuft noch.\r\n"
+        "Steering · 2\r\n"
+        "1. Und jetzt bitte in 5 Saetzen: was ist ein Gletscher?\r\n"
+        "2. hey sparky\r\n"
+        "1. Ein echter Listenpunkt danach bleibt.\r\n"
+    )
+    assert preview.text() == "● Antwort laeuft noch.\n1. Ein echter Listenpunkt danach bleibt."
