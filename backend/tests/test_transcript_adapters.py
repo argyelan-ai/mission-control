@@ -83,8 +83,22 @@ def test_every_adapter_offers_the_full_contract():
             value = getattr(a, field.name)
             if field.name in ("name", "process_name"):
                 assert isinstance(value, str) and value, (harness, field.name)
+            elif field.name == "fresh_session_pane_marker":
+                # Optionaler Terminal-Marker: nicht jede CLI braucht ihn
+                # (Claude Code schreibt den Wechsel selbst ins Transkript).
+                assert value is None or (isinstance(value, str) and value), (harness, field.name)
             else:
                 assert callable(value), (harness, field.name)
+
+
+def test_only_omp_needs_a_pane_marker_for_a_fresh_session():
+    """omp legt bei ``/new`` keine Datei an — nur sein Terminal zeigt den
+    Wechsel, also nur sein Adapter traegt den Marker. Claude Code eroeffnet
+    bei ``/clear`` eine neue Datei; ein Marker dort waere ein zweiter,
+    widerspruechlicher Ausloeser."""
+    assert adapter_for(_Agent(harness="omp")).fresh_session_pane_marker == "New session started"
+    for harness in ("claude", "openclaude", "kimi", None):
+        assert adapter_for(_Agent(harness=harness)).fresh_session_pane_marker is None, harness
 
 
 def test_only_claude_shaped_adapters_look_for_subagent_runs():

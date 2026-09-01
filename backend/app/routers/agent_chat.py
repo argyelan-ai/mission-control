@@ -46,6 +46,7 @@ from app.services.reference_ingest import (
 )
 from app.services.sse import _sse_generator
 from app.services.transcript_adapters import adapter_for
+from app.services import fresh_session
 from app.services.transcript_chat import (
     read_history,
     resolve_aliveness,
@@ -153,6 +154,34 @@ async def get_chat_history(
         return resolved
 
     agent, path, adapter = resolved
+    capabilities = {
+        **await effort_capabilities(agent),
+        **await slash_command_capabilities(agent),
+        **await model_options_capabilities(agent),
+    }
+
+    # Frische Sitzung ohne Datei (omp ``/new``, siehe ``fresh_session``):
+    # die neueste Datei ist noch die ALTE. Sie hier auszuliefern brachte den
+    # alten Verlauf direkt nach ``session_changed`` zurueck — genau der
+    # gemeldete Fehler. Leer antworten, mit einer Kennung, die nicht die
+    # alte ist, damit das Frontend die Seite als neue Sitzung einspeist.
+    marked_at = fresh_session.marked_at(str(agent_id))
+    if marked_at is not None and await asyncio.to_thread(
+        fresh_session.is_stale, str(agent_id), path
+    ):
+        return {
+            "events": [],
+            "session": {
+                "sessionId": f"fresh-{int(marked_at)}",
+                "live": True,
+                "startedAt": None,
+                "aliveness": "active",
+            },
+            "hasMore": False,
+            "subagentRuns": [],
+            "capabilities": capabilities,
+        }
+
     observed_windows = await get_observed_model_windows()
     history = read_history(
         path,
@@ -162,11 +191,7 @@ async def get_chat_history(
         observed_windows=observed_windows,
     )
     history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
-    history["capabilities"] = {
-        **await effort_capabilities(agent),
-        **await slash_command_capabilities(agent),
-        **await model_options_capabilities(agent),
-    }
+    history["capabilities"] = capabilities
     return history
 
 

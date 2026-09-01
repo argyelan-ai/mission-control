@@ -1622,3 +1622,136 @@ async def test_preview_is_only_sent_once_two_readings_agree(tmp_path, fake_broad
     # Unveraenderter Text wird nicht erneut gesendet.
     await manager._pump_preview("chan", state)
     assert len([d for _, _, d in fake_broadcast if d.get("kind") == "preview"]) == 1
+
+
+# ── Frische Sitzung ohne Datei (omp ``/new``) ───────────────────────────────
+
+
+class _OmpStubAgent(_StubAgent):
+    harness = "omp"
+
+
+def _omp_pane(with_marker: bool) -> str:
+    body = " ✔ New session started\n" if with_marker else ""
+    return (
+        " Tip: Press alt+p (or /switch) to switch provider\n"
+        f"{body}"
+        "╭── π  > ⬢ MC model · ◒ high > 📁 /workspace > ◫ 3.7%/500K ⟲ ▶──╮\n"
+        "╰─                                                        ─╯\n"
+    )
+
+
+async def test_tailer_fresh_session_marker_clears_the_chat(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Taucht ``New session started`` NEU im Terminal auf, gilt die alte Datei
+    als beendet: ``session_changed`` geht raus, die Historie meldet sich
+    leer, und Zeilen, die noch in die alte Datei fallen, erreichen den Chat
+    nicht mehr."""
+    import app.services.transcript_chat as transcript_chat
+    from app.services import fresh_session
+
+    fresh_session.reset_for_tests()
+    session_file = tmp_path / "2026-09-01T12-39-02-054Z_old.jsonl"
+    session_file.write_text("")
+
+    panes = iter([_omp_pane(False), _omp_pane(False), _omp_pane(True)])
+
+    async def _fake_capture_pane(agent):
+        return next(panes, _omp_pane(True))
+
+    monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
+
+    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
+    await manager.acquire("agent-omp", session_file, agent)
+    try:
+        assert await _wait_until(
+            lambda: any(d.get("kind") == "session_changed" for _, _, d in fake_broadcast)
+        )
+        assert fresh_session.is_stale("agent-omp", session_file) is True
+
+        with session_file.open("a") as fh:
+            fh.write(
+                '{"type":"message","id":"m9","timestamp":"2026-09-01T12:40:00Z",'
+                '"message":{"role":"user","content":[{"type":"text","text":"alt"}]}}\n'
+            )
+        await asyncio.sleep(0.15)
+    finally:
+        await manager.release("agent-omp")
+        fresh_session.reset_for_tests()
+
+    assert not any(d.get("kind") == "message" for _, _, d in fake_broadcast)
+    changed = [d for _, _, d in fake_broadcast if d.get("kind") == "session_changed"]
+    assert len(changed) == 1
+
+
+async def test_tailer_preexisting_marker_does_not_fire(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Der Marker steht nach einem frueheren ``/new`` noch lange im Terminal.
+    Nur ein ZUWACHS zaehlt — sonst leerte sich der Chat bei jedem Oeffnen."""
+    import app.services.transcript_chat as transcript_chat
+    from app.services import fresh_session
+
+    fresh_session.reset_for_tests()
+    session_file = tmp_path / "old.jsonl"
+    session_file.write_text("")
+
+    async def _fake_capture_pane(agent):
+        return _omp_pane(True)
+
+    monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
+
+    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
+    await manager.acquire("agent-omp", session_file, agent)
+    try:
+        await asyncio.sleep(0.2)
+    finally:
+        await manager.release("agent-omp")
+        fresh_session.reset_for_tests()
+
+    assert not any(d.get("kind") == "session_changed" for _, _, d in fake_broadcast)
+    assert fresh_session.is_stale("agent-omp", session_file) is False
+
+
+async def test_history_is_empty_while_the_fresh_session_has_no_file_yet(
+    auth_client: AsyncClient, make_agent, tmp_path, monkeypatch
+):
+    """Nach ``session_changed`` holt das Frontend die Historie neu. Liefert
+    die Route dann die ALTE Datei, ist der alte Verlauf sofort wieder da —
+    genau der gemeldete Fehler. Solange keine neuere Datei existiert, muss
+    sie leer antworten, mit einer Sitzungs-ID, die nicht die alte ist."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import agent_chat_input as agent_chat_input_mod
+    from app.services import fresh_session
+
+    fresh_session.reset_for_tests()
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    old = tdir / "old.jsonl"
+    old.write_text(_user_line("alter verlauf") + "\n")
+    os.utime(old, (1_000, 1_000))
+
+    monkeypatch.setattr(transcript_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    monkeypatch.setattr(transcript_chat_mod, "transcript_allowed", lambda a, p: True)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug, levels=(): None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path, levels=(): None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
+
+    agent = await make_agent(name="Omp Agent", slug="omp-agent", agent_runtime="cli-bridge")
+    try:
+        r0 = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
+        assert r0.status_code == 200
+        assert len(r0.json()["events"]) == 1
+
+        fresh_session.mark(str(agent.id), at=2_000)
+        r1 = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
+        assert r1.status_code == 200
+        body = r1.json()
+        assert body["events"] == []
+        assert body["session"]["sessionId"] != r0.json()["session"]["sessionId"]
+        assert body["session"]["aliveness"] == "active"
+        assert "capabilities" in body
+    finally:
+        fresh_session.reset_for_tests()
