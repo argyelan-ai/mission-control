@@ -43,7 +43,7 @@
 import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, Lock } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
@@ -115,6 +115,35 @@ const REASON_LABEL_KEY: Record<DeviceStatusReason, string> = {
 
 /** Das Gerät meldet sich alle 15 s — so lange darf „wird übernommen" stehen. */
 const HEARTBEAT_SECONDS = 15;
+
+// ── Schalter-Ehrlichkeit (Review M7) ─────────────────────────────────────────
+// Der Schalter darf nur bedienbar sein, wenn ein Klick auch etwas bewirken
+// kann. In drei Zuständen ist er sichtbar, aber wirkungslos — dann wird er
+// GESPERRT (nicht versteckt: der Operator soll sehen, dass es ihn gibt) und
+// ein Satz sagt, was fehlt:
+//   no_device_state  alter Agent, der keinen Zustand meldet → Ampel rot, ein
+//                    Klick stünde für immer auf „wird übernommen"
+//   stale            Agent meldet sich nicht mehr; `reachable` der Host-
+//                    Metrik fällt erst nach 60 s, die Ampel schon ab 120 s —
+//                    dazwischen wäre der Schalter ein leeres Versprechen
+//   gpu_mode unknown Agent läuft, aber die Steuer-Skripte fehlen auf der Box
+//                    → currentMode=null, ein Soll würde nie erfüllt
+// Die `reason`-Werte kommen fertig vom Backend (services/device_state.py);
+// hier wird nichts nachgerechnet.
+export type SwitchLock = "no_device_state" | "stale" | "unknown_mode";
+
+export function switchLockFor(device: Device): SwitchLock | null {
+  if (device.reason === "no_device_state") return "no_device_state";
+  if (device.reason === "stale") return "stale";
+  if (device.device_state?.gpu_mode === "unknown") return "unknown_mode";
+  return null;
+}
+
+/** Alter der letzten Meldung als kurzer Text: Sekunden, ab 10 Minuten Minuten. */
+function ageLabel(locale: string, ageS: number): string {
+  if (ageS >= 600) return `${Math.round(ageS / 60).toLocaleString(locale)} min`;
+  return `${Math.round(ageS).toLocaleString(locale)} s`;
+}
 
 // Feste Zeilenhöhen der vollen Ansicht: die Beschriftungsspalte links muss auf
 // den Pixel mit den Balkenreihen rechts fluchten, sonst zerfällt das Diagramm
@@ -601,7 +630,12 @@ export function DeviceModeStrip({
   const [elapsed, setElapsed] = useState(0);
 
   const targetMode: GpuMode | null = optimistic ?? device.desired_state?.gpu_mode ?? null;
-  const pending = !!targetMode && targetMode !== currentMode;
+
+  // Gesperrt = ein Klick könnte nichts bewirken. Dann gibt es auch kein
+  // „wird übernommen": das Warten hätte kein Ende, und der Sperr-Hinweis
+  // sagt stattdessen, was zuerst passieren muss.
+  const lock = switchLockFor(device);
+  const pending = !lock && !!targetMode && targetMode !== currentMode;
 
   useEffect(() => {
     if (optimistic && currentMode === optimistic) {
@@ -633,7 +667,7 @@ export function DeviceModeStrip({
   });
 
   const pick = (mode: GpuMode) => {
-    if (!canControl || mode === targetMode) return;
+    if (!canControl || lock || mode === targetMode) return;
     setOptimistic(mode);
     setPickedAt(Date.now());
     setElapsed(0);
@@ -662,12 +696,15 @@ export function DeviceModeStrip({
         >
           {t("stripLabel")}
         </span>
-        <div className="flex-1 min-w-0">
+        {/* Gesperrt: sichtbar gedimmt, und ohne Ziel-Markierung — ein Reiter
+            auf dem Soll würde eine Einstellung behaupten, die die Box nie
+            bestätigt hat. */}
+        <div className="flex-1 min-w-0" style={lock ? { opacity: 0.55 } : undefined}>
           <CompactModeSwitch
             current={currentMode}
-            target={targetMode}
+            target={lock ? null : targetMode}
             pending={pending}
-            disabled={!canControl || mutation.isPending}
+            disabled={!canControl || !!lock || mutation.isPending}
             onPick={pick}
           />
         </div>
@@ -698,6 +735,34 @@ export function DeviceModeStrip({
           ? t("sameSpeedShort", { tokens: `${num(locale, MODE_FACTS[shownMode].tokensPerSec)} ${t("unitTokens")}` })
           : t("sameSpeed")}
       </p>
+
+      {/* Gesperrt — ein Satz, was fehlt. Warn-Ocker: die Box ist nicht kaputt,
+          MC kann sie nur gerade nicht stellen. Der Schalter bleibt sichtbar,
+          damit klar ist, dass es ihn gibt. */}
+      {lock && (
+        <div
+          data-testid="device-lock-hint"
+          data-lock={lock}
+          className="flex items-start gap-2 rounded-lg px-2.5 py-1.5"
+          style={{ background: `${C.warning}0F`, border: `1px solid ${C.warning}33` }}
+        >
+          <Lock size={11} aria-hidden style={{ color: STATUS_TEXT.warning, marginTop: 2 }} />
+          <span className="text-[11px]" style={{ color: STATUS_TEXT.warning, lineHeight: 1.45 }}>
+            {lock === "no_device_state" && t("lockNoDeviceState")}
+            {lock === "stale" &&
+              (device.age_s != null
+                ? t("lockStale", { age: ageLabel(locale, device.age_s) })
+                : t("lockStaleNever"))}
+            {lock === "unknown_mode" && (
+              <>
+                {t("lockUnknownMode")}{" "}
+                <code className="font-mono text-[10px]">--install --allow-control</code>{" "}
+                {t("lockUnknownModeTail")}
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* Nachziehen — Info-Blau, mit sichtbarem Fortschritt statt Spinner. */}
       {pending && (
@@ -773,7 +838,7 @@ export function DeviceModeStrip({
         </div>
       )}
 
-      {!state && (
+      {!state && !lock && (
         <p data-testid="device-no-report" className="text-[11px]" style={{ color: C.textMuted }}>
           {t("notReporting")}
         </p>
@@ -793,9 +858,9 @@ export function DeviceModeStrip({
         >
           <ModeScale
             current={currentMode}
-            target={targetMode}
+            target={lock ? null : targetMode}
             pending={pending}
-            disabled={!canControl || mutation.isPending}
+            disabled={!canControl || !!lock || mutation.isPending}
             onPick={pick}
           />
           <p className="mt-3 text-[11px]" style={{ color: C.textSecondary, lineHeight: 1.45 }}>
