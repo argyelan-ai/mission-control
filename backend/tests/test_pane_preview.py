@@ -170,7 +170,7 @@ def test_steering_box_of_queued_operator_text_is_furniture():
         "● Antwort laeuft noch.\r\n"
         "Steering · 2\r\n"
         "1. Und jetzt bitte in 5 Saetzen: was ist ein Gletscher?\r\n"
-        "2. hey sparky\r\n"
+        "2. hallo nochmal\r\n"
         "1. Ein echter Listenpunkt danach bleibt.\r\n"
     )
     assert preview.text() == "● Antwort laeuft noch.\n1. Ein echter Listenpunkt danach bleibt."
