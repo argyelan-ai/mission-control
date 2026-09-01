@@ -121,6 +121,19 @@ export interface SessionChangedEvent {
   kind: "session_changed";
 }
 
+/** Live-Vorschau aus dem Terminal (Live-Schicht A): der Tailer liest den
+ *  Bildschirm der CLI mit und schickt den ruhig gewordenen Text, BEVOR die
+ *  Antwort im Transkript steht. Keine uuid — das ist keine Zeile des
+ *  Gespraechs, sondern ein Blick ueber die Schulter: eine neue Vorschau
+ *  ersetzt die alte, die echte Antwort loest sie ab. */
+export interface PreviewEvent {
+  kind: "preview";
+  uuid: null;
+  ts: string;
+  text: string;
+  source: "pane";
+}
+
 /** Eine Hintergrund-Meldung der CLI: ein Subagent oder ein Hintergrund-Befehl
  *  ist fertig. Sie steht im Transkript als Nachricht mit der Rolle `user` —
  *  ungedeutet stand sie darum als Nachricht des Operators im Chat, samt
@@ -147,6 +160,7 @@ export type ChatEvent =
   | CommandEvent
   | UsageEvent
   | StateEvent
+  | PreviewEvent
   | NotificationEvent
   | SessionChangedEvent;
 

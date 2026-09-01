@@ -19,6 +19,7 @@ import type {
   ChatEvent,
   CommandEvent,
   MessageEvent,
+  PreviewEvent,
   SessionChangedEvent,
   StateEvent,
   ThinkingEvent,
@@ -236,6 +237,50 @@ function echo(overrides: Partial<PendingEcho> = {}): PendingEcho {
   return { id: "e1", text: "hallo", sentAt: 1_000, status: "pending", ...overrides };
 }
 
+
+describe("Live-Vorschau (preview) — eigenes Fach, nie Zeitachse", () => {
+  const preview = (text: string): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text, source: "pane" });
+
+  it("legt die Vorschau ins eigene Fach und laesst die Zeitachse in Ruhe", () => {
+    const state = chatReducer(createInitialChatState(), preview("Ich schaue mir die Datei an"));
+    expect(state.events).toHaveLength(0);
+    expect(state.preview?.text).toBe("Ich schaue mir die Datei an");
+  });
+
+  it("ersetzt eine aeltere Vorschau durch die neuere", () => {
+    let state = chatReducer(createInitialChatState(), preview("erst"));
+    state = chatReducer(state, preview("dann"));
+    expect(state.preview?.text).toBe("dann");
+  });
+
+  it("wird von der echten Antwort abgeloest", () => {
+    let state = chatReducer(createInitialChatState(), preview("laeuft…"));
+    state = chatReducer(state, msg("a1", "Fertig.", "assistant"));
+    expect(state.preview).toBeNull();
+    expect(state.events).toHaveLength(1);
+  });
+
+  it("bleibt stehen, wenn nur der Operator etwas schreibt", () => {
+    let state = chatReducer(createInitialChatState(), preview("laeuft…"));
+    state = chatReducer(state, msg("u1", "und weiter?", "user"));
+    expect(state.preview?.text).toBe("laeuft…");
+  });
+
+  it("verfaellt, sobald der Agent ruht — eine Waise ohne Antwort ist keine Antwort", () => {
+    let state = chatReducer(createInitialChatState(), preview("laeuft…"));
+    state = chatReducer(state, { kind: "state", status: "working", prompt: null });
+    expect(state.preview?.text).toBe("laeuft…");
+    state = chatReducer(state, { kind: "state", status: "idle", prompt: null });
+    expect(state.preview).toBeNull();
+  });
+
+  it("verfaellt beim Sitzungswechsel", () => {
+    let state = chatReducer(createInitialChatState(), preview("laeuft…"));
+    state = chatReducer(state, { kind: "session_changed" });
+    expect(state.preview).toBeNull();
+  });
+});
 
 describe("gemischte Bloecke unter einer uuid (omp)", () => {
   it("behaelt Denken UND Antwort, wenn beide dieselbe Eintrags-uuid tragen", () => {
