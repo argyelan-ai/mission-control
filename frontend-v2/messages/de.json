@@ -2253,7 +2253,12 @@
       "applyFailed": "Konnte nicht gespeichert werden. Bitte nochmal versuchen.",
       "notReporting": "Diese Box hat noch keine Werte gemeldet.",
       "readOnlyHint": "Nur Administratoren können den Modus umstellen.",
-      "stripLabel": "GPU-Modus"
+      "stripLabel": "GPU-Modus",
+      "lockNoDeviceState": "Der Agent meldet keinen Zustand — er ist zu alt. Agent auf der Box aktualisieren, dann lässt sich der Modus stellen.",
+      "lockStale": "Der Agent hat sich seit {age} nicht gemeldet. Solange bleibt der Modus gesperrt.",
+      "lockStaleNever": "Der Agent hat sich noch nie gemeldet. Solange bleibt der Modus gesperrt.",
+      "lockUnknownMode": "Die Steuer-Skripte fehlen auf der Box. Auf der Box",
+      "lockUnknownModeTail": "wiederholen, dann lässt sich der Modus stellen."
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint nicht erkannt",
