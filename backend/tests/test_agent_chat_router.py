@@ -270,6 +270,10 @@ def manager():
 
     m = ChatTailerManager()
     m.POLL_INTERVAL = 0.02
+    # Der Sondentakt zaehlt in Sekunden (nicht mehr in Poll-Durchlaeufen), also
+    # muss er hier genauso schrumpfen wie der Poll-Takt — sonst wartet jeder
+    # Test, der eine ZWEITE Zustandsmeldung braucht, volle 2 Sekunden auf sie.
+    m.STATE_PROBE_INTERVAL_SECONDS = 0.02
     return m
 
 
@@ -1448,3 +1452,34 @@ async def test_the_endpoint_serves_only_real_files_from_that_folder(
     assert (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/aecht")).status_code == 200
     # Der Verweis darauf nicht.
     assert (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/subagent/averweis")).status_code == 404
+
+
+async def test_first_state_arrives_immediately_not_after_the_probe_interval(
+    manager, fake_broadcast, tmp_path
+):
+    """Wer den Chat oeffnet, sieht den Zustand sofort — nicht erst nach dem
+    Sondentakt.
+
+    Der Sondentakt war in POLL-TICKS gezaehlt, nicht in Sekunden: die erste
+    Zustandsmeldung kam damit erst nach ``N × POLL_INTERVAL``, und jede
+    Aenderung am Poll-Takt verschob sie mit (01.09.2026 beim Absenken des
+    Takts auf 0,3 s aufgefallen). Die Sonde ist ein 50-ms-Rundlauf; die erste
+    darf sofort laufen, danach reicht der Zeittakt.
+    """
+    session_file = tmp_path / "sess-first.jsonl"
+    session_file.write_text("")
+    agent = _StubAgent(agent_runtime="host", slug="boss")
+    # Beide Takte auf Betriebswerte: die Fixture verkleinert sie fuer andere
+    # Tests, hier muessen sie echt sein — sonst kaeme die erste Meldung auch
+    # ohne die Sofort-Sonde rechtzeitig, und der Test prueft nichts.
+    manager.POLL_INTERVAL = 0.1
+    manager.STATE_PROBE_INTERVAL_SECONDS = 2.0
+
+    await manager.acquire("agent-first", session_file, agent)
+    try:
+        assert await _wait_until(
+            lambda: any(d.get("kind") == "state" for _, _, d in fake_broadcast),
+            timeout=0.25,
+        ), "nach einer Viertelsekunde lag noch keine Zustandsmeldung vor"
+    finally:
+        await manager.release("agent-first")
