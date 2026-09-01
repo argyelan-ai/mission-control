@@ -1624,6 +1624,83 @@ async def test_preview_is_only_sent_once_two_readings_agree(tmp_path, fake_broad
     assert len([d for _, _, d in fake_broadcast if d.get("kind") == "preview"]) == 1
 
 
+async def test_preview_screen_takes_the_real_pane_size(manager, tmp_path, monkeypatch):
+    """Live-Gate 01.09.2026: Pane 168x45, Emulator 80x24 -> Zeilen bei 80 ab."""
+    from app.services import pane_stream
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(tmp_path / "p.log"))
+    monkeypatch.setattr(pane_stream, "pane_size", _async_return((168, 45)))
+    state = await manager._start_preview(_StubAgent(agent_runtime="cli-bridge", slug="rex"))
+    assert (state["screen"].cols, state["screen"].rows) == (168, 45)
+
+
+async def test_preview_keeps_its_size_when_the_stream_file_is_truncated(
+    tmp_path, fake_broadcast, manager
+):
+    from app.services.pane_preview import PanePreview
+
+    stream = tmp_path / "trunc.log"
+    stream.write_bytes(b"x" * 100)
+    state = {"path": stream, "offset": 0, "screen": PanePreview(cols=168, rows=45), "last_sent": "", "pending": None}
+    await manager._pump_preview("chan", state)
+    stream.write_bytes(b"neu")          # geleert und kuerzer -> von vorn
+    await manager._pump_preview("chan", state)
+    assert (state["screen"].cols, state["screen"].rows) == (168, 45)
+
+
+async def test_preview_shows_only_what_follows_the_last_transcript_line(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Live-Gate 01.09.2026: die Vorschau trug den GANZEN Bildschirm — alte
+    Zuege, die eigene Frage, und nach der fertigen Antwort dieselbe Antwort
+    nochmal. Die Vorschau soll nur zeigen, was das Transkript noch nicht hat:
+    alles NACH der letzten Transkript-Zeile."""
+    import json
+
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-anchor.jsonl"
+    session_file.write_text("")
+    stream_file = tmp_path / "anchor.log"
+    stream_file.write_bytes(b"")
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-anchor", session_file, agent)
+    try:
+        question = "Schreib mir bitte in 4-5 Saetzen, was ein Fjord ist."
+        with open(session_file, "a") as fh:
+            fh.write(json.dumps({
+                "type": "user", "uuid": "u-1", "timestamp": "2026-09-01T21:00:21Z",
+                "message": {"role": "user", "content": question},
+            }) + "\n")
+        assert await _wait_until(
+            lambda: any(d.get("kind") == "message" for _, _, d in fake_broadcast), timeout=3.0
+        )
+        stream_file.write_bytes(
+            f"● Alte Antwort von vorhin, lang genug fuer die Dedup-Grenze.\r\n> {question}\r\n● Ein Fjord ist ein Meeresarm.\r\n".encode()
+        )
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "preview" and "Meeresarm" in d.get("text", "")
+                for _, _, d in fake_broadcast
+            ),
+            timeout=3.0,
+        ), "keine Vorschau"
+    finally:
+        await manager.release("agent-anchor")
+
+    preview = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"][-1]
+    assert "Alte Antwort" not in preview["text"], "alter Zug in der Vorschau"
+    assert "Fjord ist" not in preview["text"] or "Schreib mir" not in preview["text"], (
+        "die eigene Frage steht in der Vorschau"
+    )
+    assert preview["text"] == "● Ein Fjord ist ein Meeresarm."
+
+
 # ── Frische Sitzung ohne Datei (omp ``/new``) ───────────────────────────────
 
 

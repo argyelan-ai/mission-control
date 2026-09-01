@@ -21,9 +21,16 @@ import re
 
 import pyte
 
-#: Breite/Hoehe des nachgerechneten Bildschirms. 80×24 ist das Format, in dem
-#: die Agenten-Panes laufen; der Rueckblick faengt weggescrollte Zeilen auf.
+#: Rueckfall-Groesse des nachgerechneten Bildschirms, wenn tmux nicht sagt, wie
+#: gross die Pane wirklich ist. Die echte Groesse ist PFLICHT (Live-Gate
+#: 01.09.2026: Sparkys Pane war 168x45, mit 80 Spalten brach jede Zeile bei
+#: Zeichen 80 ab und der Rest ging beim Neuzeichnen verloren). Der Rueckblick
+#: faengt weggescrollte Zeilen auf.
 COLS, ROWS, HISTORY = 80, 24, 3000
+
+#: omp zeigt eingereihte Nachrichten in einer Box "Steering · N" mit N
+#: nummerierten Zeilen. Das ist das Echo des Operators, nie Inhalt.
+_STEERING = re.compile(r"^\s*Steering\s*·\s*(\d+)\s*$")
 
 #: Zeilen, die zur Oberflaeche gehoeren und nie Inhalt sind. Bewusst als
 #: Muster-Liste und nicht als Adapter-Methode: die Rahmen der vier CLIs
@@ -53,9 +60,15 @@ class PanePreview:
     230 von 556 Zeichen belegt).
     """
 
-    def __init__(self) -> None:
-        self._screen = pyte.HistoryScreen(COLS, ROWS, history=HISTORY, ratio=0.5)
+    def __init__(self, cols: int = COLS, rows: int = ROWS) -> None:
+        self.cols, self.rows = cols, rows
+        self._screen = pyte.HistoryScreen(cols, rows, history=HISTORY, ratio=0.5)
         self._stream = pyte.Stream(self._screen)
+
+    def fresh(self) -> "PanePreview":
+        """Ein leerer Bildschirm derselben Groesse — fuer den Neustart, wenn
+        die Strom-Datei geleert wurde."""
+        return PanePreview(self.cols, self.rows)
 
     def feed(self, chunk: bytes | str) -> None:
         if not chunk:
@@ -68,7 +81,7 @@ class PanePreview:
 
     def _lines(self) -> list[str]:
         rows = [
-            "".join(row[x].data if x in row else " " for x in range(COLS)).rstrip()
+            "".join(row[x].data if x in row else " " for x in range(self.cols)).rstrip()
             for row in self._screen.history.top
         ]
         rows += [line.rstrip() for line in self._screen.display]
@@ -90,6 +103,11 @@ class PanePreview:
         gesendeten Nachricht steht in der Eingabezeile, und die faellt sonst
         schon vor der Suche weg. Zurueck kommt nur Inhalt.
 
+        Eine lange Zeile steht im Terminal umgebrochen ueber mehrere
+        Bildschirmzeilen; der Schnitt gehoert HINTER die letzte davon. Gesucht
+        wird darum mit Kopf UND Schwanz des Ankers, genommen wird der letzte
+        Treffer — sonst tropfte der Rest der alten Antwort in die Vorschau.
+
         Ohne Treffer kommt der ganze Inhalt zurueck — lieber zu viel zeigen als
         eine Antwort verschlucken; die Wahrheit raeumt ohnehin auf.
         """
@@ -97,11 +115,11 @@ class PanePreview:
         lines = self._lines()
         if not needle:
             return self.text()
-        head = needle[:24]
+        head, tail = needle[:24], needle[-24:]
         cut = None
         for idx, line in enumerate(lines):
             flat = re.sub(r"\s+", " ", line).strip()
-            if needle in flat or (len(head) > 8 and head in flat):
+            if needle in flat or (len(head) > 8 and (head in flat or tail in flat)):
                 cut = idx
         if cut is None:
             return self.text()
@@ -126,8 +144,16 @@ class PanePreview:
         """
         out: list[str] = []
         seen: set[str] = set()
+        skip = 0            # verbleibende Zeilen der Steering-Box
         for raw in lines:
             line = raw.strip()
+            if skip and re.match(r"^\d+\.\s", line):
+                skip -= 1
+                continue
+            steering = _STEERING.match(line)
+            if steering:
+                skip = int(steering.group(1))
+                continue
             if not line or _FURNITURE.search(raw):
                 continue
             key = re.sub(r"\s+", " ", line)

@@ -104,6 +104,32 @@ async def start(agent) -> Path | None:
     return path if ok else None
 
 
+async def pane_size(agent) -> tuple[int, int]:
+    """Breite und Hoehe der Pane — oder 80x24, wenn tmux nicht antwortet.
+
+    Der Emulator muss so breit sein wie die echte Pane: mit 80 Spalten brach
+    jede Zeile von Sparkys 168 breiter Pane bei Zeichen 80 ab (Live-Gate
+    01.09.2026). Ein Fehler ist nie fatal — dann ist die Vorschau nur schmal.
+    """
+    slug = _slug(agent)
+    if slug is None:
+        return 80, 24
+
+    def _query() -> tuple[int, int]:
+        argv = _docker_argv(slug, "display", "-p", "-t", f"{slug}:0", "#{pane_width}x#{pane_height}")
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT_SECONDS)
+            width, height = proc.stdout.strip().split("x")
+            cols, rows = int(width), int(height)
+            if cols > 0 and rows > 0:
+                return cols, rows
+        except Exception as exc:  # noqa: BLE001 — Docker weg, Timeout, Murks in stdout
+            logger.warning("pane_stream: Pane-Groesse von %s unbekannt: %s", slug, exc)
+        return 80, 24
+
+    return await asyncio.to_thread(_query)
+
+
 async def stop(agent) -> None:
     """Schaltet den Strom ab.
 

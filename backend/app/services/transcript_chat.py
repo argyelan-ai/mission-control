@@ -1922,6 +1922,19 @@ class ChatTailerManager:
                                     observed_windows[ev["model"]] = ev["contextWindow"]
                                     await observe_model_window(ev["model"], ev["contextWindow"])
 
+                            if ev["kind"] == "message" and preview_state is not None:
+                                # Der letzte Absatz der Nachricht ist die
+                                # Marke: was auf dem Bildschirm DANACH steht,
+                                # hat das Transkript noch nicht (Live-Gate
+                                # 01.09.2026: ohne Marke trug die Vorschau den
+                                # ganzen Bildschirm samt alter Zuege und, nach
+                                # der fertigen Antwort, dieselbe Antwort nochmal).
+                                paragraphs = [p for p in (ev.get("text") or "").splitlines() if p.strip()]
+                                if paragraphs:
+                                    preview_state["anchor"] = paragraphs[-1]
+                                    preview_state["last_sent"] = ""
+                                    preview_state["pending"] = None
+
                             await sse.broadcast(channel, "chat_event", ev)
                 except asyncio.CancelledError:
                     raise
@@ -2037,7 +2050,14 @@ class ChatTailerManager:
             path = await pane_stream.start(agent)
             if path is None:
                 return None
-            return {"path": path, "offset": 0, "screen": PanePreview(), "last_sent": "", "pending": None}
+            cols, rows = await pane_stream.pane_size(agent)
+            return {
+                "path": path, "offset": 0, "screen": PanePreview(cols, rows),
+                "last_sent": "", "pending": None,
+                # Letzte Zeile, die das Transkript schon hat (siehe Tailer):
+                # die Vorschau zeigt nur, was danach auf dem Bildschirm steht.
+                "anchor": "",
+            }
         except Exception:  # noqa: BLE001
             logger.warning("preview: Start fehlgeschlagen", exc_info=True)
             return None
@@ -2063,7 +2083,7 @@ class ChatTailerManager:
                 return b""
             if size < state["offset"]:      # Datei wurde geleert -> von vorn
                 state["offset"] = 0
-                state["screen"] = state["screen"].__class__()
+                state["screen"] = state["screen"].fresh()
             if size == state["offset"]:
                 return b""
             with open(path, "rb") as handle:
@@ -2076,7 +2096,8 @@ class ChatTailerManager:
         if chunk:
             state["screen"].feed(chunk)
 
-        text = state["screen"].text().strip()
+        anchor = state.get("anchor") or ""
+        text = (state["screen"].text_after(anchor) if anchor else state["screen"].text()).strip()
         if not text or text == state["last_sent"]:
             return
         if state["pending"] != text:

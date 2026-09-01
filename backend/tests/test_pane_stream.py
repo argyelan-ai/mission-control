@@ -90,3 +90,29 @@ async def test_start_never_raises_when_docker_is_unreachable(monkeypatch, tmp_pa
     monkeypatch.setattr(subprocess, "run", _boom)
 
     assert await pane_stream.start(_StubAgent(slug="rex")) is None
+
+
+# ── Pane-Groesse ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pane_size_reads_width_and_height_from_tmux(monkeypatch):
+    calls: list[list[str]] = []
+
+    def _fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="168x45\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert await pane_stream.pane_size(_StubAgent(slug="rex")) == (168, 45)
+    assert calls[-1][7:9] == ["tmux", "display"]
+    assert "rex:0" in calls[-1]
+
+
+@pytest.mark.asyncio
+async def test_pane_size_falls_back_to_80x24_when_tmux_is_unreachable(monkeypatch):
+    def _fake_run(argv, **kwargs):
+        raise OSError("docker weg")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert await pane_stream.pane_size(_StubAgent(slug="rex")) == (80, 24)
