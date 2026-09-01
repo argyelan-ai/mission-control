@@ -2238,7 +2238,12 @@
       "applyFailed": "Could not be saved. Please try again.",
       "notReporting": "This box hasn't reported any values yet.",
       "readOnlyHint": "Only administrators can change the mode.",
-      "stripLabel": "GPU mode"
+      "stripLabel": "GPU mode",
+      "lockNoDeviceState": "The agent reports no state — it is too old. Update the agent on the box, then the mode can be set.",
+      "lockStale": "The agent has not reported for {age}. The mode stays locked until it does.",
+      "lockStaleNever": "The agent has never reported. The mode stays locked until it does.",
+      "lockUnknownMode": "The control scripts are missing on the box. Run",
+      "lockUnknownModeTail": "on the box again, then the mode can be set."
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint not detected",

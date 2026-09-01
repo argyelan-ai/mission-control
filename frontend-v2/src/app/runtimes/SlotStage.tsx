@@ -513,6 +513,11 @@ function NowBlock({ serving, live, sizeGb }: { serving: Runtime | null; live?: R
  *  - Host erreichbar → bei einer schlafenden Box wäre der Schalter ein
  *    Versprechen, das niemand einlöst. Die Kachel sagt daneben schon, dass
  *    sie nicht erreichbar ist; ein bedienbarer Regler daneben widerspricht dem.
+ *
+ * Sichtbar heisst noch nicht bedienbar: meldet der Agent keinen Zustand
+ * (`reason` no_device_state), ist er verstummt (`stale`) oder fehlen die
+ * Steuer-Skripte (`gpu_mode` unknown), SPERRT der Streifen den Schalter selbst
+ * und sagt in einem Satz, was fehlt — siehe switchLockFor() in DeviceControl.
  */
 function DeviceStrip({
   device,
