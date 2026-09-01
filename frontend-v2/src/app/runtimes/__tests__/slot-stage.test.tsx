@@ -3,8 +3,42 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SlotStage } from "../SlotStage";
 import { api } from "@/lib/api";
-import type { Runtime, Host, RuntimeLiveStatus } from "@/lib/types";
+import type { Device, Runtime, Host, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
+
+// Der echte zustand-Store schreibt über die persist-Middleware in
+// localStorage — im jsdom reicht ein Selektor-Mock (SlotStage liest nur
+// currentUser.role, um den Geräte-Schalter zu sperren).
+const mockStore = vi.hoisted(() => ({
+  state: { currentUser: { id: "u1", email: "a@b.c", name: "Admin", role: "admin" } as { id: string; email: string; name: string; role: string } | null },
+}));
+vi.mock("@/lib/store", () => ({
+  useAppStore: (selector: (s: typeof mockStore.state) => unknown) => selector(mockStore.state),
+}));
+
+/** Eine Zeile aus /nodes/devices — nur je gekoppelte Boxen stehen dort. */
+function makeDevice(over: Partial<Device> = {}): Device {
+  return {
+    host_id: "spark",
+    slug: "spark",
+    display_name: "GPU-Box",
+    has_agent: true,
+    desired_state: { gpu_mode: "eco" },
+    device_state: {
+      gpu_mode: "eco", gpu_clock_mhz: 1989, gpu_power_w: 33, gpu_temp_c: 63,
+      min_free_kbytes: 5242880, oom_guard: "active", latency_tune: true,
+      mtu: { iface: "enP7s7", value: 9000 }, applied_at: "2026-09-01T00:12:00Z", last_error: null,
+    },
+    device_state_updated_at: "2026-09-01T00:12:00Z",
+    agent_last_seen_at: "2026-09-01T00:12:00Z",
+    status: "green",
+    reason: "in_sync",
+    diff: [],
+    last_error: null,
+    age_s: 4,
+    ...over,
+  };
+}
 
 // Fixtures copied from grouping.test.ts (this repo's established pattern —
 // RuntimeDetailPanel.test.tsx does the same rather than importing another
@@ -42,6 +76,21 @@ function renderWithQuery(ui: React.ReactElement) {
 
 const noopSizeGb = () => undefined;
 
+/**
+ * Wartet, bis die Geräte-Abfrage wirklich durch ist.
+ *
+ * Ohne das prüft ein "kein Schalter da"-Test nichts: die Abfrage ist zum
+ * Zeitpunkt der Behauptung noch offen, der Schalter fehlt also aus dem
+ * falschen Grund. (Genau so ist eine Sabotage-Probe hier durchgerutscht.)
+ */
+async function devicesSettled(spy: { mock: { results: unknown[] } }) {
+  await waitFor(() => expect(spy.mock.results.length).toBeGreaterThan(0));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("SlotStage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -60,6 +109,9 @@ describe("SlotStage", () => {
     vi.spyOn(api.runtimes.sparkrun, "currentRecipe").mockResolvedValue({
       slug: "rt", current_recipe: "qwen-general", sparkrun_managed: true,
     });
+    // Standard: keine gekoppelte Box — wer den Schalter testet, überschreibt.
+    vi.spyOn(api.nodes, "devices").mockResolvedValue([]);
+    mockStore.state.currentUser = { id: "u1", email: "a@b.c", name: "Admin", role: "admin" };
   });
 
   it("serving stage renders model+ctx+latency and never renders tok/s", async () => {
@@ -255,6 +307,108 @@ describe("SlotStage", () => {
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
     expect(await screen.findByText("No model of its own — telemetry for this box")).toBeInTheDocument();
+  });
+
+  // ── Geräte-Steuerung (GPU-Modus) ─────────────────────────────────────────
+  // Der Schalter gehört in die Geräte-Ansicht — aber nur dort, wo er auch
+  // etwas bewirken kann.
+
+  it("puts the GPU mode strip into the serving tile of a paired box", async () => {
+    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
+    const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(
+      <SlotStage
+        group={group}
+        live={{ rt: { reachable: true, latency_ms: 14 } as RuntimeLiveStatus }}
+        sizeGb={noopSizeGb}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(await screen.findByTestId("device-control")).toBeInTheDocument();
+    expect(screen.getByTestId("compact-mode-eco")).toHaveAttribute("aria-checked", "true");
+    // Die Referenzwerte sind als solche markiert (HONESTY RULE) — die echten
+    // Live-Werte stehen daneben in der Telemetrie-Spalte.
+    expect(screen.getByTestId("compact-mode-boost")).toHaveTextContent("≈60 W");
+    expect(screen.getByText(/^Measured: /)).toBeInTheDocument();
+    expect(screen.getByText("55 °C")).toBeInTheDocument();
+  });
+
+  // Ein Schalter auf einer Box, die MC nicht stellen kann, ist eine Lüge.
+  it("shows no GPU mode strip for a box without a node agent", async () => {
+    const devices = vi.spyOn(api.nodes, "devices").mockResolvedValue([]);
+    const serving = makeRuntime({ slug: "rt", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    await screen.findByText("GPU-Box");
+    await devicesSettled(devices);
+    expect(screen.queryByTestId("device-control")).toBeNull();
+  });
+
+  it("shows no GPU mode strip while the host is unreachable", async () => {
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({
+      reachable: false, gpu_util_pct: null, vram_used_mb: null, vram_total_mb: null, gpu_temp_c: null,
+    });
+    const devices = vi
+      .spyOn(api.nodes, "devices")
+      .mockResolvedValue([makeDevice({ status: "yellow", reason: "stale" })]);
+    const serving = makeRuntime({ slug: "rt", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Host unreachable")).toBeInTheDocument();
+    await devicesSettled(devices);
+    expect(screen.queryByTestId("device-control")).toBeNull();
+  });
+
+  // Graue Ampel = MC weiss nichts über den Zustand der Box. Einen Regler
+  // anzubieten, dessen Ist-Stand niemand kennt, führt in die Irre.
+  it("shows no GPU mode strip while the traffic light is grey", async () => {
+    const devices = vi
+      .spyOn(api.nodes, "devices")
+      .mockResolvedValue([makeDevice({ status: "grey", reason: "no_agent", has_agent: false, device_state: null })]);
+    const serving = makeRuntime({ slug: "rt", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    await screen.findByText("GPU-Box");
+    await devicesSettled(devices);
+    expect(screen.queryByTestId("device-control")).toBeNull();
+  });
+
+  it("puts the strip on a worker tile too — a paired box with no runtime of its own", async () => {
+    vi.spyOn(api.nodes, "devices").mockResolvedValue([
+      makeDevice({ host_id: "beta", slug: "beta", display_name: "Beta" }),
+    ]);
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = { host, runtimes: [] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByText("Fleet worker")).toBeInTheDocument();
+    expect(await screen.findByTestId("device-control")).toBeInTheDocument();
+  });
+
+  it("is read-only for a non-admin", async () => {
+    mockStore.state.currentUser = { id: "u2", email: "x@y.z", name: "Ops", role: "user" };
+    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
+    const serving = makeRuntime({ slug: "rt", state: "ready" });
+    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    expect(await screen.findByTestId("compact-mode-boost")).toBeDisabled();
   });
 
   it("a non-startable host runtime (e.g. omp) stays visible in the dropdown but disabled", async () => {

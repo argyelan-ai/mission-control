@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { DeviceRowControl, MODE_FACTS } from "../DeviceControl";
+import { DeviceModeStrip, MODE_FACTS } from "../DeviceControl";
 import { api } from "@/lib/api";
 import type { Device, DeviceState } from "@/lib/types";
 
@@ -61,37 +61,37 @@ function compactBarPct(mode: string): number {
   return parseFloat(m[1]) * 100;
 }
 
-describe("DeviceRowControl", () => {
+describe("DeviceModeStrip", () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it("shows the four steps compactly, with what each one costs", async () => {
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     for (const m of ["eco+", "eco", "normal", "boost"]) {
       expect(screen.getByTestId(`compact-mode-${m}`)).toBeInTheDocument();
     }
     // Der Stromwert je Stufe steht dran — die Zahl trägt auf dieser Fläche
     // mehr als jede Grafik.
-    expect(screen.getByTestId("compact-mode-eco+")).toHaveTextContent("27 W");
-    expect(screen.getByTestId("compact-mode-boost")).toHaveTextContent("60 W");
+    expect(screen.getByTestId("compact-mode-eco+")).toHaveTextContent("≈27 W");
+    expect(screen.getByTestId("compact-mode-boost")).toHaveTextContent("≈60 W");
     expect(screen.getByTestId("compact-mode-eco")).toHaveAttribute("aria-checked", "true");
   });
 
   // Die Kernaussage muss auch eingeklappt sichtbar sein — ohne sie versteht
   // niemand, warum man freiwillig die sparsamste Stufe wählt.
   it("states the core message without expanding anything", () => {
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     expect(screen.queryByTestId("device-detail")).toBeNull();
+    // „Measured:" davor — die Zahl darf nicht als Live-Wert dieser Box
+    // gelesen werden (HONESTY RULE der Slot-Kachel).
     expect(
-      screen.getByText(/the same on every step\. What you save is power and heat\./),
+      screen.getByText(/^Measured: 20\.4 tok\/s on every step — what you save is power and heat\.$/),
     ).toBeInTheDocument();
-    // …und die Erzeugungsgeschwindigkeit steht als Zahl daneben
-    expect(screen.getByText(/20\.4 tok\/s/)).toBeInTheDocument();
   });
 
   it("draws the power staircase in the compact switch", () => {
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     const power = ["eco+", "eco", "normal", "boost"].map(compactBarPct);
     expect(power[0]).toBeLessThan(power[1]);
@@ -102,7 +102,7 @@ describe("DeviceRowControl", () => {
 
   it("opens the full measurement on demand", async () => {
     const user = userEvent.setup();
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     await user.click(screen.getByTestId("device-toggle-detail"));
 
@@ -119,7 +119,7 @@ describe("DeviceRowControl", () => {
   // das kaputt (z.B. andere Skala je Spalte), erzählte das Bild eine Lüge.
   it("draws generation flat across all modes and power as a staircase", async () => {
     const user = userEvent.setup();
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
     await user.click(screen.getByTestId("device-toggle-detail"));
     await screen.findByTestId("device-detail");
 
@@ -139,7 +139,7 @@ describe("DeviceRowControl", () => {
   it("animates through transform only, never through layout properties", async () => {
     const user = userEvent.setup();
     vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue(makeDevice());
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     await user.click(screen.getByTestId("compact-mode-boost"));
     await user.click(screen.getByTestId("device-toggle-detail"));
@@ -156,7 +156,7 @@ describe("DeviceRowControl", () => {
   it("sends the desired state and shows the hand-over while the box catches up", async () => {
     const user = userEvent.setup();
     const set = vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue(makeDevice());
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     await user.click(screen.getByTestId("compact-mode-eco+"));
 
@@ -177,7 +177,7 @@ describe("DeviceRowControl", () => {
     const user = userEvent.setup();
     const set = vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue(makeDevice());
     renderWithQuery(
-      <DeviceRowControl
+      <DeviceModeStrip
         device={makeDevice({
           desired_state: { gpu_mode: "eco", oom_guard: true, latency_tune: true, mtu: 9000, min_free_kbytes: 5242880 },
         })}
@@ -198,7 +198,7 @@ describe("DeviceRowControl", () => {
 
   it("shows the hand-over for a desired state set elsewhere (no click here)", async () => {
     renderWithQuery(
-      <DeviceRowControl
+      <DeviceModeStrip
         device={makeDevice({
           device_state: makeState({ gpu_mode: "boost" }),
           desired_state: { gpu_mode: "eco" },
@@ -215,20 +215,20 @@ describe("DeviceRowControl", () => {
   });
 
   it("keeps quiet about the hand-over when desired and reported agree", () => {
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     expect(screen.queryByTestId("device-pending")).toBeNull();
     expect(screen.queryByTestId("compact-target-outline")).toBeNull();
   });
 
   it("stays quiet about boost while a gentler step is chosen", () => {
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
     expect(screen.queryByTestId("device-boost-warning")).toBeNull();
   });
 
   it("warns about the risk once boost is the chosen step", () => {
     renderWithQuery(
-      <DeviceRowControl
+      <DeviceModeStrip
         device={makeDevice({
           device_state: makeState({ gpu_mode: "boost" }),
           desired_state: { gpu_mode: "boost" },
@@ -241,7 +241,7 @@ describe("DeviceRowControl", () => {
 
   it("passes the box's own error through instead of swallowing it", () => {
     renderWithQuery(
-      <DeviceRowControl
+      <DeviceModeStrip
         device={makeDevice({
           status: "red",
           reason: "last_error",
@@ -259,7 +259,7 @@ describe("DeviceRowControl", () => {
   it("drops the target again when saving fails, so nobody waits for nothing", async () => {
     const user = userEvent.setup();
     vi.spyOn(api.nodes, "setDesiredState").mockRejectedValue(new Error("API 500"));
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     await user.click(screen.getByTestId("compact-mode-boost"));
 
@@ -271,7 +271,7 @@ describe("DeviceRowControl", () => {
   // würde eine Einstellung behaupten, die niemand gemacht hat.
   it("highlights nothing when neither a reading nor a target exists", () => {
     renderWithQuery(
-      <DeviceRowControl
+      <DeviceModeStrip
         device={makeDevice({
           has_agent: false,
           status: "grey",
@@ -292,7 +292,7 @@ describe("DeviceRowControl", () => {
 
   it("is read-only for non-admins", async () => {
     const set = vi.spyOn(api.nodes, "setDesiredState");
-    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl={false} />);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl={false} />);
 
     expect(screen.getByTestId("compact-mode-boost")).toBeDisabled();
     expect(screen.getByText("Only administrators can change the mode.")).toBeInTheDocument();

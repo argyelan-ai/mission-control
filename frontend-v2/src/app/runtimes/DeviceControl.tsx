@@ -4,12 +4,23 @@
  * Geräte-Steuerung — GPU-Modus, eingebaut in die Host-Zeile
  * (docs/plans/2026-09-01-geraete-steuerung-vertrag.md, Gewerk C).
  *
- * WARUM hier und nicht als eigener Abschnitt:
- * Ein Gerät ist EIN Ding. Zugangsdaten oben, Betriebszustand in einem zweiten
- * Block darunter — das zwang den Operator, zwei Stellen im Kopf zusammen-
- * zubringen, und den zweiten Block fand er gar nicht erst, weil er unter einer
- * Liste stand, die er schon abgehakt hatte. Der Schalter sitzt darum in der
- * Zeile des Geräts, das er steuert.
+ * WARUM in der Slot-Bühne:
+ * Die Geräte-Ansicht ist der Reiter „fleet" — dort stehen die Boxen, dort
+ * schaut der Operator hin. Die Host-Liste im Reiter „infra" ist Verwaltung
+ * (anlegen, koppeln, löschen); ein Betriebs-Schalter war dort zweimal am
+ * falschen Ort. Der Schalter sitzt jetzt in der Kachel der Box, deren Takt
+ * er stellt — neben deren Live-Werten.
+ *
+ * WO GENAU, und wo NICHT:
+ * In der Slot-Kachel (Box mit Runtimes) und in der Worker-Kachel (gekoppelte
+ * Box ohne eigene Runtime). NICHT bei einer schlafenden oder nicht
+ * erreichbaren Box und nicht bei einer, die MC gar nicht steuern kann —
+ * ein Schalter, der nichts bewirken kann, ist eine Lüge.
+ *
+ * HONESTY RULE (Dateikopf von SlotStage.tsx): nur echte Felder. Die vier
+ * Referenzwerte je Stufe sind KEINE Live-Messung dieser Box — sie stehen
+ * darum mit „≈" und unter der Überschrift „gemessen", während die echten
+ * Live-Werte daneben in der Telemetrie-Spalte stehen.
  *
  * WARUM zwei Ausbaustufen:
  * In einer Zeile ist der Platz knapp. Eingeklappt trägt der Schalter genau so
@@ -203,8 +214,8 @@ function RowLabel({ name, unit }: { name: string; unit: string }) {
       className="flex flex-col justify-end"
       style={{ height: H.row, paddingBottom: 8, lineHeight: 1.25 }}
     >
-      <span style={{ fontSize: "11px", color: C.textMuted }}>{name}</span>
-      <span style={{ fontSize: "9px", color: C.textDim }}>{unit}</span>
+      <span className="text-[11px]" style={{ color: C.textMuted }}>{name}</span>
+      <span className="text-[9px]" style={{ color: C.textDim }}>{unit}</span>
     </div>
   );
 }
@@ -243,8 +254,8 @@ function ModeScale({
     <div>
       {/* Skalen-Beschriftung: kühl/sparsam links, heiss/schnell rechts. */}
       <div
-        className="flex items-center justify-between mb-2"
-        style={{ fontSize: "10px", letterSpacing: "0.06em", textTransform: "uppercase", color: C.textDim }}
+        className="flex items-center justify-between mb-2 text-[10px] uppercase"
+        style={{ letterSpacing: "0.06em", color: C.textDim }}
       >
         <span>{t("scaleLow")}</span>
         <span
@@ -263,8 +274,8 @@ function ModeScale({
           <RowLabel name={t("rowPower")} unit={t("unitWatt")} />
           <RowLabel name={t("rowHeat")} unit={t("unitTemp")} />
           <div
-            className="flex items-center"
-            style={{ height: H.foot, fontSize: "10px", color: C.textDim }}
+            className="flex items-center text-[10px]"
+            style={{ height: H.foot, color: C.textDim }}
           >
             {t("rowPrefill")}
           </div>
@@ -342,10 +353,9 @@ function ModeScale({
                   style={{ ["--tw-ring-color" as string]: C.borderAccent }}
                 >
                   <span
-                    className="flex items-center justify-center gap-1"
+                    className="flex items-center justify-center gap-1 text-[12px]"
                     style={{
                       height: H.head,
-                      fontSize: "12px",
                       fontWeight: active ? 600 : 500,
                       color: active ? C.textPrimary : C.textMuted,
                     }}
@@ -371,10 +381,9 @@ function ModeScale({
                   </span>
 
                   <span
-                    className="flex items-center justify-center tabular-nums"
+                    className="flex items-center justify-center tabular-nums text-[10px]"
                     style={{
                       height: H.foot,
-                      fontSize: "10px",
                       color: f.prefillPenaltyPct > 0 ? C.textMuted : C.textDim,
                     }}
                   >
@@ -404,8 +413,8 @@ function FactsReadout({ mode }: { mode: GpuMode }) {
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mt-3">
       {items.map((it) => (
         <div key={it.k} className="flex flex-col">
-          <span style={{ fontSize: "10px", color: C.textDim }}>{t(it.k)}</span>
-          <span className="tabular-nums" style={{ fontSize: "15px", color: C.textPrimary, fontWeight: 600 }}>
+          <span className="text-[10px]" style={{ color: C.textDim }}>{t(it.k)}</span>
+          <span className="tabular-nums text-[15px] font-semibold" style={{ color: C.textPrimary }}>
             {it.v}
           </span>
         </div>
@@ -508,31 +517,38 @@ function CompactModeSwitch({
               onClick={() => onPick(mode)}
               data-testid={`compact-mode-${mode}`}
               data-active={active ? "true" : "false"}
-              className="flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 min-h-11 sm:min-h-0 cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1"
+              className="flex flex-col items-center justify-center gap-1 px-1 py-1.5 min-h-11 sm:min-h-0 cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1"
               style={{ ["--tw-ring-color" as string]: C.borderAccent }}
             >
+              {/* Ab sm eine Zeile — die Slot-Kachel ist voll, jede zweite
+                  Zeile kostet dort echten Platz. Auf dem Handy passen bei vier
+                  Spalten „boost" und „≈60 W" nicht nebeneinander (sie wurden
+                  abgeschnitten), also untereinander. Das „≈" trennt die
+                  Referenzmessung sichtbar von den Live-Werten in der
+                  Telemetrie-Spalte daneben (HONESTY RULE). */}
               <span
-                className="flex items-center gap-1 leading-none"
+                className="flex flex-col sm:flex-row items-center sm:gap-1 leading-none text-[11px]"
                 style={{
-                  fontSize: "11px",
                   fontWeight: active ? 600 : 500,
                   color: active ? C.textPrimary : C.textMuted,
                 }}
               >
-                {f.risky && (
-                  <AlertTriangle
-                    size={9}
-                    aria-hidden
-                    style={{ color: active ? STATUS_TEXT.warning : C.textDim }}
-                  />
-                )}
-                {t(MODE_LABEL_KEY[mode])}
-              </span>
-              <span
-                className="tabular-nums leading-none"
-                style={{ fontSize: "9px", color: active ? C.textMuted : C.textDim }}
-              >
-                {num(locale, f.watt, 0)} {t("unitWatt")}
+                <span className="flex items-center gap-1 whitespace-nowrap">
+                  {f.risky && (
+                    <AlertTriangle
+                      size={9}
+                      aria-hidden
+                      style={{ color: active ? STATUS_TEXT.warning : C.textDim }}
+                    />
+                  )}
+                  {t(MODE_LABEL_KEY[mode])}
+                </span>
+                <span
+                  className="tabular-nums whitespace-nowrap text-[9px] font-normal"
+                  style={{ color: active ? C.textMuted : C.textDim }}
+                >
+                  ≈{num(locale, f.watt, 0)} {t("unitWatt")}
+                </span>
               </span>
               {/* Stromtreppe: Länge trägt den Verbrauch. Statisch gesetzt und
                   über transform skaliert — kein Layout, kein Ruckeln. */}
@@ -556,9 +572,9 @@ function CompactModeSwitch({
   );
 }
 
-// ── Der Block, der unter der Host-Zeile hängt ────────────────────────────────
+// ── Der Streifen in der Slot-Kachel ─────────────────────────────────────────
 
-export function DeviceRowControl({
+export function DeviceModeStrip({
   device,
   canControl,
 }: {
@@ -632,10 +648,20 @@ export function DeviceRowControl({
     <div
       data-testid="device-control"
       data-slug={device.slug}
-      className="flex flex-col gap-2 pt-2 mt-1.5"
-      style={{ borderTop: `1px solid ${C.borderSubtle}` }}
+      className="flex flex-col gap-2 px-4 py-2.5"
+      style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2.5">
+        {/* Sagt, was der Streifen ist — die Kachel trägt schon zwei andere
+            Schalter (Rezept, Start/Stop), er darf nicht mit ihnen verschwimmen.
+            Auch auf dem Handy sichtbar, dort über dem Schalter: vier Modus-
+            namen ohne Überschrift erklären sich nicht von selbst. */}
+        <span
+          className="shrink-0 text-[10px] font-medium uppercase"
+          style={{ color: C.textDim, letterSpacing: "0.08em" }}
+        >
+          {t("stripLabel")}
+        </span>
         <div className="flex-1 min-w-0">
           <CompactModeSwitch
             current={currentMode}
@@ -650,8 +676,8 @@ export function DeviceRowControl({
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           data-testid="device-toggle-detail"
-          className="shrink-0 flex items-center gap-1 rounded-md px-2 min-h-11 sm:min-h-7 cursor-pointer"
-          style={{ fontSize: "11px", color: C.textMuted, border: `1px solid ${C.border}` }}
+          className="shrink-0 flex items-center gap-1 rounded-md px-2 min-h-11 sm:min-h-7 cursor-pointer text-[11px]"
+          style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
         >
           {t("showNumbers")}
           <ChevronDown
@@ -664,8 +690,10 @@ export function DeviceRowControl({
       </div>
 
       {/* Die Kernaussage — immer sichtbar, auch eingeklappt. Ohne sie versteht
-          niemand, warum man freiwillig die sparsamste Stufe wählt. */}
-      <p style={{ fontSize: "11px", color: C.textSecondary, lineHeight: 1.45 }}>
+          niemand, warum man freiwillig die sparsamste Stufe wählt. Mit
+          „Gemessen:" davor, damit sie nicht als Live-Wert dieser Box gelesen
+          wird (HONESTY RULE). */}
+      <p className="text-[11px]" style={{ color: C.textSecondary, lineHeight: 1.45 }}>
         {shownMode
           ? t("sameSpeedShort", { tokens: `${num(locale, MODE_FACTS[shownMode].tokensPerSec)} ${t("unitTokens")}` })
           : t("sameSpeed")}
@@ -678,7 +706,7 @@ export function DeviceRowControl({
           className="rounded-lg px-2.5 py-1.5"
           style={{ background: `${C.info}0F`, border: `1px solid ${C.info}33` }}
         >
-          <div className="flex items-center gap-2" style={{ fontSize: "11px", color: C.info }}>
+          <div className="flex items-center gap-2 text-[11px]" style={{ color: C.info }}>
             {mutation.isPending && <Loader2 size={11} className="animate-spin" aria-hidden />}
             <span>
               {t("pendingTo", { mode: t(MODE_LABEL_KEY[targetMode as GpuMode]) })}
@@ -704,7 +732,7 @@ export function DeviceRowControl({
               />
             </div>
           )}
-          <p className="mt-1" style={{ fontSize: "10px", color: C.textDim }}>
+          <p className="mt-1 text-[10px]" style={{ color: C.textDim }}>
             {t("pendingHint")}
           </p>
         </div>
@@ -719,7 +747,7 @@ export function DeviceRowControl({
           style={{ background: `${C.warning}0F`, border: `1px solid ${C.warning}33` }}
         >
           <AlertTriangle size={11} aria-hidden style={{ color: STATUS_TEXT.warning, marginTop: 2 }} />
-          <span style={{ fontSize: "11px", color: STATUS_TEXT.warning, lineHeight: 1.45 }}>
+          <span className="text-[11px]" style={{ color: STATUS_TEXT.warning, lineHeight: 1.45 }}>
             {t("boostRiskHint")}
           </span>
         </div>
@@ -728,8 +756,8 @@ export function DeviceRowControl({
       {device.last_error && (
         <div
           data-testid="device-last-error"
-          className="rounded-lg px-2.5 py-1.5"
-          style={{ background: `${C.error}0F`, border: `1px solid ${C.error}26`, fontSize: "11px", color: STATUS_TEXT.error }}
+          className="rounded-lg px-2.5 py-1.5 text-[11px]"
+          style={{ background: `${C.error}0F`, border: `1px solid ${C.error}26`, color: STATUS_TEXT.error }}
         >
           {t("deviceError", { error: device.last_error })}
         </div>
@@ -738,21 +766,21 @@ export function DeviceRowControl({
       {mutation.isError && (
         <div
           data-testid="device-apply-failed"
-          className="rounded-lg px-2.5 py-1.5"
-          style={{ background: `${C.error}0F`, border: `1px solid ${C.error}26`, fontSize: "11px", color: STATUS_TEXT.error }}
+          className="rounded-lg px-2.5 py-1.5 text-[11px]"
+          style={{ background: `${C.error}0F`, border: `1px solid ${C.error}26`, color: STATUS_TEXT.error }}
         >
           {t("applyFailed")}
         </div>
       )}
 
       {!state && (
-        <p data-testid="device-no-report" style={{ fontSize: "11px", color: C.textMuted }}>
+        <p data-testid="device-no-report" className="text-[11px]" style={{ color: C.textMuted }}>
           {t("notReporting")}
         </p>
       )}
 
       {!canControl && (
-        <p style={{ fontSize: "10px", color: C.textDim }}>{t("readOnlyHint")}</p>
+        <p className="text-[10px]" style={{ color: C.textDim }}>{t("readOnlyHint")}</p>
       )}
 
       {/* Volle Ansicht: das Diagramm, das die Behauptung „gleich schnell"
@@ -770,11 +798,11 @@ export function DeviceRowControl({
             disabled={!canControl || mutation.isPending}
             onPick={pick}
           />
-          <p className="mt-3" style={{ fontSize: "11px", color: C.textSecondary, lineHeight: 1.45 }}>
+          <p className="mt-3 text-[11px]" style={{ color: C.textSecondary, lineHeight: 1.45 }}>
             {t("sameSpeed")}
           </p>
           {shownMode && <FactsReadout mode={shownMode} />}
-          <p className="mt-2" style={{ fontSize: "10px", color: C.textDim }}>
+          <p className="mt-2 text-[10px]" style={{ color: C.textDim }}>
             {t("measuredNote")}
           </p>
         </div>
