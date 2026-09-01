@@ -2,19 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { DeviceControl, MODE_FACTS } from "../DeviceControl";
+import { DeviceRowControl, MODE_FACTS } from "../DeviceControl";
 import { api } from "@/lib/api";
 import type { Device, DeviceState } from "@/lib/types";
-
-// Wie in HostsSection.test.tsx: der echte zustand-Store schreibt über die
-// persist-Middleware in localStorage — im jsdom reicht ein Selektor-Mock,
-// DeviceControl braucht nur currentUser.role.
-const mockStore = vi.hoisted(() => ({
-  state: { currentUser: null as { id: string; email: string; name: string; role: string } | null },
-}));
-vi.mock("@/lib/store", () => ({
-  useAppStore: (selector: (s: typeof mockStore.state) => unknown) => selector(mockStore.state),
-}));
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({
@@ -54,7 +44,6 @@ const makeDevice = (over: Partial<Device> = {}): Device => ({
   ...over,
 });
 
-
 /** Die Balkenhöhe steckt im scaleY der Transformation — der Balken ist immer
  *  voll hoch und wird von der Grundlinie aus zusammengedrückt (kein Layout). */
 function barPct(testId: string): number {
@@ -64,97 +53,75 @@ function barPct(testId: string): number {
   return parseFloat(m[1]) * 100;
 }
 
-describe("DeviceControl", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    mockStore.state.currentUser = { id: "u1", email: "a@b.c", name: "Admin", role: "admin" };
-  });
+/** Länge der Stromtreppe im kompakten Schalter (scaleX). */
+function compactBarPct(mode: string): number {
+  const el = screen.getByTestId(`compact-bar-${mode}`) as HTMLElement;
+  const m = /scaleX\(([-\d.]+)\)/.exec(el.style.transform);
+  if (!m) throw new Error(`kein scaleX in transform: "${el.style.transform}"`);
+  return parseFloat(m[1]) * 100;
+}
 
-  it("shows the device with its traffic light and live readings", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({ status: "yellow", reason: "stale" }),
-    ]);
+describe("DeviceRowControl", () => {
+  beforeEach(() => vi.restoreAllMocks());
 
-    renderWithQuery(<DeviceControl />);
+  it("shows the four steps compactly, with what each one costs", async () => {
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
 
-    // Der Name kommt direkt aus /nodes/devices — keine zweite Quelle
-    expect(await screen.findByText("GPU Box 1")).toBeInTheDocument();
-    expect(screen.getByTestId("health-dot-yellow")).toBeInTheDocument();
-    expect(screen.getByText("stopped reporting")).toBeInTheDocument();
-    // Live-Werte aus device_state, nicht aus der Referenzmessung
-    expect(screen.getByText("1989 MHz")).toBeInTheDocument();
-    expect(screen.getByText("33.0 W")).toBeInTheDocument();
-    expect(screen.getByText("63 °C")).toBeInTheDocument();
-  });
-
-  it("renders all four traffic-light colours", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({ host_id: "h1", slug: "a", status: "green", reason: "in_sync" }),
-      makeDevice({ host_id: "h2", slug: "b", status: "yellow", reason: "pending", diff: ["mtu"] }),
-      makeDevice({ host_id: "h3", slug: "c", status: "red", reason: "last_error", last_error: "boom" }),
-      makeDevice({
-        host_id: "h4",
-        slug: "d",
-        status: "grey",
-        reason: "no_agent",
-        has_agent: false,
-        device_state: null,
-      }),
-    ]);
-
-    renderWithQuery(<DeviceControl />);
-
-    expect(await screen.findByTestId("health-dot-green")).toBeInTheDocument();
-    expect(screen.getByTestId("health-dot-yellow")).toBeInTheDocument();
-    expect(screen.getByTestId("health-dot-red")).toBeInTheDocument();
-    expect(screen.getByTestId("health-dot-grey")).toBeInTheDocument();
-    // Gerät ohne gemeldeten Zustand sagt das, statt Nullen zu zeigen
-    expect(screen.getByTestId("device-no-report")).toBeInTheDocument();
-  });
-
-  // Eine frische Box hat weder Ist noch Soll. Ein hervorgehobener Reiter
-  // würde eine Einstellung behaupten, die niemand gemacht hat.
-  it("highlights nothing when neither a reading nor a target exists", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({
-        has_agent: false,
-        status: "grey",
-        reason: "no_agent",
-        device_state: null,
-        desired_state: null,
-      }),
-    ]);
-
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
-
-    expect(screen.queryByTestId("mode-indicator")).toBeNull();
     for (const m of ["eco+", "eco", "normal", "boost"]) {
-      expect(screen.getByTestId(`mode-${m}`)).toHaveAttribute("data-active", "false");
+      expect(screen.getByTestId(`compact-mode-${m}`)).toBeInTheDocument();
     }
+    // Der Stromwert je Stufe steht dran — die Zahl trägt auf dieser Fläche
+    // mehr als jede Grafik.
+    expect(screen.getByTestId("compact-mode-eco+")).toHaveTextContent("27 W");
+    expect(screen.getByTestId("compact-mode-boost")).toHaveTextContent("60 W");
+    expect(screen.getByTestId("compact-mode-eco")).toHaveAttribute("aria-checked", "true");
   });
 
-  it("marks the reported mode as the checked one", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({ device_state: makeState({ gpu_mode: "normal" }), desired_state: { gpu_mode: "normal" } }),
-    ]);
+  // Die Kernaussage muss auch eingeklappt sichtbar sein — ohne sie versteht
+  // niemand, warum man freiwillig die sparsamste Stufe wählt.
+  it("states the core message without expanding anything", () => {
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
 
-    renderWithQuery(<DeviceControl />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("mode-normal")).toHaveAttribute("aria-checked", "true"),
-    );
-    expect(screen.getByTestId("mode-eco")).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("mode-boost")).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByTestId("device-detail")).toBeNull();
+    expect(
+      screen.getByText(/the same on every step\. What you save is power and heat\./),
+    ).toBeInTheDocument();
+    // …und die Erzeugungsgeschwindigkeit steht als Zahl daneben
+    expect(screen.getByText(/20\.4 tok\/s/)).toBeInTheDocument();
   });
 
-  // Die eigentliche Aussage der Oberfläche: die Erzeugungs-Balken stehen über
+  it("draws the power staircase in the compact switch", () => {
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+
+    const power = ["eco+", "eco", "normal", "boost"].map(compactBarPct);
+    expect(power[0]).toBeLessThan(power[1]);
+    expect(power[1]).toBeLessThan(power[2]);
+    expect(power[2]).toBeLessThan(power[3]);
+    expect(power[3] - power[0]).toBeGreaterThan(30);
+  });
+
+  it("opens the full measurement on demand", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+
+    await user.click(screen.getByTestId("device-toggle-detail"));
+
+    const detail = await screen.findByTestId("device-detail");
+    // Das volle Diagramm samt Zahlenblock der gewählten Stufe
+    expect(within(detail).getByTestId("bar-generation-eco")).toBeInTheDocument();
+    expect(within(detail).getByText("32.5 W")).toBeInTheDocument();
+    expect(within(detail).getByText("74 °C")).toBeInTheDocument();
+    expect(within(detail).getByText(/Measured 16 Aug 2026/)).toBeInTheDocument();
+  });
+
+  // Die eigentliche Aussage des Diagramms: die Erzeugungs-Balken stehen über
   // alle vier Stufen gleich hoch, die Strom-Balken bilden eine Treppe. Ginge
   // das kaputt (z.B. andere Skala je Spalte), erzählte das Bild eine Lüge.
   it("draws generation flat across all modes and power as a staircase", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
+    const user = userEvent.setup();
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
+    await user.click(screen.getByTestId("device-toggle-detail"));
+    await screen.findByTestId("device-detail");
 
     const gen = ["eco+", "eco", "normal", "boost"].map((m) => barPct(`bar-generation-${m}`));
     expect(Math.max(...gen) - Math.min(...gen)).toBeLessThan(4);
@@ -168,47 +135,39 @@ describe("DeviceControl", () => {
 
   // Der Betreiber will eine flüssige Animation. `width`/`height` zu animieren
   // erzwingt bei jedem Bild ein neues Layout — dieser Test hält fest, dass
-  // Balken und Fortschritt ausschliesslich über transform laufen.
+  // Balken, Treppe und Fortschritt ausschliesslich über transform laufen.
   it("animates through transform only, never through layout properties", async () => {
     const user = userEvent.setup();
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
     vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue(makeDevice());
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
 
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
-    await user.click(screen.getByTestId("mode-boost"));
-    const card = await screen.findByTestId("device-card");
+    await user.click(screen.getByTestId("compact-mode-boost"));
+    await user.click(screen.getByTestId("device-toggle-detail"));
+    const block = await screen.findByTestId("device-control");
 
-    for (const el of Array.from(card.querySelectorAll<HTMLElement>("*"))) {
-      const tr = el.style.transition;
-      expect(tr).not.toMatch(/\b(width|height|padding|margin|top|left)\b/);
+    for (const el of Array.from(block.querySelectorAll<HTMLElement>("*"))) {
+      expect(el.style.transition).not.toMatch(/\b(width|height|padding|margin|top|left)\b/);
     }
-    // Balken tragen ihre Höhe im transform, nicht im height
     expect(screen.getByTestId("bar-power-boost").style.height).toBe("100%");
     expect(screen.getByTestId("bar-power-boost").style.transform).toMatch(/scaleY/);
+    expect(screen.getByTestId("compact-bar-boost").style.transform).toMatch(/scaleX/);
   });
 
-  it("sends only the desired state and shows the hand-over while the box catches up", async () => {
+  it("sends the desired state and shows the hand-over while the box catches up", async () => {
     const user = userEvent.setup();
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
-    const set = vi
-      .spyOn(api.nodes, "setDesiredState")
-      .mockResolvedValue(makeDevice({ desired_state: { gpu_mode: "eco+" }, status: "yellow", reason: "pending", diff: ["gpu_mode"] }));
+    const set = vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue(makeDevice());
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
 
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
+    await user.click(screen.getByTestId("compact-mode-eco+"));
 
-    await user.click(screen.getByTestId("mode-eco+"));
-
-    // PUT ersetzt den Soll — die bestehenden Vorgaben müssen mitgeschickt werden
     expect(set).toHaveBeenCalledWith("host-1", { gpu_mode: "eco+" });
     const pendingBox = await screen.findByTestId("device-pending");
     expect(within(pendingBox).getByText(/switching to eco\+/)).toBeInTheDocument();
     // Ziel-Umrandung neben dem gefüllten Ist-Reiter — beides gleichzeitig
-    expect(screen.getByTestId("mode-target-outline")).toBeInTheDocument();
-    expect(screen.getByTestId("mode-indicator")).toBeInTheDocument();
+    expect(screen.getByTestId("compact-target-outline")).toBeInTheDocument();
+    expect(screen.getByTestId("compact-indicator")).toBeInTheDocument();
     // Ist bleibt bis zur Bestätigung durch das Gerät bei eco
-    expect(screen.getByTestId("mode-eco")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("compact-mode-eco")).toHaveAttribute("aria-checked", "true");
   });
 
   // PUT ersetzt den Soll-Zustand vollständig. Schickte die Kachel nur
@@ -216,16 +175,17 @@ describe("DeviceControl", () => {
   // Agent liesse sie ab dann in Ruhe, ohne dass es jemand merkt.
   it("keeps the other hardening settings when only the mode changes", async () => {
     const user = userEvent.setup();
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({
-        desired_state: { gpu_mode: "eco", oom_guard: true, latency_tune: true, mtu: 9000, min_free_kbytes: 5242880 },
-      }),
-    ]);
     const set = vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue(makeDevice());
+    renderWithQuery(
+      <DeviceRowControl
+        device={makeDevice({
+          desired_state: { gpu_mode: "eco", oom_guard: true, latency_tune: true, mtu: 9000, min_free_kbytes: 5242880 },
+        })}
+        canControl
+      />,
+    );
 
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
-    await user.click(screen.getByTestId("mode-normal"));
+    await user.click(screen.getByTestId("compact-mode-normal"));
 
     expect(set).toHaveBeenCalledWith("host-1", {
       gpu_mode: "normal",
@@ -237,93 +197,106 @@ describe("DeviceControl", () => {
   });
 
   it("shows the hand-over for a desired state set elsewhere (no click here)", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({
-        device_state: makeState({ gpu_mode: "boost" }),
-        desired_state: { gpu_mode: "eco" },
-        status: "yellow",
-        reason: "pending",
-        diff: ["gpu_mode"],
-      }),
-    ]);
-
-    renderWithQuery(<DeviceControl />);
+    renderWithQuery(
+      <DeviceRowControl
+        device={makeDevice({
+          device_state: makeState({ gpu_mode: "boost" }),
+          desired_state: { gpu_mode: "eco" },
+          status: "yellow",
+          reason: "pending",
+          diff: ["gpu_mode"],
+        })}
+        canControl
+      />,
+    );
 
     expect(await screen.findByTestId("device-pending")).toBeInTheDocument();
-    expect(screen.getByTestId("mode-target-outline")).toBeInTheDocument();
+    expect(screen.getByTestId("compact-target-outline")).toBeInTheDocument();
   });
 
-  it("keeps quiet about the hand-over when desired and reported agree", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
+  it("keeps quiet about the hand-over when desired and reported agree", () => {
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
 
     expect(screen.queryByTestId("device-pending")).toBeNull();
-    expect(screen.queryByTestId("mode-target-outline")).toBeNull();
+    expect(screen.queryByTestId("compact-target-outline")).toBeNull();
   });
 
-  it("stays quiet about boost while a gentler step is chosen", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
-
+  it("stays quiet about boost while a gentler step is chosen", () => {
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
     expect(screen.queryByTestId("device-boost-warning")).toBeNull();
   });
 
-  it("warns about the risk once boost is the chosen step", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({ device_state: makeState({ gpu_mode: "boost" }), desired_state: { gpu_mode: "boost" } }),
-    ]);
-    renderWithQuery(<DeviceControl />);
-
-    expect(await screen.findByTestId("device-boost-warning")).toBeInTheDocument();
+  it("warns about the risk once boost is the chosen step", () => {
+    renderWithQuery(
+      <DeviceRowControl
+        device={makeDevice({
+          device_state: makeState({ gpu_mode: "boost" }),
+          desired_state: { gpu_mode: "boost" },
+        })}
+        canControl
+      />,
+    );
+    expect(screen.getByTestId("device-boost-warning")).toBeInTheDocument();
   });
 
-  it("passes the box's own error through instead of swallowing it", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([
-      makeDevice({ status: "red", reason: "last_error", last_error: "nvidia-smi: permission denied" }),
-    ]);
+  it("passes the box's own error through instead of swallowing it", () => {
+    renderWithQuery(
+      <DeviceRowControl
+        device={makeDevice({
+          status: "red",
+          reason: "last_error",
+          last_error: "nvidia-smi: permission denied",
+        })}
+        canControl
+      />,
+    );
 
-    renderWithQuery(<DeviceControl />);
-
-    expect(await screen.findByTestId("device-last-error")).toHaveTextContent(
+    expect(screen.getByTestId("device-last-error")).toHaveTextContent(
       "The box reports: nvidia-smi: permission denied",
     );
   });
 
   it("drops the target again when saving fails, so nobody waits for nothing", async () => {
     const user = userEvent.setup();
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
     vi.spyOn(api.nodes, "setDesiredState").mockRejectedValue(new Error("API 500"));
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl />);
 
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
-
-    await user.click(screen.getByTestId("mode-boost"));
+    await user.click(screen.getByTestId("compact-mode-boost"));
 
     expect(await screen.findByTestId("device-apply-failed")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByTestId("device-pending")).toBeNull());
   });
 
-  it("is read-only for non-admins", async () => {
-    mockStore.state.currentUser = { id: "u2", email: "x@y.z", name: "Ops", role: "user" };
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([makeDevice()]);
-    const set = vi.spyOn(api.nodes, "setDesiredState");
+  // Eine frische Box hat weder Ist noch Soll. Ein hervorgehobener Reiter
+  // würde eine Einstellung behaupten, die niemand gemacht hat.
+  it("highlights nothing when neither a reading nor a target exists", () => {
+    renderWithQuery(
+      <DeviceRowControl
+        device={makeDevice({
+          has_agent: false,
+          status: "grey",
+          reason: "no_agent",
+          device_state: null,
+          desired_state: null,
+        })}
+        canControl
+      />,
+    );
 
-    renderWithQuery(<DeviceControl />);
-    await screen.findByTestId("device-card");
-
-    expect(screen.getByTestId("mode-boost")).toBeDisabled();
-    expect(screen.getByText("Only administrators can change the mode.")).toBeInTheDocument();
-    expect(set).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("compact-indicator")).toBeNull();
+    for (const m of ["eco+", "eco", "normal", "boost"]) {
+      expect(screen.getByTestId(`compact-mode-${m}`)).toHaveAttribute("data-active", "false");
+    }
+    expect(screen.getByTestId("device-no-report")).toBeInTheDocument();
   });
 
-  it("shows an empty state when no box is paired", async () => {
-    vi.spyOn(api.nodes, "devices").mockResolvedValue([]);
-    renderWithQuery(<DeviceControl />);
-    expect(
-      await screen.findByText("No devices paired — a box running the node agent shows up here by itself."),
-    ).toBeInTheDocument();
+  it("is read-only for non-admins", async () => {
+    const set = vi.spyOn(api.nodes, "setDesiredState");
+    renderWithQuery(<DeviceRowControl device={makeDevice()} canControl={false} />);
+
+    expect(screen.getByTestId("compact-mode-boost")).toBeDisabled();
+    expect(screen.getByText("Only administrators can change the mode.")).toBeInTheDocument();
+    expect(set).not.toHaveBeenCalled();
   });
 
   it("keeps the measured reference numbers exactly as the contract states them", () => {

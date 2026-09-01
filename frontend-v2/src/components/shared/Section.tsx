@@ -148,7 +148,12 @@ export function Section({
         ) : (
           <div className="flex items-center gap-2 min-w-0 flex-1 py-1 pr-2">{heading}</div>
         )}
-        {actions && <div className="flex items-center gap-1.5 shrink-0">{actions}</div>}
+        {actions && (
+          // flex-wrap: vier Admin-Knöpfe (Box, Host, Onboarding, Pairing)
+          // passen bei 390 px nicht nebeneinander und schoben die ganze Seite
+          // seitlich aus dem Bild. Umbrechen statt überlaufen.
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">{actions}</div>
+        )}
       </div>
 
       {open && (
@@ -204,7 +209,7 @@ export function SectionOrFragment({
         {(section.actions || (!embeddedTitle && section.badge)) && (
           // Without a title the badge would sit alone on an otherwise empty
           // line; keep it with the actions so the row reads as one strip.
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
             {!embeddedTitle && section.badge}
             {section.actions}
           </div>

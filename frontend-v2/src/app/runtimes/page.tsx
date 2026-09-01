@@ -29,7 +29,6 @@ import { RuntimeScheduleTab } from "./RuntimeScheduleTab";
 import { VllmContainerCatalog } from "./VllmContainerCatalog";
 import { AddRuntimeModal } from "./AddRuntimeModal";
 import { HostsSection } from "./HostsSection";
-import { DeviceControl } from "./DeviceControl";
 import { CliToolsSection } from "@/components/shared/CliToolsSection";
 import { ModelCatalogSection } from "@/components/shared/ModelCatalogSection";
 import { LocalModelBrowser } from "@/components/shared/LocalModelBrowser";
@@ -1061,9 +1060,6 @@ export default function RuntimesPage() {
               <div className="flex flex-col gap-5">
                 <RuntimeRegister runtimes={allRuntimes} onOpen={openPanel} />
                 <HostsSection embedded />
-                {/* Direkt unter den Hosts: es sind dieselben Boxen, nur die
-                    Betriebs-Seite davon (GPU-Modus statt Zugangsdaten). */}
-                <DeviceControl embedded />
                 <KvResetScheduleToggle />
                 <VllmContainerCatalog />
                 <CliToolsSection embedded />
