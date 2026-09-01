@@ -264,6 +264,13 @@ def fake_broadcast(monkeypatch):
     return published
 
 
+def _async_return(value):
+    """Kleiner Helfer: eine Coroutine, die immer denselben Wert liefert."""
+    async def _inner(*_args, **_kwargs):
+        return value
+    return _inner
+
+
 @pytest.fixture
 def manager():
     from app.services.transcript_chat import ChatTailerManager
@@ -1483,3 +1490,135 @@ async def test_first_state_arrives_immediately_not_after_the_probe_interval(
         ), "nach einer Viertelsekunde lag noch keine Zustandsmeldung vor"
     finally:
         await manager.release("agent-first")
+
+
+# ── Live-Vorschau aus dem Terminal-Strom (P1b) ─────────────────────────────
+
+
+async def test_tailer_publishes_a_preview_while_the_answer_is_still_being_written(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Der Kern der Live-Schicht: Text zeigen, bevor das Transkript ihn hat.
+
+    Gemessen am laufenden Stack schreibt die CLI ihren Assistenten-Block auf
+    einen Schlag — bis dahin steht in der Datei nichts, waehrend im Terminal
+    der Text laeuft. Der Tailer liest deshalb zusaetzlich den Pane-Strom und
+    schickt daraus ein ``preview``-Ereignis.
+    """
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-prev.jsonl"
+    session_file.write_text("")
+    stream_file = tmp_path / "pane.log"
+    stream_file.write_bytes(b"")
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-prev", session_file, agent)
+    try:
+        stream_file.write_bytes("● Der Uetliberg ist 869 Meter hoch.\r\n".encode())
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "preview" and "869 Meter" in d.get("text", "")
+                for _, _, d in fake_broadcast
+            ),
+            timeout=3.0,
+        ), "keine Vorschau aus dem Terminal-Strom"
+    finally:
+        await manager.release("agent-prev")
+
+
+async def test_preview_events_carry_no_uuid_and_never_enter_the_history(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Eine Vorschau ist keine Wahrheit.
+
+    Sie traegt nie eine Dedup-Kennung — sonst konkurrierte sie im Reducer mit
+    dem echten Transkript-Ereignis, und der Verlauf haette am Ende zwei
+    Fassungen derselben Antwort."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-prev2.jsonl"
+    session_file.write_text("")
+    stream_file = tmp_path / "pane2.log"
+    stream_file.write_bytes(b"")
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-prev2", session_file, agent)
+    try:
+        stream_file.write_bytes("● Antwort im Entstehen, lang genug zum Senden.\r\n".encode())
+        await _wait_until(
+            lambda: any(d.get("kind") == "preview" for _, _, d in fake_broadcast), timeout=3.0
+        )
+    finally:
+        await manager.release("agent-prev2")
+
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert previews, "keine Vorschau erzeugt"
+    for event in previews:
+        assert event.get("uuid") is None
+        assert event.get("source") == "pane"
+
+
+async def test_releasing_the_last_client_switches_the_stream_off(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Der Strom laeuft nur, solange jemand zusieht — sonst waechst eine Datei
+    im Container, die niemand liest."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-prev3.jsonl"
+    session_file.write_text("")
+    stopped: list[str] = []
+
+    async def _stop(agent):
+        stopped.append(getattr(agent, "slug", "?"))
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(tmp_path / "pane3.log"))
+    monkeypatch.setattr(pane_stream, "stop", _stop)
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-prev3", session_file, agent)
+    await manager.release("agent-prev3")
+
+    assert stopped == ["rex"], "der Strom wurde nicht abgeschaltet"
+
+
+async def test_preview_is_only_sent_once_two_readings_agree(tmp_path, fake_broadcast, manager):
+    """Flacker-Daempfung: ein einzelner Blick genuegt nicht.
+
+    Der Poll friert den Terminal-Strom an einer beliebigen Byte-Grenze ein.
+    Trifft er mitten ins Neuzeichnen, steht dort kurz eine halb ueberschriebene
+    Zeile — in der Machbarkeitsprobe live gesehen (ein Textstueck doppelt).
+    Gesendet wird deshalb erst, wenn zwei Durchlaeufe DENSELBEN Text ergeben;
+    das kostet einen Tick (0,3 s) und erspart dem Leser das Zucken.
+    """
+    from app.services.pane_preview import PanePreview
+
+    stream = tmp_path / "flicker.log"
+    stream.write_bytes("● Eine Antwort, die lang genug ist.\r\n".encode())
+    state = {"path": stream, "offset": 0, "screen": PanePreview(), "last_sent": "", "pending": None}
+
+    await manager._pump_preview("chan", state)
+    assert not [d for _, _, d in fake_broadcast if d.get("kind") == "preview"], (
+        "schon der erste Blick wurde gesendet — die Daempfung fehlt"
+    )
+
+    await manager._pump_preview("chan", state)
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert len(previews) == 1
+    assert "Eine Antwort" in previews[0]["text"]
+
+    # Unveraenderter Text wird nicht erneut gesendet.
+    await manager._pump_preview("chan", state)
+    assert len([d for _, _, d in fake_broadcast if d.get("kind") == "preview"]) == 1

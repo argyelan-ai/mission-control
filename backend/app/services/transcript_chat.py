@@ -1595,6 +1595,9 @@ class ChatTailerManager:
     def __init__(self) -> None:
         self._refcounts: dict[str, int] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        #: Agent-Zeile je laufendem Tailer — ``release`` braucht sie, um den
+        #: Terminal-Strom wieder abzuschalten.
+        self._agents: dict[str, Any] = {}
 
     async def acquire(self, agent_id: str, path: Path, agent: Any | None = None) -> None:
         """Registers one more client for ``agent_id``. Starts the poll task
@@ -1624,6 +1627,10 @@ class ChatTailerManager:
                 initial_offset = path.stat().st_size
             except OSError:
                 initial_offset = 0
+            # Fuer das Abschalten des Terminal-Stroms beim letzten Client:
+            # ``release`` bekommt nur die agent_id, nicht die Agent-Zeile.
+            if agent is not None:
+                self._agents[agent_id] = agent
             self._tasks[agent_id] = asyncio.create_task(
                 self._run(agent_id, path, initial_offset, agent)
             )
@@ -1639,6 +1646,14 @@ class ChatTailerManager:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            # Der Terminal-Strom laeuft nur, solange jemand zusieht. Ohne das
+            # Abschalten schriebe tmux weiter in eine Datei, die niemand liest.
+            agent = self._agents.pop(agent_id, None)
+            if agent is not None:
+                from app.services import pane_stream
+
+                with contextlib.suppress(Exception):
+                    await pane_stream.stop(agent)
         else:
             self._refcounts[agent_id] = count - 1
 
@@ -1701,12 +1716,22 @@ class ChatTailerManager:
         rejected_rollover_path: Path | None = None
 
         last_probe_at = 0.0  # 0.0 = noch nie -> die erste Sonde laeuft sofort
+
+        # ── Live-Vorschau aus dem Terminal-Strom ─────────────────────────
+        # Das Transkript bekommt einen Assistenten-Block erst, wenn er fertig
+        # ist (gemessen: sieben Sekunden Stille in der Datei, waehrend im
+        # Terminal der Text laeuft). Der Pane-Strom hat ihn sofort. Er ist die
+        # Kuer: schlaegt hier etwas fehl, faellt nur die Vorschau aus.
+        preview_state = await self._start_preview(agent)
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
                 tick += 1
 
                 try:
+                    if preview_state is not None:
+                        await self._pump_preview(channel, preview_state)
+
                     now = time.monotonic()
                     probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
                     if agent is not None and probe_due:
@@ -1958,6 +1983,81 @@ class ChatTailerManager:
             return False
         except Exception:
             return False
+
+    async def _start_preview(self, agent: Any | None) -> dict[str, Any] | None:
+        """Schaltet den Terminal-Strom ein und legt den Emulator an.
+
+        Rueckgabe ist der Zustand, den ``_pump_preview`` fortschreibt — oder
+        None, wenn dieser Agent keinen Strom hat (Host-Agenten) oder das
+        Einschalten fehlschlug. Fehler sind hier nie fatal.
+        """
+        if agent is None:
+            return None
+        try:
+            from app.services import pane_stream
+            from app.services.pane_preview import PanePreview
+
+            path = await pane_stream.start(agent)
+            if path is None:
+                return None
+            return {"path": path, "offset": 0, "screen": PanePreview(), "last_sent": "", "pending": None}
+        except Exception:  # noqa: BLE001
+            logger.warning("preview: Start fehlgeschlagen", exc_info=True)
+            return None
+
+    async def _pump_preview(self, channel: str, state: dict[str, Any]) -> None:
+        """Liest den Zuwachs des Stroms und schickt die Vorschau.
+
+        Zwei Regeln, beide aus Messungen:
+
+        * Gesendet wird erst, wenn ZWEI Durchlaeufe denselben Text ergeben.
+          Friert man den Strom mitten im Neuzeichnen ein — und das tut jeder
+          Poll —, steht kurz eine halb ueberschriebene Zeile da. Ein Tick
+          Verzoegerung kostet 0,3 s und erspart dem Leser das Flackern.
+        * Nie eine Dedup-Kennung: die Vorschau konkurriert nicht mit dem
+          Transkript, sie wird davon abgeloest.
+        """
+        path: Path = state["path"]
+
+        def _read() -> bytes:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                return b""
+            if size < state["offset"]:      # Datei wurde geleert -> von vorn
+                state["offset"] = 0
+                state["screen"] = state["screen"].__class__()
+            if size == state["offset"]:
+                return b""
+            with open(path, "rb") as handle:
+                handle.seek(state["offset"])
+                chunk = handle.read()
+            state["offset"] += len(chunk)
+            return chunk
+
+        chunk = await asyncio.to_thread(_read)
+        if chunk:
+            state["screen"].feed(chunk)
+
+        text = state["screen"].text().strip()
+        if not text or text == state["last_sent"]:
+            return
+        if state["pending"] != text:
+            state["pending"] = text      # erst beim naechsten gleichen Stand senden
+            return
+
+        state["last_sent"] = text
+        await sse.broadcast(
+            channel,
+            "chat_event",
+            {
+                "kind": "preview",
+                "uuid": None,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "text": text,
+                "source": "pane",
+            },
+        )
 
     async def _compute_pane_state(
         self, agent: Any, current_path: Path, adapter: Any | None = None
