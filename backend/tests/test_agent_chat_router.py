@@ -1701,6 +1701,29 @@ async def test_preview_shows_only_what_follows_the_last_transcript_line(
     assert preview["text"] == "● Ein Fjord ist ein Meeresarm."
 
 
+async def test_preview_sends_the_stable_prefix_while_the_text_keeps_growing(
+    tmp_path, fake_broadcast, manager
+):
+    """Live 02.09.2026: ein Modell mit 50 t/s aendert den Bildschirm bei JEDEM
+    Poll — zwei gleiche Lesungen gab es in 20 s Antwort kein einziges Mal, die
+    Vorschau blieb stumm. Gesendet wird darum, was zwei Lesungen GEMEINSAM
+    haben (bis zur letzten ganzen Wortgrenze): flackerfrei, aber nie stumm."""
+    from app.services.pane_preview import PanePreview
+
+    stream = tmp_path / "grow.log"
+    stream.write_bytes("Erste Zeile der Antwort, lang genug.\r\nZweite".encode())
+    state = {"path": stream, "offset": 0, "screen": PanePreview(), "last_sent": "", "pending": None}
+    await manager._pump_preview("chan", state)
+    with open(stream, "ab") as fh:
+        fh.write(" Zeile waechst noch weiter.\r\nDritte".encode())
+    await manager._pump_preview("chan", state)
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert [p["text"] for p in previews] == ["Erste Zeile der Antwort, lang genug.\nZweite"], (
+        "'Zweite' steht in beiden Lesungen als ganzes Wort — es gehoert dazu; "
+        "'Dritte' ist noch im Entstehen und bleibt draussen"
+    )
+
+
 # ── Frische Sitzung ohne Datei (omp ``/new``) ───────────────────────────────
 
 

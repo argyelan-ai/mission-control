@@ -1556,6 +1556,27 @@ def _count_lines(value: Any) -> int:
 _PANE_UNSET: object = object()
 
 
+def _stable_prefix(a: str, b: str) -> str:
+    """Gemeinsamer Anfang zweier Lesungen bis zur letzten ganzen Wortgrenze —
+    der Teil des Bildschirms, der sich zwischen zwei Polls nicht mehr bewegt
+    hat. Wortweise statt zeilenweise, damit die Vorschau waechst wie der Text
+    im Terminal und nicht erst alle 168 Zeichen springt."""
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    prefix = a[:n]
+    if n == len(a) == len(b):
+        return prefix.rstrip()
+    longer = a if len(a) > len(b) else b
+    if n < min(len(a), len(b)) or not longer[n].isspace():
+        # Abgewichen oder mitten im Wort: zurueck bis zur letzten Wortgrenze.
+        boundary = max(prefix.rfind(" "), prefix.rfind("\n"))
+        prefix = prefix[: boundary + 1] if boundary >= 0 else ""
+    return prefix.rstrip()
+
+
 class ChatTailerManager:
     """Refcounted, per-agent background poller that follows a live Claude
     Code transcript and republishes each new line as a ``chat_event`` SSE
@@ -2098,13 +2119,23 @@ class ChatTailerManager:
 
         anchor = state.get("anchor") or ""
         text = (state["screen"].text_after(anchor) if anchor else state["screen"].text()).strip()
-        if not text or text == state["last_sent"]:
+        if not text:
             return
-        if state["pending"] != text:
-            state["pending"] = text      # erst beim naechsten gleichen Stand senden
+        previous, state["pending"] = state["pending"], text
+        # Gesendet wird, was zwei Lesungen GEMEINSAM haben, bis zur letzten
+        # ganzen Wortgrenze. Bei ruhigem Bildschirm ist das der ganze Text;
+        # bei laufendem Strom alles ausser dem Wort, das gerade entsteht. Warten,
+        # bis zwei Lesungen GLEICH sind, ging live nicht: ein Modell mit
+        # 50 t/s aendert den Bildschirm bei jedem Poll, die Vorschau blieb
+        # 20 s stumm (02.09.2026).
+        if previous is None:
+            return
+        stable = text if previous == text else _stable_prefix(previous, text)
+        if not stable or stable == state["last_sent"]:
             return
 
-        state["last_sent"] = text
+        state["last_sent"] = stable
+        text = stable
         await sse.broadcast(
             channel,
             "chat_event",
