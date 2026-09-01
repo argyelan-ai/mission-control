@@ -37,7 +37,7 @@ def _device_state(**overrides) -> dict:
         "min_free_kbytes": 5242880,
         "oom_guard": "active",
         "latency_tune": True,
-        "mtu": {"iface": "enP7s7", "value": 9000},
+        "mtu": {"iface": "eth0", "value": 9000},
         "applied_at": utcnow().isoformat(),
     }
     body.update(overrides)
@@ -126,7 +126,7 @@ async def test_heartbeat_with_device_state_is_stored(client, auth_client):
 
     state = (await auth_client.get(f"/api/v1/nodes/{host_id}/device-state")).json()
     assert state["device_state"]["gpu_mode"] == "eco"
-    assert state["device_state"]["mtu"] == {"iface": "enP7s7", "value": 9000}
+    assert state["device_state"]["mtu"] == {"iface": "eth0", "value": 9000}
     assert state["device_state_updated_at"] is not None
     # last_error war null → exclude_none lässt es weg, statt es als hartes
     # null zu speichern (sonst würde die Ampel es als Fehler lesen können).
@@ -187,8 +187,12 @@ async def test_desired_state_unknown_host_404(auth_client):
         {"gpu_mode": "eco; reboot"},    # Shell-Anhängsel
         {"min_free_kbytes": 999_999_999},  # weit über der Plausibilitätsgrenze
         {"min_free_kbytes": 1},
+        {"min_free_kbytes": 67_108_864},  # alter 64-GB-Deckel — seit Review M5 zu viel
+        {"min_free_kbytes": 16_777_217},  # 1 KB über dem neuen 16-GB-Deckel
         {"mtu": 70},
         {"mtu": 100_000},
+        {"mtu": 1280},                    # altes IPv6-Minimum — seit Review M5 zu tief
+        {"mtu": 1499},
         {"nvidia_smi_args": "-i 0"},    # unbekanntes Feld → nie durchreichen
     ],
 )
@@ -401,11 +405,101 @@ async def test_devices_route_not_shadowed_by_host_id(auth_client):
 async def test_device_state_carries_display_name(client, auth_client):
     """Die Oberfläche soll die Kachel-Überschrift nicht gegen eine zweite
     Quelle verknüpfen müssen — sonst laufen Liste und Kachel auseinander."""
-    minted = (await auth_client.post("/api/v1/nodes/pairing-codes", json={"display_name_hint": "GX10 Werkstatt"})).json()
+    minted = (await auth_client.post("/api/v1/nodes/pairing-codes", json={"display_name_hint": "einer echten Box Werkstatt"})).json()
     paired = (
         await client.post("/api/v1/nodes/pair", json={"code": minted["code"], "hostname": "gx10-anzeige"})
     ).json()
 
     row = (await auth_client.get(f"/api/v1/nodes/{paired['host_id']}/device-state")).json()
-    assert row["display_name"] == "GX10 Werkstatt"
+    assert row["display_name"] == "einer echten Box Werkstatt"
     assert row["slug"] == "gx10-anzeige"
+
+
+# ── Review-Härtung 02.09.2026: M4 (stale vor pending), M5 (Grenzen), M8
+#    (leeres device_state überschreibt nicht) ──────────────────────────────
+
+
+@pytest.mark.parametrize("body", [
+    {"min_free_kbytes": 65_536}, {"min_free_kbytes": 16_777_216},
+    {"mtu": 1500}, {"mtu": 9000},
+])
+@pytest.mark.asyncio
+async def test_boundary_values_of_the_new_limits_are_accepted(client, auth_client, body):
+    """Review M5: die Ränder der neuen Grenzen sind gültig — sonst wären sie
+    nur um eins zu eng gezogen, und niemand sähe es."""
+    _token, host_id = await _pair(client, auth_client)
+    resp = await auth_client.put(f"/api/v1/nodes/{host_id}/device-state", json=body)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["desired_state"] == body
+
+
+def test_limits_are_what_the_review_asked_for():
+    assert ds.MIN_FREE_KBYTES_RANGE == (65_536, 16_777_216)
+    assert ds.MTU_RANGE == (1_500, 9_000)
+
+
+def test_ampel_stale_schlaegt_pending():
+    """Review M4: Agent seit Minuten stumm UND Soll abweichend — vorher hiess
+    das "pending" (er arbeitet dran), was gelogen ist. Jetzt "stale", die
+    Abweichung bleibt trotzdem im diff sichtbar."""
+    result = ds.compute_status(
+        is_agent_host=True,
+        desired=_FULL_DESIRED,
+        current=_device_state(gpu_mode="boost"),
+        reported_at=utcnow() - timedelta(minutes=10),
+    )
+    assert result["status"] == ds.STATUS_YELLOW
+    assert result["reason"] == "stale"
+    assert result["diff"] == ["gpu_mode"]
+
+
+def test_ampel_pending_wenn_frisch_und_abweichend():
+    """Gegenprobe zu M4: frische Meldung + Abweichung bleibt "pending"."""
+    result = ds.compute_status(
+        is_agent_host=True,
+        desired=_FULL_DESIRED,
+        current=_device_state(gpu_mode="boost"),
+        reported_at=utcnow(),
+    )
+    assert result["reason"] == "pending"
+
+
+def test_ampel_stale_ohne_zeitstempel_trotz_abweichung():
+    result = ds.compute_status(
+        is_agent_host=True, desired=_FULL_DESIRED,
+        current=_device_state(gpu_mode="boost"), reported_at=None,
+    )
+    assert result["reason"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_empty_device_state_does_not_overwrite_a_good_one(client, auth_client):
+    """Review M8: `device_state: {}` (oder nur null-Felder) trägt keine
+    Information und darf den letzten guten Ist nicht löschen — sonst
+    springt die Ampel auf rot "nie gehärtet", obwohl nur eine Meldung leer war."""
+    token, host_id = await _pair(client, auth_client)
+    assert (await _heartbeat(client, token, device_state=_device_state())).status_code == 200
+    before = (await auth_client.get(f"/api/v1/nodes/{host_id}/device-state")).json()
+
+    await _age_last_seen(host_id)
+    assert (await _heartbeat(client, token, device_state={})).status_code == 200
+    await _age_last_seen(host_id)
+    assert (await _heartbeat(client, token, device_state={"gpu_mode": None, "mtu": None})).status_code == 200
+
+    after = (await auth_client.get(f"/api/v1/nodes/{host_id}/device-state")).json()
+    assert after["device_state"] == before["device_state"]
+    assert after["device_state"]["gpu_mode"] == "eco"
+    assert after["device_state_updated_at"] == before["device_state_updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_partial_device_state_still_overwrites(client, auth_client):
+    """Gegenprobe zu M8: ein Ist mit auch nur EINEM echten Feld ist eine
+    Meldung und ersetzt den alten (kein Feld = keine Meinung gilt pro
+    Meldung, nicht als Zusammenführung)."""
+    token, host_id = await _pair(client, auth_client)
+    assert (await _heartbeat(client, token, device_state=_device_state())).status_code == 200
+    await _age_last_seen(host_id)
+    assert (await _heartbeat(client, token, device_state={"gpu_mode": "boost"})).status_code == 200
+    after = (await auth_client.get(f"/api/v1/nodes/{host_id}/device-state")).json()
+    assert after["device_state"] == {"gpu_mode": "boost"}
