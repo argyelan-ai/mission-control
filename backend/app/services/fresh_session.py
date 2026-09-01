@@ -1,6 +1,6 @@
 """Frische Sitzung, fuer die noch keine Datei existiert.
 
-Befund 01.09.2026, live an ``mc-agent-sparky`` nachgemessen: omp legt bei
+Befund 01.09.2026, live an ``dem omp-Agenten`` nachgemessen: omp legt bei
 ``/new`` KEINE neue Sitzungsdatei an. Im Terminal steht sofort
 ``✔ New session started``, auf der Platte passiert nichts — die Datei
 entsteht erst mit der ersten Nachricht der neuen Sitzung. Bis dahin ist die

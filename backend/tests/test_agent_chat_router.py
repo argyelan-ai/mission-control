@@ -1662,7 +1662,7 @@ async def test_tailer_fresh_session_marker_clears_the_chat(
 
     monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
 
-    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="sparky")
+    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
     await manager.acquire("agent-omp", session_file, agent)
     try:
         assert await _wait_until(
@@ -1702,7 +1702,7 @@ async def test_tailer_preexisting_marker_does_not_fire(
 
     monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
 
-    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="sparky")
+    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
     await manager.acquire("agent-omp", session_file, agent)
     try:
         await asyncio.sleep(0.2)
@@ -1739,7 +1739,7 @@ async def test_history_is_empty_while_the_fresh_session_has_no_file_yet(
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path, levels=(): None)
     monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
 
-    agent = await make_agent(name="Sparky", slug="sparky", agent_runtime="cli-bridge")
+    agent = await make_agent(name="Omp Agent", slug="omp-agent", agent_runtime="cli-bridge")
     try:
         r0 = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
         assert r0.status_code == 200

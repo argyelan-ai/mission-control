@@ -1,6 +1,6 @@
 """Frische Sitzung ohne Datei — der ``/new``-Fall bei omp.
 
-Befund 01.09.2026 (Operator, live nachgemessen an ``mc-agent-sparky``): omp
+Befund 01.09.2026 (Operator, live nachgemessen an ``dem omp-Agenten``): omp
 legt bei ``/new`` KEINE neue Sitzungsdatei an; die entsteht erst mit der
 ersten Nachricht. Bis dahin ist die ALTE Datei die neueste auf der Platte —
 ``find_active_session`` liefert sie, und der Chat zeigt den alten Verlauf
