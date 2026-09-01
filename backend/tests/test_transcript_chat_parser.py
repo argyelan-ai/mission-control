@@ -808,7 +808,7 @@ def test_text_that_merely_mentions_the_envelope_stays_a_normal_message():
 
 # ── Leere Denk-Bloecke: Claude Code schreibt sie mit leerem Text ────────────
 #
-# Live gemessen 01.09.2026 (FreeCode, 115 Bloecke in einer Sitzung): ein
+# Live gemessen 01.09.2026 (ein Container-Agent, 115 Bloecke in einer Sitzung):
 # thinking-Block im Transkript sieht so aus —
 #   {"type":"thinking","thinking":"","signature":"EtcOCokBCBAYAipA…"}
 # Der Klartext des Denkens steht NICHT in der Datei, nur die verschluesselte
