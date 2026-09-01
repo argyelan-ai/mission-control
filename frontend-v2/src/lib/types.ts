@@ -2853,3 +2853,72 @@ export interface XPostApprovalPayload {
   requester_task_id?: string | null;
   content_pipeline_id?: string | null;
 }
+
+// ── Geräte-Steuerung (docs/plans/2026-09-01-geraete-steuerung-vertrag.md) ────
+// Soll-Zustand statt Fernbefehl: MC legt den Soll ab, der node-agent holt ihn
+// bei seinem Heartbeat (alle 15 s) ab und meldet den Ist im nächsten Takt.
+// Darum trägt jedes Gerät BEIDE Zustände — die Differenz ist der Grund für
+// die "wird übernommen"-Anzeige und für die gelbe Ampel.
+
+export const GPU_MODES = ["eco+", "eco", "normal", "boost"] as const;
+/** Reihenfolge = die Skala der Oberfläche: sparsam/kühl → schnell/heiss. */
+export type GpuMode = (typeof GPU_MODES)[number];
+
+/** Ist-Zustand, wie ihn der Agent im Heartbeat meldet. */
+export interface DeviceState {
+  gpu_mode: GpuMode | "unknown";
+  gpu_clock_mhz: number | null;
+  gpu_power_w: number | null;
+  gpu_temp_c: number | null;
+  min_free_kbytes: number | null;
+  oom_guard: "active" | "inactive" | "missing" | null;
+  latency_tune: boolean | null;
+  mtu: { iface: string; value: number } | null;
+  applied_at: string | null;
+  /** Text, wenn das Setzen auf dem Gerät scheiterte. */
+  last_error: string | null;
+}
+
+/** Soll-Zustand. Fehlendes Feld = MC hat dazu keine Meinung (Vertrag). */
+export interface DesiredState {
+  gpu_mode?: GpuMode;
+  min_free_kbytes?: number;
+  oom_guard?: boolean;
+  latency_tune?: boolean;
+  mtu?: number;
+}
+
+/** Ampel — kommt fertig gerechnet vom Backend, die Oberfläche rechnet NICHT nach.
+ *  Werte 1:1 aus backend/app/services/device_state.py. */
+export type DeviceStatus = "green" | "yellow" | "red" | "grey";
+
+/** Warum die Ampel so steht — je Wert ein eigener Satz in der Oberfläche. */
+export type DeviceStatusReason =
+  | "no_agent"
+  | "last_error"
+  | "no_device_state"
+  | "pending"
+  | "stale"
+  | "in_sync";
+
+/** Eine Zeile aus GET /api/v1/nodes/devices (DeviceStateResponse). */
+export interface Device {
+  host_id: string;
+  slug: string;
+  /** Vom Backend mitgeliefert — nicht selbst gegen die Host-Liste verknüpfen,
+   *  zwei Quellen für dieselbe Überschrift laufen auseinander. */
+  display_name: string;
+  /** false = nie gepaart. Der Soll darf trotzdem schon gesetzt werden. */
+  has_agent: boolean;
+  desired_state: DesiredState | null;
+  device_state: DeviceState | null;
+  device_state_updated_at: string | null;
+  agent_last_seen_at: string | null;
+  status: DeviceStatus;
+  reason: DeviceStatusReason;
+  /** Felder, in denen Soll und Ist auseinanderlaufen (z. B. ["gpu_mode"]). */
+  diff: string[];
+  last_error: string | null;
+  /** Alter der letzten Meldung in Sekunden. */
+  age_s: number | null;
+}

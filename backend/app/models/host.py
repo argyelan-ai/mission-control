@@ -98,6 +98,30 @@ class Host(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
+    # ── Geräte-Steuerung (Soll-Zustand statt Fernbefehl, 01.09.2026) ─────────
+    #
+    # MC kann den node-agent nicht anrufen — er redet nur nach aussen. Also
+    # legt MC hier ab, wie das Gerät aussehen SOLL (GPU-Takt-Deckel,
+    # OOM-Wächter, min_free_kbytes, latency-tune, MTU); der Agent holt sich
+    # das mit jedem Heartbeat ab und gleicht ab. Fehlt ein Feld im
+    # desired_state, hat MC dazu keine Meinung und der Agent lässt es in Ruhe.
+    agent_desired_state: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    # Der vom Gerät gemeldete IST-Zustand — letzter Schnappschuss, wie
+    # agent_telemetry. Getrennt davon, weil er nur mit Agenten ab der
+    # Steuerungs-Version kommt: ein alter Agent lässt das Feld weg, und dann
+    # darf hier nichts überschrieben werden.
+    agent_device_state: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    # Wann der Ist zuletzt gemeldet wurde. Eigene Spalte statt
+    # agent_last_seen_at, weil ein alter Agent zwar heartbeatet (last_seen
+    # frisch), aber nie einen Ist meldet — die Ampel muss das unterscheiden.
+    agent_device_state_updated_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), nullable=False),
