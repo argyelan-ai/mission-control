@@ -305,4 +305,113 @@ describe("DeviceModeStrip", () => {
     expect(MODE_FACTS.eco).toMatchObject({ clockMhz: 2000, tokensPerSec: 20.4, watt: 32.5, tempC: 74 });
     expect(MODE_FACTS["eco+"]).toMatchObject({ clockMhz: 1800, tokensPerSec: 19.8, watt: 27.1, tempC: 69 });
   });
+
+  // ── Schalter-Ehrlichkeit (Review M7): sichtbar, aber gesperrt ────────────
+
+  it("locks the switch for an old agent that reports no state, instead of a hand-over that never ends", async () => {
+    const set = vi.spyOn(api.nodes, "setDesiredState");
+    renderWithQuery(
+      <DeviceModeStrip
+        device={makeDevice({
+          device_state: null,
+          device_state_updated_at: null,
+          status: "red",
+          reason: "no_device_state",
+          desired_state: { gpu_mode: "normal" },
+          age_s: null,
+        })}
+        canControl
+      />,
+    );
+
+    // Der Schalter ist da — gesperrt, nicht versteckt.
+    for (const m of ["eco+", "eco", "normal", "boost"]) {
+      expect(screen.getByTestId(`compact-mode-${m}`)).toBeDisabled();
+    }
+    const hint = screen.getByTestId("device-lock-hint");
+    expect(hint).toHaveAttribute("data-lock", "no_device_state");
+    expect(hint).toHaveTextContent(/reports no state.*Update the agent/);
+    // Kein „wird übernommen" — das Ziel ist gesetzt, kann aber nie erfüllt werden.
+    expect(screen.queryByTestId("device-pending")).toBeNull();
+    // Und kein Reiter auf dem Soll „normal": das wäre eine behauptete Einstellung.
+    expect(screen.queryByTestId("compact-indicator")).toBeNull();
+    expect(screen.getByTestId("compact-mode-normal")).toHaveAttribute("data-active", "false");
+    expect(screen.queryByTestId("device-no-report")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("compact-mode-eco+"));
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("locks the switch while the agent is silent and says for how long", async () => {
+    const set = vi.spyOn(api.nodes, "setDesiredState");
+    renderWithQuery(
+      <DeviceModeStrip
+        device={makeDevice({ status: "yellow", reason: "stale", age_s: 187 })}
+        canControl
+      />,
+    );
+
+    expect(screen.getByTestId("compact-mode-eco")).toBeDisabled();
+    const hint = screen.getByTestId("device-lock-hint");
+    expect(hint).toHaveAttribute("data-lock", "stale");
+    expect(hint).toHaveTextContent("has not reported for 187 s");
+
+    await userEvent.click(screen.getByTestId("compact-mode-boost"));
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("shows minutes once the silence is long, and 'never' without any report", () => {
+    const { unmount } = renderWithQuery(
+      <DeviceModeStrip device={makeDevice({ status: "yellow", reason: "stale", age_s: 1500 })} canControl />,
+    );
+    expect(screen.getByTestId("device-lock-hint")).toHaveTextContent("for 25 min");
+    unmount();
+
+    renderWithQuery(
+      <DeviceModeStrip device={makeDevice({ status: "yellow", reason: "stale", age_s: null })} canControl />,
+    );
+    expect(screen.getByTestId("device-lock-hint")).toHaveTextContent("has never reported");
+  });
+
+  it("locks the switch when the control scripts are missing (gpu_mode unknown) and names the fix", async () => {
+    const set = vi.spyOn(api.nodes, "setDesiredState");
+    renderWithQuery(
+      <DeviceModeStrip
+        device={makeDevice({
+          device_state: makeState({ gpu_mode: "unknown" }),
+          desired_state: { gpu_mode: "eco" },
+          status: "green",
+          reason: "in_sync",
+        })}
+        canControl
+      />,
+    );
+
+    expect(screen.getByTestId("compact-mode-eco")).toBeDisabled();
+    const hint = screen.getByTestId("device-lock-hint");
+    expect(hint).toHaveAttribute("data-lock", "unknown_mode");
+    expect(hint).toHaveTextContent("control scripts are missing");
+    expect(hint).toHaveTextContent("--install --allow-control");
+    expect(screen.queryByTestId("device-pending")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("compact-mode-normal"));
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("locks the full view too", async () => {
+    renderWithQuery(
+      <DeviceModeStrip device={makeDevice({ status: "yellow", reason: "stale", age_s: 200 })} canControl />,
+    );
+    await userEvent.click(screen.getByTestId("device-toggle-detail"));
+    expect(await screen.findByTestId("mode-eco")).toBeDisabled();
+  });
+
+  it("stays unlocked and clickable in the healthy case (sabotage check for the lock)", async () => {
+    vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue({} as never);
+    renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
+    expect(screen.queryByTestId("device-lock-hint")).toBeNull();
+    expect(screen.getByTestId("compact-mode-normal")).not.toBeDisabled();
+    await userEvent.click(screen.getByTestId("compact-mode-normal"));
+    await waitFor(() => expect(api.nodes.setDesiredState).toHaveBeenCalledTimes(1));
+  });
 });
