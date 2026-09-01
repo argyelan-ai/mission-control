@@ -97,6 +97,11 @@ PROCESS_NAME = "omp"
 #: ``…/agent/sessions`` mountet (siehe Modul-Docstring).
 _SESSIONS_DIRNAME = "omp-sessions"
 
+#: Was omp nach ``/new`` ins Terminal schreibt (live 01.09.2026: ``✔ New
+#: session started``). Ohne das Haekchen verglichen — Symbol und Farbe sind
+#: Kosmetik der TUI, der Text ist die Aussage.
+FRESH_SESSION_MARKER = "New session started"
+
 #: Wie tief unter dem Sessions-Wurzelverzeichnis eine Session liegen darf.
 #: 1 = die pro-cwd-Ordner. Tiefer liegen nur Anhaenge/Blobs, keine Sessions.
 _SESSION_GLOBS = ("*.jsonl", "*/*.jsonl")

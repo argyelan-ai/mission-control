@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.services import sse
+from app.services import fresh_session, sse
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
@@ -1553,6 +1553,9 @@ def _count_lines(value: Any) -> int:
 # ── Live tailing (I/O — background polling task, not pure) ──────────────────
 
 
+_PANE_UNSET: object = object()
+
+
 class ChatTailerManager:
     """Refcounted, per-agent background poller that follows a live Claude
     Code transcript and republishes each new line as a ``chat_event`` SSE
@@ -1717,6 +1720,17 @@ class ChatTailerManager:
 
         last_probe_at = 0.0  # 0.0 = noch nie -> die erste Sonde laeuft sofort
 
+        # ── Frische Sitzung ohne Datei (omp ``/new``) ────────────────────
+        # omp legt bei ``/new`` keine Datei an; nur das Terminal zeigt den
+        # Wechsel (``✔ New session started``). Gezaehlt wird der Marker im
+        # Pane — er steht nach einem frueheren ``/new`` noch lange dort, also
+        # zaehlt nur ein ZUWACHS. ``None`` = noch keine Sonde gelaufen; der
+        # erste Stand ist die Nulllinie, sonst leerte sich der Chat bei jedem
+        # Oeffnen. ``stale_path`` haelt die alte Datei fest, damit Zeilen,
+        # die noch dort landen, nicht in die neue Sitzung tropfen.
+        marker_count: int | None = None
+        stale_path: Path | None = None
+
         # ── Live-Vorschau aus dem Terminal-Strom ─────────────────────────
         # Das Transkript bekommt einen Assistenten-Block erst, wenn er fertig
         # ist (gemessen: sieben Sekunden Stille in der Datei, waehrend im
@@ -1736,14 +1750,30 @@ class ChatTailerManager:
                     probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
                     if agent is not None and probe_due:
                         last_probe_at = now
+                        pane_text = await capture_pane(agent)
                         new_state = await self._compute_pane_state(
-                            agent, current_path, adapter
+                            agent, current_path, adapter, pane_text=pane_text
                         )
                         if new_state != last_pane_state:
                             last_pane_state = new_state
                             await sse.broadcast(
                                 channel, "chat_event", {"kind": "state", **new_state}
                             )
+
+                        marker = getattr(adapter, "fresh_session_pane_marker", None)
+                        if marker and pane_text is not None:
+                            count = pane_text.count(marker)
+                            if marker_count is not None and count > marker_count:
+                                fresh_session.mark(agent_id)
+                                stale_path = current_path
+                                seen_uuids = set()
+                                tool_events_by_id = {}
+                                command_events_by_uuid = {}
+                                await sse.broadcast(
+                                    channel, "chat_event",
+                                    {"kind": "session_changed", "aliveness": "active"},
+                                )
+                            marker_count = count
 
                     try:
                         active = await asyncio.to_thread(adapter.find_active_session, tdir)
@@ -1780,6 +1810,7 @@ class ChatTailerManager:
                         else:
                             rejected_rollover_path = None
                             current_path = active[0]
+                            stale_path = None
                             offset = 0
                             buffer = b""
                             tool_events_by_id = {}
@@ -1803,6 +1834,12 @@ class ChatTailerManager:
                                 {"kind": "session_changed", "aliveness": "active"},
                             )
                             continue
+
+                    if stale_path is not None and current_path == stale_path:
+                        # Die Sitzung ist im Terminal schon neu, die Datei
+                        # dazu fehlt noch — was jetzt noch in die alte
+                        # faellt, gehoert nicht in den Chat.
+                        continue
 
                     try:
                         new_offset, chunk = await asyncio.to_thread(
@@ -2060,7 +2097,12 @@ class ChatTailerManager:
         )
 
     async def _compute_pane_state(
-        self, agent: Any, current_path: Path, adapter: Any | None = None
+        self,
+        agent: Any,
+        current_path: Path,
+        adapter: Any | None = None,
+        *,
+        pane_text: str | None | object = _PANE_UNSET,
     ) -> dict[str, Any]:
         """One probe tick's worth of state classification (A6). Computes
         ``transcript_active`` from the current session file's mtime (used
@@ -2076,7 +2118,11 @@ class ChatTailerManager:
         (``pane_state.process_alive``) is itself cached ~30s.
 
         ``adapter`` (omp-Runde) liefert die harness-eigenen Pane-Regeln, die
-        Zug-Ende-Probe und den Prozessnamen. ``None`` = Claude Code."""
+        Zug-Ende-Probe und den Prozessnamen. ``None`` = Claude Code.
+
+        ``pane_text``: der Tailer liest das Pane pro Sonde EINMAL (er braucht
+        es auch fuer den Sitzungs-Marker) und reicht es herein; ohne Angabe
+        wird hier selbst gelesen."""
         if adapter is None:
             from app.services.transcript_adapters import adapter_for
 
@@ -2100,7 +2146,8 @@ class ChatTailerManager:
 
         aliveness = await resolve_aliveness(agent, current_path, adapter)
 
-        pane_text = await capture_pane(agent)
+        if pane_text is _PANE_UNSET:
+            pane_text = await capture_pane(agent)
         if pane_text is None:
             return {
                 "status": "working" if transcript_active else "idle",

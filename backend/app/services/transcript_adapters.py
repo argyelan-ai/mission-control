@@ -118,6 +118,14 @@ class TranscriptAdapter:
     #: ohne.
     subagent_runs: Callable[[Path], list[dict[str, Any]]] = _no_subagent_runs
 
+    #: Terminal-Zeile, die eine FRISCHE Sitzung ohne Datei anzeigt (omp:
+    #: ``New session started``). omp legt bei ``/new`` keine Datei an, die
+    #: alte bleibt die neueste auf der Platte — nur das Terminal weiss vom
+    #: Wechsel. Der Tailer zaehlt den Marker im Pane; ein ZUWACHS setzt
+    #: ``fresh_session.mark``. ``None`` = die CLI schreibt den Wechsel selbst
+    #: ins Transkript (Claude Code: ``/clear`` eroeffnet eine neue Datei).
+    fresh_session_pane_marker: str | None = None
+
 
 def _claude_adapter(
     name: str = CLAUDE, process_name: str = "claude"
@@ -171,6 +179,7 @@ def _omp_adapter() -> TranscriptAdapter:
         transcript_suggests_turn_ended=omp_chat.transcript_suggests_turn_ended,
         parse_pane_state=omp_chat.parse_pane_state,
         process_name=omp_chat.PROCESS_NAME,
+        fresh_session_pane_marker=omp_chat.FRESH_SESSION_MARKER,
     )
 
 
