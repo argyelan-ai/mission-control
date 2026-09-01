@@ -341,6 +341,15 @@ class TestInventoryHash:
         assert agent.inventory_hash([]) == agent.inventory_hash([])
 
 
+def _neutralise_device_state(agent, monkeypatch):
+    """Hält die Geräte-Steuerung aus den älteren run_loop-Tests heraus: der
+    Test-Mac hat weder /proc noch nvidia-smi noch systemctl, und diese Tests
+    prüfen ausschliesslich das Inventar-Verhalten."""
+    monkeypatch.setattr(agent, "_run_nvidia_smi", lambda: "")
+    monkeypatch.setattr(agent, "read_oom_guard", lambda: "missing")
+    monkeypatch.setattr(agent, "collect_device_state", lambda **_kwargs: {"gpu_mode": "eco"})
+
+
 # ── run_loop's inventory caching (review finding #7, 30.08.2026) ────────────
 
 
@@ -360,10 +369,11 @@ class TestRunLoopInventoryCaching:
 
         monkeypatch.setattr(agent, "scan_model_inventory", fake_scan)
         monkeypatch.setattr(agent, "collect_telemetry", lambda **_kwargs: {"ts": "now"})
+        _neutralise_device_state(agent, monkeypatch)
 
         send_calls = []
 
-        def fake_send(mc_url, token, telemetry, inventory=None):
+        def fake_send(mc_url, token, telemetry, inventory=None, device_state=None):
             send_calls.append(inventory)
             if len(send_calls) == 1:
                 raise RuntimeError("network blip")
@@ -389,6 +399,7 @@ class TestRunLoopInventoryCaching:
 
     def test_broken_scan_does_not_prevent_the_heartbeat_from_sending(self, agent, monkeypatch):
         monkeypatch.setattr(agent, "collect_telemetry", lambda **_kwargs: {"ts": "now"})
+        _neutralise_device_state(agent, monkeypatch)
 
         def fake_scan(paths):
             raise RuntimeError("permission denied somewhere deep")
@@ -398,7 +409,7 @@ class TestRunLoopInventoryCaching:
         send_calls = []
         monkeypatch.setattr(
             agent, "send_heartbeat",
-            lambda mc_url, token, telemetry, inventory=None: send_calls.append(inventory),
+            lambda mc_url, token, telemetry, inventory=None, device_state=None: send_calls.append(inventory),
         )
         monkeypatch.setattr(agent.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt()))
 
@@ -671,3 +682,525 @@ class TestHttpPostJson:
         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
         assert result.stdout.strip() == "OK"
+
+
+# ── Geräte-Steuerung: Ist-Zustand lesen (Vertrag 01.09.2026, Gewerk A) ──────
+
+
+class TestParseNvidiaSmiDevice:
+    def test_full_line(self, agent):
+        out = agent.parse_nvidia_smi_device("42, 1024, 2048, 63, 1989, 33.12\n")
+        assert out == {"gpu_clock_mhz": 1989, "gpu_power_w": 33.1, "gpu_temp_c": 63}
+
+    def test_short_line_from_an_older_query_yields_none_not_an_error(self, agent):
+        out = agent.parse_nvidia_smi_device("42, 1024, 2048, 63")
+        assert out == {"gpu_clock_mhz": None, "gpu_power_w": None, "gpu_temp_c": 63}
+
+    def test_na_fields(self, agent):
+        out = agent.parse_nvidia_smi_device("[N/A], [N/A], [N/A], [N/A], [N/A], [N/A]")
+        assert out == {"gpu_clock_mhz": None, "gpu_power_w": None, "gpu_temp_c": None}
+
+    def test_empty_stdout(self, agent):
+        assert agent.parse_nvidia_smi_device("") == {
+            "gpu_clock_mhz": None, "gpu_power_w": None, "gpu_temp_c": None,
+        }
+
+    def test_telemetry_parser_still_reads_the_extended_line(self, agent):
+        """Die zwei neuen Felder hängen hinten dran — der alte Parser muss
+        unverändert weiterlesen (sonst hätte die Erweiterung die Telemetrie
+        still kaputtgemacht)."""
+        out = agent.parse_nvidia_smi("42, 1024, 2048, 63, 1989, 33.12")
+        assert out == {
+            "gpu_util_pct": 42, "vram_used_mb": 1024,
+            "vram_total_mb": 2048, "gpu_temp_c": 63,
+        }
+
+
+class TestParseGpuMode:
+    @pytest.mark.parametrize("raw,expected", [
+        ("boost\n", "boost"), ("normal", "normal"), ("eco\n", "eco"),
+        (" ECO+ \n", "eco+"),
+    ])
+    def test_known_modes(self, agent, raw, expected):
+        assert agent.parse_gpu_mode(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", "turbo", "eco; rm -rf /", "eco eco"])
+    def test_unknown_is_unknown_not_guessed(self, agent, raw):
+        assert agent.parse_gpu_mode(raw) == "unknown"
+
+
+class TestParseOomGuard:
+    def test_enabled_and_running(self, agent):
+        assert agent.parse_oom_guard("enabled\n", "active\n") == "active"
+
+    def test_enabled_but_dead(self, agent):
+        assert agent.parse_oom_guard("enabled\n", "failed\n") == "inactive"
+
+    def test_disabled(self, agent):
+        assert agent.parse_oom_guard("disabled\n", "inactive\n") == "inactive"
+
+    def test_unit_not_installed_is_missing_not_inactive(self, agent):
+        """Der teuer bezahlte Unterschied: auf Marks zweiter Box war earlyoom
+        gar nicht installiert — das muss anders aussehen als 'aus'."""
+        assert agent.parse_oom_guard("not-found\n", "inactive\n") == "missing"
+
+    def test_empty_output_is_missing(self, agent):
+        assert agent.parse_oom_guard("", "") == "missing"
+
+
+class TestParseAspmPolicy:
+    def test_performance_active(self, agent):
+        assert agent.parse_aspm_policy_performance("default [performance] powersave") is True
+
+    def test_other_policy_active(self, agent):
+        assert agent.parse_aspm_policy_performance("default performance [powersave]") is False
+
+    def test_empty(self, agent):
+        assert agent.parse_aspm_policy_performance("") is False
+
+
+class TestParseDefaultIface:
+    ROUTE = (
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        "enP7s7\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+        "enP7s7\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n"
+    )
+
+    def test_picks_the_default_route_interface(self, agent):
+        assert agent.parse_default_iface(self.ROUTE) == "enP7s7"
+
+    def test_lowest_metric_wins(self, agent):
+        text = self.ROUTE + "tailscale0\t00000000\t00000000\t0003\t0\t0\t50\t00000000\t0\t0\t0\n"
+        assert agent.parse_default_iface(text) == "tailscale0"
+
+    def test_no_default_route(self, agent):
+        header = self.ROUTE.splitlines()[0] + "\n"
+        assert agent.parse_default_iface(header) is None
+
+    def test_garbage_is_not_fatal(self, agent):
+        assert agent.parse_default_iface("kaputt") is None
+
+
+class TestCollectDeviceState:
+    def test_reads_every_contract_field_from_fake_system_files(self, agent, tmp_path, monkeypatch):
+        (tmp_path / "mc-gpu-mode").write_text("eco\n")
+        (tmp_path / "min_free_kbytes").write_text("5242880\n")
+        (tmp_path / "policy").write_text("default [performance] powersave\n")
+        monkeypatch.setattr(agent, "GPU_MODE_FILE", tmp_path / "mc-gpu-mode")
+        monkeypatch.setattr(agent, "MIN_FREE_KBYTES_FILE", tmp_path / "min_free_kbytes")
+        monkeypatch.setattr(agent, "ASPM_POLICY_FILE", tmp_path / "policy")
+        monkeypatch.setattr(agent, "_holder_process_running", lambda name: True)
+        monkeypatch.setattr(agent, "read_mtu", lambda: {"iface": "enP7s7", "value": 9000})
+
+        state = agent.collect_device_state(
+            gpu_fields={"gpu_clock_mhz": 1989, "gpu_power_w": 33.0, "gpu_temp_c": 63},
+            oom_guard="active",
+            apply_status={"applied_at": "2026-09-01T00:12:00+00:00", "last_error": None},
+        )
+
+        assert state == {
+            "gpu_mode": "eco", "gpu_clock_mhz": 1989, "gpu_power_w": 33.0,
+            "gpu_temp_c": 63, "min_free_kbytes": 5242880, "oom_guard": "active",
+            "latency_tune": True, "mtu": {"iface": "enP7s7", "value": 9000},
+            "applied_at": "2026-09-01T00:12:00+00:00", "last_error": None,
+        }
+
+    def test_missing_system_files_leave_safe_defaults(self, agent, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "GPU_MODE_FILE", tmp_path / "weg")
+        monkeypatch.setattr(agent, "MIN_FREE_KBYTES_FILE", tmp_path / "weg")
+        monkeypatch.setattr(agent, "ASPM_POLICY_FILE", tmp_path / "weg")
+        monkeypatch.setattr(agent, "NET_ROUTE_FILE", tmp_path / "weg")
+
+        state = agent.collect_device_state(gpu_fields={}, oom_guard="missing")
+
+        assert state["gpu_mode"] == "unknown"
+        assert state["min_free_kbytes"] is None
+        assert state["latency_tune"] is False
+        assert state["mtu"] is None
+
+    def test_latency_tune_false_when_holder_process_is_gone(self, agent, tmp_path, monkeypatch):
+        """ASPM allein reicht nicht — stirbt der Halte-Prozess, ist die
+        Einstellung faktisch weg (genau der stille Rückfall nach Neustart)."""
+        (tmp_path / "policy").write_text("default [performance] powersave\n")
+        monkeypatch.setattr(agent, "ASPM_POLICY_FILE", tmp_path / "policy")
+        monkeypatch.setattr(agent, "_holder_process_running", lambda name: False)
+        assert agent.read_latency_tune() is False
+
+
+class TestReadOomGuard:
+    def test_no_systemctl_binary_is_missing_not_a_crash(self, agent, monkeypatch):
+        def boom(*a, **k):
+            raise FileNotFoundError("systemctl")
+
+        monkeypatch.setattr(agent.subprocess, "run", boom)
+        assert agent.read_oom_guard() == "missing"
+
+
+# ── Geräte-Steuerung: Soll-Zustand anwenden ─────────────────────────────────
+
+
+class _FakeProc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+@pytest.fixture
+def cmds(agent, monkeypatch):
+    """Fängt jeden Setz-Befehl ab und merkt sich argv + kwargs, damit die
+    Tests sowohl das WAS (Argumentliste) als auch das WIE (nie shell=True)
+    prüfen können."""
+    class _Calls(list):
+        """Liste der Aufrufe; `.result["proc"]` erlaubt einem Test, den
+        Rückgabewert des nächsten Befehls zu setzen (z.B. Exit 1)."""
+        result = {"proc": _FakeProc(0)}
+
+    calls = _Calls()
+    calls.result = {"proc": _FakeProc(0)}
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return calls.result["proc"]
+
+    monkeypatch.setattr(agent.subprocess, "run", fake_run)
+    return calls
+
+
+CURRENT = {
+    "gpu_mode": "eco",
+    "min_free_kbytes": 5242880,
+    "oom_guard": "active",
+    "latency_tune": True,
+    "mtu": {"iface": "enP7s7", "value": 9000},
+}
+
+
+class TestApplyDesiredState:
+    def test_empty_desired_does_nothing(self, agent, cmds):
+        assert agent.apply_desired_state({}, CURRENT) == (False, [])
+        assert cmds == []
+
+    def test_identical_desired_is_idempotent(self, agent, cmds, monkeypatch):
+        """Die wichtigste Eigenschaft: der Abgleich läuft alle 15 s. Wäre er
+        nicht idempotent, liefe alle 15 s ein root-Befehl auf dem Gerät."""
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        desired = {
+            "gpu_mode": "eco", "min_free_kbytes": 5242880,
+            "oom_guard": True, "latency_tune": True, "mtu": 9000,
+        }
+        changed, errors = agent.apply_desired_state(desired, CURRENT)
+        assert (changed, errors) == (False, [])
+        assert cmds == []
+
+    def test_gpu_mode_change_calls_the_hardcoded_script_without_a_shell(self, agent, cmds):
+        changed, errors = agent.apply_desired_state({"gpu_mode": "eco+"}, CURRENT)
+        assert (changed, errors) == (True, [])
+        argv, kwargs = cmds[0]
+        assert argv == [agent.GPU_MODE_SCRIPT, "eco+"]
+        assert kwargs.get("shell") is not True
+
+    @pytest.mark.parametrize("evil", [
+        "eco; rm -rf /", "eco && reboot", "$(id)", "`id`", "eco\nrm -rf /",
+        "../../bin/sh", 42, None, True, ["eco"],
+    ])
+    def test_malicious_or_unknown_gpu_mode_is_refused(self, agent, cmds, evil):
+        changed, errors = agent.apply_desired_state({"gpu_mode": evil}, CURRENT)
+        assert changed is False
+        assert cmds == []  # NICHTS ausgeführt
+        assert errors and "gpu_mode" in errors[0]
+
+    def test_min_free_kbytes_change(self, agent, cmds):
+        changed, errors = agent.apply_desired_state({"min_free_kbytes": 1048576}, CURRENT)
+        assert (changed, errors) == (True, [])
+        assert cmds[0][0] == ["sysctl", "-w", "vm.min_free_kbytes=1048576"]
+
+    @pytest.mark.parametrize("bad", ["1048576", 0, -5, True, 1024, 99999999999, 1.5, None])
+    def test_min_free_kbytes_rejects_wrong_type_or_range(self, agent, cmds, bad):
+        changed, errors = agent.apply_desired_state({"min_free_kbytes": bad}, CURRENT)
+        assert (changed, cmds) == (False, [])
+        assert errors and "min_free_kbytes" in errors[0]
+
+    def test_oom_guard_enable_when_unit_missing(self, agent, cmds):
+        current = dict(CURRENT, oom_guard="missing")
+        changed, errors = agent.apply_desired_state({"oom_guard": True}, current)
+        assert (changed, errors) == (True, [])
+        assert cmds[0][0] == ["systemctl", "enable", "--now", "earlyoom"]
+
+    def test_oom_guard_disable(self, agent, cmds):
+        changed, errors = agent.apply_desired_state({"oom_guard": False}, CURRENT)
+        assert (changed, errors) == (True, [])
+        assert cmds[0][0] == ["systemctl", "disable", "--now", "earlyoom"]
+
+    def test_oom_guard_rejects_non_boolean(self, agent, cmds):
+        changed, errors = agent.apply_desired_state({"oom_guard": "yes"}, CURRENT)
+        assert (changed, cmds) == (False, [])
+        assert errors and "oom_guard" in errors[0]
+
+    def test_latency_tune_on(self, agent, cmds):
+        current = dict(CURRENT, latency_tune=False)
+        changed, errors = agent.apply_desired_state({"latency_tune": True}, current)
+        assert (changed, errors) == (True, [])
+        assert cmds[0][0] == ["bash", agent.LATENCY_TUNE_SCRIPT]
+
+    def test_latency_tune_off_is_reported_not_invented(self, agent, cmds):
+        changed, errors = agent.apply_desired_state({"latency_tune": False}, CURRENT)
+        assert (changed, cmds) == (False, [])
+        assert errors and "latency_tune" in errors[0]
+
+    def test_mtu_change_uses_the_interface_from_the_ist_zustand(self, agent, cmds, monkeypatch):
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        changed, errors = agent.apply_desired_state({"mtu": 1500}, CURRENT)
+        assert (changed, errors) == (True, [])
+        assert cmds[0][0] == ["ip", "link", "set", "enP7s7", "mtu", "1500"]
+
+    @pytest.mark.parametrize("bad", [99, 576, 9216, 99999, "9000", True, None])
+    def test_mtu_rejects_implausible_values(self, agent, cmds, monkeypatch, bad):
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        changed, errors = agent.apply_desired_state({"mtu": bad}, CURRENT)
+        assert (changed, cmds) == (False, [])
+        assert errors and "mtu" in errors[0]
+
+    def test_mtu_without_a_known_interface_is_refused(self, agent, cmds):
+        current = dict(CURRENT, mtu=None)
+        changed, errors = agent.apply_desired_state({"mtu": 9000}, current)
+        assert (changed, cmds) == (False, [])
+        assert errors and "Schnittstelle" in errors[0]
+
+    def test_permission_denied_lands_in_last_error_without_crashing(self, agent, cmds):
+        cmds.result["proc"] = _FakeProc(1, stderr="sysctl: permission denied\n")
+        changed, errors = agent.apply_desired_state({"min_free_kbytes": 1048576}, CURRENT)
+        assert changed is False
+        assert errors and "permission denied" in errors[0]
+
+    def test_missing_script_lands_in_last_error_without_crashing(self, agent, monkeypatch):
+        def boom(argv, **kwargs):
+            raise FileNotFoundError(argv[0])
+
+        monkeypatch.setattr(agent.subprocess, "run", boom)
+        changed, errors = agent.apply_desired_state({"gpu_mode": "boost"}, CURRENT)
+        assert changed is False
+        assert errors and "nicht vorhanden" in errors[0]
+
+    def test_timeout_lands_in_last_error_without_crashing(self, agent, monkeypatch):
+        def boom(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, 20)
+
+        monkeypatch.setattr(agent.subprocess, "run", boom)
+        changed, errors = agent.apply_desired_state({"latency_tune": True},
+                                                   dict(CURRENT, latency_tune=False))
+        assert changed is False
+        assert errors and "fehlgeschlagen" in errors[0]
+
+    def test_one_bad_field_does_not_block_the_others(self, agent, cmds):
+        desired = {"gpu_mode": "unsinn", "min_free_kbytes": 1048576}
+        changed, errors = agent.apply_desired_state(desired, CURRENT)
+        assert changed is True
+        assert len(errors) == 1
+        assert cmds[0][0] == ["sysctl", "-w", "vm.min_free_kbytes=1048576"]
+
+    def test_non_dict_desired_state_is_ignored(self, agent, cmds):
+        changed, errors = agent.apply_desired_state("gib mir root", CURRENT)
+        assert (changed, cmds) == (False, [])
+        assert errors
+
+
+# ── Geräte-Steuerung im Heartbeat-Kreislauf ─────────────────────────────────
+
+
+class TestHeartbeatDeviceState:
+    def test_device_state_is_attached_to_the_payload(self, agent, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            agent, "_http_post_json",
+            lambda url, payload, token, timeout: sent.update(payload) or {},
+        )
+        agent.send_heartbeat("http://mc.test", "tok", {"ts": "now"},
+                             device_state={"gpu_mode": "eco"})
+        assert sent["device_state"] == {"gpu_mode": "eco"}
+
+    def test_payload_stays_unchanged_when_no_device_state(self, agent, monkeypatch):
+        sent = {}
+        monkeypatch.setattr(
+            agent, "_http_post_json",
+            lambda url, payload, token, timeout: sent.update(payload) or {},
+        )
+        agent.send_heartbeat("http://mc.test", "tok", {"ts": "now"})
+        assert "device_state" not in sent
+
+
+class TestRunLoopDesiredState:
+    """run_loop mit echter Antwortverarbeitung — collect_device_state und
+    send_heartbeat sind gefälscht, apply_desired_state ist es NICHT."""
+
+    def _drive(self, agent, monkeypatch, responses, current=None, device_state_fn=None):
+        monkeypatch.setattr(agent, "_run_nvidia_smi", lambda: "")
+        monkeypatch.setattr(agent, "read_oom_guard", lambda: "missing")
+        monkeypatch.setattr(agent, "collect_telemetry", lambda **_k: {"ts": "now"})
+        monkeypatch.setattr(agent, "scan_model_inventory", lambda paths: [])
+        monkeypatch.setattr(
+            agent, "collect_device_state",
+            device_state_fn or (lambda **_k: dict(current if current is not None else CURRENT)),
+        )
+        seq = list(responses)
+
+        def fake_send(mc_url, token, telemetry, inventory=None, device_state=None):
+            sends.append(device_state)
+            return seq.pop(0) if seq else {}
+
+        sends: list = []
+        monkeypatch.setattr(agent, "send_heartbeat", fake_send)
+        n = {"i": 0}
+
+        def fake_sleep(_s):
+            n["i"] += 1
+            if n["i"] >= len(responses):
+                raise KeyboardInterrupt()
+
+        monkeypatch.setattr(agent.time, "sleep", fake_sleep)
+        agent.run_loop("http://mc.test", "tok")
+        return sends
+
+    def test_response_without_desired_state_changes_nothing(self, agent, monkeypatch, cmds):
+        sends = self._drive(agent, monkeypatch, [{"ok": True}])
+        assert sends == [CURRENT]  # Ist-Zustand ging mit raus
+        assert cmds == []  # aber nichts wurde gesetzt
+
+    def test_old_backend_empty_response_changes_nothing(self, agent, monkeypatch, cmds):
+        self._drive(agent, monkeypatch, [{}])
+        assert cmds == []
+
+    def test_desired_state_equal_to_ist_changes_nothing(self, agent, monkeypatch, cmds):
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        self._drive(agent, monkeypatch, [{"desired_state": {"gpu_mode": "eco", "oom_guard": True}}])
+        assert cmds == []
+
+    def test_deviating_desired_state_is_applied(self, agent, monkeypatch, cmds):
+        self._drive(agent, monkeypatch, [{"desired_state": {"gpu_mode": "eco+"}}])
+        assert cmds[0][0] == [agent.GPU_MODE_SCRIPT, "eco+"]
+
+    def test_failure_is_reported_in_the_next_heartbeat_and_the_loop_lives(
+        self, agent, monkeypatch, cmds
+    ):
+        cmds.result["proc"] = _FakeProc(1, stderr="Operation not permitted")
+        def device_state(gpu_fields=None, oom_guard=None, apply_status=None):
+            return dict(
+                CURRENT,
+                applied_at=(apply_status or {}).get("applied_at"),
+                last_error=(apply_status or {}).get("last_error"),
+            )
+
+        sends = self._drive(
+            agent, monkeypatch,
+            [{"desired_state": {"gpu_mode": "boost"}}, {"ok": True}],
+            device_state_fn=device_state,
+        )
+        assert len(sends) == 2  # Schleife lebt weiter
+        assert sends[0]["last_error"] is None  # erste Runde: noch kein Versuch
+        assert "not permitted" in sends[1]["last_error"]
+
+
+# ── Formatvertrag Agent <-> Backend (Präzisierung 01.09.2026) ───────────────
+#
+# Zwei bewusste Formatbrüche: `mtu` ist im Soll eine nackte Zahl, im Ist
+# {"iface": …, "value": …}; `oom_guard` ist im Soll bool, im Ist dreiwertig.
+# Passt eine der beiden Seiten nicht zusammen, stünde die Ampel dauerhaft auf
+# gelb, OHNE dass irgendetwas kaputt wäre — genau deshalb hier festgenagelt.
+
+
+class TestFormatContractWithBackend:
+    def test_mtu_ist_is_a_dict_soll_is_a_bare_number(self, agent, cmds, monkeypatch):
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        # Soll = blanke Zahl, Ist = {"iface", "value"} -> erfüllt, nichts tun
+        changed, errors = agent.apply_desired_state({"mtu": 9000}, CURRENT)
+        assert (changed, errors, list(cmds)) == (False, [], [])
+
+    def test_mtu_compares_only_the_value_never_the_iface(self, agent, cmds, monkeypatch):
+        """MC kennt den Namen der Netzwerkkarte nicht. Ein anderer iface-Name
+        darf deshalb NIE als Abweichung zählen."""
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        current = dict(CURRENT, mtu={"iface": "ganz-anders0", "value": 9000})
+        changed, errors = agent.apply_desired_state({"mtu": 9000}, current)
+        assert (changed, errors, list(cmds)) == (False, [], [])
+
+    @pytest.mark.parametrize("ist,soll,erfuellt", [
+        ("active", True, True),
+        ("inactive", True, False),
+        ("missing", True, False),
+        ("active", False, False),
+        ("inactive", False, True),
+        ("missing", False, True),   # nicht installiert = "aus" ist erfüllt
+    ])
+    def test_oom_guard_bool_vs_three_state_matrix(self, agent, cmds, ist, soll, erfuellt):
+        current = dict(CURRENT, oom_guard=ist)
+        changed, errors = agent.apply_desired_state({"oom_guard": soll}, current)
+        assert errors == []
+        assert changed is not erfuellt
+        assert (cmds == []) is erfuellt
+
+    def test_gpu_mode_unknown_is_an_ist_value_never_a_command(self, agent, cmds):
+        """'unknown' heisst "konnte ich nicht feststellen" — als Befehl ist es
+        sinnlos und muss abgelehnt werden, sonst liefe mc-gpu-mode.sh unknown."""
+        assert agent.parse_gpu_mode("") == "unknown"  # im Ist erlaubt
+        changed, errors = agent.apply_desired_state(
+            {"gpu_mode": "unknown"}, dict(CURRENT, gpu_mode="unknown")
+        )
+        assert (changed, list(cmds)) == (False, [])
+        assert errors and "gpu_mode" in errors[0]
+
+    def test_real_backend_response_shape_without_desired_state(self, agent, monkeypatch, cmds):
+        """Exakt die Antwort, die nodes.py heute liefert, wenn kein Soll
+        gesetzt ist (desired_state fällt via exclude_none ganz weg)."""
+        sends = TestRunLoopDesiredState()._drive(
+            agent, monkeypatch,
+            [{"ok": True, "heartbeat_interval_s": 15, "commands": []}],
+        )
+        assert len(sends) == 1
+        assert cmds == []
+
+    def test_real_backend_response_shape_with_desired_state(self, agent, monkeypatch, cmds):
+        sends = TestRunLoopDesiredState()._drive(
+            agent, monkeypatch,
+            [{"ok": True, "heartbeat_interval_s": 15, "commands": [],
+              "desired_state": {"gpu_mode": "normal", "oom_guard": True, "mtu": 9000}}],
+        )
+        assert len(sends) == 1
+        assert [c[0] for c in cmds] == [[agent.GPU_MODE_SCRIPT, "normal"]]  # nur die Abweichung
+
+    def test_limits_match_the_backends_limits_exactly(self, agent):
+        """Drift-Wächter: wäre der Agent lockerer als das Backend, gäbe es
+        einen Wertebereich, den nur eine Seite kennt."""
+        svc = pytest.importorskip("app.services.device_state")
+        assert (agent.MIN_FREE_KBYTES_MIN, agent.MIN_FREE_KBYTES_MAX) == svc.MIN_FREE_KBYTES_RANGE
+        assert (agent.MTU_MIN, agent.MTU_MAX) == svc.MTU_RANGE
+        assert agent.GPU_MODES == svc.GPU_MODES
+
+    def test_reported_ist_validates_against_the_backends_pydantic_model(self, agent, tmp_path, monkeypatch):
+        """E2E-Absicherung ohne Box: der Ist-Zustand, den der Agent baut, muss
+        durch das DeviceState-Modell des echten Endpunkts gehen — sonst
+        antwortet das Backend im Feldversuch mit 422 statt mit dem Soll."""
+        nodes = pytest.importorskip("app.routers.nodes")
+        (tmp_path / "mc-gpu-mode").write_text("eco\n")
+        monkeypatch.setattr(agent, "GPU_MODE_FILE", tmp_path / "mc-gpu-mode")
+        monkeypatch.setattr(agent, "MIN_FREE_KBYTES_FILE", tmp_path / "weg")
+        monkeypatch.setattr(agent, "ASPM_POLICY_FILE", tmp_path / "weg")
+        monkeypatch.setattr(agent, "read_mtu", lambda: {"iface": "enP7s7", "value": 9000})
+
+        state = agent.collect_device_state(
+            gpu_fields={"gpu_clock_mhz": 1989, "gpu_power_w": 33.1, "gpu_temp_c": 63},
+            oom_guard="missing",
+            apply_status={
+                "applied_at": "2026-09-01T00:12:00+00:00",
+                "last_error": "sysctl -> Exit 1: permission denied",
+            },
+        )
+        parsed = nodes.DeviceState.model_validate(state)
+        assert parsed.gpu_mode == "eco"
+        assert parsed.oom_guard == "missing"
+        assert parsed.mtu.value == 9000
+        assert parsed.applied_at is not None
+        # Und der ganze Heartbeat-Body, so wie er über die Leitung geht:
+        nodes.HeartbeatRequest.model_validate(
+            {"telemetry": {"ts": "2026-09-01T00:12:00+00:00"},
+             "agent_version": agent.AGENT_VERSION, "device_state": state}
+        )

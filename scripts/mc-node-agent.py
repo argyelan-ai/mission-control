@@ -92,6 +92,41 @@ INVENTORY_SCAN_EVERY_N_HEARTBEATS = 40
 # heartbeat (~1 min at the 15s interval), reuse the cached reading between.
 GPU_POLL_EVERY_N_HEARTBEATS = 4
 
+# ── Geräte-Steuerung (docs/plans/2026-09-01-geraete-steuerung-vertrag.md) ────
+#
+# Warum eine feste Liste statt "was der Server schickt": ein Gerät fernsteuern
+# heisst root-nahe Aktionen auslösen. Der Agent kennt deshalb NUR diese
+# Aktionen, baut jeden Aufruf selbst als Argumentliste (nie shell=True, nie
+# Serverdaten in eine Befehlszeile interpoliert) und lehnt alles ab, was nicht
+# exakt in die erlaubten Werte passt (fail-closed).
+GPU_MODES = ("boost", "normal", "eco", "eco+")
+GPU_MODE_FILE = Path("/etc/mc-gpu-mode")
+GPU_MODE_SCRIPT = "/usr/local/sbin/mc-gpu-mode.sh"
+LATENCY_TUNE_SCRIPT = "/usr/local/sbin/latency-tune.sh"
+# Der Halte-Prozess, den latency-tune.sh startet: er hält /dev/cpu_dma_latency
+# offen. Stirbt er, fällt die Einstellung still zurück — genau deshalb prüfen
+# wir ihn und nicht nur die ASPM-Datei.
+LATENCY_TUNE_HOLDER = "cpu_dma_holder"
+ASPM_POLICY_FILE = Path("/sys/module/pcie_aspm/parameters/policy")
+MIN_FREE_KBYTES_FILE = Path("/proc/sys/vm/min_free_kbytes")
+OOM_GUARD_UNIT = "earlyoom"
+NET_ROUTE_FILE = Path("/proc/net/route")
+SYS_CLASS_NET = Path("/sys/class/net")
+# Plausibilitätsgrenzen. Ein Wert ausserhalb ist keine Konfiguration, sondern
+# ein Fehler — ablehnen, statt das Gerät unbrauchbar zu machen (min_free von
+# 100 GB macht die Box unbenutzbar, eine MTU von 70 killt das Netz).
+# Absichtlich IDENTISCH zu backend/app/services/device_state.py
+# (MIN_FREE_KBYTES_RANGE / MTU_RANGE): der Agent ist die letzte
+# Verteidigungslinie und darf nie lockerer sein als das Backend — sonst
+# entsteht ein Wertebereich, den nur eine der beiden Seiten kennt.
+MIN_FREE_KBYTES_MIN = 65_536        # 64 MB
+MIN_FREE_KBYTES_MAX = 67_108_864    # 64 GB
+MTU_MIN = 1_280                     # IPv6-Minimum
+MTU_MAX = 9_000                     # Jumbo-Frames
+# Setz-Befehle dürfen hängen (systemctl wartet auf den Dienst) — hart deckeln,
+# damit die Heartbeat-Schleife nie stehen bleibt.
+SET_CMD_TIMEOUT_S = 20
+
 SYSTEM_TOKEN_PATH = Path("/etc/mc-node-agent/token")
 USER_TOKEN_PATH = Path.home() / ".config" / "mc-node-agent" / "token"
 SYSTEMD_UNIT_PATH = Path("/etc/systemd/system/mc-node-agent.service")
@@ -245,6 +280,104 @@ def parse_nvidia_smi(stdout: str) -> dict:
     result["vram_total_mb"] = _int_or_none(parts[2])
     result["gpu_temp_c"] = _int_or_none(parts[3])
     return result
+
+
+def _float_or_none(raw: str) -> float | None:
+    """Wie _int_or_none, aber für power.draw — Watt kommen mit Nachkomma."""
+    s = raw.strip().strip("[]")
+    if not s or s.upper() == "N/A":
+        return None
+    try:
+        return round(float(s), 1)
+    except ValueError:
+        return None
+
+
+def parse_nvidia_smi_device(stdout: str) -> dict:
+    """Zieht Takt/Watt/Temperatur aus DERSELBEN nvidia-smi-Zeile, die
+    parse_nvidia_smi liest (Felder 5 und 6 der erweiterten Abfrage in
+    _run_nvidia_smi).
+
+    Bewusst kein zweiter nvidia-smi-Aufruf: jeder Aufruf ist ein fork+exec mit
+    ~21 MB Spitze auf GB10 (Speicher-Diät, siehe Moduldoc). Ein Aufruf, zwei
+    Auswertungen. Eine alte/kurze Zeile (weniger Felder) ergibt None statt
+    eines Fehlers.
+    """
+    result: dict[str, float | int | None] = {
+        "gpu_clock_mhz": None,
+        "gpu_power_w": None,
+        "gpu_temp_c": None,
+    }
+    if not stdout or not stdout.strip():
+        return result
+    parts = [p.strip() for p in stdout.strip().splitlines()[0].split(",")]
+    if len(parts) >= 4:
+        result["gpu_temp_c"] = _int_or_none(parts[3])
+    if len(parts) >= 5:
+        result["gpu_clock_mhz"] = _int_or_none(parts[4])
+    if len(parts) >= 6:
+        result["gpu_power_w"] = _float_or_none(parts[5])
+    return result
+
+
+def parse_gpu_mode(text: str) -> str:
+    """Inhalt von /etc/mc-gpu-mode -> einer der GPU_MODES, sonst 'unknown'.
+
+    Fail-closed: was nicht exakt einer der vier bekannten Modi ist, wird nicht
+    geraten. 'unknown' heisst für die Oberfläche schlicht "Soll ≠ Ist".
+    """
+    value = (text or "").strip().lower()
+    return value if value in GPU_MODES else "unknown"
+
+
+def parse_min_free_kbytes(text: str) -> int | None:
+    try:
+        return int((text or "").strip())
+    except ValueError:
+        return None
+
+
+def parse_oom_guard(is_enabled_out: str, is_active_out: str) -> str:
+    """Die zwei systemctl-Ausgaben -> 'active' | 'inactive' | 'missing'.
+
+    'not-found' (Unit gar nicht installiert) ist der wichtigste Fall: auf
+    Marks zweiter Box fehlte earlyoom komplett, was dort Einfrierer statt
+    kontrollierter Abschüsse ergab — das muss sichtbar anders aussehen als
+    "installiert, aber aus".
+    """
+    enabled = (is_enabled_out or "").strip().splitlines()
+    enabled_state = enabled[0].strip() if enabled else ""
+    if not enabled_state or enabled_state in ("not-found", "not-found."):
+        return "missing"
+    active = (is_active_out or "").strip().splitlines()
+    return "active" if active and active[0].strip() == "active" else "inactive"
+
+
+def parse_aspm_policy_performance(text: str) -> bool:
+    """/sys/module/pcie_aspm/parameters/policy listet alle Werte, der aktive
+    steht in eckigen Klammern: 'default performance [powersave] ...'."""
+    return "[performance]" in (text or "")
+
+
+def parse_default_iface(proc_net_route: str) -> str | None:
+    """Schnittstelle der Standard-Route aus /proc/net/route.
+
+    Die Schnittstelle heisst nicht überall gleich (GX10: enP7s7, Spark: enp1s0)
+    — deshalb nachschlagen statt festverdrahten. Ziel 00000000 = Default-Route;
+    bei mehreren gewinnt die mit der kleinsten Metrik (Feld 7), wie im Kernel.
+    """
+    best: tuple[int, str] | None = None
+    for line in (proc_net_route or "").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 8 or fields[1] != "00000000":
+            continue
+        try:
+            metric = int(fields[6])
+        except ValueError:
+            metric = 0
+        if best is None or metric < best[0]:
+            best = (metric, fields[0])
+    return best[1] if best else None
 
 
 # ── Model-weights inventory (Nachtrag 30.08.2026 — Phase 2's "already on the
@@ -432,12 +565,19 @@ def inventory_hash(entries: list[dict]) -> str:
 
 def _run_nvidia_smi() -> str:
     """Returns nvidia-smi's stdout, or '' on any failure (missing binary,
-    timeout, non-zero exit) — parse_nvidia_smi treats '' as "no GPU data"."""
+    timeout, non-zero exit) — parse_nvidia_smi treats '' as "no GPU data".
+
+    Geräte-Steuerung 01.09.2026: die Abfrage trägt zusätzlich clocks.gr und
+    power.draw. Sie hängen HINTEN dran, damit parse_nvidia_smi (Felder 1-4)
+    unverändert weiterliest — ein Aufruf bedient jetzt Telemetrie UND
+    device_state, statt ein zweiter fork+exec (~21 MB Spitze) dazuzukommen.
+    """
     try:
         proc = subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,"
+                "temperature.gpu,clocks.gr,power.draw",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -502,6 +642,265 @@ def collect_telemetry(gpu_fields: dict | None = None) -> dict:
 
     telemetry.update(gpu_fields if gpu_fields is not None else parse_nvidia_smi(_run_nvidia_smi()))
     return telemetry
+
+
+# ── Geräte-Zustand lesen (Ist) ───────────────────────────────────────────────
+
+
+def _read_text(path: Path) -> str | None:
+    """Kleine Systemdatei lesen; nicht vorhanden/nicht lesbar -> None. Jede
+    einzelne Quelle darf fehlen, ohne den ganzen Zustand zu kippen."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def read_oom_guard() -> str:
+    """'active' | 'inactive' | 'missing' — zwei systemctl-Aufrufe.
+
+    Teuerster Teil des Ist-Zustands (zwei fork+exec), deshalb ruft run_loop
+    das nur im selben Takt wie nvidia-smi auf und reicht das Ergebnis an
+    collect_device_state weiter.
+    """
+    try:
+        enabled = subprocess.run(
+            ["systemctl", "is-enabled", OOM_GUARD_UNIT],
+            capture_output=True, text=True, timeout=NVIDIA_SMI_TIMEOUT_S,
+        )
+        active = subprocess.run(
+            ["systemctl", "is-active", OOM_GUARD_UNIT],
+            capture_output=True, text=True, timeout=NVIDIA_SMI_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return "missing"  # kein systemd auf dieser Box — kein Fehler
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log.warning("systemctl-Abfrage für %s fehlgeschlagen: %s", OOM_GUARD_UNIT, e)
+        return "missing"
+    return parse_oom_guard(enabled.stdout or enabled.stderr, active.stdout)
+
+
+def _holder_process_running(name: str) -> bool:
+    """Läuft ein Prozess, dessen Kommandozeile `name` enthält?
+
+    Bewusst über /proc statt `pgrep` — pgrep wäre ein fork+exec pro Heartbeat,
+    /proc kostet nur ein paar sehr kleine Lesevorgänge. Der eigene Prozess
+    wird übersprungen, damit ein Agent, der zufällig so heisst, sich nicht
+    selbst findet.
+    """
+    self_pid = str(os.getpid())
+    try:
+        pids = os.listdir("/proc")
+    except OSError:
+        return False
+    for pid in pids:
+        if not pid.isdigit() or pid == self_pid:
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read(4096)
+        except OSError:
+            continue  # Prozess ist inzwischen weg oder gehört jemand anderem
+        if name.encode() in cmdline:
+            return True
+    return False
+
+
+def read_latency_tune() -> bool:
+    """latency-tune gilt nur als aktiv, wenn BEIDES stimmt: ASPM auf
+    performance UND der Halte-Prozess lebt. Nach einem Neustart ist beides
+    weg — genau der stille Rückfall, den der Vertrag sichtbar machen will."""
+    policy = _read_text(ASPM_POLICY_FILE)
+    if policy is None or not parse_aspm_policy_performance(policy):
+        return False
+    return _holder_process_running(LATENCY_TUNE_HOLDER)
+
+
+def read_mtu() -> dict | None:
+    """{'iface': ..., 'value': ...} der Standard-Route, oder None."""
+    route = _read_text(NET_ROUTE_FILE)
+    if route is None:
+        return None
+    iface = parse_default_iface(route)
+    if not iface or not _iface_exists(iface):
+        return None
+    raw = _read_text(SYS_CLASS_NET / iface / "mtu")
+    value = _int_or_none(raw) if raw is not None else None
+    return {"iface": iface, "value": value}
+
+
+def _iface_exists(iface: str) -> bool:
+    """Schnittstellenname gegen /sys/class/net prüfen — verhindert, dass ein
+    krummer Name (Pfadtrenner, '..') überhaupt in einen Befehl gelangt."""
+    if not iface or "/" in iface or iface in (".", "..") or len(iface) > 32:
+        return False
+    return (SYS_CLASS_NET / iface).exists()
+
+
+def collect_device_state(
+    gpu_fields: dict | None = None,
+    oom_guard: str | None = None,
+    apply_status: dict | None = None,
+) -> dict:
+    """Ein Ist-Zustands-Schnappschuss laut Datenvertrag.
+
+    `gpu_fields`/`oom_guard` erlauben es run_loop, die beiden teuren Quellen
+    (nvidia-smi, systemctl) zwischenzuspeichern — gleiches Muster wie
+    collect_telemetry(gpu_fields=...). `apply_status` trägt Zeitpunkt und
+    Fehler der letzten Setz-Runde mit; ohne Setz-Versuch bleibt beides None.
+    """
+    gpu = gpu_fields if gpu_fields is not None else parse_nvidia_smi_device(_run_nvidia_smi())
+    status = apply_status or {}
+    state: dict = {
+        "gpu_mode": parse_gpu_mode(_read_text(GPU_MODE_FILE) or ""),
+        "gpu_clock_mhz": gpu.get("gpu_clock_mhz"),
+        "gpu_power_w": gpu.get("gpu_power_w"),
+        "gpu_temp_c": gpu.get("gpu_temp_c"),
+        "min_free_kbytes": None,
+        "oom_guard": oom_guard if oom_guard is not None else read_oom_guard(),
+        "latency_tune": False,
+        "mtu": None,
+        "applied_at": status.get("applied_at"),
+        "last_error": status.get("last_error"),
+    }
+    raw_min_free = _read_text(MIN_FREE_KBYTES_FILE)
+    if raw_min_free is not None:
+        state["min_free_kbytes"] = parse_min_free_kbytes(raw_min_free)
+    try:
+        state["latency_tune"] = read_latency_tune()
+    except OSError:
+        state["latency_tune"] = False
+    try:
+        state["mtu"] = read_mtu()
+    except OSError:
+        state["mtu"] = None
+    return state
+
+
+# ── Soll-Zustand anwenden ────────────────────────────────────────────────────
+#
+# Sicherheitsregeln dieses Abschnitts (Vertrag, harte Regel 8):
+#  - NUR die fünf fest einprogrammierten Aktionen unten, nie ein Befehl aus
+#    der Serverantwort.
+#  - Jeder Aufruf als Argumentliste, NIEMALS shell=True — Serverdaten landen
+#    dadurch nie in einer Kommandozeile, die eine Shell auseinandernimmt.
+#  - Jeder Wert wird streng geprüft (Typ + erlaubte Menge/Grenzen). Was nicht
+#    passt, wird ignoriert und als last_error gemeldet (fail-closed).
+#  - Idempotent: was schon stimmt, wird nicht angefasst.
+
+
+def _run_set_cmd(argv: list[str]) -> str | None:
+    """Führt eine der fest verdrahteten Aktionen aus. Rückgabe: None bei
+    Erfolg, sonst eine kurze Fehlerbeschreibung für last_error (u.a. der
+    typische Fall "läuft nicht als root")."""
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=SET_CMD_TIMEOUT_S
+        )
+    except FileNotFoundError:
+        return f"{argv[0]} nicht vorhanden"
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return f"{argv[0]} fehlgeschlagen: {e}"
+    if proc.returncode == 0:
+        return None
+    detail = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
+    return f"{argv[0]} -> Exit {proc.returncode}: {detail[:200]}"
+
+
+def _valid_int(value: object, low: int, high: int) -> int | None:
+    """int im Bereich [low, high] — bool wird abgelehnt (bool ist in Python
+    ein int-Subtyp, `True` würde sonst als 1 durchrutschen)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if low <= value <= high else None
+
+
+def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
+    """Gleicht `current` an `desired` an — nur die abweichenden Felder.
+
+    Rückgabe: (etwas gesetzt?, Fehlerliste). Wirft nie: jeder Fehler wird
+    eingesammelt und landet im nächsten Heartbeat als last_error. Felder, die
+    in `desired` fehlen, bleiben unangetastet ("kein Feld = keine Meinung").
+    """
+    errors: list[str] = []
+    changed = False
+    if not isinstance(desired, dict):
+        return False, ["desired_state ist kein Objekt — ignoriert"]
+
+    if "gpu_mode" in desired:
+        mode = desired["gpu_mode"]
+        if not isinstance(mode, str) or mode not in GPU_MODES:
+            errors.append(f"gpu_mode {mode!r} abgelehnt (erlaubt: {', '.join(GPU_MODES)})")
+        elif mode != current.get("gpu_mode"):
+            err = _run_set_cmd([GPU_MODE_SCRIPT, mode])
+            if err:
+                errors.append(f"gpu_mode={mode}: {err}")
+            else:
+                changed = True
+
+    if "min_free_kbytes" in desired:
+        value = _valid_int(desired["min_free_kbytes"], MIN_FREE_KBYTES_MIN, MIN_FREE_KBYTES_MAX)
+        if value is None:
+            errors.append(
+                f"min_free_kbytes {desired['min_free_kbytes']!r} abgelehnt "
+                f"(ganze Zahl {MIN_FREE_KBYTES_MIN}..{MIN_FREE_KBYTES_MAX} erwartet)"
+            )
+        elif value != current.get("min_free_kbytes"):
+            err = _run_set_cmd(["sysctl", "-w", f"vm.min_free_kbytes={value}"])
+            if err:
+                errors.append(f"min_free_kbytes={value}: {err}")
+            else:
+                changed = True
+
+    if "oom_guard" in desired:
+        want = desired["oom_guard"]
+        if not isinstance(want, bool):
+            errors.append(f"oom_guard {want!r} abgelehnt (true/false erwartet)")
+        else:
+            is_active = current.get("oom_guard") == "active"
+            if want != is_active:
+                verb = "enable" if want else "disable"
+                err = _run_set_cmd(["systemctl", verb, "--now", OOM_GUARD_UNIT])
+                if err:
+                    errors.append(f"oom_guard={want}: {err}")
+                else:
+                    changed = True
+
+    if "latency_tune" in desired:
+        want = desired["latency_tune"]
+        if not isinstance(want, bool):
+            errors.append(f"latency_tune {want!r} abgelehnt (true/false erwartet)")
+        elif want and not current.get("latency_tune"):
+            err = _run_set_cmd(["bash", LATENCY_TUNE_SCRIPT])
+            if err:
+                errors.append(f"latency_tune: {err}")
+            else:
+                changed = True
+        elif not want and current.get("latency_tune"):
+            # Es gibt (Stand 01.09.2026) kein Rückweg-Skript. Ehrlich melden
+            # statt einen Ausschalt-Befehl zu erfinden — ein Neustart räumt es
+            # ohnehin weg.
+            errors.append("latency_tune=false: kein Ausschalt-Skript vorhanden — bitte neu starten")
+
+    if "mtu" in desired:
+        value = _valid_int(desired["mtu"], MTU_MIN, MTU_MAX)
+        current_mtu = current.get("mtu") or {}
+        iface = current_mtu.get("iface")
+        if value is None:
+            errors.append(
+                f"mtu {desired['mtu']!r} abgelehnt (ganze Zahl {MTU_MIN}..{MTU_MAX} erwartet)"
+            )
+        elif not iface or not _iface_exists(iface):
+            errors.append("mtu: keine Standard-Route-Schnittstelle gefunden")
+        elif value != current_mtu.get("value"):
+            err = _run_set_cmd(["ip", "link", "set", iface, "mtu", str(value)])
+            if err:
+                errors.append(f"mtu={value} auf {iface}: {err}")
+            else:
+                changed = True
+
+    return changed, errors
 
 
 # ── HTTP (raw socket — no urllib.request/http.client; see Speicher-Diät note
@@ -706,10 +1105,21 @@ def pair(mc_url: str, code: str) -> str:
     return token
 
 
-def send_heartbeat(mc_url: str, token: str, telemetry: dict, inventory: list[dict] | None = None) -> dict:
+def send_heartbeat(
+    mc_url: str,
+    token: str,
+    telemetry: dict,
+    inventory: list[dict] | None = None,
+    device_state: dict | None = None,
+) -> dict:
+    """Sendet den Heartbeat und gibt die Antwort zurück. `device_state` ist
+    optional — ein Backend ohne Geräte-Steuerung ignoriert das Feld, und ein
+    Agent auf einer Box ohne lesbaren Zustand lässt es einfach weg."""
     payload = {"telemetry": telemetry, "agent_version": AGENT_VERSION}
     if inventory is not None:
         payload["inventory"] = inventory
+    if device_state is not None:
+        payload["device_state"] = device_state
     return _http_post_json(f"{mc_url}/api/v1/nodes/heartbeat", payload, token=token, timeout=HTTP_TIMEOUT_S)
 
 
@@ -887,6 +1297,16 @@ def run_loop(mc_url: str, token: str) -> None:
     GPU_POLL_EVERY_N_HEARTBEATS-th successful heartbeat; a failed send
     reuses the same cached GPU reading on retry rather than forking a new
     nvidia-smi process for nothing.
+
+    Geräte-Steuerung (01.09.2026, docs/plans/2026-09-01-geraete-steuerung-
+    vertrag.md): jede Runde legt den Ist-Zustand in den Heartbeat und wendet
+    danach den `desired_state` aus der Antwort an — nur, was abweicht. Der
+    Abgleich läuft bei JEDER Runde, deshalb überlebt eine Einstellung auch
+    einen Neustart der Box von selbst. Eine Antwort ohne `desired_state`
+    (altes Backend) bedeutet schlicht: nichts tun. Nach einem erfolgreichen
+    Setzen werden die zwischengespeicherten Messwerte sofort für ungültig
+    erklärt, damit die nächste Runde den echten neuen Zustand meldet und
+    nicht denselben Befehl noch einmal absetzt.
     """
     backoff = HEARTBEAT_INTERVAL_S
     inventory_paths = default_inventory_paths()
@@ -895,15 +1315,32 @@ def run_loop(mc_url: str, token: str) -> None:
     cached_scan: tuple[str, list[dict]] | None = None
     scan_due = True  # scan once, unconditionally, at startup
     cached_gpu: dict | None = None
+    cached_gpu_device: dict | None = None
+    cached_oom_guard: str | None = None
     gpu_poll_due = True  # poll once, unconditionally, at startup
+    apply_status: dict = {"applied_at": None, "last_error": None}
 
     while True:
         try:
             if gpu_poll_due:
-                cached_gpu = parse_nvidia_smi(_run_nvidia_smi())
+                smi_stdout = _run_nvidia_smi()
+                cached_gpu = parse_nvidia_smi(smi_stdout)
+                cached_gpu_device = parse_nvidia_smi_device(smi_stdout)
+                cached_oom_guard = read_oom_guard()
                 gpu_poll_due = False
 
             telemetry = collect_telemetry(gpu_fields=cached_gpu)
+
+            try:
+                device_state = collect_device_state(
+                    gpu_fields=cached_gpu_device,
+                    oom_guard=cached_oom_guard,
+                    apply_status=apply_status,
+                )
+            except Exception as e:  # noqa: BLE001 — ein kaputter Ist-Zustand
+                # darf den Heartbeat nie mitreissen (siehe Moduldoc).
+                log.warning("Geräte-Zustand nicht lesbar (%s) — Heartbeat geht ohne raus", e)
+                device_state = None
 
             if scan_due and cached_scan is None:
                 try:
@@ -918,7 +1355,31 @@ def run_loop(mc_url: str, token: str) -> None:
             if cached_scan is not None and cached_scan[0] != last_sent_fingerprint:
                 inventory_to_send = cached_scan[1]
 
-            send_heartbeat(mc_url, token, telemetry, inventory=inventory_to_send)
+            response = send_heartbeat(
+                mc_url, token, telemetry,
+                inventory=inventory_to_send,
+                device_state=device_state,
+            )
+
+            if device_state is not None:
+                desired = (response or {}).get("desired_state")
+                if isinstance(desired, dict) and desired:
+                    try:
+                        changed, errors = apply_desired_state(desired, device_state)
+                    except Exception as e:  # noqa: BLE001 — NIE crashen
+                        changed, errors = False, [f"Setzen abgebrochen: {e}"]
+                    if errors:
+                        for err in errors:
+                            log.warning("Soll-Zustand: %s", err)
+                        apply_status["last_error"] = "; ".join(errors)[:500]
+                    else:
+                        apply_status["last_error"] = None
+                    if changed:
+                        apply_status["applied_at"] = datetime.now(timezone.utc).isoformat()
+                        # Zwischenspeicher verwerfen: sonst vergliche die
+                        # nächste Runde gegen den alten Ist-Zustand und
+                        # setzte denselben Wert nochmals.
+                        gpu_poll_due = True
 
             if cached_scan is not None:
                 last_sent_fingerprint = cached_scan[0]

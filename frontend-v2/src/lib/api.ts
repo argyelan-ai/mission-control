@@ -93,6 +93,8 @@ import type {
   HostOnboardResponse,
   NodePairingCodeRequest,
   NodePairingCodeResponse,
+  Device,
+  DesiredState,
   SparkMetrics,
   CliGlobalSession,
   CliPlugin,
@@ -2245,6 +2247,19 @@ export const api = {
     // die MC nicht per SSH erreicht. Liefert den fertigen Install-Einzeiler.
     createPairingCode: (data: NodePairingCodeRequest): Promise<NodePairingCodeResponse> =>
       request("/api/v1/nodes/pairing-codes", { method: "POST", body: JSON.stringify(data) }),
+
+    // ── Geräte-Steuerung ───────────────────────────────────────────────────
+    // Ist + Soll + fertige Ampel je Gerät. Kein Fernbefehl: setDesiredState
+    // legt nur den Soll ab, das Gerät holt ihn beim nächsten Heartbeat.
+    devices: (): Promise<Device[]> => request("/api/v1/nodes/devices"),
+    // PUT, nicht PATCH: der Körper ERSETZT den Soll-Zustand vollständig.
+    // Wer nur den GPU-Modus ändert, muss die übrigen Felder mitschicken —
+    // sonst löscht er sie (`{}` = "MC steuert dieses Gerät nicht mehr").
+    setDesiredState: (hostId: string, desired: DesiredState): Promise<Device> =>
+      request(`/api/v1/nodes/${hostId}/device-state`, {
+        method: "PUT",
+        body: JSON.stringify(desired),
+      }),
   },
 
   // ── CLI Sessions (global) ────────────────────────────────────────────────
