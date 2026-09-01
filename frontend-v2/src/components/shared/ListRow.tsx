@@ -174,6 +174,7 @@ export function ListRow({
   chips,
   meta,
   detail,
+  footer,
   summary,
   action,
   overflow,
@@ -195,6 +196,14 @@ export function ListRow({
   meta?: React.ReactNode;
   /** Second line for things that need a sentence (live status, agents). */
   detail?: React.ReactNode;
+  /**
+   * Ein Block unter der Zeile, der auf ALLEN Breiten sichtbar bleibt — für
+   * Bedienelemente, die zur Zeile gehören (Geräte-Modus). Bewusst nicht
+   * `detail`: das ist Desktop-only und wandert auf dem Handy hinter den
+   * Aufklapper. Ein Schalter, den man auf dem Handy erst suchen muss, ist
+   * keiner.
+   */
+  footer?: React.ReactNode;
   /**
    * The one fact worth reading at 390px. Shown instead of the chips on mobile;
    * without it a row falls back to wrapping chips, which is the thing this
@@ -290,6 +299,8 @@ export function ListRow({
           {summary}
         </div>
       )}
+
+      {footer}
 
       {expanded && (
         <div className="sm:hidden flex flex-col gap-2 pt-2">
