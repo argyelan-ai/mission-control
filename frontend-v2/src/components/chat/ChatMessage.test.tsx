@@ -247,3 +247,26 @@ describe("ChatMessage — Teamkollegen-Nachricht", () => {
     expect(spy).toHaveBeenCalled();
   });
 });
+
+/**
+ * Operator-Befund 01.09.2026 ("meine Nachricht haengt"): Die eigene Zeile
+ * stand nach dem Senden 1-3 Sekunden blass da, bis das Transkript sie
+ * zurueckspiegelte. Gemessen schreibt Claude Code den User-Turn erst rund
+ * eine Sekunde spaeter, plus bis zu einer Sekunde Poll — die Blase ist also
+ * genau so lange gedimmt, wie der Chat sich traege anfuehlt.
+ *
+ * Der Server hat die Zustellung mit 204 quittiert; die Nachricht IST
+ * unterwegs. Sie deshalb auszugrauen sagt etwas Falsches. Die ehrliche
+ * Warnung bleibt: nach zehn Sekunden ohne Bestaetigung wird die Blase
+ * markiert (eigener Test oben).
+ */
+describe("Echo-Blase", () => {
+  it("zeigt eine gerade gesendete Nachricht in voller Deckkraft", () => {
+    const { container } = render(
+      <ChatMessage ev={mkEvent({ role: "user", text: "hallo" })} echoStatus="pending" />,
+    );
+    const bubble = container.querySelector('[data-testid="echo-bubble"]') as HTMLElement;
+    expect(bubble).not.toBeNull();
+    expect(bubble.style.opacity === "" || Number(bubble.style.opacity) >= 1).toBe(true);
+  });
+});

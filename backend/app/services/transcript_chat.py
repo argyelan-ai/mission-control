@@ -511,7 +511,14 @@ def _parse_assistant_entry(
             )
         elif block_type == "thinking":
             text = block.get("thinking")
-            if text is None:
+            # Claude Code schreibt den Denkverlauf NICHT im Klartext: der Block
+            # traegt ein leeres ``thinking`` und nur eine verschluesselte
+            # ``signature`` (live gemessen 01.09.2026, 115 Bloecke in einer
+            # Sitzung). Ein Ereignis daraus erzeugte eine Denk-Blase, die sich
+            # aufklappen liess und leer war — eine Schublade, die Inhalt
+            # verspricht, den die Quelle nicht hat. Erst wenn der Denkverlauf
+            # aus dem Terminal-Strom kommt, gibt es wieder etwas zu zeigen.
+            if text is None or not text.strip():
                 continue
             events.append(
                 {
@@ -1564,12 +1571,20 @@ class ChatTailerManager:
     instead of appending a second one.
     """
 
-    POLL_INTERVAL = 1.0
+    # 0,3 s statt 1,0 s: Der Tailer stat()et nur die Dateigroesse und liest
+    # ausschliesslich, wenn sie gewachsen ist — der Takt kostet also fast
+    # nichts, spart aber bis zu einer vollen Sekunde pro Antwort. Gemessen
+    # 01.09.2026: die CLI schreibt einen fertigen Assistenten-Block auf einen
+    # Schlag; bis zu diesem Zeitpunkt sieht die Oberflaeche gar nichts, danach
+    # entschied allein dieser Takt, wie lange sie weiter nichts sieht.
+    POLL_INTERVAL = 0.3
 
-    # Pane-state probe cadence: every 2nd tick (~every other POLL_INTERVAL)
-    # rather than every tick — capture-pane is a docker exec round-trip, not
-    # worth paying on every 1s poll.
-    STATE_PROBE_EVERY_N_TICKS = 2
+    # Pane-Sonde: rund alle 2 Sekunden, gemessen in SEKUNDEN statt in
+    # Poll-Durchlaeufen. In Ticks gezaehlt wanderte die erste Zustandsmeldung
+    # mit jedem geaenderten Poll-Takt mit — wer den Chat oeffnete, sah den
+    # Status erst nach N × Takt. Die Sonde ist ein docker-exec-Rundlauf
+    # (gemessen 50 ms): die erste laeuft sofort, danach genuegt der Zeittakt.
+    STATE_PROBE_INTERVAL_SECONDS = 2.0
 
     # A transcript that hasn't grown in this long reads as idle for the
     # Boss/host fallback (no pane to capture) and as the transcript_active
@@ -1685,13 +1700,17 @@ class ChatTailerManager:
         # per poll tick forever.
         rejected_rollover_path: Path | None = None
 
+        last_probe_at = 0.0  # 0.0 = noch nie -> die erste Sonde laeuft sofort
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
                 tick += 1
 
                 try:
-                    if agent is not None and tick % self.STATE_PROBE_EVERY_N_TICKS == 0:
+                    now = time.monotonic()
+                    probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
+                    if agent is not None and probe_due:
+                        last_probe_at = now
                         new_state = await self._compute_pane_state(
                             agent, current_path, adapter
                         )

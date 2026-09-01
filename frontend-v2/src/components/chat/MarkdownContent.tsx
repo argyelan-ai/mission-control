@@ -10,6 +10,7 @@
  * Verhalten unverändert; ChatMessage importiert jetzt von hier.
  */
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { C } from "@/lib/colors";
 
 // ── Markdown renderer — mirrors LegacyMemoryPage's `MarkdownContent` exactly
@@ -26,10 +27,20 @@ export function MarkdownContent({ content, compact = false }: { content: string;
   const headingClass = compact ? "text-[14px] font-semibold mb-1 mt-2.5" : null;
   return (
     <ReactMarkdown
+      // Ohne GFM kennt react-markdown weder Tabellen noch ~~durchgestrichen~~
+      // noch Aufgabenlisten — die Pipe-Zeilen einer Tabelle landeten als
+      // Fliesstext im Chat (Operator-Befund 01.09.2026). Agenten schreiben
+      // ihre Ergebnisse haeufig als Tabelle; das ist keine Randnotiz.
+      remarkPlugins={[remarkGfm]}
       components={{
-        h1: ({ children }) => <h1 className={headingClass ?? "text-lg font-bold mb-3 mt-4"} style={{ color: "var(--color-text-primary)" }}>{children}</h1>,
+        // Ueberschriften tragen ihre Ebene in der FARBE, nicht nur in der
+        // Groesse — so wie Claude Code es im Terminal tut. Drei gleich
+        // eingefaerbte Stufen lesen sich in einer langen Antwort als eine
+        // einzige Ebene, und die Gliederung geht verloren (Marks Wunsch
+        // 01.09.2026). Die Akzentfarbe fuehrt, danach zwei Textstufen.
+        h1: ({ children }) => <h1 className={headingClass ?? "text-lg font-bold mb-3 mt-4"} style={{ color: C.accent }}>{children}</h1>,
         h2: ({ children }) => <h2 className={headingClass ?? "text-base font-semibold mb-2 mt-4"} style={{ color: "var(--color-text-primary)" }}>{children}</h2>,
-        h3: ({ children }) => <h3 className={headingClass ?? "text-sm font-semibold mb-1.5 mt-3"} style={{ color: "var(--color-text-primary)" }}>{children}</h3>,
+        h3: ({ children }) => <h3 className={headingClass ?? "text-sm font-semibold mb-1.5 mt-3"} style={{ color: "var(--color-text-secondary)" }}>{children}</h3>,
         // Leading is set here rather than inherited: `leading-relaxed` (1.625)
         // used to win over the container's value, so the reading measure and
         // the line spacing disagreed.
@@ -81,6 +92,25 @@ export function MarkdownContent({ content, compact = false }: { content: string;
             </code>
           );
         },
+        // Tabellen scrollen in ihrem eigenen Kasten: eine breite Tabelle darf
+        // die Seite nicht seitwaerts schieben (auf dem Handy sonst garantiert).
+        table: ({ children }) => (
+          <div className="mb-3 overflow-x-auto" style={{ border: `1px solid ${C.border}`, borderRadius: "var(--radius-md, 6px)" }}>
+            <table className="w-full text-[13px]" style={{ borderCollapse: "collapse" }}>{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead style={{ background: "var(--color-bg-elevated)" }}>{children}</thead>
+        ),
+        th: ({ children }) => (
+          <th className="px-3 py-2 text-left font-semibold" style={{ color: "var(--color-text-primary)", borderBottom: `1px solid ${C.border}` }}>{children}</th>
+        ),
+        td: ({ children }) => (
+          <td className="px-3 py-2 align-top" style={{ color: "var(--color-text-body)", borderTop: `1px solid ${C.borderSubtle}` }}>{children}</td>
+        ),
+        del: ({ children }) => (
+          <del style={{ color: "var(--color-text-secondary)" }}>{children}</del>
+        ),
         blockquote: ({ children }) => (
           <blockquote className="pl-4 mb-3 text-sm italic" style={{ border: `1px solid ${C.borderAccent}`, borderRadius: 4, background: C.accentSubtle, paddingLeft: "0.75rem", color: "var(--color-text-secondary)" }}>
             {children}
