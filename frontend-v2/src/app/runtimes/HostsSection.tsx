@@ -27,15 +27,6 @@ import { NodePairingDialog } from "./NodePairingDialog";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
-import {
-  DeviceRowControl,
-  REASON_LABEL_KEY,
-  STATUS_ROW_TONE,
-  deviceLiveSummary,
-  useDevices,
-} from "./DeviceControl";
-import type { Device } from "@/lib/types";
-import { useLocale } from "next-intl";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -375,7 +366,6 @@ function HostFormModal({
 
 function HostCard({
   host,
-  device,
   boundCount,
   isAdmin,
   onEdit,
@@ -383,9 +373,6 @@ function HostCard({
   deletePending,
 }: {
   host: Host;
-  /** Gesetzt, sobald die Box einen node-agent hat. Fehlt sie, bleibt die
-   *  Zeile exakt wie vorher — kein Schalter, keine leere Fläche. */
-  device?: Device;
   boundCount: number;
   isAdmin: boolean;
   onEdit: () => void;
@@ -393,43 +380,23 @@ function HostCard({
   deletePending: boolean;
 }) {
   const t = useTranslations("runtimes.hosts");
-  const tDev = useTranslations("runtimes.devices");
-  const locale = useLocale();
-
-  // Der Punkt links trägt bei steuerbaren Geräten den Gerätezustand — dort
-  // sucht der Operator ihn, nicht in einer zweiten Ampel weiter unten.
-  const tone = device && host.enabled ? STATUS_ROW_TONE[device.status] : host.enabled ? "ok" : "idle";
-  const live = device ? deviceLiveSummary(device, locale, { watt: tDev("unitWatt"), temp: tDev("unitTemp") }) : null;
-
   return (
     <ListRow
       testId="host-row"
       dataAttrs={{ "data-slug": host.slug }}
-      tone={tone}
+      tone={host.enabled ? "ok" : "idle"}
       muted={!host.enabled}
       name={host.display_name}
       summary={[
         host.enabled ? t("active") : t("disabled"),
         t(KIND_LABEL_KEY[host.kind]),
         `${boundCount} ${boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}`,
-        ...(device ? [tDev(REASON_LABEL_KEY[device.reason])] : []),
-        ...(live ? [live] : []),
       ].join(" · ")}
-      footer={
-        device && host.enabled ? (
-          <DeviceRowControl device={device} canControl={isAdmin} />
-        ) : undefined
-      }
       chips={
         <>
           <MetaChip tone={host.enabled ? "ok" : "idle"}>
             {host.enabled ? t("active") : t("disabled")}
           </MetaChip>
-          {device && (
-            <MetaChip tone={STATUS_ROW_TONE[device.status]} testId="device-status-chip">
-              {tDev(REASON_LABEL_KEY[device.reason])}
-            </MetaChip>
-          )}
           <MetaChip tone="idle">{t(KIND_LABEL_KEY[host.kind])}</MetaChip>
           <MetaChip tone="idle" className="tabular-nums">
             {boundCount} {boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}
@@ -439,11 +406,6 @@ function HostCard({
       meta={
         <>
           <MetaText mono>{host.slug}</MetaText>
-          {live && (
-            <MetaText mono title={live}>
-              {live}
-            </MetaText>
-          )}
           {host.kind === "ssh" && host.ssh_host && (
             <MetaText mono title={host.ssh_host}>
               {host.ssh_host}
@@ -525,10 +487,6 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
     queryKey: ["runtimes"],
     queryFn: () => api.runtimes.list(),
   });
-
-  // Nur je gepaarte Boxen stehen darin — ein Host ohne node-agent findet sich
-  // hier nicht wieder und bekommt darum keinen Schalter.
-  const devices = useDevices();
 
   const boundCount = (hostId: string) =>
     runtimesData?.runtimes.filter((rt) => rt.host?.id === hostId).length ?? 0;
@@ -661,7 +619,6 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
           <HostCard
             key={h.id}
             host={h}
-            device={devices.get(h.id)}
             boundCount={boundCount(h.id)}
             isAdmin={isAdmin}
             onEdit={() => setModalHost(h)}

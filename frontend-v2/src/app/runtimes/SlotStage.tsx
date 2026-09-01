@@ -26,6 +26,9 @@ import { useGpuSparkline } from "./useGpuSparkline";
 import { fmtCtx } from "@/lib/utils";
 import { openModelsTab } from "./modelsTab";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { DeviceModeStrip, useDevices } from "./DeviceControl";
+import { useAppStore } from "@/lib/store";
+import type { Device } from "@/lib/types";
 
 // typeLabel copied from RuntimeDetailPanel.tsx (same list, same reasoning —
 // no shared export exists yet, and this label text must not drift between
@@ -498,6 +501,31 @@ function NowBlock({ serving, live, sizeGb }: { serving: Runtime | null; live?: R
   );
 }
 
+// ── Geräte-Streifen ────────────────────────────────────────────────────────
+/**
+ * Der GPU-Modus-Schalter, sofern diese Box ihn überhaupt haben darf.
+ *
+ * Drei Bedingungen, alle drei aus echten Feldern (HONESTY RULE):
+ *  - `/nodes/devices` kennt die Box → sie hat einen node-agent. Ohne Agent
+ *    kann MC nichts stellen, also gibt es auch keinen Schalter (SSH-/WoL-
+ *    Boxen sehen aus wie bisher).
+ *  - Ampel nicht grau → MC weiss überhaupt etwas über den Zustand.
+ *  - Host erreichbar → bei einer schlafenden Box wäre der Schalter ein
+ *    Versprechen, das niemand einlöst. Die Kachel sagt daneben schon, dass
+ *    sie nicht erreichbar ist; ein bedienbarer Regler daneben widerspricht dem.
+ */
+function DeviceStrip({
+  device,
+  hostReachable,
+}: {
+  device?: Device;
+  hostReachable?: boolean;
+}) {
+  const currentUser = useAppStore((s) => s.currentUser);
+  if (!device || device.status === "grey" || hostReachable === false) return null;
+  return <DeviceModeStrip device={device} canControl={currentUser?.role === "admin"} />;
+}
+
 // ── Header ─────────────────────────────────────────────────────────────────
 
 function StageHeader({ group, serving, live, hostReachable }: { group: HostGroup; serving: Runtime | null; live?: Record<string, RuntimeLiveStatus>; hostReachable?: boolean }) {
@@ -579,8 +607,15 @@ function StagePlaceholder({ group }: { group: HostGroup }) {
 // Falls back to the generic hint when workerOf is absent (a paired agent
 // host that isn't (yet) a member of any runtime's declared topology).
 
-function WorkerTile({ group }: { group: HostGroup }) {
+function WorkerTile({ group, device }: { group: HostGroup; device?: Device }) {
   const t = useTranslations("runtimes.slotStage");
+  // Eigenes Erreichbarkeits-Signal — TanStack fasst die Abfrage mit der der
+  // TelemetryColumn zusammen, kostet also keinen zweiten Aufruf.
+  const { data: hostMetrics } = useQuery({
+    queryKey: ["hosts", group.host.id, "metrics"],
+    queryFn: () => api.hosts.metrics(group.host.id),
+    refetchInterval: 5_000,
+  });
   const workerOf = group.workerOf;
   const hint = workerOf
     ? workerOf.headSlug
@@ -612,6 +647,7 @@ function WorkerTile({ group }: { group: HostGroup }) {
         </div>
         <TelemetryColumn hostId={group.host.id} />
       </div>
+      <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
     </div>
   );
 }
@@ -648,12 +684,16 @@ export function SlotStage({
     refetchInterval: 5_000,
   });
 
+  // Eine Abfrage für die ganze Flotte, nicht eine je Kachel — TanStack teilt
+  // sie über den Schlüssel. Enthalten sind nur je gekoppelte Boxen.
+  const device = useDevices().get(group.host.id);
+
   if (!serving && readyRuntimes.length === 0) {
     // Phase 1a (Verbund-UI, 30.08.2026): a kind="agent" host (self-registering
     // node-agent, no SSH/lifecycle path) with nothing bound is real fleet
     // inventory — telemetry-only, not an empty slot to fill.
     if (group.host.kind === "agent" || group.workerOf) {
-      return <WorkerTile group={group} />;
+      return <WorkerTile group={group} device={device} />;
     }
     return <StagePlaceholder group={group} />;
   }
@@ -667,6 +707,9 @@ export function SlotStage({
         </div>
         <TelemetryColumn hostId={group.host.id} />
       </div>
+      {/* Zwischen Zustand und Rezept-Wechsel: der Modus gehört zur Box, nicht
+          zum Modell — darum unter dem Slot-Körper und über der Rezept-Zeile. */}
+      <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
       <SwitchRow group={group} serving={serving} live={live} siblings={readyRuntimes} sizeGb={sizeGb} />
     </div>
   );

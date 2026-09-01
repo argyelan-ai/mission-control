@@ -2214,7 +2214,7 @@
       "rowHeat": "Wärme",
       "rowPrefill": "Einlesen",
       "sameSpeed": "Alle vier Stufen schreiben gleich schnell. Gespart wird nur Strom und Wärme — nur das Einlesen langer Texte dauert etwas länger.",
-      "sameSpeedShort": "{tokens} — in jeder Stufe gleich. Gespart wird nur Strom und Wärme.",
+      "sameSpeedShort": "Gemessen: {tokens} in jeder Stufe — gespart wird nur Strom und Wärme.",
       "measuredNote": "Gemessen am 16.08.2026, Qwen38-27B auf einer Box. Einlesen-Aufschlag gegenüber normal.",
       "factGeneration": "Erzeugung",
       "factPrefill": "Einlesen",
@@ -2236,7 +2236,8 @@
       "deviceError": "Die Box meldet: {error}",
       "applyFailed": "Konnte nicht gespeichert werden. Bitte nochmal versuchen.",
       "notReporting": "Diese Box hat noch keine Werte gemeldet.",
-      "readOnlyHint": "Nur Administratoren können den Modus umstellen."
+      "readOnlyHint": "Nur Administratoren können den Modus umstellen.",
+      "stripLabel": "GPU-Modus"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint nicht erkannt",

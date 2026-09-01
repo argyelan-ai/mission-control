@@ -2214,7 +2214,7 @@
       "rowHeat": "Heat",
       "rowPrefill": "Read-in",
       "sameSpeed": "All four steps write at the same speed. What you save is power and heat — only reading long inputs takes a little longer.",
-      "sameSpeedShort": "{tokens} — the same on every step. What you save is power and heat.",
+      "sameSpeedShort": "Measured: {tokens} on every step — what you save is power and heat.",
       "measuredNote": "Measured 16 Aug 2026, Qwen38-27B on one box. Read-in penalty relative to normal.",
       "factGeneration": "Generation",
       "factPrefill": "Read-in",
@@ -2236,7 +2236,8 @@
       "deviceError": "The box reports: {error}",
       "applyFailed": "Could not be saved. Please try again.",
       "notReporting": "This box hasn't reported any values yet.",
-      "readOnlyHint": "Only administrators can change the mode."
+      "readOnlyHint": "Only administrators can change the mode.",
+      "stripLabel": "GPU mode"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint not detected",
