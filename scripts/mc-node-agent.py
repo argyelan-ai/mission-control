@@ -22,7 +22,7 @@ ONE FILE, STANDARD LIBRARY ONLY, Python >= 3.9. Design constraints (Mark,
 
 Speicher-Diät (Mark, 30.08.2026 — GB10 has UNIFIED memory: every MB this
 agent holds is a MB the LLM's context window doesn't get; measured live on
-GX10 hardware, not estimated):
+einer echten Box hardware, not estimated):
 
     Peak RSS (VmHWM) before: 26.7 MB  ->  after: see git log for the exact
     before/after ru_maxrss/VmHWM measurement this round's commits carry.
@@ -64,6 +64,57 @@ service):
 `--install` needs sudo/root (it writes a unit under /etc/systemd/system and
 calls systemctl) — running it as a normal user prints an error and exits
 instead of silently doing nothing.
+
+Steuerung freischalten — `--allow-control` (Rechte-Nachtrag 01.09.2026,
+nach dem Live-Test auf einer echten Box: "RTNETLINK answers: Operation not permitted"):
+
+Der Dienst läuft absichtlich als der aufrufende Benutzer, nicht als root
+(Prinzip der geringsten Rechte, siehe UNIT_TEMPLATE weiter unten). Damit
+kann der Agent den Gerätezustand MELDEN, aber nichts SETZEN — MTU, sysctl,
+systemctl und der GPU-Modus brauchen alle root. Der Agent zu root zu machen
+wäre die bequeme Antwort und die falsche: er spricht mit dem Netz.
+
+Stattdessen ruft er die fünf Steuer-Aktionen über `sudo -n` auf, und
+`--allow-control` schreibt die dazu passende Regel nach
+/etc/sudoers.d/mc-node-agent:
+
+    sudo python3 mc-node-agent.py --mc-url https://mc… --install --allow-control
+
+Erlaubt sind GENAU diese fünf, jede mit absolutem Pfad und festen Argumenten:
+
+  1. /usr/local/sbin/mc-gpu-mode.sh boost|normal|eco|eco+   GPU-Takt-Deckel
+  2. sysctl -w vm.min_free_kbytes=*                          Speicher-Reserve
+  3. systemctl enable|disable|start|stop earlyoom            OOM-Wächter
+  4. bash /usr/local/sbin/latency-tune.sh                    Latenz-Abstimmung
+  5. ip link set * mtu *                                     MTU
+
+Warum genau diese: sie sind eins zu eins die fünf Felder des
+`desired_state` aus dem Geräte-Vertrag (docs/plans/2026-09-01-geraete-
+steuerung-vertrag.md) — mehr kann MC gar nicht anfordern, also darf auch
+nichts mehr erlaubt sein. Die Pfade stammen aus derselben
+control_binary()-Auflösung wie die echten Aufrufe, damit Regel und Aufruf
+nicht auseinanderlaufen können.
+
+Bewusst NICHT in der Regel: `tee`, `sh`, `sed`, ein nacktes `bash` oder
+irgendein Befehl mit freiem Pfad — jedes davon wäre über Umwege volles
+root. `bash` steht nur mit dem einen fest verdrahteten Skript als Argument
+da, und `sysctl` nur mit diesem einen Schlüssel.
+
+`--allow-control` lockert ausserdem die systemd-Zwangsjacke an genau zwei
+Stellen, weil Steuern sonst unmöglich ist — nicht aus Nachlässigkeit:
+`NoNewPrivileges` muss auf `no` (das Flag verbietet jedes setuid-Programm und
+damit sudo — live belegt auf einer echten Box, 01.09.2026), und die Speichergrenze steigt
+von 32 MB auf 96 MB, weil sudo und sein Kindprozess im selben cgroup zählen
+und der erste `systemctl`-Aufruf sonst den OOM-Killer auslöst statt zu
+wirken. Alles andere (Nice, IOSchedulingClass, CPUQuota) bleibt unverändert;
+welche weiteren Härtungs-Flags den Steuer-Weg brechen würden, steht bei
+render_unit().
+
+OHNE `--allow-control` ändert sich nichts: der Agent meldet weiter, setzt
+nichts, und die Zwangsjacke bleibt so streng wie bisher. Steuerung ist eine bewusste Entscheidung des Betreibers, kein
+Nebeneffekt einer Installation. Fehlt die Regel, scheitert jede Setz-Aktion
+mit einer verständlichen Meldung in `device_state.last_error` statt mit
+einem rohen Exit-Code — der Agent stürzt nie ab.
 """
 from __future__ import annotations
 
@@ -126,6 +177,39 @@ MTU_MAX = 9_000                     # Jumbo-Frames
 # Setz-Befehle dürfen hängen (systemctl wartet auf den Dienst) — hart deckeln,
 # damit die Heartbeat-Schleife nie stehen bleibt.
 SET_CMD_TIMEOUT_S = 20
+
+# Rechte-Nachtrag 01.09.2026 (Live-Test auf einer echten Box: "RTNETLINK answers:
+# Operation not permitted"). Der Dienst läuft als normaler Benutzer — Melden
+# geht damit, Setzen nicht. Statt den Agenten zu root zu machen, ruft er die
+# fünf Aktionen über `sudo -n` auf; erlaubt werden sie einzeln in
+# /etc/sudoers.d/mc-node-agent (nur mit --allow-control, siehe Moduldoc).
+SUDOERS_PATH = Path("/etc/sudoers.d/mc-node-agent")
+# Absolute Pfade, deterministisch aus einer festen Kandidatenliste — bewusst
+# OHNE $PATH: die sudoers-Regel gilt für den aufgelösten Pfad, und sudo löst
+# über secure_path auf, nicht über den PATH des Dienstes. Beide Seiten müssen
+# denselben Pfad meinen, sonst greift die Regel nicht und niemand sieht warum.
+CONTROL_BINARY_CANDIDATES = {
+    "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
+    "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
+    "ip": ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip"),
+    "bash": ("/usr/bin/bash", "/bin/bash"),
+}
+# Diese Textbausteine schreibt sudo selbst, wenn es ablehnt. Sie sind der
+# Unterschied zwischen "Regel fehlt" und "Befehl selbst ist gescheitert" —
+# und damit zwischen einer verständlichen und einer nutzlosen Meldung.
+_SUDO_REFUSAL_MARKERS = (
+    "password is required",
+    "a terminal is required",
+    "not allowed to execute",
+    "may not run",
+    "no tty present",
+    "is not in the sudoers file",
+    "sudo: unable to",
+)
+SUDO_MISSING_RULE_HINT = (
+    "keine Berechtigung: sudoers-Regel fehlt — Installation mit "
+    "`sudo python3 mc-node-agent.py --mc-url … --install --allow-control` wiederholen"
+)
 
 SYSTEM_TOKEN_PATH = Path("/etc/mc-node-agent/token")
 USER_TOKEN_PATH = Path.home() / ".config" / "mc-node-agent" / "token"
@@ -362,7 +446,7 @@ def parse_aspm_policy_performance(text: str) -> bool:
 def parse_default_iface(proc_net_route: str) -> str | None:
     """Schnittstelle der Standard-Route aus /proc/net/route.
 
-    Die Schnittstelle heisst nicht überall gleich (GX10: enP7s7, Spark: enp1s0)
+    Die Schnittstelle heisst nicht überall gleich (je nach Board z. B. enP7s7 oder enp1s0)
     — deshalb nachschlagen statt festverdrahten. Ziel 00000000 = Default-Route;
     bei mehreren gewinnt die mit der kleinsten Metrik (Feld 7), wie im Kernel.
     """
@@ -790,22 +874,60 @@ def collect_device_state(
 #  - Idempotent: was schon stimmt, wird nicht angefasst.
 
 
+def control_binary(name: str, exists=None) -> str:
+    """Absoluter Pfad zu einem der vier Systembefehle.
+
+    Erster existierender Kandidat gewinnt; existiert keiner, wird der erste
+    zurückgegeben, damit die Fehlermeldung einen konkreten Pfad nennt statt
+    eines nackten Namens. Dieselbe Funktion beliefert den Laufzeit-Aufruf UND
+    die sudoers-Datei — sie können deshalb gar nicht auseinanderlaufen.
+    """
+    candidates = CONTROL_BINARY_CANDIDATES[name]
+    check = exists if exists is not None else os.path.exists
+    for path in candidates:
+        if check(path):
+            return path
+    return candidates[0]
+
+
+def _privileged(argv: list[str]) -> list[str]:
+    """Setzt `sudo -n` davor, solange wir nicht schon root sind.
+
+    `-n` heisst: niemals nach einem Passwort fragen. Ein Dienst hat kein
+    Terminal — ohne `-n` würde er hängen statt zu scheitern.
+    """
+    if os.geteuid() == 0:
+        return argv
+    return ["sudo", "-n"] + argv
+
+
 def _run_set_cmd(argv: list[str]) -> str | None:
     """Führt eine der fest verdrahteten Aktionen aus. Rückgabe: None bei
-    Erfolg, sonst eine kurze Fehlerbeschreibung für last_error (u.a. der
-    typische Fall "läuft nicht als root")."""
+    Erfolg, sonst eine kurze Fehlerbeschreibung für last_error.
+
+    Der wichtigste Fall ist die fehlende sudoers-Regel: `sudo -n` gibt dann
+    Exit 1 mit "a password is required" zurück — für den Betreiber unbrauchbar.
+    Daraus wird hier ein Satz, der sagt, was zu tun ist.
+    """
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, timeout=SET_CMD_TIMEOUT_S
         )
     except FileNotFoundError:
+        if argv[0] == "sudo":
+            return "sudo nicht vorhanden — Steuerung braucht sudo oder einen Dienst als root"
         return f"{argv[0]} nicht vorhanden"
     except (subprocess.TimeoutExpired, OSError) as e:
         return f"{argv[0]} fehlgeschlagen: {e}"
     if proc.returncode == 0:
         return None
     detail = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
-    return f"{argv[0]} -> Exit {proc.returncode}: {detail[:200]}"
+    if argv[0] == "sudo" and any(m in detail.lower() for m in _SUDO_REFUSAL_MARKERS):
+        return SUDO_MISSING_RULE_HINT
+    # Auch ohne sudo-Schicht (Dienst läuft als root) bleibt "not permitted"
+    # möglich — etwa wenn der Kernel die Änderung ablehnt. Roh durchreichen,
+    # das ist dann die ehrlichste Information.
+    return f"{argv[-1] if argv[0] == 'sudo' else argv[0]} -> Exit {proc.returncode}: {detail[:200]}"
 
 
 def _valid_int(value: object, low: int, high: int) -> int | None:
@@ -833,7 +955,7 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
         if not isinstance(mode, str) or mode not in GPU_MODES:
             errors.append(f"gpu_mode {mode!r} abgelehnt (erlaubt: {', '.join(GPU_MODES)})")
         elif mode != current.get("gpu_mode"):
-            err = _run_set_cmd([GPU_MODE_SCRIPT, mode])
+            err = _run_set_cmd(_privileged([GPU_MODE_SCRIPT, mode]))
             if err:
                 errors.append(f"gpu_mode={mode}: {err}")
             else:
@@ -847,7 +969,9 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
                 f"(ganze Zahl {MIN_FREE_KBYTES_MIN}..{MIN_FREE_KBYTES_MAX} erwartet)"
             )
         elif value != current.get("min_free_kbytes"):
-            err = _run_set_cmd(["sysctl", "-w", f"vm.min_free_kbytes={value}"])
+            err = _run_set_cmd(_privileged(
+                [control_binary("sysctl"), "-w", f"vm.min_free_kbytes={value}"]
+            ))
             if err:
                 errors.append(f"min_free_kbytes={value}: {err}")
             else:
@@ -861,7 +985,9 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
             is_active = current.get("oom_guard") == "active"
             if want != is_active:
                 verb = "enable" if want else "disable"
-                err = _run_set_cmd(["systemctl", verb, "--now", OOM_GUARD_UNIT])
+                err = _run_set_cmd(_privileged(
+                    [control_binary("systemctl"), verb, "--now", OOM_GUARD_UNIT]
+                ))
                 if err:
                     errors.append(f"oom_guard={want}: {err}")
                 else:
@@ -872,7 +998,7 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
         if not isinstance(want, bool):
             errors.append(f"latency_tune {want!r} abgelehnt (true/false erwartet)")
         elif want and not current.get("latency_tune"):
-            err = _run_set_cmd(["bash", LATENCY_TUNE_SCRIPT])
+            err = _run_set_cmd(_privileged([control_binary("bash"), LATENCY_TUNE_SCRIPT]))
             if err:
                 errors.append(f"latency_tune: {err}")
             else:
@@ -894,7 +1020,9 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
         elif not iface or not _iface_exists(iface):
             errors.append("mtu: keine Standard-Route-Schnittstelle gefunden")
         elif value != current_mtu.get("value"):
-            err = _run_set_cmd(["ip", "link", "set", iface, "mtu", str(value)])
+            err = _run_set_cmd(_privileged(
+                [control_binary("ip"), "link", "set", iface, "mtu", str(value)]
+            ))
             if err:
                 errors.append(f"mtu={value} auf {iface}: {err}")
             else:
@@ -1192,15 +1320,77 @@ RestartSec=30
 # before MemoryMax (the HARD limit) would ever have to OOM-kill it.
 Nice=10
 IOSchedulingClass=idle
-MemoryHigh=16M
-MemoryMax=32M
-TasksMax=8
+MemoryHigh={memory_high}
+MemoryMax={memory_max}
+TasksMax={tasks_max}
 CPUQuota=10%
-NoNewPrivileges=true
-
+{no_new_privileges}
 [Install]
 WantedBy=multi-user.target
 """
+
+# Genau die Zeilen, die sich zwischen Melde- und Steuer-Betrieb unterscheiden.
+# Alles andere an der Zwangsjacke bleibt in BEIDEN Fällen gleich.
+_UNIT_REPORT_ONLY = {
+    "memory_high": "16M",
+    "memory_max": "32M",
+    "tasks_max": "8",
+    "no_new_privileges": (
+        "# Rechte-Sperre: der Prozess darf nie Rechte dazugewinnen. Gilt im\n"
+        "# reinen Melde-Betrieb (Standard) — er braucht keine.\n"
+        "NoNewPrivileges=true\n"
+    ),
+}
+_UNIT_WITH_CONTROL = {
+    # sudo + Kindprozess (systemctl/ip/bash) laufen IM SELBEN cgroup und
+    # zählen auf dieselbe Speichergrenze. Der Agent liegt bei ~27 MB Spitze —
+    # bei 32 MB hart würde der erste `systemctl enable` den cgroup-OOM-Killer
+    # auslösen, und zwar ohne Fehlermeldung im last_error. Das wäre genau der
+    # stille Ausfall, den wir sonst überall jagen. Der Deckel steigt deshalb
+    # nur im Steuer-Betrieb, und nur so weit, dass ein kurzlebiger Helfer
+    # hineinpasst — die Zwangsjacke bleibt eine Zwangsjacke.
+    "memory_high": "48M",
+    "memory_max": "96M",
+    # sudo + Kind = zwei zusätzliche Tasks, systemctl bringt eigene Threads mit.
+    "tasks_max": "16",
+    "no_new_privileges": (
+        "# Rechte-Sperre AUS — bewusste Abwägung, nicht Nachlässigkeit:\n"
+        "# NoNewPrivileges verbietet dem Prozess grundsätzlich, Rechte\n"
+        "# dazuzugewinnen, und blockiert damit jedes setuid-Programm — also\n"
+        "# auch sudo (live belegt auf einer echten Box, 01.09.2026: \'The \"no new\n"
+        "# privileges\" flag is set, which prevents sudo from running as\n"
+        "# root\'). Mit --allow-control SOLL der Agent genau fünf Aktionen\n"
+        "# als root auslösen können; die Grenze zieht dann die sudoers-Regel\n"
+        "# (/etc/sudoers.d/mc-node-agent), nicht mehr dieses Flag. Ohne\n"
+        "# --allow-control bleibt es auf true.\n"
+        "NoNewPrivileges=no\n"
+    ),
+}
+
+
+def render_unit(mc_url: str, user: str, python: str, script: str, allow_control: bool = False) -> str:
+    """Der Inhalt der systemd-Unit. Reine Funktion, damit der Unterschied
+    zwischen Melde- und Steuer-Betrieb direkt prüfbar ist.
+
+    Härtungs-Flags, die den Steuer-Weg brechen WÜRDEN, falls sie jemand
+    später ergänzt — hier festgehalten, damit es niemand einzeln im Feld
+    herausfinden muss (Stand 01.09.2026 ist keines davon in dieser Unit):
+
+      NoNewPrivileges=true   blockiert sudo komplett  -> hier abhängig gemacht
+      RestrictSUIDSGID=yes   blockiert sudo (setuid)  -> nicht setzen
+      ProtectKernelTunables=yes  macht /proc/sys nur-lesbar -> sysctl -w scheitert
+      ProtectSystem=strict   /etc + /usr nur-lesbar   -> sudoers/Skripte lesbar,
+                             aber sysctl-Schreibwege dicht -> nicht setzen
+      PrivateDevices=yes     versteckt /dev           -> latency-tune braucht
+                             /dev/cpu_dma_latency
+      CapabilityBoundingSet= leer würde CAP_NET_ADMIN entfernen -> ip link scheitert
+
+    Nicht betroffen (bremsen nur, blockieren nicht): Nice, IOSchedulingClass,
+    CPUQuota. Ein Setz-Befehl darf dadurch langsamer werden, SET_CMD_TIMEOUT_S
+    (20 s) ist dafür reichlich bemessen.
+    """
+    values = _UNIT_WITH_CONTROL if allow_control else _UNIT_REPORT_ONLY
+    return UNIT_TEMPLATE.format(user=user, python=python, script=script, mc_url=mc_url, **values)
 
 
 def _default_install_user() -> str:
@@ -1225,7 +1415,127 @@ def _user_token_path_for(user: str) -> Path:
     return home / ".config" / "mc-node-agent" / "token"
 
 
-def install_systemd_unit(mc_url: str, run_as_user: str) -> None:
+SUDOERS_HEADER = """# Mission Control node-agent — Geräte-Steuerung (--allow-control)
+#
+# Erzeugt von mc-node-agent.py. NICHT von Hand bearbeiten: bei der nächsten
+# Installation wird die Datei überschrieben.
+#
+# Warum es diese Datei gibt: der Dienst läuft als normaler Benutzer (Prinzip
+# der geringsten Rechte). Melden geht damit, Setzen nicht — MTU, sysctl,
+# systemctl und der GPU-Modus brauchen alle root. Statt den ganzen Agenten zu
+# root zu machen, sind hier GENAU die fünf Aktionen erlaubt, die MC steuern
+# kann, jede mit festem Pfad und festen Argumenten.
+#
+# Bewusst NICHT erlaubt: tee, sh, sed, ein nacktes bash, oder irgendein
+# Befehl mit freiem Pfad. Jedes davon wäre über Umwege volles root.
+# `bash` steht nur mit dem einen fest verdrahteten Skript als Argument da.
+"""
+
+
+def render_sudoers(user: str, exists=None) -> str:
+    """Der Inhalt von /etc/sudoers.d/mc-node-agent für `user`.
+
+    Reine Funktion (kein Schreiben), damit sie direkt geprüft werden kann.
+    Die Pfade kommen aus derselben control_binary()-Auflösung wie die echten
+    Aufrufe — die Regel kann deshalb nicht am tatsächlich ausgeführten Pfad
+    vorbeigehen.
+    """
+    sysctl = control_binary("sysctl", exists=exists)
+    systemctl = control_binary("systemctl", exists=exists)
+    ip = control_binary("ip", exists=exists)
+    bash = control_binary("bash", exists=exists)
+
+    cmds: list[str] = []
+    # 1. GPU-Modus: die vier Modi einzeln, kein Platzhalter — ein `*` würde
+    #    jedes Argument erlauben, das das Skript je bekommen könnte.
+    cmds += [f"{GPU_MODE_SCRIPT} {mode}" for mode in GPU_MODES]
+    # 2. Speicher-Reserve: nur genau dieser eine sysctl-Schlüssel.
+    cmds.append(f"{sysctl} -w vm.min_free_kbytes=*")
+    # 3. OOM-Wächter: nur die eine Unit. `--now` steht mit drin, weil der
+    #    Agent genau so aufruft — eine Regel, die der echte Aufruf nicht
+    #    trifft, wäre wertlos.
+    for verb in ("enable", "disable", "start", "stop"):
+        cmds.append(f"{systemctl} {verb} {OOM_GUARD_UNIT}")
+    # `--now` nur bei enable/disable — nur die kennen den Schalter, und genau
+    # so ruft der Agent auf (einschalten UND starten in einem Schritt).
+    for verb in ("enable", "disable"):
+        cmds.append(f"{systemctl} {verb} --now {OOM_GUARD_UNIT}")
+    # 4. Latenz-Abstimmung: bash NUR mit diesem einen Skript als Argument.
+    cmds.append(f"{bash} {LATENCY_TUNE_SCRIPT}")
+    # 5. MTU: Schnittstelle und Wert sind Platzhalter, der Rest steht fest.
+    cmds.append(f"{ip} link set * mtu *")
+
+    lines = [SUDOERS_HEADER]
+    lines += [f"{user} ALL=(root) NOPASSWD: {cmd}" for cmd in cmds]
+    return "\n".join(lines) + "\n"
+
+
+def _visudo_check(path: Path) -> str | None:
+    """Prüft eine sudoers-Datei mit `visudo -c -f`. None = in Ordnung."""
+    try:
+        proc = subprocess.run(
+            ["visudo", "-c", "-f", str(path)],
+            capture_output=True, text=True, timeout=SET_CMD_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return "visudo nicht gefunden — ohne Syntaxprüfung wird nichts installiert"
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return f"visudo-Prüfung fehlgeschlagen: {e}"
+    if proc.returncode == 0:
+        return None
+    return (proc.stderr or proc.stdout or "").strip()[:500]
+
+
+def install_sudoers(run_as_user: str) -> None:
+    """Schreibt /etc/sudoers.d/mc-node-agent — nur mit --allow-control.
+
+    Reihenfolge mit Absicht: erst in eine Datei AUSSERHALB von sudoers.d
+    schreiben, dort mit `visudo -c` prüfen, und erst danach an den echten
+    Platz verschieben. Eine kaputte Datei in sudoers.d legt JEDES sudo auf
+    der Box lahm — der Nutzer könnte sich selbst aussperren. So gibt es
+    dieses Zeitfenster gar nicht erst. Nach dem Verschieben wird noch einmal
+    geprüft und im Zweifel sofort gelöscht.
+    """
+    if os.geteuid() != 0:
+        log.error("--allow-control braucht root (schreibt %s). Bitte mit sudo ausführen.", SUDOERS_PATH)
+        raise SystemExit(1)
+
+    content = render_sudoers(run_as_user)
+    staging = SYSTEM_TOKEN_PATH.parent / "sudoers.staged"
+    staging.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    staging.write_text(content, encoding="utf-8")
+    os.chmod(staging, 0o440)
+
+    problem = _visudo_check(staging)
+    if problem:
+        staging.unlink(missing_ok=True)
+        log.error("sudoers-Regel abgelehnt, nichts installiert: %s", problem)
+        raise SystemExit(1)
+
+    SUDOERS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    os.replace(staging, SUDOERS_PATH)
+    os.chmod(SUDOERS_PATH, 0o440)
+    try:
+        os.chown(SUDOERS_PATH, 0, 0)
+    except OSError as e:
+        log.warning("chown root:root auf %s fehlgeschlagen: %s", SUDOERS_PATH, e)
+
+    problem = _visudo_check(SUDOERS_PATH)
+    if problem:
+        # Sicherheitsnetz: falls die Datei am echten Platz doch beanstandet
+        # wird (etwa wegen einer Kollision mit einer anderen Regel), sofort
+        # weg damit — lieber keine Steuerung als ein kaputtes sudo.
+        SUDOERS_PATH.unlink(missing_ok=True)
+        log.error("sudoers-Regel nach dem Einbau beanstandet, wieder entfernt: %s", problem)
+        raise SystemExit(1)
+
+    log.info(
+        "Steuerung freigeschaltet: %s erlaubt %s genau die fünf MC-Aktionen (sonst nichts).",
+        SUDOERS_PATH, run_as_user,
+    )
+
+
+def install_systemd_unit(mc_url: str, run_as_user: str, allow_control: bool = False) -> None:
     if os.geteuid() != 0:
         log.error(
             "--install braucht root (schreibt %s + ruft systemctl auf). "
@@ -1257,11 +1567,12 @@ def install_systemd_unit(mc_url: str, run_as_user: str) -> None:
     _chown_to_user(SYSTEM_TOKEN_PATH.parent, run_as_user)
 
     script_path = Path(__file__).resolve()
-    unit = UNIT_TEMPLATE.format(
+    unit = render_unit(
+        mc_url=mc_url,
         user=run_as_user,
         python=sys.executable,
-        script=script_path,
-        mc_url=mc_url,
+        script=str(script_path),
+        allow_control=allow_control,
     )
     SYSTEMD_UNIT_PATH.write_text(unit, encoding="utf-8")
     os.chmod(SYSTEMD_UNIT_PATH, 0o644)
@@ -1405,7 +1716,8 @@ def run_loop(mc_url: str, token: str) -> None:
 
 # ── CLI (manual sys.argv parsing — no argparse, see Speicher-Diät note) ──────
 
-_USAGE = """usage: mc-node-agent.py [-h] [--mc-url URL] [--pair CODE] [--install] [--user USER]
+_USAGE = """usage: mc-node-agent.py [-h] [--mc-url URL] [--pair CODE] [--install]
+                        [--allow-control] [--user USER]
 
 Mission Control Node Agent — push telemetry (Fleet & Rezepte v2, Phase 1).
 
@@ -1414,6 +1726,12 @@ Mission Control Node Agent — push telemetry (Fleet & Rezepte v2, Phase 1).
   --pair CODE    Pairing-Code einlösen (aus POST /api/v1/nodes/pairing-codes)
                  und Token speichern
   --install      Als systemd-Dienst installieren — braucht sudo/root
+  --allow-control
+                 Steuerung freischalten: schreibt /etc/sudoers.d/mc-node-agent
+                 mit GENAU den fünf MC-Aktionen (GPU-Modus, min_free_kbytes,
+                 earlyoom, latency-tune, MTU) und sonst nichts. Ohne diesen
+                 Schalter meldet der Agent nur und setzt nie etwas.
+                 Braucht sudo/root.
   --user USER    systemd User= für --install (Default: $SUDO_USER, sonst der
                  aktuelle User)
   -h, --help     Diese Hilfe anzeigen
@@ -1421,12 +1739,15 @@ Mission Control Node Agent — push telemetry (Fleet & Rezepte v2, Phase 1).
 
 
 class _Args:
-    __slots__ = ("mc_url", "pair", "install", "user")
+    __slots__ = ("mc_url", "pair", "install", "allow_control", "user")
 
     def __init__(self) -> None:
         self.mc_url: str | None = os.environ.get("MC_URL")
         self.pair: str | None = None
         self.install: bool = False
+        # Standard ist AUS: Steuerung ist eine bewusste Entscheidung des
+        # Betreibers, kein Nebeneffekt einer Installation.
+        self.allow_control: bool = False
         self.user: str | None = None
 
 
@@ -1437,7 +1758,7 @@ def _arg_error(msg: str) -> "None":
 
 
 def parse_args(argv: list[str] | None = None) -> _Args:
-    """Manual parser for this agent's 4 flags — only the space-separated
+    """Manual parser for this agent's 5 flags — only the space-separated
     `--flag value` form is supported (matches every call site in this repo;
     `--flag=value` is not implemented, kept out on purpose for simplicity)."""
     argv = sys.argv[1:] if argv is None else argv
@@ -1460,6 +1781,8 @@ def parse_args(argv: list[str] | None = None) -> _Args:
             args.pair = argv[i]
         elif arg == "--install":
             args.install = True
+        elif arg == "--allow-control":
+            args.allow_control = True
         elif arg == "--user":
             i += 1
             if i >= len(argv):
@@ -1490,13 +1813,25 @@ def main(argv: list[str] | None = None) -> int:
     else:
         token = load_token()
 
-    if args.install:
+    if args.install or args.allow_control:
         run_as_user = args.user or _default_install_user()
-        try:
-            install_systemd_unit(mc_url, run_as_user)
-        except subprocess.CalledProcessError as e:
-            log.error("systemctl-Aufruf fehlgeschlagen: %s", e)
-            return 1
+        if args.install:
+            try:
+                install_systemd_unit(mc_url, run_as_user, allow_control=args.allow_control)
+            except subprocess.CalledProcessError as e:
+                log.error("systemctl-Aufruf fehlgeschlagen: %s", e)
+                return 1
+        # Bewusst NACH dem Dienst: scheitert die sudoers-Regel, läuft der
+        # Agent trotzdem und meldet weiter — nur setzen kann er dann nicht.
+        # Umgekehrt wäre eine gescheiterte Regel ein Totalausfall.
+        if args.allow_control:
+            install_sudoers(run_as_user)
+        else:
+            log.info(
+                "Steuerung NICHT freigeschaltet (Standard). Der Agent meldet den "
+                "Gerätezustand, setzt aber nichts. Zum Freischalten: erneut mit "
+                "--install --allow-control ausführen."
+            )
         return 0
 
     if not token:
