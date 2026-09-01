@@ -263,6 +263,7 @@ pypdfium2==5.8.0
     # via pdfplumber
 pyperclip==1.11.0
     # via fastmcp-slim
+pyte==0.8.2
 pytest==9.0.3
     # via
     #   mission-control-backend (pyproject.toml)
