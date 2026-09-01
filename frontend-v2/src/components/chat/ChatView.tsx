@@ -31,6 +31,7 @@ import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
 import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
 import { ChatMessage } from "./ChatMessage";
+import { PreviewRow } from "./PreviewRow";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
@@ -1000,6 +1001,11 @@ export function ChatView({
                 echoStatus={echo.status}
               />
             ))}
+
+            {/* Die Live-Vorschau kommt zuletzt: sie ist die Antwort, die
+                gerade entsteht — nach allem Bestaetigten und nach dem eigenen
+                Echo, auf das sie antwortet. */}
+            {stream.preview && <PreviewRow preview={stream.preview} />}
           </div>
 
           {prompt && (
