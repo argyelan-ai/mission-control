@@ -171,6 +171,7 @@ function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamRe
     echoFailed: vi.fn(),
     echoAgentStarting: vi.fn(),
     awaitingResponse: false,
+    preview: null,
     ...overrides,
   };
 }
@@ -947,6 +948,32 @@ describe("ChatView", () => {
     // A bubble that outlived a failed send would claim a delivery that never
     // happened — worse than the delay it was meant to hide.
     await waitFor(() => expect(echoFailed).toHaveBeenCalledWith("geht nicht"));
+  });
+
+  it("zeigt die Live-Vorschau als laufende Antwort NACH dem Verlauf, sichtbar markiert", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "Ich lese gerade foo.py …", source: "pane" },
+      })
+    );
+    renderChatView();
+
+    const row = screen.getByTestId("preview-row");
+    expect(row).toHaveTextContent("Ich lese gerade foo.py …");
+    // Sichtbar als Vorschau gekennzeichnet — nie verwechselbar mit einer
+    // bestaetigten Antwort aus dem Transkript.
+    expect(row).toHaveTextContent("Live preview");
+    expect(screen.getByText("Hallo!").compareDocumentPosition(row)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("rendert ohne Vorschau keine Vorschau-Zeile", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], preview: null }));
+    renderChatView();
+    expect(screen.queryByTestId("preview-row")).not.toBeInTheDocument();
   });
 
   it("renders a pending echo as a dimmed bubble after the real timeline", () => {
