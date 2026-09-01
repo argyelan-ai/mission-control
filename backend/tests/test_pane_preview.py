@@ -189,3 +189,32 @@ def test_anchor_whose_tail_wraps_across_two_screen_lines_still_cuts_after_it():
         "Kilauea auf Hawaii.\r\n"
     )
     assert preview.text_after(anchor) == ""
+
+
+def test_italic_grey_thinking_summary_is_not_content():
+    """omp zeigt die Denk-Zusammenfassung kursiv+grau — kein Antworttext.
+
+    Live-Gate 02.09.2026: "Same format as before, German, 4 sentences." stand
+    in drei Vorschau-Events, in der fertigen Antwort aber nie.
+    """
+    p = PanePreview(80, 10)
+    p.feed(
+        "\x1b[3;38;2;156;163;176mSame format as before, German, 4 sentences.\x1b[39;23m\r\n"
+        "\r\n"
+        "Ein Geysir ist eine heisse Quelle, die Wasser ausstoesst.\r\n"
+    )
+    assert p.text() == "Ein Geysir ist eine heisse Quelle, die Wasser ausstoesst."
+
+
+def test_a_single_italic_word_inside_a_normal_line_stays():
+    """Sabotage-Gegenprobe: nur GANZ kursive Zeilen sind Denk-Zeilen —
+    ein kursives Wort mitten im Satz bleibt Inhalt."""
+    p = PanePreview(80, 10)
+    p.feed("Das ist \x1b[3mwirklich\x1b[23m wichtig, sagte er laut.\r\n")
+    assert p.text() == "Das ist wirklich wichtig, sagte er laut."
+
+
+def test_a_lone_spinner_glyph_is_furniture():
+    p = PanePreview(80, 10)
+    p.feed("Ein Anfang der Antwort.\r\n\r\n ⠼\r\n")
+    assert p.text() == "Ein Anfang der Antwort."

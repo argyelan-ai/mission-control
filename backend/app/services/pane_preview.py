@@ -42,7 +42,7 @@ _FURNITURE = re.compile(
     | ^\s*⏵⏵                                 # Berechtigungs-Hinweis
     | ^\s*⎿\s*Tip:                           # eingeblendete Tipps
     | (bypass\ permissions|esc\ to\ interrupt|⟦esc⟧|for\ agents)
-    | ^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏·✻✽✢✶✳✻*]\s            # Spinner-Zeilen
+    | ^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏·✻✽✢✶✳✻*](\s|$)        # Spinner-Zeilen (auch allein)
     | ^\s*\w+…\s*$                           # "Working…", "Germinating…"
     | ^\s*\S+\ for\ \d+s                     # "Baked for 2s · done"
     """,
@@ -80,12 +80,25 @@ class PanePreview:
         self._stream.feed(chunk)
 
     def _lines(self) -> list[str]:
-        rows = [
-            "".join(row[x].data if x in row else " " for x in range(self.cols)).rstrip()
-            for row in self._screen.history.top
-        ]
-        rows += [line.rstrip() for line in self._screen.display]
-        return rows
+        rows = list(self._screen.history.top)
+        rows += [self._screen.buffer[y] for y in range(self.rows)]
+        return [self._row_text(row) for row in rows]
+
+    def _row_text(self, row) -> str:
+        """Eine Bildschirmzeile als Text — oder leer, wenn sie NUR aus
+        kursiven Zeichen besteht.
+
+        omp zeichnet die Zusammenfassung seines Denkens kursiv und grau, den
+        Antworttext aufrecht. Die Denk-Zeile ist kein Inhalt (Live-Gate
+        02.09.2026: sie stand in der Vorschau, in der Antwort nie). Ein
+        einzelnes kursives Wort in einer sonst aufrechten Zeile bleibt.
+        """
+        chars = [row[x] if x in row else None for x in range(self.cols)]
+        text = "".join(c.data if c is not None else " " for c in chars).rstrip()
+        inked = [c for c in chars if c is not None and c.data.strip()]
+        if inked and all(c.italics for c in inked):
+            return ""
+        return text
 
     def text(self) -> str:
         """Der sichtbare Inhalt ohne den Rahmen der Oberflaeche."""
