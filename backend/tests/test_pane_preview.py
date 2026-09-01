@@ -174,3 +174,18 @@ def test_steering_box_of_queued_operator_text_is_furniture():
         "1. Ein echter Listenpunkt danach bleibt.\r\n"
     )
     assert preview.text() == "● Antwort laeuft noch.\n1. Ein echter Listenpunkt danach bleibt."
+
+
+def test_anchor_whose_tail_wraps_across_two_screen_lines_still_cuts_after_it():
+    """Live 02.09.2026: der Schwanz des Ankers lag ueber einem Umbruch
+    ('…sowie der' | 'Kilauea auf Hawaii.') — keine Zeile enthielt ihn, der
+    Schnitt fiel auf den KOPF in Zeile 1, und die Vorschau wiederholte die
+    fertige Antwort ab Zeile 2."""
+    anchor = "Beruehmte Beispiele sind der Aetna und Vesuv in Italien, der Fuji in Japan sowie der Kilauea auf Hawaii."
+    preview = PanePreview(cols=168, rows=24)
+    # omp bricht selbst an Wortgrenzen um — die Zeilen kommen fertig geteilt.
+    preview.feed(
+        "Beruehmte Beispiele sind der Aetna und Vesuv in Italien, der Fuji in Japan sowie der\r\n"
+        "Kilauea auf Hawaii.\r\n"
+    )
+    assert preview.text_after(anchor) == ""

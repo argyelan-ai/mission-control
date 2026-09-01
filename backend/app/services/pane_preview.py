@@ -115,14 +115,28 @@ class PanePreview:
         lines = self._lines()
         if not needle:
             return self.text()
+        # Gesucht wird im ZUSAMMENGEFUEGTEN Text, nicht Zeile fuer Zeile: die
+        # CLI bricht an Wortgrenzen um, Kopf oder Schwanz des Ankers liegen
+        # also gern ueber zwei Bildschirmzeilen (live 02.09.2026: '…sowie der'
+        # | 'Kilauea auf Hawaii.'). Jede Zeile kennt ihren Startversatz im
+        # Ganzen; die Fundstelle wird darueber auf die Zeile zurueckgerechnet.
+        flat_lines = [re.sub(r"\s+", " ", line).strip() for line in lines]
+        joined, starts = "", []
+        for flat in flat_lines:
+            starts.append(len(joined))
+            joined += flat + " "
         head, tail = needle[:24], needle[-24:]
-        cut = None
-        for idx, line in enumerate(lines):
-            flat = re.sub(r"\s+", " ", line).strip()
-            if needle in flat or (len(head) > 8 and (head in flat or tail in flat)):
-                cut = idx
-        if cut is None:
+        end = -1
+        for probe in (needle, tail, head):
+            if len(probe) <= 8:
+                continue
+            pos = joined.rfind(probe)
+            if pos >= 0:
+                end = pos + len(probe) - 1
+                break
+        if end < 0:
             return self.text()
+        cut = max(i for i, start in enumerate(starts) if start <= end)
         return "\n".join(self._filter(lines[cut + 1 :])).strip()
 
     def _content_lines(self) -> list[str]:
