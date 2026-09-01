@@ -170,12 +170,16 @@ export function ChatMessage({
             background: C.bgElevated,
             border: `1px solid ${unconfirmed ? `${C.warning}55` : C.border}`,
             borderRadius: "var(--radius-xl)",
-            // Pending is dimmed, not spinning: the message is there, it just
-            // isn't acknowledged yet. Once confirmed the bubble is replaced by
-            // the real transcript event and returns to full opacity.
-            opacity: echoStatus === "pending" ? 0.55 : 1,
-            // queued/starting keep full opacity: they carry an explanatory line
-            // of their own, and dimming them too would read as "degraded".
+            // Volle Deckkraft, auch waehrend "pending": Der Server hat die
+            // Zustellung mit 204 quittiert, die Nachricht IST unterwegs. Bis
+            // das Transkript sie zurueckspiegelt vergehen gemessen 1-3
+            // Sekunden (die CLI schreibt den User-Turn erst rund eine Sekunde
+            // spaeter, plus Poll) — genau so lange stand die eigene Zeile
+            // blass da und der Chat fuehlte sich traege an (Operator-Befund
+            // 01.09.2026). Das Dimmen sagte etwas Falsches ueber einen
+            // Vorgang, der laengst geglueckt war. Die ehrliche Warnung bleibt:
+            // ohne Bestaetigung wird die Blase nach zehn Sekunden markiert.
+            opacity: 1,
           }}
         >
           <span className="sr-only">Du</span>

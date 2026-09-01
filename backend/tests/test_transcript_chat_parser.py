@@ -804,3 +804,42 @@ def test_text_that_merely_mentions_the_envelope_stays_a_normal_message():
         ev = parse_transcript_line(json.dumps(_teammate_line(text)))[0]
         assert ev["role"] == "user", text
         assert ev.get("teammate") is None, text
+
+
+# ── Leere Denk-Bloecke: Claude Code schreibt sie mit leerem Text ────────────
+#
+# Live gemessen 01.09.2026 (FreeCode, 115 Bloecke in einer Sitzung): ein
+# thinking-Block im Transkript sieht so aus —
+#   {"type":"thinking","thinking":"","signature":"EtcOCokBCBAYAipA…"}
+# Der Klartext des Denkens steht NICHT in der Datei, nur die verschluesselte
+# Signatur der API. Ein Ereignis mit leerem Text erzeugte in der Oberflaeche
+# eine Denk-Blase, die sich aufklappen liess und dann nichts zeigte
+# (Operator-Befund: "leerer Bubble beim Aufklappen").
+#
+# Eine leere Schublade ist schlechter als keine: sie verspricht Inhalt, den es
+# nicht gibt. Erst wenn wir den Denkverlauf aus einer Quelle holen, die ihn
+# wirklich hat (Terminal-Strom), gibt es wieder etwas aufzuklappen.
+
+_EMPTY_THINKING_LINE = (
+    '{"type":"assistant","uuid":"a9","timestamp":"2026-09-01T10:00:00Z",'
+    '"isSidechain":false,"message":{"role":"assistant","model":"claude-sonnet-5",'
+    '"id":"msg_e","content":[{"type":"thinking","thinking":"","signature":"EtcOCok"},'
+    '{"type":"text","text":"fertig"}]}}'
+)
+
+
+def test_empty_thinking_block_emits_no_event():
+    kinds = [e["kind"] for e in parse_transcript_line(_EMPTY_THINKING_LINE)]
+    assert "thinking" not in kinds
+    assert "message" in kinds
+
+
+def test_whitespace_only_thinking_block_emits_no_event():
+    line = _EMPTY_THINKING_LINE.replace('"thinking":""', '"thinking":"   \\n  "')
+    assert [e for e in parse_transcript_line(line) if e["kind"] == "thinking"] == []
+
+
+def test_real_thinking_text_still_emits_an_event():
+    line = _EMPTY_THINKING_LINE.replace('"thinking":""', '"thinking":"ich ueberlege"')
+    thinking = [e for e in parse_transcript_line(line) if e["kind"] == "thinking"]
+    assert len(thinking) == 1 and thinking[0]["text"] == "ich ueberlege"
