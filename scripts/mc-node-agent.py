@@ -1810,7 +1810,7 @@ CONTROL_FILES: dict[str, tuple[str, int, str]] = {
 # Panic, kein Log. Der Embedded-Controller kappt den Strom, bevor das System
 # etwas schreiben kann. Ein Takt-Deckel behebt das. Die Erzeugung hängt an
 # der Speicherbandbreite, NICHT am Takt — Drosseln kostet deshalb fast
-# nichts und spart sehr viel Strom (eigener Sweep 16.08.2026, Qwen38-27B,
+# nichts und spart sehr viel Strom (eigener Sweep 16.08.2026, 27B-Modell,
 # EINE Box):
 #
 #   Stufe    Takt     Erzeugung   Einlesen   Watt ⌀   °C max
