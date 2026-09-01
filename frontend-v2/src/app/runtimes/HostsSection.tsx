@@ -6,6 +6,10 @@
  * HostsSection: Cards (Name, Kind-Badge, Status, gebundene Runtimes) +
  * Add/Edit-Modal (admin-only) + Delete mit 409-Guard-Feedback.
  *
+ * Neu anlegen läuft über EINEN Knopf „Gerät hinzufügen" (AddDeviceDialog):
+ * der fragt nach der Situation des Operators und öffnet dann den passenden
+ * der vier bestehenden Wege (Onboarding / Pairing / BoxWizard / Formular).
+ *
  * Metrics-bar-free (slot-stage redesign): live GPU/RAM/temp bars now live in
  * SlotStage's TelemetryColumn, not here — see docs/plans/2026-08-13
  * -runtimes-slot-stage-design.md.
@@ -14,7 +18,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plus, Radio, Server, Trash2, Wand2, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Server, Trash2, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind } from "@/lib/types";
@@ -24,6 +28,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
 import { HostOnboardDialog } from "./HostOnboardDialog";
 import { NodePairingDialog } from "./NodePairingDialog";
+import { AddDeviceDialog, type DeviceRoute } from "./AddDeviceDialog";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -52,6 +57,15 @@ const KIND_LABEL_KEY: Record<HostKind, string> = {
   local: "kindLocal",
   agent: "kindAgent",
 };
+
+/**
+ * Typen, die man im Formular von Hand wählen darf. `agent` fehlt bewusst:
+ * ein manuell angelegter kind=agent-Host hat keinen agent_token_hash
+ * (den vergibt nur routers/nodes.py beim Einlösen eines Pairing-Codes),
+ * kann sich also nie melden und bleibt für immer grau — eine Falle.
+ * Bestehende agent-Zeilen bleiben unangetastet (Edit zeigt den Typ gesperrt).
+ */
+const SELECTABLE_KINDS: readonly HostKind[] = ["ssh", "flask_wol", "local"];
 
 // ── Host Form Modal (admin-only) ──────────────────────────────────────────────
 
@@ -145,10 +159,13 @@ function Field({
 function HostFormModal({
   host,
   onClose,
+  onOpenPairing,
 }: {
   /** null = create, Host = edit */
   host: Host | null;
   onClose: () => void;
+  /** Sprung zum Pairing-Weg aus dem Typ-Hinweis (nur beim Anlegen sinnvoll). */
+  onOpenPairing?: () => void;
 }) {
   const t = useTranslations("runtimes.hosts");
   const queryClient = useQueryClient();
@@ -233,29 +250,61 @@ function HostFormModal({
             <Field label={t("fieldSlug")} value={form.slug} onChange={(v) => set("slug", v)} placeholder={t("slugPlaceholder")} mono />
             <Field label={t("fieldDisplayName")} value={form.display_name} onChange={(v) => set("display_name", v)} placeholder={t("displayNamePlaceholder")} />
 
-            {/* Kind pills */}
+            {/* Kind pills — `agent` ist nicht wählbar (siehe SELECTABLE_KINDS).
+                Eine bestehende agent-Zeile zeigt ihren Typ gesperrt an. */}
             <div className="flex flex-col gap-1">
               <span className="text-xs" style={{ color: C.textMuted }}>{t("fieldType")}</span>
-              <div className="flex gap-1.5">
-                {(Object.keys(KIND_LABEL_KEY) as HostKind[]).map((k) => {
-                  const active = form.kind === k;
-                  return (
+              {form.kind === "agent" ? (
+                <span
+                  data-testid="host-kind-locked"
+                  className="self-start text-xs px-2.5 py-1 rounded-md font-semibold"
+                  style={{
+                    background: C.accentSubtle,
+                    border: `1px solid ${C.borderAccent}`,
+                    color: C.accent,
+                  }}
+                >
+                  {t(KIND_LABEL_KEY.agent)} · {t("kindAgentLocked")}
+                </span>
+              ) : (
+                <div className="flex gap-1.5">
+                  {SELECTABLE_KINDS.map((k) => {
+                    const active = form.kind === k;
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => set("kind", k)}
+                        className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-all"
+                        style={{
+                          background: active ? C.accentSubtle : C.borderSubtle,
+                          border: `1px solid ${active ? C.borderAccent : C.border}`,
+                          color: active ? C.accent : C.textMuted,
+                          fontWeight: active ? 600 : 400,
+                        }}
+                      >
+                        {t(KIND_LABEL_KEY[k])}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {!host && (
+                <p className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
+                  {t("kindAgentHint")}{" "}
+                  {onOpenPairing && (
                     <button
-                      key={k}
-                      onClick={() => set("kind", k)}
-                      className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-all"
-                      style={{
-                        background: active ? C.accentSubtle : C.borderSubtle,
-                        border: `1px solid ${active ? C.borderAccent : C.border}`,
-                        color: active ? C.accent : C.textMuted,
-                        fontWeight: active ? 600 : 400,
-                      }}
+                      type="button"
+                      data-testid="host-kind-agent-hint-link"
+                      onClick={onOpenPairing}
+                      className="underline underline-offset-2 cursor-pointer hover:text-[var(--color-text-primary)]"
+                      style={{ color: C.textSecondary }}
                     >
-                      {t(KIND_LABEL_KEY[k])}
+                      {t("kindAgentHintLink")}
                     </button>
-                  );
-                })}
-              </div>
+                  )}
+                </p>
+              )}
             </div>
 
             {form.kind === "ssh" && (
@@ -474,9 +523,26 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
   // modal: undefined = closed, null = create, Host = edit
   const [modalHost, setModalHost] = useState<Host | null | undefined>(undefined);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [chooserOpen, setChooserOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [onboardOpen, setOnboardOpen] = useState(false);
   const [pairingOpen, setPairingOpen] = useState(false);
+
+  /**
+   * Routing „Situation → Weg". Der Chooser kennt keine Dialoge, nur Routen —
+   * hier wird entschieden, was aufgeht. Spätere Verkettung (Onboarding →
+   * Modell-Schritte des Wizards) hängt sich an den `onboard`-Zweig bzw. an
+   * ein Fertig-Signal des HostOnboardDialog, ohne den Chooser anzufassen.
+   */
+  const openRoute = (route: DeviceRoute) => {
+    setChooserOpen(false);
+    switch (route) {
+      case "onboard": setOnboardOpen(true); break;
+      case "pairing": setPairingOpen(true); break;
+      case "wizard": setWizardOpen(true); break;
+      case "manual": setModalHost(null); break;
+    }
+  };
 
   const { data: hosts, isLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],
@@ -512,69 +578,21 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
       count={(hosts ?? []).length}
       actions={
         isAdmin ? (
-          <>
-            {/* Wizard = der geführte Weg (testen → Basis → Modell → läuft).
-                „Host" bleibt daneben als Direkteingabe für alle, die genau
-                wissen was sie eintragen — und für flask_wol/local, die der
-                Wizard bewusst nicht abdeckt. */}
-            <button
-              data-testid="hosts-add-box"
-              onClick={() => setWizardOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-              style={{
-                background: C.accentSubtle,
-                border: `1px solid ${C.borderAccent}`,
-                color: C.accent,
-              }}
-            >
-              <Wand2 size={11} />
-              {t("addBoxButton")}
-            </button>
-            <button
-              onClick={() => setModalHost(null)}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-              style={{
-                background: C.borderSubtle,
-                border: `1px solid ${C.border}`,
-                color: C.textMuted,
-              }}
-            >
-              <Plus size={11} />
-              {t("addHostButton")}
-            </button>
-            {/* Fleet & Rezepte v2, Phase 2: IP+User+Passwort rein, MC macht
-                den Rest selbst (SSH-Onboarding) — Alternative für Boxen ohne
-                bereits hinterlegten Key, ergänzt (nicht ersetzt) den Wizard,
-                der einen vorhandenen Key voraussetzt. */}
-            <button
-              data-testid="hosts-onboard"
-              onClick={() => setOnboardOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-              style={{
-                background: C.borderSubtle,
-                border: `1px solid ${C.border}`,
-                color: C.textMuted,
-              }}
-            >
-              <Server size={11} />
-              {t("onboardButton")}
-            </button>
-            {/* kind=agent — für Boxen, die MC nicht per SSH erreicht: Code +
-                Einzeiler statt Zugangsdaten. */}
-            <button
-              data-testid="hosts-pairing"
-              onClick={() => setPairingOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-              style={{
-                background: C.borderSubtle,
-                border: `1px solid ${C.border}`,
-                color: C.textMuted,
-              }}
-            >
-              <Radio size={11} />
-              {t("pairingButton")}
-            </button>
-          </>
+          /* Ein Einstieg für alle vier Wege — die Wahl (Onboarding / Pairing /
+             Wizard / Formular) trifft der AddDeviceDialog nach Situation. */
+          <button
+            data-testid="hosts-add-device"
+            onClick={() => setChooserOpen(true)}
+            className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
+            style={{
+              background: C.accentSubtle,
+              border: `1px solid ${C.borderAccent}`,
+              color: C.accent,
+            }}
+          >
+            <Plus size={11} />
+            {t("addDeviceButton")}
+          </button>
         ) : undefined
       }
     >
@@ -629,8 +647,17 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
       </div>
 
       {modalHost !== undefined && (
-        <HostFormModal host={modalHost} onClose={() => setModalHost(undefined)} />
+        <HostFormModal
+          host={modalHost}
+          onClose={() => setModalHost(undefined)}
+          onOpenPairing={() => {
+            setModalHost(undefined);
+            setPairingOpen(true);
+          }}
+        />
       )}
+
+      <AddDeviceDialog open={chooserOpen} onClose={() => setChooserOpen(false)} onChoose={openRoute} />
 
       {wizardOpen && <BoxWizard onClose={() => setWizardOpen(false)} />}
       <HostOnboardDialog open={onboardOpen} onClose={() => setOnboardOpen(false)} />

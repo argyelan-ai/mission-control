@@ -7,7 +7,43 @@
         "rule": "design-system-font-size",
         "value": "13px",
         "createdAt": "2026-08-16T18:08:56.863Z",
-        "reason": "DESIGN.md v4 Typografie: 'UI-Detailtext oft 11-13px' + Dichte-Regel nennt 13px explizit — dokumentierter Ramp-Bereich"
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "9px",
+        "createdAt": "2026-09-01T22:07:25.265Z",
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "10px",
+        "createdAt": "2026-09-01T22:07:25.325Z",
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "11px",
+        "createdAt": "2026-09-01T22:07:25.386Z",
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "12px",
+        "createdAt": "2026-09-01T22:07:25.443Z",
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "15px",
+        "createdAt": "2026-09-01T22:07:25.558Z",
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "17px",
+        "createdAt": "2026-09-01T22:07:25.615Z",
+        "reason": "Runtimes-Seite: historisch gewachsene Skala (Betreiber 01.09.2026); 90 Vorkommen in 7 Groessen; DESIGN.md hat keine dokumentierte Typo-Skala"
       }
     ]
   }
