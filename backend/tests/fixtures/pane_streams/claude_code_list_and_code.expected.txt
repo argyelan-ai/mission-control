@@ -1,0 +1,8 @@
+1. Ein Branch ist ein unabhängiger Entwicklungszweig, der es erlaubt, Änderungen isoliert vom Hauptzweig vorzunehmen.
+2. Branches erleichtern parallele Arbeit im Team, da mehrere Personen gleichzeitig an unterschiedlichen Features arbeiten können, ohne sich gegenseitig zu blockieren.
+3. Über Merge oder Rebase lassen sich die Änderungen eines Branches später kontrolliert in einen anderen Branch integrieren.
+
+```bash
+git checkout -b feature/neue-funktion
+git push -u origin feature/neue-funktion
+```

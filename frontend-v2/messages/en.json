@@ -635,6 +635,7 @@
     "noTranscript": "No transcript available",
     "transcriptLoading": "Loading transcript…",
     "pickSession": "Pick a session in the sidebar.",
+    "livePreview": "Live preview",
     "noMessagesYet": "No messages yet",
     "noMessagesHint": "Write the first message to {name} below — or open the terminal to see the raw session.",
     "sendFailed": "Send failed",

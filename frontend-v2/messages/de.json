@@ -635,6 +635,7 @@
     "noTranscript": "Kein Transkript verfügbar",
     "transcriptLoading": "Transkript wird geladen…",
     "pickSession": "Wähle eine Session in der Seitenleiste.",
+    "livePreview": "Live-Vorschau",
     "noMessagesYet": "Noch keine Nachrichten",
     "noMessagesHint": "Schreib unten die erste Nachricht an {name} — oder öffne das Terminal, um die rohe Sitzung zu sehen.",
     "sendFailed": "Senden fehlgeschlagen",

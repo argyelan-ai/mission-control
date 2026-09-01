@@ -33,6 +33,9 @@ dependencies = [
     "scikit-learn>=1.5.0",
     "pdfplumber>=0.11.0",
     "tweepy>=4.14.0",
+    # Bildschirm-Emulator fuer die Live-Vorschau aus dem tmux-Strom: der Strom
+    # ist rohe Terminal-Ausgabe mit Cursor-Spruengen, kein anhaengbarer Text.
+    "pyte>=0.8.2",
 ]
 
 [project.optional-dependencies]

@@ -264,6 +264,13 @@ def fake_broadcast(monkeypatch):
     return published
 
 
+def _async_return(value):
+    """Kleiner Helfer: eine Coroutine, die immer denselben Wert liefert."""
+    async def _inner(*_args, **_kwargs):
+        return value
+    return _inner
+
+
 @pytest.fixture
 def manager():
     from app.services.transcript_chat import ChatTailerManager
@@ -1483,3 +1490,268 @@ async def test_first_state_arrives_immediately_not_after_the_probe_interval(
         ), "nach einer Viertelsekunde lag noch keine Zustandsmeldung vor"
     finally:
         await manager.release("agent-first")
+
+
+# ── Live-Vorschau aus dem Terminal-Strom (P1b) ─────────────────────────────
+
+
+async def test_tailer_publishes_a_preview_while_the_answer_is_still_being_written(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Der Kern der Live-Schicht: Text zeigen, bevor das Transkript ihn hat.
+
+    Gemessen am laufenden Stack schreibt die CLI ihren Assistenten-Block auf
+    einen Schlag — bis dahin steht in der Datei nichts, waehrend im Terminal
+    der Text laeuft. Der Tailer liest deshalb zusaetzlich den Pane-Strom und
+    schickt daraus ein ``preview``-Ereignis.
+    """
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-prev.jsonl"
+    session_file.write_text("")
+    stream_file = tmp_path / "pane.log"
+    stream_file.write_bytes(b"")
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-prev", session_file, agent)
+    try:
+        stream_file.write_bytes("● Der Uetliberg ist 869 Meter hoch.\r\n".encode())
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "preview" and "869 Meter" in d.get("text", "")
+                for _, _, d in fake_broadcast
+            ),
+            timeout=3.0,
+        ), "keine Vorschau aus dem Terminal-Strom"
+    finally:
+        await manager.release("agent-prev")
+
+
+async def test_preview_events_carry_no_uuid_and_never_enter_the_history(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Eine Vorschau ist keine Wahrheit.
+
+    Sie traegt nie eine Dedup-Kennung — sonst konkurrierte sie im Reducer mit
+    dem echten Transkript-Ereignis, und der Verlauf haette am Ende zwei
+    Fassungen derselben Antwort."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-prev2.jsonl"
+    session_file.write_text("")
+    stream_file = tmp_path / "pane2.log"
+    stream_file.write_bytes(b"")
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-prev2", session_file, agent)
+    try:
+        stream_file.write_bytes("● Antwort im Entstehen, lang genug zum Senden.\r\n".encode())
+        await _wait_until(
+            lambda: any(d.get("kind") == "preview" for _, _, d in fake_broadcast), timeout=3.0
+        )
+    finally:
+        await manager.release("agent-prev2")
+
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert previews, "keine Vorschau erzeugt"
+    for event in previews:
+        assert event.get("uuid") is None
+        assert event.get("source") == "pane"
+
+
+async def test_releasing_the_last_client_switches_the_stream_off(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Der Strom laeuft nur, solange jemand zusieht — sonst waechst eine Datei
+    im Container, die niemand liest."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-prev3.jsonl"
+    session_file.write_text("")
+    stopped: list[str] = []
+
+    async def _stop(agent):
+        stopped.append(getattr(agent, "slug", "?"))
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(tmp_path / "pane3.log"))
+    monkeypatch.setattr(pane_stream, "stop", _stop)
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-prev3", session_file, agent)
+    await manager.release("agent-prev3")
+
+    assert stopped == ["rex"], "der Strom wurde nicht abgeschaltet"
+
+
+async def test_preview_is_only_sent_once_two_readings_agree(tmp_path, fake_broadcast, manager):
+    """Flacker-Daempfung: ein einzelner Blick genuegt nicht.
+
+    Der Poll friert den Terminal-Strom an einer beliebigen Byte-Grenze ein.
+    Trifft er mitten ins Neuzeichnen, steht dort kurz eine halb ueberschriebene
+    Zeile — in der Machbarkeitsprobe live gesehen (ein Textstueck doppelt).
+    Gesendet wird deshalb erst, wenn zwei Durchlaeufe DENSELBEN Text ergeben;
+    das kostet einen Tick (0,3 s) und erspart dem Leser das Zucken.
+    """
+    from app.services.pane_preview import PanePreview
+
+    stream = tmp_path / "flicker.log"
+    stream.write_bytes("● Eine Antwort, die lang genug ist.\r\n".encode())
+    state = {"path": stream, "offset": 0, "screen": PanePreview(), "last_sent": "", "pending": None}
+
+    await manager._pump_preview("chan", state)
+    assert not [d for _, _, d in fake_broadcast if d.get("kind") == "preview"], (
+        "schon der erste Blick wurde gesendet — die Daempfung fehlt"
+    )
+
+    await manager._pump_preview("chan", state)
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert len(previews) == 1
+    assert "Eine Antwort" in previews[0]["text"]
+
+    # Unveraenderter Text wird nicht erneut gesendet.
+    await manager._pump_preview("chan", state)
+    assert len([d for _, _, d in fake_broadcast if d.get("kind") == "preview"]) == 1
+
+
+# ── Frische Sitzung ohne Datei (omp ``/new``) ───────────────────────────────
+
+
+class _OmpStubAgent(_StubAgent):
+    harness = "omp"
+
+
+def _omp_pane(with_marker: bool) -> str:
+    body = " ✔ New session started\n" if with_marker else ""
+    return (
+        " Tip: Press alt+p (or /switch) to switch provider\n"
+        f"{body}"
+        "╭── π  > ⬢ MC model · ◒ high > 📁 /workspace > ◫ 3.7%/500K ⟲ ▶──╮\n"
+        "╰─                                                        ─╯\n"
+    )
+
+
+async def test_tailer_fresh_session_marker_clears_the_chat(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Taucht ``New session started`` NEU im Terminal auf, gilt die alte Datei
+    als beendet: ``session_changed`` geht raus, die Historie meldet sich
+    leer, und Zeilen, die noch in die alte Datei fallen, erreichen den Chat
+    nicht mehr."""
+    import app.services.transcript_chat as transcript_chat
+    from app.services import fresh_session
+
+    fresh_session.reset_for_tests()
+    session_file = tmp_path / "2026-09-01T12-39-02-054Z_old.jsonl"
+    session_file.write_text("")
+
+    panes = iter([_omp_pane(False), _omp_pane(False), _omp_pane(True)])
+
+    async def _fake_capture_pane(agent):
+        return next(panes, _omp_pane(True))
+
+    monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
+
+    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
+    await manager.acquire("agent-omp", session_file, agent)
+    try:
+        assert await _wait_until(
+            lambda: any(d.get("kind") == "session_changed" for _, _, d in fake_broadcast)
+        )
+        assert fresh_session.is_stale("agent-omp", session_file) is True
+
+        with session_file.open("a") as fh:
+            fh.write(
+                '{"type":"message","id":"m9","timestamp":"2026-09-01T12:40:00Z",'
+                '"message":{"role":"user","content":[{"type":"text","text":"alt"}]}}\n'
+            )
+        await asyncio.sleep(0.15)
+    finally:
+        await manager.release("agent-omp")
+        fresh_session.reset_for_tests()
+
+    assert not any(d.get("kind") == "message" for _, _, d in fake_broadcast)
+    changed = [d for _, _, d in fake_broadcast if d.get("kind") == "session_changed"]
+    assert len(changed) == 1
+
+
+async def test_tailer_preexisting_marker_does_not_fire(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Der Marker steht nach einem frueheren ``/new`` noch lange im Terminal.
+    Nur ein ZUWACHS zaehlt — sonst leerte sich der Chat bei jedem Oeffnen."""
+    import app.services.transcript_chat as transcript_chat
+    from app.services import fresh_session
+
+    fresh_session.reset_for_tests()
+    session_file = tmp_path / "old.jsonl"
+    session_file.write_text("")
+
+    async def _fake_capture_pane(agent):
+        return _omp_pane(True)
+
+    monkeypatch.setattr(transcript_chat, "capture_pane", _fake_capture_pane)
+
+    agent = _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
+    await manager.acquire("agent-omp", session_file, agent)
+    try:
+        await asyncio.sleep(0.2)
+    finally:
+        await manager.release("agent-omp")
+        fresh_session.reset_for_tests()
+
+    assert not any(d.get("kind") == "session_changed" for _, _, d in fake_broadcast)
+    assert fresh_session.is_stale("agent-omp", session_file) is False
+
+
+async def test_history_is_empty_while_the_fresh_session_has_no_file_yet(
+    auth_client: AsyncClient, make_agent, tmp_path, monkeypatch
+):
+    """Nach ``session_changed`` holt das Frontend die Historie neu. Liefert
+    die Route dann die ALTE Datei, ist der alte Verlauf sofort wieder da —
+    genau der gemeldete Fehler. Solange keine neuere Datei existiert, muss
+    sie leer antworten, mit einer Sitzungs-ID, die nicht die alte ist."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import agent_chat_input as agent_chat_input_mod
+    from app.services import fresh_session
+
+    fresh_session.reset_for_tests()
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    old = tdir / "old.jsonl"
+    old.write_text(_user_line("alter verlauf") + "\n")
+    os.utime(old, (1_000, 1_000))
+
+    monkeypatch.setattr(transcript_chat_mod, "resolve_transcript_dir", lambda a: tdir)
+    monkeypatch.setattr(transcript_chat_mod, "transcript_allowed", lambda a, p: True)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model", lambda slug: None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level", lambda slug, levels=(): None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_effort_level_at", lambda path, levels=(): None)
+    monkeypatch.setattr(agent_chat_input_mod, "_persisted_model_at", lambda path: None)
+
+    agent = await make_agent(name="Omp Agent", slug="omp-agent", agent_runtime="cli-bridge")
+    try:
+        r0 = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
+        assert r0.status_code == 200
+        assert len(r0.json()["events"]) == 1
+
+        fresh_session.mark(str(agent.id), at=2_000)
+        r1 = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/history")
+        assert r1.status_code == 200
+        body = r1.json()
+        assert body["events"] == []
+        assert body["session"]["sessionId"] != r0.json()["session"]["sessionId"]
+        assert body["session"]["aliveness"] == "active"
+        assert "capabilities" in body
+    finally:
+        fresh_session.reset_for_tests()

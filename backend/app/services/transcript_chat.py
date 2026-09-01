@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.services import sse
+from app.services import fresh_session, sse
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
@@ -1553,6 +1553,9 @@ def _count_lines(value: Any) -> int:
 # ── Live tailing (I/O — background polling task, not pure) ──────────────────
 
 
+_PANE_UNSET: object = object()
+
+
 class ChatTailerManager:
     """Refcounted, per-agent background poller that follows a live Claude
     Code transcript and republishes each new line as a ``chat_event`` SSE
@@ -1595,6 +1598,9 @@ class ChatTailerManager:
     def __init__(self) -> None:
         self._refcounts: dict[str, int] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        #: Agent-Zeile je laufendem Tailer — ``release`` braucht sie, um den
+        #: Terminal-Strom wieder abzuschalten.
+        self._agents: dict[str, Any] = {}
 
     async def acquire(self, agent_id: str, path: Path, agent: Any | None = None) -> None:
         """Registers one more client for ``agent_id``. Starts the poll task
@@ -1624,6 +1630,10 @@ class ChatTailerManager:
                 initial_offset = path.stat().st_size
             except OSError:
                 initial_offset = 0
+            # Fuer das Abschalten des Terminal-Stroms beim letzten Client:
+            # ``release`` bekommt nur die agent_id, nicht die Agent-Zeile.
+            if agent is not None:
+                self._agents[agent_id] = agent
             self._tasks[agent_id] = asyncio.create_task(
                 self._run(agent_id, path, initial_offset, agent)
             )
@@ -1639,6 +1649,14 @@ class ChatTailerManager:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            # Der Terminal-Strom laeuft nur, solange jemand zusieht. Ohne das
+            # Abschalten schriebe tmux weiter in eine Datei, die niemand liest.
+            agent = self._agents.pop(agent_id, None)
+            if agent is not None:
+                from app.services import pane_stream
+
+                with contextlib.suppress(Exception):
+                    await pane_stream.stop(agent)
         else:
             self._refcounts[agent_id] = count - 1
 
@@ -1701,24 +1719,61 @@ class ChatTailerManager:
         rejected_rollover_path: Path | None = None
 
         last_probe_at = 0.0  # 0.0 = noch nie -> die erste Sonde laeuft sofort
+
+        # ── Frische Sitzung ohne Datei (omp ``/new``) ────────────────────
+        # omp legt bei ``/new`` keine Datei an; nur das Terminal zeigt den
+        # Wechsel (``✔ New session started``). Gezaehlt wird der Marker im
+        # Pane — er steht nach einem frueheren ``/new`` noch lange dort, also
+        # zaehlt nur ein ZUWACHS. ``None`` = noch keine Sonde gelaufen; der
+        # erste Stand ist die Nulllinie, sonst leerte sich der Chat bei jedem
+        # Oeffnen. ``stale_path`` haelt die alte Datei fest, damit Zeilen,
+        # die noch dort landen, nicht in die neue Sitzung tropfen.
+        marker_count: int | None = None
+        stale_path: Path | None = None
+
+        # ── Live-Vorschau aus dem Terminal-Strom ─────────────────────────
+        # Das Transkript bekommt einen Assistenten-Block erst, wenn er fertig
+        # ist (gemessen: sieben Sekunden Stille in der Datei, waehrend im
+        # Terminal der Text laeuft). Der Pane-Strom hat ihn sofort. Er ist die
+        # Kuer: schlaegt hier etwas fehl, faellt nur die Vorschau aus.
+        preview_state = await self._start_preview(agent)
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
                 tick += 1
 
                 try:
+                    if preview_state is not None:
+                        await self._pump_preview(channel, preview_state)
+
                     now = time.monotonic()
                     probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
                     if agent is not None and probe_due:
                         last_probe_at = now
+                        pane_text = await capture_pane(agent)
                         new_state = await self._compute_pane_state(
-                            agent, current_path, adapter
+                            agent, current_path, adapter, pane_text=pane_text
                         )
                         if new_state != last_pane_state:
                             last_pane_state = new_state
                             await sse.broadcast(
                                 channel, "chat_event", {"kind": "state", **new_state}
                             )
+
+                        marker = getattr(adapter, "fresh_session_pane_marker", None)
+                        if marker and pane_text is not None:
+                            count = pane_text.count(marker)
+                            if marker_count is not None and count > marker_count:
+                                fresh_session.mark(agent_id)
+                                stale_path = current_path
+                                seen_uuids = set()
+                                tool_events_by_id = {}
+                                command_events_by_uuid = {}
+                                await sse.broadcast(
+                                    channel, "chat_event",
+                                    {"kind": "session_changed", "aliveness": "active"},
+                                )
+                            marker_count = count
 
                     try:
                         active = await asyncio.to_thread(adapter.find_active_session, tdir)
@@ -1755,6 +1810,7 @@ class ChatTailerManager:
                         else:
                             rejected_rollover_path = None
                             current_path = active[0]
+                            stale_path = None
                             offset = 0
                             buffer = b""
                             tool_events_by_id = {}
@@ -1778,6 +1834,12 @@ class ChatTailerManager:
                                 {"kind": "session_changed", "aliveness": "active"},
                             )
                             continue
+
+                    if stale_path is not None and current_path == stale_path:
+                        # Die Sitzung ist im Terminal schon neu, die Datei
+                        # dazu fehlt noch — was jetzt noch in die alte
+                        # faellt, gehoert nicht in den Chat.
+                        continue
 
                     try:
                         new_offset, chunk = await asyncio.to_thread(
@@ -1959,8 +2021,88 @@ class ChatTailerManager:
         except Exception:
             return False
 
+    async def _start_preview(self, agent: Any | None) -> dict[str, Any] | None:
+        """Schaltet den Terminal-Strom ein und legt den Emulator an.
+
+        Rueckgabe ist der Zustand, den ``_pump_preview`` fortschreibt — oder
+        None, wenn dieser Agent keinen Strom hat (Host-Agenten) oder das
+        Einschalten fehlschlug. Fehler sind hier nie fatal.
+        """
+        if agent is None:
+            return None
+        try:
+            from app.services import pane_stream
+            from app.services.pane_preview import PanePreview
+
+            path = await pane_stream.start(agent)
+            if path is None:
+                return None
+            return {"path": path, "offset": 0, "screen": PanePreview(), "last_sent": "", "pending": None}
+        except Exception:  # noqa: BLE001
+            logger.warning("preview: Start fehlgeschlagen", exc_info=True)
+            return None
+
+    async def _pump_preview(self, channel: str, state: dict[str, Any]) -> None:
+        """Liest den Zuwachs des Stroms und schickt die Vorschau.
+
+        Zwei Regeln, beide aus Messungen:
+
+        * Gesendet wird erst, wenn ZWEI Durchlaeufe denselben Text ergeben.
+          Friert man den Strom mitten im Neuzeichnen ein — und das tut jeder
+          Poll —, steht kurz eine halb ueberschriebene Zeile da. Ein Tick
+          Verzoegerung kostet 0,3 s und erspart dem Leser das Flackern.
+        * Nie eine Dedup-Kennung: die Vorschau konkurriert nicht mit dem
+          Transkript, sie wird davon abgeloest.
+        """
+        path: Path = state["path"]
+
+        def _read() -> bytes:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                return b""
+            if size < state["offset"]:      # Datei wurde geleert -> von vorn
+                state["offset"] = 0
+                state["screen"] = state["screen"].__class__()
+            if size == state["offset"]:
+                return b""
+            with open(path, "rb") as handle:
+                handle.seek(state["offset"])
+                chunk = handle.read()
+            state["offset"] += len(chunk)
+            return chunk
+
+        chunk = await asyncio.to_thread(_read)
+        if chunk:
+            state["screen"].feed(chunk)
+
+        text = state["screen"].text().strip()
+        if not text or text == state["last_sent"]:
+            return
+        if state["pending"] != text:
+            state["pending"] = text      # erst beim naechsten gleichen Stand senden
+            return
+
+        state["last_sent"] = text
+        await sse.broadcast(
+            channel,
+            "chat_event",
+            {
+                "kind": "preview",
+                "uuid": None,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "text": text,
+                "source": "pane",
+            },
+        )
+
     async def _compute_pane_state(
-        self, agent: Any, current_path: Path, adapter: Any | None = None
+        self,
+        agent: Any,
+        current_path: Path,
+        adapter: Any | None = None,
+        *,
+        pane_text: str | None | object = _PANE_UNSET,
     ) -> dict[str, Any]:
         """One probe tick's worth of state classification (A6). Computes
         ``transcript_active`` from the current session file's mtime (used
@@ -1976,7 +2118,11 @@ class ChatTailerManager:
         (``pane_state.process_alive``) is itself cached ~30s.
 
         ``adapter`` (omp-Runde) liefert die harness-eigenen Pane-Regeln, die
-        Zug-Ende-Probe und den Prozessnamen. ``None`` = Claude Code."""
+        Zug-Ende-Probe und den Prozessnamen. ``None`` = Claude Code.
+
+        ``pane_text``: der Tailer liest das Pane pro Sonde EINMAL (er braucht
+        es auch fuer den Sitzungs-Marker) und reicht es herein; ohne Angabe
+        wird hier selbst gelesen."""
         if adapter is None:
             from app.services.transcript_adapters import adapter_for
 
@@ -2000,7 +2146,8 @@ class ChatTailerManager:
 
         aliveness = await resolve_aliveness(agent, current_path, adapter)
 
-        pane_text = await capture_pane(agent)
+        if pane_text is _PANE_UNSET:
+            pane_text = await capture_pane(agent)
         if pane_text is None:
             return {
                 "status": "working" if transcript_active else "idle",

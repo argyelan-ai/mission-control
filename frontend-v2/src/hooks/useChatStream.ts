@@ -9,6 +9,7 @@ import type {
   ChatCapabilities,
   ChatEvent,
   ChatSession,
+  PreviewEvent,
   StateEvent,
   TimelineChatEvent,
   UsageEvent,
@@ -217,6 +218,12 @@ export interface ChatReducerState {
   index: Map<string, number>;
   state: StateEvent | null;
   usage: UsageEvent | null;
+  /** Der Blick ueber die Schulter: was die CLI gerade auf den Bildschirm
+   *  schreibt, bevor es im Transkript steht. Eigenes Fach, nie Zeitachse —
+   *  eine Vorschau ersetzt die vorige, die echte Antwort loest sie ab, und
+   *  ein ruhender Agent hat keine (eine Waise ohne Antwort waere eine
+   *  Luege). */
+  preview: PreviewEvent | null;
   /** Bumped every time a `session_changed` event is processed. The hook
    *  watches this to know a history refetch is needed — it can't rely on
    *  `events` being empty as the signal, since a second rollover could land
@@ -225,7 +232,7 @@ export interface ChatReducerState {
 }
 
 export function createInitialChatState(): ChatReducerState {
-  return { events: [], index: new Map(), state: null, usage: null, sessionChangedAt: 0 };
+  return { events: [], index: new Map(), state: null, usage: null, preview: null, sessionChangedAt: 0 };
 }
 
 /**
@@ -288,7 +295,15 @@ function pushOrReplace(state: ChatReducerState, ev: TimelineChatEvent): ChatRedu
 export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatReducerState {
   switch (event.kind) {
     case "state":
-      return { ...state, state: event };
+      /* Ruht der Agent, gibt es nichts mehr vorzuschauen — was dann noch im
+         Fach stuende, hat das Transkript nie bestaetigt. */
+      return {
+        ...state,
+        state: event,
+        preview: event.status === "idle" ? null : state.preview,
+      };
+    case "preview":
+      return { ...state, preview: event };
     case "usage":
       return { ...state, usage: event };
     case "session_changed":
@@ -306,9 +321,17 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
         events: [],
         index: new Map(),
         usage: null,
+        preview: null,
         sessionChangedAt: state.sessionChangedAt + 1,
       };
     case "message":
+      /* Die Antwort des Agenten ist das, was die Vorschau angekuendigt hat —
+         ab hier steht sie im Transkript, die Vorschau hat ausgedient. Eine
+         Zeile des OPERATORS beendet nichts: der Agent schreibt ja weiter. */
+      return pushOrReplace(
+        event.role === "assistant" ? { ...state, preview: null } : state,
+        event,
+      );
     case "tool":
     case "thinking":
     case "command":
@@ -393,6 +416,9 @@ export interface UseChatStreamResult {
   /** True from a send until the transcript shows any sign of life (a state
    *  change, a tool call, a message). Drives the honest "Gesendet…" line. */
   awaitingResponse: boolean;
+  /** Die Live-Vorschau aus dem Terminal, solange der Agent schreibt und das
+   *  Transkript die Antwort noch nicht traegt. Render AFTER `pendingEchoes`. */
+  preview: PreviewEvent | null;
 }
 
 /**
@@ -621,7 +647,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
       }
       // Any sign the agent processed the turn ends the "Gesendet…" line. A
       // `usage` frame alone doesn't count — it can arrive for the previous turn.
-      if (ev.kind === "state" || ev.kind === "tool" || ev.kind === "thinking" || ev.kind === "message") {
+      if (ev.kind === "state" || ev.kind === "tool" || ev.kind === "thinking" || ev.kind === "message" || ev.kind === "preview") {
         setAwaitingResponse(false);
       }
       if (ev.kind === "session_changed") {
@@ -660,5 +686,6 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     echoFailed,
     echoAgentStarting,
     awaitingResponse,
+    preview: chatState.preview,
   };
 }
