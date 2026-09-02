@@ -42,8 +42,42 @@ export function mergeBySeq(existing: GroupMessage[], incoming: GroupMessage[]): 
   return [...merged, ...stillPending];
 }
 
+/** Live-Vorschau je Mitglied: was es gerade im Terminal tippt, bevor seine
+ *  Nachricht im Raum steht (Live-Schicht A, Gruppen-Ausgabe). Schlüssel =
+ *  Agent-ID. Ein Eintrag verschwindet mit leerem Text (fertige Antwort,
+ *  Agent idle, neue Sitzung) oder sobald der Sprecher wirklich gepostet hat. */
+export type GroupPreviews = Record<string, { text: string; ts: string | null }>;
+
+export function applyGroupPreviewEvent(
+  previews: GroupPreviews,
+  event: string,
+  data: Record<string, unknown>,
+): GroupPreviews {
+  if (event === "group.preview") {
+    const agentId = data.agent_id as string | undefined;
+    if (!agentId) return previews;
+    const text = (data.text as string | undefined) ?? "";
+    if (!text.trim()) {
+      if (!(agentId in previews)) return previews;
+      const { [agentId]: _gone, ...rest } = previews;
+      return rest;
+    }
+    return { ...previews, [agentId]: { text, ts: (data.ts as string | null | undefined) ?? null } };
+  }
+  if (event === "group.message_posted") {
+    const msg = data.message as { sender_type?: string; sender_id?: string | null } | undefined;
+    const senderId = msg?.sender_type === "agent" ? msg.sender_id : null;
+    if (!senderId || !(senderId in previews)) return previews;
+    const { [senderId]: _posted, ...rest } = previews;
+    return rest;
+  }
+  return previews;
+}
+
 interface UseGroupStreamResult {
   messages: GroupMessage[];
+  /** Live-Vorschau je Mitglied (Agent-ID → Text). */
+  previews: GroupPreviews;
   state: GroupStreamState;
   connected: boolean;
   loading: boolean;
@@ -61,6 +95,7 @@ interface UseGroupStreamResult {
 export function useGroupStream(groupId: string | null): UseGroupStreamResult {
   const [messages, setMessages] = useState<GroupMessage[]>([]);
   const [state, setState] = useState<GroupStreamState>(EMPTY_GROUP_STREAM_STATE);
+  const [previews, setPreviews] = useState<GroupPreviews>({});
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -92,6 +127,7 @@ export function useGroupStream(groupId: string | null): UseGroupStreamResult {
     oldestSeq.current = 0;
     setMessages([]);
     setState(EMPTY_GROUP_STREAM_STATE);
+    setPreviews({});
     setError(false);
     if (!groupId) return;
     let cancelled = false;
@@ -133,6 +169,7 @@ export function useGroupStream(groupId: string | null): UseGroupStreamResult {
     enabled: !!groupId,
     onEvent: (event, data) => {
       setConnected(true);
+      setPreviews((p) => applyGroupPreviewEvent(p, event, data));
       switch (event) {
         case "group.message_posted": {
           const msg = data.message as GroupMessage | undefined;
@@ -239,6 +276,7 @@ export function useGroupStream(groupId: string | null): UseGroupStreamResult {
   const value = useMemo<UseGroupStreamResult>(
     () => ({
       messages,
+      previews,
       state,
       connected,
       loading,
@@ -251,7 +289,7 @@ export function useGroupStream(groupId: string | null): UseGroupStreamResult {
       docVersion: state.docVersion,
       refresh: pullDelta,
     }),
-    [messages, state, connected, loading, error, hasMoreBefore, send, sending, loadOlder, loadingOlder, pullDelta],
+    [messages, previews, state, connected, loading, error, hasMoreBefore, send, sending, loadOlder, loadingOlder, pullDelta],
   );
 
   return value;

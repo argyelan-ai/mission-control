@@ -22,20 +22,30 @@ class _FakePubSub:
     def __init__(self) -> None:
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.timeouts: list[float | None] = []
+        self.subscribed: list[str] = []
 
-    async def subscribe(self, *channels: str) -> None: ...
+    async def subscribe(self, *channels: str) -> None:
+        self.subscribed.extend(channels)
     async def unsubscribe(self, *channels: str) -> None: ...
     async def aclose(self) -> None: ...
 
     async def get_message(self, ignore_subscribe_messages: bool = False, timeout: float | None = 0.0):
         self.timeouts.append(timeout)
         if timeout == 0.0 or timeout is None:
-            return None if self.queue.empty() else {"data": self.queue.get_nowait()}
+            return None if self.queue.empty() else self._frame(self.queue.get_nowait())
         try:
-            data = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+            item = await asyncio.wait_for(self.queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
-        return {"data": data}
+        return self._frame(item)
+
+    @staticmethod
+    def _frame(item):
+        # redis-py liefert {"channel": ..., "data": ...}; Tests duerfen
+        # einen nackten String (Kanal "c") oder ein (Kanal, Daten)-Paar legen.
+        if isinstance(item, tuple):
+            return {"channel": item[0], "data": item[1]}
+        return {"channel": "c", "data": item}
 
 
 class _FakeRedis:
@@ -99,3 +109,36 @@ async def test_a_published_message_is_forwarded_promptly(fake_pubsub):
     assert json.loads(first["data"]) == {"kind": "preview"}
     # Sabotage-Gegenprobe: Nachrichten warten NICHT auf den Ping-Takt.
     assert time.monotonic() - started < 1.0
+
+
+# --- Kanal-bewusster Uebersetzer (Gruppen-Vorschau) -------------------------
+#
+# Der Gruppenraum haengt sich zusaetzlich an die Chat-Kanaele seiner
+# Mitglieder. Der Generator muss darum wissen, AUS WELCHEM Kanal ein Frame
+# kam, und ihn ueber ``transform(channel, payload)`` umschreiben oder
+# verwerfen koennen.
+
+
+@pytest.mark.asyncio
+async def test_transform_rewrites_or_drops_frames_per_channel(fake_pubsub):
+    seen: list[tuple[str, dict]] = []
+
+    def transform(channel: str, payload: dict) -> dict | None:
+        seen.append((channel, payload))
+        if channel == "drop-me":
+            return None
+        return {**payload, "event": f"rewritten:{channel}"}
+
+    gen = sse._sse_generator(["keep", "drop-me"], ping_interval=5, transform=transform)
+    await fake_pubsub.queue.put(
+        ("drop-me", json.dumps({"id": "1", "event": "chat_event", "data": {"kind": "preview"}}))
+    )
+    await fake_pubsub.queue.put(
+        ("keep", json.dumps({"id": "2", "event": "group.turn_started", "data": {"x": 1}}))
+    )
+    first = await asyncio.wait_for(gen.__anext__(), timeout=2)
+    await gen.aclose()
+    assert first["event"] == "rewritten:keep"
+    assert first["id"] == "2"
+    assert json.loads(first["data"]) == {"x": 1}
+    assert [c for c, _ in seen] == ["drop-me", "keep"]

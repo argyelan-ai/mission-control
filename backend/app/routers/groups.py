@@ -11,10 +11,12 @@ Runden-Steuerung (start/pause/stop) kommt mit der Engine in PR B.
 
 import os
 import uuid
+from pathlib import Path
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -26,6 +28,7 @@ from app.models.group import AgentGroup, GroupMember
 from app.models.memory import BoardMemory
 from app.models.thread import Message
 from app.redis_client import RedisKeys
+from app.routers.agent_chat import _resolve_transcript_path
 from app.services import group_service, reference_ingest
 from app.services.group_service import (
     GroupMemberNotCapable,
@@ -408,11 +411,38 @@ async def group_stream(
     Trägt group.message_posted / round_started / turn_started /
     round_completed / doc_updated / gate_requested / status_changed /
     member_changed — die Live-Ansicht im Frontend hängt hier dran.
-    """
-    from app.services.sse import make_sse_response
 
-    await _get_group_or_404(session, group_id)
-    return make_sse_response([RedisKeys.group_events(str(group_id))])
+    Zusätzlich ``group.preview {agent_id, text, ts}``: was ein Mitglied
+    gerade im Terminal tippt, bevor seine Nachricht gepostet ist. Quelle ist
+    derselbe Vorschau-Strom wie im Sessions-Chat (``group_preview``).
+    """
+    from sse_starlette.sse import EventSourceResponse
+
+    from app.services.group_preview import group_stream_frames
+
+    group = await _get_group_or_404(session, group_id)
+    # Transkriptpfade JETZT auflösen — die DB-Session lebt nicht so lange
+    # wie der Strom.
+    sources = await _group_preview_sources(session, group)
+    return EventSourceResponse(group_stream_frames(str(group_id), sources))
+
+
+async def _group_preview_sources(
+    session: AsyncSession, group: AgentGroup
+) -> list[tuple[Agent, Path]]:
+    """(Agent, Transkriptpfad) je aktivem Mitglied mit Live-Sitzung.
+    Archivierte Mitglieder und Agenten ohne Transkript (Host-Agenten, noch
+    keine Sitzung) fallen still weg — die Vorschau ist Komfort, kein Gate."""
+    sources: list[tuple[Agent, Path]] = []
+    for _member, agent in await _members_with_agents(session, group):
+        if agent.archived_at is not None:
+            continue
+        resolved = await _resolve_transcript_path(agent.id, session)
+        if isinstance(resolved, JSONResponse):
+            continue
+        resolved_agent, path, _adapter = resolved
+        sources.append((resolved_agent, path))
+    return sources
 
 
 @router.post("/groups/{group_id}/start")
