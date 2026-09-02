@@ -24,7 +24,8 @@
  */
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
+import { Unfold } from "@/components/ui/Unfold";
 import { C } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
@@ -170,11 +171,13 @@ export function GroupMessage({
             data-testid="group-system-toggle"
             className="w-full flex items-center gap-1.5 text-left bg-transparent border-0 p-0 cursor-pointer"
           >
-            {systemOpen ? (
-              <ChevronDown size={12} className="shrink-0" style={{ color: C.textDim }} />
-            ) : (
-              <ChevronRight size={12} className="shrink-0" style={{ color: C.textDim }} />
-            )}
+            <ChevronRight
+              size={12}
+              data-testid="group-system-chevron"
+              data-open={systemOpen}
+              className="shrink-0 chevron-turn"
+              style={{ color: C.textDim }}
+            />
             <span
               // textMuted, nicht textDim: colors.ts sagt zu textDim
               // ausdruecklich „decoration / inactive icons ONLY — never body
@@ -187,7 +190,7 @@ export function GroupMessage({
             </span>
           </button>
 
-          {systemOpen && (
+          <Unfold open={systemOpen}>
             <pre
               data-testid="group-system-body"
               className="mt-1.5 ml-5 max-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-[1.7] p-2 rounded-sm scroll-quiet"
@@ -199,7 +202,7 @@ export function GroupMessage({
             >
               {fullBody}
             </pre>
-          )}
+          </Unfold>
         </div>
       </div>
     );
@@ -262,11 +265,13 @@ export function GroupMessage({
             // sein als der Text, den er zeigt. Aufhellen statt Farbwechsel.
             className="w-full flex items-baseline gap-2 text-left bg-transparent border-0 p-0 cursor-pointer opacity-90 hover:opacity-100 transition-opacity"
           >
-            {open ? (
-              <ChevronDown size={12} className="shrink-0 self-center" style={{ color: C.textDim }} />
-            ) : (
-              <ChevronRight size={12} className="shrink-0 self-center" style={{ color: C.textDim }} />
-            )}
+            <ChevronRight
+              size={12}
+              data-testid="group-contribution-chevron"
+              data-open={open}
+              className="shrink-0 self-center chevron-turn"
+              style={{ color: C.textDim }}
+            />
             {senderName && (
               <span
                 className="shrink-0 font-mono text-[11px] font-medium"
@@ -291,7 +296,7 @@ export function GroupMessage({
               </span>
             )}
           </button>
-          {open && (
+          <Unfold open={open}>
             <div
               data-testid="group-contribution-body"
               // Leseweite statt Panelbreite — dieselbe Kappung wie im 1:1-Chat,
@@ -300,7 +305,7 @@ export function GroupMessage({
             >
               <MarkdownContent content={message.body} />
             </div>
-          )}
+          </Unfold>
         </div>
       </div>
     </div>
