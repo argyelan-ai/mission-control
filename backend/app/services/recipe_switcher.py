@@ -58,6 +58,7 @@ logger = logging.getLogger("mc.recipe_switcher")
 # ── Grau-Gründe als Sätze (Vertrag: "Sätze, keine Codes") ────────────────────
 REASON_NO_COMMAND = "Startbefehl fehlt"
 REASON_NO_SECOND_BOX = "braucht 2 Boxen — keine freie zweite Box"
+REASON_RUNNING = "läuft bereits auf dieser Box"
 REASON_NO_SSH = "Box hat keinen SSH-Zugang — MC kann hier nichts starten"
 REASON_DUO_PHASE3 = "Zweibox-Start kommt in Phase 3"
 REASON_RECIPE_HIDDEN = "Rezept ist ausgeblendet"
@@ -262,7 +263,8 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
     exclusive_busy = {
         hid for hid, rts in occupied.items() if any(rt.exclusive_memory for rt in rts)
     }
-    candidate_workers = worker_candidates(hosts, host, exclusive_busy)
+    # Wirklich freie Boxen (Worker-Rolle zuerst, P2) — für einen NEUEN Start.
+    free_workers = worker_candidates(hosts, host, exclusive_busy)
     ssh_ok = host_can_ssh(host)
 
     entries: list[dict[str, Any]] = []
@@ -283,8 +285,15 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
 
         nodes = recipe_nodes(recipe.topology)
         reason: str | None = None
+        own_busy = {hid for rt in matching if running_by_id[rt.id] for hid in _hosts_of(rt)}
+        # Kandidaten = wirklich freie Boxen (für einen NEUEN Start, P3). Für die
+        # Frage „passt das Rezept auf dieses Paar?" zählt zusätzlich die Box,
+        # die das EIGENE laufende Duo belegt — sonst stünde ein laufender
+        # Verbund als „keine freie zweite Box" da (Live-Befund 02.09.).
+        candidate_workers = free_workers if nodes >= 2 else []
+        own_other_boxes = own_busy - {host.id}
         if nodes >= 2:
-            fit = "duo" if candidate_workers else "none"
+            fit = "duo" if (candidate_workers or own_other_boxes) else "none"
             if fit == "none":
                 reason = REASON_NO_SECOND_BOX
         else:
@@ -294,6 +303,11 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
         if not command_ok:
             reason = REASON_NO_COMMAND
         startable = command_ok and fit != "none"
+        if running:
+            # Ein laufendes Rezept ist gesetzt, nicht startbar — der Grund sagt
+            # das, statt „keine freie Box" oder „Port belegt" zu behaupten.
+            startable = False
+            reason = REASON_RUNNING
 
         # Port-Kollision auf DIESER Box: nur ein Blocker, den der Start nicht
         # selbst wegräumt, zählt. Eine exklusive Runtime wird von einem
