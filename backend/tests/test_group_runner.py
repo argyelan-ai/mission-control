@@ -111,6 +111,23 @@ async def _agent_says(session: AsyncSession, group, agent: Agent, body: str):
     )
 
 
+async def _age_lead_prompt(session: AsyncSession, group, round_row) -> None:
+    """Den Lead-Auftrag rückdatieren, sodass der Lead-Timeout abgelaufen ist."""
+    lead_prompt = (
+        await session.exec(
+            select(Message).where(
+                Message.thread_id == group.thread_id,
+                Message.seq == round_row.lead_prompt_seq,
+            )
+        )
+    ).one()
+    lead_prompt.created_at = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(
+        seconds=group.speaker_timeout_seconds + 60
+    )
+    session.add(lead_prompt)
+    await session.commit()
+
+
 async def _run_full_round(
     session, group, alpha, beta, gamma, *, lead_verdict: str,
     beta_text: str = "DFlash2 liegt vorn. Quelle: https://example.org/a",
@@ -547,14 +564,24 @@ async def test_frage_an_mark_waits_at_gate(async_session: AsyncSession):
 async def test_malformed_lead_verdict_fails_round_and_circuit_breaker_pauses(
     async_session: AsyncSession,
 ):
-    """Formwidriges Lead-Urteil = Fehlrunde; 2 in Folge (Default
-    pause_on_failed_rounds=2) → paused + group_gate (Circuit-Breaker)."""
+    """Formwidriges Lead-Urteil = Fehlrunde (geschlossen beim Lead-Timeout,
+    damit ein Lead sich noch mit einem Marker korrigieren kann); 2 in Folge
+    (Default pause_on_failed_rounds=2) → paused + group_gate (Circuit-Breaker)."""
     group, alpha, beta, gamma = await _make_running_group(async_session)
-    for _ in range(2):
-        await _run_full_round(
-            async_session, group, alpha, beta, gamma,
-            lead_verdict="hm, schwierig zu sagen",
-        )
+    for round_no in (1, 2):
+        await _tick(async_session)  # Brief
+        await _agent_says(async_session, group, beta, "A. Quelle: https://x.org")
+        await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+        await _tick(async_session)  # Lead-Prompt raus
+        await _agent_says(async_session, group, alpha, "hm, schwierig zu sagen")
+        await _tick(async_session)
+        round_row = await _current_round(async_session, group)
+        assert round_row.round_no == round_no and round_row.outcome is None
+        await _age_lead_prompt(async_session, group, round_row)
+        await _tick(async_session)  # Timeout → formwidrig
+        await async_session.refresh(round_row)
+        assert round_row.outcome == "failed"
+        assert "Marker" in (round_row.report or "")
     await async_session.refresh(group)
     assert group.status == "paused"
     assert group.consecutive_failed_rounds == 2
@@ -569,6 +596,39 @@ async def test_malformed_lead_verdict_fails_round_and_circuit_breaker_pauses(
 
 
 @pytest.mark.asyncio
+async def test_lead_scratch_message_without_marker_does_not_end_the_turn(
+    async_session: AsyncSession,
+):
+    """Live 02.09.2026 (Sparky, Gruppe 001a5ed5): der Lead schickte beim
+    Erkunden des CLI eine Probe („Test-Nachricht") — die Engine nahm sie als
+    Urteil, „formwidrig", Runde verloren. Es zählt der Marker: markerlose
+    Lead-Nachrichten werden übersprungen, das echte Urteil danach gewertet."""
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "A. Quelle: https://x.org")
+    await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+    await _tick(async_session)  # Lead-Prompt raus
+
+    await _agent_says(async_session, group, alpha, "Test-Nachricht")
+    await _tick(async_session)
+    round1 = await _current_round(async_session, group)
+    assert round1.round_no == 1 and round1.outcome is None  # Turn läuft weiter
+
+    await _agent_says(
+        async_session, group, alpha, "ZIEL ERREICHT: A und B decken sich."
+    )
+    await _tick(async_session)
+    round1 = (
+        await async_session.exec(
+            select(GroupRound).where(
+                GroupRound.group_id == group.id, GroupRound.round_no == 1
+            )
+        )
+    ).one()
+    assert round1.outcome == "goal_reached"
+
+
+@pytest.mark.asyncio
 async def test_lead_timeout_fails_round(async_session: AsyncSession):
     group, alpha, beta, gamma = await _make_running_group(async_session)
     await _tick(async_session)
@@ -577,19 +637,7 @@ async def test_lead_timeout_fails_round(async_session: AsyncSession):
     await _tick(async_session)  # Lead-Prompt raus
 
     round_row = await _current_round(async_session, group)
-    lead_prompt = (
-        await async_session.exec(
-            select(Message).where(
-                Message.thread_id == group.thread_id,
-                Message.seq == round_row.lead_prompt_seq,
-            )
-        )
-    ).one()
-    lead_prompt.created_at = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(
-        seconds=group.speaker_timeout_seconds + 60
-    )
-    async_session.add(lead_prompt)
-    await async_session.commit()
+    await _age_lead_prompt(async_session, group, round_row)
 
     await _tick(async_session)
     round1 = (
