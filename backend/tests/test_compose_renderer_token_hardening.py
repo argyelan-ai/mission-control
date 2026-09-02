@@ -1,14 +1,17 @@
-"""Tests for MC_TOKEN hardening in compose_renderer.py (ADR-051).
+"""Tests for MC_TOKEN handling in compose_renderer.py.
 
-Verifies:
-1. Every agent service in the rendered output has ``env_file`` containing
-   ``docker/.env.agents`` so MC_TOKEN_<NAME> vars reach the container even
-   without explicit ``--env-file`` at compose-up time.
-2. The backward-compatible ``MC_TOKEN=${MC_TOKEN_<NAME>}`` env var is still
-   emitted (parse-time interpolation path still works when --env-file IS passed).
-3. New agents appended by the renderer (not in static template) also carry both.
-4. The injection is idempotent — running the renderer twice does not duplicate
-   the env_file entry.
+Security invariant (fix/agent-token-env-file-leak): ``docker/.env.agents``
+holds the tokens of EVERY agent.  Mounting it as ``env_file`` handed each
+container all 15 ``MC_TOKEN_<NAME>`` secrets in plain text — a compromised
+agent could impersonate any other.  The renderer must therefore
+
+1. never emit ``docker/.env.agents`` as ``env_file`` for any agent service,
+2. strip a lingering entry from files rendered by older versions,
+3. keep ``docker/.env.shared`` when a service-level ``env_file`` remains
+   (YAML merge: a service-level list replaces the anchor list),
+4. keep the ``MC_TOKEN=${MC_TOKEN_<NAME>}`` interpolation line — the only
+   token path left; every compose caller passes ``--env-file docker/.env.agents``
+   (cli_terminal.py, docker_agent_sync.py, start-all.sh).
 """
 from __future__ import annotations
 
@@ -75,6 +78,18 @@ services:
     volumes:
       - ${HOME}/.mc/agents/sparky/claude-config:/home/agent/.claude
 
+  mc-agent-legacy:
+    <<: *claude-agent-base
+    container_name: mc-agent-legacy
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
+    environment:
+      - AGENT_NAME=legacy
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_LEGACY}
+      - AGENT_SLUG=legacy
+
 networks:
   mission-control_default:
     external: true
@@ -111,28 +126,38 @@ def _env_list(service_def: dict) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_existing_services_get_env_file_agents(async_session, compose_path):
-    """Every service already in the static template must have env_file including
-    docker/.env.agents after the renderer runs."""
-    # No agents in DB → renderer runs purely for env_file injection.
+async def test_no_service_mounts_env_agents(async_session, compose_path):
+    """No agent service may carry docker/.env.agents in env_file — that file
+    contains every agent's token."""
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
     parsed = yaml.safe_load(rendered)
     services = parsed["services"]
 
     for svc_name, svc_def in services.items():
         ef = _env_file_list(svc_def)
-        assert any(".env.agents" in entry for entry in ef), (
-            f"Service {svc_name} missing docker/.env.agents in env_file: {ef}"
+        assert not any(".env.agents" in entry for entry in ef), (
+            f"Service {svc_name} leaks docker/.env.agents via env_file: {ef}"
         )
 
 
 @pytest.mark.asyncio
+async def test_legacy_env_agents_entry_is_stripped_but_shared_kept(async_session, compose_path):
+    """A file rendered by an older backend already lists docker/.env.agents at
+    service level.  The renderer must remove it and keep docker/.env.shared
+    (dropping the whole block would fall back to the anchor, but an explicit
+    block that lost .env.shared would silently strip CLAUDE_CODE_OAUTH_TOKEN)."""
+    rendered = await render_compose_agents(async_session, compose_path=compose_path)
+    parsed = yaml.safe_load(rendered)
+    ef = _env_file_list(parsed["services"]["mc-agent-legacy"])
+
+    assert not any(".env.agents" in e for e in ef), ef
+    assert any(".env.shared" in e for e in ef), ef
+
+
+@pytest.mark.asyncio
 async def test_existing_services_retain_env_shared(async_session, compose_path):
-    """Regression guard: injecting a service-level env_file REPLACES the anchor's
-    env_file in YAML merge semantics.  The renderer must therefore repeat
-    docker/.env.shared alongside docker/.env.agents — otherwise every agent
-    silently loses CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN / TAVILY_API_KEY (a worse
-    incident than the blank MC_TOKEN this PR fixes)."""
+    """Every service still resolves docker/.env.shared (via anchor or explicit
+    block) so CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN keep flowing."""
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
     parsed = yaml.safe_load(rendered)
     services = parsed["services"]
@@ -140,39 +165,30 @@ async def test_existing_services_retain_env_shared(async_session, compose_path):
     for svc_name, svc_def in services.items():
         ef = _env_file_list(svc_def)
         assert any(".env.shared" in entry for entry in ef), (
-            f"Service {svc_name} lost docker/.env.shared after env_file injection "
-            f"(YAML merge override bug): {ef}"
-        )
-        assert any(".env.agents" in entry for entry in ef), (
-            f"Service {svc_name} missing docker/.env.agents in env_file: {ef}"
+            f"Service {svc_name} lost docker/.env.shared: {ef}"
         )
 
 
 @pytest.mark.asyncio
 async def test_existing_services_retain_mc_token_env_var(async_session, compose_path):
-    """Backward-compat: MC_TOKEN=${MC_TOKEN_<NAME>} interpolation line must be
-    preserved in existing services (canonical --env-file path still works)."""
+    """MC_TOKEN=${MC_TOKEN_<NAME>} interpolation is now the ONLY token path and
+    must survive rendering."""
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
     parsed = yaml.safe_load(rendered)
     services = parsed["services"]
 
     for svc_name, svc_def in services.items():
         env = _env_list(svc_def)
-        # The compose-interpolation line ${MC_TOKEN_REX} etc. is present.
-        mc_token_entries = [e for e in env if "MC_TOKEN" in str(e) and "AGENT" not in str(e) and "PATH" not in str(e) and "INBOX" not in str(e)]
+        mc_token_entries = [e for e in env if str(e).startswith("MC_TOKEN=")]
         assert mc_token_entries, (
             f"Service {svc_name} lost its MC_TOKEN env entry. env={env}"
         )
 
 
 @pytest.mark.asyncio
-async def test_new_agent_block_includes_env_file_agents(async_session, compose_path):
-    """A new cli-bridge agent not in the static template should get env_file
-    including docker/.env.agents in its generated service block."""
-    newbie = Agent(
-        name="Newbie",
-        agent_runtime="cli-bridge",
-    )
+async def test_new_agent_block_has_no_env_agents(async_session, compose_path):
+    """A freshly appended agent block must not mount docker/.env.agents either."""
+    newbie = Agent(name="Newbie", agent_runtime="cli-bridge")
     async_session.add(newbie)
     await async_session.commit()
     await async_session.refresh(newbie)
@@ -183,49 +199,31 @@ async def test_new_agent_block_includes_env_file_agents(async_session, compose_p
 
     assert "mc-agent-newbie" in services, "New agent block not appended"
     ef = _env_file_list(services["mc-agent-newbie"])
-    assert any(".env.agents" in entry for entry in ef), (
-        f"New agent block missing docker/.env.agents in env_file: {ef}"
-    )
+    assert not any(".env.agents" in entry for entry in ef), ef
+    assert any(".env.shared" in entry for entry in ef), ef
 
 
 @pytest.mark.asyncio
 async def test_new_agent_block_has_mc_token_env_var(async_session, compose_path):
-    """New agent blocks must still emit MC_TOKEN=${MC_TOKEN_<NAME>} for the
-    canonical --env-file path."""
-    newbie = Agent(
-        name="Newbie",
-        agent_runtime="cli-bridge",
-    )
+    """New agent blocks emit MC_TOKEN=${MC_TOKEN_<NAME>} for the --env-file path."""
+    newbie = Agent(name="Newbie", agent_runtime="cli-bridge")
     async_session.add(newbie)
     await async_session.commit()
     await async_session.refresh(newbie)
 
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
     parsed = yaml.safe_load(rendered)
-    services = parsed["services"]
-
-    env = _env_list(services["mc-agent-newbie"])
-    assert any("MC_TOKEN" in str(e) for e in env), (
-        f"New agent block missing MC_TOKEN env entry. env={env}"
-    )
+    env = _env_list(parsed["services"]["mc-agent-newbie"])
+    assert "MC_TOKEN=${MC_TOKEN_NEWBIE}" in env, env
 
 
 @pytest.mark.asyncio
-async def test_env_file_injection_is_idempotent(async_session, compose_path):
-    """Running the renderer twice must not duplicate the .env.agents entry."""
-    # First pass
+async def test_strip_is_idempotent(async_session, compose_path):
+    """Rendering the rendered output again yields the same env_file blocks."""
     first = await render_compose_agents(async_session, compose_path=compose_path)
-    # Write the first output as the new "static" file and re-render.
     compose_path.write_text(first, encoding="utf-8")
     second = await render_compose_agents(async_session, compose_path=compose_path)
 
-    parsed = yaml.safe_load(second)
-    services = parsed["services"]
-
-    for svc_name, svc_def in services.items():
-        ef = _env_file_list(svc_def)
-        agents_entries = [e for e in ef if ".env.agents" in e]
-        assert len(agents_entries) == 1, (
-            f"Service {svc_name} has {len(agents_entries)} .env.agents entries "
-            f"after double-render (expected 1): {ef}"
-        )
+    a = {k: _env_file_list(v) for k, v in yaml.safe_load(first)["services"].items()}
+    b = {k: _env_file_list(v) for k, v in yaml.safe_load(second)["services"].items()}
+    assert a == b

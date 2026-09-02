@@ -313,15 +313,13 @@ async def test_fallback_when_runtime_id_null(async_session, compose_path):
 
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
 
-    # No image override and no vault injection — but env_file hardening is
-    # always applied (ADR-051), so the output is not byte-identical to source.
     parsed = yaml.safe_load(rendered)
     services = parsed.get("services", {})
     assert "mc-agent-davinci" in services
-    # Verify env_file hardening is present (the key new invariant).
+    # Security invariant: the all-agents token file is never mounted.
     ef = services["mc-agent-davinci"].get("env_file", [])
-    assert any(".env.agents" in str(e) for e in ef), (
-        f"env_file hardening missing from davinci service: {ef}"
+    assert not any(".env.agents" in str(e) for e in ef), (
+        f"davinci service leaks docker/.env.agents: {ef}"
     )
 
 
