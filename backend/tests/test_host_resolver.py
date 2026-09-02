@@ -237,53 +237,6 @@ async def test_verify_started_is_host_scoped():
     assert ssh.call_args.kwargs.get("host") is box_b
 
 
-async def test_switch_recipe_evicts_and_starts_on_resolved_host(
-    async_session, fake_redis
-):
-    """switch_recipe resolves the runtime's host and threads it through to
-    eviction AND start (box A is never touched for a switch to box B)."""
-    from app.services import sparkrun_manager
-
-    host = Host(slug="box-a", display_name="Box A", kind="ssh", ssh_host="192.0.2.20")
-    async_session.add(host)
-    await async_session.commit()
-    await async_session.refresh(host)
-    rt = _make_runtime(
-        slug="qwen-general",
-        host_id=host.id,
-        launch_command=(
-            "uvx sparkrun run @official/old-recipe --solo --no-rm --ensure "
-            "--no-follow --label mc.runtime.slug=qwen-general"
-        ),
-    )
-    async_session.add(rt)
-    await async_session.commit()
-    await async_session.refresh(rt)
-
-    evict = AsyncMock(return_value={"ok": True, "message": "evicted", "stopped": []})
-    start = AsyncMock(return_value={"ok": True, "message": "starting"})
-
-    async def _fake_get_redis():
-        return fake_redis
-
-    with (
-        patch("app.services.runtime_manager.evict_spark_runtime_containers", evict),
-        patch("app.services.runtime_manager.start_runtime", start),
-        patch("app.services.runtime_model_resolver.get_redis", _fake_get_redis),
-        patch(
-            "app.services.agent_runtime_switch.probe_runtime_model",
-            AsyncMock(return_value=None),
-        ),
-    ):
-        result = await sparkrun_manager.switch_recipe(
-            async_session, rt, "@official/new-recipe"
-        )
-
-    assert result["ok"] is True
-    assert evict.call_args.kwargs["host"].slug == "box-a"
-    assert start.call_args.kwargs["host"].slug == "box-a"
-
-
 # ── get_host_metrics ─────────────────────────────────────────────────────────
 
 _METRICS_OUT = (

@@ -26,15 +26,26 @@ Python defaults must match them.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Text, text
+from typing import Any
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, Text, text
 from sqlmodel import Column, Field, SQLModel
 
 from app.utils import utcnow
 
-#: How the model is served. Mirrors the runtime_type vocabulary where they
-#: overlap (``vllm_docker``, ``llamacpp_docker``, ``ssh_process``), plus
-#: ``sparkrun`` for recipe-based launches on a DGX Spark.
-ENGINES = ("sparkrun", "vllm_docker", "llamacpp_docker", "ssh_process")
+#: How the model is served. Identical to the runtime_type vocabulary of the
+#: engines MC starts over SSH (``vllm_docker``, ``llamacpp_docker``,
+#: ``ssh_process``) — a recipe's engine IS the runtime_type of its instance.
+#:
+#: Rezept-Umschalter (02.09.2026): ``sparkrun`` ist kein Engine-Wert mehr.
+#: Ein sparkrun-Rezept ist ein gewöhnlicher Startbefehl (``uvx sparkrun run …``)
+#: und wird beim Import/Startup zu ``vllm_docker`` umgewandelt
+#: (services/local_registry.normalise_legacy_engine) — der Befehl bleibt.
+ENGINES = ("vllm_docker", "llamacpp_docker", "ssh_process")
+
+#: Der alte Engine-Wert, den Seeds/Registries noch liefern dürfen — wird
+#: umgewandelt, nie abgelehnt und nie gespeichert.
+LEGACY_ENGINE_SPARKRUN = "sparkrun"
 
 #: CPU architecture of the target box. ``any`` = runs on both; used as the
 #: default so a new entry without an explicit claim is never over-promised as
@@ -71,12 +82,26 @@ class LocalRecipe(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
-    # Launch hooks. recipe_ref is the sparkrun recipe handle (e.g.
-    # "@mark/laguna-s21-nvfp4-vllm"); launch_template is a free-form command
-    # blueprint for the docker engines. PR 2 hands these to the EXISTING
-    # switch_recipe path — nothing here executes anything by itself.
+    # Launch hooks. launch_template is the command blueprint (placeholders:
+    # services/launch_template.KNOWN_PLACEHOLDERS) that becomes the instance's
+    # launch_command; recipe_ref is the registry handle a wrapper recipe was
+    # imported from (e.g. "@registry/name") — kept so an already existing
+    # runtime whose launch_command mentions it is still recognised as this
+    # recipe's instance (services/recipe_switcher.recipe_matches_runtime).
+    # Nothing here executes anything by itself.
     recipe_ref: str | None = Field(default=None, max_length=256)
     launch_template: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
+    # ── Rezept-Umschalter (Vertrag 02.09.2026) ───────────────────────────────
+    # topology = {"nodes": 1|2}: wie viele Boxen das Rezept braucht — NUR die
+    # Anzahl, nie die Geräte. NULL = 1 (Solo), damit jede bestehende Zeile
+    # unverändert gültig bleibt. Beim Anlegen einer Instanz wird es nach
+    # runtimes.topology kopiert; welche Boxen es konkret sind, steht dort
+    # (host_id = Head) und in runtime_hosts (Mitglieder).
+    topology: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Standard-Port des Rezepts. Die Oberfläche braucht ihn für den Satz
+    # „Port 8000 auf dieser Box belegt durch …", ohne den Befehl zu parsen.
+    port: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
 
     # One-click installation (PR 6). The command that puts the engine ON the
     # box — cloning a repo, building it, fetching weights. Runs once, as a
