@@ -1086,6 +1086,30 @@ describe("Composer", () => {
       await waitFor(() => expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-pending", "false"));
     });
 
+    it("lets the gauge breathe while the switch runs and pulses once when confirmed", async () => {
+      // design-dna: Bewegung mit Bedeutung. Der Wechsel dauert Sekunden (omp
+      // dreht bis zu 8x Shift+Tab) — die Saeule atmet, solange gewartet wird,
+      // und setzt sich mit einem kurzen Puls, sobald die CLI bestaetigt hat.
+      let resolve: (() => void) | undefined;
+      mockSetEffort.mockImplementation(() => new Promise<void>((r) => { resolve = () => r(); }));
+      const user = userEvent.setup();
+      renderWithEffort("medium");
+      await user.click(screen.getByTestId("effort-chip"));
+      pick(CAPS.effortLevels, "high");
+
+      expect(screen.getByTestId("effort-gauge-fill")).toHaveAttribute("data-pending", "true");
+      expect(screen.getByTestId("effort-gauge-fill")).toHaveAttribute("data-settled", "false");
+
+      resolve?.();
+      await waitFor(() => expect(screen.getByTestId("effort-gauge-fill")).toHaveAttribute("data-settled", "true"));
+      expect(screen.getByTestId("effort-gauge-fill")).toHaveAttribute("data-pending", "false");
+      // Der Puls ist einmalig: nach seiner Dauer ist der Marker wieder weg.
+      await waitFor(
+        () => expect(screen.getByTestId("effort-gauge-fill")).toHaveAttribute("data-settled", "false"),
+        { timeout: 1500 },
+      );
+    });
+
     it("demotes the chip to a read-only value when the runtime has no terminal to drive", async () => {
       mockSetEffort.mockRejectedValue(new Error('API 409: {"reason":"input_not_supported"}'));
       const user = userEvent.setup();
