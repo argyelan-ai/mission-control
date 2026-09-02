@@ -311,3 +311,42 @@ describe("contributionExcerpt — die eine Zeile auf dem Aufklapper", () => {
     expect(contributionExcerpt("")).toBe("");
   });
 });
+
+describe("GroupMessage — Bewegung", () => {
+  // design-dna: Micro-Feedback 100-150 ms, Transitions 200-300 ms, nur
+  // transform/opacity, reduced-motion respektieren. Der Chevron DREHT sich
+  // (ein Icon, das rotiert) statt zwischen zwei Icons zu springen; der Körper
+  // faltet sich auf (Unfold) statt zu erscheinen.
+  it("uses one chevron that rotates open instead of swapping icons", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "Erste Zeile.\n\nMehr." }));
+    const chevron = screen.getByTestId("group-contribution-chevron");
+    expect(chevron).toHaveAttribute("data-open", "false");
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.getByTestId("group-contribution-chevron")).toHaveAttribute("data-open", "true");
+  });
+
+  it("wraps the opened body in an Unfold so it can fold with motion", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "Erste Zeile.\n\nMehr." }));
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    const body = screen.getByTestId("group-contribution-body");
+    expect(body.closest("[data-testid='unfold']")).not.toBeNull();
+  });
+
+  it("folds the system letter through the same Unfold", async () => {
+    const user = userEvent.setup({ delay: null });
+    const long = "# Gruppe: X — Runde 1/2\n\n" + "Zeile.\n".repeat(40);
+    render(
+      <GroupMessage
+        message={mkMessage({ sender_type: "system", sender_id: null, body: long })}
+        senderName={null}
+        senderEmoji={null}
+        isOwn={false}
+      />,
+    );
+    expect(screen.getByTestId("group-system-chevron")).toHaveAttribute("data-open", "false");
+    await user.click(screen.getByTestId("group-system-toggle"));
+    expect(screen.getByTestId("group-system-body").closest("[data-testid='unfold']")).not.toBeNull();
+  });
+});
