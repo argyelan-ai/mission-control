@@ -35,6 +35,14 @@ _STEERING = re.compile(r"^\s*Steering\s*·\s*(\d+)\s*$")
 #: Zeilen, die zur Oberflaeche gehoeren und nie Inhalt sind. Bewusst als
 #: Muster-Liste und nicht als Adapter-Methode: die Rahmen der vier CLIs
 #: unterscheiden sich in den Zeichen, nicht in der Art.
+# Claude Code zeichnet einen Werkzeugaufruf als Block: Kopf „● Name(…" (die
+# Argumente brechen in Folgezeilen um), darunter „⎿"-Ergebniszeilen, die
+# ebenfalls umbrechen. Der Kopf eines Bash-Aufrufs ist seine Beschreibung OHNE
+# Klammern — erkennbar nur daran, dass direkt darunter „⎿" steht.
+_TOOL_HEAD = re.compile(r"^\s*●\s*[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*\(")
+_TOOL_RESULT = re.compile(r"^\s*⎿")
+_BULLET = re.compile(r"^\s*●")
+
 _FURNITURE = re.compile(
     r"""
       ^\s*[─━═╭╰│╮╯┌└]                      # Rahmen- und Trennlinien
@@ -49,8 +57,10 @@ _FURNITURE = re.compile(
     | ^\s*@\S*\.msg-nudge\.msg                # Zustell-Echo, das die omp-Bridge eintippt
     | ^\s*\[Pasted\ text\ \#\d+                # Claude Code: eingefuegter Auftrag im Composer
     | ^\s*paste\ again\ to\ expand             #   … und sein Hinweis darunter
-    | ^\s*●\s*Running\ \d+\ .*…\s*$             # Claude Code: Werkzeug-Statuszeile
+    | ^\s*(●\s*)?Running\ \d+\ .*…\s*$         # Claude Code: Werkzeug-Statuszeile
+    | ^\s*Ran\ \d+\ shell\ command                #   … und ihr Abschluss
     | ^\s*●\s*$                                # Claude Code: Platzhalter der kommenden Antwort
+    | ^\s*[▐▝▎]                               # Claude Code: Logo-Banner + „▎ Using …" nach Neustart
     | ^\s*Update\ Available\s*$                # omp: Update-Banner nach Frischstart
     | ^\s*New\ version\ .*Run:\ omp\ update      #   … zweite Zeile davon
     """,
@@ -180,8 +190,18 @@ class PanePreview:
         out: list[str] = []
         seen: set[str] = set()
         skip = 0            # verbleibende Zeilen der Steering-Box
-        for raw in lines:
+        in_tool = False     # innerhalb eines Werkzeug-Blocks (bis Leerzeile / neues „●")
+        for i, raw in enumerate(lines):
             line = raw.strip()
+            if not line:
+                in_tool = False
+            elif _BULLET.match(raw):
+                nxt = next((l for l in lines[i + 1:] if l.strip()), "")
+                in_tool = bool(_TOOL_HEAD.match(raw) or _TOOL_RESULT.match(nxt))
+            elif _TOOL_RESULT.match(raw):
+                in_tool = True
+            if in_tool:
+                continue
             if skip and re.match(r"^\d+\.\s", line):
                 skip -= 1
                 continue

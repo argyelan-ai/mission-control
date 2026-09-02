@@ -260,3 +260,69 @@ def test_omp_update_banner_and_nudge_echo_are_furniture():
         "@/home/agent/.msg-nudge.msg\r\nIch lese die Inbox.\r\n"
     )
     assert p.text() == "Ich lese die Inbox."
+
+
+def test_claude_code_tool_call_block_is_furniture():
+    """Ein Werkzeugaufruf von Claude Code ist ein Block: Kopf „● Name(…", seine
+    umgebrochenen Argument-Zeilen, dann „⎿"-Ergebniszeilen samt Umbruch. Nichts
+    davon ist Antworttext (Live-Gate B, 02.09.: ~70 % der Vorschau war Rahmen)."""
+    p = PanePreview(80, 24)
+    p.feed(
+        '● Web Search("MDN server-sent events limitation maximum number of open\r\n'
+        '  connections HTTP/1.1 six browser")\r\n'
+        "  ⎿  Searching: MDN server-sent events limitation maximum open connections\r\n"
+        "     HTTP/1.1 six browser\r\n"
+        '  ⎿  Found 9 results for "MDN server-sent events limitation maximum open\r\n'
+        '     connections HTTP/1.1 six browser"\r\n'
+        "  ⎿  Did 1 search in 5s\r\n"
+        "\r\n"
+        "  Running 1 shell command…\r\n"
+        "\r\n"
+        "● Beitrag ist im Thread (Runde 1/1, genau ein Post).\r\n"
+        "\r\n"
+        "- Position — SSE-Nachteil: Verbindungslimit von 6 pro Browser/Domain.\r\n"
+    )
+    assert p.text() == (
+        "● Beitrag ist im Thread (Runde 1/1, genau ein Post).\n"
+        "- Position — SSE-Nachteil: Verbindungslimit von 6 pro Browser/Domain."
+    )
+
+
+def test_claude_code_bash_description_head_before_result_is_furniture():
+    """Ein Bash-Aufruf zeigt seine Beschreibung als „●"-Zeile OHNE Klammern —
+    erkennbar nur daran, dass direkt darunter „⎿" folgt."""
+    p = PanePreview(80, 24)
+    p.feed(
+        "● Posting single contribution to group thread\r\n"
+        '  ⎿  $ mc msg --thread 0000 "Mein Nachteil: SSE\r\n'
+        '     ist hart gedeckelt."\r\n'
+        "  ⎿  Ran 1 shell command\r\n"
+        "\r\n"
+        "● Erledigt, der Beitrag steht im Thread.\r\n"
+    )
+    assert p.text() == "● Erledigt, der Beitrag steht im Thread."
+
+
+def test_claude_code_tool_call_head_mid_stream_is_furniture():
+    """Mitten im Streaming steht der Kopf noch ohne „⎿" darunter — trotzdem Rahmen."""
+    p = PanePreview(80, 24)
+    p.feed(
+        "● Antwort davor.\r\n\r\n"
+        '● Web Search("server-sent events maximum number of open\r\n'
+        '  connections")\r\n'
+    )
+    assert p.text() == "● Antwort davor."
+
+
+def test_claude_code_start_banner_is_furniture():
+    """Nach einem Neustart zeigt Claude Code sein Logo-Banner (Blockgrafik-Zeilen)
+    und die Modell-Hinweiszeile „▎ Using …" — das stand als Vorschau eines Mitglieds."""
+    p = PanePreview(80, 10)
+    p.feed(
+        "▐▛███▛█   Claude Code v2.1.258\r\n"
+        "▝▜██████▀  Opus 5 · Claude API\r\n"
+        "▝▝ ▝▝    /home/agent\r\n"
+        "▎ Using Opus 5 (from .claude/settings.json) · /model\r\n"
+        "● Hallo, ich bin bereit.\r\n"
+    )
+    assert p.text() == "● Hallo, ich bin bereit."
