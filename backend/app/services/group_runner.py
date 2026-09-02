@@ -522,7 +522,12 @@ class GroupRunnerService:
         self, session: AsyncSession, group: AgentGroup,
         round_row: GroupRound, members: list[Agent],
     ) -> None:
-        reply = (
+        # Es zählt der Marker, nicht die erste Nachricht: ein Lead, der beim
+        # Erkunden des CLI eine Probe schickt (live 02.09.2026: „Test-
+        # Nachricht"), hat damit noch nicht geurteilt. Markerlose Nachrichten
+        # werden übersprungen; erst der Timeout schliesst die Runde als
+        # formwidrig — mit der letzten markerlosen Nachricht als Beleg.
+        lead_messages = list(
             await session.exec(
                 select(Message)
                 .where(
@@ -532,9 +537,12 @@ class GroupRunnerService:
                     Message.seq > (round_row.lead_prompt_seq or 0),
                 )
                 .order_by(Message.seq.asc())  # type: ignore[union-attr]
-                .limit(1)
             )
-        ).first()
+        )
+        reply = next(
+            (m for m in lead_messages if _parse_verdict(m.body)[0] is not None),
+            None,
+        )
 
         if reply is None:
             prompt = (
@@ -551,20 +559,20 @@ class GroupRunnerService:
                 and utcnow() - prompted_at
                 >= timedelta(seconds=group.speaker_timeout_seconds)
             ):
-                await self._complete_round(
-                    session, group, round_row, outcome="failed",
-                    note="Lead-Timeout — Runde ohne Urteil geschlossen.",
-                )
+                if lead_messages:
+                    await self._complete_round(
+                        session, group, round_row, outcome="failed",
+                        note="Lead-Urteil ohne Marker (formwidrig).",
+                        verdict_text=lead_messages[-1].body,
+                    )
+                else:
+                    await self._complete_round(
+                        session, group, round_row, outcome="failed",
+                        note="Lead-Timeout — Runde ohne Urteil geschlossen.",
+                    )
             return
 
         outcome, remainder = _parse_verdict(reply.body)
-        if outcome is None:
-            await self._complete_round(
-                session, group, round_row, outcome="failed",
-                note="Lead-Urteil ohne Marker (formwidrig).",
-                verdict_text=reply.body,
-            )
-            return
         await self._complete_round(
             session, group, round_row, outcome=outcome, verdict_text=remainder,
         )

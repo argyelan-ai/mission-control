@@ -435,3 +435,80 @@ if __name__ == "__main__":
             print(f"FAIL {fn.__name__}: {e}")
     print(f"\n{len(fns) - failed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)
+
+
+# ── startup: orphaned task lock from a SIGKILLed previous life ───────────────
+
+def test_serve_loop_clears_orphaned_task_lock_at_startup():
+    """Live 02.09.2026: Docker-Neustart schoss den Container mitten in einem
+    Lauf ab; `.task-active.lock` blieb liegen. Ohne Aufräumen beim Start war
+    das Gate für immer zu („Gate zu … Nudge aufgeschoben" alle 5 s) und der
+    Agent hörte keine Nachricht mehr. poll.sh räumt so einen Lock beim Start
+    weg — die Bridge muss das genauso tun."""
+    with tempfile.TemporaryDirectory() as d:
+        lock = os.path.join(d, "task.lock")
+        with open(lock, "w") as fh:
+            fh.write("1788330146")  # Epoch eines längst toten Laufs
+        bridge.serve_loop(
+            poll_interval=0, max_iterations=1,
+            _poll_fn=lambda: {"state": "idle"},
+            _lifecycle_factory=lambda t: _RecordingLifecycle(),
+            _run_factory=lambda t, cwd: _finish_outcome,
+            _sleep=lambda _s: None,
+            _context_env_path=os.path.join(d, "ctx.env"),
+            _msg_queue_dir=os.path.join(d, "queue"), _msg_ack_dir=os.path.join(d, "ack"),
+            _task_lock_path=lock,
+            _nudge_state_file=os.path.join(d, "nudge-state"),
+            _nudge_msg_file=os.path.join(d, "nudge.msg"),
+        )
+        assert not os.path.exists(lock), "orphaned task lock must be cleared at serve start"
+    print("PASS test_serve_loop_clears_orphaned_task_lock_at_startup")
+
+
+# ── fresh omp session: nudge must teach `mc` as a SHELL command ─────────────
+# Live 2026-09-02: after a container recreate the omp TUI started with an empty
+# session; the nudge "lies sie jetzt mit: mc inbox" made the model reach for
+# its built-in irc tool ("IRC inbox empty") instead of running the CLI — the
+# group synthesis (seq 3) was never read and the round hit the lead timeout.
+
+def test_nudge_text_names_mc_as_shell_command_not_a_tool():
+    text = bridge.build_nudge_text(3, 1788343994)
+    assert "Shell-Befehl" in text, text
+    assert "Bash" in text, text
+    assert "irc" in text.lower(), text
+    print("PASS test_nudge_text_names_mc_as_shell_command_not_a_tool")
+
+
+def test_first_nudge_after_serve_start_carries_card_once():
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, ".claude"))
+        with open(os.path.join(d, ".claude", "CARD.md"), "w", encoding="utf-8") as fh:
+            fh.write("CARD-IDENTITY-BLOCK")
+        tui = _StubTui([True, True])
+        deliv = _delivery(d, tui)
+        deliv.home_dir = d
+
+        deliv.nudge([_msg(3, "th")])
+        first = open(deliv.nudge_msg_file, encoding="utf-8").read()
+        assert first.startswith("CARD-IDENTITY-BLOCK"), first
+        assert "mc inbox" in first, first
+
+        # turn ended → gate opens again; a later, higher seq nudges anew
+        deliv._awaiting_offset = None
+        deliv._release_msg_lock()
+        deliv.nudge([_msg(4, "th")])
+        second = open(deliv.nudge_msg_file, encoding="utf-8").read()
+        assert "CARD-IDENTITY-BLOCK" not in second, second
+        assert "bis seq 4" in second, second
+    print("PASS test_first_nudge_after_serve_start_carries_card_once")
+
+
+def test_first_nudge_without_card_is_plain():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _StubTui([True])
+        deliv = _delivery(d, tui)
+        deliv.home_dir = d  # no .claude/CARD.md here
+        deliv.nudge([_msg(3, "th")])
+        text = open(deliv.nudge_msg_file, encoding="utf-8").read()
+        assert text.startswith("📬"), text
+    print("PASS test_first_nudge_without_card_is_plain")

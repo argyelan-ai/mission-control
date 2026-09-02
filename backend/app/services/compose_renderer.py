@@ -112,19 +112,20 @@ HARNESS_IMAGES: dict[str, str] = {
     "kimi": KIMI_IMAGE,
 }
 
-# Token-hardening (fix/agent-token-recreate-hardening):
-# MC_TOKEN_<AGENTNAME> vars live in docker/.env.agents (symlink under
-# ~/.mc/secrets/…/docker/.env.agents).  By emitting this env_file for every
-# rendered agent service we ensure the variables are available inside the
-# container even when the caller forgot --env-file docker/.env.agents on
-# `docker compose up --force-recreate`.
-# Path is relative to the project root — same convention as docker/.env.shared
-# used in the anchor blocks.
+# Token isolation (fix/agent-token-env-file-leak, supersedes the earlier
+# "defense layer 1"): docker/.env.agents (symlink under ~/.mc/secrets/…) holds
+# the MC_TOKEN_<NAME> secret of EVERY agent.  Mounting it as env_file handed
+# each container all of them in plain text — a compromised agent could act as
+# any other.  The renderer therefore never emits it and strips lingering
+# entries written by older versions.  Tokens reach a container only through
+# ``MC_TOKEN=${MC_TOKEN_<NAME>}`` interpolation; every compose caller passes
+# ``--env-file docker/.env.agents`` for that (cli_terminal.force_recreate,
+# docker_agent_sync, scripts/start-all.sh).
 _AGENTS_ENV_FILE = "docker/.env.agents"
-# The shared env file already referenced by anchor blocks.  We re-declare it
-# at service level whenever we emit a service-level env_file list so that YAML
-# merge semantics (service-level list replaces the anchor list, not merges) do
-# not silently drop CLAUDE_CODE_OAUTH_TOKEN, GH_TOKEN, TAVILY_API_KEY, etc.
+# The shared env file already referenced by anchor blocks.  Whenever a
+# service-level env_file list remains we keep it there so that YAML merge
+# semantics (service-level list replaces the anchor list, not merges) do not
+# silently drop CLAUDE_CODE_OAUTH_TOKEN, GH_TOKEN, TAVILY_API_KEY, etc.
 _SHARED_ENV_FILE = "docker/.env.shared"
 
 # Compose path: docker/docker-compose.agents.yml relative to repo root.
@@ -513,39 +514,31 @@ def _ensure_msg_delivery_mode(body_lines: list[str]) -> list[str]:
     return body
 
 
-def _ensure_env_file_entry(body_lines: list[str]) -> list[str]:
-    """Ensure ``docker/.env.agents`` appears in this service body's ``env_file``
-    block.
+def _strip_agents_env_file(body_lines: list[str]) -> list[str]:
+    """Remove ``docker/.env.agents`` from this service body's ``env_file`` block.
 
-    Two cases:
-    - An ``env_file:`` block already exists in the body (service-level override
-      was previously added) → append ``docker/.env.agents`` if not present.
-    - No ``env_file:`` block in body (normal case — the service relies on the
-      anchor's env_file) → create a new block that explicitly lists BOTH
-      ``docker/.env.shared`` (the anchor's file) and ``docker/.env.agents`` so
-      that YAML merge semantics (service-level list *replaces* the anchor list)
-      do not silently drop the shared credentials.
+    Files rendered before the token-isolation fix carry a service-level
+    ``env_file`` listing both ``docker/.env.shared`` and ``docker/.env.agents``.
+    Only the agents file is dropped; the block itself stays (with
+    ``docker/.env.shared``) because a service-level list overrides the anchor
+    list — deleting the whole block would also be safe, but keeping it is the
+    smaller change and does not depend on the anchor being intact.
 
-    Idempotent: re-running with the same body produces the same output.
+    Idempotent: bodies without the entry are returned unchanged.
     """
-    agents_env = _AGENTS_ENV_FILE
-
-    # Early-out: already present.
-    if any(agents_env in line for line in body_lines):
+    env_file_range = _find_block_range(body_lines, "env_file")
+    if env_file_range is None:
         return list(body_lines)
-
+    start, end = env_file_range
     body = list(body_lines)
-    env_file_range = _find_block_range(body, "env_file")
-    if env_file_range is not None:
-        # Existing service-level env_file block — append .env.agents.
-        _, end = env_file_range
-        body.insert(end, f"      - {agents_env}")
+    kept = [
+        line for line in body[start + 1:end]
+        if _AGENTS_ENV_FILE not in line
+    ]
+    if kept:
+        body[start + 1:end] = kept
     else:
-        # No service-level env_file block — add one with both files.
-        body.append("    env_file:")
-        body.append(f"      - {_SHARED_ENV_FILE}")
-        body.append(f"      - {agents_env}")
-
+        del body[start:end]
     return body
 
 
@@ -625,9 +618,8 @@ def _rewrite_compose(
 
         target_image = image_overrides.get(slug)
         wants_vault = slug in vault_writers
-        # env_file injection is always applied — every agent service needs the
-        # MC_TOKEN_<NAME> variables available inside the container regardless of
-        # how compose was invoked (defense layer 1 against silent blank MC_TOKEN).
+        # env_file stripping is always applied — no agent service may mount
+        # docker/.env.agents (it holds every agent's token).
 
         # Walk through the service body until we hit the next top-level key
         # (no leading whitespace) or another service definition. Collect the
@@ -705,10 +697,9 @@ def _rewrite_compose(
         # Referenz-Dateien-Mount für ALLE Agent-Services (ADR-053).
         body_lines = _ensure_references_volume(body_lines)
 
-        # Defense layer 1: ensure docker/.env.agents is in every agent service's
-        # env_file so MC_TOKEN_<NAME> vars are available at container runtime
-        # even when compose is called without --env-file docker/.env.agents.
-        body_lines = _ensure_env_file_entry(body_lines)
+        # Token isolation: drop docker/.env.agents from any service-level
+        # env_file (legacy renders) — see _AGENTS_ENV_FILE.
+        body_lines = _strip_agents_env_file(body_lines)
 
         # Fleet default nudge+pull (W2.1, ADR-071) for every agent service.
         body_lines = _ensure_msg_delivery_mode(body_lines)
@@ -811,11 +802,10 @@ def _build_new_agent_block(
         # Explicit service-level env_file overrides the anchor's env_file in
         # YAML merge semantics (service-level list replaces the anchor list).
         # We therefore repeat docker/.env.shared here so CLAUDE_CODE_OAUTH_TOKEN
-        # and GH_TOKEN remain available, and add docker/.env.agents to ensure
-        # MC_TOKEN_<NAME> vars are present even without --env-file at compose-up.
+        # and GH_TOKEN remain available.  docker/.env.agents is deliberately
+        # NOT listed — it holds every agent's token (see _AGENTS_ENV_FILE).
         "    env_file:",
         f"      - {_SHARED_ENV_FILE}",
-        f"      - {_AGENTS_ENV_FILE}",
         "    environment:",
         f"      - AGENT_NAME={slug}",
         "      - MC_API_URL=${MC_API_URL:-http://backend:8000}",
@@ -896,8 +886,8 @@ async def render_compose_agents(
             new_agents.append((slug, resolved_image))
 
     # Note: _rewrite_compose is always called (even with empty overrides/vault_writers)
-    # because it now also injects env_file: docker/.env.agents into every agent service
-    # (defense layer 1 against blank MC_TOKEN when --env-file is omitted at compose-up).
+    # because it also strips env_file: docker/.env.agents from every agent service
+    # (token isolation — see _AGENTS_ENV_FILE).
     rendered = _rewrite_compose(static, overrides, vault_writers=vault_writers)
 
     # Append full service blocks for agents not already present in the file.
