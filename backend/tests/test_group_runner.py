@@ -599,7 +599,7 @@ async def test_malformed_lead_verdict_fails_round_and_circuit_breaker_pauses(
 async def test_lead_scratch_message_without_marker_does_not_end_the_turn(
     async_session: AsyncSession,
 ):
-    """Live 02.09.2026 (Sparky, Gruppe 001a5ed5): der Lead schickte beim
+    """Live 02.09.2026 (omp-Lead, Gruppe 001a5ed5): der Lead schickte beim
     Erkunden des CLI eine Probe („Test-Nachricht") — die Engine nahm sie als
     Urteil, „formwidrig", Runde verloren. Es zählt der Marker: markerlose
     Lead-Nachrichten werden übersprungen, das echte Urteil danach gewertet."""
