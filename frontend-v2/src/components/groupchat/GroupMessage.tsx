@@ -13,12 +13,16 @@
  * Erwähnungen (`message.mentions`) werden NICHT zusätzlich gerendert: sie
  * stehen bereits im Text, und der angezeigte Text wird nie umgeschrieben.
  *
- * Zwei verschiedene Klemmen, absichtlich: ein System-Brief verschwindet GANZ
- * hinter seinem Knopf (Maschinen-Auftrag, man liest ihn nur auf Verdacht), ein
- * Agenten-Beitrag bleibt mit seinen ersten Zeilen stehen (Inhalt, den man im
- * Vorbeilesen mitnimmt). Siehe ADR-075, Punkt F.
+ * Agenten-Beiträge starten ZUGEKLAPPT (Marks Befund 02.09.2026: offen stehende
+ * Beiträge machen den Raum laut). Sichtbar bleibt eine Kopfzeile — Avatar,
+ * Name, Uhrzeit, erste Zeile — die als Griff dient: wer lesen will, macht
+ * gezielt den richtigen Beitrag auf. Nur das Lead-Urteil (`defaultOpen`)
+ * steht von sich aus offen, es ist das Ergebnis der Runde. Die frühere
+ * 3-Zeilen-Klemme ist damit entfallen; ein offener Beitrag ist ganz offen.
+ * System-Briefe behalten ihren eigenen Aufklapper (Maschinen-Auftrag, man
+ * liest ihn nur auf Verdacht). Siehe ADR-075, Punkt F.
  */
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -41,6 +45,9 @@ interface GroupMessageProps {
    *  pro Runde standen sonst Brief, Timeout-Notiz und Synthese-Auftrag als
    *  drei Zeilen zwischen zwei Beiträgen, die man vergleichen will. */
   alsoContains?: string[];
+  /** Offen starten — nur für das Lead-Urteil am Rundenende. Alles andere
+   *  klappt zu, damit der Raum ruhig bleibt. */
+  defaultOpen?: boolean;
 }
 
 /** Ab dieser Länge wird eine System-Nachricht zugeklappt. Runden-Briefe und
@@ -48,113 +55,30 @@ interface GroupMessageProps {
  *  dazwischen ist viel Luft, die Grenze muss nicht fein justiert sein. */
 const SYSTEM_COLLAPSE_CHARS = 240;
 
-// ── Klemme für Agenten-Beiträge ─────────────────────────────────────────────
-// Ein Beitrag ist Inhalt, kein Maschinen-Auftrag. Er darf deshalb NICHT wie ein
-// Rundenbrief ganz hinter einem Knopf verschwinden — der Anfang muss ohne Klick
-// lesbar bleiben. Darum zwei Grenzen statt einer:
-//
-//   PREVIEW  — was sichtbar bleibt, wenn geklemmt wird (drei Zeilen: Position
-//              und erster Grund stehen fast immer darin).
-//   MIN      — ab wann überhaupt geklemmt wird. Die Kursänderung (ADR-075,
-//              Punkt A) beauftragt 2–4 Sätze, gemessen 200–500 Zeichen ≈ bis
-//              sieben Zeilen. Klemmten wir schon bei der Vorschauhöhe, stünde
-//              unter JEDEM regelkonformen Beitrag ein Aufklapper und der Raum
-//              wäre wieder zu — die Klemme ist das Netz für die Textwände von
-//              1600–4900 Zeichen, nicht die Regel.
-const CONTRIBUTION_LINE_HEIGHT_PX = 24; // 14px × 1.7, gerundet — wie unten gesetzt
-// Vier statt drei Zeilen, weil die unterste unter dem Verlauf ausblendet: nach
-// dem Fade bleiben rund drei Zeilen wirklich lesbar — die Vorschauhöhe, die
-// oben gemeint ist.
-export const CONTRIBUTION_CLAMP_MAX_PX = 4 * CONTRIBUTION_LINE_HEIGHT_PX;
-export const CONTRIBUTION_COLLAPSE_MIN_PX = 7 * CONTRIBUTION_LINE_HEIGHT_PX;
-// Weiche Schnittkante — die Regel steht als `.clamp-fade` in globals.css. Ein
-// fester Pixel-Deckel auf Markdown KANN nicht auf einer Zeilenkante landen
-// (Überschrift, Absatz und Liste haben verschiedene Zeilenhöhen); live schnitt
-// er mitten durch die Buchstaben, Befund 22.08.2026. Die Verlaufshöhe dort ist
-// bewusst dieselbe wie CONTRIBUTION_LINE_HEIGHT_PX.
-const CONTRIBUTION_FADE_CLASS = "clamp-fade";
-
-/** Beitrag mit Klemme: gemessen wird die gerenderte Höhe, nicht die Zeichenzahl.
- *  Der Text wird nie abgeschnitten — sonst zerrisse man Markdown mittendrin (ein
- *  halber Code-Block, eine Liste ohne Ende). Der Aufklapper erscheint nur, wenn
- *  wirklich etwas verborgen ist. */
-function ClampedContribution({
-  content,
-  style,
-  title,
-}: {
-  content: string;
-  style?: React.CSSProperties;
-  title?: string;
-}) {
-  const t = useTranslations("sessions.groups");
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    const measure = () => {
-      // Im mobilen Stapel bleibt die abgewählte Spalte mit `display: none`
-      // gemountet — dort liest jede Messung 0 und meldete „nichts verborgen"
-      // für einen 3000-Zeichen-Beitrag. Lieber gar nicht messen als falsch.
-      if (el.scrollHeight === 0) return;
-      setOverflows(el.scrollHeight > CONTRIBUTION_COLLAPSE_MIN_PX);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [content]);
-
-  const clamped = overflows && !expanded;
-
-  return (
-    <div
-      data-testid="group-message-agent"
-      data-sender-type="agent"
-      title={title}
-      // Leseweite statt Panelbreite — dieselbe Kappung wie im 1:1-Chat, damit
-      // ein Agentenbeitrag hier nicht anders liest als dort.
-      className="max-w-[76ch] min-w-0 text-[14px] leading-[1.7]"
-      style={style}
-    >
-      <div
-        ref={bodyRef}
-        data-testid="group-contribution-body"
-        data-clamped={clamped}
-        className={`[&>*:last-child]:mb-0${clamped ? ` ${CONTRIBUTION_FADE_CLASS}` : ""}`}
-        style={clamped ? { maxHeight: CONTRIBUTION_CLAMP_MAX_PX, overflow: "hidden" } : undefined}
-      >
-        <MarkdownContent content={content} />
-      </div>
-      {overflows && (
-        // Bewusst leise und ohne Rahmen: der Beitrag daneben trägt keinen
-        // Container, ein aufgemachter Knopf zöge mehr Blick auf sich als der
-        // Text, den er zeigt. Chevron in Dekorfarbe, Beschriftung lesbar.
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          data-testid="group-contribution-toggle"
-          // Aufhellen statt Farbwechsel beim Überfahren: die Farbe kommt aus
-          // dem Token per style-Attribut, eine hover:text-Klasse käme dagegen
-          // nicht an — und der Raum bleibt achromatisch.
-          className="mt-1 flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer font-mono text-[11px] opacity-90 hover:opacity-100 transition-opacity"
-          style={{ color: C.textMuted }}
-        >
-          {expanded ? (
-            <ChevronDown size={12} className="shrink-0" style={{ color: C.textDim }} />
-          ) : (
-            <ChevronRight size={12} className="shrink-0" style={{ color: C.textDim }} />
-          )}
-          {expanded ? t("contributionCollapse") : t("contributionExpand")}
-        </button>
-      )}
-    </div>
-  );
+/** Die eine Zeile auf dem zugeklappten Beitrag: erste nicht-leere Zeile,
+ *  von Markdown-Zierrat befreit. Nichts wird geparst, was man nicht sieht —
+ *  nur Überschriftszeichen, Betonung, Listenpunkte, Zitatzeichen und die
+ *  Pipes einer Tabellenzeile (die wird zur Phrase „A · B"). Gekürzt wird per
+ *  CSS (`truncate`), nicht hier — die Breite kennt nur der Bildschirm. */
+export function contributionExcerpt(body: string): string {
+  const line = (body ?? "").split("\n").find((l) => l.trim()) ?? "";
+  let out = line.trim();
+  if (out.startsWith("|")) {
+    out = out
+      .split("|")
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .join(" · ");
+  }
+  return out
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^(?:[-*+]|\d+[.)])\s+/, "")
+    .replace(/^>\s*/, "")
+    .replace(/(\*\*|__|~~|`)/g, "")
+    .replace(/(^|[^\w])[*_](?=\S)/g, "$1")
+    .replace(/(?<=\S)[*_](?=[^\w]|$)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** HH:MM, 24h, de-CH. Ein kaputter Zeitstempel darf die Kopfzeile nicht
@@ -173,11 +97,16 @@ export function GroupMessage({
   isOwn,
   groupWithPrevious = false,
   alsoContains,
+  defaultOpen = false,
 }: GroupMessageProps) {
   const t = useTranslations("sessions.groups");
   // Zugeklappt starten: der Verlauf gehört den Beiträgen, nicht den Aufträgen
   // der Engine. Wer wissen will, was genau beauftragt wurde, klappt auf.
   const [systemOpen, setSystemOpen] = useState(false);
+  // Beiträge starten zu (Marks Befund 02.09.2026) — ausser dem Lead-Urteil.
+  // Der Zustand lebt pro Nachricht (Key = message.id im Verlauf) und bleibt
+  // deshalb beim Nachladen/Scrollen erhalten.
+  const [open, setOpen] = useState(defaultOpen);
 
   const pending = message.pending === true;
   // Gedimmt statt Spinner: die Nachricht steht schon da, sie ist nur noch nicht
@@ -301,46 +230,77 @@ export function GroupMessage({
   }
 
   const clock = formatClock(message.created_at);
+  const excerpt = contributionExcerpt(message.body);
 
   return (
-    // Sprecher-Rinne statt bündiger Kante (Operator-Befund 22.08.2026: „das
-    // sieht nicht nach Gruppenchat aus"). Vorher standen Kopfzeile und Text an
-    // derselben Kante wie System- und Nutzerzeilen — der Verlauf las sich als
-    // Protokoll, nicht als Raum mit Leuten darin. Jetzt hält eine schmale
-    // Spalte links den Avatar, der Text rückt auf Namenshöhe ein.
-    //
-    // Folgt derselbe Sprecher noch einmal, bleibt die Rinne LEER statt den
-    // Avatar zu wiederholen: der Einzug trägt die Zuordnung weiter, und die
-    // Beiträge lesen als ein Block statt als Stakkato.
-    <div className={`w-full px-4 md:px-5 ${groupWithPrevious ? "pt-0.5 pb-1.5" : "pt-2 pb-1.5"}`}>
+    // Sprecher-Rinne statt bündiger Kante (Operator-Befund 22.08.2026): eine
+    // schmale Spalte links hält den Avatar, der Text rückt auf Namenshöhe ein
+    // — so liest sich der Verlauf als Raum mit Leuten darin, nicht als
+    // Protokoll. Die Kopfzeile bleibt auch beim selben Sprecher stehen: sie
+    // IST zugeklappt der Beitrag und der Griff zum Öffnen.
+    <div className={`w-full px-4 md:px-5 ${groupWithPrevious ? "pt-0.5 pb-1" : "pt-2 pb-1"}`}>
       <div className="flex gap-2.5">
         <div
           data-testid="group-speaker-gutter"
           className="w-7 shrink-0 flex justify-center pt-[3px]"
         >
-          {!groupWithPrevious && (
-            <EntityIcon value={senderEmoji} size={18} style={{ color: C.textSecondary }} />
-          )}
+          <EntityIcon value={senderEmoji} size={18} style={{ color: C.textSecondary }} />
         </div>
-        <div className="min-w-0 flex-1">
-          {!groupWithPrevious && (
-            <div className="mb-1 flex items-baseline gap-2">
-              {senderName && (
-                <span
-                  className="font-mono text-[11px] font-medium"
-                  style={{ color: C.textSecondary }}
-                >
-                  {senderName}
-                </span>
-              )}
-              {clock && (
-                <span className="font-mono text-[11px]" style={{ color: C.textDim }}>
-                  {clock}
-                </span>
-              )}
+        <div
+          data-testid="group-message-agent"
+          data-sender-type="agent"
+          className="min-w-0 flex-1"
+          style={pendingStyle}
+        >
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            title={pendingTitle}
+            data-testid="group-contribution-toggle"
+            // Ganze Zeile klickbar, ohne Rahmen: der Griff soll nicht lauter
+            // sein als der Text, den er zeigt. Aufhellen statt Farbwechsel.
+            className="w-full flex items-baseline gap-2 text-left bg-transparent border-0 p-0 cursor-pointer opacity-90 hover:opacity-100 transition-opacity"
+          >
+            {open ? (
+              <ChevronDown size={12} className="shrink-0 self-center" style={{ color: C.textDim }} />
+            ) : (
+              <ChevronRight size={12} className="shrink-0 self-center" style={{ color: C.textDim }} />
+            )}
+            {senderName && (
+              <span
+                className="shrink-0 font-mono text-[11px] font-medium"
+                style={{ color: C.textSecondary }}
+              >
+                {senderName}
+              </span>
+            )}
+            {clock && (
+              <span className="shrink-0 font-mono text-[11px]" style={{ color: C.textDim }}>
+                {clock}
+              </span>
+            )}
+            {!open && (
+              // Auszug nur zugeklappt: offen steht die erste Zeile ohnehin
+              // direkt darunter, doppelt wäre sie Rauschen.
+              <span
+                className="min-w-0 truncate text-[13px]"
+                style={{ color: C.textMuted }}
+              >
+                {excerpt}
+              </span>
+            )}
+          </button>
+          {open && (
+            <div
+              data-testid="group-contribution-body"
+              // Leseweite statt Panelbreite — dieselbe Kappung wie im 1:1-Chat,
+              // damit ein Agentenbeitrag hier nicht anders liest als dort.
+              className="mt-1 max-w-[76ch] min-w-0 text-[14px] leading-[1.7] [&>*:last-child]:mb-0"
+            >
+              <MarkdownContent content={message.body} />
             </div>
           )}
-          <ClampedContribution content={message.body} style={pendingStyle} title={pendingTitle} />
         </div>
       </div>
     </div>
