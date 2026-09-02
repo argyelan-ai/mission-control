@@ -340,3 +340,56 @@ def test_run_native_continue_escalates_on_inject_failure():
 if __name__ == "__main__":
     import pytest as _pytest
     raise SystemExit(_pytest.main([__file__, "-v"]))
+
+
+def test_inject_file_does_not_claim_submitted_when_typing_the_mention_failed():
+    """Live 02.09.2026 (Sparky, Gruppen-Synthese seq 3): das ERSTE send-keys
+    (die @path-Erwaehnung tippen) lief in den 15-s-Timeout (rc=1, nichts
+    getippt), Escape+Enter gingen durch, und der Composer war leer — was die
+    Pruefung als "submitted" las. Die Bridge ackte die Nachricht, der Agent
+    hat sie nie gesehen. Leer-weil-nie-getippt ist KEIN Erfolg: bei rc!=0
+    beim Tippen wird neu getippt (innerhalb der Paste-Kappe), nie verifiziert,
+    und nach der Kappe ist das Ergebnis False (kein Ack, Redelivery)."""
+    tmp = tempfile.mkdtemp(prefix="omp-inject-")
+    tf = _task_file_path(tmp)
+    calls = []
+
+    def fake_run(args):
+        calls.append(list(args))
+        if args[0] == "send-keys" and args[-1] == f"@{tf}":
+            return 1, ""  # TimeoutExpired swallowed in _default_run
+        if args[0] == "capture-pane":
+            return 0, _pane_submitted(tf)  # composer leer — weil nie getippt
+        return 0, ""
+
+    sleeps = []
+    ctrl, _tmp2 = _controller(fake_run, sleep_log=sleeps)
+
+    ok = ctrl.inject_file(tf, max_paste_attempts=2, retry_backoff=5.0)
+
+    assert ok is False
+    at_mentions = [c for c in calls if c[0] == "send-keys" and c[-1] == f"@{tf}"]
+    assert len(at_mentions) == 2, "die Erwaehnung wird bis zur Kappe neu getippt"
+    assert not any(c[0] == "capture-pane" for c in calls), (
+        "ohne getippten Text gibt es nichts zu verifizieren — ein leerer Composer darf nie als Erfolg gelten"
+    )
+
+
+def test_inject_file_recovers_when_typing_fails_once_then_succeeds():
+    tmp = tempfile.mkdtemp(prefix="omp-inject-")
+    tf = _task_file_path(tmp)
+    calls = []
+    typed = {"n": 0}
+
+    def fake_run(args):
+        calls.append(list(args))
+        if args[0] == "send-keys" and args[-1] == f"@{tf}":
+            typed["n"] += 1
+            return (1, "") if typed["n"] == 1 else (0, "")
+        if args[0] == "capture-pane":
+            return 0, _pane_submitted(tf)
+        return 0, ""
+
+    ctrl, _tmp2 = _controller(fake_run)
+    assert ctrl.inject_file(tf, max_paste_attempts=2, retry_backoff=5.0) is True
+    assert typed["n"] == 2
