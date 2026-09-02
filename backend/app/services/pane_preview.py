@@ -46,6 +46,13 @@ _FURNITURE = re.compile(
     | ^\s*\w+…\s*$                           # "Working…", "Germinating…"
     | ^\s*\S+\ for\ \d+s                     # "Baked for 2s · done"
     | 📬\ Neue\ Nachrichten\ \(bis\ seq          # Zustell-Echo, das poll.sh eintippt
+    | ^\s*@\S*\.msg-nudge\.msg                # Zustell-Echo, das die omp-Bridge eintippt
+    | ^\s*\[Pasted\ text\ \#\d+                # Claude Code: eingefuegter Auftrag im Composer
+    | ^\s*paste\ again\ to\ expand             #   … und sein Hinweis darunter
+    | ^\s*●\s*Running\ \d+\ .*…\s*$             # Claude Code: Werkzeug-Statuszeile
+    | ^\s*●\s*$                                # Claude Code: Platzhalter der kommenden Antwort
+    | ^\s*Update\ Available\s*$                # omp: Update-Banner nach Frischstart
+    | ^\s*New\ version\ .*Run:\ omp\ update      #   … zweite Zeile davon
     """,
     re.VERBOSE,
 )
