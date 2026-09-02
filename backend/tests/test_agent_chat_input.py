@@ -2412,7 +2412,7 @@ async def test_effort_capabilities_non_boss_host_claude_agent_gets_no_switch(mon
 
 # ── omp: Denk-Stufe (Effort-Pendant) ueber die Statuszeile ──────────────────
 #
-# Live-Befund am Sparky-Pane (omp v16.4.6, 02.09.2026): omp kennt KEIN
+# Live-Befund am omp-Pane eines Agenten (omp v16.4.6, 02.09.2026): omp kennt KEIN
 # ``/thinking <stufe>``-Kommando in der TUI — der Text landete als normale
 # Nachricht beim Modell. Was es gibt: Shift+Tab (tmux ``BTab``) dreht die
 # Stufe im Ring ``off -> auto -> minimal -> low -> medium -> high -> xhigh
