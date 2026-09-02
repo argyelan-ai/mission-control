@@ -71,7 +71,7 @@ describe("HostsSection", () => {
     await waitFor(() => expect(screen.getByText("2 Runtimes")).toBeInTheDocument());
     expect(screen.getByText("0 Runtimes")).toBeInTheDocument();
     // non-admin: no add/edit/delete controls
-    expect(screen.queryByRole("button", { name: /^Host$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
     expect(screen.queryByLabelText(/Delete host/)).toBeNull();
   });
 
@@ -94,7 +94,7 @@ describe("HostsSection", () => {
 
     renderWithQuery(<HostsSection />);
 
-    expect(await screen.findByRole("button", { name: "Host" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Add device" })).toBeInTheDocument();
 
     // Delete is destructive and now sits in the row overflow menu.
     await userEvent.click(await screen.findByTestId("host-more-gpu-box-1"));
@@ -103,5 +103,118 @@ describe("HostsSection", () => {
     expect(
       await screen.findByText("Host hat 2 gebundene Runtimes — erst umbinden.")
     ).toBeInTheDocument();
+  });
+
+  // ── „Gerät hinzufügen": ein Knopf, vier Wege ──────────────────────────────
+
+  async function renderAsAdmin(hosts: Host[] = [makeHost()]) {
+    mockStore.state.currentUser = { id: "u1", email: "a@b.c", name: "Admin", role: "admin" };
+    vi.spyOn(api.hosts, "list").mockResolvedValue(hosts);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] } as never);
+    renderWithQuery(<HostsSection />);
+    return await screen.findByRole("button", { name: "Add device" });
+  }
+
+  it("shows exactly one add button — the four old entry points are gone from the header", async () => {
+    await renderAsAdmin();
+    expect(screen.queryByRole("button", { name: "Add box" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Host" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Auto-onboard device" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Device reports in by itself" })).toBeNull();
+  });
+
+  it("the chooser asks for the situation and offers all three routes plus the manual side path", async () => {
+    const addBtn = await renderAsAdmin();
+    await userEvent.click(addBtn);
+
+    const dialog = await screen.findByRole("dialog", { name: "Add device" });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByTestId("add-device-onboard")).toHaveTextContent("I have the box's username and password");
+    expect(screen.getByTestId("add-device-pairing")).toHaveTextContent("I can work on the box myself");
+    expect(screen.getByTestId("add-device-wizard")).toHaveTextContent("already reaches the box with a key");
+    // The wizard needs a key the box already accepts — the sentence must say
+    // where to go when the check fails, instead of leaving the operator in
+    // reachable:false without an explanation.
+    expect(screen.getByTestId("add-device-wizard")).toHaveTextContent(/If the test fails.*first path/);
+    expect(screen.getByTestId("add-device-manual")).toHaveTextContent("Create entry manually");
+  });
+
+  it("routes: password → onboarding dialog", async () => {
+    await userEvent.click(await renderAsAdmin());
+    await userEvent.click(await screen.findByTestId("add-device-onboard"));
+    expect(await screen.findByTestId("onboard-address")).toBeInTheDocument();
+    // The chooser closes (framer-motion exit animation → waitFor).
+    await waitFor(() => expect(screen.queryByTestId("add-device-onboard")).toBeNull());
+  });
+
+  it("routes: work on the box myself → pairing dialog", async () => {
+    await userEvent.click(await renderAsAdmin());
+    await userEvent.click(await screen.findByTestId("add-device-pairing"));
+    expect(await screen.findByTestId("pairing-generate")).toBeInTheDocument();
+  });
+
+  it("routes: already reachable → box wizard", async () => {
+    await userEvent.click(await renderAsAdmin());
+    await userEvent.click(await screen.findByTestId("add-device-wizard"));
+    expect(await screen.findByRole("dialog", { name: "Add box" })).toBeInTheDocument();
+  });
+
+  it("routes: side path → manual form (flask_wol / local only live here)", async () => {
+    await userEvent.click(await renderAsAdmin());
+    await userEvent.click(await screen.findByTestId("add-device-manual"));
+    expect(await screen.findByText("Enter device manually")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Flask/WoL" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Local" })).toBeInTheDocument();
+  });
+
+  // ── Typ „Agent" im Formular gesperrt ─────────────────────────────────────
+
+  it("manual form: kind 'agent' is not selectable and the hint points to pairing", async () => {
+    await userEvent.click(await renderAsAdmin());
+    await userEvent.click(await screen.findByTestId("add-device-manual"));
+    await screen.findByText("Enter device manually");
+
+    expect(screen.getByRole("button", { name: "SSH" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Agent" })).toBeNull();
+    expect(screen.getByText(/Devices that report in by themselves can't be created here/)).toBeInTheDocument();
+
+    // The hint's link jumps straight to the pairing route.
+    await userEvent.click(screen.getByTestId("host-kind-agent-hint-link"));
+    expect(await screen.findByTestId("pairing-generate")).toBeInTheDocument();
+    expect(screen.queryByText("Enter device manually")).toBeNull();
+  });
+
+  it("manual form: creating saves the chosen kind (never 'agent')", async () => {
+    const create = vi.spyOn(api.hosts, "create").mockResolvedValue(makeHost({ id: "new", kind: "local" }));
+    await userEvent.click(await renderAsAdmin());
+    await userEvent.click(await screen.findByTestId("add-device-manual"));
+    await screen.findByText("Enter device manually");
+
+    await userEvent.type(screen.getByLabelText("Slug"), "mini");
+    await userEvent.type(screen.getByLabelText("Display name"), "Mac Mini");
+    await userEvent.click(screen.getByRole("button", { name: "Local" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0][0]).toMatchObject({ slug: "mini", display_name: "Mac Mini", kind: "local" });
+  });
+
+  it("editing an existing agent host keeps kind='agent' locked — the row is not touched", async () => {
+    const update = vi.spyOn(api.hosts, "update").mockResolvedValue(makeHost({ kind: "agent" }));
+    await renderAsAdmin([makeHost({ id: "host-a", slug: "gx10", display_name: "GX10", kind: "agent", ssh_host: null })]);
+
+    await userEvent.click(await screen.findByLabelText("Edit host GX10"));
+    await screen.findByText("Edit host — GX10");
+
+    expect(screen.getByTestId("host-kind-locked")).toHaveTextContent("Agent");
+    expect(screen.queryByRole("button", { name: "SSH" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Agent" })).toBeNull();
+    // No "create via pairing" hint on edit — nothing to redirect here.
+    expect(screen.queryByTestId("host-kind-agent-hint-link")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0]).toBe("host-a");
+    expect(update.mock.calls[0][1]).toMatchObject({ kind: "agent" });
   });
 });
