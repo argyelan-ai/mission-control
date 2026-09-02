@@ -4,7 +4,7 @@
  * Coverage:
  *   1. Credits: „by {author}" mit Link auf jeder Karte, auch ohne Link-URL
  *   2. ssh_process-Karte ist deploybar und öffnet den Installations-Dialog
- *      statt des sparkrun-Recipe-Switches
+ *      statt des Rezept-Starts auf einer Box
  *   3. Exklusivitäts-Warnung nennt genau die Runtimes, die der Start stoppt —
  *      und nur die auf DERSELBEN Box
  *   4. „Installieren" ruft den Install-Endpoint und pollt das Live-Log
@@ -209,18 +209,18 @@ describe("ssh_process deploy", () => {
 
   // ── Routing zum richtigen Dialog ──────────────────────────────────────────
 
-  it("opens the install dialog instead of the recipe switch", async () => {
+  it("opens the install dialog instead of the box recipe start", async () => {
     vi.spyOn(api.localRegistry, "list").mockResolvedValue(mkList([mkRecipe()]));
     vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
     vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
     vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
-    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    const startRecipe = vi.spyOn(api.hosts, "startRecipe");
     renderBrowser();
 
     await userEvent.click(await screen.findByTestId("local-registry-deploy"));
 
     await screen.findByTestId("ssh-deploy-install");
-    expect(switchRecipe).not.toHaveBeenCalled();
+    expect(startRecipe).not.toHaveBeenCalled();
   });
 
   it("keeps an ssh_process entry without a launch template undeployable", async () => {
@@ -491,18 +491,18 @@ describe("compose-based deploy", () => {
     expect(await screen.findByTestId("local-registry-deploy")).toBeEnabled();
   });
 
-  it("routes it to the install dialog, not the sparkrun recipe switch", async () => {
+  it("routes it to the install dialog, not the box recipe start", async () => {
     vi.spyOn(api.localRegistry, "list").mockResolvedValue(mkList([mkComposeRecipe()]));
     vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
     vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
     vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
-    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    const startRecipe = vi.spyOn(api.hosts, "startRecipe");
     renderBrowser();
 
     await userEvent.click(await screen.findByTestId("local-registry-deploy"));
 
     await screen.findByTestId("ssh-deploy-install");
-    expect(switchRecipe).not.toHaveBeenCalled();
+    expect(startRecipe).not.toHaveBeenCalled();
   });
 
   it("keeps a vllm_docker entry without templates on the wizard path", async () => {

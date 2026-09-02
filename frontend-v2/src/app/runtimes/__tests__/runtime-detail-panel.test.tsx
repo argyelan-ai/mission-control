@@ -50,6 +50,38 @@ describe("RuntimeDetailPanel", () => {
     await waitFor(() => expect(start).toHaveBeenCalledWith("rt", undefined));
   });
 
+  // Rezept-Umschalter (Vertrag 02.09.2026): dieselbe Quelle wie die Kachel.
+  it("host-bound runtime: shows the box recipe switcher fed by GET /hosts/{id}/recipes", async () => {
+    const recipes = vi.spyOn(api.hosts, "recipes").mockResolvedValue([{
+      slug: "recipe-x", display_name: "Recipe X", engine: "lmstudio", topology: { nodes: 1 }, port: 1234,
+      instance_runtime_id: "rt", running: true, startable: true, fit: "solo", reason: null,
+      busy_hosts: [], candidate_workers: [],
+    }]);
+    renderWithQuery(
+      <RuntimeDetailPanel
+        open
+        runtime={makeRuntime({ runtime_type: "lmstudio", host: { id: "box-a", slug: "box-a", display_name: "Box A" } })}
+        onClose={() => {}}
+      />,
+    );
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    await waitFor(() => expect(trigger).toHaveTextContent("Recipe X"));
+    expect(recipes).toHaveBeenCalledWith("box-a");
+  });
+
+  it("host-bound runtime without recipes: no switcher, no phantom control", async () => {
+    const recipes = vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    renderWithQuery(
+      <RuntimeDetailPanel
+        open
+        runtime={makeRuntime({ runtime_type: "vllm_docker", host: { id: "box-a", slug: "box-a", display_name: "Box A" } })}
+        onClose={() => {}}
+      />,
+    );
+    await waitFor(() => expect(recipes).toHaveBeenCalledWith("box-a"));
+    await waitFor(() => expect(screen.queryByTestId("recipe-dropdown-trigger")).not.toBeInTheDocument());
+  });
+
   it("renders nothing when runtime is null", () => {
     const { container } = renderWithQuery(<RuntimeDetailPanel open runtime={null} onClose={() => {}} />);
     expect(container.querySelector('[role="dialog"]')).toBeNull();
