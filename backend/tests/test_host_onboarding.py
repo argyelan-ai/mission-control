@@ -465,3 +465,23 @@ async def test_rate_limit_after_three_failed_auths(auth_client):
             json={"address": "192.0.2.80", "username": "u", "auth": {"password": "wrong-again"}},
         )
     assert resp.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_onboarding_stores_role_and_reonboarding_without_role_keeps_it(auth_client):
+    """P2 (Chef-Entscheid 02.09.): Rolle auch auf dem Passwort-Weg; ohne Angabe
+    bleibt die alte Rolle stehen, ausdrücklich gesetzt wechselt sie."""
+    patcher, _ = _patch_asyncssh_connect()
+    with patcher:
+        job_id = await _run_onboarding_and_wait(_params(role="worker"))
+        assert (await host_onboarding.get_status(job_id))["status"] == "done"
+        hosts = (await auth_client.get("/api/v1/hosts")).json()
+        assert len(hosts) == 1 and hosts[0]["role"] == "worker" and hosts[0]["kind"] == "ssh"
+
+        await _run_onboarding_and_wait(_params())  # ohne Rolle → bleibt worker
+        hosts = (await auth_client.get("/api/v1/hosts")).json()
+        assert len(hosts) == 1 and hosts[0]["role"] == "worker"
+
+        await _run_onboarding_and_wait(_params(role="head"))  # ausdrücklich → wechselt
+        hosts = (await auth_client.get("/api/v1/hosts")).json()
+        assert len(hosts) == 1 and hosts[0]["role"] == "head"

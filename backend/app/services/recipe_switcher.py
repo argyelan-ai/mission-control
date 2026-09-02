@@ -23,10 +23,10 @@ Was hier passiert
   über das Label ``mc.runtime.slug``, ``exclusive_memory``-Verdrängung).
   Kein zweiter Lebenszyklus.
 
-Was hier bewusst NICHT passiert (P2/P3)
----------------------------------------
+Was hier bewusst NICHT passiert (P3)
+-----------------------------------
 Zweibox-Start (``nodes=2`` → 409 mit Satz), Schreibpfad ``runtime_hosts``,
-Worker-Wahl, Geräterolle head/worker. ``candidate_workers`` wird trotzdem
+Worker-Wahl. ``candidate_workers`` (seit P2 mit Rolle, Worker zuerst) wird
 schon geliefert, damit P3 die Liste nicht neu erfinden muss.
 
 Gründe (``reason``) sind SÄTZE in einfacher Sprache, keine Codes — die
@@ -51,7 +51,7 @@ from app.models.local_recipe import LocalRecipe
 from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost
 from app.services import launch_template
-from app.services.host_resolver import ResolvedHost, resolved_host_from_row
+from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 logger = logging.getLogger("mc.recipe_switcher")
 
@@ -146,8 +146,24 @@ def has_launch_command(recipe: LocalRecipe) -> bool:
 
 
 def host_can_ssh(host: Host) -> bool:
-    """MC startet über SSH — ohne SSH-Zugang kann es hier nichts starten."""
-    return host.kind == "ssh" and bool((host.ssh_host or "").strip())
+    """MC startet über SSH — ohne SSH-Zugang kann es hier nichts starten.
+
+    P2: eine ``kind=agent``-Box mit ``ssh_host`` zählt (host_resolver.ssh_capable
+    ist die eine Regel dafür).
+    """
+    return ssh_capable(host)
+
+
+def recipe_is_exclusive(recipe: LocalRecipe) -> bool:
+    """Belegt dieses Rezept die Box exklusiv?
+
+    P2: Das Katalogfeld ``exclusive`` ist die Wahrheit, sobald es gesetzt ist.
+    Die Heuristik „min_vram_gb gesetzt → exklusiv" bleibt NUR der Fallback
+    für Rezepte, die dazu nichts sagen (alle Zeilen von vor P2).
+    """
+    if recipe.exclusive is not None:
+        return bool(recipe.exclusive)
+    return recipe.min_vram_gb is not None
 
 
 def recipe_claims_box(recipe: LocalRecipe, instance: Runtime | None) -> bool:
@@ -155,7 +171,20 @@ def recipe_claims_box(recipe: LocalRecipe, instance: Runtime | None) -> bool:
     entscheidet deren Flag; sonst dieselbe Regel wie beim Anlegen."""
     if instance is not None:
         return bool(instance.exclusive_memory)
-    return recipe.min_vram_gb is not None
+    return recipe_is_exclusive(recipe)
+
+
+def worker_candidates(hosts: list[Host], head: Host, exclusive_busy: set[uuid.UUID]) -> list[dict[str, Any]]:
+    """Freie Boxen als mögliche Worker — mit Rolle aus ``hosts.role``.
+
+    Reihenfolge (Vertrag P2): Boxen mit ``role=worker`` zuerst, dann die
+    übrigen; innerhalb stabil nach ``ui_order``/``slug``. Die Rolle ist nur
+    eine Vorbelegung — eine Head-Box steht trotzdem in der Liste, sie
+    kommt nur später.
+    """
+    free = [h for h in hosts if h.id != head.id and h.id not in exclusive_busy]
+    free.sort(key=lambda h: (0 if h.role == "worker" else 1, h.ui_order, h.slug))
+    return [{"host_id": str(h.id), "slug": h.slug, "role": h.role} for h in free]
 
 
 async def probe_running(runtime: Runtime) -> bool:
@@ -233,13 +262,7 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
     exclusive_busy = {
         hid for hid, rts in occupied.items() if any(rt.exclusive_memory for rt in rts)
     }
-    # ``role`` bleibt null: hosts.role gibt es erst in P2. Das Feld steht
-    # trotzdem schon im Schema, damit die Oberfläche es nicht nachrüsten muss.
-    candidate_workers = [
-        {"host_id": str(h.id), "slug": h.slug, "role": None}
-        for h in sorted(hosts, key=lambda h: (h.ui_order, h.slug))
-        if h.id != host.id and h.id not in exclusive_busy
-    ]
+    candidate_workers = worker_candidates(hosts, host, exclusive_busy)
     ssh_ok = host_can_ssh(host)
 
     entries: list[dict[str, Any]] = []
@@ -402,10 +425,11 @@ async def build_runtime_from_recipe(
         launch_command=command,
         stop_command=stop_command,
         process_name=recipe.process_name,
-        # Ein Rezept, das VRAM beansprucht, beansprucht die Box: nur so greift
-        # die Verdrängung (ensure_exclusive_host) „wie heute" auch für
-        # Instanzen, die nicht von Hand angelegt wurden.
-        exclusive_memory=recipe.min_vram_gb is not None,
+        # Katalogfeld ``exclusive`` = Wahrheit, Heuristik (min_vram_gb
+        # gesetzt) = Fallback — siehe recipe_is_exclusive. Nur so greift die
+        # Verdrängung (ensure_exclusive_host) auch für Instanzen, die nicht
+        # von Hand angelegt wurden.
+        exclusive_memory=recipe_is_exclusive(recipe),
         host_id=host.id,
         max_context_len=recipe.context_len,
         topology={"nodes": recipe_nodes(recipe.topology), "recipe_slug": recipe.slug},

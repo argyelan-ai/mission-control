@@ -19,6 +19,24 @@ from sqlalchemy import JSON
 from sqlmodel import Column, Field, SQLModel
 
 
+#: Geräterolle (Rezept-Umschalter P2) — die EINE Regel für jeden Weg, der
+#: eine Box anlegt (Formular, Pairing-Code, Passwort-Onboarding).
+HOST_ROLES = ("head", "worker")
+
+
+def normalise_role(value: str | None) -> str | None:
+    """Trimmt, macht klein, leer → None; jeder andere Wert ist ein Tippfehler
+    (ValueError mit Satz — pydantic macht daraus ein 422)."""
+    if value is None:
+        return None
+    value = value.strip().lower()
+    if value == "":
+        return None
+    if value not in HOST_ROLES:
+        raise ValueError("role muss 'head' oder 'worker' sein — oder leer, wenn die Box keine feste Rolle hat")
+    return value
+
+
 class Host(SQLModel, table=True):
     __tablename__ = "hosts"
 
@@ -74,6 +92,19 @@ class Host(SQLModel, table=True):
 
     enabled: bool = Field(default=True, sa_column=Column(Boolean, server_default=text("true"), nullable=False))
     ui_order: int = Field(default=0)
+
+    # ── Rezept-Umschalter P2 (Vertrag 02.09.2026) ────────────────────────────
+    #
+    # role: `head` | `worker` | NULL — NUR eine Standardvorgabe für den
+    # Zweibox-Fall (welche Box im Duo per Default Head ist). Bei Ein-Box-
+    # Rezepten wird sie ignoriert, und sie sperrt nirgends etwas: die Rolle
+    # ist eine Vorbelegung, keine Regel. Werte prüft routers/hosts.py.
+    role: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # fabric_ip: die Adresse, unter der die Boxen sich GEGENSEITIG erreichen
+    # (Verbund-Kabel). Getrennt von ssh_host (MC → Box) und tailscale_host
+    # (Endpunkt für Host-Agenten), weil es ein drittes Netz ist. P3 schreibt
+    # sie als HEAD_IP/WORKER_IP in die .env des Rezepts; NULL = ssh_host.
+    fabric_ip: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
     # ── kind=agent (Fleet & Rezepte v2, Phase 1) ─────────────────────────────
     #
