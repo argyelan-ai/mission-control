@@ -435,3 +435,31 @@ if __name__ == "__main__":
             print(f"FAIL {fn.__name__}: {e}")
     print(f"\n{len(fns) - failed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)
+
+
+# ── startup: orphaned task lock from a SIGKILLed previous life ───────────────
+
+def test_serve_loop_clears_orphaned_task_lock_at_startup():
+    """Live 02.09.2026: Docker-Neustart schoss den Container mitten in einem
+    Lauf ab; `.task-active.lock` blieb liegen. Ohne Aufräumen beim Start war
+    das Gate für immer zu („Gate zu … Nudge aufgeschoben" alle 5 s) und der
+    Agent hörte keine Nachricht mehr. poll.sh räumt so einen Lock beim Start
+    weg — die Bridge muss das genauso tun."""
+    with tempfile.TemporaryDirectory() as d:
+        lock = os.path.join(d, "task.lock")
+        with open(lock, "w") as fh:
+            fh.write("1788330146")  # Epoch eines längst toten Laufs
+        bridge.serve_loop(
+            poll_interval=0, max_iterations=1,
+            _poll_fn=lambda: {"state": "idle"},
+            _lifecycle_factory=lambda t: _RecordingLifecycle(),
+            _run_factory=lambda t, cwd: _finish_outcome,
+            _sleep=lambda _s: None,
+            _context_env_path=os.path.join(d, "ctx.env"),
+            _msg_queue_dir=os.path.join(d, "queue"), _msg_ack_dir=os.path.join(d, "ack"),
+            _task_lock_path=lock,
+            _nudge_state_file=os.path.join(d, "nudge-state"),
+            _nudge_msg_file=os.path.join(d, "nudge.msg"),
+        )
+        assert not os.path.exists(lock), "orphaned task lock must be cleared at serve start"
+    print("PASS test_serve_loop_clears_orphaned_task_lock_at_startup")
