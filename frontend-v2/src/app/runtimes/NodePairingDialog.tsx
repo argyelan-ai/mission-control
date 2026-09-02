@@ -87,12 +87,13 @@ export function NodePairingDialog({ open, onClose }: { open: boolean; onClose: (
     setDisplayNameHint(""); setSshHost(""); setBusy(false); setError(null); setResult(null); setCopiedIdx(null);
     setRole(null); setRoleSuggested(true);
     // Rollen-Vorschlag aus dem Bestand (P2). Kein useQuery: der Dialog läuft
-    // auch ohne QueryClientProvider (Tests, Einzelverwendung) — ein einfacher
-    // Aufruf reicht, und schlägt er fehl, gilt „keine Box" → Head.
+    // auch ohne QueryClientProvider (Tests, Einzelverwendung). Schlägt die
+    // Liste fehl oder ist sie noch nicht da, bleibt die Rolle null — ein
+    // stiller „Head"-Vorschlag ohne Wissen wäre eine Falschaussage.
     let cancelled = false;
     api.hosts.list()
       .then((hosts) => { if (!cancelled) setRole((r) => r ?? suggestRole(hosts.length)); })
-      .catch(() => { if (!cancelled) setRole((r) => r ?? suggestRole(0)); });
+      .catch(() => { /* Bestand unbekannt → kein Vorschlag, role bleibt null */ });
     return () => { cancelled = true; };
   }, [open]);
 
@@ -103,7 +104,8 @@ export function NodePairingDialog({ open, onClose }: { open: boolean; onClose: (
       const res = await api.nodes.createPairingCode({
         display_name_hint: displayNameHint.trim() || null,
         ssh_host: sshHost.trim() || null,
-        role: role ?? suggestRole(0),
+        // null = Bestand unbekannt oder bewusst nichts gewählt — nie ein stilles „head".
+        role,
       });
       setResult(res);
     } catch (err) {

@@ -179,14 +179,15 @@ function HostFormModal({
   host,
   onClose,
   onOpenPairing,
-  existingHostCount = 0,
+  existingHostCount,
 }: {
   /** null = create, Host = edit */
   host: Host | null;
   onClose: () => void;
   /** Sprung zum Pairing-Weg aus dem Typ-Hinweis (nur beim Anlegen sinnvoll). */
   onOpenPairing?: () => void;
-  /** Für die Rollen-Vorbelegung beim Anlegen: erste Box Head, weitere Worker. */
+  /** Für die Rollen-Vorbelegung beim Anlegen: erste Box Head, weitere Worker.
+   *  undefined = Bestand unbekannt → keine Vorbelegung (role bleibt null). */
   existingHostCount?: number;
 }) {
   const t = useTranslations("runtimes.hosts");
@@ -194,7 +195,9 @@ function HostFormModal({
   // Beim Anlegen ist die Rolle vorbelegt (Vorschlag), beim Bearbeiten kommt
   // sie aus der Zeile — und darf dort auch wieder auf „Keine" zurück.
   const [form, setForm] = useState<HostCreate>(
-    host ? hostToForm(host) : { ...EMPTY_FORM, role: suggestRole(existingHostCount) },
+    host
+      ? hostToForm(host)
+      : { ...EMPTY_FORM, role: existingHostCount === undefined ? null : suggestRole(existingHostCount) },
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -339,7 +342,7 @@ function HostFormModal({
               value={form.role ?? null}
               onChange={(role: HostRole | null) => set("role", role)}
               labelClassName="text-xs text-[var(--color-text-muted)]"
-              suggested={!host}
+              suggested={!host && existingHostCount !== undefined}
               allowNone={!!host}
             />
 
@@ -717,7 +720,7 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
       {modalHost !== undefined && (
         <HostFormModal
           host={modalHost}
-          existingHostCount={(hosts ?? []).length}
+          existingHostCount={hosts?.length}
           onClose={() => setModalHost(undefined)}
           onOpenPairing={() => {
             setModalHost(undefined);

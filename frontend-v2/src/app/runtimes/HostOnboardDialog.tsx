@@ -164,7 +164,8 @@ export function HostOnboardDialog({ open, onClose }: { open: boolean; onClose: (
         display_name: displayName.trim() || null,
         bootstrap,
         install_agent: installAgent,
-        role: role ?? suggestRole(existingHosts?.length ?? 0),
+        // null = Bestand unbekannt / nichts gewählt — kein stilles „head".
+        role,
       });
       setJobId(res.job_id);
       setStatus("running");

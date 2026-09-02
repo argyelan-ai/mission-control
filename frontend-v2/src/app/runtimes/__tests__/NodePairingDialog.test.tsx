@@ -20,14 +20,14 @@ describe("NodePairingDialog", () => {
 
     render(<NodePairingDialog open onClose={vi.fn()} />);
 
-    await userEvent.type(screen.getByTestId("pairing-display-name"), "GX10");
+    await userEvent.type(screen.getByTestId("pairing-display-name"), "box-c");
     await userEvent.click(screen.getByTestId("pairing-generate"));
 
     expect(await screen.findByTestId("pairing-code")).toHaveTextContent("ABCD1234");
     expect(screen.getByTestId("pairing-install-command")).toHaveTextContent("--pair ABCD1234 --install");
     // P2: ohne Eingabe geht die SSH-Adresse als null mit (nicht als "").
-    // hosts.list nicht gemockt → Aufruf scheitert → „keine Box" → Head.
-    expect(api.nodes.createPairingCode).toHaveBeenCalledWith({ display_name_hint: "GX10", ssh_host: null, role: "head" });
+    // hosts.list nicht gemockt → Bestand unbekannt → KEIN stiller Vorschlag, role null.
+    expect(api.nodes.createPairingCode).toHaveBeenCalledWith({ display_name_hint: "box-c", ssh_host: null, role: null });
   });
 
   // ── P2: SSH-Adresse + Install-Befehle je Netz ─────────────────────────────
@@ -45,7 +45,38 @@ describe("NodePairingDialog", () => {
     await userEvent.click(screen.getByTestId("pairing-generate"));
     await screen.findByTestId("pairing-code");
 
-    expect(api.nodes.createPairingCode).toHaveBeenCalledWith({ display_name_hint: "box-b", ssh_host: "192.0.2.22", role: "head" });
+    expect(api.nodes.createPairingCode).toHaveBeenCalledWith({ display_name_hint: "box-b", ssh_host: "192.0.2.22", role: null });
+  });
+
+  it("P2: unknown inventory (list fails) → no suggestion, nothing preselected, role null is sent — sending is NOT blocked", async () => {
+    vi.spyOn(api.hosts, "list").mockRejectedValue(new Error("API 500"));
+    vi.spyOn(api.nodes, "createPairingCode").mockResolvedValue({
+      code: "FFFF6666", expires_at: "2026-09-02T12:15:00Z", host_id: null,
+      install_command: "sudo python3 /usr/local/bin/mc-node-agent.py --pair FFFF6666 --install",
+    });
+    render(<NodePairingDialog open onClose={vi.fn()} />);
+    await waitFor(() => expect(api.hosts.list).toHaveBeenCalled());
+
+    expect(screen.getByTestId("pairing-role-head")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("pairing-role-worker")).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(screen.getByTestId("pairing-generate"));
+    await screen.findByTestId("pairing-code");
+    expect(vi.mocked(api.nodes.createPairingCode).mock.calls[0][0]).toMatchObject({ role: null });
+  });
+
+  it("P2: empty inventory (0 boxes, list known) → suggestion 'head' is sent", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([]);
+    vi.spyOn(api.nodes, "createPairingCode").mockResolvedValue({
+      code: "GGGG7777", expires_at: "2026-09-02T12:15:00Z", host_id: null,
+      install_command: "sudo python3 /usr/local/bin/mc-node-agent.py --pair GGGG7777 --install",
+    });
+    render(<NodePairingDialog open onClose={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("pairing-role-head")).toHaveAttribute("aria-checked", "true"),
+    );
+    await userEvent.click(screen.getByTestId("pairing-generate"));
+    await screen.findByTestId("pairing-code");
+    expect(vi.mocked(api.nodes.createPairingCode).mock.calls[0][0]).toMatchObject({ role: "head" });
   });
 
   it("P2: suggests 'worker' when a box exists, and a click on Head is what gets sent", async () => {

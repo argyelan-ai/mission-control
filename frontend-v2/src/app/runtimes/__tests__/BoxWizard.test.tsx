@@ -290,8 +290,8 @@ describe("BoxWizard — component", () => {
       slug: "dgx-spark",
       display_name: "DGX Spark",
       kind: "ssh",
-      // P2: kein Bestand (hosts.list nicht gemockt → keine Liste) → erste Box = Head
-      role: "head",
+      // P2: hosts.list nicht gemockt → Bestand unbekannt → kein stiller Vorschlag
+      role: null,
       ssh_host: "192.0.2.10",
       ssh_user: null,
       ssh_key_path: null,
@@ -318,6 +318,21 @@ describe("BoxWizard — component", () => {
     await walkToStep2(user);
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0][0]).toMatchObject({ role: "worker" });
+  });
+
+  it("P2: unknown inventory (list fails) → nothing preselected, role null goes out, step 2 still reachable", async () => {
+    vi.spyOn(api.hosts, "list").mockRejectedValue(new Error("API 500"));
+    vi.spyOn(api.hosts, "probe").mockResolvedValue(mkProbe());
+    const create = vi.spyOn(api.hosts, "create").mockResolvedValue(mkHost());
+    const user = userEvent.setup();
+    renderWizard();
+    await waitFor(() => expect(api.hosts.list).toHaveBeenCalled());
+    expect(screen.getByTestId("box-wizard-role-head")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("box-wizard-role-worker")).toHaveAttribute("aria-checked", "false");
+
+    await walkToStep2(user);
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0][0]).toMatchObject({ role: null });
   });
 
   it("P2: the suggestion is only a suggestion — one click flips it to 'head' and that is what gets sent", async () => {

@@ -963,8 +963,8 @@ export function BoxWizard({ onClose }: { onClose: () => void }) {
   const [runtimeId, setRuntimeId] = useState<string | null>(null);
 
   // Rollen-Vorschlag (P2): erste Box im Bestand → Head, sonst Worker. Kommt
-  // die Liste nicht (Netz, Rechte), gilt „keine Box" — der Operator sieht den
-  // Vorschlag ohnehin und dreht ihn mit einem Klick.
+  // die Liste nicht (Netz, Rechte), bleibt die Rolle null — der Operator kann
+  // sie trotzdem wählen; nur vorgeschlagen wird nichts.
   const { data: existingHosts } = useQuery<Host[]>({ queryKey: ["hosts"], queryFn: api.hosts.list });
   useEffect(() => {
     if (existingHosts === undefined) return;
@@ -994,7 +994,9 @@ export function BoxWizard({ onClose }: { onClose: () => void }) {
           slug: state.slug.trim(),
           display_name: state.displayName.trim(),
           kind: "ssh",
-          role: state.role ?? suggestRole(existingHosts?.length ?? 0),
+          // null, solange der Bestand unbekannt ist (Liste nicht geladen) —
+          // kein stiller „head". Vorschlag greift nur mit echtem Bestand.
+          role: state.role,
           ssh_host: state.sshHost.trim(),
           ssh_user: state.sshUser.trim() || null,
           ssh_key_path: state.sshKeyPath.trim() || null,

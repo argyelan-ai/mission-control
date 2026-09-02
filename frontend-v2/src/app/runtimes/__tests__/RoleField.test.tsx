@@ -8,7 +8,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { RoleChip, RoleField, suggestRole } from "../RoleField";
+import type { HostRole } from "@/lib/types";
 
 describe("suggestRole", () => {
   it("first box → head, every further box → worker", () => {
@@ -51,6 +53,54 @@ describe("RoleField", () => {
     render(<RoleField value="worker" onChange={() => {}} labelClassName="text-xs" />);
     expect(screen.queryByRole("radio", { name: "None" })).toBeNull();
     expect(screen.getAllByRole("radio")).toHaveLength(2);
+  });
+});
+
+describe("RoleField — keyboard (ARIA radiogroup)", () => {
+  it("roving tabIndex: only the checked radio is in the tab order", () => {
+    render(<RoleField value="worker" onChange={() => {}} labelClassName="text-xs" allowNone />);
+    expect(screen.getByRole("radio", { name: "Head" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("radio", { name: "Worker" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("radio", { name: "None" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("with nothing checked the first radio is the tab stop", () => {
+    render(<RoleField value={null} onChange={() => {}} labelClassName="text-xs" />);
+    expect(screen.getByRole("radio", { name: "Head" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("radio", { name: "Worker" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("arrow keys move the choice and the focus, wrapping around", async () => {
+    // Gesteuert wie im echten Formular: der Wert folgt onChange.
+    const seen: Array<HostRole | null> = [];
+    function Harness() {
+      const [v, setV] = useState<HostRole | null>("head");
+      return <RoleField value={v} onChange={(r) => { seen.push(r); setV(r); }} labelClassName="text-xs" allowNone />;
+    }
+    render(<Harness />);
+    screen.getByRole("radio", { name: "Head" }).focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(seen.at(-1)).toBe("worker");
+    expect(screen.getByRole("radio", { name: "Worker" })).toHaveFocus();
+    expect(screen.getByRole("radio", { name: "Worker" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(seen.at(-1)).toBe("head");
+    expect(screen.getByRole("radio", { name: "Head" })).toHaveFocus();
+    // Wrap: von Head nach links/oben landet auf „None" (letzte Option) …
+    await userEvent.keyboard("{ArrowUp}");
+    expect(seen.at(-1)).toBe(null);
+    expect(screen.getByRole("radio", { name: "None" })).toHaveFocus();
+    // … und von „None" nach rechts wieder auf Head.
+    await userEvent.keyboard("{ArrowDown}");
+    expect(seen.at(-1)).toBe("head");
+  });
+
+  it("ArrowDown from an unselected group picks the first option", async () => {
+    const onChange = vi.fn();
+    render(<RoleField value={null} onChange={onChange} labelClassName="text-xs" />);
+    screen.getByRole("radio", { name: "Head" }).focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(onChange).toHaveBeenLastCalledWith("head");
   });
 });
 

@@ -296,10 +296,10 @@ describe("HostsSection", () => {
 
   it("editing an existing agent host keeps kind='agent' locked — the row is not touched", async () => {
     const update = vi.spyOn(api.hosts, "update").mockResolvedValue(makeHost({ kind: "agent" }));
-    await renderAsAdmin([makeHost({ id: "host-a", slug: "gx10", display_name: "GX10", kind: "agent", ssh_host: null })]);
+    await renderAsAdmin([makeHost({ id: "host-a", slug: "box-a", display_name: "box-a", kind: "agent", ssh_host: null })]);
 
-    await userEvent.click(await screen.findByLabelText("Edit host GX10"));
-    await screen.findByText("Edit host — GX10");
+    await userEvent.click(await screen.findByLabelText("Edit host box-a"));
+    await screen.findByText("Edit host — box-a");
 
     expect(screen.getByTestId("host-kind-locked")).toHaveTextContent("Agent");
     expect(screen.queryByRole("button", { name: "SSH" })).toBeNull();

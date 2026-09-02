@@ -18,6 +18,7 @@
  * so sieht die Rolle in jedem Dialog aus wie dessen übrige Felder.
  */
 
+import { useRef, type KeyboardEvent } from "react";
 import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import type { HostRole } from "@/lib/types";
@@ -52,6 +53,29 @@ export function RoleField({
 }) {
   const t = useTranslations("runtimes.hosts");
   const hintId = `${idPrefix}-hint`;
+  const groupRef = useRef<HTMLDivElement | null>(null);
+
+  // ARIA-Radiogroup: genau EIN Radio im Tab-Fluss (das gewählte, sonst das
+  // erste), Pfeiltasten wechseln die Option und tragen den Fokus mit.
+  const values: Array<HostRole | null> = [
+    ...ROLE_OPTIONS.map((o) => o.value),
+    ...(allowNone ? [null] : []),
+  ];
+  const currentIdx = values.indexOf(value);
+  const tabStopIdx = currentIdx >= 0 ? currentIdx : 0;
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const dir =
+      e.key === "ArrowRight" || e.key === "ArrowDown" ? 1
+      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1
+      : 0;
+    if (dir === 0) return;
+    e.preventDefault();
+    const base = currentIdx >= 0 ? currentIdx : (dir > 0 ? -1 : 0);
+    const next = (base + dir + values.length) % values.length;
+    onChange(values[next]);
+    const radios = groupRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    radios?.[next]?.focus();
+  };
   const chipClass =
     "text-xs px-2.5 py-1.5 sm:py-1 min-h-11 sm:min-h-0 rounded-md cursor-pointer transition-colors font-mono uppercase tracking-wider";
   const chipStyle = (active: boolean) => ({
@@ -67,12 +91,14 @@ export function RoleField({
         {t("fieldRole")}
       </span>
       <div
+        ref={groupRef}
         role="radiogroup"
         aria-labelledby={`${idPrefix}-label`}
         aria-describedby={hintId}
+        onKeyDown={onKeyDown}
         className="flex gap-1.5"
       >
-        {ROLE_OPTIONS.map((opt) => {
+        {ROLE_OPTIONS.map((opt, i) => {
           const active = value === opt.value;
           return (
             <button
@@ -80,6 +106,7 @@ export function RoleField({
               type="button"
               role="radio"
               aria-checked={active}
+              tabIndex={tabStopIdx === i ? 0 : -1}
               data-testid={`${idPrefix}-${opt.value}`}
               onClick={() => onChange(opt.value)}
               className={chipClass}
@@ -94,6 +121,7 @@ export function RoleField({
             type="button"
             role="radio"
             aria-checked={value === null}
+            tabIndex={tabStopIdx === ROLE_OPTIONS.length ? 0 : -1}
             data-testid={`${idPrefix}-none`}
             onClick={() => onChange(null)}
             className={chipClass}
