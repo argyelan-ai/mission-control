@@ -772,7 +772,7 @@ async def evict_spark_runtime_containers(
 
     A non-empty ``blocked`` list makes the overall result ``ok=False`` — an
     unresolved, still-running container means the box is not actually free,
-    and the caller (``ensure_exclusive_host`` / ``switch_recipe``) must not
+    and the caller (``ensure_exclusive_host``) must not
     launch a second model on top of it.
 
     Returns ``{"ok": bool, "message": str, "stopped": [ids], "blocked": [...]}``.
@@ -1544,6 +1544,26 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
     return {"state": "unknown", "http_reachable": False, "container_status": None}
 
 
+def runtime_row_to_dict(runtime: Runtime) -> dict:
+    """Coerce a Runtime row into the dict shape the lifecycle functions here
+    expect (start/stop/restart/get_runtime_state). Narrow on purpose — only
+    the fields those functions read. Lived in the old sparkrun module before
+    the Rezept-Umschalter (02.09.2026) retired it; the watcher's auto-recovery
+    still needs exactly this shape."""
+    return {
+        "id": str(runtime.id),
+        "slug": runtime.slug,
+        "display_name": runtime.display_name,
+        "runtime_type": runtime.runtime_type,
+        "endpoint": runtime.endpoint,
+        "container_name": runtime.container_name,
+        "host": runtime.host,
+        "launch_command": runtime.launch_command,
+        "lms_identifier": runtime.lms_identifier,
+        "lms_cli_path": runtime.lms_cli_path,
+    }
+
+
 def _grace_slug(runtime: dict) -> str | None:
     """Key a runtime is tracked under in runtime_grace. Registry dicts predate
     the slug column, so fall back to the id the same way start/restart do."""
@@ -1712,7 +1732,7 @@ async def start_runtime(
       (:mod:`app.services.host_memory_prep`).
     * **Switch-grace** (PR5) — docker engines and ssh_process take 2–15
       minutes to serve; without the marker the watcher reports that warmup as
-      an outage. ``grace_source`` records who asked — ``switch_recipe`` and
+      an outage. ``grace_source`` records who asked — a recipe start and
       the watcher's auto-recovery pass their own value.
 
     The marker is cleared here only when the start call itself fails; a

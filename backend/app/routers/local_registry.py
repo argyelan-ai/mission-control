@@ -30,7 +30,7 @@ from app.database import get_session
 from app.models.host import Host
 from app.models.local_recipe import LocalRecipe
 from app.models.runtime import Runtime
-from app.services import launch_template, local_registry, recipe_install
+from app.services import launch_template, local_registry, recipe_install, recipe_switcher
 from app.services.host_resolver import resolved_host_from_row
 
 router = APIRouter(prefix="/api/v1/local-registry", tags=["local-registry"])
@@ -62,6 +62,10 @@ class LocalRecipeOut(BaseModel):
     source_registry: str
     source_url: str | None
     env: dict[str, str] | None
+    # Rezept-Umschalter (02.09.2026): Anzahl Boxen (immer gefüllt, NULL → 1)
+    # und Standard-Port (darf fehlen).
+    topology: dict
+    port: int | None
     tags: list[str]
     notes: str | None
     enabled: bool
@@ -80,10 +84,11 @@ class LocalRecipePatch(BaseModel):
 async def _running_matcher(session: AsyncSession):
     """Build a predicate "is some enabled runtime serving this recipe?".
 
-    Two conservative signals, both read-only:
-      * an enabled runtime whose ``model_identifier`` equals the recipe's, or
-      * an enabled runtime whose ``launch_command`` mentions the recipe_ref
-        (that is how a sparkrun recipe shows up on a runtime row).
+    Dieselbe Zuordnung wie der Rezept-Umschalter
+    (``recipe_switcher.recipe_matches_runtime``: expliziter Rückverweis in
+    ``runtimes.topology``, ``recipe_ref`` im Startbefehl, gleicher
+    ``model_identifier``) — EINE Regel, damit Katalogseite und Umschalter nie
+    verschiedener Meinung sind, welche Runtime zu welchem Rezept gehört.
 
     Conservative on purpose: a false "running" badge would invite the operator
     to skip a deploy that never happened. Loading the runtimes once and matching
@@ -92,16 +97,9 @@ async def _running_matcher(session: AsyncSession):
     runtimes = (
         await session.exec(select(Runtime).where(Runtime.enabled == True))  # noqa: E712
     ).all()
-    identifiers = {
-        (rt.model_identifier or "").strip().lower() for rt in runtimes if rt.model_identifier
-    }
-    launch_commands = [rt.launch_command for rt in runtimes if rt.launch_command]
 
     def _is_running(recipe: LocalRecipe) -> bool:
-        if (recipe.model_identifier or "").strip().lower() in identifiers:
-            return True
-        ref = (recipe.recipe_ref or "").strip()
-        return bool(ref) and any(ref in cmd for cmd in launch_commands)
+        return any(recipe_switcher.recipe_matches_runtime(recipe, rt) for rt in runtimes)
 
     return _is_running
 
@@ -129,6 +127,8 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
         source_registry=recipe.source_registry,
         source_url=recipe.source_url,
         env=dict(recipe.env) if recipe.env else None,
+        topology={"nodes": recipe_switcher.recipe_nodes(recipe.topology)},
+        port=recipe.port,
         tags=list(recipe.tags or []),
         notes=recipe.notes,
         enabled=recipe.enabled,
@@ -140,7 +140,7 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
 
 @router.get("")
 async def list_local_recipes(
-    engine: str | None = Query(default=None, description="sparkrun | vllm_docker | llamacpp_docker"),
+    engine: str | None = Query(default=None, description="vllm_docker | llamacpp_docker | ssh_process"),
     arch: str | None = Query(default=None, description="arm64 | x86_64 | any"),
     enabled: bool | None = Query(default=None),
     q: str | None = Query(default=None, description="substring over name, slug, model id, tags"),
