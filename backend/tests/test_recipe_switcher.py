@@ -234,7 +234,8 @@ async def test_instance_is_recognised_by_recipe_ref_in_launch_command(auth_clien
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
     assert entry["instance_runtime_id"] == str(legacy.id)
     assert entry["running"] is True
-    assert entry["startable"] is True
+    assert entry["startable"] is False  # läuft → nicht doppelt startbar
+    assert entry["reason"] == "läuft bereits auf dieser Box"
 
 
 @pytest.mark.asyncio
@@ -578,3 +579,28 @@ async def test_model_round_trips_topology_and_port(session):
     rows = {r.slug: r for r in (await session.exec(select(LocalRecipe))).all()}
     assert rows["recipe-x"].topology == {"nodes": 2} and rows["recipe-x"].port == 8888
     assert rows["recipe-y"].topology is None and rows["recipe-y"].port is None
+
+
+@pytest.mark.asyncio
+async def test_running_duo_is_fitted_not_reported_as_no_free_box(auth_client, session):
+    """Live-Befund 02.09.: Ein laufendes Zweibox-Rezept belegt seine eigene
+    zweite Box — das darf nicht als „keine freie zweite Box" gelten."""
+    box_a = await _host(session, "box-a")
+    box_b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    recipe = await _recipe(session, "recipe-duo", topology={"nodes": 2})
+    rt = await _runtime(session, "duo-a", box_a, exclusive_memory=True,
+                        topology={"nodes": 2, "recipe_slug": recipe.slug})
+    from app.models.runtime_host import RuntimeHost
+    session.add(RuntimeHost(runtime_id=rt.id, host_id=box_b.id, role="worker", node_rank=1))
+    await session.commit()
+
+    with _probe({"duo-a"}):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-duo"]
+    assert entry["running"] is True
+    assert entry["fit"] == "duo"
+    assert entry["startable"] is False
+    assert entry["reason"] == "läuft bereits auf dieser Box"
+    assert entry["busy_hosts"] == ["box-a", "box-b"]
+    # Für einen NEUEN Start ist box-b nicht frei — Kandidatenliste bleibt leer.
+    assert entry["candidate_workers"] == []
+

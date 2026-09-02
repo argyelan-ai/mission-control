@@ -955,14 +955,3 @@ option {
   background-color: var(--action-hover);
 }
 
-/* ── Weiche Schnittkante für geklemmte Beiträge ────────────────────────────
-   Ein fester Pixel-Deckel auf Markdown kann nicht auf einer Zeilenkante
-   landen — Überschrift, Absatz und Liste haben verschiedene Zeilenhöhen. Live
-   schnitt der Deckel darum mitten durch die Buchstaben (Befund 22.08.2026).
-   Der Verlauf macht aus der zufälligen Kante eine sichtbare Absicht.
-   Als Klasse und nicht als Inline-Stil, weil `mask-image` in jsdom gar nicht
-   existiert — eine Behauptung darüber wäre im Test unsichtbar. */
-.clamp-fade {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
-}
