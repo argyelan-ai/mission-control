@@ -387,7 +387,7 @@ Drei bewusste Unterschiede:
    Wiederverwendung der Eviction wuerde "stoppe den kleinen Helfer" still zum
    Abschuss des vLLM daneben machen.
 
-**Kein Recipe-Switch:** `POST /runtimes/{id}/switch-recipe` bleibt hart auf
+**Kein Recipe-Switch** *(historisch — `switch-recipe` ist seit ADR-077 entfernt; Rezeptwechsel laufen über `POST /hosts/{id}/recipes/{slug}/start`)*: `POST /runtimes/{id}/switch-recipe` blieb hart auf
 `vllm_docker`. "Recipe" heisst dort sparkrun-Recipe, das es nur fuer vLLM auf
 dem Spark gibt. Modellwechsel bei llama.cpp = anderer Container bzw. anderes
 `launch_command`; hot-swapping hinter einem Port waere ein spaeterer
@@ -594,8 +594,9 @@ nie `curl | sh`. Saemtliche Remote-Arbeit geht durch
 
 Der Passt-Check in Schritt 3 misst gegen das **geprobte** Inventar (Summe des
 GPU-VRAM, ersatzweise RAM) und loest damit die 121-GB-Konstante des
-Modell-Browsers ab. `sparkrun`-Rezepte erscheinen im Wizard nicht: die werden
-ueber `switch-recipe` auf einer bestehenden Spark-Runtime deployt.
+Modell-Browsers ab. *(Historisch: `sparkrun`-Rezepte erschienen im Wizard nicht und
+liefen ueber `switch-recipe`. Seit ADR-077 sind sie gewoehnliche Katalogzeilen mit
+Startbefehl und erscheinen wie jedes andere Rezept.)*
 
 #### Host-Registry (NEU 2026-07-02, ADR-048)
 
@@ -695,8 +696,9 @@ legitimately down.
 **Grace.** `services/runtime_grace.py` holds one Redis marker per runtime
 (`mc:runtime-switching:{slug}` → `{phase, source, started_at}`, TTL 20 min).
 `phase` is `evicting|launching|loading`, `source` is
-`switch_recipe|manual_start|auto_recovery`. `sparkrun_manager.switch_recipe`
-sets it **before** the eviction and clears it on every abort path;
+`switch_recipe|manual_start|auto_recovery`. *(`sparkrun_manager.switch_recipe` is gone
+since ADR-077; the `switch_recipe` source label remains for compatibility.)*
+It used to set the marker **before** the eviction and clear it on every abort path;
 `runtime_manager.start_runtime`/`restart_runtime` set it for
 `DOCKER_ENGINE_TYPES` and clear it when the call itself fails. A marked
 runtime is written to the live snapshot as `status: "switching"` + `phase`
@@ -790,7 +792,12 @@ Fortschrittsanzeige (Phasen: Manifest → Build (Log-Tail) → Recreate).
 **Nicht in v1:** GHCR-Publish der Agent-Images, Auto-Update-Policy,
 Changelog-Anzeige im Dialog.
 
-#### Sparkrun Recipe-Switching — Solo-Capability-Guard (NEU 2026-07-06, ADR-059)
+#### Sparkrun Recipe-Switching — Solo-Capability-Guard (2026-07-06, ADR-059 — **superseded by ADR-077**)
+
+> **Stand 2026-09-02:** `sparkrun_manager.list_recipes`/`switch_recipe`, `solo_capable`,
+> TP-Override und `SparkRecipeSwitcher` sind entfernt (ADR-077). Was bleibt: der
+> Post-Launch-Prozess-Check `verify_spark_vllm_process_started` in `start_runtime`.
+> Der Rest dieses Abschnitts ist Historie.
 
 Der DGX Spark hat **1 GPU**. `sparkrun` (die Recipe-CLI, die vLLM-Container auf
 dem Spark steuert) bietet für dasselbe Modell teils mehrere Registry-Varianten
@@ -1206,6 +1213,55 @@ false "drift to nothing"). Host agents (Boss/Hermes/Jarvis) are excluded
 from auto-sync — launchd-managed, they only get the activity event. Siehe
 ADR-054 (supersedes D-22, ADR-028).
 
+### Rezept → Instanz → Start (NEU 2026-09-02, ADR-077)
+
+Ein **Rezept** ist eine Katalogzeile (`local_recipes`): Engine · Startbefehl
+(Vorlage `launch_template`, Pflicht) · Port · Topologie `{"nodes": 1|2}` —
+nur die **Anzahl** Boxen, nie die Geräte. Eine **Instanz** ist eine Runtime
+auf konkreten Boxen: `runtimes.host_id` = Head (die Box, die MC anspricht),
+`runtime_hosts` = weitere Mitglieder. Der **Zustand** („läuft?") kommt nur
+aus der Health-Probe am Head, nie aus einer Statusspalte.
+
+```
+Box-Wizard / Runtimes-Seite / Detail-Panel
+  → GET /api/v1/hosts/{host_id}/recipes            (routers/host_recipes.py)
+      recipe_switcher.list_host_recipes:
+        Katalog (enabled) + Runtimes (enabled, host-gebunden) + runtime_hosts
+        + parallele Health-Probe je Instanz (probe_running)
+        → je Rezept: fit solo|duo|none · startable · running · reason (Satz)
+                     · busy_hosts · candidate_workers
+        → Reihenfolge: laufend → startbar → grau
+      Frontend (HostRecipeSwitcher.tsx) zeigt, rechnet NICHTS nach
+  → Klick „starten" (2 Klicks: wählen → bestätigen)
+  → POST /api/v1/hosts/{host_id}/recipes/{slug}/start   (admin-only)
+      recipe_switcher.start_recipe_on_host:
+        nodes ≥ 2   → 409 „Zweibox-Start kommt in Phase 3"   (P3 offen)
+        kein SSH    → 409 „Box hat keinen SSH-Zugang …"
+        keine Instanz für diese Box → build_runtime_from_recipe
+            (Felder wie Box-Wizard; topology aus Katalog kopiert + recipe_slug;
+             exclusive_memory = min_vram_gb gesetzt; Startbefehl aus Vorlage)
+        kein Startbefehl → 422 „Startbefehl fehlt"
+        → runtime_manager.start_runtime(instance, host=Head)
+            ensure_exclusive_host (Verdrängung) → SSH nohup bash -lc <launch_command>
+            → Verifikation Label mc.runtime.slug + vLLM-Prozess-Check (ADR-059)
+  → Liste pollt, bis running umschlägt („startet …" nie länger als die Frist)
+```
+
+**Zweibox-Rezepte (Duo):** MC spricht **nur mit dem Head**. Das Rezept zieht
+seinen Worker selbst dazu (sein `start.sh` per SSH, gesteuert über
+`HEAD_IP`/`WORKER_IP`). Es gibt keinen MC-eigenen Multi-Host-Startpfad;
+`runtime_hosts` dient Anzeige und Konfliktprüfung. P3 schreibt die zwei
+Werte aus der Worker-Wahl in die `.env` des Rezepts (die `.env` gewinnt dort
+über die Umgebung — geprüft 02.09.). P2 bringt `hosts.role` (head/worker) als
+Vorbelegung; Solo ignoriert die Rolle.
+
+**sparkrun** ist kein Konzept mehr: ein sparkrun-Rezept ist ein gewöhnlicher
+Startbefehl (`uvx sparkrun run …`, Engine `vllm_docker`, Label-Verifikation).
+Alte `engine=sparkrun`-Zeilen wandelt der Startup um
+(`local_registry.repair_legacy_sparkrun_rows`), nie löschen. Die früheren
+Abschnitte zu `switch-recipe`, `sparkrun_manager` und `SparkRecipeSwitcher`
+in diesem Dokument sind Historie.
+
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
 - **Pfad:** `~/.mc/vault/`
@@ -1289,6 +1345,7 @@ Alle ADRs in `docs/decisions/`:
 - **ADR-039** — OpenClaw Gateway Sunset (Runtime + Code-Pfad + DB-Schema + Frontend + Host-Service entfernt, v0.9)
 - **ADR-042** — unsloth_porsche power-managed Runtime (PORSCHE Windows-Box, Flask `:5555`/PowerShell statt DGX-SSH, Wake-on-LAN via Host-Helper, bedarfsgesteuerter Lebenszyklus, fail-open Runtime-Readiness-Dispatch-Gate nur für power-managed Agenten)
 - **ADR-046** — Lifecycle Safety Watchdog (Silent-Abort Auto-Block; acked+verstummt → `blocked`; cli-bridge v1, host deferred; Prime-Directive-safe: runtime-gate + konservativer geflooter Threshold + Korroboration + staged nudge)
+- **ADR-077** — Ein Rezept-Modell (Engine · Startbefehl (Pflicht) · Port · Topologie = Anzahl Boxen, nie Geräte); sparkrun kein Konzept mehr; eine Schnittstelle `GET /hosts/{id}/recipes` für beide Umschalter, Backend rechnet, Frontend zeigt; kein neuer Multi-Host-Startcode (MC spricht nur mit dem Head). Supersedes ADR-059
 
 ---
 
@@ -1325,6 +1382,11 @@ Alle ADRs in `docs/decisions/`:
 | Gruppenchat: Zustellung/Sichtbarkeit | `services/thread_scope.py` (Group-Join) + `routers/agents.py::_group_message_visible_to` (Mention-Filter) | ADR-075 — eine Scope-Regel für Zustellung UND Antwort-Recht; Agenten-Posts ohne Mention wecken strukturell NIEMANDEN (Sturm-Schutz) — nie aufweichen |
 | Gruppenchat: Runden-Ablauf/Deckel/Verdikt | `services/group_runner.py` (Brief, Sammeln, Lead-Turn, Kaskade) | ADR-075 — Engine ruft NIE ein LLM; Verdikt-Marker + Kaskaden-Reihenfolge nur mit Test ändern; Timeout-Notizen tragen keine mentions |
 | Gruppenchat: UI (Raum, Sidebar, Ergebnis-Panel) | `frontend-v2/src/components/groupchat/*` + `hooks/useGroupStream.ts` | ADR-075 — lebt IN der Sessions-Seite; Texte nur über `sessions.groups`-i18n (de+en); Sprecher bleiben achromatisch; nie einen Zustand behaupten, wenn der SSE-Strom weg ist |
+| Rezepte & Umschalter: neues Rezept aufnehmen | `backend/config/local-recipes.json` (Seed) bzw. Katalogzeile `local_recipes` mit `engine`, `launch_template` (Pflicht: daraus wird der Startbefehl), `port`, `topology` `{"nodes":1\|2}` | ADR-077 — NUR die Anzahl Boxen ins Rezept, nie Geräte; keine Gerätedaten/Modellnamen des Betreibers im Repo (Leak-Gate). Skill `mc-recipe-integration` |
+| Rezepte & Umschalter: Regel „passt / startbar / Grund" | `backend/app/services/recipe_switcher.py::list_host_recipes` (Gründe als Sätze: `REASON_*`, `reason_port_busy`) | ADR-077 — das Backend rechnet, `HostRecipeSwitcher.tsx` zeigt nur; nie eine zweite Regel im Frontend nachbauen |
+| Rezepte & Umschalter: Start aus dem Katalog | `backend/app/services/recipe_switcher.py::start_recipe_on_host` → `build_runtime_from_recipe` + `runtime_manager.start_runtime` | ADR-077 — kein zweiter Lebenszyklus; Duo (`nodes=2`) bis P3 = 409 mit Satz; MC spricht nur mit dem Head |
+| Rezepte & Umschalter: Startbefehl-Pflicht | `backend/app/routers/runtimes.py::_require_launch_command` (`COMMAND_DRIVEN_RUNTIME_TYPES` in `recipe_switcher.py`) | ADR-077 — Router-Regel, KEIN DB-NOT-NULL (Cloud/LM Studio haben legitim keinen Befehl) |
+| Rezepte & Umschalter: alte sparkrun-Zeilen | `backend/app/services/local_registry.py::normalise_legacy_engine` / `repair_legacy_sparkrun_rows` (Startup) | ADR-077 — umwandeln, nie löschen: mit Befehl → `vllm_docker`, ohne → `ssh_process` + „Startbefehl fehlt" |
 | Frontend-Page | `frontend-v2/src/app/{page}/page.tsx` | Ggf. `lib/api.ts` + types |
 | Browsebare Datei-Wurzel hinzufügen/ändern | `backend/app/services/fs_roots.py` (Registry, SSoT) | Nie `secrets`/Token-Config browsebar machen (ADR-040) |
 | Datei-Zugriff (list/stat/stream) | `backend/app/services/fs_service.py` (einziger Containment-Guard) | Nie an `fs_service` vorbei os.listdir/open |
@@ -1349,6 +1411,19 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-09-02** — **Ein Rezept-Modell + Rezept-Umschalter (ADR-077, #388 Backend, #389
+  Frontend):** Rezept = Engine · Startbefehl (Pflicht) · Port · Topologie (Anzahl Boxen).
+  `local_recipes.topology` `{"nodes":1|2}` + `port` (Migration 0191, additiv). sparkrun ist
+  kein Konzept mehr: `services/sparkrun_manager.py`, `POST /runtimes/{id}/switch-recipe`,
+  das `sparkrun_managed`-Gate und `SparkRecipeSwitcher.tsx` entfernt; alte Katalogzeilen
+  werden beim Start umgewandelt (`repair_legacy_sparkrun_rows` → `vllm_docker`), nie
+  gelöscht. Eine Schnittstelle für beide Umschalter: `GET/POST /api/v1/hosts/{id}/recipes`
+  (`routers/host_recipes.py` + `services/recipe_switcher.py`) — `fit`/`startable`/`running`/
+  `reason` backend-seitig, Gründe als Sätze, `HostRecipeSwitcher.tsx` zeigt nur.
+  `launch_command` Pflicht im Router (`_require_launch_command`), nicht als DB-NOT-NULL.
+  Kein neuer Multi-Host-Startcode: MC spricht nur mit dem Head; Duo-Start bis P3 = 409.
+  Auslöser: Umschalter stumm (`sparkrun_managed`), `runtime_hosts` leer/ohne Schreibpfad,
+  Zweibox-Rezept ohne Startbefehl. Supersedes ADR-059 (Prozess-Check bleibt).
 - **2026-08-20** — **Multi-Agent-Gruppenchat V1, Sessions-UI (ADR-075, PR C):** Gruppen leben
   in der bestehenden `/sessions`-Seite, nicht auf einer eigenen Insel (Lehre aus der
   ungenutzten Loops-Seite). Neu unter `frontend-v2/src/components/groupchat/`: GroupRow +
