@@ -2455,12 +2455,12 @@ async def test_set_effort_omp_cycles_shift_tab_until_status_line_matches(monkeyp
             _omp_pane("◔ low"),    # 5 -> Ziel
         ],
     )
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     await agent_chat_input.set_effort(agent, "low")
 
     assert [c[-1] for c in calls] == ["BTab"] * 5
     assert all("send-keys" in c for c in calls)
-    assert persisted == [("sparky", "low")]
+    assert persisted == [("alpha", "low")]
 
 
 async def test_set_effort_omp_is_a_noop_when_already_there(monkeypatch):
@@ -2469,12 +2469,12 @@ async def test_set_effort_omp_is_a_noop_when_already_there(monkeypatch):
     calls, persisted = await _patch_omp_effort_deps(
         monkeypatch, agent_chat_input, pane_sequence=[_omp_pane("◒ high")],
     )
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     await agent_chat_input.set_effort(agent, "high")
     assert calls == []
     # Trotzdem persistieren: die Datei ist der Standard fuer den naechsten
     # Task-Relaunch, und die Statuszeile sagt nichts ueber die Datei.
-    assert persisted == [("sparky", "high")]
+    assert persisted == [("alpha", "high")]
 
 
 async def test_set_effort_omp_gives_up_after_one_full_ring(monkeypatch):
@@ -2486,7 +2486,7 @@ async def test_set_effort_omp_gives_up_after_one_full_ring(monkeypatch):
     calls, persisted = await _patch_omp_effort_deps(
         monkeypatch, agent_chat_input, pane_sequence=[_omp_pane("◒ high")],
     )
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     with pytest.raises(agent_chat_input.EffortSwitchFailedError):
         await agent_chat_input.set_effort(agent, "low")
     assert len(calls) == agent_chat_input._OMP_THINKING_RING_MAX_PRESSES
@@ -2501,7 +2501,7 @@ async def test_set_effort_omp_busy_preflight_uses_omp_pane_rules(monkeypatch):
     calls, persisted = await _patch_omp_effort_deps(
         monkeypatch, agent_chat_input, pane_sequence=[PANE_WORKING_GENERIC],
     )
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     with pytest.raises(agent_chat_input.AgentBusyError):
         await agent_chat_input.set_effort(agent, "low")
     assert calls == [] and persisted == []
@@ -2517,7 +2517,7 @@ async def test_set_effort_omp_off_is_session_only(monkeypatch):
         monkeypatch, agent_chat_input,
         pane_sequence=[_omp_pane("◕ xhigh"), _omp_pane(None)],
     )
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     await agent_chat_input.set_effort(agent, "off")
     assert [c[-1] for c in calls] == ["BTab"]
     assert persisted == []
@@ -2526,7 +2526,7 @@ async def test_set_effort_omp_off_is_session_only(monkeypatch):
 async def test_set_effort_omp_rejects_auto_and_claude_only_levels():
     from app.services import agent_chat_input
 
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     for level in ("auto", "ultracode", "max"):
         with pytest.raises(ValueError):
             await agent_chat_input.set_effort(agent, level)
@@ -2542,7 +2542,7 @@ async def test_effort_capabilities_omp_reads_level_from_status_line(monkeypatch)
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
     monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
 
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     caps = await agent_chat_input.effort_capabilities(agent)
     assert caps == {
         "effortLevels": ["off", "minimal", "low", "medium", "high", "xhigh"],
@@ -2565,7 +2565,7 @@ async def test_effort_capabilities_omp_auto_shows_no_level(monkeypatch):
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
     monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
 
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     caps = await agent_chat_input.effort_capabilities(agent)
     assert caps["canSwitchEffort"] is True and caps["effort"] is None
 
@@ -2580,7 +2580,7 @@ async def test_effort_capabilities_omp_without_status_line_cannot_switch(monkeyp
     monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
     monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
 
-    agent = _StubAgent(slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
     caps = await agent_chat_input.effort_capabilities(agent)
     assert caps["canSwitchEffort"] is False
     assert caps["effortReason"] == "no_pane"

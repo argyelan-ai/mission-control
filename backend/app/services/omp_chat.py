@@ -806,7 +806,7 @@ _PANE_TAIL_LINES = 40
 
 # ── Denk-Stufe aus der Statuszeile ─────────────────────────────────────────
 #
-# omp hat kein ``/thinking``-Kommando in der TUI (live geprueft am Sparky-Pane,
+# omp hat kein ``/thinking``-Kommando in der TUI (live geprueft am omp-Pane eines Agenten,
 # omp v16.4.6, 02.09.2026: der Text ging als normale Nachricht ans Modell).
 # Die Stufe wird per Shift+Tab im Ring gedreht und steht in der Statuszeile
 # ueber dem Eingabefeld:

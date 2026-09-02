@@ -217,7 +217,7 @@ ALLOWED_EFFORT_LEVELS = _EFFORT_LEVELS_BY_HARNESS["claude"]
 
 # omp (seit 02.09.2026): das Effort-Pendant heisst dort "thinking level" und
 # wird NICHT ueber ein Slash-Kommando gesetzt — die TUI kennt kein
-# ``/thinking`` (live geprueft am Sparky-Pane, omp v16.4.6: der Text ging als
+# ``/thinking`` (live geprueft am omp-Pane eines Agenten, omp v16.4.6: der Text ging als
 # normale Nachricht ans Modell). Der einzige Kanal ohne Neustart ist
 # Shift+Tab (tmux ``BTab``, "Cycle thinking level"), das den Ring
 #   off -> auto -> minimal -> low -> medium -> high -> xhigh -> off
