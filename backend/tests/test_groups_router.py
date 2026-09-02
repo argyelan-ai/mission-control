@@ -508,3 +508,41 @@ async def test_memory_survives_deleting_everything(auth_client: AsyncClient, asy
 
     rows = (await async_session.exec(select(BoardMemory))).all()
     assert rows, "Der Memory-Eintrag darf beim Löschen der Gruppe nicht verschwinden"
+
+
+@pytest.mark.asyncio
+async def test_preview_sources_are_only_live_members_with_a_transcript(
+    async_session, monkeypatch
+):
+    """Gruppen-Vorschau (Live-Schicht A im Gruppenraum): Quellen sind die
+    Mitglieder, die eine Live-Sitzung mit Transkript haben. Archivierte
+    Mitglieder und Host-Agenten ohne Transkript fallen still weg — der
+    Gruppen-Stream darf daran nie scheitern."""
+    from pathlib import Path
+
+    from fastapi.responses import JSONResponse
+
+    from app.routers import groups as groups_router
+    from app.services import group_service
+
+    live = await _make_agent(async_session, "Live")
+    silent = await _make_agent(async_session, "Silent")
+    gone = await _make_agent(async_session, "Gone")
+    group = await group_service.create_group(
+        async_session, goal="Vorschau", member_ids=[live.id, silent.id, gone.id]
+    )
+    import datetime as dt
+
+    gone.archived_at = dt.datetime.now(tz=dt.timezone.utc)
+    async_session.add(gone)
+    await async_session.commit()
+
+    async def _fake_resolve(agent_id, session):
+        if agent_id == live.id:
+            return (live, Path("/tmp/live.jsonl"), None)
+        return JSONResponse(status_code=404, content={"reason": "no_transcript"})
+
+    monkeypatch.setattr(groups_router, "_resolve_transcript_path", _fake_resolve)
+
+    sources = await groups_router._group_preview_sources(async_session, group)
+    assert [(a.id, p) for a, p in sources] == [(live.id, Path("/tmp/live.jsonl"))]
