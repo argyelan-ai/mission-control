@@ -783,27 +783,42 @@ class GroupRunnerService:
             content = content[:DOC_SNAPSHOT_MAX_BYTES] + "\n\n_[gekürzt — Snapshot-Cap]_"
         return content
 
+    async def refresh_run_usage(
+        self, session: AsyncSession, group: AgentGroup,
+    ) -> bool:
+        """Alle beendeten Runden des Laufs nachrechnen — auch die LETZTE.
+
+        Noetig fuer 1-Runden-Gruppen: da folgt kein Rundenschluss mehr, der
+        ``_refresh_finished_round_usage`` ausloest (live 03.09.: Harvester kam
+        88 s nach Rundenschluss, Runde blieb auf 0). Der Runden-Endpoint ruft
+        das beim Lesen auf. Liefert True, wenn sich etwas geaendert hat —
+        der Aufrufer committet."""
+        members = await group_service.group_member_agents(session, group)
+        return await self._refresh_finished_round_usage(
+            session, group, members, None
+        )
+
     async def _refresh_finished_round_usage(
         self,
         session: AsyncSession,
         group: AgentGroup,
         members: list[Agent],
-        current: GroupRound,
-    ) -> None:
-        """Abgeschlossene Runden dieses Laufs (vor ``current``) per Fenster
-        [started_at, finished_at] neu snapshotten — Nachzuegler-Events landen
-        so bei ihrer Runde statt nirgends."""
-        rows = (
-            await session.exec(
-                select(GroupRound).where(
-                    GroupRound.group_id == group.id,
-                    GroupRound.round_no < current.round_no,
-                    GroupRound.finished_at != None,  # noqa: E711
-                    GroupRound.started_at != None,  # noqa: E711
-                )
-            )
-        ).all()
+        current: GroupRound | None,
+    ) -> bool:
+        """Abgeschlossene Runden dieses Laufs (vor ``current``; alle, wenn
+        ``current`` None ist) per Fenster [started_at, finished_at] neu
+        snapshotten — Nachzuegler-Events landen so bei ihrer Runde statt
+        nirgends."""
+        stmt = select(GroupRound).where(
+            GroupRound.group_id == group.id,
+            GroupRound.finished_at != None,  # noqa: E711
+            GroupRound.started_at != None,  # noqa: E711
+        )
+        if current is not None:
+            stmt = stmt.where(GroupRound.round_no < current.round_no)
+        rows = (await session.exec(stmt)).all()
         start = ensure_aware(group.started_at) if group.started_at else None
+        changed = False
         for r in rows:
             if start is not None and r.created_at is not None:
                 if ensure_aware(r.created_at) < start:
@@ -815,6 +830,8 @@ class GroupRunnerService:
                 r.tokens_used = tokens
                 r.cost_usd = cost
                 session.add(r)
+                changed = True
+        return changed
 
     async def _usage_in_window(
         self, session: AsyncSession, members: list[Agent], *, since, until=None,

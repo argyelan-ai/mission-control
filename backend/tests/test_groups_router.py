@@ -546,3 +546,40 @@ async def test_preview_sources_are_only_live_members_with_a_transcript(
 
     sources = await groups_router._group_preview_sources(async_session, group)
     assert [(a.id, p) for a, p in sources] == [(live.id, Path("/tmp/live.jsonl"))]
+
+
+@pytest.mark.asyncio
+async def test_rounds_endpoint_recounts_late_usage(auth_client: AsyncClient, async_session):
+    """Nachzuegler-Event (Harvester lief erst nach Rundenschluss) muss beim
+    Lesen der Runden mitgezaehlt werden — sonst bleibt eine 1-Runden-Gruppe
+    ewig auf tokens_used=0 (live 03.09.)."""
+    import datetime as dt
+
+    from app.models.group import AgentGroup, GroupRound
+    from app.models.model_usage import ModelUsageEvent
+
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    body = await _create_group(auth_client, [a.id, b.id])
+    gid = body["id"]
+
+    group = await async_session.get(AgentGroup, uuid.UUID(gid))
+    t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10)
+    group.started_at = t0
+    async_session.add(group)
+    async_session.add(GroupRound(
+        group_id=group.id, round_no=1, outcome="done", report="x",
+        started_at=t0 + dt.timedelta(seconds=1),
+        finished_at=t0 + dt.timedelta(minutes=5),
+        tokens_used=0, cost_usd=0.0,
+    ))
+    async_session.add(ModelUsageEvent(
+        agent_id=b.id, harness="cli-bridge", model="m", session_id="s",
+        message_uuid=str(uuid.uuid4()), input_tokens=40, output_tokens=2,
+        cost_usd=0.0, ts=t0 + dt.timedelta(minutes=2), source_file="t.jsonl",
+    ))
+    await async_session.commit()
+
+    resp = await auth_client.get(f"/api/v1/groups/{gid}/rounds")
+    assert resp.status_code == 200
+    assert resp.json()["rounds"][0]["tokens_used"] == 42
