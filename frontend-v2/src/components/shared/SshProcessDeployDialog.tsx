@@ -3,8 +3,8 @@
 /**
  * SshProcessDeployDialog — eine Host-Engine per Klick installieren und starten (PR 6).
  *
- * Der sparkrun-Deploy im LocalModelBrowser ist ein Recipe-Switch auf einer
- * bestehenden Runtime. Eine ssh_process-Engine hat noch gar keine Runtime-Zeile
+ * Der Rezept-Start im LocalModelBrowser braucht eine Box, auf der der
+ * Startbefehl schon läuft. Eine ssh_process-Engine hat noch gar keine Runtime-Zeile
  * und liegt beim ersten Mal auch noch nicht auf der Box — deshalb zwei
  * Schritte statt einem:
  *
@@ -45,6 +45,16 @@ import type {
   Runtime,
 } from "@/lib/types";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+
+/**
+ * Welche Boxen MC per SSH starten kann — dieselbe Regel wie im Backend
+ * (`_ssh_run`, Rezept-Umschalter P2): kind=ssh ODER eine gepaarte Box
+ * (kind=agent), die zusätzlich eine SSH-Adresse hat. Ohne Adresse meldet
+ * eine agent-Box nur — sie darf hier nicht als Ziel erscheinen.
+ */
+export function sshCapable(h: Host): boolean {
+  return (h.kind === "ssh" || h.kind === "agent") && !!h.ssh_host;
+}
 
 /** ds4 und Verwandte hören auf 8888; abweichende Ports trägt der Operator ein. */
 const DEFAULT_PORT = 8888;
@@ -125,7 +135,7 @@ export function SshProcessDeployDialog({
   const hostsQuery = useQuery({ queryKey: ["hosts"], queryFn: () => api.hosts.list() });
   const runtimesQuery = useQuery({ queryKey: ["runtimes"], queryFn: () => api.runtimes.list() });
 
-  const sshHosts: Host[] = (hostsQuery.data ?? []).filter((h) => h.kind === "ssh");
+  const sshHosts: Host[] = (hostsQuery.data ?? []).filter(sshCapable);
   const host = sshHosts.find((h) => h.id === hostId) ?? null;
 
   useEffect(() => {

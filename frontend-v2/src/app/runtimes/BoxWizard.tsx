@@ -74,9 +74,9 @@ export const BOX_WIZARD_STEPS = [
 ] as const;
 
 /**
- * Engines, für die dieser Wizard eine Runtime bauen kann. sparkrun-Rezepte
- * erscheinen nicht: die laufen über switch-recipe auf einer bestehenden
- * Spark-Runtime (siehe LocalModelBrowser) und brauchen kein launch_command.
+ * Engines, für die dieser Wizard eine Runtime bauen kann. Alles andere
+ * (z.B. Host-Prozesse) hat einen eigenen Weg über den Rezept-Start je Box
+ * bzw. den Install-Dialog im LocalModelBrowser.
  */
 const WIZARD_ENGINES = ["llamacpp_docker", "vllm_docker"] as const;
 
@@ -663,8 +663,8 @@ function ModelStep({
     queryFn: () => api.localRegistry.list({ enabled: true, ...(arch ? { arch } : {}) }),
   });
 
-  // sparkrun-Einträge fliegen raus: für die gibt es switch-recipe, nicht diesen
-  // Weg (siehe WIZARD_ENGINES).
+  // Nur Wizard-Engines: alles andere hat seinen eigenen Startweg (siehe
+  // WIZARD_ENGINES).
   const recipes = (data?.recipes ?? []).filter((r) =>
     (WIZARD_ENGINES as readonly string[]).includes(r.engine),
   );

@@ -6,8 +6,8 @@
  *   2. „neu"-Badge exakt am 7-Tage-Fenster (frisch ja, 8 Tage nein)
  *   3. Passt-Check: min_vram_gb über Spark-Klasse → Warn-Chip, darunter nicht
  *   4. „Registry aktualisieren" ruft den Endpoint + zeigt das Ergebnis inkl. Gründe
- *   5. Deploy-Dialog: switchRecipe(runtimeId, recipe_ref) mit korrekten Args
- *   6. Nicht-sparkrun / ohne recipe_ref → Deploy-Button disabled
+ *   5. Deploy-Dialog: hosts.startRecipe(hostId, slug) mit korrekten Args
+ *   6. Ohne Startbefehl → Deploy-Button disabled
  *   7. Ausgeblendete zeigen → PATCH-Pfad + enabled-Filter am Backend
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -17,10 +17,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LocalModelBrowser } from "../LocalModelBrowser";
 import { api } from "@/lib/api";
 import type {
+  Host,
   LocalRecipe,
   LocalRegistryResponse,
-  Runtime,
-  RuntimesResponse,
 } from "@/lib/types";
 
 const daysAgo = (n: number) =>
@@ -30,7 +29,7 @@ const mkRecipe = (overrides: Partial<LocalRecipe> = {}): LocalRecipe => ({
   slug: "qwen-general",
   display_name: "Qwen General",
   description: "Allrounder auf der Spark.",
-  engine: "sparkrun",
+  engine: "vllm_docker",
   model_identifier: "Qwen/Qwen3-32B",
   quant: "nvfp4",
   est_weights_gb: 21,
@@ -38,8 +37,9 @@ const mkRecipe = (overrides: Partial<LocalRecipe> = {}): LocalRecipe => ({
   context_len: 131072,
   arch: "arm64",
   gb10_validated: true,
-  recipe_ref: "qwen-general",
-  launch_template: null,
+  recipe_ref: null,
+  // Startbefehl vorhanden → über den Rezept-Start je Box deploybar.
+  launch_template: "echo start",
   install_template: null,
   stop_template: null,
   process_name: null,
@@ -63,31 +63,25 @@ const mkList = (recipes: LocalRecipe[]): LocalRegistryResponse => ({
   sources: [],
 });
 
-const mkRuntime = (overrides: Partial<Runtime> = {}): Runtime =>
-  ({
-    id: "rt-vllm-1",
-    slug: "spark-vllm",
-    display_name: "Spark vLLM",
-    runtime_type: "vllm_docker",
-    provider: "vllm",
-    endpoint: "http://spark.local:8000",
-    healthcheck_path: "/health",
-    container_name: null,
-    role_tags: [],
-    supports_tools: true,
-    supports_reasoning: true,
-    supports_streaming: true,
-    preferred_context_len: 32768,
-    max_context_len: 131072,
-    gpu_profile: "gb10",
-    memory_notes: "",
-    startup_notes: "",
-    ui_order: 1,
-    enabled: true,
-    ...overrides,
-  }) as Runtime;
-
-const mkRuntimes = (runtimes: Runtime[]): RuntimesResponse => ({ runtimes });
+const mkHost = (overrides: Partial<Host> = {}): Host => ({
+  id: "box-a",
+  slug: "box-a",
+  display_name: "Box A",
+  kind: "ssh",
+  ssh_host: null,
+  ssh_user: null,
+  ssh_key_path: null,
+  ssh_credential_id: null, role: null, fabric_ip: null,
+  control_url: null,
+  wol_mac_address: null,
+  power_managed: false,
+  notes: null,
+  enabled: true,
+  ui_order: 0,
+  created_at: "",
+  updated_at: "",
+  ...overrides,
+});
 
 function renderBrowser() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -98,12 +92,12 @@ function renderBrowser() {
   );
 }
 
-/** Standard-Mocks: eine vLLM-Runtime, sonst pro Test überschrieben. */
-function mockBackend(recipes: LocalRecipe[], runtimes: Runtime[] = [mkRuntime()]) {
+/** Standard-Mocks: eine Box, sonst pro Test überschrieben. */
+function mockBackend(recipes: LocalRecipe[], hosts: Host[] = [mkHost()]) {
   const list = vi
     .spyOn(api.localRegistry, "list")
     .mockResolvedValue(mkList(recipes));
-  vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes(runtimes));
+  vi.spyOn(api.hosts, "list").mockResolvedValue(hosts);
   return list;
 }
 
@@ -133,7 +127,7 @@ describe("LocalModelBrowser", () => {
     const cards = screen.getAllByTestId("local-recipe-card");
     expect(cards).toHaveLength(2);
     // Engine-Chip auf der Karte (der gleiche Text steht auch im Filter-Select).
-    expect(within(cards[0]).getByText("sparkrun")).toBeInTheDocument();
+    expect(within(cards[0]).getByText("vllm_docker")).toBeInTheDocument();
     expect(within(cards[1]).getByText("llamacpp_docker")).toBeInTheDocument();
   });
 
@@ -215,37 +209,31 @@ describe("LocalModelBrowser", () => {
     ).toHaveTextContent("HTTP 404");
   });
 
-  it("deploys a sparkrun recipe via switchRecipe with runtime id and recipe_ref", async () => {
-    mockBackend([mkRecipe({ recipe_ref: "qwen-general-nvfp4" })], [
-      mkRuntime({ id: "rt-vllm-1", display_name: "Spark vLLM" }),
-      mkRuntime({ id: "rt-lms", runtime_type: "lmstudio", display_name: "LM Studio" }),
+  it("deploys a recipe through the box recipe start with host id and slug", async () => {
+    mockBackend([mkRecipe({ slug: "recipe-x", display_name: "Recipe X" })], [
+      mkHost({ id: "box-a", display_name: "Box A" }),
+      mkHost({ id: "box-b", slug: "box-b", display_name: "Box B", enabled: false }),
     ]);
-    const switchSpy = vi
-      .spyOn(api.runtimes.sparkrun, "switchRecipe")
-      .mockResolvedValue({
-        ok: true,
-        message: "switched",
-        old_recipe: "laguna-s21",
-        new_recipe: "qwen-general-nvfp4",
-        launch_command: "sparkrun run qwen-general-nvfp4",
-      });
+    const startSpy = vi
+      .spyOn(api.hosts, "startRecipe")
+      .mockResolvedValue({ ok: true, message: "started" });
 
     renderBrowser();
 
     await userEvent.click(await screen.findByTestId("local-registry-deploy"));
     const dialog = await screen.findByRole("dialog");
 
-    // Nur vllm_docker-Runtimes sind Ziele — LM Studio taucht nicht auf.
-    const select = within(dialog).getByLabelText("Target runtime");
-    expect(within(select).getByRole("option", { name: "Spark vLLM" })).toBeInTheDocument();
+    // Ziel ist eine Box — abgeschaltete Boxen tauchen nicht auf.
+    const select = within(dialog).getByLabelText("Target box");
+    expect(within(select).getByRole("option", { name: "Box A" })).toBeInTheDocument();
     expect(
-      within(select).queryByRole("option", { name: "LM Studio" }),
+      within(select).queryByRole("option", { name: "Box B" }),
     ).not.toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole("button", { name: /^Deploy$/ }));
 
     await waitFor(() =>
-      expect(switchSpy).toHaveBeenCalledWith("rt-vllm-1", "qwen-general-nvfp4"),
+      expect(startSpy).toHaveBeenCalledWith("box-a", "recipe-x"),
     );
   });
 
@@ -255,16 +243,15 @@ describe("LocalModelBrowser", () => {
         slug: "gemma-cpp",
         display_name: "Gemma llama.cpp",
         engine: "llamacpp_docker",
-        recipe_ref: null,
+        launch_template: null,
       }),
       mkRecipe({
-        slug: "sparkrun-without-ref",
-        display_name: "Sparkrun ohne Ref",
-        engine: "sparkrun",
-        recipe_ref: null,
+        slug: "recipe-x",
+        display_name: "Recipe ohne Startbefehl",
+        launch_template: null,
       }),
     ]);
-    const switchSpy = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    const startSpy = vi.spyOn(api.hosts, "startRecipe");
     renderBrowser();
 
     await waitFor(() =>
@@ -281,7 +268,7 @@ describe("LocalModelBrowser", () => {
     }
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(switchSpy).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
   });
 
   it("hides an entry via PATCH and loads hidden ones only on demand", async () => {
@@ -310,7 +297,7 @@ describe("LocalModelBrowser", () => {
 
   it("renders an error state when the registry cannot be loaded", async () => {
     vi.spyOn(api.localRegistry, "list").mockRejectedValue(new Error("API 500: boom"));
-    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.hosts, "list").mockResolvedValue([]);
     renderBrowser();
 
     await waitFor(() =>

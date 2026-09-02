@@ -6,7 +6,7 @@
  *   2. Step-Gating (canProceed) inkl. „Probe-Fehler blockiert Schritt 2"
  *   3. Übergang 1→2 legt die Host-Zeile an (POST /hosts) — erst nach dem Probe
  *   4. Ampel-Logik in Schritt 2 aus dem echten Inventar
- *   5. Schritt 3: arch-Filter am Backend, sparkrun raus, VRAM-Warnung gegen
+ *   5. Schritt 3: arch-Filter am Backend, Nicht-Wizard-Engines raus, VRAM-Warnung gegen
  *      die ECHTEN Werte der Box
  *   6. Abschluss ruft POST /runtimes + start mit den korrekten Argumenten
  */
@@ -405,7 +405,7 @@ describe("BoxWizard — component", () => {
       mkRegistry([
         mkRecipe(),
         mkRecipe({ slug: "big-one", display_name: "Big One", min_vram_gb: 90 }),
-        mkRecipe({ slug: "spark-only", display_name: "Spark Only", engine: "sparkrun" }),
+        mkRecipe({ slug: "host-only", display_name: "Host Only", engine: "ssh_process" }),
       ]),
     );
     const user = userEvent.setup();
@@ -419,9 +419,9 @@ describe("BoxWizard — component", () => {
       expect(list).toHaveBeenCalledWith({ enabled: true, arch: "x86_64" }),
     );
     const cards = await screen.findAllByTestId("box-wizard-recipe");
-    // sparkrun fliegt raus — dafür gibt es switch-recipe, nicht diesen Weg.
+    // Nicht-Wizard-Engines fliegen raus — die haben ihren eigenen Startweg.
     expect(cards).toHaveLength(2);
-    expect(screen.queryByText("Spark Only")).not.toBeInTheDocument();
+    expect(screen.queryByText("Host Only")).not.toBeInTheDocument();
 
     const bySlug = Object.fromEntries(
       cards.map((c) => [c.getAttribute("data-slug"), c]),

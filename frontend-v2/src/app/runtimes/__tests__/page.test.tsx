@@ -69,10 +69,7 @@ describe("RuntimesPage", () => {
     vi.spyOn(api.lmstudio, "list").mockResolvedValue({ models: [], reachable: true });
     vi.spyOn(api.lmstudio, "downloads").mockResolvedValue({ downloads: [] });
     vi.spyOn(api.runtimes, "liveStatus").mockResolvedValue(emptyLive);
-    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({ recipes: [] });
-    vi.spyOn(api.runtimes.sparkrun, "currentRecipe").mockResolvedValue({
-      slug: "rt", current_recipe: null, sparkrun_managed: false,
-    });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
   });
 
   it("(a) an omp runtime on an enabled host is visible as a ready row", async () => {
@@ -86,10 +83,10 @@ describe("RuntimesPage", () => {
 
     renderPage();
 
-    // Visible twice by design: as a disabled engine in the stage's unified
-    // switch dropdown, and as a register row on the Infrastructure tab.
-    await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
-    expect(await screen.findByTestId("switch-engine-omp1")).toBeInTheDocument();
+    // Die Umschalt-Zeile der Kachel zeigt nur noch Rezepte der Box (eine
+    // Quelle); andere Runtimes der Box stehen im Register auf dem
+    // Infrastruktur-Tab und öffnen von dort das Detail-Panel.
+    expect(await screen.findByTestId("recipe-dropdown-trigger")).toBeInTheDocument();
     await act(async () => { screen.getByTestId("page-tab-infra").click(); });
     expect(await screen.findByTestId("runtime-register-row-omp1")).toBeInTheDocument();
   });

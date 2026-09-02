@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SlotStage } from "../SlotStage";
 import { api } from "@/lib/api";
-import type { Device, Runtime, Host, RuntimeLiveStatus } from "@/lib/types";
+import type { Device, Runtime, Host, HostRecipe, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
 
 // Der echte zustand-Store schreibt über die persist-Middleware in
@@ -67,6 +67,16 @@ function makeHost(over: Partial<Host>): Host {
   };
 }
 
+/** Eine Zeile aus GET /hosts/{id}/recipes — fertig bewertet vom Backend. */
+function makeRecipe(over: Partial<HostRecipe> & { slug: string }): HostRecipe {
+  return {
+    display_name: over.slug, engine: "vllm_docker", topology: { nodes: 1 }, port: 8000,
+    instance_runtime_id: null, running: false, startable: true, fit: "solo", reason: null,
+    busy_hosts: [], candidate_workers: [],
+    ...over,
+  };
+}
+
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -100,15 +110,10 @@ describe("SlotStage", () => {
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "rt", count: 0, agents: [],
     });
-    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({
-      recipes: [
-        { name: "qwen-general", model: "qwen3.6", registry: "official", tp: 1, nodes: 1, solo_capable: true },
-        { name: "laguna-s21", model: "laguna", registry: "official", tp: 1, nodes: 1, solo_capable: true },
-      ],
-    });
-    vi.spyOn(api.runtimes.sparkrun, "currentRecipe").mockResolvedValue({
-      slug: "rt", current_recipe: "qwen-general", sparkrun_managed: true,
-    });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([
+      makeRecipe({ slug: "recipe-x", display_name: "Recipe X", running: true }),
+      makeRecipe({ slug: "recipe-y", display_name: "Recipe Y" }),
+    ]);
     // Standard: keine gekoppelte Box — wer den Schalter testet, überschreibt.
     vi.spyOn(api.nodes, "devices").mockResolvedValue([]);
     mockStore.state.currentUser = { id: "u1", email: "a@b.c", name: "Admin", role: "admin" };
@@ -197,83 +202,58 @@ describe("SlotStage", () => {
     expect(indicator).toHaveTextContent("loading");
   });
 
-  it("recipe click arms a confirm step; only the confirm click calls switchRecipe", async () => {
-    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe").mockResolvedValue({
-      ok: true, message: "Switching…", old_recipe: "qwen-general", new_recipe: "laguna-s21", launch_command: "sparkrun run laguna-s21",
-    });
-    const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
-    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
-    const group: HostGroup = { host, runtimes: [serving] };
-
-    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
-
-    // Recipes live behind a dropdown now (65-recipe catalog flooded the row).
-    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
-    await act(async () => {
-      trigger.click();
-    });
-    const option = await screen.findByText("laguna-s21");
-    await act(async () => {
-      option.click();
-    });
-
-    // Selecting only arms the confirm step — one click must never evict
-    // whatever the GPU is currently serving.
-    expect(switchRecipe).not.toHaveBeenCalled();
-    const confirmBtn = await screen.findByText("Confirm switch");
-    confirmBtn.click();
-
-    await waitFor(() => expect(switchRecipe).toHaveBeenCalledWith("rt", "laguna-s21"));
-  });
-
-  // T1 (Verbund-UI, 30.08.2026): a verbund recipe's device requirement must
-  // be visible in the row itself, not only discoverable by hovering.
-  it("shows a verbund recipe's device requirement inline, disabled, with a plain-language tooltip", async () => {
-    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
-    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({
-      recipes: [
-        { name: "qwen-general", model: "qwen3.6", registry: "official", tp: 1, nodes: 1, solo_capable: true },
-        { name: "glm-verbund", model: "glm-5.3", registry: "official", tp: 2, nodes: 2, solo_capable: false },
-      ],
-    });
-    const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
-    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+  it("recipe click arms a confirm step; only the confirm click starts the recipe on the box", async () => {
+    const startRecipe = vi.spyOn(api.hosts, "startRecipe").mockResolvedValue({ ok: true, message: "started" });
+    const serving = makeRuntime({ slug: "rt", display_name: "Recipe X", runtime_type: "vllm_docker", state: "ready" });
+    const host = makeHost({ slug: "box-a", display_name: "Box A" });
     const group: HostGroup = { host, runtimes: [serving] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
     const trigger = await screen.findByTestId("recipe-dropdown-trigger");
     await act(async () => { trigger.click(); });
+    const option = await screen.findByTestId("recipe-option-recipe-y");
+    await act(async () => { option.click(); });
 
-    const verbundOption = await screen.findByText("glm-verbund");
-    // Device requirement visible in the row itself (not just on hover).
-    expect(await screen.findByText("Needs tp=2, nodes=2 — cannot run solo")).toBeInTheDocument();
-    // Plain-language reason still available as a tooltip on top of that.
-    const optionButton = verbundOption.closest("button");
-    expect(optionButton).toHaveAttribute("title", "Needs tp=2, nodes=2 — cannot run solo on this host");
-    expect(optionButton).toBeDisabled();
+    // Wählen bewaffnet nur die Bestätigung — ein Klick darf nie das laufende
+    // Modell der Box rauswerfen.
+    expect(startRecipe).not.toHaveBeenCalled();
+    // Die Bestätigung sagt, was gestoppt wird.
+    expect(screen.getByText("Recipe X will be stopped.")).toBeInTheDocument();
+    await act(async () => { screen.getByTestId("recipe-confirm-start").click(); });
 
-    // Genuinely not clickable through to a switch.
-    optionButton?.click();
-    expect(switchRecipe).not.toHaveBeenCalled();
+    await waitFor(() => expect(startRecipe).toHaveBeenCalledWith("box-a", "recipe-y"));
+    // Ehrlicher Zwischenzustand: „startet …", nicht „läuft".
+    expect(await screen.findByTestId("recipe-starting")).toHaveTextContent("starting Recipe Y …");
   });
 
-  it("a sibling engine in the unified dropdown arms a confirm; confirm calls start (slot takeover)", async () => {
-    const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
-    const serving = makeRuntime({ slug: "rt", display_name: "DeepSeek V4 Flash", runtime_type: "vllm_docker", state: "ready" });
-    const stopped = makeRuntime({ slug: "other", display_name: "Qwen 3.6", runtime_type: "lmstudio", state: "stopped" });
-    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
+  // Vertrag 02.09.2026: das Dropdown ist die EINE Quelle und verschwindet
+  // nicht mehr, wenn die Box (noch) keine Rezepte hat.
+  it("keeps the recipe dropdown when the box has zero recipes and says so inside", async () => {
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    const serving = makeRuntime({ slug: "rt", display_name: "Engine X", runtime_type: "lmstudio", state: "ready" });
+    const host = makeHost({ slug: "box-a", display_name: "Box A" });
+    const group: HostGroup = { host, runtimes: [serving] };
+
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    expect(trigger).toHaveTextContent("Engine X");
+    await act(async () => { trigger.click(); });
+    expect(await screen.findByTestId("recipe-empty")).toHaveTextContent("No recipes for this box.");
+  });
+
+  it("no longer lists sibling runtimes of the box in the recipe dropdown", async () => {
+    const serving = makeRuntime({ slug: "rt", display_name: "Recipe X", runtime_type: "vllm_docker", state: "ready" });
+    const stopped = makeRuntime({ slug: "other", display_name: "Other Engine", runtime_type: "lmstudio", state: "stopped" });
+    const host = makeHost({ slug: "box-a", display_name: "Box A" });
     const group: HostGroup = { host, runtimes: [serving, stopped] };
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
     await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
-    await act(async () => { (await screen.findByTestId("switch-engine-other")).click(); });
-
-    // Selecting only arms the confirm — one click must never evict the GPU.
-    expect(start).not.toHaveBeenCalled();
-    await act(async () => { (await screen.findByText("Confirm switch")).click(); });
-    await waitFor(() => expect(start).toHaveBeenCalledWith(stopped.id));
+    await screen.findByTestId("recipe-option-recipe-y");
+    expect(screen.queryByText("Other Engine")).not.toBeInTheDocument();
   });
 
   it("renders a placeholder when the host has no runtimes at all", async () => {
@@ -446,21 +426,6 @@ describe("SlotStage", () => {
 
     expect(await screen.findByTestId("compact-mode-boost")).toBeDisabled();
   });
-
-  it("a non-startable host runtime (e.g. omp) stays visible in the dropdown but disabled", async () => {
-    const start = vi.spyOn(api.runtimes, "start").mockResolvedValue({ ok: true, message: "started" });
-    const omp = makeRuntime({ slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped" });
-    const host = makeHost({ slug: "spark", display_name: "GPU-Box" });
-    const group: HostGroup = { host, runtimes: [omp] };
-
-    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
-
-    await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
-    const item = await screen.findByTestId("switch-engine-omp1");
-    expect(item).toBeDisabled();
-    item.click();
-    expect(start).not.toHaveBeenCalled();
-  });
 });
 
 // Migrated from the deleted runtime-card's runtime-live-status.test.tsx and
@@ -496,10 +461,7 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "rt", count: 0, agents: [],
     });
-    vi.spyOn(api.runtimes.sparkrun, "listRecipes").mockResolvedValue({ recipes: [] });
-    vi.spyOn(api.runtimes.sparkrun, "currentRecipe").mockResolvedValue({
-      slug: "rt", current_recipe: null, sparkrun_managed: false,
-    });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
   });
 
   it("renders served model + Drift badge when reachable and drifted", async () => {
@@ -606,7 +568,9 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
 
     renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
 
-    await screen.findByText("Laguna 2.1");
+    // Der Name steht im Jetzt-Block UND als Fallback auf dem Rezept-Auslöser
+    // (kein Rezept meldet running) — beides ist korrekt, darum findAll.
+    await screen.findAllByText("Laguna 2.1");
     expect(screen.queryByText("Name")).not.toBeInTheDocument();
   });
 });

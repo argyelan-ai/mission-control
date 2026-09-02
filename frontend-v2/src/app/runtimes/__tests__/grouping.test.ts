@@ -127,11 +127,21 @@ describe("CLOUD_TYPES", () => {
 });
 
 describe("panelCapabilities", () => {
-  it("vllm_docker: lifecycle+probe+recipe, no editor/context/wake", () => {
-    expect(panelCapabilities(makeRuntime({ runtime_type: "vllm_docker" }))).toEqual({
+  it("vllm_docker on a box: lifecycle+probe+recipe, no editor/context/wake", () => {
+    const host = { id: "box-a", slug: "box-a", display_name: "Box A" };
+    expect(panelCapabilities(makeRuntime({ runtime_type: "vllm_docker", host }))).toEqual({
       lifecycle: true, wake: false, probe: true,
       modelEditor: false, recipeSwitcher: true, contextSettings: false, autostart: false,
     });
+  });
+
+  // Rezept-Umschalter (Vertrag 02.09.2026): das Gate ist „hat eine Box",
+  // nicht „ist ein bestimmter runtime_type" — sonst wäre es Hardcodierung.
+  it("recipeSwitcher follows the host binding, not the runtime_type", () => {
+    const host = { id: "box-a", slug: "box-a", display_name: "Box A" };
+    expect(panelCapabilities(makeRuntime({ runtime_type: "lmstudio", host })).recipeSwitcher).toBe(true);
+    expect(panelCapabilities(makeRuntime({ runtime_type: "ssh_process", host })).recipeSwitcher).toBe(true);
+    expect(panelCapabilities(makeRuntime({ runtime_type: "vllm_docker", host: null })).recipeSwitcher).toBe(false);
   });
 
   it("lmstudio: lifecycle+probe+contextSettings", () => {

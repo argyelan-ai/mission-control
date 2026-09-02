@@ -4,7 +4,7 @@
  * Coverage:
  *   1. Credits: „by {author}" mit Link auf jeder Karte, auch ohne Link-URL
  *   2. ssh_process-Karte ist deploybar und öffnet den Installations-Dialog
- *      statt des sparkrun-Recipe-Switches
+ *      statt des Rezept-Starts auf einer Box
  *   3. Exklusivitäts-Warnung nennt genau die Runtimes, die der Start stoppt —
  *      und nur die auf DERSELBEN Box
  *   4. „Installieren" ruft den Install-Endpoint und pollt das Live-Log
@@ -23,6 +23,7 @@ import {
   defaultPortFor,
   exclusiveNeighbours,
   slugify,
+  sshCapable,
 } from "../SshProcessDeployDialog";
 import { api } from "@/lib/api";
 import type {
@@ -209,18 +210,18 @@ describe("ssh_process deploy", () => {
 
   // ── Routing zum richtigen Dialog ──────────────────────────────────────────
 
-  it("opens the install dialog instead of the recipe switch", async () => {
+  it("opens the install dialog instead of the box recipe start", async () => {
     vi.spyOn(api.localRegistry, "list").mockResolvedValue(mkList([mkRecipe()]));
     vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
     vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
     vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
-    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    const startRecipe = vi.spyOn(api.hosts, "startRecipe");
     renderBrowser();
 
     await userEvent.click(await screen.findByTestId("local-registry-deploy"));
 
     await screen.findByTestId("ssh-deploy-install");
-    expect(switchRecipe).not.toHaveBeenCalled();
+    expect(startRecipe).not.toHaveBeenCalled();
   });
 
   it("keeps an ssh_process entry without a launch template undeployable", async () => {
@@ -426,6 +427,28 @@ describe("ssh_process deploy", () => {
     expect(screen.queryByTestId("ssh-deploy-created")).toBeNull();
   });
 
+  // P2: gepaarte Boxen (kind=agent) mit SSH-Adresse sind Startziele —
+  // dieselbe Regel wie im Backend. Ohne Adresse melden sie nur.
+  it("sshCapable — ssh or agent WITH an ssh_host; everything else is no start target", () => {
+    expect(sshCapable(mkHost({ kind: "ssh", ssh_host: "192.0.2.10" }))).toBe(true);
+    expect(sshCapable(mkHost({ kind: "agent", ssh_host: "192.0.2.22" }))).toBe(true);
+    expect(sshCapable(mkHost({ kind: "agent", ssh_host: null }))).toBe(false);
+    expect(sshCapable(mkHost({ kind: "ssh", ssh_host: null }))).toBe(false);
+    expect(sshCapable(mkHost({ kind: "local", ssh_host: "192.0.2.10" }))).toBe(false);
+    expect(sshCapable(mkHost({ kind: "flask_wol", ssh_host: null }))).toBe(false);
+  });
+
+  it("offers a paired (agent) box with an SSH address as start target, but not one without", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([
+      mkHost({ id: "host-b", slug: "box-b", display_name: "Box B", kind: "agent", ssh_host: "192.0.2.22" }),
+      mkHost({ id: "host-c", slug: "box-c", display_name: "Box C", kind: "agent", ssh_host: null }),
+    ]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] } as never);
+    renderDialog();
+    expect(await screen.findByText("Box B")).toBeInTheDocument();
+    expect(screen.queryByText("Box C")).toBeNull();
+  });
+
   it("blocks both actions when no SSH box is connected", async () => {
     vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost({ kind: "local" })]);
     vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
@@ -491,18 +514,18 @@ describe("compose-based deploy", () => {
     expect(await screen.findByTestId("local-registry-deploy")).toBeEnabled();
   });
 
-  it("routes it to the install dialog, not the sparkrun recipe switch", async () => {
+  it("routes it to the install dialog, not the box recipe start", async () => {
     vi.spyOn(api.localRegistry, "list").mockResolvedValue(mkList([mkComposeRecipe()]));
     vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
     vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
     vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
-    const switchRecipe = vi.spyOn(api.runtimes.sparkrun, "switchRecipe");
+    const startRecipe = vi.spyOn(api.hosts, "startRecipe");
     renderBrowser();
 
     await userEvent.click(await screen.findByTestId("local-registry-deploy"));
 
     await screen.findByTestId("ssh-deploy-install");
-    expect(switchRecipe).not.toHaveBeenCalled();
+    expect(startRecipe).not.toHaveBeenCalled();
   });
 
   it("keeps a vllm_docker entry without templates on the wizard path", async () => {

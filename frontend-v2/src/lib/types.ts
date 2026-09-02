@@ -2010,7 +2010,8 @@ export interface LocalRecipe {
   slug: string;
   display_name: string;
   description: string | null;
-  /** "sparkrun" | "vllm_docker" | "llamacpp_docker" | "ssh_process" */
+  /** z.B. "vllm_docker" | "llamacpp_docker" | "ssh_process" — die Engine
+   *  ist nur ein Etikett; gestartet wird immer der hinterlegte Startbefehl. */
   engine: string;
   model_identifier: string;
   quant: string | null;
@@ -2021,7 +2022,8 @@ export interface LocalRecipe {
   /** "arm64" | "x86_64" | "any" */
   arch: string;
   gb10_validated: boolean;
-  /** Name des sparkrun-Rezepts — nur damit ist ein Deploy über switch-recipe möglich. */
+  /** Rezeptname in der Quell-Registry (historisch). Kein eigener Startweg
+   *  mehr — gestartet wird über den Startbefehl, siehe HostRecipe. */
   recipe_ref: string | null;
   launch_template: string | null;
   /** Nur ssh_process: Befehl, der die Engine auf die Box bringt (One-Click). */
@@ -2194,19 +2196,48 @@ export interface RuntimeActionResult {
   message: string;
 }
 
-// Sparkrun recipe management (ADR-059) — `tp`/`nodes` come straight from
-// `sparkrun list`'s TP/Nodes columns (null when the CLI prints `-`).
-// `solo_capable` is derived server-side against the target host's actual
-// GPU count (see sparkrun_manager.list_recipes) — a recipe needing more
-// GPUs/nodes than the host has is NOT solo-startable, even though nothing
-// about its name suggests that.
-export interface SparkrunRecipe {
-  name: string;
-  model: string | null;
-  registry: string;
-  tp: number | null;
-  nodes: number | null;
-  solo_capable: boolean;
+// ── Rezept-Umschalter (GET /hosts/{host_id}/recipes) ────────────────────────
+// Vertrag vom 02.09.2026 (docs/plans/2026-09-02-rezept-umschalter-vertrag.md).
+// Das Backend liefert JEDE Aussage fertig — running, startable, fit, reason.
+// Das Frontend rechnet nichts nach: es zeigt nur an und ruft start auf.
+// Warum: ein Rezept ist Engine · Startbefehl · Port · Anzahl Boxen. Ob es auf
+// dieser Box gerade laufen kann (Port frei? zweite Box frei? Befehl da?),
+// weiss nur der Server — jede Client-Herleitung wäre geraten.
+export interface HostRecipeCandidateWorker {
+  host_id: string;
+  slug: string;
+  role: "worker" | "head" | null;
+}
+
+export interface HostRecipe {
+  slug: string;
+  display_name: string;
+  engine: string;
+  /** nodes=1: nur diese Box · nodes=2: Verbund aus zwei Boxen. */
+  topology: { nodes: 1 | 2 };
+  port: number | null;
+  /** Gibt es schon eine Instanz dieses Rezepts mit dieser Box als Kopf? */
+  instance_runtime_id: string | null;
+  /** Instanz gesund (Health am Kopf) — nie geraten. */
+  running: boolean;
+  /** Startbefehl vorhanden UND fit != "none". */
+  startable: boolean;
+  fit: "solo" | "duo" | "none";
+  /** Ganzer Satz in einfacher Sprache, wenn nicht startbar — sonst null. */
+  reason: string | null;
+  /** Boxen (Slugs), die dieses Rezept gerade belegen. */
+  busy_hosts: string[];
+  /** Freie Boxen für einen Zweibox-Start — Phase 3 nutzt sie. */
+  candidate_workers: HostRecipeCandidateWorker[];
+}
+
+/** Antwort von POST /hosts/{host_id}/recipes/{slug}/start. Der Vertrag legt
+ *  nur den Erfolgsfall + 409/422 fest; `message` ist optional, weil der
+ *  Umschalter nach dem Klick ohnehin nur die Rezeptliste als Wahrheit nimmt. */
+export interface HostRecipeStartResult {
+  ok?: boolean;
+  message?: string | null;
+  runtime_id?: string | null;
 }
 
 // Harness/Provider-Decoupling (ADR-056) — compat matrix for the harness
