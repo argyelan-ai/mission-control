@@ -230,3 +230,33 @@ def test_delivery_echo_typed_by_poll_sh_is_furniture():
         b"Ich lese die Inbox.\r\n"
     )
     assert pv.text() == "Ich lese die Inbox."
+
+
+# ── Live-Gate A (Gruppenraum, 02.09.2026): Rahmen der beiden Panes ─────────
+
+def test_claude_code_paste_marker_in_the_composer_is_furniture():
+    """poll.sh fügt den Auftrag in Claude Codes Eingabezeile ein; die zeigt
+    dafür „[Pasted text #1 +13 lines]" und „paste again to expand". Beides
+    stand als Vorschau eines Claude-Code-Mitglieds im Gruppenraum — es ist Maschinen-Zustellung."""
+    p = PanePreview(80, 10)
+    p.feed("u\r\n[Pasted text #1 +13 lines]\r\npaste again to expand\r\nIch fange an.\r\n")
+    assert p.text() == "u\nIch fange an."
+
+
+def test_claude_code_tool_status_line_and_lone_bullet_are_furniture():
+    """„● Running 1 shell command…" ist die Werkzeug-Statuszeile, ein einsames
+    „●" der Platzhalter der kommenden Antwort — kein Inhalt."""
+    p = PanePreview(80, 10)
+    p.feed("● Running 1 shell command…\r\n●\r\n● Die Antwort beginnt hier.\r\n")
+    assert p.text() == "● Die Antwort beginnt hier."
+
+
+def test_omp_update_banner_and_nudge_echo_are_furniture():
+    """Nach einem Frischstart zeigt omp sein Update-Banner; die Bridge tippt
+    „@/home/agent/.msg-nudge.msg" ein. Beides stand als Vorschau eines omp-Mitglieds."""
+    p = PanePreview(80, 10)
+    p.feed(
+        "Update Available\r\nNew version 18.1.2 is available. Run: omp update\r\n"
+        "@/home/agent/.msg-nudge.msg\r\nIch lese die Inbox.\r\n"
+    )
+    assert p.text() == "Ich lese die Inbox."
