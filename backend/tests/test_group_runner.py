@@ -24,6 +24,7 @@ from app.models.approval import Approval
 from app.models.group import AgentGroup, GroupRound
 from app.models.thread import Message
 from app.services import group_service
+from app.utils import ensure_aware
 from app.services.group_runner import (
     GroupRunnerService,
     _is_pass,
@@ -747,6 +748,70 @@ async def test_budget_pauses_with_gate(async_session: AsyncSession):
         )
     ).one()
     assert gate.payload["reason"] == "budget_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_late_harvested_usage_lands_in_its_round(async_session: AsyncSession):
+    """Der Token-Harvester liest nachlaufend: ein Usage-Event aus Runde 1 kann
+    erst NACH dem Rundenschluss in der DB stehen (live 02.09.: Sparkys Event
+    ts 18:59:53, geerntet 19:02:18, Runde zu um 19:02:02 → tokens_used=0).
+    Beim naechsten Rundenschluss wird die alte Runde per Zeitfenster
+    [started_at, finished_at] nachgerechnet."""
+    from app.models.model_usage import ModelUsageEvent
+
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)  # Runde 1 offen
+    await _agent_says(async_session, group, beta, "A. Quelle: https://x.org")
+    await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+    await _tick(async_session)
+    await _agent_says(async_session, group, alpha, "WEITER: mehr Recherche nötig")
+    await _tick(async_session)  # Runde 1 zu — noch ohne Event
+    round1 = (
+        await async_session.exec(
+            select(GroupRound).where(
+                GroupRound.group_id == group.id, GroupRound.round_no == 1
+            )
+        )
+    ).one()
+    assert round1.finished_at is not None
+    assert (round1.tokens_used or 0) == 0
+
+    # Nachzuegler: ts liegt IN Runde 1, kommt aber erst jetzt an.
+    inside = ensure_aware(round1.started_at) + (
+        ensure_aware(round1.finished_at) - ensure_aware(round1.started_at)
+    ) / 2
+    async_session.add(ModelUsageEvent(
+        agent_id=beta.id,
+        harness="cli-bridge",
+        model="test-model",
+        session_id="s1",
+        message_uuid=str(uuid.uuid4()),
+        input_tokens=700,
+        output_tokens=300,
+        cost_usd=0.0,
+        ts=inside,
+        source_file="test.jsonl",
+    ))
+    await async_session.commit()
+
+    # Runde 2 komplett
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "C. Quelle: https://x.org")
+    await _agent_says(async_session, group, gamma, "D. Quelle: https://y.org")
+    await _tick(async_session)
+    await _agent_says(async_session, group, alpha, "WEITER: noch eine Runde")
+    await _tick(async_session)
+
+    await async_session.refresh(round1)
+    round2 = (
+        await async_session.exec(
+            select(GroupRound).where(
+                GroupRound.group_id == group.id, GroupRound.round_no == 2
+            )
+        )
+    ).one()
+    assert round1.tokens_used == 1000
+    assert (round2.tokens_used or 0) == 0  # nicht doppelt gezaehlt
 
 
 # ── Dokument ───────────────────────────────────────────────────────────────
