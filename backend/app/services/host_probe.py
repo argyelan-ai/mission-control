@@ -8,7 +8,7 @@ login can sudo without a password.
 Two rules this module lives by:
 
 * **No second SSH implementation.** ``runtime_manager._ssh_run`` is the only
-  primitive (lazy import, same pattern as ``sparkrun_manager``) — it owns the
+  primitive (lazy import, same pattern as ``recipe_switcher``) — it owns the
   host resolution chain, the key handling and the timeouts.
 * **Unreachable is an answer, not an error.** A box that is off, firewalled or
   has the wrong key returns ``reachable: false`` plus a readable reason. The
@@ -211,7 +211,7 @@ async def probe_host(host: ResolvedHost) -> dict:
     """
     # Lazy import: runtime_manager imports host_resolver and a fair amount of
     # the runtime stack; importing it at module scope would drag that into the
-    # hosts router. Same pattern as sparkrun_manager.get_host_gpu_count.
+    # hosts router. Same pattern as recipe_switcher.probe_running.
     from app.services.runtime_manager import _ssh_run  # noqa: SLF001
 
     try:

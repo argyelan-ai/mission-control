@@ -516,7 +516,7 @@ class RuntimeWatcher:
 
         ``--restart=no`` is never put back to ``unless-stopped`` — that is
         deliberate, not an oversight. Every future start of this container
-        goes through MC (manual start, switch-recipe, or PR10's exclusivity-
+        goes through MC (manual start, recipe start, or PR10's exclusivity-
         aware auto-recovery), each of which runs the memory prep from PR8
         first. Restoring the compose autostart would let Docker itself
         relaunch the container straight past that prep on the very next host
@@ -846,12 +846,11 @@ class RuntimeWatcher:
                     "consecutive_failures": fails},
         )
 
-        from app.services.runtime_manager import start_runtime
-        from app.services.sparkrun_manager import _to_runtime_dict  # noqa: SLF001
+        from app.services.runtime_manager import runtime_row_to_dict, start_runtime
 
         try:
             result = await start_runtime(
-                _to_runtime_dict(runtime), host=host,
+                runtime_row_to_dict(runtime), host=host,
                 grace_source=SOURCE_AUTO_RECOVERY,
             )
         except Exception as exc:  # noqa: BLE001

@@ -3,7 +3,7 @@
     "slug": "qwen36-general-spark",
     "display_name": "Qwen3.6 General (Spark)",
     "description": "General-purpose default for a single DGX Spark: broad tool use, long context, the safe fallback when no specialised recipe fits.",
-    "engine": "sparkrun",
+    "engine": "vllm_docker",
     "model_identifier": "qwen3.6",
     "quant": "nvfp4",
     "est_weights_gb": 105.0,
@@ -14,6 +14,11 @@
     "author": "Alibaba Qwen Team",
     "author_url": "https://qwenlm.github.io",
     "recipe_ref": "@official/qwen3.6",
+    "launch_template": "uvx sparkrun run @official/qwen3.6 --solo --no-rm --ensure --no-follow --label mc.runtime.slug={slug}",
+    "topology": {
+      "nodes": 1
+    },
+    "port": 8000,
     "source_registry": "builtin",
     "tags": [
       "general",
@@ -26,7 +31,7 @@
     "slug": "laguna-s21-nvfp4",
     "display_name": "Laguna S21 NVFP4",
     "description": "Best single-Spark coding model to date — 78.5 % on SWE-bench Multilingual. First choice for agent work on one GB10 box.",
-    "engine": "sparkrun",
+    "engine": "vllm_docker",
     "model_identifier": "laguna-s21-nvfp4",
     "quant": "nvfp4",
     "est_weights_gb": 71.0,
@@ -37,6 +42,11 @@
     "author": "poolside",
     "author_url": "https://poolside.ai",
     "recipe_ref": "@mark/laguna-s21-nvfp4-vllm",
+    "launch_template": "uvx sparkrun run @mark/laguna-s21-nvfp4-vllm --solo --no-rm --ensure --no-follow --label mc.runtime.slug={slug}",
+    "topology": {
+      "nodes": 1
+    },
+    "port": 8000,
     "source_registry": "builtin",
     "tags": [
       "coding",
@@ -71,7 +81,7 @@
     "slug": "deepseek-v4-flash-spark",
     "display_name": "DeepSeek V4 Flash (Spark)",
     "description": "Large reasoning/general model, FP8. The heavyweight alternative when one box may be dedicated to a single strong model.",
-    "engine": "sparkrun",
+    "engine": "ssh_process",
     "model_identifier": "DeepSeek-V4-Flash",
     "quant": "fp8",
     "est_weights_gb": 95.0,
@@ -87,7 +97,7 @@
       "reasoning",
       "solo"
     ],
-    "notes": "Solo only — nothing else fits on the box next to it. model_identifier is the served name from the recipe, not a Hugging Face repo."
+    "notes": "Solo only — nothing else fits on the box next to it. model_identifier is the served name from the recipe, not a Hugging Face repo. No launch template on file: the entry stays listed, but the switcher reports it as not startable until a registry or an operator supplies the command."
   },
   {
     "slug": "gemma4-27b-nvfp4",

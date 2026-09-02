@@ -181,7 +181,12 @@ async def test_seed_inserts_the_builtin_catalogue(session):
     assert len(rows) == inserted
     laguna = await get_recipe(session, "laguna-s21-nvfp4")
     assert laguna is not None
-    assert laguna.engine == "sparkrun"
+    # Seit dem Rezept-Umschalter (02.09.2026) ein gewöhnlicher Docker-Start
+    # mit dem Wrapper-Befehl als launch_template — kein eigener Engine-Wert.
+    assert laguna.engine == "vllm_docker"
+    assert laguna.launch_template.startswith("uvx sparkrun run @mark/laguna-s21-nvfp4-vllm")
+    assert "mc.runtime.slug={slug}" in laguna.launch_template
+    assert laguna.topology == {"nodes": 1}
     assert laguna.recipe_ref == "@mark/laguna-s21-nvfp4-vllm"
     assert laguna.gb10_validated is True
     assert laguna.est_weights_gb == 71.0
@@ -539,7 +544,9 @@ async def test_list_endpoint_returns_sorted_catalogue(auth_client, session):
     assert names == sorted(names, key=str.lower)
     assert body["sources"] == []
     laguna = next(r for r in body["recipes"] if r["slug"] == "laguna-s21-nvfp4")
-    assert laguna["engine"] == "sparkrun"
+    assert laguna["engine"] == "vllm_docker"
+    assert laguna["topology"] == {"nodes": 1}
+    assert laguna["port"] == 8000
     assert laguna["gb10_validated"] is True
     assert laguna["running"] is False  # nothing is serving it in this fixture
 
@@ -548,8 +555,8 @@ async def test_list_endpoint_returns_sorted_catalogue(auth_client, session):
 async def test_list_endpoint_filters(auth_client, session):
     await seed_local_recipes(session)
 
-    engines = await auth_client.get("/api/v1/local-registry?engine=sparkrun")
-    assert {r["engine"] for r in engines.json()["recipes"]} == {"sparkrun"}
+    engines = await auth_client.get("/api/v1/local-registry?engine=llamacpp_docker")
+    assert {r["engine"] for r in engines.json()["recipes"]} == {"llamacpp_docker"}
 
     # arm64 is inclusive: an `any` recipe DOES run on an arm64 box.
     arm = await auth_client.get("/api/v1/local-registry?arch=arm64")

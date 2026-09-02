@@ -21,7 +21,7 @@ from app.models.host import Host
 from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
-from app.services import runtime_manager, runtime_readiness, runtime_naming
+from app.services import recipe_switcher, runtime_manager, runtime_readiness, runtime_naming
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
@@ -193,6 +193,9 @@ class RuntimeCreate(BaseModel):
     enabled: bool = True
     autostart_supported: bool = False  # ADR-057: Engine Control v0
     autostart_flag_path: str | None = None
+    # Rezept-Umschalter (02.09.2026): {"nodes": 1|2, …} — vom Katalog kopiert,
+    # wenn die Instanz über /hosts/{id}/recipes/{slug}/start entsteht.
+    topology: dict | None = None
 
     @field_validator("control_url")
     @classmethod
@@ -246,6 +249,7 @@ class RuntimeUpdate(BaseModel):
     enabled: bool | None = None
     autostart_supported: bool | None = None  # ADR-057: Engine Control v0
     autostart_flag_path: str | None = None
+    topology: dict | None = None
 
     @field_validator("control_url")
     @classmethod
@@ -869,124 +873,6 @@ async def probe_model_endpoint(
     }
 
 
-# ── Sparkrun recipe management ──────────────────────────────────────────────
-
-
-class SwitchRecipeBody(BaseModel):
-    """Body for ``POST /runtimes/{id}/switch-recipe``."""
-
-    recipe: str = Field(min_length=1, max_length=128)
-
-    @field_validator("recipe")
-    @classmethod
-    def validate_recipe(cls, v: str) -> str:
-        # Allow ``@registry/recipe-name`` or bare ``recipe-name``. Reject
-        # anything else to keep shell-safe.
-        import re as _re
-
-        if not _re.fullmatch(r"[@\w./-]+", v):
-            raise ValueError("recipe contains invalid characters")
-        return v.strip()
-
-
-@router.get("/sparkrun/recipes")
-async def list_sparkrun_recipes(current_user=Depends(require_user)):
-    """Enumerate available sparkrun recipes on the Spark host.
-
-    Calls ``uvx sparkrun list`` via SSH and returns parsed entries. Used by
-    the ``/runtimes`` UI to populate the recipe-switcher dropdown for
-    vllm_docker runtimes that are sparkrun-managed.
-    """
-    from app.services.sparkrun_manager import list_recipes
-
-    recipes = await list_recipes()
-    return {"recipes": recipes}
-
-
-@router.get("/{runtime_id}/current-recipe")
-async def get_current_recipe(
-    runtime_id: str,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """Return the sparkrun recipe currently encoded in this runtime's
-    ``launch_command``, or ``None`` if not sparkrun-managed.
-    """
-    from app.services.sparkrun_manager import extract_current_recipe
-
-    rt = await _resolve_runtime_dict(session, runtime_id)
-    if rt is None:
-        raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
-    recipe = extract_current_recipe(rt.get("launch_command"))
-    return {
-        "slug": rt["slug"],
-        "current_recipe": recipe,
-        "sparkrun_managed": recipe is not None,
-    }
-
-
-@router.post("/{runtime_id}/switch-recipe")
-async def switch_sparkrun_recipe(
-    runtime_id: str,
-    body: SwitchRecipeBody,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """Switch the sparkrun recipe driving this runtime.
-
-    Flow (atomic):
-      1. Stop the current container (best-effort)
-      2. Persist the new ``launch_command`` derived from ``body.recipe``
-      3. Start the new container via SSH
-      4. Trigger model-identifier re-probe so the resolver picks up the new model
-
-    Returns 200 with ``ok=true`` once the new container is launching;
-    container warmup (2-5 min) happens asynchronously in the background.
-    Frontend can poll the runtime health endpoint until model_identifier
-    shows the new value.
-    """
-    from app.services.sparkrun_manager import switch_recipe
-
-    # Slug-or-UUID lookup (mirrors probe_model_endpoint)
-    rt = (await session.exec(select(Runtime).where(Runtime.slug == runtime_id))).first()
-    if not rt:
-        try:
-            rt_uuid = uuid.UUID(runtime_id)
-        except ValueError:
-            rt_uuid = None
-        if rt_uuid is not None:
-            rt = await session.get(Runtime, rt_uuid)
-    if not rt:
-        raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
-
-    # Deliberately vllm_docker ONLY — llamacpp_docker is not admitted here.
-    # A "recipe" in this endpoint means a sparkrun recipe (`uvx sparkrun`),
-    # which exists only for vLLM on the DGX Spark. llama.cpp has no equivalent:
-    # switching its model means a different container / launch_command (or,
-    # later, llama-swap which does hot model switching behind one port). Opening
-    # this gate would let the UI offer sparkrun recipes for an engine that
-    # cannot run them, and switch_recipe would write a launch_command that
-    # starts vLLM under a llamacpp runtime row.
-    if rt.runtime_type != "vllm_docker":
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Recipe-switch only supported for vllm_docker runtimes "
-                f"(this is {rt.runtime_type!r})."
-            ),
-        )
-
-    try:
-        result = await switch_recipe(session, rt, body.recipe)
-    except ValueError as exc:
-        # ``build_launch_command`` raises on invalid slug/recipe — surface as 400
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not result.get("ok"):
-        raise HTTPException(status_code=502, detail=result.get("message", "switch failed"))
-    return result
-
-
 # ── DB-backed CRUD endpoints (for UI management) ─────────────────────────────
 # These work against the `runtimes` table (Phase 1) and will become the
 # source of truth once runtime_manager is fully refactored off the JSON seed.
@@ -1004,6 +890,32 @@ async def _validate_host_id(session: AsyncSession, host_id: uuid.UUID) -> None:
             status_code=422,
             detail=f"host_id {host_id} zeigt auf keinen Host (GET /api/v1/hosts)",
         )
+
+
+#: Felder, deren Änderung die Startbefehl-Pflicht neu bewerten muss. Ein
+#: PATCH an ui_order o.ä. lässt eine alte Zeile ohne Befehl in Ruhe — sie
+#: bleibt lesbar (Vertrag), nur aktivieren/binden/umtypen geht nicht.
+_LAUNCH_COMMAND_RULE_FIELDS = frozenset({"launch_command", "enabled", "host_id", "runtime_type"})
+
+LAUNCH_COMMAND_REQUIRED = (
+    "Startbefehl fehlt — eine aktivierte Runtime mit Box braucht einen "
+    "Startbefehl (launch_command), sonst kann MC sie nie starten."
+)
+
+
+def _require_launch_command(rt: Runtime) -> None:
+    """Rezept-Umschalter (Vertrag 02.09.2026): launch_command ist Pflicht für
+    enabled + host-gebunden — im Router, nicht als DB-NOT-NULL, damit Cloud-
+    Runtimes ohne Box unberührt bleiben. Nur Engines, die MC über einen Befehl
+    startet (recipe_switcher.COMMAND_DRIVEN_RUNTIME_TYPES): LM Studio lädt
+    per ``lms load``, ein Pflichtfeld wäre dort eine Lüge."""
+    if (
+        rt.enabled
+        and rt.host_id is not None
+        and rt.runtime_type in recipe_switcher.COMMAND_DRIVEN_RUNTIME_TYPES
+        and not (rt.launch_command or "").strip()
+    ):
+        raise HTTPException(status_code=422, detail=LAUNCH_COMMAND_REQUIRED)
 
 
 async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
@@ -1038,6 +950,7 @@ async def create_runtime_db(
     if body.host_id is not None:
         await _validate_host_id(session, body.host_id)
     rt = Runtime(**body.model_dump())
+    _require_launch_command(rt)
     session.add(rt)
     await session.commit()
     await session.refresh(rt)
@@ -1077,6 +990,8 @@ async def update_runtime_db(
         rt.host_id = body.host_id
     if "api_key_secret_id" in body.model_fields_set:
         rt.api_key_secret_id = body.api_key_secret_id
+    if body.model_fields_set & _LAUNCH_COMMAND_RULE_FIELDS:
+        _require_launch_command(rt)
     rt.updated_at = datetime.utcnow()
     session.add(rt)
     await session.commit()
