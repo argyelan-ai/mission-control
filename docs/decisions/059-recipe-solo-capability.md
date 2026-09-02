@@ -1,6 +1,6 @@
 # ADR-059 — Solo-Capability-aware Recipe Switching (Engine Control)
 
-**Status:** Accepted
+**Status:** Superseded by ADR-077 (Solo-Capability über `sparkrun list`, TP-Override, `SparkRecipeSwitcher`); der Post-Launch-Prozess-Check `verify_spark_vllm_process_started` bleibt gültig und wird von ADR-077 weiterverwendet
 **Datum:** 2026-07-06
 **Scope:** Infra/Runtime · Backend/DB
 
