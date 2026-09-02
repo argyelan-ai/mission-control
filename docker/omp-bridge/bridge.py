@@ -1743,10 +1743,14 @@ def _nudge_state_write(path: str, seqs: dict[str, int], now: float) -> None:
 
 
 def build_nudge_text(global_max: int, epoch: int) -> str:
-    """Single-line wake-up, identical wording to poll.sh / grok-bridge.py."""
+    """Single-line wake-up, same shape as poll.sh — plus a tool hint the omp
+    TUI needs: in a fresh session (container recreate, no CARD yet) the model
+    read "mc inbox" as a tool name and reached for its built-in irc tool
+    ("IRC inbox empty", 2026-09-02) — the message was never read."""
     return (
         f"📬 Neue Nachrichten (bis seq {global_max}, {epoch}) — "
-        f"lies sie jetzt mit: mc inbox"
+        f"lies sie jetzt mit: mc inbox "
+        f"(`mc` ist ein Shell-Befehl: im Bash-Tool ausführen, NICHT das irc-Tool)"
     )
 
 
@@ -1816,6 +1820,12 @@ class _MsgDelivery:
         # True only while WE hold the recycler task lock for a message turn, so
         # we never remove a lock a real task dispatch is holding.
         self._holds_lock: bool = False
+        # A serve start means a fresh omp session that has never seen the
+        # CARD.md identity block (task dispatches prepend it themselves, see
+        # wrap_prompt). The FIRST nudge carries it once so the model knows
+        # what `mc` is; later nudges resume a session that already has it.
+        self._card_pending: bool = True
+        self.home_dir: Optional[str] = None
 
     def _signal_size(self) -> int:
         try:
@@ -1995,6 +2005,10 @@ class _MsgDelivery:
 
         epoch = int(now)
         text = build_nudge_text(global_max, epoch)
+        if self._card_pending:
+            identity = _identity_block(self.home_dir)
+            if identity:
+                text = f"{identity}\n\n---\n\n{text}"
         try:
             parent = os.path.dirname(self.nudge_msg_file)
             if parent:
@@ -2008,6 +2022,7 @@ class _MsgDelivery:
         offset_before = self._signal_size()
         self._acquire_msg_lock()
         if self.ctrl.inject_file(self.nudge_msg_file):
+            self._card_pending = False
             _nudge_state_write(self.nudge_state_file, seqs, now)
             # Hold the gate closed (and the lock held) until the turn ends —
             # same as a normal queued message: the agent's mc inbox call opens
