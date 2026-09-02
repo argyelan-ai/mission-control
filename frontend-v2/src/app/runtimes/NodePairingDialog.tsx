@@ -44,12 +44,27 @@ export function installCommandRows(res: NodePairingCodeResponse): NodeInstallCom
   return [{ label: "", url: "", cmd: res.install_command }];
 }
 
-/** Backend-Label → Satz in der Oberfläche; Unbekanntes bleibt, wie es kommt. */
+/**
+ * Backend-Label → Satz in der Oberfläche; Unbekanntes bleibt, wie es kommt.
+ * Das Backend liefert (Stand 02.09.): "Tailscale", "LAN", "Adresse" (DNS-Name),
+ * "Öffentlich"; Dubletten als "LAN 2" — deshalb Präfix-Treffer plus Suffix.
+ */
 const INSTALL_LABEL_KEY: Record<string, string> = {
   tailscale: "pairingInstallLabelTailscale",
   tailnet: "pairingInstallLabelTailscale",
   lan: "pairingInstallLabelLan",
+  adresse: "pairingInstallLabelAddress",
+  address: "pairingInstallLabelAddress",
+  "öffentlich": "pairingInstallLabelPublic",
+  public: "pairingInstallLabelPublic",
 };
+
+/** Übersetzt "LAN 2" zu „im LAN 2": Wort übersetzen, Zähler anhängen. */
+export function installLabelParts(raw: string): { key: string | null; suffix: string } {
+  const m = raw.trim().toLowerCase().match(/^(.*?)(?:\s+(\d+))?$/);
+  const word = m?.[1] ?? "";
+  return { key: INSTALL_LABEL_KEY[word] ?? null, suffix: m?.[2] ? ` ${m[2]}` : "" };
+}
 
 export function NodePairingDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const t = useTranslations("runtimes.hosts");
@@ -109,8 +124,8 @@ export function NodePairingDialog({ open, onClose }: { open: boolean; onClose: (
   }
 
   const labelFor = (row: NodeInstallCommand): string => {
-    const key = INSTALL_LABEL_KEY[row.label.trim().toLowerCase()];
-    return key ? t(key) : row.label;
+    const { key, suffix } = installLabelParts(row.label);
+    return key ? `${t(key)}${suffix}` : row.label;
   };
 
   const rows = result ? installCommandRows(result) : [];

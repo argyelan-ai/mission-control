@@ -2232,7 +2232,9 @@
       "pairingInstallCommandsLabel": "Installationsbefehl (auf dem Gerät ausführen) – je nach Netz",
       "pairingInstallLabelTailscale": "im Tailnet",
       "pairingInstallLabelLan": "im LAN",
-      "pairingCopyAria": "Befehl {label} kopieren"
+      "pairingCopyAria": "Befehl {label} kopieren",
+      "pairingInstallLabelAddress": "über DNS-Name",
+      "pairingInstallLabelPublic": "öffentlich"
     },
     "devices": {
       "modeGroupLabel": "GPU-Modus wählen",

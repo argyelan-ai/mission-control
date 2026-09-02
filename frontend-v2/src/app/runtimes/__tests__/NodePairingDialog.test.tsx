@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { NodePairingDialog, installCommandRows } from "../NodePairingDialog";
+import { NodePairingDialog, installCommandRows, installLabelParts } from "../NodePairingDialog";
 import { api } from "@/lib/api";
 
 describe("NodePairingDialog", () => {
@@ -122,6 +122,14 @@ describe("NodePairingDialog", () => {
     expect(screen.getByTestId("pairing-install-command")).toHaveTextContent("--pair CCCC3333 --install");
     expect(screen.queryByTestId("pairing-install-command-1")).toBeNull();
     expect(screen.queryByTestId("pairing-install-label-0")).toBeNull();
+  });
+
+  it("P2: installLabelParts — known backend labels map to i18n keys, counters survive, unknown stays raw", () => {
+    expect(installLabelParts("Tailscale")).toEqual({ key: "pairingInstallLabelTailscale", suffix: "" });
+    expect(installLabelParts("LAN 2")).toEqual({ key: "pairingInstallLabelLan", suffix: " 2" });
+    expect(installLabelParts("Adresse")).toEqual({ key: "pairingInstallLabelAddress", suffix: "" });
+    expect(installLabelParts("Öffentlich")).toEqual({ key: "pairingInstallLabelPublic", suffix: "" });
+    expect(installLabelParts("Kabelnetz")).toEqual({ key: null, suffix: "" });
   });
 
   it("P2: installCommandRows — list wins, empty list and missing list fall back", () => {
