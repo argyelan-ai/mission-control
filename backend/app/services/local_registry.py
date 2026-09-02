@@ -52,7 +52,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.models.local_recipe import ARCHS, ENGINES, LocalRecipe
+from app.models.local_recipe import ARCHS, ENGINES, LEGACY_ENGINE_SPARKRUN, LocalRecipe
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.utils import utcnow
@@ -113,6 +113,10 @@ class RecipeSpec(BaseModel):
     # spelled on the way into an environment variable is a decision, and it
     # belongs to whoever wrote the recipe, not to a JSON parser.
     env: dict[str, str] | None = None
+    # Rezept-Umschalter (02.09.2026): Anzahl Boxen + Standard-Port. Beide
+    # optional — fehlend heisst Solo ohne Port-Angabe, wie jede alte Zeile.
+    topology: dict | None = None
+    port: int | None = PydanticField(default=None, ge=1, le=65535)
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
     enabled: bool = True
@@ -121,14 +125,41 @@ class RecipeSpec(BaseModel):
     def env_map(self) -> dict[str, str]:
         return {str(k): str(v) for k, v in (self.env or {}).items()}
 
+    @property
+    def topology_map(self) -> dict | None:
+        return dict(self.topology) if self.topology else None
+
+    def normalised(self) -> "RecipeSpec":
+        """Alte ``engine: sparkrun``-Einträge in das eine Rezept-Modell heben.
+
+        Ein sparkrun-Rezept ist ein gewöhnlicher Startbefehl: der Wrapper
+        erzeugt einen Docker-Container mit dem Label ``mc.runtime.slug``, also
+        genau das, was der ``vllm_docker``-Lebenszyklus startet, verifiziert
+        und verdrängt. Fehlt ein eigenes ``launch_template``, entsteht es aus
+        ``recipe_ref``. Ohne beides bleibt der Eintrag lesbar (Engine
+        ``ssh_process``, kein Befehl) und meldet in der Oberfläche ehrlich
+        „Startbefehl fehlt", statt abgelehnt zu werden.
+        """
+        if self.engine != LEGACY_ENGINE_SPARKRUN:
+            return self
+        engine, template = normalise_legacy_engine(self.engine, self.recipe_ref, self.launch_template)
+        return self.model_copy(
+            update={
+                "engine": engine,
+                "launch_template": template,
+                "topology": self.topology_map or {"nodes": 1},
+            }
+        )
+
     def validate_vocabulary(self) -> str | None:
         """Return a reason string when engine/arch are outside the vocabulary.
 
         Kept out of pydantic validators on purpose: a source with one unknown
         engine should skip THAT entry with a readable reason, not fail the
         whole payload — and the reason is what the operator sees in the UI.
+        The legacy ``sparkrun`` value passes: it is normalised, not rejected.
         """
-        if self.engine not in ENGINES:
+        if self.engine != LEGACY_ENGINE_SPARKRUN and self.engine not in ENGINES:
             return f"unknown engine {self.engine!r} (expected one of {', '.join(ENGINES)})"
         if self.arch not in ARCHS:
             return f"unknown arch {self.arch!r} (expected one of {', '.join(ARCHS)})"
@@ -207,7 +238,61 @@ def _parse_entries(entries, origin: str, reasons: list[str]) -> list[RecipeSpec]
     return specs
 
 
+#: Die Flags, die der alte Sonderweg an jeden ``uvx sparkrun run`` hängte:
+#: Einzelbox-Modus, Container behalten (sonst löscht ``--rm`` ihn nach dem
+#: Stop und ``docker start`` findet nichts mehr), idempotent, nicht folgen.
+SPARKRUN_RUN_FLAGS = "--solo --no-rm --ensure --no-follow"
+
+
+def build_sparkrun_launch_template(recipe_ref: str) -> str:
+    """``uvx sparkrun run <ref> …`` als gewöhnliches launch_template, mit dem
+    Pflicht-Label ``mc.runtime.slug={slug}`` — der Platzhalter wird beim
+    Anlegen der Instanz gerendert (services/launch_template)."""
+    return f"uvx sparkrun run {recipe_ref.strip()} {SPARKRUN_RUN_FLAGS} --label mc.runtime.slug={{slug}}"
+
+
+def normalise_legacy_engine(
+    engine: str, recipe_ref: str | None, launch_template: str | None
+) -> tuple[str, str | None]:
+    """(engine, launch_template) für einen alten sparkrun-Eintrag — s. RecipeSpec.normalised."""
+    if engine != LEGACY_ENGINE_SPARKRUN:
+        return engine, launch_template
+    template = (launch_template or "").strip() or None
+    if template is None and (recipe_ref or "").strip():
+        template = build_sparkrun_launch_template(recipe_ref)
+    # Mit Befehl: ein Docker-Start wie jeder andere. Ohne: lesbar, aber ohne
+    # Startweg — ssh_process hat keinen Engine-Standard, also erfindet
+    # niemand einen falschen ``docker run`` dafür.
+    return ("vllm_docker" if template else "ssh_process"), template
+
+
+async def repair_legacy_sparkrun_rows(session: AsyncSession) -> int:
+    """Startup-Reparatur: bestehende Katalogzeilen mit ``engine=sparkrun``
+    umwandeln, nicht löschen (Vertrag, Regel 6). Idempotent; Runtime-Zeilen
+    werden nicht angefasst — eine Runtime mit ``uvx sparkrun run`` im
+    Startbefehl war schon immer ein gewöhnlicher ``vllm_docker``-Start.
+
+    Returns: Anzahl umgewandelter Zeilen.
+    """
+    rows = (
+        await session.exec(select(LocalRecipe).where(LocalRecipe.engine == LEGACY_ENGINE_SPARKRUN))
+    ).all()
+    for row in rows:
+        row.engine, row.launch_template = normalise_legacy_engine(
+            row.engine, row.recipe_ref, row.launch_template
+        )
+        if not row.topology:
+            row.topology = {"nodes": 1}
+        row.updated_at = utcnow()
+        session.add(row)
+    if rows:
+        await session.commit()
+        logger.info("local registry: %d sparkrun-Zeile(n) umgewandelt", len(rows))
+    return len(rows)
+
+
 def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
+    spec = spec.normalised()
     return LocalRecipe(
         slug=spec.slug,
         display_name=spec.display_name,
@@ -230,6 +315,8 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         source_registry=spec.source_registry,
         source_url=spec.source_url,
         env=spec.env_map or None,
+        topology=spec.topology_map,
+        port=spec.port,
         tags=list(spec.tags or []),
         notes=spec.notes,
         enabled=spec.enabled,
@@ -245,6 +332,7 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
     operator's decision (a refresh must never un-hide a recipe), the second is
     the definition of "when did MC first learn about this".
     """
+    spec = spec.normalised()
     changed = False
     for attr, value in (
         ("display_name", spec.display_name),
@@ -267,6 +355,8 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("source_registry", spec.source_registry),
         ("source_url", spec.source_url),
         ("env", spec.env_map or None),
+        ("topology", spec.topology_map),
+        ("port", spec.port),
         ("tags", list(spec.tags or [])),
         ("notes", spec.notes),
     ):

@@ -477,7 +477,7 @@ class RedisKeys:
 
     # ── Switch Grace + Auto-Recovery (PR5, services/runtime_grace.py) ────
     # runtime_switching: "this runtime is expected to be unreachable right
-    # now" — set by switch_recipe/start_runtime, cleared by the watcher once a
+    # now" — set by start_runtime (Rezept-Start), cleared by the watcher once a
     # probe succeeds. TTL is the safety net against a backend crash mid-switch.
     @staticmethod
     def runtime_switching(slug: str) -> str:
@@ -521,7 +521,7 @@ class RedisKeys:
     # "This is the value MC stamped onto the container it most recently
     # created for this slug." No TTL — it must outlive the whole runtime
     # lifetime, not just a switch window. Overwritten on every fresh
-    # container creation (switch_recipe / a new docker run), read back
+    # container creation (a new docker run), read back
     # before any docker stop MC issues against a container it believes is
     # its own, so a container someone hand-recreated under the same name
     # or label is never silently killed (Local Studio's "never stop what

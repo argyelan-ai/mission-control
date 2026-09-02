@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -19,7 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.activity import ActivityEvent
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys
-from app.services import host_memory_prep, runtime_grace, sparkrun_manager
+from app.services import host_memory_prep, runtime_grace
 from app.services.agent_runtime_switch import ProbedModel
 from app.services.host_resolver import ResolvedHost
 from app.services.runtime_watcher import (
@@ -186,109 +185,8 @@ async def test_expired_marker_restores_normal_alerting(
     assert "runtime.unreachable" in await _event_types(async_session)
 
 
-# ── (a) switch_recipe sets/clears the marker on every path ───────────────
-
-
-@pytest.fixture
-async def switch_runtime(async_session: AsyncSession) -> Runtime:
-    return await _mk_runtime(
-        async_session,
-        slug="switch-rt",
-        launch_command=(
-            "uvx sparkrun run @official/old-recipe --solo --no-rm --ensure "
-            "--no-follow --label mc.runtime.slug=switch-rt"
-        ),
-        container_name="sparkrun_old_solo",
-    )
-
-
-@pytest.mark.asyncio
-async def test_switch_recipe_marks_evicting_before_the_evict(
-    async_session: AsyncSession, switch_runtime: Runtime, grace_redis
-):
-    """The marker must exist BEFORE the model is killed — the window between
-    eviction and marking is exactly where the false alarms came from."""
-    seen: dict = {}
-
-    async def _evict(*args, **kwargs):
-        seen["at_evict"] = await runtime_grace.get_switching(switch_runtime.slug)
-        return {"ok": True, "message": "evicted", "stopped": []}
-
-    with (
-        patch("app.services.runtime_manager.evict_spark_runtime_containers", _evict),
-        patch("app.services.runtime_manager.start_runtime",
-              AsyncMock(return_value={"ok": True, "message": "starting"})),
-        patch("app.services.agent_runtime_switch.probe_runtime_model",
-              AsyncMock(return_value=None)),
-        patch("app.services.runtime_model_resolver.get_redis",
-              _fake_get_redis(grace_redis)),
-    ):
-        result = await sparkrun_manager.switch_recipe(
-            async_session, switch_runtime, "@official/new-recipe"
-        )
-
-    assert result["ok"] is True
-    assert seen["at_evict"]["phase"] == runtime_grace.PHASE_EVICTING
-    assert seen["at_evict"]["source"] == runtime_grace.SOURCE_SWITCH
-    # Still in flight after a successful switch — only a serving probe ends it.
-    after = await runtime_grace.get_switching(switch_runtime.slug)
-    assert after["phase"] == runtime_grace.PHASE_LOADING
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "abort_path",
-    ["same_recipe", "multi_node", "evict_failed", "start_failed"],
-)
-async def test_switch_recipe_leaves_no_marker_on_any_abort_path(
-    async_session: AsyncSession, switch_runtime: Runtime, grace_redis, abort_path
-):
-    """Every early return must leave the runtime un-graced — a stuck marker
-    would blind the watcher for the full 20-minute TTL."""
-    target = "@official/new-recipe"
-    patches = [
-        patch("app.services.agent_runtime_switch.probe_runtime_model",
-              AsyncMock(return_value=None)),
-        patch("app.services.runtime_model_resolver.get_redis",
-              _fake_get_redis(grace_redis)),
-    ]
-    if abort_path == "same_recipe":
-        target = "@official/old-recipe"
-    elif abort_path == "multi_node":
-        patches += [
-            patch("app.services.sparkrun_manager.get_host_gpu_count",
-                  AsyncMock(return_value=1)),
-            patch("app.services.sparkrun_manager.list_recipes",
-                  AsyncMock(return_value=[{"name": target, "model": "m",
-                                           "registry": "official", "tp": 4,
-                                           "nodes": 2, "solo_capable": False}])),
-        ]
-    elif abort_path == "evict_failed":
-        patches.append(patch(
-            "app.services.runtime_manager.evict_spark_runtime_containers",
-            AsyncMock(return_value={"ok": False, "message": "still running"}),
-        ))
-    else:  # start_failed
-        patches += [
-            patch("app.services.runtime_manager.evict_spark_runtime_containers",
-                  AsyncMock(return_value={"ok": True, "message": "evicted",
-                                          "stopped": []})),
-            patch("app.services.runtime_manager.start_runtime",
-                  AsyncMock(return_value={"ok": False, "message": "no container"})),
-        ]
-
-    with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        result = await sparkrun_manager.switch_recipe(
-            async_session, switch_runtime, target
-        )
-
-    if abort_path == "same_recipe":
-        assert result["ok"] is True and "no-op" in result["message"].lower()
-    else:
-        assert result["ok"] is False
-    assert await runtime_grace.get_switching(switch_runtime.slug) is None
+# ── (a) start_runtime sets/clears the marker (der alte switch_recipe-Pfad
+#    ist mit dem Rezept-Umschalter 02.09.2026 entfallen) ────────────────
 
 
 @pytest.mark.asyncio
