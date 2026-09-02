@@ -2085,6 +2085,17 @@ def serve_loop(
     nudge_state_file = _nudge_state_file or MSG_NUDGE_STATE_FILE
     nudge_msg_file = _nudge_msg_file or MSG_NUDGE_MSG_FILE
 
+    # Orphaned task lock from a previous container life (SIGKILL mid-run, e.g.
+    # a Docker restart 2026-09-02): nobody else ever removes it, so gate_open()
+    # stayed False forever and the agent went deaf to messages. Nothing can be
+    # in flight at serve start — mirror poll.sh's startup `rm -f`.
+    if os.path.exists(task_lock_path):
+        try:
+            os.remove(task_lock_path)
+            sys.stderr.write(f"[serve] removed orphaned task lock {task_lock_path}\n")
+        except OSError as e:  # pragma: no cover — best-effort
+            sys.stderr.write(f"[serve] orphaned task lock removal failed: {e}\n")
+
     # One controller for the container's lifetime; run_native_turn relaunches +
     # truncates the signal per task, so state never bleeds between tasks.
     tui = NativeTuiController(session=session, signal_file=signal_file, window=tui_window,
