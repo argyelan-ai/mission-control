@@ -215,10 +215,34 @@ _EFFORT_LEVELS_BY_HARNESS: dict[str, tuple[str, ...]] = {
 # Rueckwaertskompatibler Name (Claude Code) — bestehende Aufrufer/Tests.
 ALLOWED_EFFORT_LEVELS = _EFFORT_LEVELS_BY_HARNESS["claude"]
 
+# omp (seit 02.09.2026): das Effort-Pendant heisst dort "thinking level" und
+# wird NICHT ueber ein Slash-Kommando gesetzt — die TUI kennt kein
+# ``/thinking`` (live geprueft am Sparky-Pane, omp v16.4.6: der Text ging als
+# normale Nachricht ans Modell). Der einzige Kanal ohne Neustart ist
+# Shift+Tab (tmux ``BTab``, "Cycle thinking level"), das den Ring
+#   off -> auto -> minimal -> low -> medium -> high -> xhigh -> off
+# dreht; die Statuszeile zeigt die Stufe sofort (``omp_chat.
+# status_line_thinking_level``). ``auto`` steht bewusst NICHT in der Leiter:
+# es ist keine Stufe, sondern omps Klassifizierer, der pro Zug selbst waehlt —
+# auf dem Regler waere das ein Wert ohne Rang. ``max`` fehlt, weil das
+# Flottenmodell (GLM-5.3-Flash) es nicht anbietet; der Ring ueberspringt es.
+# Bewusst eine EIGENE Tabelle statt Eintrag in ``_EFFORT_LEVELS_BY_HARNESS``:
+# die dient ``model_catalog`` als "kennt Claude-Aliasse"-Tor, und ``/model
+# sonnet`` ist in omp Kauderwelsch.
+_OMP_THINKING_LEVELS: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh")
+# Ein voller Ring hat 7 Stationen (inkl. auto); nach 8 Druecken ohne Treffer
+# reagiert die TUI nicht (Modell ohne Reasoning, Pane eingefroren) — Schluss.
+_OMP_THINKING_RING_MAX_PRESSES = 8
+# omps Settings-Datei im Container (agentDir bei OMP_PROFILE=mc-agent). Nur
+# ueber docker exec erreichbar — auf dem Host sind nur omp-sessions gemountet.
+_OMP_SETTINGS_PATH = "/home/agent/.omp/profiles/mc-agent/agent/settings.json"
+
 
 def effort_levels_for(harness: str | None) -> tuple[str, ...]:
-    """Die Stufenleiter DIESES Harness — leer fuer jede CLI, die ``/effort``
-    gar nicht kennt (kimi, omp). Leer heisst: nichts anbieten, nichts tippen."""
+    """Die Stufenleiter DIESES Harness — leer fuer jede CLI, die kein
+    Effort-Pendant hat (kimi). Leer heisst: nichts anbieten, nichts tippen."""
+    if harness == "omp":
+        return _OMP_THINKING_LEVELS
     return _EFFORT_LEVELS_BY_HARNESS.get(harness or "", ())
 
 
@@ -601,13 +625,17 @@ async def set_effort(agent, level: str) -> None:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
     kind = _target_kind(agent)
-    if harness not in _EFFORT_LEVELS_BY_HARNESS:
+    if not effort_levels_for(harness):
         # Spiegel des Capabilities-Gates: selbst wenn ein Client den Endpoint
         # direkt trifft, tippen wir kein /effort in eine fremde CLI.
         raise InputNotSupportedError()
 
     if kind == "boss":
         await _set_effort_boss(agent, level)
+        return
+
+    if harness == "omp":
+        await _set_effort_omp(agent, level)
         return
 
     slug = agent.slug
@@ -641,6 +669,93 @@ async def set_effort(agent, level: str) -> None:
         if not await _pane_is_busy(agent):
             await _run_docker_exec(_docker_argv(slug, "Escape"))
         raise EffortSwitchFailedError()
+
+
+async def _set_effort_omp(agent, level: str) -> None:
+    """omp-Variante von ``set_effort`` (02.09.2026): drueckt Shift+Tab
+    (``BTab``), bis die Statuszeile die gewuenschte Stufe zeigt.
+
+    - EIN Capture fuer Preflight UND Ist-Stufe: ``⟦esc⟧`` im Pane heisst
+      arbeitender Zug -> ``AgentBusyError`` (Shift+Tab waehrend eines Zugs
+      wuerde die Stufe zwar wechseln, aber wir wollen keine Tasten in einen
+      arbeitenden Pane senden — gleiche I-1-Regel wie bei Claude).
+    - Kein Pane / keine Statuszeile -> ``InputNotSupportedError`` (die TUI
+      bootet oder das Fenster fehlt; ohne Anzeige ist nichts verifizierbar).
+    - Schon dort -> kein Tastendruck.
+    - Sonst je Druck: ``BTab``, kurz warten, Capture, Statuszeile lesen.
+      Treffer -> fertig. Nach ``_OMP_THINKING_RING_MAX_PRESSES`` ohne Treffer
+      -> ``EffortSwitchFailedError``. KEIN Escape-Cleanup: es liegt kein
+      halbes Kommando im Eingabefeld, Escape waere hier omps INTERRUPT.
+    - Persistenz: der Wechsel per Shift+Tab gilt nur fuer die laufende
+      Session — jeder Task-Relaunch (bridge.py respawnt das Fenster) startet
+      wieder mit ``defaultThinkingLevel`` aus omps settings.json. Darum wird
+      die Stufe zusaetzlich dort eingetragen (auch bei "schon dort": die
+      Statuszeile sagt nichts ueber die Datei). Ausnahme ``off``: omps
+      eigener Settings-Enum kennt es nicht als Standard (die CLI persistiert
+      es selbst nie) — wie max/ultracode bei Claude session-only.
+    """
+    from app.services.omp_chat import status_line_thinking_level
+
+    slug = agent.slug
+    pane = await capture_pane(agent)
+    if pane is not None and _omp_pane_busy(agent, pane):
+        raise AgentBusyError()
+    current = status_line_thinking_level(pane)
+    if current is None:
+        raise InputNotSupportedError()
+
+    if current != level:
+        for _ in range(_OMP_THINKING_RING_MAX_PRESSES):
+            await _run_docker_exec(_docker_argv(slug, "BTab"))
+            await asyncio.sleep(_EFFORT_VERIFY_DELAY_SECONDS)
+            current = status_line_thinking_level(await capture_pane(agent))
+            if current == level:
+                break
+        else:
+            raise EffortSwitchFailedError()
+
+    if level != "off":
+        await _persist_omp_thinking_level(slug, level)
+
+
+def _omp_pane_busy(agent, pane: str) -> bool:
+    from app.services.transcript_adapters import adapter_for
+
+    return adapter_for(agent).parse_pane_state(pane, False)["status"] in _BUSY_PANE_STATUSES
+
+
+async def _persist_omp_thinking_level(slug: str, level: str) -> None:
+    """Schreibt ``defaultThinkingLevel`` in omps settings.json IM Container
+    (JSON-Merge, andere Schluessel bleiben). Fail-silent wie
+    ``_run_docker_exec``: der Session-Wechsel ist schon passiert und
+    verifiziert; eine fehlende Persistenz kostet nur den Standard beim
+    naechsten Relaunch, keinen falschen Erfolg."""
+    script = (
+        "import json, os, pathlib\n"
+        f"p = pathlib.Path({_OMP_SETTINGS_PATH!r})\n"
+        "p.parent.mkdir(parents=True, exist_ok=True)\n"
+        "try:\n"
+        "    data = json.loads(p.read_text())\n"
+        "except Exception:\n"
+        "    data = {}\n"
+        f"data['defaultThinkingLevel'] = {level!r}\n"
+        "tmp = p.with_suffix('.tmp')\n"
+        "tmp.write_text(json.dumps(data, indent=2) + '\\n')\n"
+        "os.replace(tmp, p)\n"
+    )
+    argv = [
+        "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
+        "python3", "-c", script,
+    ]
+    try:
+        result = await asyncio.to_thread(subprocess.run, argv, capture_output=True, timeout=5)
+        if result.returncode != 0:
+            logger.warning(
+                "omp thinking level persist failed for %s: %s",
+                slug, result.stderr.decode(errors="replace").strip()[:200],
+            )
+    except Exception as exc:  # noqa: BLE001 — fail-silent, s. Docstring
+        logger.warning("omp thinking level persist failed for %s: %s", slug, exc)
 
 
 def _read_since(path: Path, offset: int | None) -> tuple[int, str]:
@@ -881,7 +996,7 @@ async def _verify_effort_applied(agent, level: str) -> bool:
 # possibly-stale level list. A drift just gets logged, once per cli_version
 # fleet-wide (Redis SET NX EX dedup, same TTL as the model catalog), as a
 # signal that a manual Phase-0 re-verification pass is due.
-_EFFORT_LEVELS_VERIFIED_CLI_VERSION = {"claude": "2.1.234", "openclaude": "0.7.0"}
+_EFFORT_LEVELS_VERIFIED_CLI_VERSION = {"claude": "2.1.234", "openclaude": "0.7.0", "omp": "16.4.6"}
 _EFFORT_DRIFT_LOG_DEDUP_TTL_SECONDS = 24 * 3600  # matches the model catalog's own TTL
 
 
@@ -953,11 +1068,34 @@ async def effort_capabilities(agent) -> dict[str, object]:
     levels = effort_levels_for(harness)
 
     if kind == "docker" and not levels:
-        # Fremde CLI im Container (kimi, omp): /effort ist ein Claude-Kommando.
+        # Fremde CLI im Container (kimi): /effort ist ein Claude-Kommando.
         # Weder Leiter noch Schaltrecht behaupten — sonst tippt ein Klick
         # Kauderwelsch in eine TUI, die es nicht versteht (kritischer
         # Test-Durchgang 18.08.2026).
         return _no_effort("foreign_harness")
+
+    if kind == "docker" and harness == "omp":
+        # Quelle ist der Pane, nicht eine Datei: die Statuszeile zeigt die
+        # Stufe der LAUFENDEN Session (Shift+Tab-Wechsel landen nie in
+        # settings.json). Ohne Statuszeile (TUI bootet, Fenster weg) gibt es
+        # nichts zu schalten — und nichts, woran ein Wechsel zu pruefen waere.
+        from app.services.omp_chat import status_line_thinking_level
+
+        await _check_effort_levels_version_drift(agent)
+        current = status_line_thinking_level(await capture_pane(agent))
+        if current is None:
+            caps = _no_effort("no_pane")
+            caps["effortLevels"] = list(levels)
+            return caps
+        return {
+            "effortLevels": list(levels),
+            "canSwitchEffort": True,
+            # ``auto`` ist keine Stufe der Leiter -> None: der Chip zeigt
+            # dann ehrlich "keine feste Stufe" statt einer falschen Fuellung.
+            "effort": current if current in levels else None,
+            "effortShared": False,
+            "effortReason": None,
+        }
 
     if kind == "docker":
         await _check_effort_levels_version_drift(agent)
@@ -1067,7 +1205,7 @@ def _no_effort(reason: str) -> dict[str, object]:
     fehlt, WEIL …" — das UI kann es erklaeren statt nur auszublenden.
 
     Codes (maschinenlesbar, der Text gehoert ins Frontend):
-    - ``foreign_harness``: diese CLI kennt ``/effort`` gar nicht (kimi, omp).
+    - ``foreign_harness``: diese CLI hat kein Effort-Pendant (kimi).
     - ``no_pane``: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis).
     - ``model_no_effort``: Harness kann es, das MODELL des Agenten nicht.
 

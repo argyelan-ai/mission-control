@@ -816,3 +816,31 @@ def test_new_parser_seed_ignores_everything_but_the_level_lines(tmp_path):
     parser = omp_chat.new_parser(p)
     assert parser(TITLE_LINE) == []
     assert parser(ASSISTANT_LINE)[-1]["effort"] == "high"
+
+
+# ── Denk-Stufe aus der Statuszeile (Effort-Pendant, s. agent_chat_input) ────
+
+def _omp_pane(level_suffix: str | None) -> str:
+    suffix = f" · {level_suffix}" if level_suffix else ""
+    return (
+        " - Keine neuen Nachrichten — Inbox leer, nichts zu tun.\n"
+        f"╭── π  > ⬢ MC model{suffix} > 📁 /workspace > ◫ 5.9%/500K ⟲ ▶──────◀ ──╮\n"
+        "╰─                                                                ─╯\n"
+    )
+
+
+def test_omp_status_line_thinking_level_reads_every_observed_form():
+    assert omp_chat.status_line_thinking_level(_omp_pane("◒ high")) == "high"
+    assert omp_chat.status_line_thinking_level(_omp_pane("◕ xhigh")) == "xhigh"
+    assert omp_chat.status_line_thinking_level(_omp_pane("○ min")) == "minimal"
+    assert omp_chat.status_line_thinking_level(_omp_pane("◔ low")) == "low"
+    assert omp_chat.status_line_thinking_level(_omp_pane("◑ med")) == "medium"
+    assert omp_chat.status_line_thinking_level(_omp_pane("⟳ auto")) == "auto"
+    assert omp_chat.status_line_thinking_level(_omp_pane(None)) == "off"
+    # Keine Statuszeile (bootende TUI) -> None, nicht "off".
+    assert omp_chat.status_line_thinking_level("nothing here\n") is None
+
+
+def test_status_line_thinking_level_takes_the_last_status_line():
+    pane = _omp_pane("◒ high") + _omp_pane("◔ low")
+    assert omp_chat.status_line_thinking_level(pane) == "low"

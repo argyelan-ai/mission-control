@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -801,6 +802,40 @@ def _composer_draft(composer_line: str) -> str:
 
 
 _PANE_TAIL_LINES = 40
+
+
+# ── Denk-Stufe aus der Statuszeile ─────────────────────────────────────────
+#
+# omp hat kein ``/thinking``-Kommando in der TUI (live geprueft am Sparky-Pane,
+# omp v16.4.6, 02.09.2026: der Text ging als normale Nachricht ans Modell).
+# Die Stufe wird per Shift+Tab im Ring gedreht und steht in der Statuszeile
+# ueber dem Eingabefeld:
+#   ``╭── π  > ⬢ MC model · ◒ high > 📁 /workspace > ◫ 5.9%/500K ⟲ ▶…``
+# Beobachtete Anzeigen: ``⟳ auto``, ``○ min``, ``◔ low``, ``◑ med``,
+# ``◒ high``, ``◕ xhigh``; ``off`` hat KEINEN Suffix (``⬢ MC model >``).
+# Das Glyph vor dem Wort wird bewusst nicht ausgewertet — nur das Wort.
+_STATUS_LINE_MODEL_MARKER = "⬢"
+_STATUS_LINE_THINKING_RE = re.compile(r"⬢\s*[^>·\n]*?(?:\s·\s\S+\s+(\w+))?\s*>")
+_STATUS_LINE_LEVEL_ALIASES = {"min": "minimal", "med": "medium"}
+
+
+def status_line_thinking_level(pane_text: str | None) -> str | None:
+    """Die aktuelle Denk-Stufe (omps Effort-Pendant) aus der Statuszeile —
+    ``"off"`` ohne Suffix, ``None`` wenn gar keine Statuszeile im Pane steht
+    (TUI bootet noch). Liest die LETZTE Statuszeile: der Pane kann ueber der
+    aktuellen noch alte aus dem Scrollback zeigen."""
+    if not pane_text:
+        return None
+    level: str | None = None
+    for line in pane_text.splitlines():
+        if _STATUS_LINE_MODEL_MARKER not in line or not line.lstrip().startswith("╭"):
+            continue
+        m = _STATUS_LINE_THINKING_RE.search(line)
+        if m is None:
+            continue
+        word = m.group(1)
+        level = "off" if word is None else _STATUS_LINE_LEVEL_ALIASES.get(word, word)
+    return level
 
 
 def parse_pane_state(pane_text: str, transcript_active: bool) -> dict[str, Any]:
