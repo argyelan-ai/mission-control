@@ -58,6 +58,7 @@ logger = logging.getLogger("mc.recipe_switcher")
 # ── Grau-Gründe als Sätze (Vertrag: "Sätze, keine Codes") ────────────────────
 REASON_NO_COMMAND = "Startbefehl fehlt"
 REASON_NO_SECOND_BOX = "braucht 2 Boxen — keine freie zweite Box"
+REASON_RUNNING = "läuft bereits auf dieser Box"
 REASON_NO_SSH = "Box hat keinen SSH-Zugang — MC kann hier nichts starten"
 REASON_DUO_PHASE3 = "Zweibox-Start kommt in Phase 3"
 REASON_RECIPE_HIDDEN = "Rezept ist ausgeblendet"
@@ -235,11 +236,16 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
     }
     # ``role`` bleibt null: hosts.role gibt es erst in P2. Das Feld steht
     # trotzdem schon im Schema, damit die Oberfläche es nicht nachrüsten muss.
-    candidate_workers = [
-        {"host_id": str(h.id), "slug": h.slug, "role": None}
-        for h in sorted(hosts, key=lambda h: (h.ui_order, h.slug))
-        if h.id != host.id and h.id not in exclusive_busy
-    ]
+    sorted_hosts = sorted(hosts, key=lambda h: (h.ui_order, h.slug))
+
+    def _candidates_for(_unused: set[uuid.UUID]) -> list[dict[str, Any]]:
+        # Nur wirklich freie Boxen — P3 bietet sie als Worker an.
+        return [
+            {"host_id": str(h.id), "slug": h.slug, "role": None}
+            for h in sorted_hosts
+            if h.id != host.id and h.id not in exclusive_busy
+        ]
+
     ssh_ok = host_can_ssh(host)
 
     entries: list[dict[str, Any]] = []
@@ -260,8 +266,15 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
 
         nodes = recipe_nodes(recipe.topology)
         reason: str | None = None
+        own_busy = {hid for rt in matching if running_by_id[rt.id] for hid in _hosts_of(rt)}
+        # Kandidaten = wirklich freie Boxen (für einen NEUEN Start, P3). Für die
+        # Frage „passt das Rezept auf dieses Paar?" zählt zusätzlich die Box,
+        # die das EIGENE laufende Duo belegt — sonst stünde ein laufender
+        # Verbund als „keine freie zweite Box" da (Live-Befund 02.09.).
+        candidate_workers = _candidates_for(set()) if nodes >= 2 else []
+        own_other_boxes = own_busy - {host.id}
         if nodes >= 2:
-            fit = "duo" if candidate_workers else "none"
+            fit = "duo" if (candidate_workers or own_other_boxes) else "none"
             if fit == "none":
                 reason = REASON_NO_SECOND_BOX
         else:
@@ -271,6 +284,11 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
         if not command_ok:
             reason = REASON_NO_COMMAND
         startable = command_ok and fit != "none"
+        if running:
+            # Ein laufendes Rezept ist gesetzt, nicht startbar — der Grund sagt
+            # das, statt „keine freie Box" oder „Port belegt" zu behaupten.
+            startable = False
+            reason = REASON_RUNNING
 
         # Port-Kollision auf DIESER Box: nur ein Blocker, den der Start nicht
         # selbst wegräumt, zählt. Eine exklusive Runtime wird von einem
