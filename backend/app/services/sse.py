@@ -33,7 +33,14 @@ async def _sse_generator(
 
     try:
         while True:
-            message = await asyncio.wait_for(pubsub.get_message(ignore_subscribe_messages=True), timeout=ping_interval)
+            # ``timeout`` MUSS an get_message selbst: ohne ihn (Standard 0.0)
+            # kehrt redis-py sofort mit None zurueck, ``wait_for`` lief darum
+            # nie in seinen Timeout, und jede Runde schickte einen Ping —
+            # 57 000 pro Sekunde und 1,4 MB/s je offenem Tab (Live-Befund
+            # 02.09.2026, seit dem ersten Release).
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=ping_interval
+            )
             if message is not None:
                 try:
                     payload = json.loads(message["data"])
