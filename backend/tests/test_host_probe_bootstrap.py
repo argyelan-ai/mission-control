@@ -710,7 +710,7 @@ async def test_launch_command_endpoint_bad_template_is_400(auth_client):
 
 
 def test_build_launch_command_unsupported_engine():
-    with pytest.raises(ValueError, match="sparkrun"):
+    with pytest.raises(ValueError, match="unknown_engine"):
         build_launch_command(
-            engine="sparkrun", model_identifier="@official/x", slug="s", port=8000
+            engine="unknown_engine", model_identifier="org/x", slug="s", port=8000
         )

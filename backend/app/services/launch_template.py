@@ -13,9 +13,10 @@ Three deliberate choices:
   command. The regex only matches ``[a-z_]+`` inside braces, so docker's own
   ``--format '{{.State.Status}}'`` passes through untouched — that syntax
   would break ``str.format`` and is exactly why this isn't ``str.format``.
-* **sparkrun is not handled here.** It already has
-  ``sparkrun_manager.build_launch_command`` and its own switch-recipe path; a
-  second way to phrase a sparkrun launch is a second thing to keep in sync.
+* **Wrapper recipes (``uvx sparkrun run …``) are ordinary templates.** Since
+  the Rezept-Umschalter (02.09.2026) they carry their whole command in
+  ``launch_template`` — with the ``mc.runtime.slug={slug}`` label like any
+  other docker engine — and go through this renderer like everything else.
 * **The ``mc.runtime.slug`` label is mandatory.** Stop, restart and the
   start-verification find the container by that label — a launch command
   without it produces a runtime MC can start but never stop again.
@@ -68,8 +69,8 @@ DEFAULT_IMAGES: dict[str, str] = {
     "vllm_docker": "vllm/vllm-openai:latest",
 }
 
-# Engines the wizard can create a runtime for. sparkrun entries are shown but
-# not deployable here — see the module docstring.
+# Engines with a DEFAULT template, i.e. deployable without an own
+# launch_template. ssh_process entries must bring their own.
 SUPPORTED_ENGINES = tuple(DEFAULT_TEMPLATES)
 
 _SLUG_RE = re.compile(r"[A-Za-z0-9_-]+")
