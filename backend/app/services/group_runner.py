@@ -78,7 +78,10 @@ _STALE_PREFIX = "NICHTS NEUES"
 # Vorher 2000 Zeichen je Beitrag — das waren 30 000–41 800 Token pro Runde
 # (Live-Messung 22.08.). Der Chat trägt die Meinungsbildung, die Substanz
 # steht im Ergebnis-Dokument; zum Weiterdenken reicht der Kern.
-_CONTRIB_LIMIT = 400   # Beitrag eines Sprechers im Lead-Auftrag
+# 400 → 1200 (02.09.2026): seit Beiträge Tabellen tragen dürfen, muss eine
+# kompakte Vergleichstabelle (6 Zeilen ≈ 300–600 Zeichen) den Lead GANZ
+# erreichen — abgeschnitten wäre sie wertlos. Ein Aufsatz passt weiterhin nicht.
+_CONTRIB_LIMIT = 1200  # Beitrag eines Sprechers im Lead-Auftrag
 _HEADER_LIMIT = 300    # Vorrunden-Delta und Operator-Einwürfe im Brief
 
 
@@ -285,6 +288,22 @@ class GroupRunnerService:
             "- **Antworte in 2–4 Sätzen**: deine Position, ein Grund, eine "
             "Quelle als Link. Ausführliche Belege gehören ins Ergebnis-Dokument, "
             "nicht in den Raum.",
+            # Der Raum rendert Markdown (GFM) und klappt Beiträge zu — eine
+            # kompakte Tabelle stört niemanden mehr, sie ist für Vergleiche das
+            # bessere Format als drei Sätze mit Zahlen (Marks Wunsch 02.09.2026).
+            # Mehrzeilig NUR per Heredoc über stdin: in einem "…"-Argument
+            # zerreisst die Shell die Pipes und Zeilenumbrüche.
+            "- Markdown wird gerendert: für einen Vergleich lieber eine kompakte "
+            "Tabelle oder Liste (max. ~6 Zeilen) statt Fliesstext mit Zahlen. "
+            "Mehrzeilig senden per Heredoc:",
+            "```",
+            f"mc msg --thread {group.thread_id} - <<'EOF'",
+            "Position in einem Satz.",
+            "| Option | Wert | Quelle |",
+            "|---|---|---|",
+            "| A | … | https://… |",
+            "EOF",
+            "```",
             "- Quellen-Pflicht bleibt: eine Behauptung ohne Quellen-URL ist kein "
             "Beitrag — der nackte Link genügt, kein Zitat-Block.",
             "- Antworte NICHT auf andere Mitglieder per @-Mention — die Engine "
@@ -494,7 +513,9 @@ class GroupRunnerService:
             # Der Synthese-Beitrag war die grösste einzelne Textwand im Raum
             # (bis 4900 Zeichen). Die Substanz ist im Dokument nicht verloren,
             # sondern dort erst am richtigen Platz.
-            "**Halte den Chat-Beitrag kurz: Marker + zwei bis drei Sätze.** Die "
+            "**Halte den Chat-Beitrag kurz: Marker + zwei bis drei Sätze.** Eine "
+            "kompakte Tabelle darunter ist erlaubt, wenn sie das Urteil trägt "
+            f"(mehrzeilig per `mc msg --thread {group.thread_id} - <<'EOF' … EOF`). Die "
             "ausführliche Synthese mit Quellen und Dissens gehört ins "
             "Ergebnis-Dokument, nicht in den Raum.",
             "Eine Antwort ohne Marker wertet die Runde als gescheitert.",
