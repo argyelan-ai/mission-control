@@ -9,9 +9,9 @@
  * laufende Wahrheit bleibt runtime.model_identifier; `running` ist der vom
  * Backend abgeleitete Hinweis, absichtlich konservativ.
  *
- * Der Deploy legt hier KEINEN zweiten Start-Pfad an: er ruft exakt die
- * Mutation, die der SparkRecipeSwitcher schon benutzt
- * (api.runtimes.sparkrun.switchRecipe). Einträge ohne sparkrun-recipe_ref
+ * Der Deploy legt hier KEINEN zweiten Start-Pfad an: er ruft denselben
+ * Rezept-Start je Box wie der Umschalter in der Gerätekachel
+ * (api.hosts.startRecipe, Vertrag 02.09.2026). Einträge ohne Startbefehl
  * bleiben deshalb bewusst deaktiviert statt einen Weg anzubieten, der scheitert.
  *
  * ssh_process-Einträge (PR 6) haben noch gar keine Runtime-Zeile und liegen
@@ -41,10 +41,11 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
+  Host,
   LocalRecipe,
   LocalRegistryRefreshResult,
-  Runtime,
 } from "@/lib/types";
+import { hostRecipesKey } from "@/components/shared/HostRecipeSwitcher";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { SectionOrFragment } from "@/components/shared/Section";
@@ -77,7 +78,7 @@ function isNew(recipe: LocalRecipe, now: number): boolean {
 
 /**
  * Deploybar sind zwei Sorten, auf zwei verschiedenen Wegen:
- *   sparkrun          → Recipe-Switch auf einer bestehenden Spark-Runtime
+ *   mit Startbefehl   → Rezept-Start auf einer Box (Instanz entsteht dabei)
  *   selbst-installend → eigener Dialog: installieren, Runtime anlegen, starten
  *
  * Die zweite Sorte hängt bewusst an der FÄHIGKEIT, nicht an der Engine: ein
@@ -93,8 +94,8 @@ export function isSelfInstalling(recipe: LocalRecipe): boolean {
 
 function isDeployable(recipe: LocalRecipe): boolean {
   if (isSelfInstalling(recipe)) return true;
-  if (recipe.engine === "ssh_process") return !!recipe.launch_template;
-  return recipe.engine === "sparkrun" && !!recipe.recipe_ref;
+  // Ohne Startbefehl kann keine Box das Rezept starten — egal welche Engine.
+  return !!recipe.launch_template;
 }
 
 // ── Karte ────────────────────────────────────────────────────────────────────
@@ -319,7 +320,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
   const [engineFilter, setEngineFilter] = useState<string>("");
   const [pending, setPending] = useState<LocalRecipe | null>(null);
   const [installing, setInstalling] = useState<LocalRecipe | null>(null);
-  const [targetRuntimeId, setTargetRuntimeId] = useState<string>("");
+  const [targetHostId, setTargetHostId] = useState<string>("");
   const [togglingSlug, setTogglingSlug] = useState<string | null>(null);
   const [refreshResult, setRefreshResult] =
     useState<LocalRegistryRefreshResult | null>(null);
@@ -334,9 +335,9 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
   });
 
   // Die /runtimes-Seite hält diese Query bereits — hier ist es ein Cache-Treffer.
-  const runtimesQuery = useQuery({
-    queryKey: ["runtimes"],
-    queryFn: () => api.runtimes.list(),
+  const hostsQuery = useQuery({
+    queryKey: ["hosts"],
+    queryFn: () => api.hosts.list(),
   });
 
   const refreshMutation = useMutation({
@@ -368,24 +369,24 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
       }),
   });
 
-  // Exakt der Pfad des SparkRecipeSwitcher — ein Deploy ist ein Recipe-Switch,
-  // kein eigener Lifecycle.
+  // Exakt der Pfad des Rezept-Umschalters in der Gerätekachel — ein Deploy
+  // ist ein Rezept-Start auf einer Box, kein eigener Lifecycle.
   const deployMutation = useMutation({
-    mutationFn: ({ runtimeId, recipe }: { runtimeId: string; recipe: string }) =>
-      api.runtimes.sparkrun.switchRecipe(runtimeId, recipe),
+    mutationFn: ({ hostId, slug }: { hostId: string; slug: string }) =>
+      api.hosts.startRecipe(hostId, slug),
     onSuccess: (_res, vars) => {
-      const runtime = runtimesQuery.data?.runtimes.find((r) => r.id === vars.runtimeId);
+      const host = hostsQuery.data?.find((h) => h.id === vars.hostId);
       addNotification({
         type: "success",
         message: t("deployStarted", {
-          name: pending?.display_name ?? vars.recipe,
-          runtime: runtime?.display_name ?? vars.runtimeId,
+          name: pending?.display_name ?? vars.slug,
+          runtime: host?.display_name ?? vars.hostId,
         }),
         persistent: false,
       });
       setPending(null);
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
-      queryClient.invalidateQueries({ queryKey: ["runtime-current-recipe"] });
+      queryClient.invalidateQueries({ queryKey: hostRecipesKey(vars.hostId) });
       queryClient.invalidateQueries({ queryKey: ["local-registry"] });
     },
     onError: (err: Error) => {
@@ -436,12 +437,11 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
     [recipes],
   );
 
-  const vllmRuntimes: Runtime[] = useMemo(
-    () =>
-      (runtimesQuery.data?.runtimes ?? []).filter(
-        (r) => r.runtime_type === "vllm_docker",
-      ),
-    [runtimesQuery.data],
+  // Ziel ist eine Box, keine Runtime: der Start-Endpunkt legt die Instanz
+  // selbst an, falls es noch keine gibt.
+  const targetHosts: Host[] = useMemo(
+    () => (hostsQuery.data ?? []).filter((h) => h.enabled),
+    [hostsQuery.data],
   );
 
   const openDeploy = (recipe: LocalRecipe) => {
@@ -450,7 +450,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
       return;
     }
     setPending(recipe);
-    setTargetRuntimeId(vllmRuntimes[0]?.id ?? "");
+    setTargetHostId(targetHosts[0]?.id ?? "");
   };
 
   return (
@@ -594,22 +594,22 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
             <div className="flex flex-col gap-2">
               <div>
                 {t("deployBody")}{" "}
-                <span className="font-mono text-primary">{pending.recipe_ref}</span>
+                <span className="font-mono text-primary">{pending.slug}</span>
               </div>
-              {vllmRuntimes.length > 0 ? (
+              {targetHosts.length > 0 ? (
                 <label className="flex flex-col gap-1">
                   <span className="label-sys label-sys--dim">
                     {t("deployTargetLabel")}
                   </span>
                   <select
-                    value={targetRuntimeId}
-                    onChange={(e) => setTargetRuntimeId(e.target.value)}
+                    value={targetHostId}
+                    onChange={(e) => setTargetHostId(e.target.value)}
                     aria-label={t("deployTargetLabel")}
                     className="rounded-md border border-subtle bg-surface px-2 py-1.5 text-xs text-primary cursor-pointer"
                   >
-                    {vllmRuntimes.map((rt) => (
-                      <option key={rt.id} value={rt.id}>
-                        {rt.display_name}
+                    {targetHosts.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.display_name}
                       </option>
                     ))}
                   </select>
@@ -622,11 +622,8 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
           ) : null
         }
         onConfirm={() => {
-          if (!pending?.recipe_ref || !targetRuntimeId) return;
-          deployMutation.mutate({
-            runtimeId: targetRuntimeId,
-            recipe: pending.recipe_ref,
-          });
+          if (!pending || !targetHostId) return;
+          deployMutation.mutate({ hostId: targetHostId, slug: pending.slug });
         }}
         onCancel={() => setPending(null)}
       />
