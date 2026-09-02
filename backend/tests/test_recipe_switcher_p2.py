@@ -434,10 +434,10 @@ def test_install_base_urls_labels_and_orders_all_addresses():
 def test_install_base_urls_drops_localhost_and_duplicates_but_never_ends_empty():
     from app.config import settings
 
-    with patch.object(settings, "mc_node_agent_base_url", "http://100.100.1.1, http://100.100.1.1/"), \
+    with patch.object(settings, "mc_node_agent_base_url", "http://mc.tailnet-name.ts.net, http://mc.tailnet-name.ts.net/"), \
          patch.object(settings, "mc_base_url", "http://localhost:8000"), \
          patch.object(settings, "public_host", ""), _no_interfaces():
-        assert nodes_router.install_base_urls() == [{"label": "Tailscale", "url": "http://100.100.1.1"}]
+        assert nodes_router.install_base_urls() == [{"label": "Tailscale", "url": "http://mc.tailnet-name.ts.net"}]
 
     with patch.object(settings, "mc_node_agent_base_url", ""), \
          patch.object(settings, "mc_base_url", "http://localhost"), \
