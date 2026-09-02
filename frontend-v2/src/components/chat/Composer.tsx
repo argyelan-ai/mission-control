@@ -217,6 +217,10 @@ interface ComposerProps {
  * `search` state simply stayed empty forever and every item was shown
  * unfiltered — the bug this component was rewritten to fix.
  */
+/** Dauer des Settle-Pulses der Effort-Saeule — muss zu `effort-settle` in
+ *  globals.css passen. */
+export const EFFORT_SETTLE_MS = 320;
+
 export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true }: ComposerProps) {
   const t = useTranslations("sessions");
   const [text, setText] = useState("");
@@ -232,6 +236,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   /** The level asked for, while the request is in flight. Never used as the
    *  chip's label — the label stays transcript truth. */
   const [pendingEffort, setPendingEffort] = useState<string | null>(null);
+  // Einmaliger Settle-Puls der Saeule nach bestaetigtem Wechsel (CSS
+  // `effort-settle`, 320 ms). Per Timer statt `onAnimationEnd` zurueckgesetzt:
+  // unter prefers-reduced-motion laeuft keine Animation, also kaeme das
+  // Ereignis nie — und der Marker bliebe kleben.
+  const [effortSettled, setEffortSettled] = useState(false);
+  useEffect(() => {
+    if (!effortSettled) return;
+    const id = setTimeout(() => setEffortSettled(false), EFFORT_SETTLE_MS);
+    return () => clearTimeout(id);
+  }, [effortSettled]);
   /** Die Stufe, die das Backend zuletzt BESTAETIGT hat — zusammen mit dem
    *  usage-Ereignis, das in dem Moment galt.
    *
@@ -532,6 +546,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       // usage-Ereignis etwas anderes sagt, ist das die ehrlichste Zahl, die
       // wir haben (s. confirmedEffort).
       setConfirmedEffort({ level, usageAt: usage });
+      setEffortSettled(true);
     } catch (err) {
       if (isInputNotSupportedError(err)) {
         setEffortSupported(false);
@@ -1066,7 +1081,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   >
                     <span
                       data-testid="effort-gauge-fill"
-                      className="absolute bottom-0 left-0 right-0 rounded-full transition-[height] duration-200"
+                      data-pending={pendingEffort != null}
+                      data-settled={effortSettled}
+                      className="effort-fill absolute bottom-0 left-0 right-0 rounded-full transition-[height] duration-200"
                       style={{
                         height: `${effortFillPct}%`,
                         backgroundColor: STATUS.online,

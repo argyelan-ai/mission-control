@@ -200,4 +200,26 @@ describe("GroupChatView", () => {
     render(<GroupChatView group={mkGroup({ status: "running" })} onGroupChanged={vi.fn()} />);
     expect(screen.queryByTestId("group-preview-row")).not.toBeInTheDocument();
   });
+
+  it("opens only the lead's verdict by default — every other contribution stays folded", () => {
+    // Marks Wunsch 02.09.2026: der Raum soll ruhig wirken. Das Rundenergebnis
+    // (Lead-Urteil mit Marker) ist das Einzige, das man ohne Klick lesen will.
+    streamState.messages = [
+      mkMessage({ seq: 1, sender_id: "a2", body: "Beta: DFlash2 ist schneller." }),
+      mkMessage({ seq: 2, sender_id: "a1", body: "Alpha als Mitglied: einverstanden." }),
+      mkMessage({ seq: 3, sender_id: "a1", body: "ZIEL ERREICHT: DFlash2 wird Standard." }),
+    ];
+    render(<GroupChatView group={mkGroup({ status: "done" })} onGroupChanged={vi.fn()} />);
+    const toggles = screen.getAllByTestId("group-contribution-toggle");
+    expect(toggles.map((t) => t.getAttribute("aria-expanded"))).toEqual(["false", "false", "true"]);
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("DFlash2 wird Standard.");
+  });
+
+  it("keeps a member's message folded even when it starts with a marker word", () => {
+    // Nur der Lead spricht das Urteil — ein Mitglied, das „WEITER" schreibt,
+    // ist ein normaler Beitrag.
+    streamState.messages = [mkMessage({ seq: 1, sender_id: "a2", body: "WEITER: ich bin noch nicht sicher." })];
+    render(<GroupChatView group={mkGroup({ status: "running" })} onGroupChanged={vi.fn()} />);
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "false");
+  });
 });

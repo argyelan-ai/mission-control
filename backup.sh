@@ -15,7 +15,7 @@ BACKUP_DIR="./backups"
 CONTAINER="mission-control-db-1"
 DB_NAME="mission_control"
 DB_USER="mc"
-KEEP_LAST=10  # Anzahl Backups die behalten werden
+KEEP_LAST=4  # Anzahl Backups die behalten werden (Daten-Backup ~2,7 GB/Tag; DB-Dump geht taeglich zusaetzlich nach iCloud)
 
 mkdir -p "$BACKUP_DIR"
 
