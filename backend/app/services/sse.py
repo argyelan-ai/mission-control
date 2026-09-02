@@ -9,6 +9,8 @@ import json
 import uuid
 from collections.abc import AsyncGenerator
 
+from collections.abc import Callable
+
 import redis.asyncio as aioredis
 from sse_starlette.sse import EventSourceResponse
 
@@ -22,9 +24,15 @@ async def broadcast(channel: str, event_type: str, data: dict) -> None:
     await redis.publish(channel, payload)
 
 
+# Uebersetzer je Kanal: bekommt (Kanalname, geparste Nutzlast) und gibt die
+# Nutzlast zurueck — umgeschrieben oder unveraendert — oder None zum Verwerfen.
+Transform = Callable[[str, dict], dict | None]
+
+
 async def _sse_generator(
     channels: list[str],
     ping_interval: int = settings.sse_ping_interval,
+    transform: Transform | None = None,
 ) -> AsyncGenerator[dict, None]:
     redis_url = settings.redis_url
     pubsub_redis = aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
@@ -44,6 +52,10 @@ async def _sse_generator(
             if message is not None:
                 try:
                     payload = json.loads(message["data"])
+                    if transform is not None:
+                        payload = transform(message.get("channel", ""), payload)
+                        if payload is None:
+                            continue
                     yield {
                         "id": payload.get("id", str(uuid.uuid4())),
                         "event": payload.get("event", "message"),
@@ -62,5 +74,7 @@ async def _sse_generator(
         await pubsub_redis.aclose()
 
 
-def make_sse_response(channels: list[str]) -> EventSourceResponse:
-    return EventSourceResponse(_sse_generator(channels))
+def make_sse_response(
+    channels: list[str], transform: Transform | None = None
+) -> EventSourceResponse:
+    return EventSourceResponse(_sse_generator(channels, transform=transform))

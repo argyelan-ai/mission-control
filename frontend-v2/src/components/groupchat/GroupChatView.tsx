@@ -26,6 +26,7 @@ import { AvatarStack } from "@/components/groupchat/AvatarStack";
 import { GroupComposer } from "@/components/groupchat/GroupComposer";
 import { GroupGateCard } from "@/components/groupchat/GroupGateCard";
 import { GroupMessage } from "@/components/groupchat/GroupMessage";
+import { GroupPreviewRow } from "@/components/groupchat/GroupPreviewRow";
 import { GroupStatusLine } from "@/components/groupchat/GroupStatusLine";
 import { RoundDivider } from "@/components/groupchat/RoundDivider";
 import { FinishGroupDialog } from "@/components/groupchat/FinishGroupDialog";
@@ -83,7 +84,7 @@ export function GroupChatView({
   useEffect(() => {
     const el = scrollRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [stream.messages]);
+  }, [stream.messages, stream.previews]);
 
   const roundBySeq = useMemo(() => {
     const map = new Map<number, number>();
@@ -352,6 +353,18 @@ export function GroupChatView({
             </div>
           );
         })}
+        {/* Live-Vorschau: wer gerade tippt, steht dort, wo sein Beitrag gleich
+            landet — hinter dem Verlauf, in der Reihenfolge der Mitglieder. */}
+        {group.members
+          .filter((m) => stream.previews[m.id]?.text)
+          .map((m) => (
+            <GroupPreviewRow
+              key={`preview-${m.id}`}
+              name={m.name}
+              emoji={m.emoji}
+              text={stream.previews[m.id].text}
+            />
+          ))}
       </div>
 
       {/* Gate + Statuszeile + Composer */}

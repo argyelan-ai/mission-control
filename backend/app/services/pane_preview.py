@@ -45,6 +45,7 @@ _FURNITURE = re.compile(
     | ^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏·✻✽✢✶✳✻*](\s|$)        # Spinner-Zeilen (auch allein)
     | ^\s*\w+…\s*$                           # "Working…", "Germinating…"
     | ^\s*\S+\ for\ \d+s                     # "Baked for 2s · done"
+    | 📬\ Neue\ Nachrichten\ \(bis\ seq          # Zustell-Echo, das poll.sh eintippt
     """,
     re.VERBOSE,
 )

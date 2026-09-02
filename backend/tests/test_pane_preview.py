@@ -218,3 +218,15 @@ def test_a_lone_spinner_glyph_is_furniture():
     p = PanePreview(80, 10)
     p.feed("Ein Anfang der Antwort.\r\n\r\n ⠼\r\n")
     assert p.text() == "Ein Anfang der Antwort."
+
+
+def test_delivery_echo_typed_by_poll_sh_is_furniture():
+    """poll.sh tippt „📬 Neue Nachrichten (bis seq N, t) — lies sie jetzt mit:
+    mc inbox" in die Pane. Das ist Maschinen-Zustellung, kein Text des Agenten —
+    im Gruppenraum stünde er sonst als erste Zeile jeder Vorschau."""
+    pv = PanePreview()
+    pv.feed(
+        b"> \xf0\x9f\x93\xac Neue Nachrichten (bis seq 42, 1756800000) \xe2\x80\x94 lies sie jetzt mit: mc inbox\r\n"
+        b"Ich lese die Inbox.\r\n"
+    )
+    assert pv.text() == "Ich lese die Inbox."

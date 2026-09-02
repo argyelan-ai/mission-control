@@ -25,6 +25,7 @@ const streamState = {
   loadingOlder: false,
   docVersion: null as number | null,
   refresh: vi.fn(),
+  previews: {} as Record<string, { text: string; ts: string | null }>,
 };
 
 vi.mock("@/hooks/useGroupStream", () => ({
@@ -96,6 +97,7 @@ beforeEach(() => {
   streamState.state = { ...EMPTY_GROUP_STREAM_STATE };
   streamState.connected = true;
   streamState.docVersion = null;
+  streamState.previews = {};
   rounds.rounds = [];
   startMock.mockResolvedValue(mkGroup({ status: "running" }));
   pauseMock.mockResolvedValue(mkGroup({ status: "paused" }));
@@ -180,5 +182,22 @@ describe("GroupChatView", () => {
     streamState.connected = false;
     render(<GroupChatView group={mkGroup({ status: "running" })} onGroupChanged={vi.fn()} />);
     expect(screen.getByText("Status unknown — connection lost")).toBeInTheDocument();
+  });
+
+  it("shows what a member is typing live, under the messages, with its name", () => {
+    streamState.messages = [mkMessage({ seq: 1 })];
+    streamState.previews = { a1: { text: "Ich schlage DFlash2 vor, weil", ts: "T" } };
+    render(<GroupChatView group={mkGroup({ status: "running" })} onGroupChanged={vi.fn()} />);
+    const row = screen.getByTestId("group-preview-row");
+    expect(row).toHaveTextContent("Alpha");
+    expect(row).toHaveTextContent("Ich schlage DFlash2 vor, weil");
+    // Die Vorschau steht HINTER dem Verlauf — dort, wo der Beitrag gleich landet.
+    const log = screen.getByTestId("group-messages");
+    expect(log.lastElementChild).toContainElement(row);
+  });
+
+  it("renders no preview row when nobody is typing", () => {
+    render(<GroupChatView group={mkGroup({ status: "running" })} onGroupChanged={vi.fn()} />);
+    expect(screen.queryByTestId("group-preview-row")).not.toBeInTheDocument();
   });
 });

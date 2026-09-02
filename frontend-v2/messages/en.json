@@ -483,6 +483,7 @@
   },
   "sessions": {
     "groups": {
+      "typingPreview": "typing …",
       "sectionTitle": "Groups",
       "newGroup": "New group",
       "emptyList": "No groups yet — several agents, one goal.",
