@@ -479,11 +479,17 @@ async def heartbeat(
     if body.inventory is not None:
         host.agent_inventory = [entry.model_dump(mode="json") for entry in body.inventory]
         host.agent_inventory_updated_at = now
-    if body.device_state is not None:
+    if body.device_state is not None and (
+        device_dump := body.device_state.model_dump(mode="json", exclude_none=True)
+    ):
         # exclude_none: der Agent meldet nur, was er lesen konnte — ein Feld,
         # das er weglässt, soll auch im gespeicherten Ist fehlen (und damit
         # als Abweichung zählen), statt als hartes null zu erscheinen.
-        host.agent_device_state = body.device_state.model_dump(mode="json", exclude_none=True)
+        # Review M8 (02.09.2026): ein LEERES device_state ({} oder nur
+        # null-Felder) trägt keine Information und darf den letzten guten
+        # Ist nicht überschreiben — sonst springt die Ampel auf rot
+        # ("nie gehärtet"), obwohl nur eine Meldung leer war.
+        host.agent_device_state = device_dump
         host.agent_device_state_updated_at = now
     session.add(host)
     await session.commit()

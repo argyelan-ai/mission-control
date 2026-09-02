@@ -24,8 +24,13 @@ GPU_MODES = ("boost", "normal", "eco", "eco+")
 # Plausibilitätsgrenzen. Sie sind bewusst weit, sollen aber Tippfehler
 # abfangen, die auf dem Gerät echten Schaden anrichten: ein min_free_kbytes
 # von 100 GB macht die Box unbenutzbar, eine MTU von 70 killt das Netz.
-MIN_FREE_KBYTES_RANGE = (65_536, 67_108_864)   # 64 MB … 64 GB, in KB
-MTU_RANGE = (1_280, 9_000)                      # IPv6-Minimum … Jumbo-Frames
+# Review M5 (02.09.2026): enger gezogen. 64 GB Reserve wäre auf einer
+# 128-GB-Box die halbe Maschine, 16 GB reicht für jede sinnvolle Einstellung
+# (im Feld: 5 GB). MTU unter 1500 hat keinen Nutzen, nur einen leisen
+# Leistungseinbruch im Verbund. IDENTISCH zu scripts/mc-node-agent.py
+# (MIN_FREE_KBYTES_MIN/MAX, MTU_MIN/MAX) und zu den Wrappern in scripts/device/.
+MIN_FREE_KBYTES_RANGE = (65_536, 16_777_216)   # 64 MB … 16 GB, in KB
+MTU_RANGE = (1_500, 9_000)                      # Ethernet-Standard … Jumbo-Frames
 
 # Ab wann eine Ist-Meldung als "nicht mehr frisch" gilt. Der Agent schlägt
 # alle 15 s an (nodes.HEARTBEAT_INTERVAL_S); 120 s lassen also acht Runden
@@ -93,6 +98,12 @@ def compute_status(
     nichts zu steuern), danach die harten Fehler (rot), dann das Wartende
     (gelb). Grün bleibt bewusst der engste Fall: Ist deckt das Soll und die
     Meldung ist frisch.
+
+    Innerhalb von gelb gilt "stale" VOR "pending" (Review M4, 02.09.2026):
+    ein Agent, der seit Minuten nichts meldet, wird das Soll auch nicht
+    nachziehen. "pending" hiesse "er arbeitet dran" — das wäre gelogen. Die
+    Abweichung wird trotzdem mitgegeben (diff), damit die Oberfläche beides
+    zeigen kann.
     """
     now = now or utcnow()
 
@@ -113,9 +124,9 @@ def compute_status(
         age_s = (now - ensure_aware(reported_at)).total_seconds()
 
     diff = desired_state_diff(desired, current)
+    if age_s is None or age_s > STALE_AFTER_S:
+        return {"status": STATUS_YELLOW, "reason": "stale", "diff": diff, "age_s": age_s}
     if diff:
         return {"status": STATUS_YELLOW, "reason": "pending", "diff": diff, "age_s": age_s}
-    if age_s is None or age_s > STALE_AFTER_S:
-        return {"status": STATUS_YELLOW, "reason": "stale", "diff": [], "age_s": age_s}
 
     return {"status": STATUS_GREEN, "reason": "in_sync", "diff": [], "age_s": age_s}
