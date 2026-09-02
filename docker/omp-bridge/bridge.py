@@ -2443,13 +2443,28 @@ class NativeTuiController:
         paste_count = 0
 
         while paste_count < max_paste_attempts:
-            self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
+            rc, _ = self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
+            paste_count += 1
+            if rc != 0:
+                # Live incident 2026-09-02 (Sparky, group synthesis seq 3):
+                # THIS send-keys hit the 15 s subprocess timeout (rc=1,
+                # nothing typed), Escape+Enter went through, and the composer
+                # read as blank -> "submitted" -> acked -> message lost.
+                # Blank-because-never-typed is not a submit: never verify a
+                # paste that did not happen; retype within the cap instead.
+                sys.stderr.write(
+                    f"[native] inject_file: typing the mention failed (rc={rc}) "
+                    f"on paste {paste_count}/{max_paste_attempts} "
+                    f"(target={self.target}) — nothing to verify\n"
+                )
+                if paste_count < max_paste_attempts:
+                    self._sleep(retry_backoff)
+                continue
             self._sleep(self.key_delay)
             self._run(["send-keys", "-t", self.target, "Escape"])
             self._sleep(self.key_delay)
             self._run(["send-keys", "-t", self.target, "Enter"])
             self._sleep(self.key_delay)
-            paste_count += 1
 
             state = self._composer_state(fragment, verify_attempts, verify_wait)
             if state == "submitted":
