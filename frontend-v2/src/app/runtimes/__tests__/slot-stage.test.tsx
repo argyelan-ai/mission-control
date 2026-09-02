@@ -60,7 +60,7 @@ function makeRuntime(over: Partial<Runtime>): Runtime {
 function makeHost(over: Partial<Host>): Host {
   return {
     id: over.slug ?? "h", slug: "h", display_name: "H", kind: "ssh",
-    ssh_host: null, ssh_user: null, ssh_key_path: null, ssh_credential_id: null, control_url: null,
+    ssh_host: null, ssh_user: null, ssh_key_path: null, ssh_credential_id: null, role: null, fabric_ip: null, control_url: null,
     wol_mac_address: null, power_managed: false, notes: null, enabled: true,
     ui_order: 0, created_at: "", updated_at: "",
     ...over,
@@ -137,6 +137,42 @@ describe("SlotStage", () => {
     expect(screen.getByText("42 ms")).toBeInTheDocument();
     expect(screen.queryByText(/tok\/s/i)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/tok\/s/i);
+  });
+
+  // ── P2: Rollen-Chip in der Kopfzeile ──────────────────────────────────────
+
+  it("P2: serving stage shows a HEAD chip in the header when the host has a role", async () => {
+    const serving = makeRuntime({ slug: "rt", display_name: "Model A", runtime_type: "vllm_docker", state: "ready" });
+    const host = makeHost({ slug: "box-a", display_name: "Box A", role: "head" });
+    renderWithQuery(<SlotStage group={{ host, runtimes: [serving] }} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    const chip = await screen.findByTestId("host-role-chip");
+    expect(chip).toHaveAttribute("data-role", "head");
+    expect(chip).toHaveTextContent("Head");
+  });
+
+  it("P2: without a role the header renders no chip at all (sabotage: role=null)", async () => {
+    const serving = makeRuntime({ slug: "rt", display_name: "Model A", runtime_type: "vllm_docker", state: "ready" });
+    const host = makeHost({ slug: "box-a", display_name: "Box A", role: null });
+    renderWithQuery(<SlotStage group={{ host, runtimes: [serving] }} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+    await screen.findByText("Model A");
+    expect(screen.queryByTestId("host-role-chip")).toBeNull();
+  });
+
+  it("P2: the empty-slot placeholder and the worker tile carry the chip too", async () => {
+    // Leerer Slot (ssh-Host ohne Runtime) mit Rolle worker
+    const { unmount } = renderWithQuery(
+      <SlotStage group={{ host: makeHost({ slug: "box-b", display_name: "Box B", role: "worker" }), runtimes: [] }} sizeGb={noopSizeGb} onOpen={() => {}} />,
+    );
+    expect(await screen.findByTestId("host-role-chip")).toHaveTextContent("Worker");
+    unmount();
+
+    // Verbund-Knoten (agent-Host ohne Runtime) mit Rolle worker
+    renderWithQuery(
+      <SlotStage group={{ host: makeHost({ slug: "box-c", display_name: "Box C", kind: "agent", role: "worker" }), runtimes: [] }} sizeGb={noopSizeGb} onOpen={() => {}} />,
+    );
+    expect(await screen.findByTestId("host-role-chip")).toHaveAttribute("data-role", "worker");
   });
 
   it("switching live status renders a phase indicator", async () => {

@@ -45,11 +45,14 @@ import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type {
+  Host,
   HostBootstrapLog,
   HostBootstrapLogLine,
   HostProbeResult,
+  HostRole,
   LocalRecipe,
 } from "@/lib/types";
+import { RoleField, suggestRole } from "./RoleField";
 import {
   wizardBackdropClass,
   wizardBtnPrimaryStyle,
@@ -87,6 +90,11 @@ export interface BoxWizardState {
   step: number;
   slug: string;
   displayName: string;
+  /** Geräterolle (P2) — Vorschlag aus dem Bestand, im Schritt 1 änderbar.
+   *  null nur, solange die Vorbelegung noch nicht gesetzt wurde. */
+  role: HostRole | null;
+  /** true, solange der Wert der Vorschlag ist (niemand hat geklickt). */
+  roleSuggested: boolean;
   sshHost: string;
   sshUser: string;
   sshKeyPath: string;
@@ -102,6 +110,8 @@ export function initialBoxWizardState(): BoxWizardState {
     step: 0,
     slug: "",
     displayName: "",
+    role: null,
+    roleSuggested: true,
     sshHost: "",
     sshUser: "",
     sshKeyPath: "",
@@ -337,6 +347,13 @@ function ConnectionStep({
         onChange={(v) => update({ sshHost: v, probe: null })}
         placeholder={t("sshHostPlaceholder")}
         mono
+      />
+      <RoleField
+        idPrefix="box-wizard-role"
+        value={state.role}
+        onChange={(role) => update({ role, roleSuggested: false })}
+        labelClassName={wizardLabelClass}
+        suggested={state.roleSuggested}
       />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <WizField
@@ -944,6 +961,15 @@ export function BoxWizard({ onClose }: { onClose: () => void }) {
 
   const [state, setState] = useState<BoxWizardState>(initialBoxWizardState);
   const [runtimeId, setRuntimeId] = useState<string | null>(null);
+
+  // Rollen-Vorschlag (P2): erste Box im Bestand → Head, sonst Worker. Kommt
+  // die Liste nicht (Netz, Rechte), gilt „keine Box" — der Operator sieht den
+  // Vorschlag ohnehin und dreht ihn mit einem Klick.
+  const { data: existingHosts } = useQuery<Host[]>({ queryKey: ["hosts"], queryFn: api.hosts.list });
+  useEffect(() => {
+    if (existingHosts === undefined) return;
+    setState((s) => (s.roleSuggested ? { ...s, role: suggestRole(existingHosts.length) } : s));
+  }, [existingHosts]);
   const [navError, setNavError] = useState<string | null>(null);
   const [navBusy, setNavBusy] = useState(false);
 
@@ -968,6 +994,7 @@ export function BoxWizard({ onClose }: { onClose: () => void }) {
           slug: state.slug.trim(),
           display_name: state.displayName.trim(),
           kind: "ssh",
+          role: state.role ?? suggestRole(existingHosts?.length ?? 0),
           ssh_host: state.sshHost.trim(),
           ssh_user: state.sshUser.trim() || null,
           ssh_key_path: state.sshKeyPath.trim() || null,

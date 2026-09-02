@@ -84,6 +84,8 @@ describe("HostOnboardDialog", () => {
       display_name: null,
       bootstrap: true,
       install_agent: true,
+      // P2: hosts.list nicht gemockt → kein Bestand → erste Box = Head
+      role: "head",
     });
 
     expect(await screen.findByText("Verbinde zu mcfleet@192.0.2.50 …")).toBeInTheDocument();
@@ -97,6 +99,50 @@ describe("HostOnboardDialog", () => {
     expect(screen.getByTestId("onboard-status")).toHaveTextContent("Onboarding von 'gx10' abgeschlossen.");
     expect(screen.getByTestId("onboard-done")).toBeInTheDocument();
   }, 10000);
+
+  // ── P2: Geräterolle ────────────────────────────────────────────────────────
+
+  it("P2: suggests 'worker' when a box exists and sends the clicked role", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([{ id: "host-a", slug: "box-a" } as never]);
+    vi.spyOn(api.hosts, "onboard").mockResolvedValue({ job_id: "job-3" });
+    vi.spyOn(api.hosts, "onboardLog").mockResolvedValue({
+      job_id: "job-3", status: "running", phase: "connect", message: null, running: true, cursor: 0, lines: [],
+    } as HostOnboardLog);
+
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("onboard-role-worker")).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(screen.getByTestId("onboard-role-suggested")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByTestId("onboard-address"), "192.0.2.51");
+    await userEvent.type(screen.getByTestId("onboard-username"), "operator");
+    await userEvent.type(screen.getByTestId("onboard-password"), "secret");
+    await userEvent.click(screen.getByTestId("onboard-start"));
+    expect(api.hosts.onboard).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.hosts.onboard).mock.calls[0][0]).toMatchObject({ role: "worker" });
+  });
+
+  it("P2: one click flips the suggestion to 'head' — and the list must not overwrite it", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([{ id: "host-a", slug: "box-a" } as never]);
+    vi.spyOn(api.hosts, "onboard").mockResolvedValue({ job_id: "job-4" });
+    vi.spyOn(api.hosts, "onboardLog").mockResolvedValue({
+      job_id: "job-4", status: "running", phase: "connect", message: null, running: true, cursor: 0, lines: [],
+    } as HostOnboardLog);
+
+    renderWithQuery(<HostOnboardDialog open onClose={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("onboard-role-worker")).toHaveAttribute("aria-checked", "true"),
+    );
+    await userEvent.click(screen.getByTestId("onboard-role-head"));
+    expect(screen.queryByTestId("onboard-role-suggested")).toBeNull();
+
+    await userEvent.type(screen.getByTestId("onboard-address"), "192.0.2.51");
+    await userEvent.type(screen.getByTestId("onboard-username"), "operator");
+    await userEvent.type(screen.getByTestId("onboard-password"), "secret");
+    await userEvent.click(screen.getByTestId("onboard-start"));
+    expect(vi.mocked(api.hosts.onboard).mock.calls[0][0]).toMatchObject({ role: "head" });
+  });
 
   it("shows the actionable message on auth_failed", async () => {
     vi.spyOn(api.hosts, "onboard").mockResolvedValue({ job_id: "job-2" });

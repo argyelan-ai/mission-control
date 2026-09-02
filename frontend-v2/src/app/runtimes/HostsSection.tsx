@@ -21,7 +21,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
-import type { Host, HostCreate, HostKind } from "@/lib/types";
+import type { Host, HostCreate, HostKind, HostRole } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -29,6 +29,7 @@ import { BoxWizard } from "./BoxWizard";
 import { HostOnboardDialog } from "./HostOnboardDialog";
 import { NodePairingDialog } from "./NodePairingDialog";
 import { AddDeviceDialog, type DeviceRoute } from "./AddDeviceDialog";
+import { RoleField, suggestRole } from "./RoleField";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -73,6 +74,8 @@ const EMPTY_FORM: HostCreate = {
   slug: "",
   display_name: "",
   kind: "ssh",
+  role: null,
+  fabric_ip: "",
   ssh_host: "",
   ssh_user: "",
   ssh_key_path: "",
@@ -88,6 +91,8 @@ function hostToForm(host: Host): HostCreate {
     slug: host.slug,
     display_name: host.display_name,
     kind: host.kind,
+    role: host.role ?? null,
+    fabric_ip: host.fabric_ip ?? "",
     ssh_host: host.ssh_host ?? "",
     ssh_user: host.ssh_user ?? "",
     ssh_key_path: host.ssh_key_path ?? "",
@@ -109,6 +114,8 @@ function formToPayload(form: HostCreate): HostCreate {
     slug: form.slug.trim(),
     display_name: form.display_name.trim(),
     kind: form.kind,
+    role: form.role ?? null,
+    fabric_ip: norm(form.fabric_ip),
     ssh_host: norm(form.ssh_host),
     ssh_user: norm(form.ssh_user),
     ssh_key_path: norm(form.ssh_key_path),
@@ -126,12 +133,17 @@ function Field({
   onChange,
   placeholder,
   mono,
+  hint,
+  testId,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   mono?: boolean;
+  /** Ein Satz unter dem Feld — was es tut, wann man es leer lässt. */
+  hint?: string;
+  testId?: string;
 }) {
   const id = `host-field-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
@@ -145,6 +157,8 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        data-testid={testId}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         className={`text-sm px-3 py-2 rounded-lg outline-none ${mono ? "font-mono" : ""}`}
         style={{
           background: C.border,
@@ -152,6 +166,11 @@ function Field({
           color: C.textPrimary,
         }}
       />
+      {hint && (
+        <p id={`${id}-hint`} className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
@@ -160,16 +179,23 @@ function HostFormModal({
   host,
   onClose,
   onOpenPairing,
+  existingHostCount = 0,
 }: {
   /** null = create, Host = edit */
   host: Host | null;
   onClose: () => void;
   /** Sprung zum Pairing-Weg aus dem Typ-Hinweis (nur beim Anlegen sinnvoll). */
   onOpenPairing?: () => void;
+  /** Für die Rollen-Vorbelegung beim Anlegen: erste Box Head, weitere Worker. */
+  existingHostCount?: number;
 }) {
   const t = useTranslations("runtimes.hosts");
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<HostCreate>(host ? hostToForm(host) : EMPTY_FORM);
+  // Beim Anlegen ist die Rolle vorbelegt (Vorschlag), beim Bearbeiten kommt
+  // sie aus der Zeile — und darf dort auch wieder auf „Keine" zurück.
+  const [form, setForm] = useState<HostCreate>(
+    host ? hostToForm(host) : { ...EMPTY_FORM, role: suggestRole(existingHostCount) },
+  );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // iOS-safe scroll lock + Esc close (panel register rule 4)
@@ -307,12 +333,49 @@ function HostFormModal({
               )}
             </div>
 
+            {/* Rolle (P2): Vorschlag beim Anlegen, frei beim Bearbeiten — auch
+                „Keine", damit ein gesetzter Wert wieder gelöscht werden kann. */}
+            <RoleField
+              value={form.role ?? null}
+              onChange={(role: HostRole | null) => set("role", role)}
+              labelClassName="text-xs text-[var(--color-text-muted)]"
+              suggested={!host}
+              allowNone={!!host}
+            />
+
             {form.kind === "ssh" && (
               <>
-                <Field label={t("fieldSshHost")} value={form.ssh_host ?? ""} onChange={(v) => set("ssh_host", v)} placeholder={t("sshHostPlaceholder")} mono />
+                <Field label={t("fieldSshHost")} value={form.ssh_host ?? ""} onChange={(v) => set("ssh_host", v)} placeholder={t("sshHostPlaceholder")} mono testId="host-field-ssh-host" />
                 <Field label={t("fieldSshUser")} value={form.ssh_user ?? ""} onChange={(v) => set("ssh_user", v)} mono />
                 <Field label={t("fieldSshKeyPath")} value={form.ssh_key_path ?? ""} onChange={(v) => set("ssh_key_path", v)} placeholder="/root/.ssh/id_ed25519" mono />
               </>
+            )}
+
+            {/* Pairing-Boxen (kind=agent) legen sich ohne SSH an. Hier darf die
+                Adresse nachgetragen werden — sonst kann MC die Box nur sehen,
+                nicht starten (Vertrag P2). */}
+            {form.kind === "agent" && (
+              <Field
+                label={t("fieldSshHostOptional")}
+                value={form.ssh_host ?? ""}
+                onChange={(v) => set("ssh_host", v)}
+                placeholder={t("sshHostPlaceholder")}
+                hint={t("sshHostOptionalHint")}
+                mono
+                testId="host-field-ssh-host"
+              />
+            )}
+
+            {(form.kind === "ssh" || form.kind === "agent") && (
+              <Field
+                label={t("fieldFabricIp")}
+                value={form.fabric_ip ?? ""}
+                onChange={(v) => set("fabric_ip", v)}
+                placeholder={t("fabricIpPlaceholder")}
+                hint={t("fabricIpHint")}
+                mono
+                testId="host-field-fabric-ip"
+              />
             )}
 
             {form.kind === "flask_wol" && (
@@ -447,6 +510,11 @@ function HostCard({
             {host.enabled ? t("active") : t("disabled")}
           </MetaChip>
           <MetaChip tone="idle">{t(KIND_LABEL_KEY[host.kind])}</MetaChip>
+          {host.role && (
+            <MetaChip tone="idle" className="font-mono uppercase tracking-wide">
+              {host.role === "head" ? t("roleHead") : t("roleWorker")}
+            </MetaChip>
+          )}
           <MetaChip tone="idle" className="tabular-nums">
             {boundCount} {boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}
           </MetaChip>
@@ -455,7 +523,7 @@ function HostCard({
       meta={
         <>
           <MetaText mono>{host.slug}</MetaText>
-          {host.kind === "ssh" && host.ssh_host && (
+          {(host.kind === "ssh" || host.kind === "agent") && host.ssh_host && (
             <MetaText mono title={host.ssh_host}>
               {host.ssh_host}
             </MetaText>
@@ -649,6 +717,7 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
       {modalHost !== undefined && (
         <HostFormModal
           host={modalHost}
+          existingHostCount={(hosts ?? []).length}
           onClose={() => setModalHost(undefined)}
           onOpenPairing={() => {
             setModalHost(undefined);

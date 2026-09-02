@@ -21,7 +21,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { RoleField, suggestRole } from "./RoleField";
 import type {
+  Host,
+  HostRole,
   Credential,
   HostBootstrapLogLine,
   HostOnboardStatus,
@@ -57,6 +60,9 @@ export function HostOnboardDialog({ open, onClose }: { open: boolean; onClose: (
   const [displayName, setDisplayName] = useState("");
   const [bootstrap, setBootstrap] = useState(true);
   const [installAgent, setInstallAgent] = useState(true);
+  // Rolle (P2): Vorschlag aus dem Bestand — erste Box Head, weitere Worker.
+  const [role, setRole] = useState<HostRole | null>(null);
+  const [roleSuggested, setRoleSuggested] = useState(true);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,6 +72,13 @@ export function HostOnboardDialog({ open, onClose }: { open: boolean; onClose: (
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const cursor = useRef(0);
   const logEnd = useRef<HTMLDivElement | null>(null);
+
+  // Bestand für den Rollen-Vorschlag; Handklick (roleSuggested=false) gewinnt.
+  const { data: existingHosts } = useQuery<Host[]>({ queryKey: ["hosts"], queryFn: api.hosts.list, enabled: open });
+  useEffect(() => {
+    if (existingHosts === undefined || !roleSuggested) return;
+    setRole(suggestRole(existingHosts.length));
+  }, [existingHosts, roleSuggested]);
 
   const credentialsQuery = useQuery({
     queryKey: ["credentials"],
@@ -151,6 +164,7 @@ export function HostOnboardDialog({ open, onClose }: { open: boolean; onClose: (
         display_name: displayName.trim() || null,
         bootstrap,
         install_agent: installAgent,
+        role: role ?? suggestRole(existingHosts?.length ?? 0),
       });
       setJobId(res.job_id);
       setStatus("running");
@@ -225,6 +239,14 @@ export function HostOnboardDialog({ open, onClose }: { open: boolean; onClose: (
             style={{ background: C.border, border: `1px solid ${C.borderSubtle}`, color: C.textPrimary }}
           />
         </label>
+
+        <RoleField
+          idPrefix="onboard-role"
+          value={role}
+          onChange={(r) => { setRole(r); setRoleSuggested(false); }}
+          labelClassName="text-xs text-[var(--color-text-muted)]"
+          suggested={roleSuggested}
+        />
 
         <div className="flex flex-col gap-1">
           <span className="text-xs" style={{ color: C.textMuted }}>{t("onboardAuthLabel")}</span>

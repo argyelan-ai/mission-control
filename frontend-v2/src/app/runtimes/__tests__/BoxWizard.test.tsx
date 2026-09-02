@@ -290,10 +290,55 @@ describe("BoxWizard — component", () => {
       slug: "dgx-spark",
       display_name: "DGX Spark",
       kind: "ssh",
+      // P2: kein Bestand (hosts.list nicht gemockt → keine Liste) → erste Box = Head
+      role: "head",
       ssh_host: "192.0.2.10",
       ssh_user: null,
       ssh_key_path: null,
     });
+  });
+
+  // ── P2: Geräterolle ────────────────────────────────────────────────────────
+
+  it("P2: suggests 'worker' when a box already exists, and the suggestion is visible", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.hosts, "probe").mockResolvedValue(mkProbe());
+    const create = vi.spyOn(api.hosts, "create").mockResolvedValue(mkHost());
+    const user = userEvent.setup();
+    renderWizard();
+
+    // Vorbelegung kommt asynchron aus der Host-Liste.
+    await waitFor(() =>
+      expect(screen.getByTestId("box-wizard-role-worker")).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(screen.getByTestId("box-wizard-role-head")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("box-wizard-role-suggested")).toBeInTheDocument();
+    expect(screen.getByText(/Single-box recipes ignore the role/)).toBeInTheDocument();
+
+    await walkToStep2(user);
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0][0]).toMatchObject({ role: "worker" });
+  });
+
+  it("P2: the suggestion is only a suggestion — one click flips it to 'head' and that is what gets sent", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.hosts, "probe").mockResolvedValue(mkProbe());
+    const create = vi.spyOn(api.hosts, "create").mockResolvedValue(mkHost());
+    const user = userEvent.setup();
+    renderWizard();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("box-wizard-role-worker")).toHaveAttribute("aria-checked", "true"),
+    );
+    await user.click(screen.getByTestId("box-wizard-role-head"));
+    expect(screen.getByTestId("box-wizard-role-head")).toHaveAttribute("aria-checked", "true");
+    // Nach dem Klick ist es kein Vorschlag mehr — der Satz verschwindet …
+    expect(screen.queryByTestId("box-wizard-role-suggested")).toBeNull();
+
+    await walkToStep2(user);
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    // … und die Liste darf die Handwahl nicht mehr überschreiben.
+    expect(create.mock.calls[0][0]).toMatchObject({ role: "head" });
   });
 
   it("shows green lights for a prepared box and offers no bootstrap", async () => {
