@@ -151,7 +151,12 @@ export function panelCapabilities(rt: Runtime): PanelCapabilities {
     // Non-probeable runtimes have no watcher-driven live model; their static
     // DB value is the only source of truth and needs the manual editor.
     modelEditor: !probe,
-    recipeSwitcher: rt.runtime_type === "vllm_docker",
+    // Rezept-Umschalter (Vertrag 02.09.2026): jede host-gebundene Runtime
+    // kann Rezepte haben — welche, sagt GET /hosts/{id}/recipes. Ob die
+    // Box tatsächlich Rezepte hat, entscheidet der Umschalter selbst an der
+    // Liste (hideWhenEmpty); hier gibt es nur die Vorbedingung „hat Box".
+    // Früher hing das an EINEM runtime_type — das war die Hardcodierung.
+    recipeSwitcher: rt.host != null,
     contextSettings: rt.runtime_type === "lmstudio",
     autostart: rt.autostart_supported === true,
   };
