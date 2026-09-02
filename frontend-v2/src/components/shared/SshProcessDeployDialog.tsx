@@ -3,8 +3,8 @@
 /**
  * SshProcessDeployDialog — eine Host-Engine per Klick installieren und starten (PR 6).
  *
- * Der sparkrun-Deploy im LocalModelBrowser ist ein Recipe-Switch auf einer
- * bestehenden Runtime. Eine ssh_process-Engine hat noch gar keine Runtime-Zeile
+ * Der Rezept-Start im LocalModelBrowser braucht eine Box, auf der der
+ * Startbefehl schon läuft. Eine ssh_process-Engine hat noch gar keine Runtime-Zeile
  * und liegt beim ersten Mal auch noch nicht auf der Box — deshalb zwei
  * Schritte statt einem:
  *

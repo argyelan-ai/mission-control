@@ -4,28 +4,27 @@
  * SlotStage — one GPU slot's "stage" (mockup M1, m1-slot-buehne.html).
  *
  * Renders a single host's occupancy: what's currently serving (or OFF),
- * live GPU/VRAM/temp telemetry, a way to switch to another sparkrun recipe
- * or start another lifecycle-capable runtime on the box, and a quiet ready
- * list of everything else that could take the slot.
+ * live GPU/VRAM/temp telemetry and the recipe switcher for the box (one
+ * source for every recipe the box can run — see HostRecipeSwitcher).
  *
  * HONESTY RULE (hard, per task brief): only real fields are rendered —
  * no tok/s, no uptime, no ETA. The mockup shows all three; this component
  * deliberately does not reproduce them.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import type { Runtime, RuntimeLiveStatus, SparkrunRecipe } from "@/lib/types";
-import { panelCapabilities, pickServing, type HostGroup } from "./grouping";
+import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import { pickServing, type HostGroup } from "./grouping";
 import { useGpuSparkline } from "./useGpuSparkline";
 import { fmtCtx } from "@/lib/utils";
 import { openModelsTab } from "./modelsTab";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { DeviceModeStrip, useDevices } from "./DeviceControl";
 import { useAppStore } from "@/lib/store";
 import type { Device } from "@/lib/types";
@@ -236,142 +235,40 @@ function PhaseIndicator({ phase, message }: { phase?: string | null; message?: s
   );
 }
 
-// Switch row carries sparkrun recipes only (per the approved M1 mockup — the
-// switch targets are recipes, not sibling runtimes). Non-serving lifecycle
-// runtimes live exclusively in the ready list below; slot takeover for them
-// happens via Start inside the detail panel opened from that row.
-/** One thing the operator can hand the GPU slot to — either a sparkrun
- *  recipe (same engine, different model/config) or a sibling runtime on the
- *  host (a different engine entirely). The UI deliberately unifies both:
- *  to the operator they are the same question ("which model gets the GPU?"),
- *  even though the backend paths differ (switch-recipe vs. start+eviction). */
-type SwitchChoice =
-  | { kind: "recipe"; name: string }
-  | { kind: "runtime"; rt: Runtime };
-
+// Die Umschalt-Zeile hat genau EINE Quelle: die Rezeptliste der Box
+// (GET /hosts/{id}/recipes, Vertrag 02.09.2026). Die früheren zwei Quellen —
+// eine per SSH gelesene Rezeptliste eines Werkzeugs plus die
+// Geschwister-Runtimes derselben Box — sind weg: sie widersprachen sich, und
+// bei 0 Rezepten verschwand das Dropdown ganz. Andere Runtimes der Box
+// startet man weiterhin über das Register (Infrastruktur-Tab) → Detail-Panel.
 function SwitchRow({
   group,
   serving,
   live,
-  siblings,
-  sizeGb,
 }: {
   group: HostGroup;
   serving: Runtime | null;
   live?: Record<string, RuntimeLiveStatus>;
-  siblings: Runtime[];
-  sizeGb: (rt: Runtime) => number | undefined;
 }) {
   const t = useTranslations("runtimes.slotStage");
-  const tRecipe = useTranslations("runtimes.recipe");
-  const queryClient = useQueryClient();
-  // Two-step confirm before an eviction — restores the old SparkRecipeSwitcher's
-  // arm/confirm behavior (a switch evicts whatever the GPU is currently
-  // serving; that must never be one click away).
-  const [confirm, setConfirm] = useState<SwitchChoice | null>(null);
-  const rowRef = useRef<HTMLDivElement>(null);
-
-  // The vllm_docker runtime actually holding the slot wins over "the first
-  // vllm_docker row in the group" — a host can carry more than one
-  // vllm_docker runtime (e.g. mid box-migration), and the switch must target
-  // whichever one is really serving right now.
-  const vllmRuntime =
-    serving?.runtime_type === "vllm_docker"
-      ? serving
-      : group.runtimes.find((rt) => rt.runtime_type === "vllm_docker") ?? null;
-  const recipeCapable = vllmRuntime != null;
-
-  const currentRecipeQuery = useQuery({
-    queryKey: ["runtime-current-recipe", vllmRuntime?.id],
-    queryFn: () => api.runtimes.sparkrun.currentRecipe(vllmRuntime!.id),
-    enabled: recipeCapable,
-    staleTime: 300_000,
-    refetchOnWindowFocus: false,
-  });
-  const recipesQuery = useQuery({
-    queryKey: ["sparkrun-recipes"],
-    queryFn: () => api.runtimes.sparkrun.listRecipes(),
-    enabled: recipeCapable,
-    staleTime: 300_000,
-    refetchOnWindowFocus: false,
-  });
-
-  // sparkrun_managed: false means this is a plain vllm_docker container the
-  // operator runs by hand — there is nothing honest to switch (mirrors the
-  // old SparkRecipeSwitcher's `isSparkrun` gate). Undefined (still loading)
-  // keeps the row rendered so it doesn't flash in and out while the probe is
-  // in flight.
-  const isSparkrunManaged = currentRecipeQuery.data?.sparkrun_managed !== false;
-
-  const switchMutation = useMutation({
-    mutationFn: (recipe: string) => api.runtimes.sparkrun.switchRecipe(vllmRuntime!.id, recipe),
-    onSuccess: () => {
-      setConfirm(null);
-      queryClient.invalidateQueries({ queryKey: ["runtime-current-recipe", vllmRuntime?.id] });
-      queryClient.invalidateQueries({ queryKey: ["runtimes"] });
-    },
-    onError: () => setConfirm(null),
-  });
-
-  // Slot takeover by a sibling engine: plain start — the backend evicts the
-  // current occupant itself (exclusive-memory handling in runtime_manager).
-  const startMutation = useMutation({
-    mutationFn: (rt: Runtime) => api.runtimes.start(rt.id),
-    onSuccess: () => {
-      setConfirm(null);
-      queryClient.invalidateQueries({ queryKey: ["runtimes"] });
-    },
-    onError: () => setConfirm(null),
-  });
-
-  // Clicking outside the row disarms an armed confirm — same "click elsewhere
-  // closes it" behavior the old dropdown had via its document mousedown listener.
-  useEffect(() => {
-    if (confirm === null) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (rowRef.current?.contains(e.target as Node)) return;
-      setConfirm(null);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [confirm]);
-
   const servingLive = serving ? liveFor(serving, live) : undefined;
-  const isSwitching = servingLive?.status === "switching";
-  const isMutating = switchMutation.isPending || startMutation.isPending || isSwitching;
 
-  if (isMutating) {
-    const message = switchMutation.data?.message ?? startMutation.data?.message ?? null;
+  // Während der Watcher ein Umschalten meldet (evicting → launching → loading)
+  // zeigt die Zeile die Phase statt eines bedienbaren Umschalters — zwei
+  // Starts gleichzeitig darf es nicht geben.
+  if (servingLive?.status === "switching") {
     return (
       <div
         className="flex items-center gap-3 px-4 py-3"
         style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
       >
-        <PhaseIndicator phase={servingLive?.phase ?? undefined} message={message} />
+        <PhaseIndicator phase={servingLive.phase ?? undefined} message={null} />
       </div>
     );
   }
 
-  const errorMessage = switchMutation.isError
-    ? t("switchFailed", { message: switchMutation.error.message })
-    : startMutation.isError
-      ? t("switchFailed", { message: startMutation.error.message })
-      : null;
-
-  const showRecipes = recipeCapable && isSparkrunManaged;
-  const allRecipes = recipesQuery.data?.recipes ?? [];
-  const currentName = currentRecipeQuery.data?.current_recipe ?? null;
-  // Dropdown order: current first, then runnable (solo-capable) recipes, then
-  // the rest (disabled — they need more GPUs/nodes than this host has).
-  const sortedRecipes = [
-    ...allRecipes.filter((r) => r.name === currentName),
-    ...allRecipes.filter((r) => r.name !== currentName && r.solo_capable),
-    ...allRecipes.filter((r) => r.name !== currentName && !r.solo_capable),
-  ];
-
   return (
     <div
-      ref={rowRef}
       className="flex items-center gap-2 px-4 py-3 flex-wrap"
       style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
     >
@@ -382,50 +279,7 @@ function SwitchRow({
         {t("switchLabel")}
       </span>
 
-      {confirm == null && (showRecipes || siblings.length > 0) && (
-        <UnifiedSwitchDropdown
-          recipes={showRecipes ? sortedRecipes : []}
-          currentName={currentName}
-          servingName={serving?.display_name ?? null}
-          siblings={siblings}
-          sizeGb={sizeGb}
-          onSelect={setConfirm}
-        />
-      )}
-
-      {confirm != null && (
-        <div
-          className="flex items-center gap-2 rounded-md px-3 py-2 text-xs flex-wrap"
-          style={{ background: C.bgSurface, border: `1px solid ${C.borderAccent}` }}
-        >
-          <span className="font-mono" style={{ color: C.textPrimary }}>
-            {confirm.kind === "recipe" ? confirm.name : confirm.rt.display_name}
-          </span>
-          <button
-            onClick={() =>
-              confirm.kind === "recipe"
-                ? switchMutation.mutate(confirm.name)
-                : startMutation.mutate(confirm.rt)
-            }
-            className="rounded-sm px-2 py-1 text-[10px] font-semibold cursor-pointer"
-            style={{ background: C.accent, color: C.bgDeep }}
-          >
-            {tRecipe("confirmSwitch")}
-          </button>
-          <button
-            onClick={() => setConfirm(null)}
-            className="rounded-sm px-2 py-1 text-[10px] cursor-pointer"
-            style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
-          >
-            {tRecipe("cancel")}
-          </button>
-          <span className="text-[10px]" style={{ color: C.textMuted }}>{tRecipe("warmupNotice")}</span>
-        </div>
-      )}
-
-      {showRecipes && recipesQuery.isError && (
-        <span className="text-xs" style={{ color: STATUS_TEXT.error }}>{tRecipe("unreachable")}</span>
-      )}
+      <HostRecipeSwitcher hostId={group.host.id} servingName={serving?.display_name ?? null} />
 
       <button
         onClick={() => openModelsTab("download")}
@@ -434,10 +288,6 @@ function SwitchRow({
       >
         {t("addModel")}
       </button>
-
-      {errorMessage && (
-        <span className="text-xs w-full" style={{ color: STATUS_TEXT.error }}>{errorMessage}</span>
-      )}
     </div>
   );
 }
@@ -715,190 +565,7 @@ export function SlotStage({
       {/* Zwischen Zustand und Rezept-Wechsel: der Modus gehört zur Box, nicht
           zum Modell — darum unter dem Slot-Körper und über der Rezept-Zeile. */}
       <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
-      <SwitchRow group={group} serving={serving} live={live} siblings={readyRuntimes} sizeGb={sizeGb} />
+      <SwitchRow group={group} serving={serving} live={live} />
     </div>
-  );
-}
-
-// ── Recipe dropdown ─────────────────────────────────────────────────────────
-// The sparkrun catalog is 65 recipes — pills flooded the stage. One trigger
-// showing the current recipe; the list opens in a portal (the stage card
-// clips overflow) with runnable recipes first and non-solo ones disabled.
-
-function UnifiedSwitchDropdown({
-  recipes,
-  currentName,
-  servingName,
-  siblings,
-  sizeGb,
-  onSelect,
-}: {
-  recipes: SparkrunRecipe[];
-  currentName: string | null;
-  servingName: string | null;
-  siblings: Runtime[];
-  sizeGb: (rt: Runtime) => number | undefined;
-  onSelect: (choice: SwitchChoice) => void;
-}) {
-  const t = useTranslations("runtimes.slotStage");
-  const tRecipe = useTranslations("runtimes.recipe");
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const toggle = () => {
-    if (!open && triggerRef.current) {
-      const r = triggerRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: r.left });
-    }
-    setOpen((v) => !v);
-  };
-
-  return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={toggle}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        data-testid="recipe-dropdown-trigger"
-        className="flex items-center gap-2 rounded-md px-3 py-2 text-xs cursor-pointer"
-        style={{ background: C.bgSurface, border: `1px solid ${open ? C.borderAccent : C.border}`, color: C.textPrimary }}
-      >
-        <span className="font-mono truncate max-w-[340px]">
-          {currentName ?? servingName ?? t("selectRecipe")}
-        </span>
-        <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>▾</span>
-      </button>
-
-      {open && pos != null &&
-        createPortal(
-          <div
-            ref={menuRef}
-            role="listbox"
-            data-testid="recipe-dropdown-list"
-            className="fixed z-50 rounded-md overflow-y-auto"
-            style={{
-              top: pos.top,
-              left: pos.left,
-              width: "380px",
-              maxHeight: "280px",
-              background: C.bgElevated,
-              border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-            }}
-          >
-            {recipes.length > 0 && (
-              <div
-                className="px-3 pt-2 pb-1 text-[9px] font-medium uppercase"
-                style={{ color: C.textDim, letterSpacing: "0.1em" }}
-              >
-                {t("groupRecipes")}
-              </div>
-            )}
-            {recipes.map((r) => {
-              const isActive = r.name === currentName;
-              const isDisabled = !r.solo_capable;
-              const gpuHint =
-                r.tp != null || r.nodes != null
-                  ? `tp=${r.tp ?? 1}${r.nodes != null ? `, nodes=${r.nodes}` : ""}`
-                  : null;
-              return (
-                <button
-                  key={r.name}
-                  role="option"
-                  aria-selected={isActive}
-                  disabled={isActive || isDisabled}
-                  title={isDisabled ? tRecipe("needsMoreTitle", { gpuHint: gpuHint ?? tRecipe("moreGpusNodes") }) : undefined}
-                  onClick={() => {
-                    setOpen(false);
-                    onSelect({ kind: "recipe", name: r.name });
-                  }}
-                  className="flex flex-col w-full px-3 py-2 text-left text-xs font-mono cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
-                  style={{
-                    color: isActive ? C.accent : isDisabled ? C.textDim : C.textPrimary,
-                    borderBottom: `1px solid ${C.borderSubtle}`,
-                  }}
-                >
-                  <div className="flex items-center gap-2 w-full">
-                    <span className="truncate">{r.name}</span>
-                    {isActive && <span className="ml-auto shrink-0 text-[9px] uppercase" style={{ color: C.accent }}>{t("recipeCurrent")}</span>}
-                  </div>
-                  {/* T1 (Verbund-UI, 30.08.2026): a verbund recipe isn't just
-                      greyed out — its device requirement is visible in the
-                      row (not only in the hover title above), same wording/
-                      i18n key SparkRecipeSwitcher already uses for the same
-                      concept (needsMoreShort) so the two pickers agree. */}
-                  {isDisabled && gpuHint && (
-                    <span className="text-[10px] mt-0.5" style={{ color: C.warning }}>
-                      {tRecipe("needsMoreShort", { gpuHint })}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-
-            {siblings.length > 0 && (
-              <div
-                className="px-3 pt-2 pb-1 text-[9px] font-medium uppercase"
-                style={{ color: C.textDim, letterSpacing: "0.1em" }}
-              >
-                {t("groupEngines")}
-              </div>
-            )}
-            {siblings.map((rt) => {
-              // Slot takeover = start this runtime; only backend-startable
-              // engines are selectable, the rest stay visible but disabled.
-              const startable = panelCapabilities(rt).lifecycle;
-              const gb = sizeGb(rt);
-              return (
-                <button
-                  key={rt.id}
-                  role="option"
-                  aria-selected={false}
-                  disabled={!startable}
-                  data-testid={`switch-engine-${rt.slug ?? rt.id}`}
-                  title={!startable ? t("engineNotStartable") : undefined}
-                  onClick={() => {
-                    setOpen(false);
-                    onSelect({ kind: "runtime", rt });
-                  }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs cursor-pointer disabled:cursor-not-allowed transition-colors hover:bg-[var(--color-bg-hover)]"
-                  style={{
-                    color: startable ? C.textPrimary : C.textDim,
-                    borderBottom: `1px solid ${C.borderSubtle}`,
-                  }}
-                >
-                  <span className="truncate">{rt.display_name}</span>
-                  <span className="ml-auto shrink-0" style={{ color: C.textDim }}>
-                    {typeLabel(rt.runtime_type)}{gb != null ? ` · ${Math.round(gb)} GB` : ""}
-                  </span>
-                </button>
-              );
-            })}
-          </div>,
-          document.body
-        )}
-    </>
   );
 }

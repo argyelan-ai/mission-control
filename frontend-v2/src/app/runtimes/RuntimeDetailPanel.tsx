@@ -23,7 +23,7 @@ import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
-import { SparkRecipeSwitcher } from "@/components/shared/SparkRecipeSwitcher";
+import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { MetaChip } from "@/components/shared/ListRow";
 import { panelCapabilities } from "./grouping";
@@ -595,7 +595,11 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
               variant="default"
             />
           )}
-          {caps.recipeSwitcher && <SparkRecipeSwitcher runtimeId={runtime.id} />}
+          {/* Dieselbe Liste, dieselbe Quelle wie in der Gerätekachel —
+              kein zweiter Datenweg (Vertrag 02.09.2026). */}
+          {caps.recipeSwitcher && runtime.host && (
+            <HostRecipeSwitcher hostId={runtime.host.id} compact hideWhenEmpty />
+          )}
           {caps.contextSettings && (
             <button
               onClick={() => setSettingsOpen((v) => !v)}
