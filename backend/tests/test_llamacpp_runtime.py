@@ -288,27 +288,6 @@ async def test_restart_without_any_container_fails_honestly():
     assert "Kein laufender" in result["message"]
 
 
-# ── Recipe-switch gate stays closed ──────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_recipe_switch_rejects_llamacpp(async_session, auth_client):
-    """sparkrun recipes only exist for vLLM — a llamacpp row must 422, not get a
-    launch_command that would start vLLM under it."""
-    rt = Runtime(
-        slug="llamacpp-gate", display_name="llama.cpp Gate",
-        runtime_type="llamacpp_docker", endpoint="http://192.0.2.10:8080/v1",
-        enabled=True,
-    )
-    async_session.add(rt)
-    await async_session.commit()
-
-    resp = await auth_client.post(
-        "/api/v1/runtimes/llamacpp-gate/switch-recipe",
-        json={"recipe": "@example/some-nvfp4-vllm"},
-    )
-    assert resp.status_code == 422
-    assert "vllm_docker" in resp.json()["detail"]
-
-
 # ── Seed template ────────────────────────────────────────────────────────────
 def test_seed_ships_a_disabled_llamacpp_template():
     entries = [rt for rt in runtime_manager.load_registry()

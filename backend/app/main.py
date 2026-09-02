@@ -78,6 +78,7 @@ from app.routers import (
     deploy,
     discord as discord_router,
     hosts,
+    host_recipes,
     install_requests,
     internal,
     meetings,
@@ -574,10 +575,13 @@ async def _seed_local_recipes() -> None:
     """Import config/local-recipes.json into the DB on first run (idempotent)."""
     try:
         from sqlmodel.ext.asyncio.session import AsyncSession
-        from app.services.local_registry import seed_local_recipes
+        from app.services.local_registry import repair_legacy_sparkrun_rows, seed_local_recipes
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await seed_local_recipes(session)
+            # Rezept-Umschalter (02.09.2026): alte engine=sparkrun-Zeilen
+            # umwandeln (Befehl bleibt), damit es nur EIN Rezept-Modell gibt.
+            await repair_legacy_sparkrun_rows(session)
     except Exception as e:
         logger.warning("Local recipe seeding failed (non-critical): %s", e)
 
@@ -877,6 +881,7 @@ app.include_router(models.router)
 app.include_router(runtimes.router)
 app.include_router(local_registry.router)  # /api/v1/local-registry — curated local model/recipe registry
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
+app.include_router(host_recipes.router)  # /api/v1/hosts/{id}/recipes — Rezept-Umschalter (Vertrag 02.09.2026)
 app.include_router(nodes.router)  # /api/v1/nodes — mc-node-agent pairing + push telemetry (Fleet & Rezepte v2, Phase 1)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)

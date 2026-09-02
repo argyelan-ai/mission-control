@@ -11,9 +11,6 @@ key saying "this runtime is *expected* to be unreachable right now, and why".
 
 Who writes it
 -------------
-- ``sparkrun_manager.switch_recipe`` — ``evicting`` before the eviction,
-  then hands over to ``start_runtime``, then ``loading`` once the launch
-  returned ok. Clears it on every abort path.
 - ``runtime_manager.start_runtime`` / ``restart_runtime`` — ``launching`` for
   docker engine types (manual starts hit the same cold-load window), cleared
   again when the call itself reports failure.
