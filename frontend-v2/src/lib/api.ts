@@ -1950,29 +1950,6 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ url }),
       }),
-    // Sparkrun recipe management (Phase 35) — applies to vllm_docker runtimes
-    // whose launch_command invokes `sparkrun run <recipe>`.
-    sparkrun: {
-      listRecipes: (): Promise<{
-        recipes: import("@/lib/types").SparkrunRecipe[];
-      }> => request("/api/v1/runtimes/sparkrun/recipes"),
-      currentRecipe: (runtimeId: string): Promise<{
-        slug: string;
-        current_recipe: string | null;
-        sparkrun_managed: boolean;
-      }> => request(`/api/v1/runtimes/${runtimeId}/current-recipe`),
-      switchRecipe: (runtimeId: string, recipe: string): Promise<{
-        ok: boolean;
-        message: string;
-        old_recipe: string | null;
-        new_recipe: string;
-        launch_command: string;
-      }> =>
-        request(`/api/v1/runtimes/${runtimeId}/switch-recipe`, {
-          method: "POST",
-          body: JSON.stringify({ recipe }),
-        }),
-    },
     // DB-backed CRUD (Phase 3) — will become the source of truth once the
     // runtime_manager is fully refactored off the JSON seed.
     db: {
@@ -2055,8 +2032,8 @@ export const api = {
   },
   // Lokale Modell-Registry — /api/v1/local-registry. Kuratierte Rezepte für
   // eigene Hardware. Der Deploy läuft NICHT über diesen Router, sondern über
-  // den bestehenden sparkrun-Switch (api.runtimes.sparkrun.switchRecipe) —
-  // hier gibt es bewusst keinen zweiten Start-Pfad.
+  // den Rezept-Start je Box (api.hosts.startRecipe) — hier gibt es bewusst
+  // keinen zweiten Start-Pfad.
   localRegistry: {
     list: (params?: {
       engine?: string;
@@ -2239,6 +2216,22 @@ export const api = {
       request("/api/v1/hosts/onboard", { method: "POST", body: JSON.stringify(data) }),
     onboardLog: (jobId: string, cursor = 0): Promise<HostOnboardLog> =>
       request(`/api/v1/hosts/onboard/${jobId}/log?cursor=${cursor}`),
+    // Rezept-Umschalter (Vertrag 02.09.2026): die EINE Quelle für beide
+    // Umschalter (Gerätekachel + Detail-Panel). Alle Rezepte der Box, fertig
+    // bewertet — laufend zuerst, dann startbar, dann grau mit Grund.
+    // Die frühere Sonderbehandlung für sparkrun (eigene Liste per SSH, eigener
+    // switch-recipe-Endpunkt) ist weg: ein sparkrun-Rezept ist nur noch ein
+    // gewöhnlicher Startbefehl.
+    recipes: (hostId: string): Promise<import("@/lib/types").HostRecipe[]> =>
+      request(`/api/v1/hosts/${hostId}/recipes`),
+    // Solo: Instanz anlegen falls nötig, dann der normale start_runtime-Pfad.
+    // Zweibox-Rezepte antworten in Phase 1 mit 409 + Grund — der Aufrufer
+    // zeigt den Satz an, statt ihn zu schlucken.
+    startRecipe: (
+      hostId: string,
+      slug: string,
+    ): Promise<import("@/lib/types").HostRecipeStartResult> =>
+      request(`/api/v1/hosts/${hostId}/recipes/${encodeURIComponent(slug)}/start`, { method: "POST" }),
   },
 
   // ── mc-node-agent pairing (Fleet & Rezepte v2, Phase 1) ──────────────────────
