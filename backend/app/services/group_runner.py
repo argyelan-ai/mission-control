@@ -285,20 +285,28 @@ class GroupRunnerService:
             f"mit GENAU EINEM Beitrag: `mc msg --thread {group.thread_id} \"…\"`.",
             # Der grösste Hebel gegen Textwände: ohne Längenbudget schreibt ein
             # so beauftragter Agent einen Aufsatz — er tut genau, was dasteht.
-            "- **Antworte in 2–4 Sätzen**: deine Position, ein Grund, eine "
-            "Quelle als Link. Ausführliche Belege gehören ins Ergebnis-Dokument, "
-            "nicht in den Raum.",
-            # Der Raum rendert Markdown (GFM) und klappt Beiträge zu — eine
-            # kompakte Tabelle stört niemanden mehr, sie ist für Vergleiche das
-            # bessere Format als drei Sätze mit Zahlen (Marks Wunsch 02.09.2026).
+            # Zweiter Hebel (Marks Wunsch 02.09.2026): kein Fliesstext, sondern
+            # ein festes Gerüst. Der Raum klappt Beiträge zu und zeigt nur die
+            # erste Zeile — sie MUSS die Kernaussage tragen, sonst liest der
+            # Operator eine Vorschau wie "Hallo zusammen, ich habe mir …".
+            "- **Format (Pflicht, kein Fliesstext):** Zeile 1 = deine Kernaussage "
+            "in EINEM Satz (der Raum zeigt zugeklappt nur diese Zeile). Danach "
+            "Stichpunkte statt Absätze: `- Grund: …`, `- Einwand/Risiko: …`, "
+            "`- Quelle: https://…`. Kein Absatz länger als 2 Sätze. Ausführliche "
+            "Belege gehören ins Ergebnis-Dokument, nicht in den Raum.",
+            # Der Raum rendert Markdown (GFM) — eine kompakte Tabelle ist für
+            # Vergleiche das bessere Format als drei Sätze mit Zahlen.
             # Mehrzeilig NUR per Heredoc über stdin: in einem "…"-Argument
             # zerreisst die Shell die Pipes und Zeilenumbrüche.
-            "- Markdown wird gerendert: für einen Vergleich lieber eine kompakte "
-            "Tabelle oder Liste (max. ~6 Zeilen) statt Fliesstext mit Zahlen. "
-            "Mehrzeilig senden per Heredoc:",
+            "- Zahlen und Vergleiche als Tabelle (max. ~6 Zeilen), nie als Satz "
+            "mit fünf Kommas. Mehrzeilig senden per Heredoc:",
             "```",
             f"mc msg --thread {group.thread_id} - <<'EOF'",
             "Position in einem Satz.",
+            "- Grund: …",
+            "- Einwand/Risiko: …",
+            "- Quelle: https://…",
+            "",
             "| Option | Wert | Quelle |",
             "|---|---|---|",
             "| A | … | https://… |",
@@ -507,14 +515,17 @@ class GroupRunnerService:
             ),
             f"1. Antworte mit `mc msg --thread {group.thread_id}` und beginne dein "
             "Urteil mit GENAU EINEM Marker:",
-            "   - `ZIEL ERREICHT: <dein Verdikt in zwei bis drei Sätzen>`",
-            "   - `WEITER: <was noch offen ist>`",
+            "   - `ZIEL ERREICHT: <Kernaussage in einem Satz>`",
+            "   - `WEITER: <was noch offen ist, ein Satz>`",
             "   - `FRAGE AN OPERATOR: <deine Frage>`",
             # Der Synthese-Beitrag war die grösste einzelne Textwand im Raum
             # (bis 4900 Zeichen). Die Substanz ist im Dokument nicht verloren,
-            # sondern dort erst am richtigen Platz.
-            "**Halte den Chat-Beitrag kurz: Marker + zwei bis drei Sätze.** Eine "
-            "kompakte Tabelle darunter ist erlaubt, wenn sie das Urteil trägt "
+            # sondern dort erst am richtigen Platz. Der Lead-Beitrag steht als
+            # einziger OFFEN im Raum — er prägt den Ton: Gerüst statt Fliesstext.
+            "**Format (Pflicht, kein Fliesstext):** Zeile 1 = Marker + Kernaussage, "
+            "darunter Stichpunkte `- Konsens: …`, `- Dissens: …`, `- Nächster Schritt: …` "
+            "(je ein Satz, insgesamt zwei bis drei Sätze). Ein Vergleich darf als "
+            "kompakte Tabelle darunter stehen, wenn sie das Urteil trägt "
             f"(mehrzeilig per `mc msg --thread {group.thread_id} - <<'EOF' … EOF`). Die "
             "ausführliche Synthese mit Quellen und Dissens gehört ins "
             "Ergebnis-Dokument, nicht in den Raum.",
