@@ -1,24 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {
-  GroupMessage,
-  CONTRIBUTION_CLAMP_MAX_PX,
-  CONTRIBUTION_COLLAPSE_MIN_PX,
-} from "./GroupMessage";
+import { GroupMessage, contributionExcerpt } from "./GroupMessage";
 import type { GroupMessage as GroupMessageData } from "@/lib/groupTypes";
-
-/** jsdom liefert für jede Layout-Messung 0 — die Klemme könnte einen Überlauf
- *  also nie selbst sehen. Nur ein gestelltes scrollHeight prüft den Zweig, auf
- *  den es ankommt. */
-function stubScrollHeight(px: number) {
-  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
-  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => px });
-  return () => {
-    if (original) Object.defineProperty(HTMLElement.prototype, "scrollHeight", original);
-    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
-  };
-}
 
 function mkMessage(overrides: Partial<GroupMessageData> = {}): GroupMessageData {
   return {
@@ -47,28 +31,32 @@ function renderMessage(
       isOwn={props.isOwn ?? false}
       groupWithPrevious={props.groupWithPrevious}
       alsoContains={props.alsoContains}
+      defaultOpen={props.defaultOpen}
     />,
   );
 }
 
 describe("GroupMessage — agent register", () => {
-  it("shows the speaker's name above their contribution", () => {
+  it("shows the speaker's name on the contribution's header row", () => {
     renderMessage(mkMessage({ body: "Ich habe gemessen." }));
     expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(screen.getByText("Ich habe gemessen.")).toBeInTheDocument();
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Ich habe gemessen.");
   });
 
-  it("renders the body as markdown, not as literal asterisks", () => {
+  it("renders the body as markdown, not as literal asterisks", async () => {
     renderMessage(mkMessage({ body: "Das ist **wichtig**." }));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId("group-contribution-toggle"));
     const strong = screen.getByText("wichtig");
     expect(strong.tagName).toBe("STRONG");
     expect(screen.queryByText(/\*\*wichtig\*\*/)).not.toBeInTheDocument();
   });
 
-  it("drops the header when the previous message came from the same speaker", () => {
+  it("keeps the header row even after the same speaker — it is the handle to open", () => {
+    // Zugeklappt IST die Kopfzeile der Beitrag. Ohne sie gäbe es nichts zum
+    // Anklicken und der zweite Beitrag desselben Sprechers wäre unsichtbar.
     renderMessage(mkMessage({ body: "…und weiter." }), { groupWithPrevious: true });
-    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
-    expect(screen.getByText("…und weiter.")).toBeInTheDocument();
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("…und weiter.");
   });
 
   it("shows the send time as 24h HH:MM in the header", () => {
@@ -86,14 +74,16 @@ describe("GroupMessage — agent register", () => {
   it("omits the name when the sender could not be resolved, instead of showing an id", () => {
     renderMessage(mkMessage({ sender_id: "8f3c-uuid" }), { senderName: null });
     expect(screen.queryByText("8f3c-uuid")).not.toBeInTheDocument();
-    expect(screen.getByText("Ein Beitrag.")).toBeInTheDocument();
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Ein Beitrag.");
   });
 
-  it("does not repeat mentions outside the body text", () => {
+  it("does not repeat mentions outside the body text", async () => {
     // Absendername bewusst verschieden vom Erwähnten, sonst zählt die Kopfzeile mit.
     renderMessage(mkMessage({ body: "@alpha bitte messen.", mentions: ["alpha"] }), {
       senderName: "Mia",
     });
+    await userEvent.setup({ delay: null }).click(screen.getByTestId("group-contribution-toggle"));
+    // Offen weicht der Auszug dem Text — die Erwähnung steht genau einmal da.
     expect(screen.getAllByText(/alpha/i)).toHaveLength(1);
     expect(screen.getByText("@alpha bitte messen.")).toBeInTheDocument();
   });
@@ -227,36 +217,65 @@ describe("GroupMessage — lange System-Nachrichten", () => {
   });
 });
 
-describe("GroupMessage — lange Agenten-Beiträge", () => {
-  let restore: (() => void) | null = null;
-
-  afterEach(() => {
-    restore?.();
-    restore = null;
+describe("GroupMessage — zugeklappte Agenten-Beiträge", () => {
+  // Marks Befund 02.09.2026: offen stehende Beiträge machen den Raum laut.
+  // Zugeklappt liest man Sprecher + erste Zeile und macht gezielt auf, was
+  // man wirklich lesen will. Die frühere 3-Zeilen-Klemme entfällt damit.
+  it("starts collapsed: header row with name and first line, no body", () => {
+    renderMessage(mkMessage({ body: "Meine Position zuerst.\n\nDann viele Belege." }));
+    const toggle = screen.getByTestId("group-contribution-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("Meine Position zuerst.");
+    expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dann viele Belege.")).not.toBeInTheDocument();
   });
 
-  it("leaves a contribution within the length budget whole — no expander", () => {
-    // Genau der Fall, den die Kursänderung anstrebt: 2–4 Sätze. Erschiene hier
-    // ein Knopf, stünde unter JEDEM Beitrag einer und der Raum wäre wieder voll.
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX - 24);
-    renderMessage(mkMessage({ body: "DFlash2 ist schneller. Der Kontext ist der Preis." }));
-    expect(screen.getByTestId("group-contribution-body")).toHaveAttribute("data-clamped", "false");
+  it("opens on click with the full markdown body and closes again", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "Erste Zeile.\n\nDas ist **wichtig**." }));
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("wichtig").tagName).toBe("STRONG");
+
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
+  });
+
+  it("renders a GFM table inside an opened contribution", async () => {
+    const user = userEvent.setup({ delay: null });
+    const body = "Vergleich:\n\n| Motor | t/s |\n|---|---|\n| DFlash2 | 423 |\n| vLLM | 56 |";
+    renderMessage(mkMessage({ body }));
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Motor" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "423" })).toBeInTheDocument();
+  });
+
+  it("starts open when asked to (lead synthesis) and can still be folded", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "ZIEL ERREICHT: DFlash2 wird Standard." }), { defaultOpen: true });
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("DFlash2 wird Standard.");
+    await user.click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
+  });
+
+  it("leaves the operator's own bubble alone — no expander there", () => {
+    renderMessage(mkMessage({ sender_type: "user", body: "Langer Auftrag. ".repeat(60) }), {
+      isOwn: true,
+    });
+    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("group-message-user")).toHaveTextContent("Langer Auftrag.");
+  });
+
+  it("leaves system messages on their own mechanism (regression)", () => {
+    const long = `# Gruppe: Spark — Runde 2/3\n\n${"Auftragstext. ".repeat(60)}`;
+    renderMessage(mkMessage({ sender_type: "system", sender_id: null, body: long }));
+    expect(screen.getByTestId("group-system-toggle")).toHaveTextContent("Gruppe: Spark — Runde 2/3");
     expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
   });
 
-  it("clamps a wall of text to the preview height and offers an expander", () => {
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
-    const body = screen.getByTestId("group-contribution-body");
-    expect(body).toHaveAttribute("data-clamped", "true");
-    expect(body.style.maxHeight).toBe(`${CONTRIBUTION_CLAMP_MAX_PX}px`);
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show more");
-  });
-
   it("führt mehrere Maschinen-Aufträge einer Runde als EINE Zeile", async () => {
-    // Pro Runde standen drei Aufklapper untereinander: Runden-Brief,
-    // Timeout-Notiz, Synthese-Auftrag. Drei Zeilen Maschinerie zwischen zwei
-    // Beiträgen, die der Leser vergleichen will (Operator-Befund 22.08.2026).
     const user = userEvent.setup();
     renderMessage(
       mkMessage({
@@ -265,95 +284,69 @@ describe("GroupMessage — lange Agenten-Beiträge", () => {
       }),
       { alsoContains: ["@lead — Synthese-Turn Runde 1/2.\n" + "y".repeat(400)] },
     );
-
-    // EIN Aufklapper, nicht zwei — und er sagt, dass mehr dahinter steckt.
     expect(screen.getAllByTestId("group-system-toggle")).toHaveLength(1);
     expect(screen.getByTestId("group-system-toggle")).toHaveTextContent("+1");
-
     await user.click(screen.getByTestId("group-system-toggle"));
     const body = screen.getByTestId("group-system-body");
     expect(body).toHaveTextContent("Gruppe: Test");
     expect(body).toHaveTextContent("Synthese-Turn");
   });
+});
 
-  it("fades the cut edge instead of slicing through a line of text", () => {
-    // Live-Befund 22.08.: der harte Pixel-Deckel traf mitten in die Buchstaben
-    // ("entscheidungsreif" horizontal halbiert). Auf Markdown mit gemischten
-    // Zeilenhöhen — Überschrift, Absatz, Liste — KANN ein fester Deckel gar
-    // nicht auf einer Zeilenkante landen. Ein weicher Verlauf am Schnitt macht
-    // die Kante zur Absicht statt zum Defekt.
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
-    const body = screen.getByTestId("group-contribution-body");
-    expect(body.className).toContain("clamp-fade");
+describe("contributionExcerpt — die eine Zeile auf dem Aufklapper", () => {
+  it("takes the first non-empty line and strips markdown decoration", () => {
+    expect(contributionExcerpt("\n\n## **Fazit**: DFlash2 gewinnt\n\nMehr…")).toBe("Fazit: DFlash2 gewinnt");
   });
 
-  it("drops the fade once the contribution is open", async () => {
-    // Sonst verblasste die letzte Zeile eines vollständig sichtbaren Beitrags —
-    // der Leser hielte ihn für weiterhin gekürzt.
-    const user = userEvent.setup();
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
-    await user.click(screen.getByTestId("group-contribution-toggle"));
-    const body = screen.getByTestId("group-contribution-body");
-    expect(body.className).not.toContain("clamp-fade");
+  it("reads a table's header row as a phrase, not as pipes", () => {
+    expect(contributionExcerpt("| Motor | t/s |\n|---|---|\n| DFlash2 | 423 |")).toBe("Motor · t/s");
   });
 
-  it("keeps the opening of a clamped contribution readable without a click", () => {
-    // Ein Beitrag ist Inhalt, kein Maschinen-Auftrag: er darf nicht vollständig
-    // hinter dem Knopf verschwinden wie ein Rundenbrief.
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    renderMessage(mkMessage({ body: `Meine Position zuerst.\n\n${"Belege. ".repeat(200)}` }));
-    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("Meine Position zuerst.");
+  it("drops list markers and quotes", () => {
+    expect(contributionExcerpt("- erster Punkt")).toBe("erster Punkt");
+    expect(contributionExcerpt("> Zitat")).toBe("Zitat");
   });
 
-  it("expands on click and clamps again on the second click", async () => {
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
+  it("is empty for an empty body", () => {
+    expect(contributionExcerpt("")).toBe("");
+  });
+});
+
+describe("GroupMessage — Bewegung", () => {
+  // design-dna: Micro-Feedback 100-150 ms, Transitions 200-300 ms, nur
+  // transform/opacity, reduced-motion respektieren. Der Chevron DREHT sich
+  // (ein Icon, das rotiert) statt zwischen zwei Icons zu springen; der Körper
+  // faltet sich auf (Unfold) statt zu erscheinen.
+  it("uses one chevron that rotates open instead of swapping icons", async () => {
     const user = userEvent.setup({ delay: null });
-    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
-
+    renderMessage(mkMessage({ body: "Erste Zeile.\n\nMehr." }));
+    const chevron = screen.getByTestId("group-contribution-chevron");
+    expect(chevron).toHaveAttribute("data-open", "false");
     await user.click(screen.getByTestId("group-contribution-toggle"));
-    expect(screen.getByTestId("group-contribution-body")).toHaveAttribute("data-clamped", "false");
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show less");
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("group-contribution-chevron")).toHaveAttribute("data-open", "true");
+  });
 
+  it("wraps the opened body in an Unfold so it can fold with motion", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "Erste Zeile.\n\nMehr." }));
     await user.click(screen.getByTestId("group-contribution-toggle"));
-    expect(screen.getByTestId("group-contribution-body")).toHaveAttribute("data-clamped", "true");
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Show more");
+    const body = screen.getByTestId("group-contribution-body");
+    expect(body.closest("[data-testid='unfold']")).not.toBeNull();
   });
 
-  it("reports nothing hidden while the element cannot be measured (hidden mobile pane)", () => {
-    // Im mobilen Stapel bleibt die abgewählte Spalte mit display:none gemountet;
-    // dort misst alles 0. Ohne diesen Schutz meldete die Messung „nichts
-    // verborgen" und der Beitrag stünde beim Zurückwechseln ungeklemmt da.
-    restore = stubScrollHeight(0);
-    renderMessage(mkMessage({ body: "Sehr ausführlicher Beitrag. ".repeat(60) }));
-    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
-  });
-
-  it("still renders the clamped body as markdown, not as cut-off source text", () => {
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    renderMessage(mkMessage({ body: `Das ist **wichtig**.\n\n${"Weiter. ".repeat(200)}` }));
-    expect(screen.getByText("wichtig").tagName).toBe("STRONG");
-  });
-
-  it("leaves the operator's own bubble to the chat clamp — no group expander there", () => {
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    renderMessage(mkMessage({ sender_type: "user", body: "Langer Auftrag. ".repeat(60) }), {
-      isOwn: true,
-    });
-    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
-  });
-
-  it("leaves system messages on their own mechanism (regression)", () => {
-    // Der Rundenbrief verschwindet weiterhin GANZ hinter dem Knopf — dort ist
-    // das richtig, hier wäre es falsch. Beide Mechaniken dürfen sich nicht
-    // vermischen.
-    restore = stubScrollHeight(CONTRIBUTION_COLLAPSE_MIN_PX * 4);
-    const long = `# Gruppe: Spark — Runde 2/3\n\n${"Auftragstext. ".repeat(60)}`;
-    renderMessage(mkMessage({ sender_type: "system", sender_id: null, body: long }));
-    expect(screen.getByTestId("group-system-toggle")).toHaveTextContent("Gruppe: Spark — Runde 2/3");
-    expect(screen.queryByTestId("group-contribution-toggle")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
+  it("folds the system letter through the same Unfold", async () => {
+    const user = userEvent.setup({ delay: null });
+    const long = "# Gruppe: X — Runde 1/2\n\n" + "Zeile.\n".repeat(40);
+    render(
+      <GroupMessage
+        message={mkMessage({ sender_type: "system", sender_id: null, body: long })}
+        senderName={null}
+        senderEmoji={null}
+        isOwn={false}
+      />,
+    );
+    expect(screen.getByTestId("group-system-chevron")).toHaveAttribute("data-open", "false");
+    await user.click(screen.getByTestId("group-system-toggle"));
+    expect(screen.getByTestId("group-system-body").closest("[data-testid='unfold']")).not.toBeNull();
   });
 });

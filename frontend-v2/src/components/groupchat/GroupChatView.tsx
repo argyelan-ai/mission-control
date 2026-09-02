@@ -42,6 +42,9 @@ interface GroupChatViewProps {
   onGroupGone?: () => void;
 }
 
+/** Marker des Lead-Zwangsformats — spiegelt `_VERDICT_MARKERS` im Backend. */
+const LEAD_VERDICT_RE = /^\s*(ZIEL ERREICHT|FRAGE AN OPERATOR|WEITER)\b/;
+
 export function GroupChatView({
   group,
   onBack,
@@ -133,6 +136,16 @@ export function GroupChatView({
     });
     return out;
   }, [stream.messages, roundBySeq]);
+
+  // Nur das Lead-Urteil steht von sich aus offen: der Lead spricht es am
+  // Rundenende mit einem der Zwangsformat-Marker (group_runner._VERDICT_MARKERS).
+  // Ein Mitglied, das zufällig mit „WEITER" beginnt, bleibt ein normaler,
+  // zugeklappter Beitrag — es zählt Sprecher UND Marker.
+  const isLeadVerdict = (m: (typeof stream.messages)[number]) =>
+    m.sender_type === "agent" &&
+    m.sender_id != null &&
+    m.sender_id === group.lead_agent_id &&
+    LEAD_VERDICT_RE.test(m.body ?? "");
 
   const memberById = useMemo(() => {
     const map = new Map<string, { name: string; emoji: string | null }>();
@@ -349,6 +362,7 @@ export function GroupChatView({
                 isOwn={message.sender_type === "user"}
                 groupWithPrevious={groupWithPrevious}
                 alsoContains={alsoContains}
+                defaultOpen={isLeadVerdict(message)}
               />
             </div>
           );
