@@ -83,28 +83,57 @@ Stattdessen ruft er die fünf Steuer-Aktionen über `sudo -n` auf, und
 Erlaubt sind GENAU diese fünf, jede mit absolutem Pfad und festen Argumenten:
 
   1. /usr/local/sbin/mc-gpu-mode.sh boost|normal|eco|eco+   GPU-Takt-Deckel
-  2. sysctl -w vm.min_free_kbytes=*                          Speicher-Reserve
+  2. /usr/local/sbin/mc-set-min-free.sh <zahl>              Speicher-Reserve
   3. systemctl enable|disable|start|stop earlyoom            OOM-Wächter
-  4. bash /usr/local/sbin/latency-tune.sh                    Latenz-Abstimmung
-  5. ip link set * mtu *                                     MTU
+  4. /usr/local/sbin/latency-tune.sh                         Latenz-Abstimmung
+  5. /usr/local/sbin/mc-set-mtu.sh <schnittstelle> <zahl>   MTU
 
 Warum genau diese: sie sind eins zu eins die fünf Felder des
 `desired_state` aus dem Geräte-Vertrag (docs/plans/2026-09-01-geraete-
 steuerung-vertrag.md) — mehr kann MC gar nicht anfordern, also darf auch
-nichts mehr erlaubt sein. Die Pfade stammen aus derselben
-control_binary()-Auflösung wie die echten Aufrufe, damit Regel und Aufruf
+nichts mehr erlaubt sein. Der systemctl-Pfad stammt aus derselben
+control_binary()-Auflösung wie der echte Aufruf, damit Regel und Aufruf
 nicht auseinanderlaufen können.
 
-Bewusst NICHT in der Regel: `tee`, `sh`, `sed`, ein nacktes `bash` oder
+Warum Wrapper-Skripte statt `sysctl -w vm.min_free_kbytes=*` und
+`ip link set * mtu *` (Review-Befund H1, 02.09.2026): ein `*` in sudoers
+passt laut `man sudoers` auch ÜBER Wortgrenzen. Die alte sysctl-Regel liess
+also `sysctl -w vm.min_free_kbytes=65536 kernel.core_pattern=|/tmp/x`
+durch, die alte ip-Regel `ip link set eth0 down mtu 1500` — beides root.
+sudo kann das seit 1.9.10 mit regulären Ausdrücken dicht machen, aber
+nicht jede Box hat so ein neues sudo. Die beiden Wrapper
+(scripts/device/mc-set-min-free.sh, mc-set-mtu.sh) prüfen deshalb SELBST:
+genau N Argumente, nur Ziffern bzw. nur ein gültiger Schnittstellenname,
+nur im erlaubten Bereich — und lehnen alles andere mit Exit 2 ab, BEVOR sie
+irgendetwas ausführen. Die sudoers-Regel für die Wrapper enthält zwar
+weiterhin ein `*` (die Zahl lässt sich nicht aufzählen), aber alles, was
+über das Wortmuster hinaus mitgegeben wird, prallt am Wrapper ab.
+`sysctl` und `ip` selbst tauchen in der Regel gar nicht mehr auf.
+
+Bewusst NICHT in der Regel: `tee`, `sh`, `sed`, `bash`, `sysctl`, `ip` oder
 irgendein Befehl mit freiem Pfad — jedes davon wäre über Umwege volles
-root. `bash` steht nur mit dem einen fest verdrahteten Skript als Argument
-da, und `sysctl` nur mit diesem einen Schlüssel.
+root. Alle Skripte werden DIREKT aufgerufen (Shebang), nie über `bash
+<skript>` — sonst wäre der Regeltext an einen Interpreter gebunden.
+
+Die Steuer-Skripte liegen im Repo unter scripts/device/ und sind hier
+zusätzlich als Text eingebettet (CONTROL_FILES, Drift-Test in
+backend/tests/test_node_agent_parsers.py hält beide Fassungen byteidentisch).
+Warum eingebettet und nicht per zweitem Endpunkt geladen: dieser Agent ist
+EINE Datei, die per `curl` von GET /api/v1/nodes/agent-script oder über die
+SSH-Einrichtung auf die Box kommt — ein zweiter Download hiesse ein zweiter
+Endpunkt, ein zweiter Docker-Mount, ein zweiter Fehlerpfad, und die Skripte
+könnten vom Agenten abweichen, der sie aufruft. So bringt `--install
+--allow-control` alles selbst mit und kopiert es root-eigen (0755, nicht
+für den Dienst-Benutzer schreibbar — sonst wäre ein Eintrag in sudoers
+gleichbedeutend mit root) nach /usr/local/sbin/. Vor jedem Setzen prüft der
+Agent, dass die Skripte da sind und root gehören; sonst steht in
+`last_error` klar, was zu tun ist.
 
 `--allow-control` lockert ausserdem die systemd-Zwangsjacke an genau zwei
 Stellen, weil Steuern sonst unmöglich ist — nicht aus Nachlässigkeit:
 `NoNewPrivileges` muss auf `no` (das Flag verbietet jedes setuid-Programm und
 damit sudo — live belegt auf einer echten Box, 01.09.2026), und die Speichergrenze steigt
-von 32 MB auf 96 MB, weil sudo und sein Kindprozess im selben cgroup zählen
+von 64 MB auf 96 MB, weil sudo und sein Kindprozess im selben cgroup zählen
 und der erste `systemctl`-Aufruf sonst den OOM-Killer auslöst statt zu
 wirken. Alles andere (Nice, IOSchedulingClass, CPUQuota) bleibt unverändert;
 welche weiteren Härtungs-Flags den Steuer-Weg brechen würden, steht bei
@@ -152,8 +181,18 @@ GPU_POLL_EVERY_N_HEARTBEATS = 4
 # exakt in die erlaubten Werte passt (fail-closed).
 GPU_MODES = ("boost", "normal", "eco", "eco+")
 GPU_MODE_FILE = Path("/etc/mc-gpu-mode")
-GPU_MODE_SCRIPT = "/usr/local/sbin/mc-gpu-mode.sh"
-LATENCY_TUNE_SCRIPT = "/usr/local/sbin/latency-tune.sh"
+CONTROL_SCRIPT_DIR = "/usr/local/sbin"
+GPU_MODE_SCRIPT = f"{CONTROL_SCRIPT_DIR}/mc-gpu-mode.sh"
+LATENCY_TUNE_SCRIPT = f"{CONTROL_SCRIPT_DIR}/latency-tune.sh"
+# Die beiden Wrapper mit strikter Argument-Prüfung (Review-Befund H1, siehe
+# Moduldoc): sie ersetzen `sysctl -w …=*` und `ip link set * mtu *` in sudoers.
+MIN_FREE_SCRIPT = f"{CONTROL_SCRIPT_DIR}/mc-set-min-free.sh"
+MTU_SCRIPT = f"{CONTROL_SCRIPT_DIR}/mc-set-mtu.sh"
+CLOCK_CAP_UNIT_PATH = Path("/etc/systemd/system/gb10-clock-cap.service")
+CONTROL_SCRIPTS_MISSING_HINT = (
+    "Steuer-Skripte fehlen — `sudo python3 mc-node-agent.py --mc-url … "
+    "--install --allow-control` wiederholen"
+)
 # Der Halte-Prozess, den latency-tune.sh startet: er hält /dev/cpu_dma_latency
 # offen. Stirbt er, fällt die Einstellung still zurück — genau deshalb prüfen
 # wir ihn und nicht nur die ASPM-Datei.
@@ -171,12 +210,30 @@ SYS_CLASS_NET = Path("/sys/class/net")
 # Verteidigungslinie und darf nie lockerer sein als das Backend — sonst
 # entsteht ein Wertebereich, den nur eine der beiden Seiten kennt.
 MIN_FREE_KBYTES_MIN = 65_536        # 64 MB
-MIN_FREE_KBYTES_MAX = 67_108_864    # 64 GB
-MTU_MIN = 1_280                     # IPv6-Minimum
+# Review M5 (02.09.2026): 64 GB war zu weit — auf einer 128-GB-Box wäre die
+# Hälfte des Speichers Reserve. 16 GB reicht für jede sinnvolle Einstellung
+# (im Feld: 5 GB) und deckelt den Schaden einer Fehleingabe.
+MIN_FREE_KBYTES_MAX = 16_777_216    # 16 GB
+# Review M5: 1280 (IPv6-Minimum) war zu tief — unter 1500 gibt es keinen
+# sinnvollen Betrieb, aber einen leisen Leistungseinbruch im Verbund.
+MTU_MIN = 1_500                     # Ethernet-Standard
 MTU_MAX = 9_000                     # Jumbo-Frames
 # Setz-Befehle dürfen hängen (systemctl wartet auf den Dienst) — hart deckeln,
 # damit die Heartbeat-Schleife nie stehen bleibt.
 SET_CMD_TIMEOUT_S = 20
+# Review M1 (02.09.2026): "gesetzt" (Exit 0) heisst nicht "wirkt". Folgt der
+# Ist-Zustand nach so vielen Setz-Versuchen mit Exit 0 immer noch nicht dem
+# Soll, wird das Feld für PAUSE-Runden ausgesetzt und als last_error
+# gemeldet. Sonst liefe alle 15 s derselbe root-Befehl (latency-tune.sh
+# würde jedes Mal einen neuen Halte-Prozess starten, nvidia-smi jede Runde
+# statt jede vierte laufen).
+SET_ATTEMPTS_BEFORE_PAUSE = 3
+SET_PAUSE_ROUNDS = 20               # 20 x 15 s = 5 Minuten
+# Review N3: Deckel für die Grösse einer HTTP-Antwort. Eine Heartbeat-Antwort
+# ist ein paar hundert Byte gross; alles jenseits von 1 MB ist kein MC,
+# sondern ein Fehler oder ein Angriff — und würde die MemoryMax-Grenze der
+# systemd-Unit (32/96 MB) sprengen, bevor json.loads überhaupt anfängt.
+HTTP_MAX_BODY_BYTES = 1_048_576
 
 # Rechte-Nachtrag 01.09.2026 (Live-Test auf einer echten Box: "RTNETLINK answers:
 # Operation not permitted"). Der Dienst läuft als normaler Benutzer — Melden
@@ -189,10 +246,10 @@ SUDOERS_PATH = Path("/etc/sudoers.d/mc-node-agent")
 # über secure_path auf, nicht über den PATH des Dienstes. Beide Seiten müssen
 # denselben Pfad meinen, sonst greift die Regel nicht und niemand sieht warum.
 CONTROL_BINARY_CANDIDATES = {
-    "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
+    # Nur noch systemctl (Review H1, 02.09.2026): sysctl und ip laufen jetzt
+    # ausschliesslich hinter den Wrapper-Skripten, bash gar nicht mehr —
+    # Skripte werden direkt über ihren Shebang aufgerufen.
     "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
-    "ip": ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip"),
-    "bash": ("/usr/bin/bash", "/bin/bash"),
 }
 # Diese Textbausteine schreibt sudo selbst, wenn es ablehnt. Sie sind der
 # Unterschied zwischen "Regel fehlt" und "Befehl selbst ist gescheitert" —
@@ -446,7 +503,7 @@ def parse_aspm_policy_performance(text: str) -> bool:
 def parse_default_iface(proc_net_route: str) -> str | None:
     """Schnittstelle der Standard-Route aus /proc/net/route.
 
-    Die Schnittstelle heisst nicht überall gleich (je nach Board z. B. enP7s7 oder enp1s0)
+    Die Schnittstelle heisst nicht überall gleich (je nach Board z. B. eth0 oder enp1s0)
     — deshalb nachschlagen statt festverdrahten. Ziel 00000000 = Default-Route;
     bei mehreren gewinnt die mit der kleinsten Metrik (Feld 7), wie im Kernel.
     """
@@ -875,7 +932,7 @@ def collect_device_state(
 
 
 def control_binary(name: str, exists=None) -> str:
-    """Absoluter Pfad zu einem der vier Systembefehle.
+    """Absoluter Pfad zu einem Systembefehl aus CONTROL_BINARY_CANDIDATES.
 
     Erster existierender Kandidat gewinnt; existiert keiner, wird der erste
     zurückgegeben, damit die Fehlermeldung einen konkreten Pfad nennt statt
@@ -938,28 +995,114 @@ def _valid_int(value: object, low: int, high: int) -> int | None:
     return value if low <= value <= high else None
 
 
-def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
-    """Gleicht `current` an `desired` an — nur die abweichenden Felder.
+def control_script_problem(path: str) -> str | None:
+    """Darf dieses Steuer-Skript über sudo als root laufen? None = ja.
 
-    Rückgabe: (etwas gesetzt?, Fehlerliste). Wirft nie: jeder Fehler wird
-    eingesammelt und landet im nächsten Heartbeat als last_error. Felder, die
-    in `desired` fehlen, bleiben unangetastet ("kein Feld = keine Meinung").
+    Zwei Prüfungen, beide aus demselben Grund: ein Skript, das in sudoers
+    steht, IST root. Fehlt es, kann nichts gesetzt werden (klarer Hinweis
+    statt rohem Exit-Code). Gehört es nicht root oder dürfen Gruppe/Andere
+    hineinschreiben, könnte der Dienst-Benutzer (oder irgendwer) seinen
+    eigenen Inhalt als root ausführen — dann lieber gar nicht setzen.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return CONTROL_SCRIPTS_MISSING_HINT
+    if st.st_uid != 0:
+        return f"{path} gehört nicht root — aus Sicherheitsgründen nicht ausgeführt"
+    if st.st_mode & 0o022:
+        return f"{path} ist für Gruppe/Andere schreibbar — aus Sicherheitsgründen nicht ausgeführt"
+    return None
+
+
+class _ApplyTracker:
+    """Merkt sich pro Feld, wie oft ein Setz-Befehl mit Exit 0 durchlief,
+    ohne dass der Ist-Zustand danach dem Soll folgte (Review M1).
+
+    Warum: `changed` hängt am Exit-Code, nicht am Zustand. Ein Skript, das
+    0 zurückgibt, aber nichts bewirkt (ASPM-Datei fehlt, nvidia-smi
+    schweigt), würde sonst alle 15 s erneut laufen — bei latency-tune.sh mit
+    jedem Mal einem neuen Halte-Prozess, und nvidia-smi jede Runde statt
+    jede vierte. Nach SET_ATTEMPTS_BEFORE_PAUSE wirkungslosen Versuchen
+    pausiert das Feld für SET_PAUSE_ROUNDS Runden und steht so lange mit
+    "gesetzt, aber Ist folgt nicht" im last_error. Danach ein neuer Anlauf
+    — vielleicht hat der Betreiber inzwischen etwas repariert.
+    """
+
+    __slots__ = ("round", "attempts", "paused_until", "targets")
+
+    def __init__(self) -> None:
+        self.round = 0
+        self.attempts: dict[str, int] = {}
+        self.paused_until: dict[str, int] = {}
+        # Welcher Befehl (Feld -> Signatur) wurde zuletzt gezählt? Ändert MC
+        # das Ziel (eco -> boost), beginnt eine neue Versuchsreihe — sonst
+        # zählte ein schnelles Hin und Her als "wirkt nicht".
+        self.targets: dict[str, str] = {}
+
+    def begin_round(self, still_pending: dict[str, str]) -> None:
+        """Am Rundenanfang mit dem FRISCHEN Ist-Zustand: welche Felder weichen
+        noch ab (Feld -> Befehls-Signatur)? Alles andere ist erfüllt und wird
+        vergessen; ein Feld mit NEUEM Ziel fängt bei null an."""
+        self.round += 1
+        for field in list(self.attempts):
+            if still_pending.get(field) != self.targets.get(field):
+                self.attempts.pop(field, None)
+                self.paused_until.pop(field, None)
+                self.targets.pop(field, None)
+        for field, n in list(self.attempts.items()):
+            if n >= SET_ATTEMPTS_BEFORE_PAUSE and field not in self.paused_until:
+                self.paused_until[field] = self.round + SET_PAUSE_ROUNDS
+        for field, until in list(self.paused_until.items()):
+            if self.round >= until:
+                # Pause vorbei: Zähler zurück, ein neuer Anlauf ist erlaubt.
+                self.paused_until.pop(field, None)
+                self.attempts[field] = 0
+
+    def is_paused(self, field: str) -> bool:
+        return self.round < self.paused_until.get(field, 0)
+
+    def pause_message(self, field: str) -> str:
+        n = self.attempts.get(field, 0)
+        remaining_s = (self.paused_until.get(field, self.round) - self.round) * HEARTBEAT_INTERVAL_S
+        return (
+            f"{field}: gesetzt, aber Ist folgt nicht ({n} Versuche mit Exit 0) — "
+            f"Pause, nächster Versuch in ~{remaining_s} s"
+        )
+
+    def record_success(self, field: str, signature: str) -> None:
+        if self.targets.get(field) != signature:
+            self.attempts[field] = 0
+            self.targets[field] = signature
+        self.attempts[field] = self.attempts.get(field, 0) + 1
+
+    def reset(self) -> None:
+        """MC hat den Soll gelöscht — nichts mehr zu verfolgen."""
+        self.attempts.clear()
+        self.paused_until.clear()
+        self.targets.clear()
+
+
+def plan_desired_state(desired: dict, current: dict) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """Welche Befehle bringen `current` auf `desired`? Reine Funktion, führt
+    nichts aus.
+
+    Rückgabe: (Liste von (Feldname, argv), Fehlerliste). Nur abweichende
+    Felder ergeben einen Befehl; Felder, die in `desired` fehlen, bleiben
+    unangetastet ("kein Feld = keine Meinung"). Jeder Wert wird streng
+    geprüft — was nicht passt, wird zum Fehler, nie zum Befehl.
     """
     errors: list[str] = []
-    changed = False
+    plans: list[tuple[str, list[str]]] = []
     if not isinstance(desired, dict):
-        return False, ["desired_state ist kein Objekt — ignoriert"]
+        return [], ["desired_state ist kein Objekt — ignoriert"]
 
     if "gpu_mode" in desired:
         mode = desired["gpu_mode"]
         if not isinstance(mode, str) or mode not in GPU_MODES:
             errors.append(f"gpu_mode {mode!r} abgelehnt (erlaubt: {', '.join(GPU_MODES)})")
         elif mode != current.get("gpu_mode"):
-            err = _run_set_cmd(_privileged([GPU_MODE_SCRIPT, mode]))
-            if err:
-                errors.append(f"gpu_mode={mode}: {err}")
-            else:
-                changed = True
+            plans.append(("gpu_mode", [GPU_MODE_SCRIPT, mode]))
 
     if "min_free_kbytes" in desired:
         value = _valid_int(desired["min_free_kbytes"], MIN_FREE_KBYTES_MIN, MIN_FREE_KBYTES_MAX)
@@ -969,13 +1112,7 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
                 f"(ganze Zahl {MIN_FREE_KBYTES_MIN}..{MIN_FREE_KBYTES_MAX} erwartet)"
             )
         elif value != current.get("min_free_kbytes"):
-            err = _run_set_cmd(_privileged(
-                [control_binary("sysctl"), "-w", f"vm.min_free_kbytes={value}"]
-            ))
-            if err:
-                errors.append(f"min_free_kbytes={value}: {err}")
-            else:
-                changed = True
+            plans.append(("min_free_kbytes", [MIN_FREE_SCRIPT, str(value)]))
 
     if "oom_guard" in desired:
         want = desired["oom_guard"]
@@ -985,24 +1122,14 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
             is_active = current.get("oom_guard") == "active"
             if want != is_active:
                 verb = "enable" if want else "disable"
-                err = _run_set_cmd(_privileged(
-                    [control_binary("systemctl"), verb, "--now", OOM_GUARD_UNIT]
-                ))
-                if err:
-                    errors.append(f"oom_guard={want}: {err}")
-                else:
-                    changed = True
+                plans.append(("oom_guard", [control_binary("systemctl"), verb, "--now", OOM_GUARD_UNIT]))
 
     if "latency_tune" in desired:
         want = desired["latency_tune"]
         if not isinstance(want, bool):
             errors.append(f"latency_tune {want!r} abgelehnt (true/false erwartet)")
         elif want and not current.get("latency_tune"):
-            err = _run_set_cmd(_privileged([control_binary("bash"), LATENCY_TUNE_SCRIPT]))
-            if err:
-                errors.append(f"latency_tune: {err}")
-            else:
-                changed = True
+            plans.append(("latency_tune", [LATENCY_TUNE_SCRIPT]))
         elif not want and current.get("latency_tune"):
             # Es gibt (Stand 01.09.2026) kein Rückweg-Skript. Ehrlich melden
             # statt einen Ausschalt-Befehl zu erfinden — ein Neustart räumt es
@@ -1020,14 +1147,54 @@ def apply_desired_state(desired: dict, current: dict) -> tuple[bool, list[str]]:
         elif not iface or not _iface_exists(iface):
             errors.append("mtu: keine Standard-Route-Schnittstelle gefunden")
         elif value != current_mtu.get("value"):
-            err = _run_set_cmd(_privileged(
-                [control_binary("ip"), "link", "set", iface, "mtu", str(value)]
-            ))
-            if err:
-                errors.append(f"mtu={value} auf {iface}: {err}")
-            else:
-                changed = True
+            plans.append(("mtu", [MTU_SCRIPT, iface, str(value)]))
 
+    return plans, errors
+
+
+def _plan_label(field: str, argv: list[str]) -> str:
+    """Kurzer Präfix für Fehlermeldungen: 'gpu_mode=eco', 'mtu=9000 auf eth0'."""
+    if field == "mtu":
+        return f"mtu={argv[2]} auf {argv[1]}"
+    if field == "oom_guard":
+        return f"oom_guard={'True' if argv[1] == 'enable' else 'False'}"
+    if field == "latency_tune":
+        return "latency_tune"
+    return f"{field}={argv[-1]}"
+
+
+def apply_desired_state(
+    desired: dict, current: dict, tracker: "_ApplyTracker | None" = None
+) -> tuple[bool, list[str]]:
+    """Gleicht `current` an `desired` an — nur die abweichenden Felder.
+
+    Rückgabe: (etwas gesetzt?, Fehlerliste). Wirft nie: jeder Fehler wird
+    eingesammelt und landet im nächsten Heartbeat als last_error.
+
+    Vor jedem Skript-Aufruf wird geprüft, dass das Skript da ist und root
+    gehört (control_script_problem) — sonst ein klarer Hinweis statt eines
+    rohen sudo-Fehlers. `tracker` (optional, run_loop) setzt Felder aus, die
+    trotz Exit 0 nicht wirken (Review M1).
+    """
+    plans, errors = plan_desired_state(desired, current)
+    changed = False
+    for field, argv in plans:
+        label = _plan_label(field, argv)
+        if tracker is not None and tracker.is_paused(field):
+            errors.append(tracker.pause_message(field))
+            continue
+        if argv[0].startswith(CONTROL_SCRIPT_DIR + "/"):
+            problem = control_script_problem(argv[0])
+            if problem:
+                errors.append(f"{label}: {problem}")
+                continue
+        err = _run_set_cmd(_privileged(argv))
+        if err:
+            errors.append(f"{label}: {err}")
+        else:
+            changed = True
+            if tracker is not None:
+                tracker.record_success(field, " ".join(argv))
     return changed, errors
 
 
@@ -1118,6 +1285,7 @@ def _read_chunked_body(reader: _SocketReader) -> bytes:
     chunk is `<hex-size>\\r\\n<data>\\r\\n`, terminated by a zero-size chunk
     followed by zero or more trailer header lines and a final blank line."""
     parts: list[bytes] = []
+    total = 0
     while True:
         size_line = reader.read_until(b"\r\n")
         size_str = size_line.split(b";", 1)[0].strip()
@@ -1129,6 +1297,11 @@ def _read_chunked_body(reader: _SocketReader) -> bytes:
             while reader.read_until(b"\r\n"):
                 pass  # drain optional trailer headers up to the final blank line
             break
+        # Review N3: derselbe Deckel wie bei Content-Length, über alle Stücke
+        # summiert — chunked darf nicht der Umweg um die Grenze sein.
+        total += size
+        if total > HTTP_MAX_BODY_BYTES:
+            raise ValueError(f"HTTP-Antwort zu gross (chunked > {HTTP_MAX_BODY_BYTES} Byte)")
         parts.append(reader.read_exact(size))
         reader.read_until(b"\r\n")  # each chunk's data is followed by a bare CRLF
     return b"".join(parts)
@@ -1160,6 +1333,14 @@ def _read_http_response(sock: socket.socket, timeout: float) -> _HTTPResponse:
         body = _read_chunked_body(reader)
     else:
         content_length = int(headers.get("content-length") or 0)
+        # Review N3: Deckel VOR dem Lesen — sonst würde ein böswilliges oder
+        # kaputtes Gegenüber mit "Content-Length: 4000000000" den Agenten
+        # in die MemoryMax-Grenze der Unit laufen lassen (OOM-Kill statt
+        # Fehlermeldung). Negative Längen sind ebenso Unsinn.
+        if content_length < 0 or content_length > HTTP_MAX_BODY_BYTES:
+            raise ValueError(
+                f"HTTP-Antwort zu gross ({content_length} Byte, Deckel {HTTP_MAX_BODY_BYTES})"
+            )
         body = reader.read_exact(content_length)
 
     return _HTTPResponse(status, headers, body)
@@ -1332,8 +1513,17 @@ WantedBy=multi-user.target
 # Genau die Zeilen, die sich zwischen Melde- und Steuer-Betrieb unterscheiden.
 # Alles andere an der Zwangsjacke bleibt in BEIDEN Fällen gleich.
 _UNIT_REPORT_ONLY = {
-    "memory_high": "16M",
-    "memory_max": "32M",
+    # Review M6 (02.09.2026), LIVE GEMESSEN statt geschätzt: `systemctl show
+    # mc-node-agent -p MemoryPeak` auf einer GB10-Box nach 24 h Betrieb =
+    # 49,3 MB Spitze (30,7 MB laufend) — die Spitze kommt vom nvidia-smi-
+    # Fork, der im selben cgroup zählt. Der alte harte Deckel von 32 MB lag
+    # UNTER dieser Spitze: die Melde-Unit wäre vom cgroup-OOM-Killer
+    # abgeschossen worden, ohne Meldung im last_error. 64 MB = Spitze plus
+    # Reserve; MemoryHigh knapp darüber, damit der Kernel nicht bei jedem
+    # nvidia-smi-Aufruf zu trimmen anfängt. Die Speicher-Diät im Moduldoc
+    # bleibt richtig — nur die Zahl war zu knapp.
+    "memory_high": "56M",
+    "memory_max": "64M",
     "tasks_max": "8",
     "no_new_privileges": (
         "# Rechte-Sperre: der Prozess darf nie Rechte dazugewinnen. Gilt im\n"
@@ -1343,8 +1533,9 @@ _UNIT_REPORT_ONLY = {
 }
 _UNIT_WITH_CONTROL = {
     # sudo + Kindprozess (systemctl/ip/bash) laufen IM SELBEN cgroup und
-    # zählen auf dieselbe Speichergrenze. Der Agent liegt bei ~27 MB Spitze —
-    # bei 32 MB hart würde der erste `systemctl enable` den cgroup-OOM-Killer
+    # zählen auf dieselbe Speichergrenze. Der Agent liegt bei ~49 MB Spitze
+    # (gemessen 02.09.2026, siehe _UNIT_REPORT_ONLY) — bei 64 MB hart würde
+    # der erste `systemctl enable` den cgroup-OOM-Killer
     # auslösen, und zwar ohne Fehlermeldung im last_error. Das wäre genau der
     # stille Ausfall, den wir sonst überall jagen. Der Deckel steigt deshalb
     # nur im Steuer-Betrieb, und nur so weit, dass ein kurzlebiger Helfer
@@ -1426,9 +1617,11 @@ SUDOERS_HEADER = """# Mission Control node-agent — Geräte-Steuerung (--allow-
 # root zu machen, sind hier GENAU die fünf Aktionen erlaubt, die MC steuern
 # kann, jede mit festem Pfad und festen Argumenten.
 #
-# Bewusst NICHT erlaubt: tee, sh, sed, ein nacktes bash, oder irgendein
-# Befehl mit freiem Pfad. Jedes davon wäre über Umwege volles root.
-# `bash` steht nur mit dem einen fest verdrahteten Skript als Argument da.
+# Bewusst NICHT erlaubt: tee, sh, sed, bash, sysctl, ip oder irgendein Befehl
+# mit freiem Pfad. Jedes davon wäre über Umwege volles root. Zahlen-Argumente
+# (Speicher-Reserve, MTU) laufen über Wrapper-Skripte, die ihre Argumente
+# SELBST streng prüfen — ein `*` in sudoers passt über Wortgrenzen hinweg
+# und wäre allein keine Grenze.
 """
 
 
@@ -1436,21 +1629,23 @@ def render_sudoers(user: str, exists=None) -> str:
     """Der Inhalt von /etc/sudoers.d/mc-node-agent für `user`.
 
     Reine Funktion (kein Schreiben), damit sie direkt geprüft werden kann.
-    Die Pfade kommen aus derselben control_binary()-Auflösung wie die echten
-    Aufrufe — die Regel kann deshalb nicht am tatsächlich ausgeführten Pfad
-    vorbeigehen.
+    Der systemctl-Pfad kommt aus derselben control_binary()-Auflösung wie
+    der echte Aufruf — die Regel kann deshalb nicht am tatsächlich
+    ausgeführten Pfad vorbeigehen. Die Skript-Pfade sind Konstanten, die
+    Aufruf und Regel gemeinsam nutzen.
     """
-    sysctl = control_binary("sysctl", exists=exists)
     systemctl = control_binary("systemctl", exists=exists)
-    ip = control_binary("ip", exists=exists)
-    bash = control_binary("bash", exists=exists)
 
     cmds: list[str] = []
     # 1. GPU-Modus: die vier Modi einzeln, kein Platzhalter — ein `*` würde
-    #    jedes Argument erlauben, das das Skript je bekommen könnte.
+    #    jedes Argument erlauben, das das Skript je bekommen könnte
+    #    (auch `restore`/`status`, die nur systemd/root gehören).
     cmds += [f"{GPU_MODE_SCRIPT} {mode}" for mode in GPU_MODES]
-    # 2. Speicher-Reserve: nur genau dieser eine sysctl-Schlüssel.
-    cmds.append(f"{sysctl} -w vm.min_free_kbytes=*")
+    # 2. Speicher-Reserve: Wrapper mit genau EINEM Zahl-Argument. Der `*`
+    #    ist nötig (die Zahl lässt sich nicht aufzählen), passt aber laut
+    #    `man sudoers` über Wortgrenzen — die Grenze zieht der Wrapper:
+    #    argc != 1 oder Nicht-Ziffern -> Exit 2, nichts ausgeführt.
+    cmds.append(f"{MIN_FREE_SCRIPT} *")
     # 3. OOM-Wächter: nur die eine Unit. `--now` steht mit drin, weil der
     #    Agent genau so aufruft — eine Regel, die der echte Aufruf nicht
     #    trifft, wäre wertlos.
@@ -1460,10 +1655,12 @@ def render_sudoers(user: str, exists=None) -> str:
     # so ruft der Agent auf (einschalten UND starten in einem Schritt).
     for verb in ("enable", "disable"):
         cmds.append(f"{systemctl} {verb} --now {OOM_GUARD_UNIT}")
-    # 4. Latenz-Abstimmung: bash NUR mit diesem einen Skript als Argument.
-    cmds.append(f"{bash} {LATENCY_TUNE_SCRIPT}")
-    # 5. MTU: Schnittstelle und Wert sind Platzhalter, der Rest steht fest.
-    cmds.append(f"{ip} link set * mtu *")
+    # 4. Latenz-Abstimmung: das Skript direkt, OHNE Argumente. Das leere
+    #    Argumentmuster in sudoers heisst "genau so, nichts dahinter".
+    cmds.append(f'{LATENCY_TUNE_SCRIPT} ""')
+    # 5. MTU: Wrapper mit genau ZWEI Argumenten (Schnittstelle, Wert) — auch
+    #    hier prüft der Wrapper argc, Zeichensatz und Bereich, nicht sudo.
+    cmds.append(f"{MTU_SCRIPT} *")
 
     lines = [SUDOERS_HEADER]
     lines += [f"{user} ALL=(root) NOPASSWD: {cmd}" for cmd in cmds]
@@ -1486,25 +1683,64 @@ def _visudo_check(path: Path) -> str | None:
     return (proc.stderr or proc.stdout or "").strip()[:500]
 
 
+def _sudoers_staging_path() -> Path:
+    """Die Prüf-Datei liegt INNERHALB von /etc/sudoers.d/ (Review H2).
+
+    Warum dort und nicht unter /etc/mc-node-agent/: jenes Verzeichnis gehört
+    dem Dienst-Benutzer. Er könnte zwischen visudo-Prüfung und Verschieben
+    die Datei austauschen oder vorab einen Symlink hinlegen — und so eine
+    eigene Regel als root installieren lassen. /etc/sudoers.d/ gehört root.
+    Der Punkt im Namen ist Absicht: sudo ignoriert per Definition jede Datei
+    in sudoers.d, deren Name einen `.` enthält oder auf `~` endet — die
+    Prüf-Datei ist also nie eine gültige Regel, auch nicht kurz.
+    """
+    return SUDOERS_PATH.parent / (SUDOERS_PATH.name + ".tmp")
+
+
+def _write_new_file_nofollow(path: Path, content: str, mode: int) -> None:
+    """Datei NEU anlegen: O_EXCL (existiert sie schon, Fehler statt
+    überschreiben) + O_NOFOLLOW (ein untergeschobener Symlink wird nicht
+    verfolgt). Beides zusammen schliesst das Zeitfenster, in dem jemand
+    anderes den Pfad besetzen könnte."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    os.chmod(path, mode)
+
+
 def install_sudoers(run_as_user: str) -> None:
     """Schreibt /etc/sudoers.d/mc-node-agent — nur mit --allow-control.
 
-    Reihenfolge mit Absicht: erst in eine Datei AUSSERHALB von sudoers.d
-    schreiben, dort mit `visudo -c` prüfen, und erst danach an den echten
-    Platz verschieben. Eine kaputte Datei in sudoers.d legt JEDES sudo auf
-    der Box lahm — der Nutzer könnte sich selbst aussperren. So gibt es
-    dieses Zeitfenster gar nicht erst. Nach dem Verschieben wird noch einmal
-    geprüft und im Zweifel sofort gelöscht.
+    Reihenfolge mit Absicht: erst in die Prüf-Datei `mc-node-agent.tmp`
+    IM root-eigenen sudoers.d schreiben (sudo ignoriert sie wegen des
+    Punkts im Namen), dort mit `visudo -c` prüfen, und erst danach mit
+    einem atomaren os.replace auf den echten Namen legen. Eine kaputte
+    Datei in sudoers.d legt JEDES sudo auf der Box lahm — der Nutzer könnte
+    sich selbst aussperren. So gibt es dieses Zeitfenster gar nicht erst.
+    Nach dem Umbenennen wird noch einmal geprüft und im Zweifel sofort
+    gelöscht.
     """
     if os.geteuid() != 0:
         log.error("--allow-control braucht root (schreibt %s). Bitte mit sudo ausführen.", SUDOERS_PATH)
         raise SystemExit(1)
 
     content = render_sudoers(run_as_user)
-    staging = SYSTEM_TOKEN_PATH.parent / "sudoers.staged"
-    staging.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    staging.write_text(content, encoding="utf-8")
-    os.chmod(staging, 0o440)
+    SUDOERS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    staging = _sudoers_staging_path()
+    # Reste eines abgebrochenen Laufs (oder ein untergeschobener Symlink)
+    # werden entfernt, nicht verfolgt: unlink löscht den Link selbst, nie
+    # das Ziel. Danach legt O_EXCL die Datei garantiert frisch an.
+    if staging.is_symlink() or staging.exists():
+        staging.unlink()
+    try:
+        _write_new_file_nofollow(staging, content, 0o440)
+    except OSError as e:
+        log.error("Prüf-Datei %s konnte nicht angelegt werden: %s", staging, e)
+        raise SystemExit(1)
 
     problem = _visudo_check(staging)
     if problem:
@@ -1512,7 +1748,6 @@ def install_sudoers(run_as_user: str) -> None:
         log.error("sudoers-Regel abgelehnt, nichts installiert: %s", problem)
         raise SystemExit(1)
 
-    SUDOERS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     os.replace(staging, SUDOERS_PATH)
     os.chmod(SUDOERS_PATH, 0o440)
     try:
@@ -1533,6 +1768,359 @@ def install_sudoers(run_as_user: str) -> None:
         "Steuerung freigeschaltet: %s erlaubt %s genau die fünf MC-Aktionen (sonst nichts).",
         SUDOERS_PATH, run_as_user,
     )
+
+
+def remove_sudoers() -> bool:
+    """Rückweg für --allow-control (Review M3): `--install` OHNE das Flag
+    nimmt die Steuerung wieder weg. True, wenn eine Datei entfernt wurde.
+
+    Auch eine liegengebliebene Prüf-Datei wird entsorgt. Die Steuer-Skripte
+    in /usr/local/sbin bleiben absichtlich: root-eigen und ohne sudoers-Regel
+    sind sie harmlos, und gb10-clock-cap.service braucht mc-gpu-mode.sh
+    weiterhin beim Systemstart.
+    """
+    removed = False
+    for path in (SUDOERS_PATH, _sudoers_staging_path()):
+        try:
+            if path.is_symlink() or path.exists():
+                path.unlink()
+                removed = removed or path == SUDOERS_PATH
+        except OSError as e:
+            log.warning("%s konnte nicht entfernt werden: %s", path, e)
+    if removed:
+        log.info("Steuerung zurückgenommen: %s entfernt — der Agent meldet nur noch.", SUDOERS_PATH)
+    return removed
+
+
+# ── Steuer-Skripte (eingebettet; Quelle und Drift-Test: scripts/device/) ────
+#
+# Warum als Text im Agenten: siehe Moduldoc ("Warum eingebettet und nicht per
+# zweitem Endpunkt"). Die Dateien unter scripts/device/ sind die lesbare,
+# prüfbare Fassung; backend/tests/test_node_agent_parsers.py stellt sicher,
+# dass beide byteidentisch sind. Änderungen also IMMER dort machen und hier
+# nachziehen (der Test wird sonst rot).
+
+# >>> CONTROL_FILES (erzeugt von scripts/device/sync-into-agent.py — NICHT von Hand ändern)
+CONTROL_FILES: dict[str, tuple[str, int, str]] = {
+    # Zielpfad -> (Dateiname unter scripts/device/, Rechte, Inhalt)
+    f"{CONTROL_SCRIPT_DIR}/mc-gpu-mode.sh": ("mc-gpu-mode.sh", 0o755, r"""#!/bin/bash
+# mc-gpu-mode.sh {boost|normal|eco|eco+|restore|status} — GPU-Takt-Deckel (GB10).
+#
+# Warum es das gibt: GB10 schaltet unter Dauerlast HART ab — kein Kernel-
+# Panic, kein Log. Der Embedded-Controller kappt den Strom, bevor das System
+# etwas schreiben kann. Ein Takt-Deckel behebt das. Die Erzeugung hängt an
+# der Speicherbandbreite, NICHT am Takt — Drosseln kostet deshalb fast
+# nichts und spart sehr viel Strom (eigener Sweep 16.08.2026, 27B-Modell,
+# EINE Box):
+#
+#   Stufe    Takt     Erzeugung   Einlesen   Watt ⌀   °C max
+#   boost    frei     20,3 tok/s   36,5 s     59,5      87    (Drosselung tritt auf)
+#   normal   2200     19,6         37,8       39,9      81
+#   eco      2000     20,4         39,2       32,5      74    <- bester Arbeitspunkt
+#   eco+     1800     19,8         40,7       27,1      69
+#
+# Die Stufe steht in /etc/mc-gpu-mode; gb10-clock-cap.service ruft beim
+# Systemstart `restore` auf, damit der Deckel einen Neustart überlebt.
+#
+# Wird von mc-node-agent.py installiert (root:root 0755 in /usr/local/sbin,
+# nur mit --install --allow-control). Die sudoers-Regel erlaubt dem Agenten
+# NUR die vier Stufen — `restore` und `status` ruft nur root/systemd.
+set -u
+STATE=/etc/mc-gpu-mode
+MODE="${1:-status}"
+NVSMI=/usr/bin/nvidia-smi
+
+if [ "$#" -gt 1 ]; then
+  echo "abgelehnt: höchstens ein Argument erwartet" >&2
+  exit 2
+fi
+# Erst das Argument prüfen, dann die Umgebung: ein unbekannter Modus ist
+# immer Exit 2, egal ob nvidia-smi da ist.
+case "$MODE" in
+  boost|normal|eco|eco+|restore|status) ;;
+  *) echo "Aufruf: $0 {boost|normal|eco|eco+|restore|status}" >&2; exit 2 ;;
+esac
+[ -x "$NVSMI" ] || { echo "nvidia-smi fehlt unter $NVSMI" >&2; exit 1; }
+
+# Scheitert nvidia-smi, wird die Stufe NICHT gespeichert und der Aufruf
+# endet mit Exit 1 — der Agent meldet das dann als last_error, statt dass
+# /etc/mc-gpu-mode etwas behauptet, was die GPU gar nicht fährt.
+apply() {
+  if ! "$NVSMI" -lgc "0,$1" >/dev/null 2>&1; then
+    echo "nvidia-smi -lgc 0,$1 fehlgeschlagen" >&2
+    return 1
+  fi
+}
+release() {
+  if ! "$NVSMI" -rgc >/dev/null 2>&1; then
+    echo "nvidia-smi -rgc fehlgeschlagen" >&2
+    return 1
+  fi
+}
+
+case "$MODE" in
+  boost)  release       && echo boost  > "$STATE" || exit 1 ;;
+  normal) apply 2200    && echo normal > "$STATE" || exit 1 ;;
+  eco)    apply 2000    && echo eco    > "$STATE" || exit 1 ;;
+  eco+)   apply 1800    && echo "eco+" > "$STATE" || exit 1 ;;
+  restore)                                     # beim Systemstart: gespeicherte Stufe setzen
+          M=$(cat "$STATE" 2>/dev/null || echo eco)
+          case "$M" in boost|normal|eco|eco+) ;; *) M=eco ;; esac
+          exec "$0" "$M" ;;
+  status) ;;
+esac
+
+GESPEICHERT=$(cat "$STATE" 2>/dev/null || echo "-")
+IST=$("$NVSMI" --query-gpu=clocks.gr --format=csv,noheader 2>/dev/null)
+WATT=$("$NVSMI" --query-gpu=power.draw --format=csv,noheader 2>/dev/null)
+TEMP=$("$NVSMI" --query-gpu=temperature.gpu --format=csv,noheader 2>/dev/null)
+echo "Modus: ${GESPEICHERT} | Takt: ${IST} | ${WATT} | ${TEMP} °C"
+"""),
+    f"{CONTROL_SCRIPT_DIR}/latency-tune.sh": ("latency-tune.sh", 0o755, r"""#!/bin/bash
+# latency-tune.sh — Latenz-Abstimmung für den TP-Verbund über Netz:
+# PCIe-ASPM auf "performance" und CPU-Tiefschlaf (tiefe C-States) sperren.
+#
+# Der zweite Teil braucht einen HALTE-PROZESS: solange jemand
+# /dev/cpu_dma_latency mit dem Wert 0 offen hält, bleibt die CPU wach. Stirbt
+# der Prozess (oder die Box startet neu), fällt die Einstellung STILL zurück —
+# deshalb prüft der Agent den Prozess (Kennung "cpu_dma_holder" in der
+# Kommandozeile) und nicht nur die ASPM-Datei.
+#
+# Idempotent: ist beides schon aktiv, wird NICHTS neu gestartet (Exit 0).
+# Sonst würde jeder Aufruf einen weiteren Halter erzeugen. Scheitert einer
+# der beiden Schritte, endet das Skript mit Exit 1 und einer Meldung — der
+# Agent zeigt sie als last_error.
+#
+# Wird von mc-node-agent.py installiert (root:root 0755 in /usr/local/sbin,
+# nur mit --install --allow-control). Kein Rückweg-Skript: ein Neustart
+# räumt beides weg.
+set -u
+ASPM=/sys/module/pcie_aspm/parameters/policy
+DMA=/dev/cpu_dma_latency
+HOLDER_TAG=cpu_dma_holder
+
+if [ "$#" -ne 0 ]; then
+  echo "abgelehnt: keine Argumente erwartet" >&2
+  exit 2
+fi
+
+holder_running() {
+  # Muster mit Klammer, damit der pgrep-Aufruf selbst nie auf sich passt.
+  pgrep -f "cpu_dma_holde[r]" >/dev/null 2>&1
+}
+
+aspm_ok=0
+if [ -w "$ASPM" ]; then
+  if grep -q '\[performance\]' "$ASPM" 2>/dev/null; then
+    aspm_ok=1
+  elif echo performance > "$ASPM" 2>/dev/null; then
+    aspm_ok=1
+  fi
+fi
+if [ "$aspm_ok" -ne 1 ]; then
+  echo "ASPM-Richtlinie konnte nicht auf performance gesetzt werden ($ASPM)" >&2
+  exit 1
+fi
+
+if ! holder_running; then
+  if [ ! -w "$DMA" ]; then
+    echo "$DMA nicht beschreibbar — C-State-Sperre unmöglich" >&2
+    exit 1
+  fi
+  # Halter: eigene Sitzung (setsid), kein Terminal, überlebt das Ende dieses
+  # Skripts. Die Zeile "# cpu_dma_holder" im Python-Code ist die Kennung,
+  # nach der Agent und pgrep suchen.
+  setsid nohup python3 -c "
+import struct, time
+f = open('$DMA', 'wb', buffering=0)
+f.write(struct.pack('i', 0))
+# $HOLDER_TAG
+while True: time.sleep(3600)
+" > /dev/null 2>&1 < /dev/null &
+  sleep 1
+  if ! holder_running; then
+    echo "Halte-Prozess ($HOLDER_TAG) ist nicht gestartet" >&2
+    exit 1
+  fi
+fi
+
+echo "ASPM: $(cat "$ASPM") | Halter läuft"
+"""),
+    f"{CONTROL_SCRIPT_DIR}/mc-set-min-free.sh": ("mc-set-min-free.sh", 0o755, r"""#!/bin/bash
+# mc-set-min-free.sh <kbytes> — Speicher-Reserve (vm.min_free_kbytes) setzen.
+#
+# Warum ein Wrapper statt `sysctl -w vm.min_free_kbytes=*` direkt in sudoers:
+# ein `*` in einer sudoers-Regel passt laut `man sudoers` auch ÜBER
+# Wortgrenzen. Die Regel liesse also auch
+#     sysctl -w vm.min_free_kbytes=65536 kernel.core_pattern=|/tmp/x
+# durch — und das wäre root. Dieser Wrapper ist deshalb die eigentliche
+# Argument-Grenze: GENAU ein Argument, nur Ziffern, nur im erlaubten Bereich.
+# Alles andere endet mit Exit 2, bevor irgendetwas ausgeführt wird.
+#
+# Wird von mc-node-agent.py installiert (root:root 0755 in /usr/local/sbin,
+# nur mit --install --allow-control). Die Grenzen sind absichtlich IDENTISCH
+# zu MIN_FREE_KBYTES_MIN/MAX im Agenten und MIN_FREE_KBYTES_RANGE im Backend.
+set -u
+
+MIN=65536       # 64 MB — darunter tut der Kernel nichts Sinnvolles mehr
+MAX=16777216    # 16 GB — mehr Reserve macht die Box unbenutzbar
+
+if [ "$#" -ne 1 ]; then
+  echo "abgelehnt: genau ein Argument erwartet (kbytes), bekommen: $#" >&2
+  exit 2
+fi
+VALUE="$1"
+# Nur Ziffern, 5-8 Stellen (65536 hat 5, 16777216 hat 8). Kein Vorzeichen,
+# kein Leerzeichen, kein Gleichheitszeichen, kein zweiter Schlüssel.
+case "$VALUE" in
+  ''|*[!0-9]*) echo "abgelehnt: '$VALUE' ist keine ganze Zahl" >&2; exit 2 ;;
+esac
+if [ "${#VALUE}" -gt 8 ] || [ "$VALUE" -lt "$MIN" ] || [ "$VALUE" -gt "$MAX" ]; then
+  echo "abgelehnt: $VALUE ausserhalb von $MIN..$MAX" >&2
+  exit 2
+fi
+
+SYSCTL=/usr/sbin/sysctl
+[ -x "$SYSCTL" ] || SYSCTL=/sbin/sysctl
+
+# Nur für Tests ohne root (sudo setzt die Umgebung zurück, env_reset — im
+# echten Betrieb kommt diese Variable nie hier an).
+if [ "${MC_DEVICE_DRY_RUN:-}" = "1" ]; then
+  echo "DRY-RUN: $SYSCTL -w vm.min_free_kbytes=$VALUE"
+  exit 0
+fi
+exec "$SYSCTL" -w "vm.min_free_kbytes=$VALUE"
+"""),
+    f"{CONTROL_SCRIPT_DIR}/mc-set-mtu.sh": ("mc-set-mtu.sh", 0o755, r"""#!/bin/bash
+# mc-set-mtu.sh <schnittstelle> <mtu> — MTU einer Netz-Schnittstelle setzen.
+#
+# Warum ein Wrapper statt `ip link set * mtu *` direkt in sudoers: die zwei
+# `*` passen laut `man sudoers` über Wortgrenzen hinweg, die Regel liesse also
+#     ip link set eth0 down mtu 1500      (Schnittstelle aus)
+#     ip link set eth0 netns 1 mtu 1500   (Schnittstelle in anderen Namensraum)
+# durch. Dieser Wrapper ist deshalb die eigentliche Argument-Grenze: GENAU
+# zwei Argumente, Schnittstelle nur aus dem erlaubten Zeichensatz UND in
+# /sys/class/net vorhanden, MTU nur Ziffern im erlaubten Bereich. Alles
+# andere endet mit Exit 2, bevor irgendetwas ausgeführt wird.
+#
+# Wird von mc-node-agent.py installiert (root:root 0755 in /usr/local/sbin,
+# nur mit --install --allow-control). Die Grenzen sind absichtlich IDENTISCH
+# zu MTU_MIN/MAX im Agenten und MTU_RANGE im Backend.
+set -u
+
+MIN=1500   # Ethernet-Standard — kleiner bremst nur und bricht Verbund-Traffic
+MAX=9000   # Jumbo-Frames
+
+if [ "$#" -ne 2 ]; then
+  echo "abgelehnt: genau zwei Argumente erwartet (schnittstelle mtu), bekommen: $#" >&2
+  exit 2
+fi
+IFACE="$1"
+MTU="$2"
+
+# Schnittstellenname: Linux erlaubt max. 15 Zeichen (IFNAMSIZ-1). Erlaubt
+# sind nur Buchstaben, Ziffern, '-', '_' und '.' — kein '/', kein Leerzeichen,
+# kein Optionsstrich am Anfang (sonst würde "-h" o.ä. als Option gelesen).
+case "$IFACE" in
+  ''|-*|*[!A-Za-z0-9._-]*) echo "abgelehnt: ungültiger Schnittstellenname '$IFACE'" >&2; exit 2 ;;
+esac
+if [ "${#IFACE}" -gt 15 ] || [ "$IFACE" = "." ] || [ "$IFACE" = ".." ]; then
+  echo "abgelehnt: ungültiger Schnittstellenname '$IFACE'" >&2
+  exit 2
+fi
+if [ ! -e "/sys/class/net/$IFACE" ] && [ "${MC_DEVICE_DRY_RUN:-}" != "1" ]; then
+  echo "abgelehnt: Schnittstelle '$IFACE' gibt es nicht" >&2
+  exit 2
+fi
+
+case "$MTU" in
+  ''|*[!0-9]*) echo "abgelehnt: '$MTU' ist keine ganze Zahl" >&2; exit 2 ;;
+esac
+if [ "${#MTU}" -gt 4 ] || [ "$MTU" -lt "$MIN" ] || [ "$MTU" -gt "$MAX" ]; then
+  echo "abgelehnt: MTU $MTU ausserhalb von $MIN..$MAX" >&2
+  exit 2
+fi
+
+IP=/usr/sbin/ip
+[ -x "$IP" ] || IP=/sbin/ip
+[ -x "$IP" ] || IP=/usr/bin/ip
+
+# Nur für Tests ohne root (sudo setzt die Umgebung zurück, env_reset — im
+# echten Betrieb kommt diese Variable nie hier an).
+if [ "${MC_DEVICE_DRY_RUN:-}" = "1" ]; then
+  echo "DRY-RUN: $IP link set dev $IFACE mtu $MTU"
+  exit 0
+fi
+# `dev` explizit: damit der Name nie als Schlüsselwort (up/down/netns…)
+# gelesen werden kann, selbst wenn eine Schnittstelle so hiesse.
+exec "$IP" link set dev "$IFACE" mtu "$MTU"
+"""),
+    str(CLOCK_CAP_UNIT_PATH): ("gb10-clock-cap.service", 0o644, r"""[Unit]
+Description=GB10 GPU-Modus (gespeicherte Stufe setzen: boost/normal/eco/eco+)
+After=nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/mc-gpu-mode.sh restore
+ExecStop=/usr/bin/nvidia-smi -rgc
+
+[Install]
+WantedBy=multi-user.target
+"""),
+}
+# <<< CONTROL_FILES
+
+
+def install_control_scripts() -> None:
+    """Kopiert die eingebetteten Steuer-Skripte root-eigen nach
+    /usr/local/sbin (0755) und die Takt-Deckel-Unit nach /etc/systemd/system
+    — nur mit --install --allow-control (Review H3).
+
+    Warum root-eigen und nicht für den Dienst-Benutzer schreibbar: die
+    Skripte stehen in sudoers. Wer sie ändern kann, ist root. Geschrieben
+    wird über eine `.tmp`-Datei im selben (root-eigenen) Verzeichnis mit
+    O_EXCL|O_NOFOLLOW und dann atomar umbenannt — ein halb geschriebenes
+    Skript kann so nie kurz als root laufen.
+
+    Die Unit wird nur aktiviert (`enable`), nicht gestartet: ein Takt-Wechsel
+    ist eine Entscheidung des Betreibers über MC, kein Nebeneffekt einer
+    Installation. Beim nächsten Systemstart stellt sie die gespeicherte Stufe
+    wieder her.
+    """
+    if os.geteuid() != 0:
+        log.error("Steuer-Skripte installieren braucht root.")
+        raise SystemExit(1)
+    unit_written = False
+    for target, (name, mode, content) in CONTROL_FILES.items():
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            if tmp.is_symlink() or tmp.exists():
+                tmp.unlink()
+            _write_new_file_nofollow(tmp, content, mode)
+            os.chown(tmp, 0, 0)
+            os.replace(tmp, path)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            log.error("Steuer-Skript %s konnte nicht installiert werden: %s", path, e)
+            raise SystemExit(1)
+        if path == CLOCK_CAP_UNIT_PATH:
+            unit_written = True
+    log.info("Steuer-Skripte installiert (root:root): %s", ", ".join(CONTROL_FILES))
+    if unit_written:
+        try:
+            subprocess.run(["systemctl", "daemon-reload"], check=True, timeout=SET_CMD_TIMEOUT_S)
+            subprocess.run(
+                ["systemctl", "enable", CLOCK_CAP_UNIT_PATH.name],
+                check=True, timeout=SET_CMD_TIMEOUT_S,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            # Kein Abbruch: die Skripte sind da, nur die Boot-Wiederherstellung
+            # fehlt — das ist ein Hinweis, kein Grund, die Steuerung zu verweigern.
+            log.warning("%s konnte nicht aktiviert werden: %s", CLOCK_CAP_UNIT_PATH.name, e)
 
 
 def install_systemd_unit(mc_url: str, run_as_user: str, allow_control: bool = False) -> None:
@@ -1579,8 +2167,14 @@ def install_systemd_unit(mc_url: str, run_as_user: str, allow_control: bool = Fa
     log.info("systemd-Unit geschrieben: %s", SYSTEMD_UNIT_PATH)
 
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", "mc-node-agent.service"], check=True)
-    log.info("mc-node-agent.service aktiviert + gestartet (User=%s).", run_as_user)
+    subprocess.run(["systemctl", "enable", "mc-node-agent.service"], check=True)
+    # `restart` statt `enable --now`: läuft der Dienst schon (erneute
+    # Installation, etwa um --allow-control ein- oder auszuschalten), würde
+    # `--now` ihn NICHT neu starten — die geänderte Unit (NoNewPrivileges,
+    # Speichergrenze) bliebe bis zum nächsten Neustart wirkungslos. restart
+    # startet einen gestoppten Dienst genauso wie `start`.
+    subprocess.run(["systemctl", "restart", "mc-node-agent.service"], check=True)
+    log.info("mc-node-agent.service aktiviert + (neu) gestartet (User=%s).", run_as_user)
 
 
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
@@ -1630,6 +2224,7 @@ def run_loop(mc_url: str, token: str) -> None:
     cached_oom_guard: str | None = None
     gpu_poll_due = True  # poll once, unconditionally, at startup
     apply_status: dict = {"applied_at": None, "last_error": None}
+    tracker = _ApplyTracker()
 
     while True:
         try:
@@ -1676,7 +2271,15 @@ def run_loop(mc_url: str, token: str) -> None:
                 desired = (response or {}).get("desired_state")
                 if isinstance(desired, dict) and desired:
                     try:
-                        changed, errors = apply_desired_state(desired, device_state)
+                        # Rundenanfang mit dem FRISCHEN Ist: welche Felder
+                        # weichen noch ab? Daraus lernt der Tracker, ob ein
+                        # Setz-Befehl der letzten Runde gewirkt hat (M1).
+                        pending = {
+                            field: " ".join(argv)
+                            for field, argv in plan_desired_state(desired, device_state)[0]
+                        }
+                        tracker.begin_round(pending)
+                        changed, errors = apply_desired_state(desired, device_state, tracker)
                     except Exception as e:  # noqa: BLE001 — NIE crashen
                         changed, errors = False, [f"Setzen abgebrochen: {e}"]
                     if errors:
@@ -1691,6 +2294,14 @@ def run_loop(mc_url: str, token: str) -> None:
                         # nächste Runde gegen den alten Ist-Zustand und
                         # setzte denselben Wert nochmals.
                         gpu_poll_due = True
+                else:
+                    # Review M2: MC hat den Soll gelöscht (oder nie gesetzt)
+                    # — ein alter Fehler darf dann nicht als rote Ampel
+                    # kleben bleiben. Es gibt nichts mehr, das scheitern kann.
+                    if apply_status["last_error"] is not None:
+                        log.info("Kein Soll-Zustand mehr — letzter Fehler zurückgesetzt.")
+                    apply_status["last_error"] = None
+                    tracker.reset()
 
             if cached_scan is not None:
                 last_sent_fingerprint = cached_scan[0]
@@ -1725,9 +2336,12 @@ Mission Control Node Agent — push telemetry (Fleet & Rezepte v2, Phase 1).
                  (oder Env MC_URL)
   --pair CODE    Pairing-Code einlösen (aus POST /api/v1/nodes/pairing-codes)
                  und Token speichern
-  --install      Als systemd-Dienst installieren — braucht sudo/root
+  --install      Als systemd-Dienst installieren — braucht sudo/root.
+                 Ohne --allow-control nimmt es eine frühere Freischaltung
+                 zurück (löscht /etc/sudoers.d/mc-node-agent).
   --allow-control
-                 Steuerung freischalten: schreibt /etc/sudoers.d/mc-node-agent
+                 Steuerung freischalten: kopiert die Steuer-Skripte root-eigen
+                 nach /usr/local/sbin und schreibt /etc/sudoers.d/mc-node-agent
                  mit GENAU den fünf MC-Aktionen (GPU-Modus, min_free_kbytes,
                  earlyoom, latency-tune, MTU) und sonst nichts. Ohne diesen
                  Schalter meldet der Agent nur und setzt nie etwas.
@@ -1825,8 +2439,35 @@ def main(argv: list[str] | None = None) -> int:
         # Agent trotzdem und meldet weiter — nur setzen kann er dann nicht.
         # Umgekehrt wäre eine gescheiterte Regel ein Totalausfall.
         if args.allow_control:
-            install_sudoers(run_as_user)
+            try:
+                # Erst die Skripte (root-eigen), dann die Regel, die sie
+                # erlaubt — eine Regel auf ein noch fehlendes Skript wäre
+                # zwar harmlos, aber der Agent meldete bis dahin Fehler.
+                install_control_scripts()
+                install_sudoers(run_as_user)
+            except SystemExit:
+                # Review M3: Steuerung konnte nicht freigeschaltet werden.
+                # Die Unit steht aber schon auf "Steuer-Betrieb"
+                # (NoNewPrivileges=no, 96 MB). Diese Lockerung ohne die
+                # sudoers-Regel wäre Lockerung ohne Nutzen — deshalb zurück
+                # auf die strenge Melde-Unit, und ehrlich mit Exit 1 enden.
+                remove_sudoers()
+                if args.install:
+                    log.error(
+                        "Steuerung NICHT freigeschaltet — Dienst wird auf reinen "
+                        "Melde-Betrieb zurückgesetzt."
+                    )
+                    try:
+                        install_systemd_unit(mc_url, run_as_user, allow_control=False)
+                    except subprocess.CalledProcessError as e:
+                        log.error("systemctl-Aufruf beim Zurücksetzen fehlgeschlagen: %s", e)
+                return 1
         else:
+            # Review M3: der Rückweg. `--install` ohne das Flag nimmt eine
+            # frühere Freischaltung wieder zurück — sonst gäbe es keinen
+            # Weg zurück ausser Handarbeit in /etc/sudoers.d.
+            if args.install:
+                remove_sudoers()
             log.info(
                 "Steuerung NICHT freigeschaltet (Standard). Der Agent meldet den "
                 "Gerätezustand, setzt aber nichts. Zum Freischalten: erneut mit "

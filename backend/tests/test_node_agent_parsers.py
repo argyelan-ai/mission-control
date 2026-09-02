@@ -865,6 +865,9 @@ def cmds(agent, monkeypatch):
         return calls.result["proc"]
 
     monkeypatch.setattr(agent.subprocess, "run", fake_run)
+    # Der Testrechner hat /usr/local/sbin/mc-*.sh nicht — die Existenz-/
+    # Besitzprüfung (Review H3) bekommt hier ihren eigenen Test weiter unten.
+    monkeypatch.setattr(agent, "control_script_problem", lambda path: None)
     return calls
 
 
@@ -924,9 +927,13 @@ class TestApplyDesiredState:
     def test_min_free_kbytes_change(self, agent, cmds):
         changed, errors = agent.apply_desired_state({"min_free_kbytes": 1048576}, CURRENT)
         assert (changed, errors) == (True, [])
-        assert cmds[0][0] == _expected(agent, [_bin(agent, "sysctl"), "-w", "vm.min_free_kbytes=1048576"])
+        assert cmds[0][0] == _expected(agent, [agent.MIN_FREE_SCRIPT, "1048576"])
 
-    @pytest.mark.parametrize("bad", ["1048576", 0, -5, True, 1024, 99999999999, 1.5, None])
+    @pytest.mark.parametrize("bad", [
+        "1048576", 0, -5, True, 1024, 99999999999, 1.5, None,
+        67_108_864,  # der alte 64-GB-Deckel — seit Review M5 zu viel
+        16_777_217,  # ein KB über dem neuen 16-GB-Deckel
+    ])
     def test_min_free_kbytes_rejects_wrong_type_or_range(self, agent, cmds, bad):
         changed, errors = agent.apply_desired_state({"min_free_kbytes": bad}, CURRENT)
         assert (changed, cmds) == (False, [])
@@ -952,7 +959,9 @@ class TestApplyDesiredState:
         current = dict(CURRENT, latency_tune=False)
         changed, errors = agent.apply_desired_state({"latency_tune": True}, current)
         assert (changed, errors) == (True, [])
-        assert cmds[0][0] == _expected(agent, [_bin(agent, "bash"), agent.LATENCY_TUNE_SCRIPT])
+        # Direkt über den Shebang, nie `bash <skript>` — die sudoers-Regel
+        # erlaubt genau diesen Aufruf ohne Argumente.
+        assert cmds[0][0] == _expected(agent, [agent.LATENCY_TUNE_SCRIPT])
 
     def test_latency_tune_off_is_reported_not_invented(self, agent, cmds):
         changed, errors = agent.apply_desired_state({"latency_tune": False}, CURRENT)
@@ -963,9 +972,13 @@ class TestApplyDesiredState:
         monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
         changed, errors = agent.apply_desired_state({"mtu": 1500}, CURRENT)
         assert (changed, errors) == (True, [])
-        assert cmds[0][0] == _expected(agent, [_bin(agent, "ip"), "link", "set", "eth0", "mtu", "1500"])
+        assert cmds[0][0] == _expected(agent, [agent.MTU_SCRIPT, "eth0", "1500"])
 
-    @pytest.mark.parametrize("bad", [99, 576, 9216, 99999, "9000", True, None])
+    @pytest.mark.parametrize("bad", [
+        99, 576, 9216, 99999, "9000", True, None,
+        1280,  # das alte IPv6-Minimum — seit Review M5 zu tief
+        1499,
+    ])
     def test_mtu_rejects_implausible_values(self, agent, cmds, monkeypatch, bad):
         monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
         changed, errors = agent.apply_desired_state({"mtu": bad}, CURRENT)
@@ -985,6 +998,10 @@ class TestApplyDesiredState:
         assert errors and "permission denied" in errors[0]
 
     def test_missing_script_lands_in_last_error_without_crashing(self, agent, monkeypatch):
+        """Die Existenzprüfung (H3) ist hier abgeschaltet — geprüft wird der
+        Fall, dass das Skript zwischen Prüfung und Aufruf verschwindet."""
+        monkeypatch.setattr(agent, "control_script_problem", lambda path: None)
+
         def boom(argv, **kwargs):
             raise FileNotFoundError(argv[0])
 
@@ -994,6 +1011,8 @@ class TestApplyDesiredState:
         assert errors and "nicht vorhanden" in errors[0]  # sudo ODER das Skript
 
     def test_timeout_lands_in_last_error_without_crashing(self, agent, monkeypatch):
+        monkeypatch.setattr(agent, "control_script_problem", lambda path: None)
+
         def boom(argv, **kwargs):
             raise subprocess.TimeoutExpired(argv, 20)
 
@@ -1008,7 +1027,7 @@ class TestApplyDesiredState:
         changed, errors = agent.apply_desired_state(desired, CURRENT)
         assert changed is True
         assert len(errors) == 1
-        assert cmds[0][0] == _expected(agent, [_bin(agent, "sysctl"), "-w", "vm.min_free_kbytes=1048576"])
+        assert cmds[0][0] == _expected(agent, [agent.MIN_FREE_SCRIPT, "1048576"])
 
     def test_non_dict_desired_state_is_ignored(self, agent, cmds):
         changed, errors = agent.apply_desired_state("gib mir root", CURRENT)
@@ -1276,6 +1295,7 @@ class TestSudoLayer:
 
     def test_missing_sudo_binary_does_not_crash(self, agent, monkeypatch):
         monkeypatch.setattr(agent.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(agent, "control_script_problem", lambda path: None)
 
         def boom(argv, **kwargs):
             raise FileNotFoundError(argv[0])
@@ -1292,17 +1312,20 @@ class TestRenderSudoers:
 
     def test_covers_exactly_the_five_actions(self, agent):
         text = self._rule(agent)
-        assert text.count("NOPASSWD:") == 4 + 1 + 6 + 1 + 1  # Modi + sysctl + systemctl + bash + ip
+        assert text.count("NOPASSWD:") == 4 + 1 + 6 + 1 + 1  # Modi + min-free + systemctl + latency + mtu
         for mode in agent.GPU_MODES:
             assert f"{agent.GPU_MODE_SCRIPT} {mode}" in text
-        assert "-w vm.min_free_kbytes=*" in text
+        assert f"{agent.MIN_FREE_SCRIPT} *" in text
         assert "enable --now earlyoom" in text
-        assert f"bash {agent.LATENCY_TUNE_SCRIPT}" in text
-        assert "link set * mtu *" in text
+        assert f'{agent.LATENCY_TUNE_SCRIPT} ""' in text
+        assert f"{agent.MTU_SCRIPT} *" in text
 
     @pytest.mark.parametrize("verboten", [
         "tee", " sh ", "/bin/sh", "sed", "ALL\n", "NOPASSWD: ALL",
-        "systemctl *", "sysctl -w *", "mc-gpu-mode.sh *",
+        "systemctl *", "mc-gpu-mode.sh *",
+        # Review H1: die alten Regeln mit `*` über Wortgrenzen dürfen nie
+        # zurückkommen — und die nackten Binaries auch nicht.
+        "sysctl", "vm.min_free_kbytes", "/ip ", "link set", "bash",
     ])
     def test_never_grants_a_backdoor_to_full_root(self, agent, verboten):
         """tee/sh/sed oder ein Platzhalter am falschen Ort wären faktisch
@@ -1314,10 +1337,13 @@ class TestRenderSudoers:
         )
         assert verboten not in rules
 
-    def test_bash_only_ever_with_the_one_fixed_script(self, agent):
+    def test_latency_tune_only_ever_without_arguments(self, agent):
+        """`cmd ""` heisst in sudoers: nur OHNE Argumente. Ohne das leere
+        Muster dürfte der Dienst-Benutzer dem Skript beliebige Argumente
+        mitgeben — heute ignoriert es sie, morgen vielleicht nicht."""
         for line in self._rule(agent).splitlines():
-            if "bash" in line and line.startswith("gpuops"):
-                assert line.endswith(agent.LATENCY_TUNE_SCRIPT)
+            if agent.LATENCY_TUNE_SCRIPT in line and line.startswith("gpuops"):
+                assert line.endswith(f'{agent.LATENCY_TUNE_SCRIPT} ""')
 
     def test_paths_come_from_the_same_resolution_as_the_real_calls(self, agent, cmds, monkeypatch):
         """Drift-Wächter: Regel und Aufruf müssen denselben Pfad meinen."""
@@ -1365,23 +1391,50 @@ class TestInstallSudoers:
         with pytest.raises(SystemExit):
             agent.install_sudoers("gpuops")
         assert not target.exists()
-        assert not (tmp_path / "etc" / "sudoers.staged").exists()
+        assert list(target.parent.iterdir()) == []  # auch keine Prüf-Datei
+        assert not (tmp_path / "etc").exists()  # und nichts im User-Verzeichnis
 
-    def test_syntax_is_checked_before_the_file_reaches_sudoers_d(self, agent, tmp_path, monkeypatch):
-        """Der Prüfling darf NICHT in sudoers.d liegen — sonst gäbe es ein
-        Zeitfenster, in dem sudo bereits kaputt ist."""
+    def test_staging_lives_inside_sudoers_d_with_a_dot_in_the_name(self, agent, tmp_path, monkeypatch):
+        """Review H2: der Prüfling liegt IM root-eigenen sudoers.d (nicht im
+        User-Verzeichnis /etc/mc-node-agent, wo ihn der Dienst-Benutzer
+        zwischen Prüfung und Verschieben austauschen könnte) — und heisst
+        `mc-node-agent.tmp`, denn Dateien mit `.` im Namen ignoriert sudo
+        per Definition. Erst nach der Prüfung bekommt er den echten Namen."""
         target = self._prepare(agent, tmp_path, monkeypatch)
-        checked: list[Path] = []
+        checked: list[tuple[Path, bool]] = []
 
         def fake_check(path):
-            checked.append(Path(path))
-            assert not target.exists() or Path(path) == target
+            checked.append((Path(path), target.exists()))
             return None
 
         monkeypatch.setattr(agent, "_visudo_check", fake_check)
         agent.install_sudoers("gpuops")
-        assert checked[0].parent != target.parent  # erst ausserhalb geprüft
-        assert checked[-1] == target  # und danach am echten Platz noch einmal
+        first_path, target_existed_then = checked[0]
+        assert first_path == target.parent / "mc-node-agent.tmp"
+        assert "." in first_path.name  # sudo ignoriert sie -> nie kurz aktiv
+        assert target_existed_then is False  # geprüft, BEVOR es die echte gibt
+        assert checked[-1] == (target, True)  # und danach am echten Platz noch einmal
+        assert not first_path.exists()  # Prüf-Datei ist umbenannt, nicht kopiert
+        assert not (tmp_path / "etc").exists()  # nichts mehr im User-Verzeichnis
+
+    def test_a_planted_symlink_at_the_staging_path_is_not_followed(self, agent, tmp_path, monkeypatch):
+        """Symlink-Angriff (Review H2): liegt am Prüf-Pfad ein Link auf eine
+        fremde Datei, darf die Regel weder DORT landen noch die fremde Datei
+        überschrieben werden. O_EXCL|O_NOFOLLOW + vorheriges unlink des Links."""
+        target = self._prepare(agent, tmp_path, monkeypatch)
+        target.parent.mkdir(parents=True)
+        victim = tmp_path / "victim"
+        victim.write_text("unversehrt\n")
+        staging = target.parent / "mc-node-agent.tmp"
+        staging.symlink_to(victim)
+        monkeypatch.setattr(agent, "_visudo_check", lambda path: None)
+
+        agent.install_sudoers("gpuops")
+
+        assert victim.read_text() == "unversehrt\n"
+        assert target.is_file() and not target.is_symlink()
+        assert "NOPASSWD" in target.read_text()
+        assert not staging.exists() and not staging.is_symlink()
 
     def test_a_complaint_after_the_move_removes_the_file_again(self, agent, tmp_path, monkeypatch):
         target = self._prepare(agent, tmp_path, monkeypatch)
@@ -1423,30 +1476,99 @@ class TestAllowControlFlag:
         args = agent.parse_args(["--mc-url", "http://x", "--install", "--allow-control"])
         assert (args.install, args.allow_control) == (True, True)
 
-    def test_install_without_the_flag_writes_no_sudoers_file(self, agent, monkeypatch):
+    @staticmethod
+    def _neutralise_install(agent, monkeypatch, tmp_path):
+        """main() fasst bei --install vier Dinge an: Unit, Skripte, sudoers,
+        Rückweg. Alle vier werden hier abgefangen und protokolliert."""
+        calls: list = []
+        monkeypatch.setattr(
+            agent, "install_systemd_unit",
+            lambda mc_url, user, allow_control=False: calls.append(("unit", user, allow_control)),
+        )
+        monkeypatch.setattr(agent, "install_control_scripts", lambda: calls.append(("scripts",)))
+        monkeypatch.setattr(agent, "install_sudoers", lambda user: calls.append(("sudoers", user)))
+        monkeypatch.setattr(agent, "SUDOERS_PATH", tmp_path / "sudoers.d" / "mc-node-agent")
+        monkeypatch.setattr(agent, "_default_install_user", lambda: "gpuops")
+        return calls
+
+    def test_install_without_the_flag_writes_no_sudoers_file(self, agent, monkeypatch, tmp_path):
         """Standard bleibt: melden ja, setzen nein."""
-        monkeypatch.setattr(agent, "install_systemd_unit", lambda mc_url, user, allow_control=False: None)
-        called = []
-        monkeypatch.setattr(agent, "install_sudoers", lambda user: called.append(user))
+        calls = self._neutralise_install(agent, monkeypatch, tmp_path)
         assert agent.main(["--mc-url", "http://x", "--install"]) == 0
-        assert called == []
+        assert [c[0] for c in calls] == ["unit"]
 
-    def test_install_with_the_flag_writes_the_sudoers_file(self, agent, monkeypatch):
-        monkeypatch.setattr(agent, "install_systemd_unit", lambda mc_url, user, allow_control=False: None)
-        called = []
-        monkeypatch.setattr(agent, "install_sudoers", lambda user: called.append(user))
-        monkeypatch.setattr(agent, "_default_install_user", lambda: "gpuops")
+    def test_install_with_the_flag_installs_scripts_then_the_rule(self, agent, monkeypatch, tmp_path):
+        """Reihenfolge: Dienst, dann Skripte (root-eigen), dann die Regel,
+        die sie erlaubt — nie eine Regel auf ein noch fehlendes Skript."""
+        calls = self._neutralise_install(agent, monkeypatch, tmp_path)
         assert agent.main(["--mc-url", "http://x", "--install", "--allow-control"]) == 0
-        assert called == ["gpuops"]
+        assert calls == [("unit", "gpuops", True), ("scripts",), ("sudoers", "gpuops")]
 
-    def test_allow_control_alone_does_not_touch_the_service(self, agent, monkeypatch):
+    def test_allow_control_alone_does_not_touch_the_service(self, agent, monkeypatch, tmp_path):
         """Nachträglich freischalten, ohne den laufenden Dienst anzufassen."""
-        unit = []
-        monkeypatch.setattr(agent, "install_systemd_unit", lambda mc_url, user, allow_control=False: unit.append(user))
-        monkeypatch.setattr(agent, "install_sudoers", lambda user: None)
-        monkeypatch.setattr(agent, "_default_install_user", lambda: "gpuops")
+        calls = self._neutralise_install(agent, monkeypatch, tmp_path)
         assert agent.main(["--mc-url", "http://x", "--allow-control"]) == 0
-        assert unit == []
+        assert "unit" not in [c[0] for c in calls]
+
+    def test_install_without_the_flag_removes_an_earlier_rule(self, agent, monkeypatch, tmp_path):
+        """Review M3 — der Rückweg: `--install` ohne Flag nimmt eine frühere
+        Freischaltung zurück. Vorher gab es keinen Weg zurück ausser Hand-
+        arbeit in /etc/sudoers.d."""
+        self._neutralise_install(agent, monkeypatch, tmp_path)
+        rule = agent.SUDOERS_PATH
+        rule.parent.mkdir(parents=True)
+        rule.write_text("gpuops ALL=(root) NOPASSWD: /usr/local/sbin/mc-gpu-mode.sh eco\n")
+        (rule.parent / "mc-node-agent.tmp").write_text("liegengeblieben\n")
+        assert agent.main(["--mc-url", "http://x", "--install"]) == 0
+        assert not rule.exists()
+        assert not (rule.parent / "mc-node-agent.tmp").exists()
+
+    def test_allow_control_alone_keeps_the_rule(self, agent, monkeypatch, tmp_path):
+        """Gegenprobe zum Rückweg: OHNE --install wird nichts entfernt —
+        `--allow-control` allein ist Freischalten, nie Zurücknehmen."""
+        calls = self._neutralise_install(agent, monkeypatch, tmp_path)
+        rule = agent.SUDOERS_PATH
+        rule.parent.mkdir(parents=True)
+        rule.write_text("alt\n")
+        assert agent.main(["--mc-url", "http://x", "--allow-control"]) == 0
+        assert rule.exists()  # install_sudoers ist gefälscht — die Datei bleibt, wie sie war
+        assert ("sudoers", "gpuops") in calls
+
+    def test_failed_rule_falls_back_to_the_report_only_unit(self, agent, monkeypatch, tmp_path):
+        """Review M3: scheitert install_sudoers, steht die Unit schon auf
+        Steuer-Betrieb (NoNewPrivileges=no, 96 MB) — ohne Regel eine
+        Lockerung ohne Nutzen. Dann zurück auf die strenge Melde-Unit,
+        Regel-Reste weg, und ehrlich Exit 1."""
+        calls = self._neutralise_install(agent, monkeypatch, tmp_path)
+
+        def boom(user):
+            calls.append(("sudoers", user))
+            raise SystemExit(1)
+
+        monkeypatch.setattr(agent, "install_sudoers", boom)
+        agent.SUDOERS_PATH.parent.mkdir(parents=True)
+        (agent.SUDOERS_PATH.parent / "mc-node-agent.tmp").write_text("Rest\n")
+
+        assert agent.main(["--mc-url", "http://x", "--install", "--allow-control"]) == 1
+        assert calls == [
+            ("unit", "gpuops", True), ("scripts",), ("sudoers", "gpuops"),
+            ("unit", "gpuops", False),  # zurück auf Melde-Betrieb
+        ]
+        assert list(agent.SUDOERS_PATH.parent.iterdir()) == []
+
+    def test_failed_scripts_never_reach_the_rule(self, agent, monkeypatch, tmp_path):
+        """Können die Skripte nicht root-eigen abgelegt werden, darf keine
+        Regel entstehen, die sie erlauben würde."""
+        calls = self._neutralise_install(agent, monkeypatch, tmp_path)
+
+        def boom():
+            calls.append(("scripts",))
+            raise SystemExit(1)
+
+        monkeypatch.setattr(agent, "install_control_scripts", boom)
+        assert agent.main(["--mc-url", "http://x", "--install", "--allow-control"]) == 1
+        assert ("sudoers", "gpuops") not in calls
+        assert calls[-1] == ("unit", "gpuops", False)
 
 
 # ── Unit-Härtung vs. Steuerung (Live-Fund, 01.09.2026) ────────────────
@@ -1473,11 +1595,11 @@ class TestUnitHardening:
 
     def test_memory_cap_leaves_room_for_the_sudo_child(self, agent):
         """sudo und sein Kind laufen im SELBEN cgroup und zählen auf dieselbe
-        Grenze. Bei 32 MB hart würde der erste systemctl-Aufruf den OOM-Killer
+        Grenze. Bei 64 MB hart würde der erste systemctl-Aufruf den OOM-Killer
         auslösen — ohne Meldung, also genau der stille Ausfall."""
         report = self._unit(agent, False)
         control = self._unit(agent, True)
-        assert "MemoryMax=32M" in report and "TasksMax=8" in report
+        assert "MemoryMax=64M" in report and "TasksMax=8" in report
         assert "MemoryMax=96M" in control and "TasksMax=16" in control
 
     def test_the_rest_of_the_straightjacket_is_untouched(self, agent):
@@ -1529,7 +1651,601 @@ class TestUnitHardening:
             lambda mc_url, user, allow_control=False: seen.update(allow_control=allow_control),
         )
         monkeypatch.setattr(agent, "install_sudoers", lambda user: None)
+        monkeypatch.setattr(agent, "install_control_scripts", lambda: None)
+        monkeypatch.setattr(agent, "remove_sudoers", lambda: False)
         agent.main(["--mc-url", "http://x", "--install", "--allow-control"])
         assert seen["allow_control"] is True
         agent.main(["--mc-url", "http://x", "--install"])
         assert seen["allow_control"] is False
+
+
+# ── Review-Härtung 02.09.2026 ─────────────────────────────────────────────────
+#
+# H1 sudoers-Platzhalter über Wortgrenzen · H2 TOCTOU beim Einbau · H3 Steuer-
+# Skripte im Repo · M1 Wiederhol-Schleife · M2 klebender last_error ·
+# N3 HTTP-Body-Deckel. Jeder Test ist so gebaut, dass er beim Zurückdrehen
+# des jeweiligen Fixes rot wird (Sabotage-Probe im Bericht).
+
+REPO_DEVICE_DIR = REPO_ROOT / "scripts" / "device"
+
+
+def _sudo_would_allow(rules_text: str, user: str, argv: list[str]) -> bool:
+    """Nachbau der sudoers-Argumentprüfung, so weit sie für diese Regeln
+    zählt (`man sudoers`, Abschnitt "Wildcards"): Pfad exakt; ohne Muster
+    sind beliebige Argumente erlaubt; `""` heisst keine Argumente; sonst
+    werden die Argumente mit Leerzeichen verbunden und per fnmatch gegen das
+    Muster geprüft — und `*` passt dabei AUCH über Leerzeichen hinweg. Genau
+    diese Eigenschaft war das Loch aus Review-Befund H1."""
+    import fnmatch
+
+    for line in rules_text.splitlines():
+        if not line.startswith(f"{user} ") or "NOPASSWD:" not in line:
+            continue
+        spec = line.split("NOPASSWD:", 1)[1].strip()
+        path, _, pattern = spec.partition(" ")
+        if path != argv[0]:
+            continue
+        args = " ".join(argv[1:])
+        if pattern == "":
+            return True
+        if pattern == '""':
+            if args == "":
+                return True
+            continue
+        if fnmatch.fnmatchcase(args, pattern):
+            return True
+    return False
+
+
+class TestSudoersWildcardAcrossWordBoundaries:
+    """Review H1: `sysctl -w vm.min_free_kbytes=*` und `ip link set * mtu *`
+    liessen Zusatz-Argumente durch. Erst wird gezeigt, dass der Nachbau das
+    Loch der ALTEN Regel findet (sonst prüfte er nichts), dann, dass die
+    neue Regel die Angriffe nicht mehr erlaubt — und dass das, was sudo bei
+    den Wrappern noch durchlässt, am Wrapper selbst abprallt."""
+
+    SYSCTL_ATTACK = ["/usr/sbin/sysctl", "-w", "vm.min_free_kbytes=65536", "kernel.core_pattern=|/tmp/x"]
+    IP_DOWN_ATTACK = ["/usr/sbin/ip", "link", "set", "eth0", "down", "mtu", "1500"]
+    IP_NETNS_ATTACK = ["/usr/sbin/ip", "link", "set", "eth0", "netns", "1", "mtu", "1500"]
+
+    def _rules(self, agent):
+        return agent.render_sudoers("gpuops", exists=lambda p: True)
+
+    def test_the_matcher_finds_the_hole_in_the_old_rules(self):
+        """Eichung des Nachbaus: die alten Regeln MÜSSEN die Angriffe
+        durchlassen — sonst bewiese der Rest dieser Klasse nichts."""
+        old = (
+            "gpuops ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.min_free_kbytes=*\n"
+            "gpuops ALL=(root) NOPASSWD: /usr/sbin/ip link set * mtu *\n"
+        )
+        assert _sudo_would_allow(old, "gpuops", self.SYSCTL_ATTACK)
+        assert _sudo_would_allow(old, "gpuops", self.IP_DOWN_ATTACK)
+        assert _sudo_would_allow(old, "gpuops", self.IP_NETNS_ATTACK)
+
+    @pytest.mark.parametrize("attack", [SYSCTL_ATTACK, IP_DOWN_ATTACK, IP_NETNS_ATTACK])
+    def test_new_rules_do_not_allow_the_attacks(self, agent, attack):
+        assert not _sudo_would_allow(self._rules(agent), "gpuops", attack)
+
+    def test_new_rules_allow_exactly_the_real_calls(self, agent, cmds, monkeypatch):
+        """Gegenprobe: was der Agent wirklich aufruft, MUSS die Regel treffen
+        — eine dichte Regel, die auch den echten Aufruf blockt, wäre wertlos."""
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 1000)
+        agent.apply_desired_state(
+            {"gpu_mode": "boost", "min_free_kbytes": 1048576, "oom_guard": False,
+             "latency_tune": True, "mtu": 1500},
+            dict(CURRENT, latency_tune=False),
+        )
+        assert len(cmds) == 5
+        rules = self._rules(agent)
+        for argv, _kwargs in cmds:
+            assert argv[:2] == ["sudo", "-n"]
+            assert _sudo_would_allow(rules, "gpuops", argv[2:]), argv
+
+    @pytest.mark.parametrize("argv", [
+        [f"{REPO_DEVICE_DIR}/../../scripts/device/mc-gpu-mode.sh", "eco"],  # anderer Pfad
+        ["/usr/local/sbin/mc-gpu-mode.sh", "restore"],   # nur systemd/root
+        ["/usr/local/sbin/mc-gpu-mode.sh", "status"],
+        ["/usr/local/sbin/mc-gpu-mode.sh", "eco", "x"],
+        ["/usr/local/sbin/latency-tune.sh", "--irgendwas"],
+        ["/usr/bin/systemctl", "enable", "--now", "sshd"],
+        ["/usr/bin/systemctl", "stop", "earlyoom", "sshd"],
+        ["/usr/bin/bash", "/usr/local/sbin/latency-tune.sh"],
+    ])
+    def test_neighbouring_calls_are_refused(self, agent, argv):
+        assert not _sudo_would_allow(self._rules(agent), "gpuops", argv)
+
+    @pytest.mark.parametrize("script, argv", [
+        ("mc-set-min-free.sh", ["65536", "kernel.core_pattern=|/tmp/x"]),
+        ("mc-set-min-free.sh", ["65536 kernel.core_pattern=|/tmp/x"]),
+        ("mc-set-min-free.sh", ["67108864"]),      # alter Deckel, jetzt zu viel
+        ("mc-set-min-free.sh", ["-w", "65536"]),
+        ("mc-set-min-free.sh", []),
+        ("mc-set-mtu.sh", ["eth0", "down", "mtu", "1500"]),
+        ("mc-set-mtu.sh", ["eth0 down", "1500"]),
+        ("mc-set-mtu.sh", ["eth0", "netns", "1", "mtu", "1500"]),
+        ("mc-set-mtu.sh", ["../../dev/null", "1500"]),
+        ("mc-set-mtu.sh", ["-h", "1500"]),
+        ("mc-set-mtu.sh", ["eth0", "1280"]),        # altes Minimum, jetzt zu tief
+        ("mc-set-mtu.sh", ["eth0", "1500", "up"]),
+        ("mc-set-mtu.sh", ["eth0"]),
+    ])
+    def test_what_sudo_still_lets_through_the_wrapper_refuses(self, agent, script, argv):
+        """Die Wrapper-Regeln enthalten weiterhin ein `*` (eine Zahl lässt
+        sich nicht aufzählen) — also lässt sudo Zusatz-Argumente durch. Die
+        Grenze ist der Wrapper: Exit 2, nichts ausgeführt (kein DRY-RUN-
+        Ausdruck, der erst nach der Prüfung käme)."""
+        proc = subprocess.run(
+            ["bash", str(REPO_DEVICE_DIR / script), *argv],
+            capture_output=True, text=True, timeout=10,
+            env={"MC_DEVICE_DRY_RUN": "1", "PATH": os.environ.get("PATH", "")},
+        )
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "abgelehnt" in proc.stderr
+        assert "DRY-RUN" not in proc.stdout
+
+    @pytest.mark.parametrize("script, argv, expected", [
+        ("mc-set-min-free.sh", ["5242880"], "sysctl -w vm.min_free_kbytes=5242880"),
+        ("mc-set-min-free.sh", ["65536"], "vm.min_free_kbytes=65536"),
+        ("mc-set-min-free.sh", ["16777216"], "vm.min_free_kbytes=16777216"),
+        ("mc-set-mtu.sh", ["eth0", "9000"], "link set dev eth0 mtu 9000"),
+        ("mc-set-mtu.sh", ["eth0", "1500"], "link set dev eth0 mtu 1500"),
+    ])
+    def test_wrappers_accept_exactly_the_valid_shape(self, script, argv, expected):
+        proc = subprocess.run(
+            ["bash", str(REPO_DEVICE_DIR / script), *argv],
+            capture_output=True, text=True, timeout=10,
+            env={"MC_DEVICE_DRY_RUN": "1", "PATH": os.environ.get("PATH", "")},
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert expected in proc.stdout
+
+    def test_wrapper_limits_match_agent_and_backend(self, agent):
+        """Drei Stellen, eine Wahrheit (Review M5): Agent, Backend und die
+        Wrapper-Skripte müssen dieselben Grenzen kennen."""
+        sys.path.insert(0, str(REPO_ROOT / "backend"))
+        from app.services import device_state as ds
+
+        assert (agent.MIN_FREE_KBYTES_MIN, agent.MIN_FREE_KBYTES_MAX) == ds.MIN_FREE_KBYTES_RANGE
+        assert (agent.MTU_MIN, agent.MTU_MAX) == ds.MTU_RANGE
+        assert agent.MIN_FREE_KBYTES_MAX == 16_777_216 and agent.MTU_MIN == 1_500
+        min_free = (REPO_DEVICE_DIR / "mc-set-min-free.sh").read_text()
+        mtu = (REPO_DEVICE_DIR / "mc-set-mtu.sh").read_text()
+        assert f"MIN={agent.MIN_FREE_KBYTES_MIN}" in min_free
+        assert f"MAX={agent.MIN_FREE_KBYTES_MAX}" in min_free
+        assert f"MIN={agent.MTU_MIN}" in mtu and f"MAX={agent.MTU_MAX}" in mtu
+
+    def test_real_visudo_accepts_the_new_rules(self, agent, tmp_path):
+        if shutil.which("visudo") is None:
+            pytest.skip("visudo nicht vorhanden")
+        f = tmp_path / "mc-node-agent"
+        f.write_text(self._rules(agent), encoding="utf-8")
+        proc = subprocess.run(["visudo", "-c", "-f", str(f)], capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+class TestControlScriptsInRepo:
+    """Review H3: die Steuer-Skripte liegen im Repo (scripts/device/) UND
+    eingebettet im Agenten — beide müssen byteidentisch sein, sonst läuft auf
+    der Box etwas anderes als das, was im Review gelesen wurde."""
+
+    def test_embedded_copies_match_the_repo_files_byte_for_byte(self, agent):
+        assert set(n for n, _m, _c in agent.CONTROL_FILES.values()) == {
+            "mc-gpu-mode.sh", "latency-tune.sh", "mc-set-min-free.sh", "mc-set-mtu.sh",
+            "gb10-clock-cap.service",
+        }
+        for target, (name, _mode, content) in agent.CONTROL_FILES.items():
+            on_disk = (REPO_DEVICE_DIR / name).read_text(encoding="utf-8")
+            assert content == on_disk, (
+                f"{name} weicht zwischen scripts/device/ und dem Agenten ab — "
+                "python3 scripts/device/sync-into-agent.py ausführen"
+            )
+
+    def test_targets_are_the_paths_the_agent_calls_and_sudoers_allows(self, agent):
+        targets = set(agent.CONTROL_FILES)
+        for path in (agent.GPU_MODE_SCRIPT, agent.LATENCY_TUNE_SCRIPT,
+                     agent.MIN_FREE_SCRIPT, agent.MTU_SCRIPT):
+            assert path in targets
+            assert path.startswith("/usr/local/sbin/")  # root-eigen, nie im Home
+            assert agent.CONTROL_FILES[path][1] == 0o755
+        assert str(agent.CLOCK_CAP_UNIT_PATH) in targets
+        assert agent.CONTROL_FILES[str(agent.CLOCK_CAP_UNIT_PATH)][1] == 0o644
+
+    def test_scripts_have_a_shebang_and_parse(self):
+        for name in ("mc-gpu-mode.sh", "latency-tune.sh", "mc-set-min-free.sh", "mc-set-mtu.sh"):
+            text = (REPO_DEVICE_DIR / name).read_text()
+            assert text.startswith("#!/bin/bash\n"), name
+            proc = subprocess.run(["bash", "-n", str(REPO_DEVICE_DIR / name)], capture_output=True, text=True)
+            assert proc.returncode == 0, proc.stderr
+
+    def test_unit_calls_the_installed_gpu_mode_script(self, agent):
+        unit = (REPO_DEVICE_DIR / "gb10-clock-cap.service").read_text()
+        assert f"ExecStart={agent.GPU_MODE_SCRIPT} restore" in unit
+
+    def test_gpu_mode_script_refuses_unknown_modes_before_touching_the_gpu(self):
+        proc = subprocess.run(["bash", str(REPO_DEVICE_DIR / "mc-gpu-mode.sh"), "turbo"],
+                              capture_output=True, text=True, timeout=10)
+        assert proc.returncode == 2
+        proc = subprocess.run(["bash", str(REPO_DEVICE_DIR / "mc-gpu-mode.sh"), "eco", "extra"],
+                              capture_output=True, text=True, timeout=10)
+        assert proc.returncode == 2
+
+    def test_latency_tune_refuses_arguments(self):
+        proc = subprocess.run(["bash", str(REPO_DEVICE_DIR / "latency-tune.sh"), "x"],
+                              capture_output=True, text=True, timeout=10)
+        assert proc.returncode == 2
+
+
+class TestControlScriptPresence:
+    """Review H3: vor jedem Setzen prüft der Agent, dass das Skript da ist
+    und root gehört — sonst klarer Hinweis statt rohem sudo-Fehler."""
+
+    def test_missing_script_gives_the_reinstall_hint(self, agent, tmp_path):
+        problem = agent.control_script_problem(str(tmp_path / "gibt-es-nicht.sh"))
+        assert problem == agent.CONTROL_SCRIPTS_MISSING_HINT
+        assert "--install --allow-control" in problem
+
+    def test_script_not_owned_by_root_is_refused(self, agent, tmp_path):
+        if os.geteuid() == 0:
+            pytest.skip("als root gehört jede Testdatei root")
+        script = tmp_path / "mc-x.sh"
+        script.write_text("#!/bin/bash\n")
+        script.chmod(0o755)
+        problem = agent.control_script_problem(str(script))
+        assert problem and "gehört nicht root" in problem
+
+    def test_world_writable_root_script_is_refused(self, agent, tmp_path, monkeypatch):
+        script = tmp_path / "mc-x.sh"
+        script.write_text("#!/bin/bash\n")
+        real_stat = agent.os.stat
+
+        class _St:
+            st_uid = 0
+            st_mode = stat.S_IFREG | 0o777
+
+        monkeypatch.setattr(agent.os, "stat", lambda p, *a, **k: _St() if str(p) == str(script) else real_stat(p, *a, **k))
+        problem = agent.control_script_problem(str(script))
+        assert problem and "schreibbar" in problem
+
+    def test_root_owned_0755_script_is_fine(self, agent, tmp_path, monkeypatch):
+        class _St:
+            st_uid = 0
+            st_mode = stat.S_IFREG | 0o755
+
+        monkeypatch.setattr(agent.os, "stat", lambda p, *a, **k: _St())
+        assert agent.control_script_problem("/usr/local/sbin/mc-gpu-mode.sh") is None
+
+    def test_apply_refuses_to_call_a_missing_script_and_says_what_to_do(self, agent, cmds, monkeypatch):
+        monkeypatch.setattr(agent, "control_script_problem", lambda p: agent.CONTROL_SCRIPTS_MISSING_HINT)
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        changed, errors = agent.apply_desired_state(
+            {"gpu_mode": "boost", "min_free_kbytes": 1048576, "mtu": 1500, "latency_tune": True},
+            dict(CURRENT, latency_tune=False),
+        )
+        assert changed is False
+        assert cmds == []  # nichts aufgerufen, auch nicht via sudo
+        assert len(errors) == 4
+        assert all("Steuer-Skripte fehlen" in e and "--install --allow-control" in e for e in errors)
+
+    def test_systemctl_needs_no_script_and_still_runs(self, agent, cmds, monkeypatch):
+        """Gegenprobe: earlyoom geht über systemctl, kein Skript — die
+        Skript-Prüfung darf das nicht blockieren."""
+        monkeypatch.setattr(agent, "control_script_problem", lambda p: agent.CONTROL_SCRIPTS_MISSING_HINT)
+        changed, errors = agent.apply_desired_state({"oom_guard": False}, CURRENT)
+        assert (changed, errors) == (True, [])
+        assert len(cmds) == 1
+
+
+class TestInstallControlScripts:
+    def _prepare(self, agent, tmp_path, monkeypatch):
+        sbin = tmp_path / "sbin"
+        unit = tmp_path / "systemd" / "gb10-clock-cap.service"
+        files = {}
+        for target, (name, mode, content) in agent.CONTROL_FILES.items():
+            if name.endswith(".service"):
+                files[str(unit)] = (name, mode, content)
+            else:
+                files[str(sbin / name)] = (name, mode, content)
+        monkeypatch.setattr(agent, "CONTROL_FILES", files)
+        monkeypatch.setattr(agent, "CLOCK_CAP_UNIT_PATH", unit)
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(agent.os, "chown", lambda *a, **k: None)  # kein root im Test
+        calls = []
+        monkeypatch.setattr(agent.subprocess, "run", lambda argv, **k: calls.append(argv) or _FakeProc(0))
+        return sbin, unit, calls
+
+    def test_writes_all_files_with_the_right_modes(self, agent, tmp_path, monkeypatch):
+        sbin, unit, calls = self._prepare(agent, tmp_path, monkeypatch)
+        agent.install_control_scripts()
+        for name in ("mc-gpu-mode.sh", "latency-tune.sh", "mc-set-min-free.sh", "mc-set-mtu.sh"):
+            f = sbin / name
+            assert f.is_file()
+            assert stat.S_IMODE(f.stat().st_mode) == 0o755
+            assert f.read_text() == (REPO_DEVICE_DIR / name).read_text()
+            assert not (sbin / (name + ".tmp")).exists()
+        assert stat.S_IMODE(unit.stat().st_mode) == 0o644
+        assert calls == [["systemctl", "daemon-reload"], ["systemctl", "enable", "gb10-clock-cap.service"]]
+
+    def test_unit_is_enabled_but_not_started(self, agent, tmp_path, monkeypatch):
+        """Ein Takt-Wechsel ist eine Entscheidung über MC, kein Nebeneffekt
+        einer Installation — deshalb kein `--now`."""
+        _sbin, _unit, calls = self._prepare(agent, tmp_path, monkeypatch)
+        agent.install_control_scripts()
+        for argv in calls:
+            assert "--now" not in argv and "start" not in argv and "restart" not in argv
+
+    def test_overwrites_an_older_copy_atomically(self, agent, tmp_path, monkeypatch):
+        sbin, _unit, _calls = self._prepare(agent, tmp_path, monkeypatch)
+        sbin.mkdir()
+        (sbin / "mc-gpu-mode.sh").write_text("alte Fassung\n")
+        (sbin / "mc-gpu-mode.sh.tmp").write_text("Rest eines Abbruchs\n")
+        agent.install_control_scripts()
+        assert (sbin / "mc-gpu-mode.sh").read_text().startswith("#!/bin/bash")
+        assert not (sbin / "mc-gpu-mode.sh.tmp").exists()
+
+    def test_planted_symlink_at_tmp_path_is_not_followed(self, agent, tmp_path, monkeypatch):
+        sbin, _unit, _calls = self._prepare(agent, tmp_path, monkeypatch)
+        sbin.mkdir()
+        victim = tmp_path / "victim"
+        victim.write_text("unversehrt\n")
+        (sbin / "mc-set-mtu.sh.tmp").symlink_to(victim)
+        agent.install_control_scripts()
+        assert victim.read_text() == "unversehrt\n"
+        assert not (sbin / "mc-set-mtu.sh").is_symlink()
+
+    def test_needs_root(self, agent, tmp_path, monkeypatch):
+        self._prepare(agent, tmp_path, monkeypatch)
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 1000)
+        with pytest.raises(SystemExit):
+            agent.install_control_scripts()
+        assert not (tmp_path / "sbin").exists()
+
+
+class TestInstallRestartsTheService:
+    def test_reinstall_restarts_so_the_new_unit_takes_effect(self, agent, tmp_path, monkeypatch):
+        """`enable --now` startet einen LAUFENDEN Dienst nicht neu — die
+        geänderte Unit (NoNewPrivileges, Speichergrenze) bliebe wirkungslos."""
+        system_token = tmp_path / "etc" / "token"
+        system_token.parent.mkdir(parents=True)
+        system_token.write_text("tok\n")
+        monkeypatch.setattr(agent, "SYSTEM_TOKEN_PATH", system_token)
+        monkeypatch.setattr(agent, "SYSTEMD_UNIT_PATH", tmp_path / "mc-node-agent.service")
+        monkeypatch.setattr(agent, "_chown_to_user", lambda path, user: None)
+        monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+        calls = []
+        monkeypatch.setattr(agent.subprocess, "run", lambda argv, **k: calls.append(argv))
+        agent.install_systemd_unit("https://mc.test", "gpuops", allow_control=True)
+        assert ["systemctl", "restart", "mc-node-agent.service"] in calls
+        assert calls.index(["systemctl", "daemon-reload"]) < calls.index(["systemctl", "restart", "mc-node-agent.service"])
+
+
+class TestRunLoopIneffectiveSet:
+    """Review M1: ein Setz-Befehl mit Exit 0, dem der Ist-Zustand nicht folgt,
+    darf nicht alle 15 s erneut laufen. Echter run_loop, echtes
+    apply_desired_state, nur Ist-Lesen/Senden/Schlafen sind gefälscht."""
+
+    def _drive(self, agent, monkeypatch, cmds, rounds, desired, current=None):
+        monkeypatch.setattr(agent, "_run_nvidia_smi", lambda: "")
+        monkeypatch.setattr(agent, "read_oom_guard", lambda: "missing")
+        monkeypatch.setattr(agent, "collect_telemetry", lambda **_k: {"ts": "now"})
+        monkeypatch.setattr(agent, "scan_model_inventory", lambda paths: [])
+        monkeypatch.setattr(agent, "_iface_exists", lambda iface: True)
+        base = dict(current if current is not None else CURRENT)
+
+        def device_state(gpu_fields=None, oom_guard=None, apply_status=None):
+            # Der Ist folgt NIE — genau der Fall "Exit 0, aber nichts passiert".
+            return dict(base, last_error=(apply_status or {}).get("last_error"),
+                        applied_at=(apply_status or {}).get("applied_at"))
+
+        monkeypatch.setattr(agent, "collect_device_state", device_state)
+        sends: list = []
+
+        def fake_send(mc_url, token, telemetry, inventory=None, device_state=None):
+            sends.append(device_state)
+            return {"desired_state": desired}
+
+        monkeypatch.setattr(agent, "send_heartbeat", fake_send)
+        n = {"i": 0}
+
+        def fake_sleep(_s):
+            n["i"] += 1
+            if n["i"] >= rounds:
+                raise KeyboardInterrupt()
+
+        monkeypatch.setattr(agent.time, "sleep", fake_sleep)
+        agent.run_loop("http://mc.test", "tok")
+        return sends
+
+    def test_set_is_paused_after_n_ineffective_attempts(self, agent, monkeypatch, cmds):
+        sends = self._drive(agent, monkeypatch, cmds, rounds=10, desired={"gpu_mode": "boost"})
+        assert len(sends) == 10
+        # Genau SET_ATTEMPTS_BEFORE_PAUSE Aufrufe, nicht 10.
+        assert len(cmds) == agent.SET_ATTEMPTS_BEFORE_PAUSE
+        assert all(argv == _expected(agent, [agent.GPU_MODE_SCRIPT, "boost"]) for argv, _k in cmds)
+        # Die Runden davor: kein Fehler (Exit 0 sah ja gut aus) …
+        assert sends[1]["last_error"] is None
+        # … ab der Pause: ehrlich gemeldet, mit Feldname und Grund.
+        assert "gpu_mode" in sends[-1]["last_error"]
+        assert "Ist folgt nicht" in sends[-1]["last_error"]
+        assert "Exit 0" in sends[-1]["last_error"]
+
+    def test_pause_ends_and_the_field_gets_a_fresh_chance(self, agent, monkeypatch, cmds):
+        """Nach der Pause darf ein neuer Anlauf kommen — vielleicht hat der
+        Betreiber inzwischen etwas repariert."""
+        monkeypatch.setattr(agent, "SET_PAUSE_ROUNDS", 2)
+        # 3 Versuche, Pause 2 Runden, 3 Versuche, Pause 2, … über 12 Runden
+        self._drive(agent, monkeypatch, cmds, rounds=12, desired={"latency_tune": True},
+                    current=dict(CURRENT, latency_tune=False))
+        assert 2 * agent.SET_ATTEMPTS_BEFORE_PAUSE <= len(cmds) < 12
+
+    def test_a_field_that_does_follow_is_never_paused(self, agent, monkeypatch, cmds):
+        """Gegenprobe: folgt der Ist, zählt nichts hoch — der Tracker darf
+        keine funktionierende Steuerung ausbremsen."""
+        monkeypatch.setattr(agent, "_run_nvidia_smi", lambda: "")
+        monkeypatch.setattr(agent, "read_oom_guard", lambda: "missing")
+        monkeypatch.setattr(agent, "collect_telemetry", lambda **_k: {"ts": "now"})
+        monkeypatch.setattr(agent, "scan_model_inventory", lambda paths: [])
+        state = {"mode": "eco"}
+
+        def device_state(gpu_fields=None, oom_guard=None, apply_status=None):
+            return dict(CURRENT, gpu_mode=state["mode"],
+                        last_error=(apply_status or {}).get("last_error"))
+
+        monkeypatch.setattr(agent, "collect_device_state", device_state)
+        desired_seq = ["boost", "eco", "boost", "eco", "boost", "eco"]
+        sends: list = []
+
+        def fake_send(mc_url, token, telemetry, inventory=None, device_state=None):
+            sends.append(device_state)
+            return {"desired_state": {"gpu_mode": desired_seq[len(sends) - 1]}}
+
+        monkeypatch.setattr(agent, "send_heartbeat", fake_send)
+
+        def fake_run(argv, **kwargs):
+            cmds.append((argv, kwargs))
+            state["mode"] = argv[-1]  # der Ist FOLGT
+            return _FakeProc(0)
+
+        monkeypatch.setattr(agent.subprocess, "run", fake_run)
+        n = {"i": 0}
+
+        def fake_sleep(_s):
+            n["i"] += 1
+            if n["i"] >= len(desired_seq):
+                raise KeyboardInterrupt()
+
+        monkeypatch.setattr(agent.time, "sleep", fake_sleep)
+        agent.run_loop("http://mc.test", "tok")
+        assert len(cmds) == len(desired_seq)  # jeder Wechsel wurde gesetzt
+        assert all(s["last_error"] is None for s in sends)
+
+    def test_failed_commands_do_not_count_as_attempts(self, agent, monkeypatch, cmds):
+        """Exit != 0 ist ein echter Fehler (steht ohnehin im last_error) und
+        soll weiter jede Runde versucht werden — z.B. bis die sudoers-Regel da ist."""
+        cmds.result["proc"] = _FakeProc(1, stderr="sudo: a password is required")
+        sends = self._drive(agent, monkeypatch, cmds, rounds=8, desired={"gpu_mode": "boost"})
+        assert len(cmds) == 8
+        assert "--allow-control" in sends[-1]["last_error"]
+
+
+class TestRunLoopClearsStaleError:
+    """Review M2: löscht MC den Soll, darf ein alter Fehler nicht als rote
+    Ampel kleben bleiben."""
+
+    def _drive(self, agent, monkeypatch, responses):
+        monkeypatch.setattr(agent, "_run_nvidia_smi", lambda: "")
+        monkeypatch.setattr(agent, "read_oom_guard", lambda: "missing")
+        monkeypatch.setattr(agent, "collect_telemetry", lambda **_k: {"ts": "now"})
+        monkeypatch.setattr(agent, "scan_model_inventory", lambda paths: [])
+
+        def device_state(gpu_fields=None, oom_guard=None, apply_status=None):
+            return dict(CURRENT, last_error=(apply_status or {}).get("last_error"))
+
+        monkeypatch.setattr(agent, "collect_device_state", device_state)
+        seq = list(responses)
+        sends: list = []
+
+        def fake_send(mc_url, token, telemetry, inventory=None, device_state=None):
+            sends.append(device_state)
+            return seq.pop(0) if seq else {}
+
+        monkeypatch.setattr(agent, "send_heartbeat", fake_send)
+        n = {"i": 0}
+
+        def fake_sleep(_s):
+            n["i"] += 1
+            if n["i"] >= len(responses):
+                raise KeyboardInterrupt()
+
+        monkeypatch.setattr(agent.time, "sleep", fake_sleep)
+        agent.run_loop("http://mc.test", "tok")
+        return sends
+
+    @pytest.mark.parametrize("cleared", [{}, {"desired_state": None}, {"desired_state": {}}, {"ok": True}])
+    def test_error_is_reset_once_the_desired_state_is_gone(self, agent, monkeypatch, cmds, cleared):
+        cmds.result["proc"] = _FakeProc(1, stderr="Operation not permitted")
+        sends = self._drive(agent, monkeypatch, [{"desired_state": {"gpu_mode": "boost"}}, cleared, {"ok": True}])
+        assert sends[1]["last_error"] and "not permitted" in sends[1]["last_error"]
+        assert sends[2]["last_error"] is None
+
+    def test_error_stays_while_the_desired_state_stays(self, agent, monkeypatch, cmds):
+        """Gegenprobe: bleibt der Soll, bleibt der Fehler — er wird ja jede
+        Runde neu erzeugt."""
+        cmds.result["proc"] = _FakeProc(1, stderr="Operation not permitted")
+        desired = {"desired_state": {"gpu_mode": "boost"}}
+        sends = self._drive(agent, monkeypatch, [desired, desired, desired])
+        assert sends[2]["last_error"] and "not permitted" in sends[2]["last_error"]
+
+
+class TestHttpBodyCap:
+    """Review N3: eine Antwort jenseits von 1 MB ist kein MC — abbrechen,
+    bevor der Speicher der Zwangsjacke (32/96 MB) reisst."""
+
+    def test_content_length_over_the_cap_is_refused_before_reading(self, agent):
+        sent = {"bytes": 0}
+
+        def handler(conn):
+            _read_request_headers(conn)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2000000\r\n\r\n")
+            # Kämen wir bis hierher zum Lesen, würde der Test unten hängen —
+            # der Client muss VOR dem Body aussteigen.
+            try:
+                conn.sendall(b"x" * 4096)
+                sent["bytes"] += 4096
+            except OSError:
+                pass
+
+        server = _OneShotHTTPServer(handler)
+        with pytest.raises(ValueError, match="zu gross"):
+            agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+
+    def test_chunked_over_the_cap_is_refused(self, agent):
+        def handler(conn):
+            _read_request_headers(conn)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                + b"200000\r\n"  # 2 MB angekündigt
+            )
+            try:
+                conn.sendall(b"y" * 4096)
+            except OSError:
+                pass
+
+        server = _OneShotHTTPServer(handler)
+        with pytest.raises(ValueError, match="zu gross"):
+            agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+
+    def test_a_body_just_under_the_cap_still_works(self, agent):
+        """Gegenprobe: der Deckel darf eine grosse, aber legitime Antwort
+        nicht abschneiden."""
+        payload = json.dumps({"pad": "z" * (agent.HTTP_MAX_BODY_BYTES - 100)}).encode()
+
+        def handler(conn):
+            _read_request_headers(conn)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
+
+        server = _OneShotHTTPServer(handler)
+        result = agent._http_post_json(server.url + "/x", {}, None, 5)
+        server.join()
+        assert len(result["pad"]) == agent.HTTP_MAX_BODY_BYTES - 100
+
+    def test_cap_is_one_megabyte(self, agent):
+        assert agent.HTTP_MAX_BODY_BYTES == 1_048_576
+
+
+class TestReportOnlyMemoryCap:
+    def test_report_only_cap_is_above_the_measured_peak(self, agent):
+        """Review M6, live gemessen 02.09.2026 (GB10, `systemctl show -p
+        MemoryPeak`): 49,3 MB Spitze durch den nvidia-smi-Fork. Der alte
+        Deckel 32M lag darunter — die Melde-Unit wäre OOM-gekillt worden."""
+        measured_peak_mb = 49.3
+        unit = agent.render_unit("https://mc.test", "gpuops", "/usr/bin/python3", "/opt/a.py")
+        max_line = next(l for l in unit.splitlines() if l.startswith("MemoryMax="))
+        high_line = next(l for l in unit.splitlines() if l.startswith("MemoryHigh="))
+        max_mb = int(max_line.split("=")[1].rstrip("M"))
+        high_mb = int(high_line.split("=")[1].rstrip("M"))
+        assert max_mb >= measured_peak_mb + 10, "Deckel unter/zu nah an der gemessenen Spitze"
+        assert high_mb > measured_peak_mb, "MemoryHigh unter der Spitze -> Dauer-Trimmen"
+        assert high_mb < max_mb
