@@ -544,8 +544,6 @@
       "archivedSection": "Archiv",
       "composerPlaceholder": "Nachricht an die Gruppe… (@ erwähnt)",
       "composerQueuedNote": "Wird der Gruppe zur nächsten Runde zugestellt.",
-      "contributionExpand": "Mehr anzeigen",
-      "contributionCollapse": "Weniger anzeigen",
       "composerMentionAll": "alle",
       "statusWaitingFor": "Runde {round}/{max} — wartet auf {names}",
       "statusSynthesis": "{name} fasst zusammen…",
