@@ -92,6 +92,8 @@ export function ChatMessage({
   ev,
   showModel = false,
   echoStatus,
+  onWithdraw,
+  onEdit,
 }: {
   ev: MessageEvent;
   showModel?: boolean;
@@ -99,6 +101,11 @@ export function ChatMessage({
    *  yet (see useChatStream's optimistic echo). Absent = a real transcript
    *  message, which needs no qualifier. */
   echoStatus?: EchoStatus;
+  /** Only meaningful while `echoStatus === "queued"`: the CLI still holds the
+   *  message, so it can be taken back (withdraw) or taken back into the
+   *  composer (edit). Absent = no buttons. */
+  onWithdraw?: () => void;
+  onEdit?: () => void;
 }) {
   // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
   // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
@@ -212,6 +219,22 @@ export function ChatMessage({
             >
               <Clock size={12} aria-hidden="true" />
               <span>{waitingNote}</span>
+              {echoStatus === "queued" && (onWithdraw || onEdit) && (
+                // While the CLI holds the message it is still ours to take
+                // back — the same thing Up + Ctrl+U does in the terminal.
+                <span className="ml-auto flex items-center gap-2.5">
+                  {onEdit && (
+                    <button type="button" onClick={onEdit} className="hover:underline" style={{ color: C.textSecondary }}>
+                      Bearbeiten
+                    </button>
+                  )}
+                  {onWithdraw && (
+                    <button type="button" onClick={onWithdraw} className="hover:underline" style={{ color: C.textSecondary }}>
+                      Zurückziehen
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
           )}
         </div>

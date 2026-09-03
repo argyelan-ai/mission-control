@@ -372,6 +372,8 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
+  const [composerPrefill, setComposerPrefill] = useState<{ text: string; at: number } | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const detailBoxRef = useRef<HTMLDivElement | null>(null);
   // Chunked first paint: a full Boss transcript is ~200 events of ReactMarkdown,
@@ -582,6 +584,19 @@ export function ChatView({
   function handleStop() {
     if (!agent) return;
     api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error(t("stopActionFailed")));
+  }
+
+  /** Take a queued steer back from the CLI. Up pops the whole queue into the
+   *  terminal's input line, C-u clears that line — proven live on a Docker
+   *  agent 03.09.2026 (the withdrawn message was never delivered). The CLI
+   *  keeps ONE queue, so every queued message comes back together; with
+   *  `edit` their texts land in the composer for another go. */
+  function handleWithdrawQueued(edit: boolean) {
+    if (!agent) return;
+    const taken = stream.withdrawQueued();
+    if (taken.length === 0) return;
+    api.chat.sendKeys(agent.id, ["Up", "C-u"]).catch(() => notify.error(t("stopActionFailed")));
+    if (edit) setComposerPrefill({ text: taken.join("\n\n"), at: Date.now() });
   }
 
   function handleAnswer(key: string) {
@@ -999,6 +1014,8 @@ export function ChatView({
                   sidechain: false,
                 }}
                 echoStatus={echo.status}
+                onWithdraw={() => handleWithdrawQueued(false)}
+                onEdit={() => handleWithdrawQueued(true)}
               />
             ))}
 
@@ -1030,6 +1047,7 @@ export function ChatView({
             state={stream.state}
             onSend={handleSend}
             onStop={handleStop}
+            prefill={composerPrefill}
             sessionLive={aliveness !== "ended"}
             /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
              * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
