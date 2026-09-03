@@ -1073,9 +1073,14 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "queued");
+    // A symbol, not a sentence (Mark, 03.09.2026): the meaning sits on the
+    // icon as its accessible name / tooltip, never as visible prose.
     expect(
-      screen.getByText("Eingereiht — wird nach dem laufenden Zug gesendet")
+      screen.getByRole("img", { name: "Eingereiht — wird nach dem laufenden Zug gesendet" })
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Eingereiht — wird nach dem laufenden Zug gesendet")
+    ).not.toBeInTheDocument();
     // The whole point: nothing here looks like a problem.
     expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
   });
@@ -1166,8 +1171,12 @@ describe("ChatView", () => {
       })
     );
     renderChatView({ agent: mkAgent({ harness: "omp" }) });
-    expect(screen.getByText("Steuernachricht — greift nach dem laufenden Werkzeug")).toBeInTheDocument();
-    expect(screen.queryByText("Eingereiht — wird nach dem laufenden Zug gesendet")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Steuernachricht — greift nach dem laufenden Werkzeug" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("img", { name: "Eingereiht — wird nach dem laufenden Zug gesendet" })
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Zurückziehen" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Bearbeiten" })).not.toBeInTheDocument();
   });
