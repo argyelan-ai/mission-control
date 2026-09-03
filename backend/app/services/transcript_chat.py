@@ -67,6 +67,7 @@ from typing import Any
 from app.config import settings
 from app.services import fresh_session, sse
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
+from app.services.pane_preview import PanePreview
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
@@ -1982,9 +1983,9 @@ class ChatTailerManager:
                                 # 01.09.2026: ohne Marke trug die Vorschau den
                                 # ganzen Bildschirm samt alter Zuege und, nach
                                 # der fertigen Antwort, dieselbe Antwort nochmal).
-                                paragraphs = [p for p in (ev.get("text") or "").splitlines() if p.strip()]
-                                if paragraphs:
-                                    preview_state["anchor"] = paragraphs[-1]
+                                anchor = PanePreview.anchor_from(ev.get("text") or "")
+                                if anchor:
+                                    preview_state["anchor"] = anchor
                                     preview_state["last_sent"] = ""
                                     preview_state["pending"] = None
 
@@ -2098,7 +2099,6 @@ class ChatTailerManager:
             return None
         try:
             from app.services import pane_stream
-            from app.services.pane_preview import PanePreview
 
             path = await pane_stream.start(agent)
             if path is None:
@@ -2159,9 +2159,9 @@ class ChatTailerManager:
 
             sent = pop_last_sent(state["agent_id"])
             if sent:
-                tail = [l.strip() for l in sent.splitlines() if l.strip()]
-                if tail:
-                    state["anchor"] = tail[-1]
+                anchor = PanePreview.anchor_from(sent)
+                if anchor:
+                    state["anchor"] = anchor
         anchor = state.get("anchor") or ""
         text = (state["screen"].text_after(anchor) if anchor else state["screen"].text()).strip()
         if not text:
