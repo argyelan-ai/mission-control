@@ -234,6 +234,13 @@ export interface ChatCapabilities {
    *  lokalen Claude-Sessions des Operators. Der Regler-Hinweis muss das am
    *  Wert sagen, nicht verschweigen. */
   effortShared?: boolean;
+  /** True, wenn `effort` aus der LAUFENDEN Session stammt (omp: Statuszeile
+   *  des Panes) und damit juenger ist als jedes `usage.effort` — das traegt
+   *  nach einem Shift+Tab-Wechsel noch die Stufe des vorigen Zugs. Dann
+   *  gewinnt `effort` ueber `usage.effort` (Live-Befund 03.09.2026: Chip
+   *  zeigte nach Neuladen "high", Pane sagte "low"). Absent/false = der Wert
+   *  ist der settings.json-Standard fuer NEUE Sessions, usage bleibt vorn. */
+  effortLive?: boolean;
   /** WARUM sich der Effort nicht umschalten laesst — damit das UI es erklaeren
    *  kann, statt das Bedienelement wortlos wegzulassen. Nur gesetzt, wenn
    *  `canSwitchEffort` false ist; `null`/absent = kein Grund noetig oder
