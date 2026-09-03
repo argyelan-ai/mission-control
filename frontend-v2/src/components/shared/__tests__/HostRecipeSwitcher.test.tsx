@@ -192,9 +192,11 @@ describe("HostRecipeSwitcher", () => {
     unmount();
 
     renderWithQuery(<HostRecipeSwitcher hostId="box-a" hideWhenEmpty />);
+    // Auf das Verschwinden WARTEN statt einen Mikro-Tick zu raten: unter
+    // CI-Last brauchte TanStack mehr als einen Tick bis zum Re-Render — der
+    // Test fiel 2× auf einem Branch ohne Frontend-Änderung (03.09.2026).
     await waitFor(() => expect(api.hosts.recipes).toHaveBeenCalled());
-    await act(async () => { await Promise.resolve(); });
-    expect(screen.queryByTestId("host-recipe-switcher")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("host-recipe-switcher")).not.toBeInTheDocument());
   });
 
   it("shows a load error as a sentence in the row", async () => {
