@@ -26,6 +26,7 @@ import { openModelsTab } from "./modelsTab";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { DeviceModeStrip, useDevices } from "./DeviceControl";
+import { RoleChip } from "./RoleField";
 import { useAppStore } from "@/lib/store";
 import type { Device } from "@/lib/types";
 
@@ -401,11 +402,14 @@ function StageHeader({ group, serving, live, hostReachable }: { group: HostGroup
       className="flex items-center justify-between px-4 py-2.5"
       style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
     >
-      <span
-        className="text-[10px] font-medium uppercase"
-        style={{ color: C.textSecondary, letterSpacing: "0.08em" }}
-      >
-        {group.host.display_name}
+      <span className="flex items-center gap-2 min-w-0">
+        <span
+          className="text-[10px] font-medium uppercase truncate"
+          style={{ color: C.textSecondary, letterSpacing: "0.08em" }}
+        >
+          {group.host.display_name}
+        </span>
+        <RoleChip role={group.host.role} />
       </span>
       {status && (
         <span className="font-mono text-xs" style={{ color: C.textMuted }}>{status}</span>
@@ -427,8 +431,11 @@ function StagePlaceholder({ group }: { group: HostGroup }) {
         className="flex items-center justify-between px-4 py-2.5"
         style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
       >
-        <span className="text-[10px] font-medium uppercase" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
-          {group.host.display_name}
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-medium uppercase truncate" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
+            {group.host.display_name}
+          </span>
+          <RoleChip role={group.host.role} />
         </span>
       </div>
       <div className="flex items-center justify-between px-4 py-6">
@@ -486,8 +493,11 @@ function WorkerTile({ group, device }: { group: HostGroup; device?: Device }) {
         className="flex items-center justify-between px-4 py-2.5"
         style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
       >
-        <span className="text-[10px] font-medium uppercase" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
-          {group.host.display_name}
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-medium uppercase truncate" style={{ color: C.textSecondary, letterSpacing: "0.08em" }}>
+            {group.host.display_name}
+          </span>
+          <RoleChip role={group.host.role} />
         </span>
         <span
           className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide"

@@ -71,7 +71,7 @@ const mkHost = (overrides: Partial<Host> = {}): Host => ({
   ssh_host: null,
   ssh_user: null,
   ssh_key_path: null,
-  ssh_credential_id: null,
+  ssh_credential_id: null, role: null, fabric_ip: null,
   control_url: null,
   wol_mac_address: null,
   power_managed: false,

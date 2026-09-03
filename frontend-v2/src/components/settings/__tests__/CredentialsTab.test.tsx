@@ -20,7 +20,7 @@ function renderWithQuery(ui: React.ReactElement) {
 
 const makeCredential = (over: Partial<Credential> = {}): Credential => ({
   id: "cred-1",
-  name: "GX10 SSH key",
+  name: "box-c SSH key",
   credential_type: "ssh_key",
   data_masked: { username: "mcfleet", public_key: "ssh-ed25519 AAAA", private_key_pem: "[hidden]" },
   url: null,
@@ -40,7 +40,7 @@ describe("CredentialsTab — ssh_key protection (review finding #2, 30.08.2026)"
 
     renderWithQuery(<CredentialsTab />);
 
-    expect(await screen.findByText("GX10 SSH key")).toBeInTheDocument();
+    expect(await screen.findByText("box-c SSH key")).toBeInTheDocument();
     expect(screen.queryByLabelText("Edit credential")).toBeNull();
     // Delete stays available — revoking a compromised key is legitimate.
     expect(screen.getByLabelText("Delete credential")).toBeInTheDocument();
