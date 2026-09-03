@@ -42,10 +42,11 @@ _STEERING = re.compile(r"^\s*Steering\s*·\s*(\d+)\s*$")
 _TOOL_HEAD = re.compile(r"^\s*●\s*[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*\(")
 _TOOL_RESULT = re.compile(r"^\s*⎿")
 _BULLET = re.compile(r"^\s*●")
+_MARKDOWN_MARKS = re.compile(r"\*\*|__|`|^\s*#{1,6}\s+", re.M)
 
 _FURNITURE = re.compile(
     r"""
-      ^\s*[─━═╭╰│╮╯┌└]                      # Rahmen- und Trennlinien
+      ^\s*[─━═╭╰│╮╯┌└├┤]                    # Rahmen- und Trennlinien (├ = omp-Box)
     | ^\s*❯                                  # Eingabezeile
     | ^\s*⏵⏵                                 # Berechtigungs-Hinweis
     | ^\s*⎿\s*Tip:                           # eingeblendete Tipps
@@ -142,7 +143,11 @@ class PanePreview:
         Ohne Treffer kommt der ganze Inhalt zurueck — lieber zu viel zeigen als
         eine Antwort verschlucken; die Wahrheit raeumt ohnehin auf.
         """
-        needle = re.sub(r"\s+", " ", anchor).strip()
+        # Das Transkript traegt Markdown ('- **Bereit** für …'), der Bildschirm
+        # zeigt es gerendert ('- Bereit für …'). Die Auszeichnung faellt darum
+        # vor der Suche weg (live 03.09.2026: sonst kein Treffer, Rueckfall
+        # auf den ganzen Bildschirm nach der fertigen Antwort).
+        needle = re.sub(r"\s+", " ", _MARKDOWN_MARKS.sub("", anchor)).strip()
         lines = self._lines()
         if not needle:
             return self.text()
