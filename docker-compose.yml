@@ -163,6 +163,10 @@ services:
       # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
       MC_BACKEND_URL: http://localhost:8000
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
+      # Adresse(n) fuer den node-agent-Install-Einzeiler (Geraete -> "Geraet
+      # hinzufuegen"); kommagetrennt = eine Zeile je Netz (Tailscale + LAN).
+      # Ohne Passthrough las das Backend die Variable nie (Live-Fund 03.09.2026).
+      MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
       # Operator identity + newsletter branding (see .env.example)
       OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
       NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
