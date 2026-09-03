@@ -46,7 +46,16 @@ USER mcuser
 EXPOSE 8000
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# --proxy-headers/--forwarded-allow-ips: without this, request.client.host is
+# ALWAYS the Caddy container's IP for every request (Caddy is a separate
+# container in the compose network; uvicorn's own default forwarded_allow_ips
+# is 127.0.0.1, which Caddy is not) — the login rate limiter and slowapi's
+# get_remote_address both key on this and end up bucketing every real client
+# together (PR #404 Rex review, MEDIUM/LOW). '*' is safe here specifically
+# because `backend` publishes no host port (see docker-compose.yml) — only
+# containers already inside the compose network can reach it directly, the
+# same trust boundary SECURITY.md already documents for this network.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--proxy-headers", "--forwarded-allow-ips=*"]
 
 # ── release target (default) ─────────────────────────────────────────────────
 FROM base AS release
@@ -64,4 +73,6 @@ EXPOSE 8000
 # Migrationen brauchen laufenden Container" fuer frische Installs.
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# See the dev-target CMD above for why --proxy-headers/--forwarded-allow-ips
+# are required (PR #404 Rex review, MEDIUM/LOW).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips=*"]
