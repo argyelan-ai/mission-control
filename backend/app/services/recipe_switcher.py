@@ -226,46 +226,52 @@ async def probe_running(
     """Ist DIESE Instanz gesund? Nie geraten — und für Host-Engines nie am
     Port allein entschieden.
 
-    WARUM DER PORT ALLEIN NICHT REICHT (Live-Befund 03.09.2026)
-    -----------------------------------------------------------
+    WARUM DER PORT ALLEIN NICHT REICHT (Live-Befunde 03.09.2026)
+    ------------------------------------------------------------
     Mehrere Rezepte einer Box benutzen denselben Port. Antwortet dort eine
     FREMDE Engine, hielt die Liste eine Instanz für laufend, die nie
-    gestartet war — und zeigte für dieses Rezept „läuft bereits auf dieser
-    Box", während in Wahrheit ein anderes Modell lief. Für Host-Engines
-    (``ssh_process``) gilt darum dieselbe UND-Regel wie in
-    ``runtime_manager.get_runtime_state``: das Handle muss auf der Box laufen
-    UND der Port antworten. Ohne hinterlegtes Handle ist die Antwort immer
-    „läuft nicht" — es gibt schlicht keinen Beleg, und ein unbelegtes „läuft"
-    ist genau die Lüge, die den Umschalter blockiert hat.
+    gestartet war — zuerst gesehen bei einer Host-Engine ohne Handle, zwei
+    Stunden später bei einem verdrängten Docker-Rezept, dessen Container
+    längst beendet war, während der Nachfolger auf demselben Port antwortete.
 
-    Docker-Rezepte behalten vorerst die reine HTTP-Probe — dort ist derselbe
-    Port-Trugschluss denkbar, aber nicht beobachtet; der Umbau wäre eine
-    docker-inspect-Runde je Instanz und gehört in einen eigenen Schritt.
+    Beide Male dieselbe Ursache und darum dieselbe Regel wie in
+    ``runtime_manager.get_runtime_state``: der ANKER muss auf der Box laufen
+    UND der Port antworten. Anker heisst Containername bei Docker-Engines,
+    Handle bei Host-Engines (``runtime_manager.runtime_anchor_names``).
+
+    Zwei bewusste Ausnahmen:
+
+    * Eine Host-Engine OHNE hinterlegtes Handle ist nie „laufend" — es gibt
+      keinen Beleg, und ein unbelegtes „läuft" ist genau die Lüge, die den
+      Umschalter blockiert hat.
+    * Eine Runtime ohne Anker oder ohne SSH-Box (Cloud, LM Studio, lokal
+      laufende Container) behält die reine Port-Probe: dort gibt es nichts
+      Besseres zu fragen, und eine strengere Regel würde sie unsichtbar
+      machen, ohne je eine Lüge verhindert zu haben.
 
     Eigene Funktion, damit Tests sie ersetzen können, ohne ins Netz zu gehen.
     """
     from app.services import runtime_manager
 
-    if runtime.runtime_type == SSH_PROCESS_ENGINE:
-        handle = (runtime.process_name or runtime.container_name or "").strip()
-        if not handle:
-            return False
-        if host is None:
-            # Ohne aufgelöste Box würde die SSH-Prüfung auf den Standard-Host
-            # der Einstellungen zurückfallen und die falsche Kiste befragen.
-            # Lieber kein Beleg als ein Beleg von woanders.
-            return False
+    registry = runtime.to_registry_dict()
+    names = runtime_manager.runtime_anchor_names(registry)
+    if not names and runtime.runtime_type == SSH_PROCESS_ENGINE:
+        return False
+    if names and host is not None:
         try:
-            alive = await runtime_manager._ssh_handle_running(  # noqa: SLF001 — dieselbe Prüfung wie get_runtime_state
-                runtime.to_registry_dict(), host=host
-            )
+            alive = await runtime_manager.anchor_running(registry, host=host)
         except Exception as exc:  # noqa: BLE001
             # Box nicht erreichbar = kein Beleg. „Läuft" behaupten wir nur,
             # wenn wir es gesehen haben.
-            logger.debug("probe: Handle-Prüfung fehlgeschlagen für %s: %s", runtime.slug, exc)
+            logger.debug("probe: Anker-Prüfung fehlgeschlagen für %s: %s", runtime.slug, exc)
             return False
         if not alive:
             return False
+    elif names and runtime.runtime_type == SSH_PROCESS_ENGINE:
+        # Ohne aufgelöste Box würde die SSH-Prüfung auf den Standard-Host der
+        # Einstellungen zurückfallen und die falsche Kiste befragen. Lieber
+        # kein Beleg als ein Beleg von woanders.
+        return False
 
     return await runtime_manager._probe_http(  # noqa: SLF001 — dieselbe Probe wie get_runtime_state
         runtime.endpoint, runtime.healthcheck_path or "/v1/models"

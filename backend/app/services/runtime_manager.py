@@ -1257,17 +1257,49 @@ def _handle_alive_command(name: str) -> str:
     „wir erreichen die Box nicht" ist eine andere Antwort als „es läuft nicht",
     und wer sie verwechselt, hält eine volle Box für frei.
     """
+    return f"pgrep -x {shlex_quote(name)} >/dev/null 2>&1 || {_container_running_command(name)}"
+
+
+def _container_running_command(name: str) -> str:
+    """Läuft ein Container dieses Namens? Exit 0 = ja, 1 = nein.
+
+    ``docker inspect`` schreibt bei unbekanntem Namen auf stderr und endet mit
+    != 0; der Vergleich macht daraus dasselbe „nein" wie bei einem gestoppten
+    Container. Es gibt hier keinen dritten Ausgang — „Container weg" und
+    „Container aus" heissen für den Lebenszyklus dasselbe.
+    """
     q = shlex_quote(name)
-    return (
-        f"pgrep -x {q} >/dev/null 2>&1 || "
-        f"[ \"$(docker inspect -f '{{{{.State.Running}}}}' {q} 2>/dev/null)\" = true ]"
-    )
+    return f"[ \"$(docker inspect -f '{{{{.State.Running}}}}' {q} 2>/dev/null)\" = true ]"
 
 
-async def _ssh_handle_running(
+def runtime_anchor_names(runtime: dict) -> list[str]:
+    """Die Namen, an denen MC diese Runtime AUF DER BOX wiedererkennt.
+
+    Der Anker ist das, was eine Instanz von „irgendwas antwortet auf dem Port"
+    unterscheidet. Docker-Engines haben ihren Containernamen, Host-Engines
+    ihre Handles. Alles andere (Cloud, LM Studio, lokale Runtimes ohne Box)
+    hat keinen — dort bleibt der Port die einzige Auskunft.
+    """
+    runtime_type = runtime.get("runtime_type")
+    if runtime_type in DOCKER_ENGINE_TYPES:
+        name = _container_name_of(runtime)
+        return [name] if name else []
+    if runtime_type == SSH_PROCESS_TYPE:
+        return _ssh_handle_names(runtime)
+    return []
+
+
+def _anchor_check_command(runtime_type: str | None, name: str) -> str:
+    """Ein Container wird als Container geprüft, ein Handle auf beide Arten."""
+    if runtime_type in DOCKER_ENGINE_TYPES:
+        return _container_running_command(name)
+    return _handle_alive_command(name)
+
+
+async def anchor_running(
     runtime: dict, *, host: ResolvedHost | None = None
 ) -> bool:
-    """Läuft diese ssh_process-Runtime? Jeder Handle, beide Prüfarten.
+    """Läuft der Anker dieser Runtime auf der Box? Eine Regel für alle Engines.
 
     Nicht jede „Host-Engine" ist ein nackter Prozess: viele Rezept-Startskripte
     starten in Wahrheit einen Container und legen sich schlafen. Für die ist
@@ -1280,13 +1312,17 @@ async def _ssh_handle_running(
     (``runtime_watcher._served_answer_is_own``); hier bekommt der Lebenszyklus
     dieselbe Regel, damit Start, Zustand und Stopp nicht auf verschiedene
     Wahrheiten schauen.
+
+    Für Docker-Engines ist der Anker der Containername — dieselbe Frage, die
+    ``get_runtime_state`` dort seit jeher stellt, nur an einer Stelle.
     """
-    names = _ssh_handle_names(runtime)
+    runtime_type = runtime.get("runtime_type")
+    names = runtime_anchor_names(runtime)
     if not names:
         raise RuntimeError(SSH_PROCESS_NO_HANDLE)
     for name in names:
         _, _, exit_code = await _ssh_run(
-            _handle_alive_command(name), host=host, timeout=20
+            _anchor_check_command(runtime_type, name), host=host, timeout=20
         )
         if exit_code == 0:
             return True
@@ -1325,7 +1361,7 @@ async def verify_ssh_process_started(
     )
     while True:
         try:
-            if await _ssh_handle_running(runtime, host=host):
+            if await anchor_running(runtime, host=host):
                 return True
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -1357,7 +1393,7 @@ async def verify_ssh_process_stopped(
     )
     while True:
         try:
-            still_running = await _ssh_handle_running(runtime, host=host)
+            still_running = await anchor_running(runtime, host=host)
         except Exception as exc:  # noqa: BLE001 — unknown counts as still busy
             logger.warning(
                 "verify-ssh-stopped: Handle-Prüfung schlug fehl für %s: %s",
@@ -1600,7 +1636,7 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
                 "state_message": SSH_PROCESS_UNCONFIGURED,
             }
         try:
-            running = await _ssh_handle_running(runtime, host=host)
+            running = await anchor_running(runtime, host=host)
         except Exception as e:  # noqa: BLE001
             logger.warning("SSH fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"state": "unknown", "http_reachable": False, "container_status": "ssh_error"}

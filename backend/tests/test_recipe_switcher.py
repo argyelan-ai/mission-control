@@ -404,7 +404,7 @@ async def test_instance_with_a_handle_that_is_not_alive_is_not_running(auth_clie
     """Port antwortet, Handle läuft nicht → das antwortet jemand anderes."""
     box_a = await _host_engine_pair(session, process_name="engine-server")
     with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
-            patch("app.services.runtime_manager._ssh_handle_running", AsyncMock(return_value=False)):
+            patch("app.services.runtime_manager.anchor_running", AsyncMock(return_value=False)):
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
     assert entry["running"] is False
     assert entry["startable"] is True
@@ -414,7 +414,7 @@ async def test_instance_with_a_handle_that_is_not_alive_is_not_running(auth_clie
 async def test_instance_counts_as_running_only_with_handle_and_port(auth_client, session):
     box_a = await _host_engine_pair(session, process_name="engine-server")
     with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
-            patch("app.services.runtime_manager._ssh_handle_running", AsyncMock(return_value=True)):
+            patch("app.services.runtime_manager.anchor_running", AsyncMock(return_value=True)):
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
     assert entry["running"] is True
     assert entry["reason"] == recipe_switcher.REASON_RUNNING
@@ -426,25 +426,67 @@ async def test_an_unreachable_box_is_no_proof_of_running(auth_client, session):
     ist genau die Behauptung, die den Umschalter blockiert hat."""
     box_a = await _host_engine_pair(session, process_name="engine-server")
     with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
-            patch("app.services.runtime_manager._ssh_handle_running",
+            patch("app.services.runtime_manager.anchor_running",
                   AsyncMock(side_effect=OSError("connection refused"))):
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
     assert entry["running"] is False
 
 
 @pytest.mark.asyncio
-async def test_docker_instances_keep_the_plain_port_probe(auth_client, session):
-    """Nur Host-Engines bekommen die SSH-Nachprüfung — Docker-Rezepte laufen
-    unverändert über die HTTP-Probe."""
+async def test_instances_without_an_anchor_keep_the_plain_port_probe(auth_client, session):
+    """Ohne Containernamen gibt es nichts Besseres zu fragen — Cloud- und
+    lokale Docker-Runtimes behalten die reine HTTP-Probe."""
     box_a = await _host(session, "box-a")
     recipe = await _recipe(session, "recipe-x")
     await _runtime(session, "recipe-x-box-a", box_a, model_identifier=recipe.model_identifier)
-    handle = AsyncMock(return_value=False)
+    anchor = AsyncMock(return_value=False)
     with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
-            patch("app.services.runtime_manager._ssh_handle_running", handle):
+            patch("app.services.runtime_manager.anchor_running", anchor):
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
     assert entry["running"] is True
-    handle.assert_not_awaited()
+    anchor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_docker_instance_with_a_dead_container_is_not_running(auth_client, session):
+    """DER ZWEITE LIVE-BEFUND: nach der Verdrängung war der Container dieses
+    Rezepts beendet, aber der Nachfolger antwortete auf demselben Port — die
+    Liste zeigte das verdrängte Rezept weiter als „läuft bereits"."""
+    box_a = await _host(session, "box-a")
+    recipe = await _recipe(session, "recipe-x")
+    await _runtime(session, "recipe-x-box-a", box_a, model_identifier=recipe.model_identifier,
+                   container_name="recipe-x-head")
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager.anchor_running", AsyncMock(return_value=False)):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
+    assert entry["running"] is False
+    assert entry["startable"] is True
+
+
+@pytest.mark.asyncio
+async def test_docker_instance_counts_as_running_with_container_and_port(auth_client, session):
+    box_a = await _host(session, "box-a")
+    recipe = await _recipe(session, "recipe-x")
+    await _runtime(session, "recipe-x-box-a", box_a, model_identifier=recipe.model_identifier,
+                   container_name="recipe-x-head")
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager.anchor_running", AsyncMock(return_value=True)):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
+    assert entry["running"] is True
+    assert entry["reason"] == recipe_switcher.REASON_RUNNING
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_box_is_no_proof_for_a_docker_instance_either(auth_client, session):
+    box_a = await _host(session, "box-a")
+    recipe = await _recipe(session, "recipe-x")
+    await _runtime(session, "recipe-x-box-a", box_a, model_identifier=recipe.model_identifier,
+                   container_name="recipe-x-head")
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager.anchor_running",
+                  AsyncMock(side_effect=OSError("connection refused"))):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
+    assert entry["running"] is False
 
 
 # ── POST /hosts/{id}/recipes/{slug}/start ────────────────────────────────────

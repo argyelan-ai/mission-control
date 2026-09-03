@@ -507,7 +507,7 @@ async def test_handle_running_asks_pgrep_and_docker_in_one_command():
         return ("", "", 0)
 
     with _ssh(handler):
-        running = await runtime_manager._ssh_handle_running(
+        running = await runtime_manager.anchor_running(
             _rt(process_name=None, container_name="engine-box"), host=_host()
         )
 
@@ -531,7 +531,7 @@ async def test_a_container_name_in_the_process_name_field_is_checked_too():
         return ("", "", 0)
 
     with _ssh(handler):
-        running = await runtime_manager._ssh_handle_running(
+        running = await runtime_manager.anchor_running(
             _rt(process_name="engine-box"), host=_host()
         )
 
@@ -541,10 +541,52 @@ async def test_a_container_name_in_the_process_name_field_is_checked_too():
 
 
 @pytest.mark.asyncio
+async def test_a_docker_runtime_is_anchored_by_its_container_name():
+    """Ein Container ist kein Prozess — für Docker-Engines wird nur der
+    Container gefragt, nicht zusätzlich die Prozesstabelle."""
+    calls = []
+
+    async def handler(cmd, **kw):
+        calls.append(cmd)
+        return ("", "", 0)
+
+    with _ssh(handler):
+        running = await runtime_manager.anchor_running(
+            {"runtime_type": "vllm_docker", "container_name": "engine-head"}, host=_host()
+        )
+
+    assert running is True
+    assert len(calls) == 1
+    assert "docker inspect -f '{{.State.Running}}' engine-head" in calls[0]
+    assert "pgrep" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_container_is_not_running():
+    with _ssh(lambda cmd, **kw: ("", "", 1)):
+        running = await runtime_manager.anchor_running(
+            {"runtime_type": "vllm_docker", "container_name": "engine-head"}, host=_host()
+        )
+    assert running is False
+
+
+def test_anchor_names_per_engine():
+    """Die eine Stelle, die sagt, woran eine Runtime erkennbar ist."""
+    assert runtime_manager.runtime_anchor_names(
+        {"runtime_type": "vllm_docker", "container_name": "engine-head"}
+    ) == ["engine-head"]
+    # Ohne Containernamen kein Anker — Cloud- und lokale Runtimes behalten
+    # damit die reine Port-Probe.
+    assert runtime_manager.runtime_anchor_names({"runtime_type": "vllm_docker"}) == []
+    assert runtime_manager.runtime_anchor_names(_rt()) == ["ds4-server"]
+    assert runtime_manager.runtime_anchor_names({"runtime_type": "cloud"}) == []
+
+
+@pytest.mark.asyncio
 async def test_handle_running_is_false_when_neither_kind_matches():
     """Exit 1 = weder ein Prozess noch ein laufender Container dieses Namens."""
     with _ssh(lambda cmd, **kw: ("", "", 1)):
-        running = await runtime_manager._ssh_handle_running(
+        running = await runtime_manager.anchor_running(
             _rt(process_name=None, container_name="engine-box"), host=_host()
         )
     assert running is False
@@ -555,7 +597,7 @@ async def test_handle_running_raises_when_the_check_itself_errors():
     """Alles über Exit 1 ist ein Fehler der Prüfung, kein „läuft nicht" —
     sonst hielte eine kaputte Prüfung eine volle Box für frei."""
     with _ssh(lambda cmd, **kw: ("", "bad option", 2)), pytest.raises(RuntimeError):
-        await runtime_manager._ssh_handle_running(
+        await runtime_manager.anchor_running(
             _rt(process_name=None, container_name="engine-box"), host=_host()
         )
 
@@ -570,7 +612,7 @@ async def test_handle_running_checks_every_configured_name():
         return ("", "", 0 if "engine-box" in cmd else 1)
 
     with _ssh(handler):
-        running = await runtime_manager._ssh_handle_running(
+        running = await runtime_manager.anchor_running(
             _rt(container_name="engine-box"), host=_host()
         )
 
