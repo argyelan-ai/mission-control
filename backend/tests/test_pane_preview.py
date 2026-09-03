@@ -351,3 +351,23 @@ def test_short_anchor_is_not_matched_inside_a_word():
     preview = PanePreview()
     preview.feed("● Lokal ist besser als Cloud.\r\n")
     assert preview.text_after("ok") == preview.text()
+
+
+def test_anchor_with_markdown_emphasis_matches_the_plain_rendering():
+    """Das Transkript traegt Markdown ('- **Bereit** für …'), der Bildschirm
+    zeigt es gerendert ('- Bereit für …'). Live 03.09.2026: kein Treffer,
+    Rueckfall auf den ganzen Bildschirm — nach der fertigen Antwort blitzte
+    noch einmal alles auf."""
+    preview = PanePreview()
+    preview.feed(" - Letzte Aktion: Screenshot-OCR\r\n - Bereit für nächsten Dispatch\r\n")
+    assert preview.text_after("- **Bereit** für nächsten Dispatch") == ""
+    preview.feed("Neu.\r\n")
+    assert preview.text_after("- **Bereit** für nächsten Dispatch") == "Neu."
+
+
+def test_box_divider_lines_are_furniture():
+    """omp zeichnet um Werkzeug-Ausgaben eine Box mit '├─── Output ───┤' —
+    ein Rahmen, kein Inhalt (live 03.09.2026 in der Vorschau sichtbar)."""
+    preview = PanePreview()
+    preview.feed("├─── Output ───────┤\r\n Status: alles gut\r\n")
+    assert preview.text() == "Status: alles gut"
