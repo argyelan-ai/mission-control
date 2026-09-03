@@ -754,6 +754,30 @@ describe("Composer", () => {
       expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "auto");
     });
 
+    it("trusts a live status-line level over the last usage event (omp)", () => {
+      // Live-Befund 03.09.2026 an Sparky (omp): Shift+Tab-Wechsel stehen sofort
+      // in der Statuszeile, aber das letzte usage traegt noch die Stufe des
+      // VORIGEN Zugs. Nach Neuladen zeigte der Chip "high", der Pane sagte
+      // "low". Meldet das Backend effortLive, ist capabilities.effort juenger
+      // als jedes usage — und gewinnt.
+      render(
+        <Composer
+          agentId="a1"
+          usage={mkUsage({ effort: "high" })}
+          capabilities={{
+            effortLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
+            canSwitchEffort: true,
+            effort: "low",
+            effortLive: true,
+          }}
+          state={null}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId("effort-chip")).toHaveAttribute("data-level", "low");
+    });
+
     it("lets the running session override the persisted default", () => {
       // max ist session-only und steht nie in settings.json — der Chip muss
       // trotzdem max zeigen, sobald die Session es meldet.

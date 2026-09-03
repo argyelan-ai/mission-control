@@ -2550,7 +2550,33 @@ async def test_effort_capabilities_omp_reads_level_from_status_line(monkeypatch)
         "effort": "medium",
         "effortShared": False,
         "effortReason": None,
+        "effortLive": True,
     }
+
+
+async def test_effort_capabilities_omp_marks_status_line_as_live_truth(monkeypatch, tmp_path):
+    """Live-Befund 03.09.2026 (Sparky): Shift+Tab-Wechsel stehen sofort in
+    der Statuszeile, aber das letzte ``usage``-Ereignis des Transkripts traegt
+    noch die Stufe des VORIGEN Zugs. Nach einem Seiten-Neuladen zeigte der Chip
+    darum ``high``, waehrend der Pane laengst ``low`` sagte. ``effortLive``
+    sagt dem Frontend: diese Stufe ist juenger als jedes usage — sie gewinnt."""
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+    async def _capture(agent):
+        return _omp_pane("◔ low")
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    omp = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    assert (await agent_chat_input.effort_capabilities(omp))["effortLive"] is True
+
+    # Claude Code liest aus settings.json — das ist der Standard fuer NEUE
+    # Sessions, nicht die Stufe der laufenden. Dort bleibt usage die Wahrheit.
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+    claude = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="claude")
+    assert "effortLive" not in await agent_chat_input.effort_capabilities(claude)
 
 
 async def test_effort_capabilities_omp_auto_shows_no_level(monkeypatch):
