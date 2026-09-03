@@ -19,7 +19,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 # ── Patch settings BEFORE the app is imported ────────────────────────────
@@ -57,6 +57,19 @@ app.config.settings = app.config.Settings(
     obsidian_export_interval=99999,  # Phase 7 OBS-02 Pitfall 4: never auto-fire in tests
     vault_lint_interval_hours=99999,  # M.3 T4 Pitfall 4 mirror: vault_lint loop must not auto-fire in tests
     ollama_url="http://localhost:99999",
+    # Der Default zeigt auf 192.0.2.10 — eine RFC-5737-Dokumentationsadresse,
+    # die es im Netz nicht gibt. Wer sie anwaehlt, wartet die vollen
+    # spark_embedding_timeout=15s auf einen TCP-Timeout. Gemessen: jeder Test,
+    # der unterwegs eine Einbettung ausloest, kostete dadurch 15 Sekunden —
+    # allein die 40 langsamsten Tests der Suite waren das, also rund 10 von 20
+    # Minuten. 127.0.0.1:1 lehnt sofort ab, derselbe Fehlerpfad in
+    # Millisekunden statt Sekunden (gleiche Idee wie ollama_url darueber).
+    # spark_llm_url bleibt bewusst auf dem Default: runtime_model_resolver
+    # findet die Spark-Runtime ueber genau diesen netloc-Vergleich, und die
+    # zugehoerigen Tests legen Runtimes mit der Default-Adresse an. Der
+    # 15-Sekunden-Haenger kam ausschliesslich vom Einbettungs-Port.
+    spark_embedding_url="http://127.0.0.1:1/v1/embeddings",
+    spark_embedding_timeout=1.0,
     use_subagent_dispatch=False,  # Tests run in legacy mode; new tests enable the flag explicitly
     secrets_encryption_key="bkMM-h80JH3_PRkNc6_-T0YrLMOShvZeoDkKnGrI7JM=",
     vault_path=_TEST_VAULT_ROOT,
@@ -102,14 +115,53 @@ test_engine = create_async_engine(
 
 # ── Database fixtures ─────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-async def setup_db():
-    """Before each test: create tables. Afterward: drop everything."""
+@pytest.fixture(scope="session", autouse=True)
+async def _schema_once():
+    """Create the schema once for the whole session.
+
+    It used to be created and dropped around every single test. That is 78
+    CREATE TABLEs plus 78 DROPs per test, and every one of them crosses
+    aiosqlite's thread boundary — measured at 78ms per test, which is roughly
+    8 minutes of the suite spent building a schema that never changes.
+    """
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+
+
+async def _empty_all_tables(conn) -> None:
+    for table in reversed(SQLModel.metadata.sorted_tables):
+        await conn.execute(text(f'DELETE FROM "{table.name}"'))
+
+
+@pytest.fixture(autouse=True)
+async def setup_db(_schema_once):
+    """Give every test an empty database — without rebuilding the schema.
+
+    Deleting the rows costs 8ms instead of 78ms and leaves the isolation the
+    old fixture provided intact: a test still starts with empty tables and
+    leaves nothing behind for the next one. Cleaning up front (not after)
+    means a crashed test cannot poison its successor either.
+
+    Self-healing on purpose: the migration tests (e.g.
+    test_migration_0123_drop_gateway_schema) replay real Alembic steps against
+    this engine and genuinely DROP tables — that is what they are testing. The
+    old per-test create_all silently repaired that; now the repair is explicit
+    and only paid when a table actually went missing.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    try:
+        async with test_engine.begin() as conn:
+            await _empty_all_tables(conn)
+    except OperationalError:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
+        async with test_engine.begin() as conn:
+            await _empty_all_tables(conn)
+    yield
 
 
 @pytest.fixture(autouse=True)
