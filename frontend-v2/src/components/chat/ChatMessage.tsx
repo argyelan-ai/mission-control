@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { AlertTriangle, Clock, Users } from "lucide-react";
+import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
@@ -219,23 +219,38 @@ export function ChatMessage({
               <div className="whitespace-pre-wrap break-words line-clamp-2">{parsed.text}</div>
             )}
             <div
-              className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px]"
+              className="mt-1 flex items-center gap-2.5 text-[11.5px]"
               style={{ color: C.textMuted }}
             >
-              <Clock size={11} className="shrink-0" aria-hidden="true" />
-              <span>{waitingNote}</span>
+              {/* A symbol, not a sentence: the meaning sits on the icon as its
+                  tooltip / accessible name (Mark, 03.09.2026). */}
+              <span role="img" aria-label={waitingNote ?? undefined} title={waitingNote ?? undefined} className="inline-flex">
+                <Clock size={12} aria-hidden="true" />
+              </span>
               {canWithdraw && (onWithdraw || onEdit) && (
-                // On narrow screens the note keeps its one line and the
-                // buttons drop underneath instead of squeezing it.
-                <span className="ml-auto pl-3 flex items-center gap-2.5">
+                <span className="ml-auto flex items-center gap-1.5">
                   {onEdit && (
-                    <button type="button" onClick={onEdit} className="hover:underline" style={{ color: C.textSecondary }}>
-                      Bearbeiten
+                    <button
+                      type="button"
+                      onClick={onEdit}
+                      aria-label="Bearbeiten"
+                      title="Bearbeiten"
+                      className="inline-flex p-0.5 rounded hover:opacity-100 opacity-70"
+                      style={{ color: C.textSecondary }}
+                    >
+                      <Pencil size={12} aria-hidden="true" />
                     </button>
                   )}
                   {onWithdraw && (
-                    <button type="button" onClick={onWithdraw} className="hover:underline" style={{ color: C.textSecondary }}>
-                      Zurückziehen
+                    <button
+                      type="button"
+                      onClick={onWithdraw}
+                      aria-label="Zurückziehen"
+                      title="Zurückziehen"
+                      className="inline-flex p-0.5 rounded hover:opacity-100 opacity-70"
+                      style={{ color: C.textSecondary }}
+                    >
+                      <X size={12} aria-hidden="true" />
                     </button>
                   )}
                 </span>
