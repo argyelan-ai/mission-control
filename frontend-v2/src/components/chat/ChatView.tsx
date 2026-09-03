@@ -1014,6 +1014,7 @@ export function ChatView({
                   sidechain: false,
                 }}
                 echoStatus={echo.status}
+                harness={agent.harness}
                 onWithdraw={() => handleWithdrawQueued(false)}
                 onEdit={() => handleWithdrawQueued(true)}
               />

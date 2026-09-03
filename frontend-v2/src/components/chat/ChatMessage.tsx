@@ -9,6 +9,7 @@ import { splitAttachments } from "./attachments";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import type { MessageEvent } from "@/lib/chatTypes";
 import type { EchoStatus } from "@/hooks/useChatStream";
+import type { Harness, HostHarness } from "@/lib/types";
 
 // ── User-bubble clamp ───────────────────────────────────────────────────────
 // A dispatch brief is thousands of characters. Left unclamped it becomes a wall
@@ -88,12 +89,25 @@ function ClampedUserContent({ text }: { text: string }) {
 /** Anhang-Zeilen aus dem Text holen: im Verlauf soll eine Kachel stehen, kein
  *  roher Pfad. Der Text bleibt die einzige Quelle — der Verlauf ist das
  *  Transkript der CLI, nicht unsere Datenbank (siehe attachments.ts). */
+/**
+ * What a send mid-turn actually does, per CLI. Claude Code QUEUES it until the
+ * running turn ends. omp treats Enter as a STEERING message: it lands after
+ * the running tool call and cuts the rest of that batch short — waiting for
+ * the turn would be the wrong promise there.
+ */
+function queuedNote(harness: Harness | HostHarness | null | undefined): string {
+  return harness === "omp"
+    ? "Steuernachricht — greift nach dem laufenden Werkzeug"
+    : "Eingereiht — wird nach dem laufenden Zug gesendet";
+}
+
 export function ChatMessage({
   ev,
   showModel = false,
   echoStatus,
   onWithdraw,
   onEdit,
+  harness,
 }: {
   ev: MessageEvent;
   showModel?: boolean;
@@ -106,6 +120,9 @@ export function ChatMessage({
    *  composer (edit). Absent = no buttons. */
   onWithdraw?: () => void;
   onEdit?: () => void;
+  /** The CLI behind the agent. A mid-turn send means something different per
+   *  harness (see `queuedNote`), so the waiting line names the right thing. */
+  harness?: Harness | HostHarness | null;
 }) {
   // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
   // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
@@ -163,10 +180,69 @@ export function ChatMessage({
     // shortly. They say what they are waiting for and stay out of the way.
     const waitingNote =
       echoStatus === "queued"
-        ? "Eingereiht — wird nach dem laufenden Zug gesendet"
+        ? queuedNote(harness)
         : echoStatus === "starting"
           ? "Agent startet — wird zugestellt…"
           : null;
+    // Only Claude Code lets us take a held message back (Up pops the queue
+    // into the input line, Ctrl+U clears it). omp consumes a steer after the
+    // running tool call; there is nothing to pull back, so no buttons.
+    const canWithdraw = echoStatus === "queued" && harness !== "omp";
+    if (echoStatus === "queued") {
+      // Not a turn yet, so not a bubble: while the CLI holds the message it
+      // sits as a small inset line under the running answer — the way Codex
+      // and Claude Code stack queued input — and grows into a real bubble the
+      // moment the transcript confirms it (operator wish 03.09.2026).
+      return (
+        <div className="w-full px-4 md:px-5 py-1 flex justify-end">
+          <div
+            data-testid="echo-bubble"
+            data-echo-status={echoStatus}
+            data-echo-compact="true"
+            className="max-w-[70%] min-w-0 pl-3 pr-3 py-1.5 text-[13px] leading-[1.5] animate-fade-in"
+            style={{
+              color: C.textSecondary,
+              borderRight: `2px solid ${C.borderSubtle}`,
+              borderRadius: "var(--radius-sm)",
+              background: `${C.bgElevated}80`,
+            }}
+          >
+            <span className="sr-only">Du</span>
+            {parsed.attachments.length > 0 && (
+              <div className="flex flex-col gap-1.5 mb-1">
+                {parsed.attachments.map((a) => (
+                  <ChatAttachmentTile key={a.path} att={a} />
+                ))}
+              </div>
+            )}
+            {parsed.text && (
+              <div className="whitespace-pre-wrap break-words line-clamp-2">{parsed.text}</div>
+            )}
+            <div
+              className="mt-1 flex items-center gap-1.5 text-[11.5px]"
+              style={{ color: C.textMuted }}
+            >
+              <Clock size={11} aria-hidden="true" />
+              <span>{waitingNote}</span>
+              {canWithdraw && (onWithdraw || onEdit) && (
+                <span className="ml-auto pl-3 flex items-center gap-2.5">
+                  {onEdit && (
+                    <button type="button" onClick={onEdit} className="hover:underline" style={{ color: C.textSecondary }}>
+                      Bearbeiten
+                    </button>
+                  )}
+                  {onWithdraw && (
+                    <button type="button" onClick={onWithdraw} className="hover:underline" style={{ color: C.textSecondary }}>
+                      Zurückziehen
+                    </button>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="w-full px-4 md:px-5 py-2 flex justify-end">
         <div
@@ -219,22 +295,6 @@ export function ChatMessage({
             >
               <Clock size={12} aria-hidden="true" />
               <span>{waitingNote}</span>
-              {echoStatus === "queued" && (onWithdraw || onEdit) && (
-                // While the CLI holds the message it is still ours to take
-                // back — the same thing Up + Ctrl+U does in the terminal.
-                <span className="ml-auto flex items-center gap-2.5">
-                  {onEdit && (
-                    <button type="button" onClick={onEdit} className="hover:underline" style={{ color: C.textSecondary }}>
-                      Bearbeiten
-                    </button>
-                  )}
-                  {onWithdraw && (
-                    <button type="button" onClick={onWithdraw} className="hover:underline" style={{ color: C.textSecondary }}>
-                      Zurückziehen
-                    </button>
-                  )}
-                </span>
-              )}
             </div>
           )}
         </div>
