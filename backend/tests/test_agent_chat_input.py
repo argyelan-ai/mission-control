@@ -558,6 +558,40 @@ async def test_send_keys_boss_sends_mapped_bytes(monkeypatch):
     assert fake_client.sent == [b"\x1b[A", b"\r"]
 
 
+# Zurueckziehen einer eingereihten Nachricht (live 03.09.2026, Claude Code
+# 2.1.259): "Up" holt die Warteschlange in die Eingabezeile
+# (``queue-operation popAll``), Ctrl+U leert die Zeile. Ohne Ctrl+U in der
+# Allowlist blieb der Text als Entwurf stehen und ging mit dem naechsten Send
+# zusammen raus.
+async def test_send_keys_docker_ctrl_u_is_a_named_tmux_key(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_keys(agent, ["Up", "C-u"])
+
+    assert calls[-1][-1] == "C-u"
+    assert "-l" not in calls[-1]
+
+
+async def test_send_keys_boss_ctrl_u_sends_nak_byte(monkeypatch):
+    from app.services import agent_chat_input
+
+    fake_client = _FakeWSClient()
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.send_keys(agent, ["Up", "C-u"])
+
+    assert fake_client.sent == [b"\x1b[A", b"\x15"]
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # services/agent_chat_input.py — unsupported runtimes
 # ══════════════════════════════════════════════════════════════════════════

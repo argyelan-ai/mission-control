@@ -371,11 +371,43 @@ def parse_transcript_line(
             return _parse_user_entry(d)
         if entry_type == "assistant":
             return _parse_assistant_entry(d, observed_windows)
+        if entry_type == "attachment":
+            return _parse_attachment_entry(d)
     except Exception:
         logger.debug("transcript_chat: failed to parse %s entry", entry_type, exc_info=True)
         return []
 
     return []
+
+
+def _parse_attachment_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
+    """Eine Nachricht, die WAEHREND eines laufenden Zugs geschickt wurde
+    (Steuern/"steering"), schreibt Claude Code nicht als ``user``-Eintrag,
+    sondern als ``attachment`` vom Typ ``queued_command`` — der Text steht in
+    ``attachment.prompt``. Live gesehen 03.09.2026 (Host 2.1.237, Container
+    2.1.259): ``queue-operation enqueue`` -> ``queue-operation remove``
+    (``absorbed_mid_turn``) -> dieser Eintrag. Ohne diesen Zweig fehlte die
+    Nachricht im Chat, ihr lokales Echo wurde nie abgeraeumt und stand nach
+    dem Zug als "Nicht bestaetigt" da, obwohl der Agent laengst darauf
+    geantwortet hatte. Wird die Warteschlange erst NACH dem Zug geleert, kommt
+    die Nachricht als normaler ``user``-Eintrag — der Zweig hier greift nur
+    fuer den Mitten-im-Zug-Fall."""
+    att = d.get("attachment")
+    if not isinstance(att, dict) or att.get("type") != "queued_command":
+        return []
+    prompt = att.get("prompt")
+    if not isinstance(prompt, str) or not prompt:
+        return []
+    # Ueber denselben Weg wie ein getippter Zug, damit Slash-Befehle,
+    # Teamkollegen-Nachrichten und Benachrichtigungen identisch erkannt werden.
+    return _parse_user_entry(
+        {
+            "uuid": d.get("uuid"),
+            "timestamp": d.get("timestamp"),
+            "isSidechain": d.get("isSidechain", False),
+            "message": {"role": "user", "content": prompt},
+        }
+    )
 
 
 def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:

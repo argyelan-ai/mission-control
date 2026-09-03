@@ -157,12 +157,17 @@ ALLOWED_KEYS: dict[str, str] = {
     "Enter": "\r",
     "Up": "\x1b[A",
     "Down": "\x1b[B",
+    # Ctrl+U leert die Eingabezeile. Gebraucht zum Zurueckziehen einer
+    # eingereihten Nachricht: "Up" holt die Warteschlange der CLI in die
+    # Eingabe zurueck (Claude Code: "Press up to edit queued messages"),
+    # Ctrl+U wirft den Text weg. Live geprueft 03.09.2026 (2.1.259).
+    "C-u": "\x15",
     "1": "1", "2": "2", "3": "3", "4": "4", "5": "5",
     "6": "6", "7": "7", "8": "8", "9": "9",
     "y": "y", "n": "n",
 }
 
-_TMUX_NAMED_KEYS = frozenset({"Escape", "Enter", "Up", "Down"})
+_TMUX_NAMED_KEYS = frozenset({"Escape", "Enter", "Up", "Down", "C-u"})
 
 # Host-runtime slugs that resolve to the Boss's own tmux/pty session — every
 # other host agent has no input channel (Hermes, Jarvis, ...).
