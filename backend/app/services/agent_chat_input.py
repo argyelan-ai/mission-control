@@ -533,6 +533,7 @@ async def send_text(agent, text: str) -> None:
         else:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
         await _run_docker_exec(_docker_argv(slug, "Enter"))
+        note_sent(str(getattr(agent, "id", "") or slug), text)
         return
 
     # kind == "boss" — text and its submitting Enter MUST be separate frames
@@ -540,6 +541,25 @@ async def send_text(agent, text: str) -> None:
     await _send_boss_bytes(
         text.encode(), b"\r", delay_before_last=_BOSS_ENTER_DELAY_SECONDS
     )
+    note_sent(str(getattr(agent, "id", "") or slug), text)
+
+
+# Was zuletzt je Agent eingetippt wurde — fuer die Live-Vorschau des
+# Sessions-Chats. Sie zeigt nur, was NACH dem Auftrag auf dem Bildschirm
+# steht; bis der Auftrag im Transkript auftaucht (bei omp erst am Ende des
+# Zugs), ist der eingetippte Text der einzige Anker. In-Process reicht: das
+# Backend laeuft mit einem Worker, Sende-Router und Tailer teilen sich den
+# Prozess. Live 03.09.2026: ohne Anker zeigte die Vorschau 2,5 KB alte
+# Historie samt Echo des Auftrags.
+_LAST_SENT: dict[str, str] = {}
+
+
+def note_sent(agent_id: str, text: str) -> None:
+    _LAST_SENT[agent_id] = text
+
+
+def pop_last_sent(agent_id: str) -> str | None:
+    return _LAST_SENT.pop(agent_id, None)
 
 
 async def send_keys(agent, keys: list[str]) -> None:

@@ -2110,6 +2110,8 @@ class ChatTailerManager:
                 # Letzte Zeile, die das Transkript schon hat (siehe Tailer):
                 # die Vorschau zeigt nur, was danach auf dem Bildschirm steht.
                 "anchor": "",
+                # Fuer den Sende-Anker (agent_chat_input.pop_last_sent).
+                "agent_id": str(getattr(agent, "id", "") or ""),
             }
         except Exception:  # noqa: BLE001
             logger.warning("preview: Start fehlgeschlagen", exc_info=True)
@@ -2149,6 +2151,17 @@ class ChatTailerManager:
         if chunk:
             state["screen"].feed(chunk)
 
+        # Hat der Operator gerade etwas eingetippt, ist DAS der Anker — das
+        # Transkript kennt die Nachricht bei omp erst am Ende des Zugs, und
+        # bis dahin zeigte die Vorschau die ganze alte Historie (03.09.2026).
+        if state.get("agent_id"):
+            from app.services.agent_chat_input import pop_last_sent
+
+            sent = pop_last_sent(state["agent_id"])
+            if sent:
+                tail = [l.strip() for l in sent.splitlines() if l.strip()]
+                if tail:
+                    state["anchor"] = tail[-1]
         anchor = state.get("anchor") or ""
         text = (state["screen"].text_after(anchor) if anchor else state["screen"].text()).strip()
         if not text:

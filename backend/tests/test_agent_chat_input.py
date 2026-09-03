@@ -2706,3 +2706,34 @@ async def test_model_options_capabilities_never_adds_claude_aliases_to_a_foreign
         _StubAgent(slug="rex", agent_runtime="cli-bridge", harness="openclaude")
     )
     assert [o["command"] for o in caps["modelOptions"]] == ["opus"]
+
+
+def test_last_sent_registry_hands_the_text_over_exactly_once():
+    """send_text merkt sich je Agent, was zuletzt eingetippt wurde; die
+    Vorschau holt es EINMAL ab und setzt es als Anker (siehe Tailer)."""
+    from app.services import agent_chat_input as m
+
+    assert m.pop_last_sent("a") is None
+    m.note_sent("a", "erster")
+    m.note_sent("a", "zweiter")     # nur der juengste zaehlt
+    m.note_sent("b", "anderer Agent")
+    assert m.pop_last_sent("a") == "zweiter"
+    assert m.pop_last_sent("a") is None
+    assert m.pop_last_sent("b") == "anderer Agent"
+
+
+async def test_send_text_notes_the_text_for_the_preview_anchor(monkeypatch):
+    from app.services import agent_chat_input
+
+    async def _fake_run(argv):
+        pass
+
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    agent.id = "agent-rex"
+    await agent_chat_input.send_text(agent, "hello agent")
+    assert agent_chat_input.pop_last_sent("agent-rex") == "hello agent"

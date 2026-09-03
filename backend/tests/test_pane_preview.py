@@ -371,3 +371,81 @@ def test_box_divider_lines_are_furniture():
     preview = PanePreview()
     preview.feed("├─── Output ───────┤\r\n Status: alles gut\r\n")
     assert preview.text() == "Status: alles gut"
+
+
+# ── Live 03.09.2026 (omp-Agent): Tabelle und Codeblock kamen kaputt an ─────
+# Auftrag "Liste, Tabelle, Codeblock": die Liste stand in der Vorschau, von
+# der Tabelle blieb nur die Ueberschrift ("2. Tabelle:" und dann nichts), im
+# Codeblock fehlte jede Einrueckung. Marks Befund: "das Streaming respektive
+# Anzeigen im omp-Chat wird nicht sauber geparst."
+
+
+def test_omp_box_table_comes_back_as_a_markdown_table():
+    """omp rendert eine Markdown-Tabelle als Kasten aus Strichzeichen. Die
+    Zeilen sahen fuer den Filter wie Rahmen aus und fielen komplett weg."""
+    p = PanePreview(80, 14)
+    p.feed(
+        " 2. Tabelle:\r\n"
+        " ┌──────────┬──────────┐\r\n"
+        " │ Spalte A │ Spalte B │\r\n"
+        " ├──────────┼──────────┤\r\n"
+        " │ Zeile 1  │ Wert 1   │\r\n"
+        " ├──────────┼──────────┤\r\n"
+        " │ Zeile 2  │ Wert 2   │\r\n"
+        " └──────────┴──────────┘\r\n"
+        " Fazit: fertig.\r\n"
+    )
+    assert p.text() == (
+        "2. Tabelle:\n"
+        "| Spalte A | Spalte B |\n"
+        "| --- | --- |\n"
+        "| Zeile 1 | Wert 1 |\n"
+        "| Zeile 2 | Wert 2 |\n"
+        "Fazit: fertig."
+    )
+
+
+def test_omp_composer_box_is_still_furniture_next_to_a_table():
+    """Der Eingabe-Rahmen von omp benutzt dieselben Strichzeichen, hat aber
+    keine Spalten — er bleibt Rahmen."""
+    p = PanePreview(80, 8)
+    p.feed(
+        " │ Nur A │\r\n"
+        "╭── π  > ⬢ MC model · ◒ high ▶───────╮\r\n"
+        "│  tippe hier                        │\r\n"
+        "╰─                                  ─╯\r\n"
+    )
+    assert p.text() == ""
+
+
+def test_code_block_keeps_its_indentation():
+    """omp rueckt einen Codeblock als Ganzes ein; innerhalb des Blocks zaehlt
+    die relative Einrueckung (Python!). Sie ging beim Zeilen-Strip verloren."""
+    p = PanePreview(80, 10)
+    p.feed(
+        " 3. Python-Codeblock:\r\n"
+        " ```python\r\n"
+        "   def gruss(name):\r\n"
+        "       return f\"Hallo, {name}!\"\r\n"
+        "   print(gruss(\"Welt\"))\r\n"
+        " ```\r\n"
+        " Fazit: fertig.\r\n"
+    )
+    assert p.text() == (
+        "3. Python-Codeblock:\n"
+        "```python\n"
+        "def gruss(name):\n"
+        "    return f\"Hallo, {name}!\"\n"
+        "print(gruss(\"Welt\"))\n"
+        "```\n"
+        "Fazit: fertig."
+    )
+
+
+def test_code_block_lines_are_not_deduplicated():
+    """Zwei gleiche lange Zeilen in einem Codeblock sind Absicht, kein
+    Neuzeichnen — die Doppel-Erkennung gilt nur ausserhalb von Zaeunen."""
+    p = PanePreview(80, 8)
+    line = "        self.value = compute_the_thing(argument_one, argument_two)"
+    p.feed(" ```python\r\n" + line + "\r\n" + line + "\r\n ```\r\n")
+    assert p.text().count("self.value") == 2

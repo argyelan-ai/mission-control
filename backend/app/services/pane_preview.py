@@ -18,6 +18,7 @@ abzueglich des Rahmens der Oberflaeche. Das traegt jede CLI, auch die naechste.
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 import pyte
 
@@ -43,6 +44,14 @@ _TOOL_HEAD = re.compile(r"^\s*●\s*[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*\(")
 _TOOL_RESULT = re.compile(r"^\s*⎿")
 _BULLET = re.compile(r"^\s*●")
 _MARKDOWN_MARKS = re.compile(r"\*\*|__|`|^\s*#{1,6}\s+", re.M)
+
+#: omp zeichnet eine Markdown-Tabelle als Kasten: ``│ a │ b │`` fuer Zeilen,
+#: ``├──┼──┤`` als Trenner, ``┌┬┐``/``└┴┘`` als Rand. Zeilen mit mindestens
+#: zwei Zellen sind Inhalt (der Eingabe-Rahmen hat nur eine) und werden zu
+#: Markdown-Pipes; der Rand bleibt Rahmen (siehe ``_FURNITURE``).
+_TABLE_ROW = re.compile(r"^\s*│(.*│.*)│\s*$")
+_TABLE_DIVIDER = re.compile(r"^\s*├[─┼]*┼[─┼]*┤\s*$")
+_FENCE = re.compile(r"^\s*```")
 
 _FURNITURE = re.compile(
     r"""
@@ -205,8 +214,29 @@ class PanePreview:
         seen: set[str] = set()
         skip = 0            # verbleibende Zeilen der Steering-Box
         in_tool = False     # innerhalb eines Werkzeug-Blocks (bis Leerzeile / neues „●")
+        code: Optional[list[str]] = None   # Zeilen eines offenen ```-Blocks
+        table_divided = False              # Kopf-Trenner der laufenden Tabelle schon gesetzt
+
+        def flush_code() -> None:
+            # Ein Codeblock ist als Ganzes eingerueckt; nur die Einrueckung
+            # RELATIV zueinander ist Inhalt (Python!). Gemeinsamen Vorspann weg.
+            if code:
+                indent = min(len(l) - len(l.lstrip()) for l in code if l.strip())
+                out.extend(l[indent:] for l in code)
+
         for i, raw in enumerate(lines):
             line = raw.strip()
+            if _FENCE.match(raw) and not in_tool:
+                if code is None:
+                    code = []
+                else:
+                    flush_code()
+                    code = None
+                out.append(line)
+                continue
+            if code is not None:
+                code.append(raw.rstrip())
+                continue
             if not line:
                 in_tool = False
             elif _BULLET.match(raw):
@@ -223,6 +253,19 @@ class PanePreview:
             if steering:
                 skip = int(steering.group(1))
                 continue
+            if _TABLE_DIVIDER.match(line):
+                # omp trennt JEDE Zeile; Markdown kennt nur den Kopf-Trenner.
+                if not table_divided:
+                    cells = line.count("┼") + 1
+                    out.append("| " + " | ".join(["---"] * cells) + " |")
+                    table_divided = True
+                continue
+            table = _TABLE_ROW.match(line)
+            if table:
+                cells = [c.strip() for c in table.group(1).split("│")]
+                out.append("| " + " | ".join(cells) + " |")
+                continue
+            table_divided = False
             if not line or _FURNITURE.search(raw):
                 continue
             key = re.sub(r"\s+", " ", line)
@@ -231,4 +274,5 @@ class PanePreview:
                     continue
                 seen.add(key)
             out.append(line)
+        flush_code()    # Block laeuft noch (Antwort mitten im Codeblock)
         return out
