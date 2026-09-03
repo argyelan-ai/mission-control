@@ -303,8 +303,12 @@ export interface ChatModelOption {
  * `backend/app/services/agent_chat_input.py`, which documents the split from
  * empirical testing, and ADR-073. The distinction matters to the operator: one
  * choice outlives the session, the other does not.
+ *
+ * `off` is omp's case: its thinking level is cycled with Shift+Tab and the
+ * CLI writes every level but `off` to `defaultThinkingLevel` (its settings
+ * enum has no `off`) — so `off` lasts until the next task relaunch.
  */
-export const SESSION_ONLY_EFFORT_LEVELS = new Set(["max", "ultracode"]);
+export const SESSION_ONLY_EFFORT_LEVELS = new Set(["max", "ultracode", "off"]);
 
 export function isSessionOnlyEffort(level: string): boolean {
   return SESSION_ONLY_EFFORT_LEVELS.has(level);
