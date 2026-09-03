@@ -2555,7 +2555,7 @@ async def test_effort_capabilities_omp_reads_level_from_status_line(monkeypatch)
 
 
 async def test_effort_capabilities_omp_marks_status_line_as_live_truth(monkeypatch, tmp_path):
-    """Live-Befund 03.09.2026 (Sparky): Shift+Tab-Wechsel stehen sofort in
+    """Live-Befund 03.09.2026 (omp-Agent): Shift+Tab-Wechsel stehen sofort in
     der Statuszeile, aber das letzte ``usage``-Ereignis des Transkripts traegt
     noch die Stufe des VORIGEN Zugs. Nach einem Seiten-Neuladen zeigte der Chip
     darum ``high``, waehrend der Pane laengst ``low`` sagte. ``effortLive``

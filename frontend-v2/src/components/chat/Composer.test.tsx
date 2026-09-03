@@ -755,7 +755,7 @@ describe("Composer", () => {
     });
 
     it("trusts a live status-line level over the last usage event (omp)", () => {
-      // Live-Befund 03.09.2026 an Sparky (omp): Shift+Tab-Wechsel stehen sofort
+      // Live-Befund 03.09.2026 an einem omp-Agenten: Shift+Tab-Wechsel stehen sofort
       // in der Statuszeile, aber das letzte usage traegt noch die Stufe des
       // VORIGEN Zugs. Nach Neuladen zeigte der Chip "high", der Pane sagte
       // "low". Meldet das Backend effortLive, ist capabilities.effort juenger
