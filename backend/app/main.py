@@ -845,13 +845,34 @@ app.add_middleware(
 )
 
 # ── Rate Limiting (slowapi) ─────────────────────────────────────────────────
+# PR #404 Rex review (MEDIUM): Limiter + default_limits + the exception
+# handler were wired up, but without SlowAPIMiddleware (or a single
+# @limiter.limit decorator — repo-wide grep found zero) default_limits was
+# never enforced. It read as "there is global rate limiting" while there was
+# none. SlowAPIMiddleware makes default_limits apply to every HTTP route;
+# it only counts requests (not connection duration), so long-lived SSE
+# responses (agent_chat.py, groups.py) count once per connection, same as
+# any other request — no special-casing needed.
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["120/minute"],
+    # Every test-client request shares one fake client address (slowapi's
+    # get_remote_address falls back to "127.0.0.1" when request.client is
+    # unset, which is how httpx's ASGITransport calls look) — a live
+    # 120/minute budget shared across the ENTIRE test session would make
+    # unrelated tests fail with spurious 429s once ~120 requests had run.
+    # test_rate_limiting_middleware.py exercises the real enforcement path
+    # by swapping in its own low-limit Limiter, independent of this flag.
+    enabled=settings.environment != "test",
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Register all routers
 app.include_router(auth.router)
