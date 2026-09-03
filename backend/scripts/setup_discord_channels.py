@@ -115,7 +115,7 @@ async def main():
         sys.exit(1)
 
     print(f"Guild ID: {guild_id}")
-    print("Bot Token: ***" + bot_token[-4:] if len(bot_token) > 4 else "***")
+    print("Bot Token: ***" + (bot_token[-4:] if len(bot_token) > 4 else ""))
     print()
 
     api = DiscordAPI(bot_token)
