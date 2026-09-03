@@ -45,7 +45,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k, v in d.items():
-        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS"):
+        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_TASK_DEADLINE", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS"):
             print(f"{k}={v}")
 except Exception:
     sys.exit(1)
@@ -71,6 +71,9 @@ except Exception:
         # reads OMP_TURN_IDLE_TIMEOUT with a 300s default when unset.
         _NEW_IDLE_TIMEOUT=$(echo "$_EXPORTS" | grep '^OMP_TURN_IDLE_TIMEOUT=' | cut -d= -f2-)
         [ -n "$_NEW_IDLE_TIMEOUT" ] && export OMP_TURN_IDLE_TIMEOUT="$_NEW_IDLE_TIMEOUT"
+        # Per-task wall clock (bridge default 3600 s; local models get 7200 s).
+        _NEW_TASK_DEADLINE=$(echo "$_EXPORTS" | grep '^OMP_TASK_DEADLINE=' | cut -d= -f2-)
+        [ -n "$_NEW_TASK_DEADLINE" ] && export OMP_TASK_DEADLINE="$_NEW_TASK_DEADLINE"
         # Context window + max output for omp's models.yml — backend decides
         # both in build_runtime_env from the runtime row's max_context_len so a
         # recipe switch to a smaller model can't leak a stale (Qwen-era) window.

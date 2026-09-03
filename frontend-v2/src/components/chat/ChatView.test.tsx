@@ -172,6 +172,7 @@ function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamRe
     echoAgentStarting: vi.fn(),
     awaitingResponse: false,
     preview: null,
+    withdrawQueued: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -1077,6 +1078,62 @@ describe("ChatView", () => {
     ).toBeInTheDocument();
     // The whole point: nothing here looks like a problem.
     expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
+  });
+
+  // Operator finding 03.09.2026: a queued steer could neither be withdrawn nor
+  // edited while the CLI still held it. The terminal can (Up pops the queue
+  // into the input line, Ctrl+U clears it) — the chat now offers the same.
+
+  it("withdraws a queued steer: pops the queue in the terminal and drops the echo", async () => {
+    const user = userEvent.setup();
+    const withdrawQueued = vi.fn(() => ["mach danach noch X"]);
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "mach danach noch X", sentAt: Date.now(), status: "queued" },
+        ],
+        withdrawQueued,
+      })
+    );
+    renderChatView();
+
+    await user.click(screen.getByRole("button", { name: "Zurückziehen" }));
+
+    await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Up", "C-u"]));
+    expect(withdrawQueued).toHaveBeenCalledTimes(1);
+    // Nothing typed into the composer on a plain withdraw.
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("");
+  });
+
+  it("edits a queued steer: withdraws it and puts the text back into the composer", async () => {
+    const user = userEvent.setup();
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "mach danach noch X", sentAt: Date.now(), status: "queued" },
+        ],
+        withdrawQueued: vi.fn(() => ["mach danach noch X"]),
+      })
+    );
+    renderChatView();
+
+    await user.click(screen.getByRole("button", { name: "Bearbeiten" }));
+
+    await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Up", "C-u"]));
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("mach danach noch X");
+  });
+
+  it("offers no withdraw on an echo that is already on its way", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        pendingEchoes: [{ id: "echo-1", text: "hallo", sentAt: Date.now(), status: "pending" }],
+      })
+    );
+    renderChatView();
+    expect(screen.queryByRole("button", { name: "Zurückziehen" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bearbeiten" })).not.toBeInTheDocument();
   });
 
   it("shows a send waiting on a booting agent calmly", () => {

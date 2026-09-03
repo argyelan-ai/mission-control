@@ -39,7 +39,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Iterable, Iterator, Optional, TextIO
+from typing import Mapping, Callable, Iterable, Iterator, Optional, TextIO
 
 # CTX-01 Nachzug Teil 2 (2026-08-10): context_detect.py liegt neben bridge.py
 # im selben Verzeichnis (docker/omp-bridge/context_detect.py, Docker-Image
@@ -281,6 +281,13 @@ class RunOutcome:
     parse_failures: int = 0
     session_id: Optional[str] = None
     watchdog_killed: bool = False         # set by the live supervisor, not the file
+    # Why the watchdog fired: "deadline" (per-task wall clock ran out while the
+    # model was still producing), "idle" (no progress for idle_timeout), or
+    # "child_dead" (TUI process vanished). One generic "kein Stream-Fortschritt"
+    # for all three misled the Sparky diagnosis on 03.09.2026 — the run was
+    # killed at 1200.5 s with heartbeats every 3 s until the end.
+    watchdog_reason: Optional[str] = None
+    watchdog_limit: Optional[float] = None
 
     # Derived completion-contract signals (filled by classify()).
     sentinel_ok: bool = False
@@ -475,6 +482,21 @@ def sentinel_present(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _watchdog_detail(o: "RunOutcome") -> str:
+    """Human-readable reason for a watchdog kill — names the trigger and its
+    limit so an operator can tell "the task needed longer" from "the model hung"."""
+    lim = f"{o.watchdog_limit:.0f} s" if o.watchdog_limit else "?"
+    if o.watchdog_reason == "deadline":
+        return (f"Zeitlimit für den Task erreicht ({lim}, OMP_TASK_DEADLINE) — "
+                "omp arbeitete noch, wurde vom Wall-Clock-Watchdog beendet.")
+    if o.watchdog_reason == "idle":
+        return (f"omp lieferte {lim} lang kein Fortschritt (OMP_TURN_IDLE_TIMEOUT) — "
+                "vom Watchdog beendet.")
+    if o.watchdog_reason == "child_dead":
+        return "omp-Prozess ist unerwartet verschwunden — vom Watchdog neu gestartet."
+    return "omp reagierte nicht mehr (kein Stream-Fortschritt) — vom Wall-Clock-Watchdog beendet."
+
+
 def classify(outcome: RunOutcome) -> Classification:
     """Map a reduced RunOutcome to exactly one terminal Kind."""
     o = outcome
@@ -489,8 +511,7 @@ def classify(outcome: RunOutcome) -> Classification:
             Kind.ABORT_HANG,
             retryable=True,
             reason="hang",
-            detail="omp reagierte nicht mehr (kein Stream-Fortschritt) — "
-                   "vom Wall-Clock-Watchdog beendet.",
+            detail=_watchdog_detail(o),
         )
 
     # (1) Launch / preflight failure: no json session ever emitted.
@@ -2089,7 +2110,7 @@ def serve_loop(
     )
     launcher = os.environ.get("OMP_LAUNCHER", "/opt/omp-bridge/launch-omp.sh")
     ready_timeout = float(os.environ.get("OMP_READY_TIMEOUT", "45"))
-    turn_deadline = float(os.environ.get("OMP_TASK_DEADLINE", os.environ.get("OMP_MAX_TIME", "1200")))
+    turn_deadline = task_deadline_from_env(os.environ)
     idle_timeout = float(os.environ.get("OMP_TURN_IDLE_TIMEOUT", "300"))
     isolation = os.environ.get("OMP_ISOLATION", "relaunch")  # relaunch | slash
 
@@ -2686,13 +2707,28 @@ def _write_task_file(path: str, body: str) -> None:
         fh.write(body)
 
 
+DEFAULT_TASK_DEADLINE_S = 3600.0
+
+
+def task_deadline_from_env(env: Mapping[str, str]) -> float:
+    """Per-task wall clock (seconds). OMP_TASK_DEADLINE wins, OMP_MAX_TIME is the
+    legacy name. Default one hour: real hangs are the idle watchdog's job; the
+    deadline only stops runaway loops. 1200 s killed a working 20-minute audit
+    on a local model (03.09.2026) — a cloud harness needed 28 min for it."""
+    raw = env.get("OMP_TASK_DEADLINE") or env.get("OMP_MAX_TIME")
+    return float(raw) if raw else DEFAULT_TASK_DEADLINE_S
+
+
 def _native_watchdog_kill(
-    controller: NativeTuiController, outcome: RunOutcome, cwd: str
+    controller: NativeTuiController, outcome: RunOutcome, cwd: str,
+    reason: Optional[str] = None, limit: Optional[float] = None,
 ) -> RunOutcome:
     """SIGKILL + relaunch the TUI (respawn-window -k) so a wedged / dead omp is
     never left in Window 0, and flag the run so classify()->ABORT_HANG
     (retryable; exhausted -> terminal blocker). Never left in_progress."""
     outcome.watchdog_killed = True
+    outcome.watchdog_reason = reason
+    outcome.watchdog_limit = limit
     try:
         controller.relaunch(cwd)
     except Exception as e:  # noqa: BLE001 — recovery must not raise past here
@@ -2775,11 +2811,11 @@ def _observe_native_turn(
         # --- watchdog (out of band vs the model): child-death, wall-clock, idle
         t = now()
         if not controller.child_alive():
-            return _native_watchdog_kill(controller, outcome, cwd)
+            return _native_watchdog_kill(controller, outcome, cwd, "child_dead")
         if t - start > turn_deadline:
-            return _native_watchdog_kill(controller, outcome, cwd)
+            return _native_watchdog_kill(controller, outcome, cwd, "deadline", turn_deadline)
         if idle_timeout and (t - last_progress) > idle_timeout:
-            return _native_watchdog_kill(controller, outcome, cwd)
+            return _native_watchdog_kill(controller, outcome, cwd, "idle", idle_timeout)
         sleep(poll_interval)
 
 
@@ -2791,7 +2827,7 @@ def run_native_turn(
     task_file_path: str,
     isolate: bool = True,
     ready_timeout: float = 45.0,
-    turn_deadline: float = 1200.0,
+    turn_deadline: float = DEFAULT_TASK_DEADLINE_S,
     idle_timeout: float = 300.0,
     poll_interval: float = 1.0,
     now: Callable[[], float] = time.monotonic,
@@ -2846,7 +2882,7 @@ def run_native_continue(
     cwd: str,
     nudge_prompt: str,
     task_file_path: str,
-    turn_deadline: float = 1200.0,
+    turn_deadline: float = DEFAULT_TASK_DEADLINE_S,
     idle_timeout: float = 300.0,
     poll_interval: float = 1.0,
     now: Callable[[], float] = time.monotonic,

@@ -843,3 +843,54 @@ def test_real_thinking_text_still_emits_an_event():
     line = _EMPTY_THINKING_LINE.replace('"thinking":""', '"thinking":"ich ueberlege"')
     thinking = [e for e in parse_transcript_line(line) if e["kind"] == "thinking"]
     assert len(thinking) == 1 and thinking[0]["text"] == "ich ueberlege"
+
+
+# ── type == "attachment" / queued_command ──────────────────────────────────
+#
+# Eine Nachricht, die WAEHREND eines laufenden Zugs geschickt wird, landet
+# nicht als ``user``-Eintrag im Transkript. Claude Code (live 03.09.2026,
+# 2.1.237 Host und 2.1.259 Container) schreibt drei Zeilen: ``queue-operation
+# enqueue``, ``queue-operation remove`` (``reason: absorbed_mid_turn``) und
+# einen ``attachment``-Eintrag vom Typ ``queued_command`` mit dem Text in
+# ``prompt``. Der Parser warf die dritte Zeile weg — die Nachricht fehlte im
+# Chat, ihr Echo wurde nie abgeraeumt und stand nach dem Zug als "Nicht
+# bestaetigt" da, obwohl der Agent laengst geantwortet hatte.
+
+QUEUED_COMMAND_LINE = '{"parentUuid":"a9","isSidechain":false,"attachment":{"type":"queued_command","prompt":"was ist der stand?","source_uuid":"src1","commandMode":"prompt","origin":{"kind":"human"},"timestamp":"2026-09-03T12:52:57.678Z"},"type":"attachment","uuid":"att1","timestamp":"2026-09-03T12:53:01.555Z","sessionId":"s1"}'
+
+QUEUED_SLASH_COMMAND_LINE = '{"parentUuid":"a9","isSidechain":false,"attachment":{"type":"queued_command","prompt":"/model sonnet","source_uuid":"src2","commandMode":"prompt","origin":{"kind":"human"},"timestamp":"2026-09-03T12:52:57.678Z"},"type":"attachment","uuid":"att2","timestamp":"2026-09-03T12:53:01.555Z","sessionId":"s1"}'
+
+OTHER_ATTACHMENT_LINE = '{"parentUuid":"a9","isSidechain":false,"attachment":{"type":"task_notification","summary":"x"},"type":"attachment","uuid":"att3","timestamp":"2026-09-03T12:53:01.555Z","sessionId":"s1"}'
+
+QUEUE_OPERATION_LINE = '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-03T12:52:57.678Z","sessionId":"s1","content":"was ist der stand?"}'
+
+
+def test_queued_command_attachment_is_a_user_message():
+    evs = parse_transcript_line(QUEUED_COMMAND_LINE)
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["kind"] == "message"
+    assert ev["role"] == "user"
+    assert ev["text"] == "was ist der stand?"
+    assert ev["uuid"] == "att1"
+    # Zeitpunkt der Uebernahme in den Zug, nicht der des Einreihens: so steht
+    # die Zeile im Chat dort, wo der Agent sie wirklich gelesen hat.
+    assert ev["ts"] == "2026-09-03T12:53:01.555Z"
+    assert ev["sidechain"] is False
+
+
+def test_queued_slash_command_attachment_is_a_command():
+    evs = parse_transcript_line(QUEUED_SLASH_COMMAND_LINE)
+    assert [e["kind"] for e in evs] == ["command"]
+    assert evs[0]["command"] == "/model sonnet"
+
+
+def test_other_attachment_types_stay_silent():
+    assert parse_transcript_line(OTHER_ATTACHMENT_LINE) == []
+
+
+def test_queue_operation_lines_stay_silent():
+    # Ein-/Ausreihen ist Buchhaltung der CLI, keine Nachricht — die Nachricht
+    # selbst kommt ueber den attachment-Eintrag (oder als user-Eintrag, wenn
+    # die Warteschlange erst nach dem Zug abgearbeitet wird).
+    assert parse_transcript_line(QUEUE_OPERATION_LINE) == []

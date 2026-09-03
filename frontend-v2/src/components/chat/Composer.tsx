@@ -198,6 +198,9 @@ interface ComposerProps {
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
    *  read-only rather than as a picker that cannot work. */
   capabilities?: ChatCapabilities | null;
+  /** Text the parent wants in the box (a withdrawn steer coming back for
+   *  editing). `at` makes the same text re-applicable: a new stamp = apply. */
+  prefill?: { text: string; at: number } | null;
 }
 
 /**
@@ -221,9 +224,12 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null }: ComposerProps) {
   const t = useTranslations("sessions");
   const [text, setText] = useState("");
+  useEffect(() => {
+    if (prefill) setText(prefill.text);
+  }, [prefill]);
   const [focused, setFocused] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const modelBoxRef = useRef<HTMLDivElement | null>(null);

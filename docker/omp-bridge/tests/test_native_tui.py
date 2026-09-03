@@ -932,3 +932,34 @@ def _run_standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_run_standalone())
+
+
+# ---------------------------------------------------------------------------
+# Watchdog reason (03.09.2026): Sparky's security-audit task ran 106 turns with
+# progress every ~3 s and was killed at exactly 1200.5 s — the per-task wall
+# clock, not a hang. The classification said "kein Stream-Fortschritt" for all
+# three watchdog triggers, which sent the diagnosis down the wrong path.
+# ---------------------------------------------------------------------------
+
+def test_deadline_watchdog_reports_deadline_not_stall():
+    h = _Harness([[{"kind": "session_start"}]])
+    outcome = h.run(turn_deadline=5, idle_timeout=1000, ready_timeout=100)
+    assert outcome.watchdog_reason == "deadline"
+    detail = bridge.classify(outcome).detail
+    assert "Zeitlimit" in detail and "5" in detail
+    assert "kein Stream-Fortschritt" not in detail
+
+
+def test_idle_watchdog_reports_idle():
+    h = _Harness([[{"kind": "session_start"}]])
+    outcome = h.run(turn_deadline=1000, idle_timeout=3, ready_timeout=100)
+    assert outcome.watchdog_reason == "idle"
+    detail = bridge.classify(outcome).detail
+    assert "kein Fortschritt" in detail and "3" in detail
+
+
+def test_child_death_watchdog_reports_child_dead():
+    h = _Harness([[{"kind": "session_start"}]], alive=True, alive_after=False)
+    outcome = h.run(turn_deadline=1000, idle_timeout=1000, ready_timeout=100)
+    assert outcome.watchdog_reason == "child_dead"
+    assert "Prozess" in bridge.classify(outcome).detail

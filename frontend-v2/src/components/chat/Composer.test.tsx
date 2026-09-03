@@ -136,6 +136,23 @@ describe("Composer", () => {
     expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
   });
 
+  it("takes a prefill into the textarea when the parent hands one over", () => {
+    const { rerender } = render(
+      <Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />
+    );
+    rerender(
+      <Composer
+        agentId="a1"
+        usage={null}
+        state={mkState("working")}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        prefill={{ text: "mach danach noch X", at: 1 }}
+      />
+    );
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("mach danach noch X");
+  });
+
   it("shows a disabled ghost Send when the agent is idle and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
     const send = screen.getByTestId("send-button");

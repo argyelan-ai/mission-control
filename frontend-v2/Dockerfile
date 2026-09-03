@@ -5,8 +5,13 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --frozen-lockfile 2>/dev/null || npm install
+# Lockfile MUST come along: without it every build resolves the tree fresh
+# from the registry. On 03.09.2026 that resolution hit an npm 10.9 arborist
+# bug ("Cannot read properties of null (reading 'edgesOut')") after an
+# upstream release — CI and deploy broke with an unchanged repo. `npm ci`
+# installs exactly what the lockfile says and fails loudly if it drifts.
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 # Build the application
 FROM base AS builder

@@ -1855,3 +1855,49 @@ async def test_history_is_empty_while_the_fresh_session_has_no_file_yet(
         assert "capabilities" in body
     finally:
         fresh_session.reset_for_tests()
+
+
+async def test_preview_starts_after_the_text_the_operator_just_sent(
+    tmp_path, fake_broadcast, manager
+):
+    """Live 03.09.2026 (omp-Agent): Der Anker kommt sonst erst aus dem
+    Transkript — bei omp landet die Nachricht dort erst am ENDE des Zugs.
+    Bis dahin zeigte die Vorschau die ganze alte Historie (2,5 KB der
+    vorigen Aufgabe) samt Echo des Auftrags. Der Auftrag, den der Operator
+    gerade eintippen liess, ist der bessere Anker: alles davor ist alt.
+    """
+    from app.services import agent_chat_input
+    from app.services.pane_preview import PanePreview
+
+    stream = tmp_path / "omp.log"
+    stream.write_bytes(
+        (
+            "● Alte Antwort aus der vorigen Aufgabe, die keiner mehr sehen will.\r\n"
+            "> Bitte eine Liste, eine Tabelle und einen Codeblock.\r\n"
+            "● Gern, hier die Liste:\r\n"
+        ).encode()
+    )
+    agent_chat_input.note_sent("agent-1", "Bitte eine Liste, eine Tabelle und einen Codeblock.")
+    state = {
+        "path": stream, "offset": 0, "screen": PanePreview(), "last_sent": "",
+        "pending": None, "anchor": "", "agent_id": "agent-1",
+    }
+    await manager._pump_preview("chan", state)
+    await manager._pump_preview("chan", state)
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert previews, "keine Vorschau"
+    assert "Gern, hier die Liste" in previews[-1]["text"]
+    assert "Alte Antwort" not in previews[-1]["text"]
+    assert "Bitte eine Liste" not in previews[-1]["text"]
+    assert agent_chat_input.pop_last_sent("agent-1") is None, "Anker muss verbraucht sein"
+
+
+async def test_preview_state_remembers_the_agent_for_the_sent_anchor(manager, tmp_path, monkeypatch):
+    from app.services import pane_stream
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(tmp_path / "p.log"))
+    monkeypatch.setattr(pane_stream, "pane_size", _async_return((80, 24)))
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    agent.id = "agent-1"
+    state = await manager._start_preview(agent)
+    assert state["agent_id"] == "agent-1"

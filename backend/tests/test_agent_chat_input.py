@@ -558,6 +558,40 @@ async def test_send_keys_boss_sends_mapped_bytes(monkeypatch):
     assert fake_client.sent == [b"\x1b[A", b"\r"]
 
 
+# Zurueckziehen einer eingereihten Nachricht (live 03.09.2026, Claude Code
+# 2.1.259): "Up" holt die Warteschlange in die Eingabezeile
+# (``queue-operation popAll``), Ctrl+U leert die Zeile. Ohne Ctrl+U in der
+# Allowlist blieb der Text als Entwurf stehen und ging mit dem naechsten Send
+# zusammen raus.
+async def test_send_keys_docker_ctrl_u_is_a_named_tmux_key(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls: list[list[str]] = []
+
+    async def _fake_run(argv):
+        calls.append(argv)
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    await agent_chat_input.send_keys(agent, ["Up", "C-u"])
+
+    assert calls[-1][-1] == "C-u"
+    assert "-l" not in calls[-1]
+
+
+async def test_send_keys_boss_ctrl_u_sends_nak_byte(monkeypatch):
+    from app.services import agent_chat_input
+
+    fake_client = _FakeWSClient()
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.send_keys(agent, ["Up", "C-u"])
+
+    assert fake_client.sent == [b"\x1b[A", b"\x15"]
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # services/agent_chat_input.py — unsupported runtimes
 # ══════════════════════════════════════════════════════════════════════════
@@ -2672,3 +2706,34 @@ async def test_model_options_capabilities_never_adds_claude_aliases_to_a_foreign
         _StubAgent(slug="rex", agent_runtime="cli-bridge", harness="openclaude")
     )
     assert [o["command"] for o in caps["modelOptions"]] == ["opus"]
+
+
+def test_last_sent_registry_hands_the_text_over_exactly_once():
+    """send_text merkt sich je Agent, was zuletzt eingetippt wurde; die
+    Vorschau holt es EINMAL ab und setzt es als Anker (siehe Tailer)."""
+    from app.services import agent_chat_input as m
+
+    assert m.pop_last_sent("a") is None
+    m.note_sent("a", "erster")
+    m.note_sent("a", "zweiter")     # nur der juengste zaehlt
+    m.note_sent("b", "anderer Agent")
+    assert m.pop_last_sent("a") == "zweiter"
+    assert m.pop_last_sent("a") is None
+    assert m.pop_last_sent("b") == "anderer Agent"
+
+
+async def test_send_text_notes_the_text_for_the_preview_anchor(monkeypatch):
+    from app.services import agent_chat_input
+
+    async def _fake_run(argv):
+        pass
+
+    async def _fake_capture_pane(agent):
+        return _IDLE_PANE
+
+    monkeypatch.setattr(agent_chat_input, "_run_docker_exec", _fake_run)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _fake_capture_pane)
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    agent.id = "agent-rex"
+    await agent_chat_input.send_text(agent, "hello agent")
+    assert agent_chat_input.pop_last_sent("agent-rex") == "hello agent"

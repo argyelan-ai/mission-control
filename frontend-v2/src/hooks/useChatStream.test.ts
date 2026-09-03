@@ -9,6 +9,7 @@ import {
   createInitialChatState,
   markUnconfirmedEchoes,
   reconcilePendingEchoes,
+  takeQueuedEchoes,
   withdrawPendingEcho,
   ECHO_CONFIRM_TIMEOUT_MS,
   MAX_CHAT_EVENTS,
@@ -430,6 +431,21 @@ describe("markUnconfirmedEchoes", () => {
     expect(markUnconfirmedEchoes([a], 1_100, false)[0].status).toBe("pending");
   });
 
+  it("restarts the clock when the queue drains, instead of accusing at once", () => {
+    // Operator-Befund 03.09.2026: die Nachricht sass minutenlang sicher in
+    // der Warteschlange; kaum war der Zug vorbei, stand sie SOFORT als
+    // "Nicht bestaetigt" da — der Zaehler lief ab dem urspruenglichen
+    // Sendezeitpunkt weiter. Die CLI braucht nach dem Zug aber erst ein
+    // paar Sekunden, um die Zeile zu schreiben; die zehn Sekunden gehoeren
+    // ab dem Ende des Zugs gezaehlt.
+    const a = echo({ sentAt: 1_000, status: "queued" });
+    const drainedAt = 1_000 + ECHO_CONFIRM_TIMEOUT_MS * 6;
+    const [back] = markUnconfirmedEchoes([a], drainedAt, false);
+    expect(back.status).toBe("pending");
+    expect(back.sentAt).toBe(drainedAt);
+    expect(markUnconfirmedEchoes([back], drainedAt + 1_000, false)[0].status).toBe("pending");
+  });
+
   it("still warns on an idle agent after the timeout", () => {
     const a = echo({ sentAt: 1_000 });
     expect(
@@ -461,6 +477,29 @@ describe("markUnconfirmedEchoes", () => {
   });
 });
 
+
+describe("takeQueuedEchoes", () => {
+  // Zurueckziehen: die CLI holt mit "Up" ALLE eingereihten Nachrichten auf
+  // einmal in die Eingabezeile (queue-operation popAll, live 03.09.2026) —
+  // also verschwinden lokal auch alle queued-Echos, und ihr Text kommt in
+  // der Reihenfolge des Einreihens zurueck, damit der Verfasser ihn
+  // bearbeiten kann.
+  it("removes every queued echo and hands their texts back in order", () => {
+    const list = [
+      echo({ id: "e1", text: "erste", status: "queued" }),
+      echo({ id: "e2", text: "bleibt", status: "unconfirmed" }),
+      echo({ id: "e3", text: "zweite", status: "queued" }),
+    ];
+    const { remaining, taken } = takeQueuedEchoes(list);
+    expect(taken).toEqual(["erste", "zweite"]);
+    expect(remaining.map((e) => e.id)).toEqual(["e2"]);
+  });
+
+  it("returns the identical array when nothing is queued", () => {
+    const list = [echo({ status: "pending" })];
+    expect(takeQueuedEchoes(list).remaining).toBe(list);
+  });
+});
 
 // ── Aliveness ────────────────────────────────────────────────────────────────
 // The rule that stopped the UI from announcing a finished session at one that

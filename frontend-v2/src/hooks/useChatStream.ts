@@ -167,10 +167,14 @@ export function markUnconfirmedEchoes(
       return e;
     }
     // Turn over: a queued line should now be written, so it goes back to
-    // waiting-and-counting rather than staying "queued" forever.
+    // waiting-and-counting rather than staying "queued" forever. The clock
+    // restarts HERE: counted from the original send it had long expired,
+    // and the line was accused the very second the turn ended — before the
+    // CLI had even had its usual few seconds to write it (operator finding
+    // 03.09.2026).
     if (e.status === "queued") {
       changed = true;
-      return { ...e, status: "pending" as const };
+      return { ...e, status: "pending" as const, sentAt: now };
     }
     if (e.status === "pending" && now - e.sentAt >= ECHO_CONFIRM_TIMEOUT_MS) {
       changed = true;
@@ -179,6 +183,20 @@ export function markUnconfirmedEchoes(
     return e;
   });
   return changed ? next : echoes;
+}
+
+/**
+ * Takes every queued echo out of the list and hands their texts back, oldest
+ * first. Backs the "Zurueckziehen"/"Bearbeiten" buttons: the CLI's "Up" pulls
+ * ALL queued messages into its input line at once (queue-operation popAll,
+ * live 03.09.2026), so the local copies go together, and the texts go back
+ * to the composer in the order they were queued. Returns the identical array
+ * when nothing was queued, so callers can skip a re-render.
+ */
+export function takeQueuedEchoes(echoes: PendingEcho[]): { remaining: PendingEcho[]; taken: string[] } {
+  const taken = echoes.filter((e) => e.status === "queued").map((e) => e.text);
+  if (taken.length === 0) return { remaining: echoes, taken };
+  return { remaining: echoes.filter((e) => e.status !== "queued"), taken };
 }
 
 /** Marks an echo as waiting on a starting agent and records that its one retry
@@ -413,6 +431,12 @@ export interface UseChatStreamResult {
   /** Call on a 409 `agent_starting`: the echo waits calmly and the send is
    *  retried once via the supplied function. */
   echoAgentStarting: (text: string, retry: () => void) => void;
+  /** Drops every QUEUED echo (the CLI still holds them) and hands their texts
+   *  back so the caller can pop the terminal's queue (Up + C-u) and optionally
+   *  put the text back into the composer. Echoes already on their way are
+   *  untouched. Operator finding 03.09.2026: a queued steer could neither be
+   *  withdrawn nor edited in the chat, only in the terminal. */
+  withdrawQueued: () => string[];
   /** True from a send until the transcript shows any sign of life (a state
    *  change, a tool call, a message). Drives the honest "Gesendet…" line. */
   awaitingResponse: boolean;
@@ -515,6 +539,18 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
   const echoFailed = useCallback((text: string) => {
     setPendingEchoes((prev) => withdrawPendingEcho(prev, text));
     setAwaitingResponse(false);
+  }, []);
+
+  // Synchronous read of the current echoes for withdrawQueued: the caller needs
+  // the texts NOW (to seed the composer), not after the next render.
+  const pendingEchoesRef = useRef<PendingEcho[]>(pendingEchoes);
+  pendingEchoesRef.current = pendingEchoes;
+  const withdrawQueued = useCallback((): string[] => {
+    const { remaining, taken } = takeQueuedEchoes(pendingEchoesRef.current);
+    if (taken.length === 0) return taken;
+    pendingEchoesRef.current = remaining;
+    setPendingEchoes(remaining);
+    return taken;
   }, []);
 
   /**
@@ -685,6 +721,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     echoSent,
     echoFailed,
     echoAgentStarting,
+    withdrawQueued,
     awaitingResponse,
     preview: chatState.preview,
   };
