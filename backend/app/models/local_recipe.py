@@ -102,6 +102,11 @@ class LocalRecipe(SQLModel, table=True):
     # Standard-Port des Rezepts. Die Oberfläche braucht ihn für den Satz
     # „Port 8000 auf dieser Box belegt durch …", ohne den Befehl zu parsen.
     port: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    # Rezept-Umschalter P2: braucht das Rezept die Box exklusiv? Das Feld ist
+    # die Wahrheit, sobald es gesetzt ist; NULL heisst „das Rezept sagt
+    # nichts" und dann greift die alte Heuristik (min_vram_gb gesetzt →
+    # exklusiv) als Fallback — siehe recipe_switcher.recipe_is_exclusive.
+    exclusive: bool | None = Field(default=None, sa_column=Column(Boolean, nullable=True))
 
     # One-click installation (PR 6). The command that puts the engine ON the
     # box — cloning a repo, building it, fetching weights. Runs once, as a
