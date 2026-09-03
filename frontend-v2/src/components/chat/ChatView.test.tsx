@@ -1125,6 +1125,53 @@ describe("ChatView", () => {
     expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("mach danach noch X");
   });
 
+  // Operator wish 03.09.2026: while the CLI still holds a steer it should not
+  // sit in the timeline as a full bubble (it is not a turn yet) but as a small
+  // inset line under the running answer, the way Codex and Claude Code stack
+  // queued input — and it must tell the truth per harness.
+
+  it("renders a queued steer as a compact inset row, not a full bubble", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "mach danach noch X", sentAt: Date.now(), status: "queued" },
+        ],
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-compact", "true");
+  });
+
+  it("keeps a plain pending echo as a full bubble", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        pendingEchoes: [{ id: "echo-1", text: "hallo", sentAt: Date.now(), status: "pending" }],
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("echo-bubble")).not.toHaveAttribute("data-echo-compact");
+  });
+
+  // omp delivers Enter mid-turn as a STEERING message — after the running tool
+  // call, not after the turn — and Up + Ctrl+U takes nothing back there. The
+  // Claude Code wording and buttons would lie on an omp agent.
+  it("tells the omp truth: steer lands after the running tool, no withdraw", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "mach danach noch X", sentAt: Date.now(), status: "queued" },
+        ],
+      })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp" }) });
+    expect(screen.getByText("Steuernachricht — greift nach dem laufenden Werkzeug")).toBeInTheDocument();
+    expect(screen.queryByText("Eingereiht — wird nach dem laufenden Zug gesendet")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zurückziehen" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bearbeiten" })).not.toBeInTheDocument();
+  });
+
   it("offers no withdraw on an echo that is already on its way", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({
