@@ -36,6 +36,7 @@ from livekit.plugins import openai, xai
 from jarvis_core import frontier, mc_client, tools as jtools
 from jarvis_core.channels import VOICE
 from jarvis_core.persona import build_instructions
+from jarvis_core.voice_provider import resolve_voice_choice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
@@ -50,47 +51,34 @@ _TURN_DETECTION = {
 }
 
 
-def _build_realtime_model():
-    """Baut das Realtime-LLM je nach `VOICE_PROVIDER` env var.
+def _build_realtime_model(provider: str | None = None, model: str | None = None):
+    """Baut das Realtime-LLM fuer diesen Anruf.
 
-    Default ist "openai" (ADR-060). "xai" bleibt als Fallback erhalten, falls
-    OpenAI Realtime mal ausfaellt oder der Operator zurueckschalten will.
-    Faellt der jeweilige API-Key, wird sofort (statt erst beim ersten
-    Session-Connect) mit einer klaren Fehlermeldung abgebrochen.
+    Die Entscheidung WAS gesprochen wird liegt in
+    ``jarvis_core.voice_provider.resolve_voice_choice`` — bewusst ohne
+    livekit-Import, damit sie im normalen Backend-Testlauf mitlaeuft. Hier
+    bleibt nur das Bauen des Plugin-Objekts.
+
+    Quelle der Wahrheit ist die Runtime-Bindung in MC (ADR-074), die der
+    entrypoint pro Anruf holt. Die env-Variablen sind der Notfall-Default.
     """
-    provider = os.environ.get("VOICE_PROVIDER", "openai").strip().lower()
+    choice = resolve_voice_choice(provider=provider, model=model)
+    logger.info("%s", choice.as_log())
 
-    if provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=openai but OPENAI_API_KEY is not set. "
-                "Set OPENAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=xai to fall back to XAI_API_KEY."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "marin"
-        model = os.environ.get("VOICE_MODEL", "gpt-realtime-2.1")
+    if choice.provider == "openai":
         return openai.realtime.RealtimeModel(
-            model=model,
-            voice=voice,
+            model=choice.model,
+            voice=choice.voice,
             turn_detection=_TURN_DETECTION,
         )
 
-    if provider == "xai":
-        if not os.environ.get("XAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=xai but XAI_API_KEY is not set. "
-                "Set XAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=openai (default) to use OPENAI_API_KEY instead."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "ara"
-        return xai.realtime.RealtimeModel(
-            voice=voice,
-            turn_detection=_TURN_DETECTION,
-        )
-
-    raise RuntimeError(
-        f"Unknown VOICE_PROVIDER={provider!r}. Use 'openai' (default) or 'xai'."
-    )
+    # xai: das installierte Plugin akzeptiert model= (grok-voice-think-fast-1.0
+    # / grok-voice-fast-1.0). Ohne Angabe bleibt der Plugin-Default — NOT_GIVEN
+    # ist dort nicht dasselbe wie None, deshalb weglassen statt None uebergeben.
+    kwargs = {"voice": choice.voice, "turn_detection": _TURN_DETECTION}
+    if choice.model:
+        kwargs["model"] = choice.model
+    return xai.realtime.RealtimeModel(**kwargs)
 
 
 class VoiceAssistant(Agent):
@@ -103,7 +91,10 @@ class VoiceAssistant(Agent):
     """
 
     def __init__(
-        self, briefing: dict | None = None, operator_name: str | None = None
+        self,
+        briefing: dict | None = None,
+        operator_name: str | None = None,
+        voice_cfg: dict | None = None,
     ) -> None:
         # Low-latency turn-detection: kurze Silence-Window damit der Operator schneller
         # Antworten bekommt (default ist ~700ms, wir gehen auf 400ms).
@@ -118,7 +109,12 @@ class VoiceAssistant(Agent):
                 frontier_enabled=frontier_on,
                 operator_name=operator_name,
             ),
-            llm=_build_realtime_model(),
+            # Die Bindung kommt aus MC und wird pro Anruf hereingereicht; ohne
+            # sie (Backend weg, nichts gebunden) greifen die env-Defaults.
+            llm=_build_realtime_model(
+                provider=(voice_cfg or {}).get("provider"),
+                model=(voice_cfg or {}).get("model"),
+            ),
         )
         # ask_frontier ist per JARVIS_FRONTIER_ENABLED gated (Default off, ADR-062):
         # ist es aus, das Tool aus dem LiveKit-Schema entfernen, sodass das
@@ -405,9 +401,23 @@ async def entrypoint(ctx: JobContext) -> None:
     operator = await mc_client.get_operator()
     operator_name = operator.get("name") if operator.get("ok") else None
 
+    # Welcher Anbieter? Kommt aus der Runtime-Bindung in MC (ADR-074) und wird
+    # HIER geholt, nicht beim Prozessstart: LiveKit gibt pro Anruf einen frischen
+    # Raum, also liest jeder Anruf die Bindung neu. Genau das macht das
+    # Umschalten in der Oberflaeche wirksam, ohne den Container anzufassen.
+    # Fail-soft in mc_client.voice_config: ohne Antwort greifen die env-Defaults.
+    voice_cfg = await mc_client.voice_config()
+    if not voice_cfg.get("ok"):
+        logger.info(
+            "no voice binding from MC (%s) — using env defaults",
+            voice_cfg.get("reason") or voice_cfg.get("error") or voice_cfg.get("status"),
+        )
+
     session = AgentSession()
     await session.start(
-        agent=VoiceAssistant(briefing=briefing, operator_name=operator_name),
+        agent=VoiceAssistant(
+            briefing=briefing, operator_name=operator_name, voice_cfg=voice_cfg
+        ),
         room=ctx.room,
     )
 

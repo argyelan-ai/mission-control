@@ -6,7 +6,12 @@
 # Point MC at it with STT_BASE_URL=http://host.docker.internal:8585/v1 in .env.
 set -euo pipefail
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC="$(cd "$(dirname "$0")" && pwd)"
+# The service must not run out of the git checkout: a branch switch or a pruned
+# worktree silently invalidates the path, and launchd then retries forever
+# (this happened — 7527 failed starts, local dictation dead for two weeks).
+# So install into a location no git operation can move.
+DIR="$HOME/.mc/stt-server"
 VENV="$DIR/.venv"
 PLIST_SRC="$DIR/com.mc.stt.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/com.mc.stt.plist"
@@ -23,6 +28,14 @@ if ! command -v ffmpeg >/dev/null; then
 fi
 PY=python3.12
 command -v $PY >/dev/null || PY=python3
+
+# ── Install into the stable location ──────────────────────────────────────
+if [ "$SRC" != "$DIR" ]; then
+    echo "==> installing to $DIR (out of reach of git)"
+    mkdir -p "$DIR"
+    cp "$SRC/server.py" "$SRC/setup.sh" "$SRC/com.mc.stt.plist" "$SRC/README.md" "$DIR/"
+    chmod +x "$DIR/setup.sh"
+fi
 
 # ── Venv ──────────────────────────────────────────────────────────────────
 echo "==> venv + dependencies ($PY)"

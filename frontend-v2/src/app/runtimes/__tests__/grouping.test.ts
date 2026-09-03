@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupRuntimes, CLOUD_TYPES, panelCapabilities, pickServing } from "../grouping";
+import { groupRuntimes, CLOUD_TYPES, VOICE_TYPES, panelCapabilities, pickServing } from "../grouping";
 import type { Runtime, Host, RuntimeLiveStatus } from "@/lib/types";
 
 function makeRuntime(over: Partial<Runtime>): Runtime {
@@ -52,6 +52,26 @@ describe("groupRuntimes", () => {
     const g = groupRuntimes([openaiCompat], []);
     expect(g.cloud.map((r) => r.slug)).toEqual(["openai-compat-api"]);
     expect(g.unassigned).toEqual([]);
+  });
+
+  // ADR-074 — voice is its own category. Listed among the cloud rows it reads
+  // as a chat runtime nobody uses: that section compares bound chat models,
+  // and a realtime speech socket has none.
+  it("keeps the voice runtimes out of cloud and unassigned", () => {
+    const openaiVoice = makeRuntime({ slug: "voice-openai", runtime_type: "voice_openai", host: null });
+    const xaiVoice = makeRuntime({ slug: "voice-xai", runtime_type: "voice_xai", host: null });
+    const g = groupRuntimes([openaiVoice, xaiVoice], []);
+    expect(g.voice.map((r) => r.slug)).toEqual(["voice-openai", "voice-xai"]);
+    expect(g.cloud).toEqual([]);
+    expect(g.unassigned).toEqual([]);
+  });
+
+  it("keeps a voice runtime in its own group even if pinned to a host", () => {
+    const host = makeHost({ id: "h1" });
+    const pinned = makeRuntime({ slug: "voice-openai", runtime_type: "voice_openai", host });
+    const g = groupRuntimes([pinned], [host]);
+    expect(g.voice.map((r) => r.slug)).toEqual(["voice-openai"]);
+    expect(g.hosts.flatMap((h) => h.runtimes)).toEqual([]);
   });
 
   it("keeps a host group even when the host has no runtimes", () => {
@@ -123,6 +143,11 @@ describe("groupRuntimes", () => {
 describe("CLOUD_TYPES", () => {
   it("contains exactly the hosted-API kinds", () => {
     expect([...CLOUD_TYPES].sort()).toEqual(["cloud", "grok", "kimi", "openai_compatible"]);
+  });
+
+  it("keeps voice types separate from cloud types", () => {
+    expect([...VOICE_TYPES].sort()).toEqual(["voice_openai", "voice_xai"]);
+    for (const t of VOICE_TYPES) expect(CLOUD_TYPES.has(t)).toBe(false);
   });
 });
 

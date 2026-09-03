@@ -98,6 +98,12 @@ export function RuntimeSwitchModal({
   // cli-bridge-facing `Harness` union, so they are never fed into the harness
   // selector / compat matrix below — hence the `!isHostInplace` guards.
   const isHostInplace = agent.agent_runtime === "host" && agent.runtime_switchable;
+  // ADR-074 — the voice agent is host-inplace but nothing restarts: the voice
+  // service reads its binding when a call starts. The generic in-place wording
+  // ("session restarts, current work is lost") would be actively wrong here,
+  // and a wrong hint is worse than none — it would have Mark expecting a cut
+  // and then doubting the switch when nothing happens.
+  const isVoiceBinding = agent.harness === "jarvis";
   const [selectedHarness, setSelectedHarness] = useState<Harness | undefined>(
     isHostInplace ? undefined : (agent.harness as Harness | undefined) ?? undefined,
   );
@@ -314,7 +320,9 @@ export function RuntimeSwitchModal({
                       data-testid="restart-done-note"
                     >
                       <Check size={12} />
-                      Agent restarted automatically
+                      {isVoiceBinding
+                        ? "Active on the next call — nothing was restarted"
+                        : "Agent restarted automatically"}
                     </div>
                   )}
                   <button
@@ -473,19 +481,37 @@ export function RuntimeSwitchModal({
                         data-testid="host-inplace-hint"
                       >
                         <RefreshCw size={13} className="mt-0.5 shrink-0" />
-                        <div>
-                          <div className="font-medium">In-place switch</div>
-                          <div className="opacity-80">
-                            Host agent — no parallel container. The runtime binding is
-                            rewritten and the session restarts briefly (short session
-                            restart, current work is lost).
+                        {isVoiceBinding ? (
+                          <div>
+                            <div className="font-medium">Takes effect on the next call</div>
+                            <div className="opacity-80">
+                              Voice agent — nothing restarts. The voice service reads
+                              this binding when a call starts, so a call in progress
+                              keeps its current provider and the next one uses the new
+                              one.
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div>
+                            <div className="font-medium">In-place switch</div>
+                            <div className="opacity-80">
+                              Host agent — no parallel container. The runtime binding is
+                              rewritten and the session restarts briefly (short session
+                              restart, current work is lost).
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
                     {/* Image-switch banner */}
-                    {preview.image_switched && (
+                    {/* Voice binds no container image — MC starts nothing for
+                        these rows. The backend still reports image_switched on
+                        the first binding (it finds no image on either side),
+                        and the banner would promise a 30–90s container swap
+                        that never happens, right next to the correct "next
+                        call" hint. */}
+                    {preview.image_switched && !isVoiceBinding && (
                       <div
                         className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                         style={{

@@ -595,12 +595,13 @@ export const HARNESS_LABELS: Record<Harness, string> = {
 // HostHarnessAdapter registry, delivered as CompatMatrix.host_harnesses, and
 // it also contains "claude" (which lives in `Harness`). The agent wizard reads
 // the registry; nothing should enumerate host harnesses from here.
-export type HostHarness = "hermes" | "grok" | "kimi";
+export type HostHarness = "hermes" | "grok" | "kimi" | "jarvis";
 
 export const HOST_HARNESS_LABELS: Record<HostHarness, string> = {
   hermes: "Hermes",
   grok: "Grok Build",
   kimi: "Kimi Code",
+  jarvis: "Jarvis (Voice)",
 };
 
 // NOTE: the wire protocol of a host harness is NOT mirrored here any more.
@@ -669,6 +670,10 @@ export interface Agent {
   // intentionally outside the cli-bridge-facing `Harness` union so HARNESS_LABELS
   // stays cli-bridge-only. Labels for host harnesses live in HOST_HARNESS_LABELS.
   harness?: Harness | HostHarness | null;
+  /** Backend-derived: do the host process actions apply (restart-process,
+   *  orphan sweep)? False for a host agent with no launchd job — Jarvis is a
+   *  docker-compose service. Read it, never re-derive from agent_runtime. */
+  host_process_managed?: boolean;
   // Derived by the backend (no DB column) from the SAME function the switch
   // endpoint guards with — services/host_harness_adapter.py::
   // runtime_switch_availability, surfaced as pydantic computed fields on the
@@ -1774,7 +1779,12 @@ export type RuntimeType =
    *  at the type level while rendering fine at runtime. */
   | "omp"
   | "grok"
-  | "kimi";
+  | "kimi"
+  /** Jarvis' realtime voice arms (ADR-074). Not chat runtimes: both are reached
+   *  over a provider's realtime speech socket, and only the jarvis harness may
+   *  bind them. */
+  | "voice_openai"
+  | "voice_xai";
 
 export interface Runtime {
   // On the GET /runtimes (legacy JSON) response `id` is the slug.

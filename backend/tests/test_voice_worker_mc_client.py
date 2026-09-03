@@ -317,3 +317,65 @@ async def test_query_memory_handles_404(mc):
     result = await mc.query_memory("x")
     assert result["ok"] is False
     assert "404" in result["error"]
+
+
+# ────────────────────────────────────────────────────────────────────────
+# voice_config — the per-call provider pull (ADR-074)
+# ────────────────────────────────────────────────────────────────────────
+#
+# This runs in the path between "Mark presses call" and "Jarvis says hello".
+# Every failure mode has to end in a dict the caller can shrug at, because the
+# alternative is an exception during session start — i.e. a silent Jarvis.
+
+
+@pytest.mark.asyncio
+async def test_voice_config_passes_the_payload_through(mc):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = MagicMock(return_value={"ok": True, "provider": "xai", "model": "grok-voice-fast-1.0"})
+    mc._client.get = AsyncMock(return_value=resp)
+
+    assert await mc.voice_config() == {
+        "ok": True, "provider": "xai", "model": "grok-voice-fast-1.0",
+    }
+
+
+@pytest.mark.asyncio
+async def test_voice_config_uses_a_short_timeout(mc):
+    """The client default is 15s. Waiting that long before the first word
+    would make a hung backend feel like a broken assistant."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = MagicMock(return_value={"ok": True, "provider": "openai"})
+    mc._client.get = AsyncMock(return_value=resp)
+
+    await mc.voice_config()
+
+    assert mc._client.get.call_args.kwargs["timeout"] == mc.VOICE_CONFIG_TIMEOUT_SECONDS
+    assert mc.VOICE_CONFIG_TIMEOUT_SECONDS <= 5.0
+
+
+@pytest.mark.asyncio
+async def test_voice_config_turns_a_server_error_into_ok_false(mc):
+    resp = MagicMock()
+    resp.status_code = 500
+    mc._client.get = AsyncMock(return_value=resp)
+
+    result = await mc.voice_config()
+
+    assert result["ok"] is False
+    assert result["status"] == 500
+
+
+@pytest.mark.asyncio
+async def test_voice_config_survives_a_dead_backend(mc):
+    """Backend stopped: must return, not raise. This is the case that decides
+    whether Jarvis still answers when MC is down."""
+    import httpx
+
+    mc._client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    result = await mc.voice_config()
+
+    assert result["ok"] is False
+    assert "error" in result

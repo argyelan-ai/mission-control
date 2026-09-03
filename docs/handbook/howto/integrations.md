@@ -136,12 +136,45 @@ LIVEKIT_API_KEY=                # same pair, split, for backend token signing
 LIVEKIT_API_SECRET=
 LIVEKIT_PUBLIC_URL=             # WS URL the browser connects to; empty = derived from origin
 LIVEKIT_NODE_IP=                # RTC candidate IP LiveKit advertises; 127.0.0.1 = local only
-VOICE_PROVIDER=openai           # "openai" (default) or "xai"
-VOICE_MODEL=gpt-realtime-2.1    # only used when VOICE_PROVIDER=openai
-OPENAI_API_KEY=                 # for the default provider
-XAI_API_KEY=                    # for the xai provider
+VOICE_PROVIDER=openai           # FALLBACK ONLY — see below
+VOICE_MODEL=gpt-realtime-2.1    # FALLBACK ONLY, and only for the arm above
+VOICE_OPENAI_VOICE_ID=          # empty = "marin"
+VOICE_XAI_VOICE_ID=             # empty = "ara"
+OPENAI_API_KEY=                 # for the openai arm
+XAI_API_KEY=                    # for the xai arm
 JARVIS_AGENT_TOKEN=             # create the Jarvis agent first, then paste its token
 ```
+
+**Picking the provider (ADR-074).** `VOICE_PROVIDER` and `VOICE_MODEL` are only
+the emergency default. The provider Jarvis actually speaks to is a *runtime
+binding*: open the Jarvis agent, use the runtime selector, pick "Jarvis Voice —
+OpenAI Realtime" or "Jarvis Voice — Grok (xAI)". The voice service reads that
+binding at the start of every call, so the change takes effect on the **next
+call** — no restart, and a call in progress is not cut off. The env values apply
+only when the backend does not answer or nothing is bound yet.
+
+The two arms keep separate voice variables because their voice names do not
+overlap: "cedar" exists at OpenAI, "ara" at xAI, and a shared value breaks
+whichever arm does not know the name.
+
+API keys stay in the container's environment. MC never stores or forwards them —
+the config endpoint returns the provider and model only.
+
+> **After deploying this change, rebuild the voice worker once.** The regular
+> deploy only rebuilds backend and frontend; the voice worker is a separate
+> image behind the `voice` compose profile, and its code is copied in, not
+> mounted. Skip it and the switch looks like it worked — MC reports success
+> while an old worker keeps talking to the previous provider and does not even
+> log which one:
+>
+> ```bash
+> docker compose -p mission-control --profile voice up -d --build voice-worker
+> ```
+>
+> Proof it landed: make a call, then
+> `docker compose -p mission-control logs --since 3m voice-worker | grep "voice provider"`.
+> The line must say `source=mc`. `source=env` means the worker never asked the
+> backend — usually the old image.
 
 The order matters for `JARVIS_AGENT_TOKEN`: create the agent in MC, then paste
 its token here. If you want voice reachable from a phone rather than only the

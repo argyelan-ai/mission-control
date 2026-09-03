@@ -301,6 +301,7 @@
       "runtimeDisabled": "deaktiviert",
       "runtimeCloudUnavailable": "Cloud, nicht auf dieser Box verfügbar",
       "inplaceHint": "In-Place-Switch — kein paralleler Container. Die Runtime-Bindung wird neu geschrieben und die Host-Session startet kurz neu (aktuelle Arbeit geht verloren).",
+      "voiceBindingHint": "Sprach-Bindung — es wird NICHTS neu gestartet. Der Sprach-Dienst liest die Bindung beim Anruf, sie gilt also ab dem nächsten Anruf; ein laufendes Gespräch behält seinen Anbieter. Umgestellt wird nur der Sprach-Kanal (Text-Chat und ask_frontier bleiben bei OpenAI).",
       "dockerHintBefore": "Der Switch löst",
       "dockerHintAfter": "aus (~5s) — bei Cross-Image-Switches ein Container-Rebuild (~30–90s). Kompatibilitätsprüfung + Warnungen erscheinen im Bestätigungs-Modal.",
       "switchButton": "Wechseln…",
@@ -2604,6 +2605,11 @@
       "sectionTitle": "Cloud — wer nutzt was",
       "collapseRow": "{n} Modelle ohne Agent — alle zeigen",
       "bindCta": "binden ›"
+    },
+    "voiceSection": {
+      "title": "Sprache",
+      "hint": "Womit Jarvis spricht. Kein Modell zum Laden, kein Start/Stop — die Umstellung wirkt beim nächsten Anruf. Betrifft nur das Sprechen, nicht Jarvis' Text-Antworten.",
+      "standby": "bereit"
     },
     "slotPage": {
       "subtitle": "Was besetzt die GPU — und wer arbeitet womit",

@@ -34,6 +34,11 @@ export const RUNTIME_TYPE_COLOR: Record<string, string> = {
   // Phase 24 (Hermes) — separated from openai_compatible by BRIGHTNESS, not hue
   // (System A): accentDeep is the dimmed accent step, still clearly not accent.
   hermes: C.accentDeep, // #C1BEB2 — gedimmte Akzentstufe
+  // Voice (ADR-074): beide Arme teilen eine Farbe, weil sie EINE Sache sind —
+  // der Sprach-Kanal. Welcher Anbieter dahinter steckt, sagt der Name; die
+  // Farbe trennt Voice von den Chat-Runtimes.
+  voice_openai: C.info,
+  voice_xai: C.info,
 };
 
 interface Props {

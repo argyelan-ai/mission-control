@@ -125,7 +125,15 @@ PROVIDERS: tuple[ProviderNaming, ...] = (
 #: Runtime types whose display name is curated by a human and must not be
 #: overwritten by the rule (case 2 in the module docstring).
 CURATED_RUNTIME_TYPES: frozenset[str] = frozenset(
-    {"vllm_docker", "llamacpp_docker", "lmstudio", "unsloth", "unsloth_porsche", "omp", "hermes"}
+    {
+        "vllm_docker", "llamacpp_docker", "lmstudio", "unsloth", "unsloth_porsche",
+        "omp", "hermes",
+        # Voice rows must keep their hand-written names. Without this the rule
+        # would rename "Jarvis Voice — OpenAI Realtime" after the endpoint host
+        # api.openai.com, which is a known provider, and the picker would show
+        # two rows that read like chat models.
+        "voice_openai", "voice_xai",
+    }
 )
 
 

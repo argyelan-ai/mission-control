@@ -40,6 +40,7 @@ import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/List
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
 import { SlotStage, typeLabel } from "./SlotStage";
 import { CloudUsage } from "./CloudUsage";
+import { VoiceSection } from "./VoiceSection";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
 import { fetchWithCache, loadCached } from "./queryCache";
@@ -1051,7 +1052,10 @@ export default function RuntimesPage() {
             )}
 
             {pageTab === "cloud" && !isEmpty && (
-              <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
+              <div className="flex flex-col gap-6">
+                <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
+                <VoiceSection runtimes={groups.voice} onOpen={openPanel} />
+              </div>
             )}
 
             {pageTab === "models" && <ModelsSection embedded />}

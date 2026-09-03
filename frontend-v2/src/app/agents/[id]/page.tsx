@@ -763,7 +763,11 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {isHostInplace ? (
-                <>{t("inplaceHint")}</>
+                // ADR-074 — voice binds without restarting anything, so the
+                // generic in-place wording ("host session restarts, current
+                // work is lost") would be plainly false here. This is the
+                // first line the operator reads under the selector.
+                <>{t(agent.harness === "jarvis" ? "voiceBindingHint" : "inplaceHint")}</>
               ) : (
                 <>
                   {t("dockerHintBefore")} <code className="font-mono">docker restart</code>{" "}
@@ -2042,7 +2046,13 @@ export default function AgentDetailPage() {
                 />
               )}
 
-              {agent.agent_runtime === "host" && (
+              {/* Not `agent_runtime === "host"`: Jarvis is a host agent with no
+                  launchd job, so this button could only ever fail with
+                  'Could not find service "com.mc.agent.jarvis"'. The backend
+                  derives the answer (host_process_managed) — the UI reads it.
+                  Older payloads omit the field, so undefined keeps today's
+                  behaviour rather than hiding the button fleet-wide. */}
+              {agent.agent_runtime === "host" && agent.host_process_managed !== false && (
                 <ActionButton
                   icon={RefreshCw}
                   label={t("detail.restartProcess")}
