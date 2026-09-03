@@ -74,7 +74,7 @@ async def _runtime(session: AsyncSession, slug: str, host: Host, **kw) -> Runtim
 
 
 def _probe(running_slugs: set[str]):
-    async def _fake(runtime: Runtime) -> bool:
+    async def _fake(runtime: Runtime, **kw) -> bool:  # host= seit #396
         return runtime.slug in running_slugs
 
     return patch("app.services.recipe_switcher.probe_running", _fake)
