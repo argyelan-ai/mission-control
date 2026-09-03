@@ -469,8 +469,29 @@ function StagePlaceholder({ group }: { group: HostGroup }) {
 // Falls back to the generic hint when workerOf is absent (a paired agent
 // host that isn't (yet) a member of any runtime's declared topology).
 
-function WorkerTile({ group, device }: { group: HostGroup; device?: Device }) {
+function WorkerTile({ group, device, live }: { group: HostGroup; device?: Device; live?: Record<string, RuntimeLiveStatus> }) {
   const t = useTranslations("runtimes.slotStage");
+  // Das Modell, das über diese Box läuft, ist das des Kopfes — die Instanz
+  // hängt am Kopf-Host, nicht hier. Gleicher Schlüssel wie die Seite, TanStack
+  // teilt die Abfrage; scheitert sie, bleibt die Kachel bei der Zeile „Teil von".
+  const workerOf = group.workerOf;
+  const { data: runtimeList } = useQuery({
+    queryKey: ["runtimes"],
+    queryFn: () => api.runtimes.list(),
+    enabled: Boolean(workerOf),
+  });
+  const headRuntime = useMemo(() => {
+    if (!workerOf) return null;
+    // GET /runtimes antwortet mit { runtimes: [...] } (Live-Befund 03.09.2026) —
+    // ein nacktes Array bleibt für Tests und ältere Aufrufer möglich.
+    const raw = runtimeList as unknown;
+    const list: Runtime[] = Array.isArray(raw)
+      ? (raw as Runtime[])
+      : ((raw as { runtimes?: Runtime[]; items?: Runtime[] } | undefined)?.runtimes
+        ?? (raw as { items?: Runtime[] } | undefined)?.items
+        ?? []);
+    return list.find((rt) => rt.id === workerOf.runtimeId) ?? null;
+  }, [runtimeList, workerOf]);
   // Eigenes Erreichbarkeits-Signal — TanStack fasst die Abfrage mit der der
   // TelemetryColumn zusammen, kostet also keinen zweiten Aufruf.
   const { data: hostMetrics } = useQuery({
@@ -478,7 +499,6 @@ function WorkerTile({ group, device }: { group: HostGroup; device?: Device }) {
     queryFn: () => api.hosts.metrics(group.host.id),
     refetchInterval: 5_000,
   });
-  const workerOf = group.workerOf;
   const hint = workerOf
     ? workerOf.headSlug
       ? t("workerPartOfWithHead", { runtime: workerOf.runtimeDisplayName, head: workerOf.headSlug })
@@ -507,12 +527,42 @@ function WorkerTile({ group, device }: { group: HostGroup; device?: Device }) {
         </span>
       </div>
       <div className="flex flex-col md:flex-row">
-        <div className="flex-1 min-w-0 flex items-center px-4 py-6">
-          <span className="text-sm" style={{ color: C.textMuted }}>{hint}</span>
+        <div className="flex-1 min-w-0">
+          {headRuntime ? (
+            <WorkerNowBlock runtime={headRuntime} live={live} hint={hint} />
+          ) : (
+            <div className="flex items-center px-4 py-6">
+              <span className="text-sm" style={{ color: C.textMuted }}>{hint}</span>
+            </div>
+          )}
         </div>
         <TelemetryColumn hostId={group.host.id} />
       </div>
       <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
+    </div>
+  );
+}
+
+// Der Modellblock der Worker-Kachel (Wunsch des Betreibers 03.09.2026): das
+// Modell, das über diese Box läuft, steht da — Zustand, Name, Modell-Kennung,
+// Engine — nur eine Stufe kleiner als beim Kopf, denn der Kopf führt. Die
+// Zeile „Teil von … · Kopf → …" bleibt darunter als Herkunft. Zustand und
+// Kennung kommen aus der Live-Probe des Kopfes (HONESTY RULE: nichts, was
+// diese Box nicht wirklich mitträgt).
+function WorkerNowBlock({ runtime, live, hint }: { runtime: Runtime; live?: Record<string, RuntimeLiveStatus>; hint: string }) {
+  const l = liveFor(runtime, live);
+  const state = slotState(runtime, l);
+  const modelText = l?.served_model ?? runtime.model_identifier ?? "—";
+  return (
+    <div className="px-4 pt-5 pb-4" data-testid="worker-now-block">
+      <StateChip state={state} phase={l?.phase} />
+      <div className="mt-1.5" style={{ fontSize: "20px", fontWeight: 600, letterSpacing: "-0.02em", color: C.textPrimary }}>
+        {runtime.display_name}
+      </div>
+      <div className="font-mono text-xs mt-0.5" style={{ color: C.textMuted }}>
+        {modelText} · {typeLabel(runtime.runtime_type)}
+      </div>
+      <div className="text-[11px] mt-3" style={{ color: C.textMuted }}>{hint}</div>
     </div>
   );
 }
@@ -558,7 +608,7 @@ export function SlotStage({
     // node-agent, no SSH/lifecycle path) with nothing bound is real fleet
     // inventory — telemetry-only, not an empty slot to fill.
     if (group.host.kind === "agent" || group.workerOf) {
-      return <WorkerTile group={group} device={device} />;
+      return <WorkerTile group={group} device={device} live={live} />;
     }
     return <StagePlaceholder group={group} />;
   }

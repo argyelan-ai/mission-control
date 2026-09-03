@@ -61,6 +61,13 @@ function compactBarPct(mode: string): number {
   return parseFloat(m[1]) * 100;
 }
 
+/** Der Streifen ist standardmässig zu (Wunsch des Betreibers 03.09.2026) —
+ *  alles unter der Schalterzeile öffnet der Details-Knopf. */
+async function openDetails() {
+  await userEvent.click(screen.getByTestId("device-toggle-detail"));
+  await screen.findByTestId("device-detail");
+}
+
 describe("DeviceModeStrip", () => {
   beforeEach(() => vi.restoreAllMocks());
 
@@ -77,17 +84,23 @@ describe("DeviceModeStrip", () => {
     expect(screen.getByTestId("compact-mode-eco")).toHaveAttribute("aria-checked", "true");
   });
 
-  // Die Kernaussage muss auch eingeklappt sichtbar sein — ohne sie versteht
-  // niemand, warum man freiwillig die sparsamste Stufe wählt.
-  it("states the core message without expanding anything", () => {
+  // Standardmässig zu: nur die Schalterzeile. Kein Erklärsatz, kein Chip,
+  // solange es nichts zu melden gibt — die Kachel bleibt ruhig.
+  it("keeps the strip to the switch row until Details is opened", async () => {
     renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl />);
 
     expect(screen.queryByTestId("device-detail")).toBeNull();
+    expect(screen.queryByText(/^Measured: /)).toBeNull();
+    expect(screen.queryByTestId("device-status-chip")).toBeNull();
+    expect(screen.getByTestId("device-toggle-detail")).toHaveAttribute("aria-expanded", "false");
+
+    await openDetails();
     // „Measured:" davor — die Zahl darf nicht als Live-Wert dieser Box
     // gelesen werden (HONESTY RULE der Slot-Kachel).
     expect(
       screen.getByText(/^Measured: 20\.4 tok\/s on every step — what you save is power and heat\.$/),
     ).toBeInTheDocument();
+    expect(screen.getByTestId("device-toggle-detail")).toHaveAttribute("aria-expanded", "true");
   });
 
   it("draws the power staircase in the compact switch", () => {
@@ -161,8 +174,15 @@ describe("DeviceModeStrip", () => {
     await user.click(screen.getByTestId("compact-mode-eco+"));
 
     expect(set).toHaveBeenCalledWith("host-1", { gpu_mode: "eco+" });
+    // Zugeklappt: das Nachziehen steht als Chip in der Zeile …
+    const chip = await screen.findByTestId("device-status-chip");
+    expect(chip).toHaveAttribute("data-kind", "pending");
+    expect(chip).toHaveTextContent(/switching to eco\+/);
+    // … aufgeklappt als Kasten mit Fortschritt.
+    await openDetails();
     const pendingBox = await screen.findByTestId("device-pending");
     expect(within(pendingBox).getByText(/switching to eco\+/)).toBeInTheDocument();
+    expect(screen.queryByTestId("device-status-chip")).toBeNull();
     // Ziel-Umrandung neben dem gefüllten Ist-Reiter — beides gleichzeitig
     expect(screen.getByTestId("compact-target-outline")).toBeInTheDocument();
     expect(screen.getByTestId("compact-indicator")).toBeInTheDocument();
@@ -210,6 +230,8 @@ describe("DeviceModeStrip", () => {
       />,
     );
 
+    expect(await screen.findByTestId("device-status-chip")).toHaveAttribute("data-kind", "pending");
+    await openDetails();
     expect(await screen.findByTestId("device-pending")).toBeInTheDocument();
     expect(screen.getByTestId("compact-target-outline")).toBeInTheDocument();
   });
@@ -226,7 +248,7 @@ describe("DeviceModeStrip", () => {
     expect(screen.queryByTestId("device-boost-warning")).toBeNull();
   });
 
-  it("warns about the risk once boost is the chosen step", () => {
+  it("warns about the risk once boost is the chosen step", async () => {
     renderWithQuery(
       <DeviceModeStrip
         device={makeDevice({
@@ -236,10 +258,12 @@ describe("DeviceModeStrip", () => {
         canControl
       />,
     );
+    expect(screen.getByTestId("device-status-chip")).toHaveAttribute("data-kind", "boost");
+    await openDetails();
     expect(screen.getByTestId("device-boost-warning")).toBeInTheDocument();
   });
 
-  it("passes the box's own error through instead of swallowing it", () => {
+  it("passes the box's own error through instead of swallowing it", async () => {
     renderWithQuery(
       <DeviceModeStrip
         device={makeDevice({
@@ -251,6 +275,8 @@ describe("DeviceModeStrip", () => {
       />,
     );
 
+    expect(screen.getByTestId("device-status-chip")).toHaveAttribute("data-kind", "error");
+    await openDetails();
     expect(screen.getByTestId("device-last-error")).toHaveTextContent(
       "The box reports: nvidia-smi: permission denied",
     );
@@ -263,13 +289,15 @@ describe("DeviceModeStrip", () => {
 
     await user.click(screen.getByTestId("compact-mode-boost"));
 
+    await waitFor(() => expect(screen.getByTestId("device-status-chip")).toHaveAttribute("data-kind", "error"));
+    await openDetails();
     expect(await screen.findByTestId("device-apply-failed")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByTestId("device-pending")).toBeNull());
   });
 
   // Eine frische Box hat weder Ist noch Soll. Ein hervorgehobener Reiter
   // würde eine Einstellung behaupten, die niemand gemacht hat.
-  it("highlights nothing when neither a reading nor a target exists", () => {
+  it("highlights nothing when neither a reading nor a target exists", async () => {
     renderWithQuery(
       <DeviceModeStrip
         device={makeDevice({
@@ -287,6 +315,7 @@ describe("DeviceModeStrip", () => {
     for (const m of ["eco+", "eco", "normal", "boost"]) {
       expect(screen.getByTestId(`compact-mode-${m}`)).toHaveAttribute("data-active", "false");
     }
+    await openDetails();
     expect(screen.getByTestId("device-no-report")).toBeInTheDocument();
   });
 
@@ -295,6 +324,7 @@ describe("DeviceModeStrip", () => {
     renderWithQuery(<DeviceModeStrip device={makeDevice()} canControl={false} />);
 
     expect(screen.getByTestId("compact-mode-boost")).toBeDisabled();
+    await openDetails();
     expect(screen.getByText("Only administrators can change the mode.")).toBeInTheDocument();
     expect(set).not.toHaveBeenCalled();
   });
@@ -328,6 +358,8 @@ describe("DeviceModeStrip", () => {
     for (const m of ["eco+", "eco", "normal", "boost"]) {
       expect(screen.getByTestId(`compact-mode-${m}`)).toBeDisabled();
     }
+    expect(screen.getByTestId("device-status-chip")).toHaveAttribute("data-kind", "lock");
+    await openDetails();
     const hint = screen.getByTestId("device-lock-hint");
     expect(hint).toHaveAttribute("data-lock", "no_device_state");
     expect(hint).toHaveTextContent(/reports no state.*Update the agent/);
@@ -352,6 +384,8 @@ describe("DeviceModeStrip", () => {
     );
 
     expect(screen.getByTestId("compact-mode-eco")).toBeDisabled();
+    expect(screen.getByTestId("device-status-chip")).toHaveAttribute("data-kind", "lock");
+    await openDetails();
     const hint = screen.getByTestId("device-lock-hint");
     expect(hint).toHaveAttribute("data-lock", "stale");
     expect(hint).toHaveTextContent("has not reported for 187 s");
@@ -360,16 +394,18 @@ describe("DeviceModeStrip", () => {
     expect(set).not.toHaveBeenCalled();
   });
 
-  it("shows minutes once the silence is long, and 'never' without any report", () => {
+  it("shows minutes once the silence is long, and 'never' without any report", async () => {
     const { unmount } = renderWithQuery(
       <DeviceModeStrip device={makeDevice({ status: "yellow", reason: "stale", age_s: 1500 })} canControl />,
     );
+    await openDetails();
     expect(screen.getByTestId("device-lock-hint")).toHaveTextContent("for 25 min");
     unmount();
 
     renderWithQuery(
       <DeviceModeStrip device={makeDevice({ status: "yellow", reason: "stale", age_s: null })} canControl />,
     );
+    await openDetails();
     expect(screen.getByTestId("device-lock-hint")).toHaveTextContent("has never reported");
   });
 
@@ -388,6 +424,8 @@ describe("DeviceModeStrip", () => {
     );
 
     expect(screen.getByTestId("compact-mode-eco")).toBeDisabled();
+    expect(screen.getByTestId("device-status-chip")).toHaveAttribute("data-kind", "lock");
+    await openDetails();
     const hint = screen.getByTestId("device-lock-hint");
     expect(hint).toHaveAttribute("data-lock", "unknown_mode");
     expect(hint).toHaveTextContent("control scripts are missing");
