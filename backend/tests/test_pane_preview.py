@@ -449,3 +449,28 @@ def test_code_block_lines_are_not_deduplicated():
     line = "        self.value = compute_the_thing(argument_one, argument_two)"
     p.feed(" ```python\r\n" + line + "\r\n" + line + "\r\n ```\r\n")
     assert p.text().count("self.value") == 2
+
+
+# ── Live 03.09.2026 (omp-Agent): Antwort endet mit Codeblock → Aufblitzen ──
+# Die Marke aus dem Transkript ist der letzte Absatz der Antwort. Endet die
+# Antwort mit einem Codeblock, ist das der Zaun '```' — nach dem Abstreifen der
+# Auszeichnung bleibt nichts, und die Suche fiel auf den ganzen Bildschirm
+# zurueck: alte Fehler, der eigene Prompt, die Antwort nochmal.
+
+
+def test_anchor_from_skips_paragraphs_that_are_only_markdown():
+    text = "3) Code:\n\n```python\ndef gruss(name):\n    return name\n\nprint(gruss(\"Welt\"))\n```"
+    assert PanePreview.anchor_from(text) == 'print(gruss("Welt"))'
+    assert PanePreview.anchor_from("```\n```") == ""
+    assert PanePreview.anchor_from("- **Bereit** für nächsten Dispatch\n") == "- **Bereit** für nächsten Dispatch"
+
+
+def test_answer_ending_in_a_code_fence_leaves_no_preview_behind():
+    preview = PanePreview()
+    preview.feed("Error: alter Fehler\r\n")
+    preview.feed("❯ Neuer Versuch, antworte knapp\r\n")
+    preview.feed("3. Code:\r\n```python\r\ndef gruss(name):\r\n    return name\r\n\r\nprint(gruss(\"Welt\"))\r\n```\r\n")
+    answer = "3) Code:\n\n```python\ndef gruss(name):\n    return name\n\nprint(gruss(\"Welt\"))\n```"
+    assert preview.text_after(PanePreview.anchor_from(answer)) == ""
+    preview.feed("Neu.\r\n")
+    assert preview.text_after(PanePreview.anchor_from(answer)) == "Neu."

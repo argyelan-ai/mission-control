@@ -132,6 +132,21 @@ class PanePreview:
         """Der sichtbare Inhalt ohne den Rahmen der Oberflaeche."""
         return "\n".join(self._content_lines()).strip()
 
+    @staticmethod
+    def anchor_from(text: str) -> str:
+        """Die Marke aus einer Transkript-Nachricht: ihr letzter Absatz, der
+        nach dem Abstreifen der Auszeichnung noch Inhalt hat.
+
+        Endet die Antwort mit einem Codeblock, ist der letzte Absatz der Zaun
+        '```' — davon bleibt nichts, und ``text_after`` fiele auf den ganzen
+        Bildschirm zurueck (live 03.09.2026, omp-Agent: nach der fertigen
+        Antwort blitzten alte Fehler, der Prompt und die Antwort nochmal auf).
+        """
+        for paragraph in reversed((text or "").splitlines()):
+            if _MARKDOWN_MARKS.sub("", paragraph).strip():
+                return paragraph.strip()
+        return ""
+
     def text_after(self, anchor: str) -> str:
         """Nur das, was NACH ``anchor`` auf dem Bildschirm steht.
 
@@ -189,9 +204,20 @@ class PanePreview:
             ]
             if not hits:
                 return self.text()
-            return "\n".join(self._filter(lines[hits[-1] + 1 :])).strip()
+            return self._after(lines, hits[-1])
         cut = max(i for i, start in enumerate(starts) if start <= end)
-        return "\n".join(self._filter(lines[cut + 1 :])).strip()
+        return self._after(lines, cut)
+
+    def _after(self, lines: list[str], cut: int) -> str:
+        rest = lines[cut + 1 :]
+        # Ist die Marke die letzte Codezeile einer Antwort, folgt ihr direkt
+        # der schliessende Zaun '```' — der gehoert noch zur Marke, sonst
+        # oeffnete er einen neuen Block und schluckte, was danach kommt.
+        while rest and not rest[0].strip():
+            rest.pop(0)
+        if rest and rest[0].strip() == "```":
+            rest.pop(0)
+        return "\n".join(self._filter(rest)).strip()
 
     def _content_lines(self) -> list[str]:
         return self._filter(self._lines())
@@ -220,6 +246,10 @@ class PanePreview:
         def flush_code() -> None:
             # Ein Codeblock ist als Ganzes eingerueckt; nur die Einrueckung
             # RELATIV zueinander ist Inhalt (Python!). Gemeinsamen Vorspann weg.
+            # Ein noch offener Zaun zieht die leeren Bildschirmzeilen darunter
+            # mit — die sind kein Code.
+            while code and not code[-1].strip():
+                code.pop()
             if code:
                 indent = min(len(l) - len(l.lstrip()) for l in code if l.strip())
                 out.extend(l[indent:] for l in code)
