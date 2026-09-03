@@ -219,12 +219,14 @@ export function ChatMessage({
               <div className="whitespace-pre-wrap break-words line-clamp-2">{parsed.text}</div>
             )}
             <div
-              className="mt-1 flex items-center gap-1.5 text-[11.5px]"
+              className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px]"
               style={{ color: C.textMuted }}
             >
-              <Clock size={11} aria-hidden="true" />
+              <Clock size={11} className="shrink-0" aria-hidden="true" />
               <span>{waitingNote}</span>
               {canWithdraw && (onWithdraw || onEdit) && (
+                // On narrow screens the note keeps its one line and the
+                // buttons drop underneath instead of squeezing it.
                 <span className="ml-auto pl-3 flex items-center gap-2.5">
                   {onEdit && (
                     <button type="button" onClick={onEdit} className="hover:underline" style={{ color: C.textSecondary }}>
