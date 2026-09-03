@@ -88,7 +88,7 @@ async def _runtime(session: AsyncSession, slug: str, host: Host | None, **kw) ->
 def _probe(running_slugs: set[str]):
     """Health-Probe-Ersatz: nur die genannten Runtime-Slugs gelten als gesund."""
 
-    async def _fake(runtime: Runtime) -> bool:
+    async def _fake(runtime: Runtime, **kw) -> bool:
         return runtime.slug in running_slugs
 
     return patch("app.services.recipe_switcher.probe_running", _fake)
@@ -310,6 +310,141 @@ async def test_hidden_recipes_are_not_listed(auth_client, session):
     await _recipe(session, "recipe-hidden", enabled=False)
     with _probe(set()):
         assert _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json()) == {}
+
+
+# ── Handle-Pflicht für Host-Engines (Vorfall 03.09.2026) ─────────────────────
+#
+# Eine Host-Engine startet MC über SSH und findet sie danach nur an einem Namen
+# wieder. Fehlt der, ist der Start ein Einbahnweg — und die Verdrängung, die
+# ihm vorausginge, hätte das laufende Modell umsonst getötet. Darum grau in der
+# Liste und 422 beim Start, bevor irgendetwas angefasst wird.
+
+HOST_ENGINE_TEMPLATE = "cd ~/engines/{slug} && PORT={port} ./start.sh"
+
+
+@pytest.mark.asyncio
+async def test_host_engine_recipe_without_a_handle_is_grey(auth_client, session):
+    box_a = await _host(session, "box-a")
+    await _recipe(session, "recipe-host", engine="ssh_process",
+                  launch_template=HOST_ENGINE_TEMPLATE, process_name=None)
+    with _probe(set()):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
+    assert entry["startable"] is False
+    assert entry["reason"] == recipe_switcher.REASON_NO_HANDLE
+
+
+@pytest.mark.asyncio
+async def test_host_engine_recipe_with_a_handle_is_startable(auth_client, session):
+    box_a = await _host(session, "box-a")
+    await _recipe(session, "recipe-host", engine="ssh_process",
+                  launch_template=HOST_ENGINE_TEMPLATE, process_name="engine-server")
+    with _probe(set()):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
+    assert entry["startable"] is True
+    assert entry["reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_docker_recipes_stay_startable_without_a_handle(auth_client, session):
+    """Docker-Engines vergeben ihren Containernamen im Template bzw. werden
+    über das Label gefunden — für sie wäre die Pflicht eine Lüge."""
+    box_a = await _host(session, "box-a")
+    await _recipe(session, "recipe-x", process_name=None)
+    with _probe(set()):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
+    assert entry["startable"] is True
+    assert entry["reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_start_of_a_handleless_host_engine_is_422_and_creates_nothing(auth_client, session):
+    box_a = await _host(session, "box-a")
+    await _recipe(session, "recipe-host", engine="ssh_process",
+                  launch_template=HOST_ENGINE_TEMPLATE, process_name=None)
+    start = AsyncMock()
+    with patch("app.services.runtime_manager.start_runtime", start):
+        resp = await auth_client.post(f"/api/v1/hosts/{box_a.id}/recipes/recipe-host/start")
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == recipe_switcher.REASON_NO_HANDLE
+    start.assert_not_awaited()
+    # Keine halbfertige Instanz zurückgelassen.
+    assert (await session.exec(select(Runtime))).all() == []
+
+
+# ── „läuft" braucht das Handle, nicht nur den Port (Live-Befund 03.09.2026) ──
+
+
+async def _host_engine_pair(session, *, process_name: str | None):
+    """Ein ssh_process-Rezept plus seine Instanz auf box-a."""
+    box_a = await _host(session, "box-a")
+    recipe = await _recipe(session, "recipe-host", engine="ssh_process",
+                           launch_template=HOST_ENGINE_TEMPLATE, process_name=process_name)
+    await _runtime(session, "recipe-host-box-a", box_a, runtime_type="ssh_process",
+                   model_identifier=recipe.model_identifier, process_name=process_name,
+                   launch_command="cd ~/engines/x && PORT=8000 ./start.sh")
+    return box_a
+
+
+@pytest.mark.asyncio
+async def test_instance_without_a_handle_is_not_running_even_if_the_port_answers(auth_client, session):
+    """DER LIVE-BEFUND: eine nie gestartete Instanz galt als „läuft bereits",
+    weil eine FREMDE Engine auf demselben Port antwortete."""
+    box_a = await _host_engine_pair(session, process_name=None)
+    port_answers = AsyncMock(return_value=True)
+    with patch("app.services.runtime_manager._probe_http", port_answers):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
+    assert entry["running"] is False
+    assert entry["reason"] == recipe_switcher.REASON_NO_HANDLE
+    # Der Port wird für eine Runtime ohne Handle gar nicht erst gefragt.
+    port_answers.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_instance_with_a_handle_that_is_not_alive_is_not_running(auth_client, session):
+    """Port antwortet, Handle läuft nicht → das antwortet jemand anderes."""
+    box_a = await _host_engine_pair(session, process_name="engine-server")
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager._ssh_handle_running", AsyncMock(return_value=False)):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
+    assert entry["running"] is False
+    assert entry["startable"] is True
+
+
+@pytest.mark.asyncio
+async def test_instance_counts_as_running_only_with_handle_and_port(auth_client, session):
+    box_a = await _host_engine_pair(session, process_name="engine-server")
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager._ssh_handle_running", AsyncMock(return_value=True)):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
+    assert entry["running"] is True
+    assert entry["reason"] == recipe_switcher.REASON_RUNNING
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_box_is_no_proof_of_running(auth_client, session):
+    """SSH kaputt heisst „wir wissen es nicht" — und ein unbelegtes „läuft"
+    ist genau die Behauptung, die den Umschalter blockiert hat."""
+    box_a = await _host_engine_pair(session, process_name="engine-server")
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager._ssh_handle_running",
+                  AsyncMock(side_effect=OSError("connection refused"))):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-host"]
+    assert entry["running"] is False
+
+
+@pytest.mark.asyncio
+async def test_docker_instances_keep_the_plain_port_probe(auth_client, session):
+    """Nur Host-Engines bekommen die SSH-Nachprüfung — Docker-Rezepte laufen
+    unverändert über die HTTP-Probe."""
+    box_a = await _host(session, "box-a")
+    recipe = await _recipe(session, "recipe-x")
+    await _runtime(session, "recipe-x-box-a", box_a, model_identifier=recipe.model_identifier)
+    handle = AsyncMock(return_value=False)
+    with patch("app.services.runtime_manager._probe_http", AsyncMock(return_value=True)), \
+            patch("app.services.runtime_manager._ssh_handle_running", handle):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-x"]
+    assert entry["running"] is True
+    handle.assert_not_awaited()
 
 
 # ── POST /hosts/{id}/recipes/{slug}/start ────────────────────────────────────
