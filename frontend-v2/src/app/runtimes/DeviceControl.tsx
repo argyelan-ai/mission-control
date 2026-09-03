@@ -716,7 +716,7 @@ export function DeviceModeStrip({
           className="shrink-0 flex items-center gap-1 rounded-md px-2 min-h-11 sm:min-h-7 cursor-pointer text-[11px]"
           style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
         >
-          {t("showNumbers")}
+          {t("details")}
           <ChevronDown
             size={12}
             aria-hidden
@@ -726,7 +726,62 @@ export function DeviceModeStrip({
         </button>
       </div>
 
-      {/* Die Kernaussage — immer sichtbar, auch eingeklappt. Ohne sie versteht
+      {/* Zugeklappt (Standard, Wunsch des Betreibers 03.09.2026): nur die
+          Schalterzeile. Was darunter steht — Erklärsatz, Sperr-/Nachzieh-
+          Hinweise, Diagramm — öffnet der Details-Knopf. Damit eine Sperre,
+          ein laufendes Nachziehen oder ein Fehler nicht unsichtbar werden,
+          steht dann ein kurzer Chip in der Zeile: ein Wort, kein Absatz. */}
+      {!open && (lock || pending || device.last_error || mutation.isError || shownMode === "boost") && (
+        <div className="flex flex-wrap items-center gap-1.5 -mt-0.5">
+          {lock && (
+            <span
+              data-testid="device-status-chip"
+              data-kind="lock"
+              className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
+              style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}55` }}
+            >
+              <Lock size={10} aria-hidden />
+              {t("chipLocked")}
+            </span>
+          )}
+          {pending && (
+            <span
+              data-testid="device-status-chip"
+              data-kind="pending"
+              className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium tabular-nums"
+              style={{ color: C.info, border: `1px solid ${C.info}55` }}
+            >
+              {mutation.isPending && <Loader2 size={10} className="animate-spin" aria-hidden />}
+              {t("pendingTo", { mode: t(MODE_LABEL_KEY[targetMode as GpuMode]) })}
+              {pickedAt !== null && remaining > 0 ? ` · ${remaining} s` : ""}
+            </span>
+          )}
+          {(device.last_error || mutation.isError) && (
+            <span
+              data-testid="device-status-chip"
+              data-kind="error"
+              className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
+              style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}55` }}
+            >
+              {t("chipError")}
+            </span>
+          )}
+          {!lock && shownMode === "boost" && (
+            <span
+              data-testid="device-status-chip"
+              data-kind="boost"
+              className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
+              style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}55` }}
+            >
+              <AlertTriangle size={10} aria-hidden />
+              {t("chipBoost")}
+            </span>
+          )}
+        </div>
+      )}
+
+      {open && (<>
+      {/* Die Kernaussage — sichtbar, sobald die Details offen sind. Ohne sie versteht
           niemand, warum man freiwillig die sparsamste Stufe wählt. Mit
           „Gemessen:" davor, damit sie nicht als Live-Wert dieser Box gelesen
           wird (HONESTY RULE). */}
@@ -850,7 +905,7 @@ export function DeviceModeStrip({
 
       {/* Volle Ansicht: das Diagramm, das die Behauptung „gleich schnell"
           belegt, statt sie nur zu behaupten. */}
-      {open && (
+      {(
         <div
           data-testid="device-detail"
           className="rounded-lg px-3 py-3 mt-0.5"
@@ -872,6 +927,7 @@ export function DeviceModeStrip({
           </p>
         </div>
       )}
+      </>)}
     </div>
   );
 }
