@@ -326,3 +326,28 @@ def test_claude_code_start_banner_is_furniture():
         "● Hallo, ich bin bereit.\r\n"
     )
     assert p.text() == "● Hallo, ich bin bereit."
+
+
+def test_short_anchor_like_a_one_word_message_still_cuts_off_the_past():
+    """Live 03.09.2026 (Marks Screenshot): auf 'danke' zeigte die Vorschau den
+    GANZEN Bildschirm — die vorige Frage, die alte Antwort, das eigene 'danke'.
+    Der Anker war kuerzer als die Suchsonde, wurde also nie gesucht, und der
+    Rueckfall 'ohne Treffer alles' griff. Ein kurzer Anker wird als GANZE
+    Zeile gesucht, nicht als Teilstueck (sonst traefe 'ok' mitten im Wort)."""
+    preview = PanePreview()
+    preview.feed(
+        "❯ ah okay passt danke\r\n"
+        "👍\r\n"
+        "❯ danke\r\n"
+        "● Gern geschehen.\r\n"
+    )
+    assert preview.text_after("danke") == "● Gern geschehen."
+    assert preview.text_after("👍") == "● Gern geschehen."
+
+
+def test_short_anchor_is_not_matched_inside_a_word():
+    """'ok' steckt in 'Lokal' — das darf keinen Schnitt ausloesen; dann gilt
+    weiter der Rueckfall (alles zeigen)."""
+    preview = PanePreview()
+    preview.feed("● Lokal ist besser als Cloud.\r\n")
+    assert preview.text_after("ok") == preview.text()

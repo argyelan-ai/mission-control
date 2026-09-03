@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GroupMessage, contributionExcerpt } from "./GroupMessage";
 import type { GroupMessage as GroupMessageData } from "@/lib/groupTypes";
@@ -197,6 +197,43 @@ describe("GroupMessage — lange System-Nachrichten", () => {
 
     await user.click(screen.getByTestId("group-system-toggle"));
     expect(screen.queryByTestId("group-system-body")).not.toBeInTheDocument();
+  });
+
+  it("renders an opened synthesis order as markdown, not as raw text (03.09.2026)", async () => {
+    const user = userEvent.setup({ delay: null });
+    const body = [
+      "@rex — Synthese-Turn Runde 2/2",
+      "",
+      "## Beiträge dieser Runde",
+      "",
+      "### @beta",
+      "Mein Beitrag.",
+      "",
+      "**Format (Pflicht):**",
+      "",
+      "| Motor | t/s |",
+      "|---|---|",
+      "| DFlash2 | 423 |",
+      "",
+      "x".repeat(400),
+    ].join("\n");
+    render(
+      <GroupMessage
+        message={mkMessage({ sender_type: "system", sender_id: null, body })}
+        senderName={null}
+        senderEmoji={null}
+        isOwn={false}
+      />,
+    );
+    await user.click(screen.getByTestId("group-system-toggle"));
+    const opened = screen.getByTestId("group-system-body");
+    expect(within(opened).getByRole("heading", { name: "Beiträge dieser Runde" })).toBeInTheDocument();
+    expect(within(opened).getByRole("heading", { name: "@beta" })).toBeInTheDocument();
+    expect(within(opened).getByRole("table")).toBeInTheDocument();
+    expect(within(opened).getByRole("cell", { name: "423" })).toBeInTheDocument();
+    // Die Markdown-Zeichen selbst duerfen nicht mehr sichtbar sein.
+    expect(opened).not.toHaveTextContent("## Beiträge");
+    expect(opened).not.toHaveTextContent("**Format");
   });
 
   it("keeps a short system note open — a timeout line is only useful unbidden", () => {

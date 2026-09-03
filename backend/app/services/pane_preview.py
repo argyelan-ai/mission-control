@@ -166,7 +166,16 @@ class PanePreview:
                 end = pos + len(probe) - 1
                 break
         if end < 0:
-            return self.text()
+            # Kurzer Anker (ein Wort, ein Emoji — Marks 'danke', 03.09.2026):
+            # als Teilstueck traefe er mitten im Wort, als GANZE Zeile ist er
+            # eindeutig. Genommen wird die letzte Zeile, die genau so lautet.
+            hits = [
+                i for i, flat in enumerate(flat_lines)
+                if flat.lstrip("❯>● ") == needle
+            ]
+            if not hits:
+                return self.text()
+            return "\n".join(self._filter(lines[hits[-1] + 1 :])).strip()
         cut = max(i for i, start in enumerate(starts) if start <= end)
         return "\n".join(self._filter(lines[cut + 1 :])).strip()
 

@@ -1407,6 +1407,16 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     return {"slashCommands": commands}
 
 
+# Aliasse, die Claude Code annimmt, aber im /model-Picker VERSCHWEIGT, bis sie
+# einmal gewaehlt wurden. Live 03.09.2026 (2.1.259, OAuth-Token im Container):
+# der Picker listete Default/Sonnet/Opus/Haiku; ``/model fable`` wurde trotzdem
+# angenommen, persistierte ``"model": "fable"``, die Statuszeile zeigte
+# "Fable 5.1" — und erst danach stand die Zeile im Picker. Der Katalog spiegelt
+# den Picker und verschwieg Fable darum jedem Claude-Agenten (Marks Befund).
+# Nur fuer Harness "claude": openclaude persistiert auch ein falsches Token.
+_PICKER_HIDDEN_CLAUDE_ALIASES = ("fable",)
+
+
 async def model_options_capabilities(agent) -> dict[str, object]:
     """``{"modelOptions": [{"command": str, "label": str,
     "contextWindow": int|None}, ...]}`` — the composer's model-switcher
@@ -1484,6 +1494,14 @@ async def model_options_capabilities(agent) -> dict[str, object]:
         # was es annimmt. Ein leeres Dropdown, bis der Katalog steht, ist
         # billiger als ein Klick, der einen echten Agenten umschaltet.
         rows = []
+
+    if harness == "claude":
+        known = {row["command"] for row in rows}
+        rows = list(rows) + [
+            {"command": alias, "label": alias.capitalize()}
+            for alias in _PICKER_HIDDEN_CLAUDE_ALIASES
+            if alias not in known and alias in settings.model_aliases
+        ]
 
     alias_to_model_id = settings.model_aliases
     options = []

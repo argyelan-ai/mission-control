@@ -192,6 +192,8 @@ _KNOWN_ALIAS_COMMANDS = {
     "sonnet": "sonnet",
     "opus": "opus",
     "haiku": "haiku",
+    # Live 03.09.2026: ``/model fable`` gueltig, persistiert "fable".
+    "fable": "fable",
 }
 
 # openclaude beschriftet seine Zeilen anders ("Opus 4.1", "Sonnet (1M
