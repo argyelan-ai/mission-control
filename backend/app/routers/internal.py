@@ -110,6 +110,12 @@ async def build_runtime_env(
         )
         if _is_slow_local_runtime:
             tokens["OMP_TURN_IDLE_TIMEOUT"] = "600"
+            # Per-task wall clock (OMP_TASK_DEADLINE, bridge default 1 h).
+            # 03.09.2026: a working 20-minute security audit on a local model
+            # was killed at the old 1200 s deadline while still streaming
+            # (a cloud harness needed 28 min for the same task). Local models
+            # get two hours; real hangs stay the idle watchdog's job.
+            tokens["OMP_TASK_DEADLINE"] = "7200"
 
         # omp's models.yml needs the served model's REAL context window. The
         # entrypoint used to hardcode 262144 (a Qwen-era value); after a recipe

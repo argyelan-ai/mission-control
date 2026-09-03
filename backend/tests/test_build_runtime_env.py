@@ -548,3 +548,48 @@ async def test_build_runtime_env_omp_no_context_len_omits_keys(async_session):
 
     assert "OMP_CONTEXT_WINDOW" not in env
     assert "OMP_MAX_TOKENS" not in env
+
+
+# ── Per-runtime OMP_TASK_DEADLINE (03.09.2026) ─────────────────────────────
+#
+# The omp bridge's per-task wall clock (default 1 h since this change) killed
+# a working 20-minute security audit on a local model at 1200 s. Local models
+# are slower than cloud harnesses on the same task (28 min for a cloud
+# harness) -> slow local runtimes get a 2 h deadline; cloud keeps the default.
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_slow_local_gets_long_task_deadline(async_session):
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="glm-vllm",
+        display_name="GLM vLLM",
+        runtime_type="vllm_docker",
+        endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="glm-flash",
+        enabled=True,
+    )
+    agent = Agent(name="SlowLocalAgent2", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert env["OMP_TASK_DEADLINE"] == "7200"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_cloud_keeps_default_task_deadline(async_session):
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="omp-cloud-runtime-2",
+        display_name="omp (cloud-hosted)",
+        runtime_type="omp",
+        endpoint="https://managed-omp-endpoint.example.com/v1",
+        model_identifier="some-cloud-model",
+        enabled=True,
+    )
+
+    env = await build_runtime_env(rt, async_session)
+
+    assert "OMP_TASK_DEADLINE" not in env

@@ -598,3 +598,20 @@ def _run_standalone() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_run_standalone())
+
+
+# ---------------------------------------------------------------------------
+# Per-task wall clock (03.09.2026): 1200 s killed a legitimately working
+# 20-minute audit on a local model (a cloud harness needed 28 min for the same
+# task). Real hangs are caught by the idle watchdog; the deadline is only the
+# runaway guard, so it defaults to an hour.
+# ---------------------------------------------------------------------------
+
+def test_task_deadline_defaults_to_one_hour():
+    assert bridge.task_deadline_from_env({}) == 3600.0
+
+
+def test_task_deadline_env_override_wins():
+    assert bridge.task_deadline_from_env({"OMP_TASK_DEADLINE": "900"}) == 900.0
+    assert bridge.task_deadline_from_env({"OMP_MAX_TIME": "100"}) == 100.0
+    assert bridge.task_deadline_from_env({"OMP_TASK_DEADLINE": "900", "OMP_MAX_TIME": "100"}) == 900.0

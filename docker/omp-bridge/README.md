@@ -43,6 +43,13 @@ break in ways that look like model problems:
    see `turn-end-hook.mjs`). Verify empirically: `progress @ <delta-event>`
    records must appear in the signal file during a long generation.
 
+   The second watchdog is the **per-task wall clock** (`OMP_TASK_DEADLINE`,
+   default 3600s; the backend hands slow local runtimes 7200s). It is only the
+   runaway guard — a task that is still streaming when it expires is killed too.
+   03.09.2026: a working 20-minute audit died at the old 1200s default while
+   heartbeating every 3s. `classify()` now names the trigger (deadline / idle /
+   child_dead) in the blocker text instead of one generic "kein Stream-Fortschritt".
+
 Both were live bugs on the omp path (Sparky) — fixed in PR #68. See also
 `mc_cli/config.py` (the file contract) and `bridge.py:supervise_stream` /
 `run_native_turn` (the watchdog).
