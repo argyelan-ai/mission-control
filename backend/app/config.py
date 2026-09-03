@@ -548,7 +548,23 @@ def node_agent_base_url() -> str:
     connect through. Falls back to mc_base_url unchanged when
     MC_NODE_AGENT_BASE_URL is unset.
     """
-    return settings.mc_node_agent_base_url or settings.mc_base_url
+    # Über die LISTE prüfen, nicht den Rohstring: "  " oder "," sind gesetzt,
+    # ergeben aber keine Adresse — dann gilt mc_base_url (Review 03.09.2026).
+    if urls := node_agent_base_urls():
+        return urls[0]
+    return settings.mc_base_url
+
+
+def node_agent_base_urls() -> list[str]:
+    """Alle konfigurierten Adressen für den Install-Einzeiler (P2, 02.09.2026).
+
+    MC_NODE_AGENT_BASE_URL darf seit P2 eine kommagetrennte Liste sein
+    („https://mc.tailnet-name.ts.net, http://192.0.2.5"): eine Box im LAN
+    erreicht MC nicht über Tailscale und umgekehrt. Ein einzelner Wert
+    verhält sich exakt wie vorher. Leer → leere Liste (der Aufrufer nimmt
+    dann mc_base_url).
+    """
+    return [u.strip() for u in settings.mc_node_agent_base_url.split(",") if u.strip()]
 
 
 def effective_host_ssh_user() -> str:

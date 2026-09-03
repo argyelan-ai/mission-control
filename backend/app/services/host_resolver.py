@@ -68,6 +68,36 @@ class ResolvedHost:
     agent_last_seen_at: datetime | None = None
     agent_version: str | None = None
 
+    # Rezept-Umschalter P2: Geräterolle (Vorbelegung im Duo-Dialog) und die
+    # Verbund-Adresse, die P3 als HEAD_IP/WORKER_IP schreibt. Beide nur
+    # durchgereicht — entschieden wird damit hier nichts.
+    role: str | None = None
+    fabric_ip: str | None = None
+
+
+def ssh_capable(host) -> bool:
+    """Kann MC diese Box per SSH erreichen? Gilt für Host-Zeilen UND ResolvedHost.
+
+    Rezept-Umschalter P2 (Vertrag 02.09.2026): Der Pairing-Weg legt Boxen als
+    ``kind=agent`` an — die Box redet nur nach aussen. Trägt so eine Box
+    ZUSÄTZLICH ein ``ssh_host`` (vom Betreiber oder beim Pairing gemeldet),
+    kann MC sie genauso starten/stoppen wie eine ``kind=ssh``-Box:
+    ``runtime_manager._ssh_run`` fragt nie nach ``kind``, nur nach der
+    Adresse (Schlüssel: ssh_credential_id → ssh_key_path → settings, wie
+    bei jedem anderen Host). Diese EINE Funktion ist die Regel dafür —
+    jede ``kind == "ssh"``-Prüfung im Lebenszyklus geht über sie, damit
+    Umschalter, Wächter und Installer nie verschiedener Meinung sind.
+
+    ``flask_wol`` und ``local`` bleiben bewusst draussen: die eine Box wird
+    über ihren Control-Server gesteuert, die andere ist MC selbst.
+    """
+    if host is None:
+        return False
+    kind = getattr(host, "kind", None)
+    if kind not in ("ssh", "agent"):
+        return False
+    return bool((getattr(host, "ssh_host", None) or "").strip())
+
 
 def _get(runtime, key: str):
     """Field access that works for both Runtime rows and registry dicts —
@@ -96,6 +126,8 @@ def _from_host_row(host: Host) -> ResolvedHost:
         agent_telemetry=host.agent_telemetry,
         agent_last_seen_at=host.agent_last_seen_at,
         agent_version=host.agent_version,
+        role=host.role,
+        fabric_ip=host.fabric_ip,
     )
 
 

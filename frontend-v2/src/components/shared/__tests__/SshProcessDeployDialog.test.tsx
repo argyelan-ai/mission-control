@@ -23,6 +23,7 @@ import {
   defaultPortFor,
   exclusiveNeighbours,
   slugify,
+  sshCapable,
 } from "../SshProcessDeployDialog";
 import { api } from "@/lib/api";
 import type {
@@ -424,6 +425,28 @@ describe("ssh_process deploy", () => {
     const error = await screen.findByTestId("ssh-deploy-error");
     expect(error.textContent).toContain("konnte nicht gestoppt werden");
     expect(screen.queryByTestId("ssh-deploy-created")).toBeNull();
+  });
+
+  // P2: gepaarte Boxen (kind=agent) mit SSH-Adresse sind Startziele —
+  // dieselbe Regel wie im Backend. Ohne Adresse melden sie nur.
+  it("sshCapable — ssh or agent WITH an ssh_host; everything else is no start target", () => {
+    expect(sshCapable(mkHost({ kind: "ssh", ssh_host: "192.0.2.10" }))).toBe(true);
+    expect(sshCapable(mkHost({ kind: "agent", ssh_host: "192.0.2.22" }))).toBe(true);
+    expect(sshCapable(mkHost({ kind: "agent", ssh_host: null }))).toBe(false);
+    expect(sshCapable(mkHost({ kind: "ssh", ssh_host: null }))).toBe(false);
+    expect(sshCapable(mkHost({ kind: "local", ssh_host: "192.0.2.10" }))).toBe(false);
+    expect(sshCapable(mkHost({ kind: "flask_wol", ssh_host: null }))).toBe(false);
+  });
+
+  it("offers a paired (agent) box with an SSH address as start target, but not one without", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([
+      mkHost({ id: "host-b", slug: "box-b", display_name: "Box B", kind: "agent", ssh_host: "192.0.2.22" }),
+      mkHost({ id: "host-c", slug: "box-c", display_name: "Box C", kind: "agent", ssh_host: null }),
+    ]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] } as never);
+    renderDialog();
+    expect(await screen.findByText("Box B")).toBeInTheDocument();
+    expect(screen.queryByText("Box C")).toBeNull();
   });
 
   it("blocks both actions when no SSH box is connected", async () => {

@@ -1121,7 +1121,9 @@ async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
     cli-bridge-Agent als Claude)."""
     from app.services import agent_chat_input
 
-    for harness in ("kimi", "omp"):
+    # omp ist seit 02.09.2026 raus aus dieser Liste: es hat eine eigene
+    # Denk-Stufen-Leiter (s. Block "omp: Denk-Stufe" unten).
+    for harness in ("kimi",):
         agent = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness=harness)
         caps = await agent_chat_input.effort_capabilities(agent)
         assert caps == {"effortLevels": [], "canSwitchEffort": False, "effort": None,
@@ -2406,3 +2408,180 @@ async def test_effort_capabilities_non_boss_host_claude_agent_gets_no_switch(mon
     # Und der Endpunkt haette ihn ohnehin abgewiesen — das Versprechen war leer.
     with pytest.raises(agent_chat_input.InputNotSupportedError):
         await agent_chat_input.set_effort(agent, "high")
+
+
+# ── omp: Denk-Stufe (Effort-Pendant) ueber die Statuszeile ──────────────────
+#
+# Live-Befund am omp-Pane eines Agenten (omp v16.4.6, 02.09.2026): omp kennt KEIN
+# ``/thinking <stufe>``-Kommando in der TUI — der Text landete als normale
+# Nachricht beim Modell. Was es gibt: Shift+Tab (tmux ``BTab``) dreht die
+# Stufe im Ring ``off -> auto -> minimal -> low -> medium -> high -> xhigh
+# -> off``, und die Statuszeile ueber dem Eingabefeld zeigt sie sofort:
+#   ``╭── π  > ⬢ MC model · ◒ high > 📁 /workspace > …``
+# Die Kurzformen ``min``/``med`` sind wörtlich so aufgezeichnet; ``off`` hat
+# gar keinen Suffix (``⬢ MC model >``).
+
+def _omp_pane(level_suffix: str | None) -> str:
+    suffix = f" · {level_suffix}" if level_suffix else ""
+    return (
+        " - Keine neuen Nachrichten — Inbox leer, nichts zu tun.\n"
+        f"╭── π  > ⬢ MC model{suffix} > 📁 /workspace > ◫ 5.9%/500K ⟲ ▶──────◀ ──╮\n"
+        "╰─                                                                ─╯\n"
+    )
+
+
+async def _patch_omp_effort_deps(monkeypatch, agent_chat_input, *, pane_sequence: list):
+    calls = await _patch_effort_deps(monkeypatch, agent_chat_input, pane_sequence=pane_sequence)
+    persisted: list[tuple[str, str]] = []
+
+    async def _fake_persist(slug, level):
+        persisted.append((slug, level))
+
+    monkeypatch.setattr(agent_chat_input, "_persist_omp_thinking_level", _fake_persist)
+    return calls, persisted
+
+
+async def test_set_effort_omp_cycles_shift_tab_until_status_line_matches(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls, persisted = await _patch_omp_effort_deps(
+        monkeypatch, agent_chat_input,
+        pane_sequence=[
+            _omp_pane("◒ high"),   # EIN Capture: Preflight (idle) + Ausgangsstufe
+            _omp_pane("◕ xhigh"),  # nach Druck 1
+            _omp_pane(None),       # 2: off
+            _omp_pane("⟳ auto"),   # 3
+            _omp_pane("○ min"),    # 4
+            _omp_pane("◔ low"),    # 5 -> Ziel
+        ],
+    )
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input.set_effort(agent, "low")
+
+    assert [c[-1] for c in calls] == ["BTab"] * 5
+    assert all("send-keys" in c for c in calls)
+    assert persisted == [("alpha", "low")]
+
+
+async def test_set_effort_omp_is_a_noop_when_already_there(monkeypatch):
+    from app.services import agent_chat_input
+
+    calls, persisted = await _patch_omp_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[_omp_pane("◒ high")],
+    )
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input.set_effort(agent, "high")
+    assert calls == []
+    # Trotzdem persistieren: die Datei ist der Standard fuer den naechsten
+    # Task-Relaunch, und die Statuszeile sagt nichts ueber die Datei.
+    assert persisted == [("alpha", "high")]
+
+
+async def test_set_effort_omp_gives_up_after_one_full_ring(monkeypatch):
+    """Ein Modell ohne Reasoning ignoriert Shift+Tab (die Stufe bleibt) —
+    nach einer vollen Runde ist Schluss, ohne Escape (nichts zu bereinigen:
+    es liegt kein Kommando im Eingabefeld)."""
+    from app.services import agent_chat_input
+
+    calls, persisted = await _patch_omp_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[_omp_pane("◒ high")],
+    )
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    with pytest.raises(agent_chat_input.EffortSwitchFailedError):
+        await agent_chat_input.set_effort(agent, "low")
+    assert len(calls) == agent_chat_input._OMP_THINKING_RING_MAX_PRESSES
+    assert all(c[-1] == "BTab" for c in calls)
+    assert persisted == []
+
+
+async def test_set_effort_omp_busy_preflight_uses_omp_pane_rules(monkeypatch):
+    from app.services import agent_chat_input
+    from tests.test_omp_chat import PANE_WORKING_GENERIC
+
+    calls, persisted = await _patch_omp_effort_deps(
+        monkeypatch, agent_chat_input, pane_sequence=[PANE_WORKING_GENERIC],
+    )
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    with pytest.raises(agent_chat_input.AgentBusyError):
+        await agent_chat_input.set_effort(agent, "low")
+    assert calls == [] and persisted == []
+
+
+async def test_set_effort_omp_off_is_session_only(monkeypatch):
+    """omps eigener Settings-Enum kennt kein ``off`` als Standard (die CLI
+    persistiert es selbst nie) — wie max/ultracode bei Claude: gilt nur
+    fuer die laufende Session, die Datei bleibt unangetastet."""
+    from app.services import agent_chat_input
+
+    calls, persisted = await _patch_omp_effort_deps(
+        monkeypatch, agent_chat_input,
+        pane_sequence=[_omp_pane("◕ xhigh"), _omp_pane(None)],
+    )
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    await agent_chat_input.set_effort(agent, "off")
+    assert [c[-1] for c in calls] == ["BTab"]
+    assert persisted == []
+
+
+async def test_set_effort_omp_rejects_auto_and_claude_only_levels():
+    from app.services import agent_chat_input
+
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    for level in ("auto", "ultracode", "max"):
+        with pytest.raises(ValueError):
+            await agent_chat_input.set_effort(agent, level)
+
+
+async def test_effort_capabilities_omp_reads_level_from_status_line(monkeypatch):
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+    async def _capture(agent):
+        return _omp_pane("◑ med")
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    caps = await agent_chat_input.effort_capabilities(agent)
+    assert caps == {
+        "effortLevels": ["off", "minimal", "low", "medium", "high", "xhigh"],
+        "canSwitchEffort": True,
+        "effort": "medium",
+        "effortShared": False,
+        "effortReason": None,
+    }
+
+
+async def test_effort_capabilities_omp_auto_shows_no_level(monkeypatch):
+    """``auto`` ist keine waehlbare Stufe (sie ist der Klassifizierer) —
+    der Chip zeigt dann ehrlich "auto"/leer statt einer falschen Fuellung."""
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+    async def _capture(agent):
+        return _omp_pane("⟳ auto")
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    caps = await agent_chat_input.effort_capabilities(agent)
+    assert caps["canSwitchEffort"] is True and caps["effort"] is None
+
+
+async def test_effort_capabilities_omp_without_status_line_cannot_switch(monkeypatch):
+    from app.services import agent_chat_input
+
+    async def _no_version(agent):
+        return None
+    async def _capture(agent):
+        return None
+    monkeypatch.setattr(agent_chat_input, "resolve_cli_version", _no_version)
+    monkeypatch.setattr(agent_chat_input, "capture_pane", _capture)
+
+    agent = _StubAgent(slug="alpha", agent_runtime="cli-bridge", harness="omp")
+    caps = await agent_chat_input.effort_capabilities(agent)
+    assert caps["canSwitchEffort"] is False
+    assert caps["effortReason"] == "no_pane"
+    assert caps["effortLevels"] == ["off", "minimal", "low", "medium", "high", "xhigh"]

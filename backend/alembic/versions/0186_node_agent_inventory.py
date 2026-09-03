@@ -8,7 +8,7 @@ Gerät liegen (~/models-local + HF-Cache) — Grundlage für Phase 2's
 Eigene Spalten statt Wiederverwendung von agent_telemetry, weil beide
 unabhängig voneinander aktualisiert werden: die Telemetrie kommt mit JEDEM
 Heartbeat, das Inventar nur alle ~10 Minuten UND nur wenn sich der Hash
-geändert hat (siehe scripts/mc-node-agent.py). Ein gemeinsames Feld hätte
+geändert hat (siehe scripts/node-agent/mc-node-agent.py). Ein gemeinsames Feld hätte
 bei jedem Telemetrie-only-Heartbeat das letzte Inventar überschreiben
 müssen (oder umgekehrt) — zwei Spalten mit eigenem *_updated_at halten die
 beiden Update-Frequenzen sauber getrennt.

@@ -31,7 +31,7 @@ const makeHost = (over: Partial<Host> = {}): Host => ({
   ssh_host: "192.0.2.10",
   ssh_user: "operator",
   ssh_key_path: null,
-  ssh_credential_id: null,
+  ssh_credential_id: null, role: null, fabric_ip: null,
   control_url: null,
   wol_mac_address: null,
   power_managed: false,
@@ -199,12 +199,107 @@ describe("HostsSection", () => {
     expect(create.mock.calls[0][0]).toMatchObject({ slug: "mini", display_name: "Mac Mini", kind: "local" });
   });
 
+  // ── P2: Rolle, SSH-Adresse, Fabric-Adresse ────────────────────────────────
+
+  it("P2: manual form suggests 'head' for the first box and the hint says solo recipes ignore it", async () => {
+    const create = vi.spyOn(api.hosts, "create").mockResolvedValue(makeHost({ id: "new" }));
+    await userEvent.click(await renderAsAdmin([]));
+    await userEvent.click(await screen.findByTestId("add-device-manual"));
+    await screen.findByText("Enter device manually");
+
+    expect(screen.getByTestId("host-role-head")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("host-role-worker")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("host-role-suggested")).toBeInTheDocument();
+    expect(screen.getByText(/Single-box recipes ignore the role/)).toBeInTheDocument();
+    // Beim Anlegen gibt es kein „None" — die Vorbelegung ist immer gesetzt.
+    expect(screen.queryByTestId("host-role-none")).toBeNull();
+
+    await userEvent.type(screen.getByLabelText("Slug"), "box-a");
+    await userEvent.type(screen.getByLabelText("Display name"), "Box A");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0][0]).toMatchObject({ slug: "box-a", role: "head" });
+  });
+
+  it("P2: with a box already registered the manual form suggests 'worker' — and one click makes it 'head'", async () => {
+    const create = vi.spyOn(api.hosts, "create").mockResolvedValue(makeHost({ id: "new" }));
+    await userEvent.click(await renderAsAdmin([makeHost({ id: "host-a", slug: "box-a", display_name: "Box A" })]));
+    await userEvent.click(await screen.findByTestId("add-device-manual"));
+    await screen.findByText("Enter device manually");
+
+    expect(screen.getByTestId("host-role-worker")).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByTestId("host-role-head"));
+    expect(screen.getByTestId("host-role-head")).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.type(screen.getByLabelText("Slug"), "box-b");
+    await userEvent.type(screen.getByLabelText("Display name"), "Box B");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0][0]).toMatchObject({ slug: "box-b", role: "head" });
+  });
+
+  it("P2: the settings mask PATCHes role, SSH address and fabric address for a paired (agent) box", async () => {
+    const update = vi.spyOn(api.hosts, "update").mockResolvedValue(makeHost({ kind: "agent" }));
+    await renderAsAdmin([
+      makeHost({ id: "host-b", slug: "box-b", display_name: "Box B", kind: "agent", ssh_host: null, role: null, fabric_ip: null }),
+    ]);
+
+    await userEvent.click(await screen.findByLabelText("Edit host Box B"));
+    await screen.findByText("Edit host — Box B");
+
+    // Bearbeiten: nichts vorbelegt, „None" ist wählbar, kein Vorschlags-Satz.
+    expect(screen.getByTestId("host-role-none")).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByTestId("host-role-suggested")).toBeNull();
+    expect(screen.getByText(/Without SSH access the box only reports in/)).toBeInTheDocument();
+    expect(screen.getByText(/Address the boxes use to reach each other/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("host-role-worker"));
+    await userEvent.type(screen.getByTestId("host-field-ssh-host"), "192.0.2.22");
+    await userEvent.type(screen.getByTestId("host-field-fabric-ip"), "192.0.2.122");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0]).toBe("host-b");
+    expect(update.mock.calls[0][1]).toMatchObject({
+      kind: "agent", role: "worker", ssh_host: "192.0.2.22", fabric_ip: "192.0.2.122",
+    });
+  });
+
+  it("P2: the settings mask can clear a role again (→ null) and an emptied fabric address is sent as null", async () => {
+    const update = vi.spyOn(api.hosts, "update").mockResolvedValue(makeHost());
+    await renderAsAdmin([
+      makeHost({ id: "host-a", slug: "box-a", display_name: "Box A", role: "head", fabric_ip: "192.0.2.111" }),
+    ]);
+
+    await userEvent.click(await screen.findByLabelText("Edit host Box A"));
+    await screen.findByText("Edit host — Box A");
+    expect(screen.getByTestId("host-role-head")).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(screen.getByTestId("host-role-none"));
+    await userEvent.clear(screen.getByTestId("host-field-fabric-ip"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][1]).toMatchObject({ role: null, fabric_ip: null });
+  });
+
+  it("P2: the device list shows the role chip only when a role is set", async () => {
+    await renderAsAdmin([
+      makeHost({ id: "host-a", slug: "box-a", display_name: "Box A", role: "head" }),
+      makeHost({ id: "host-b", slug: "box-b", display_name: "Box B", role: null }),
+    ]);
+    await screen.findByText("Box A");
+    const rows = screen.getAllByTestId("host-row");
+    expect(rows[0]).toHaveTextContent("Head");
+    expect(rows[1]).not.toHaveTextContent(/Head|Worker/);
+  });
+
   it("editing an existing agent host keeps kind='agent' locked — the row is not touched", async () => {
     const update = vi.spyOn(api.hosts, "update").mockResolvedValue(makeHost({ kind: "agent" }));
-    await renderAsAdmin([makeHost({ id: "host-a", slug: "gx10", display_name: "GX10", kind: "agent", ssh_host: null })]);
+    await renderAsAdmin([makeHost({ id: "host-a", slug: "box-a", display_name: "box-a", kind: "agent", ssh_host: null })]);
 
-    await userEvent.click(await screen.findByLabelText("Edit host GX10"));
-    await screen.findByText("Edit host — GX10");
+    await userEvent.click(await screen.findByLabelText("Edit host box-a"));
+    await screen.findByText("Edit host — box-a");
 
     expect(screen.getByTestId("host-kind-locked")).toHaveTextContent("Agent");
     expect(screen.queryByRole("button", { name: "SSH" })).toBeNull();

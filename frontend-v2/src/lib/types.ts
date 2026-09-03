@@ -2458,11 +2458,23 @@ export interface GithubConfigUpdate {
 
 export type HostKind = "ssh" | "flask_wol" | "local" | "agent";
 
+/**
+ * Geräterolle (Rezept-Umschalter P2): nur eine Standardvorgabe für den
+ * Zweibox-Fall (welche Box im Duo per Default Head ist). Ein-Box-Rezepte
+ * ignorieren sie; null = nicht gesetzt.
+ */
+export type HostRole = "head" | "worker";
+
 export interface Host {
   id: string;
   slug: string;
   display_name: string;
   kind: HostKind;
+  /** P2 — siehe HostRole. Vertrag: Out/Create/Update, nullable. */
+  role: HostRole | null;
+  /** P2 — Adresse, unter der die Boxen sich UNTEREINANDER erreichen (bei
+   *  Direktverbindung das Kabelnetz, nicht das LAN). Backend-Default = ssh_host. */
+  fabric_ip: string | null;
   ssh_host: string | null;
   ssh_user: string | null;
   ssh_key_path: string | null;
@@ -2484,6 +2496,8 @@ export interface HostCreate {
   slug: string;
   display_name: string;
   kind: HostKind;
+  role?: HostRole | null;
+  fabric_ip?: string | null;
   ssh_host?: string | null;
   ssh_user?: string | null;
   ssh_key_path?: string | null;
@@ -2618,6 +2632,8 @@ export interface HostOnboardRequest {
   display_name?: string | null;
   bootstrap: boolean;
   install_agent: boolean;
+  /** P2 — Geräterolle (Vorschlag aus dem Bestand, änderbar). */
+  role?: HostRole | null;
 }
 
 export interface HostOnboardResponse {
@@ -2654,13 +2670,30 @@ export interface HostOnboardLog {
 export interface NodePairingCodeRequest {
   host_id?: string | null;
   display_name_hint?: string | null;
+  /** P2 — optional: Adresse, unter der MC die Box per SSH erreicht. Ohne
+   *  sie meldet die Box nur — starten kann MC sie dann nicht. */
+  ssh_host?: string | null;
+  /** P2 — Geräterolle (Vorschlag aus dem Bestand, änderbar). */
+  role?: HostRole | null;
+}
+
+/** P2 — ein Install-Einzeiler je erreichbarer Adresse des MC-Hosts. */
+export interface NodeInstallCommand {
+  /** Vom Backend gesetzt (z. B. "Tailscale" / "LAN"); die UI übersetzt
+   *  bekannte Werte und zeigt unbekannte unverändert. */
+  label: string;
+  url: string;
+  cmd: string;
 }
 
 export interface NodePairingCodeResponse {
   code: string;
   expires_at: string;
   host_id: string | null;
+  /** Bleibt = erste Zeile aus install_commands (altes Backend: einzige). */
   install_command: string;
+  /** P2 — fehlt bei altem Backend → UI fällt auf install_command zurück. */
+  install_commands?: NodeInstallCommand[];
 }
 
 // ── CLI Sessions ─────────────────────────────────────────────────────────────

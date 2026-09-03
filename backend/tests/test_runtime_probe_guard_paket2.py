@@ -28,7 +28,8 @@ def _fake_get_redis(fake_redis):
 
 
 def _ssh_host():
-    return SimpleNamespace(kind="ssh", tailscale_host=None)
+    # P2: ssh_capable() verlangt eine Adresse — ein echter ResolvedHost hat immer eine.
+    return SimpleNamespace(kind="ssh", ssh_host="192.0.2.10", tailscale_host=None)
 
 
 async def _mk_rt(session, **kw):
