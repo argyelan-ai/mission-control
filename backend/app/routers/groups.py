@@ -497,8 +497,13 @@ async def group_rounds(
     current_user=Depends(require_user),
 ):
     from app.models.group import GroupRound
+    from app.services import group_runner as runner_service
 
     group = await _get_group_or_404(session, group_id)
+    # Der Token-Harvester liest nachlaufend — beendete Runden beim Lesen
+    # nachrechnen, sonst bleibt die letzte Runde eines Laufs auf 0.
+    if await runner_service.group_runner.refresh_run_usage(session, group):
+        await session.commit()
     rounds = (
         await session.exec(
             select(GroupRound)
