@@ -118,6 +118,11 @@ class LocalRecipe(SQLModel, table=True):
     # stop_command / process_name. Templated like the launch command, because
     # a stop script usually needs the same port.
     stop_template: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Prozess- ODER Container-Name — MC prüft beides: erst ``pgrep -x``, sonst
+    # ``docker inspect``. Viele Startskripte einer Host-Engine starten in
+    # Wahrheit einen Container; ohne diesen Namen könnte MC den Start zwar
+    # auslösen, ihn danach aber weder sehen noch stoppen. Darum ist das Feld
+    # für ssh_process-Rezepte Startbedingung, nicht Kür.
     process_name: str | None = Field(default=None, max_length=64)
 
     # Attribution. Community engines and quants are somebody's work; the card
