@@ -16,5 +16,14 @@ Geprüft: `shell=True`-Aufrufe (tools/generate-agent-map.py, scripts/cli-bridge.
 
 Geprüft: f-string-SQL (`agents.py:1180`, `vault_index.py:160/179`, `mc_henry_sunset.py:133`) — Spalten-/Tabellennamen kommen entweder aus Schema-Introspektion mit `_SQL_NAME_RE`-Whitelist oder sind statisch, Werte sind konsequent parametergebunden (`:dashed`, `:hex`). Path-Traversal in `vault.py` (`_safe_path`, `_safe_trash_filename`), `skills.py` (`get_skill_content`/`update_skill_content`), `clawhub.py` (Zip-Slip-Schutz bei `install_skill`) — jeweils explizite `..`/absolute-Pfad-Ablehnung plus `resolve()` + `relative_to()`-Doppelcheck. Auth (`backend/app/auth.py`): bcrypt für Passwörter, PBKDF2-HMAC + `hmac.compare_digest` für Agent-Tokens, `secrets.compare_digest` für den lokalen Auth-Token, JWT mit Expiry (8h) und `token_version`-Invalidierung. `config.py:validate_boot_secrets` verweigert den Produktionsstart bei Placeholder-JWT-Secret/leerem Encryption-Key. Credential-Vault (`encryption.py`) nutzt Fernet, verweigert Start ohne Key. Keine Findings, nichts gefixt.
 
+## Etappe D — Docker & Frontend
+
+Geprüft: `docker-compose.yml` — alle Service-Ports binden an `127.0.0.1` außer Caddy (`${MC_BIND_ADDRESS:-127.0.0.1}`), kein `privileged: true` in irgendeiner Compose-Datei, `docker.sock` wird nur read-only in `docker-socket-proxy` gemountet (kein Direktzugriff des Backends), Proxy whitelistet explizit nur die benötigten API-Pfade (BUILD/SWARM/SYSTEM=0). Frontend: kein `dangerouslySetInnerHTML`, kein `localStorage`/`sessionStorage` (Auth läuft komplett über httpOnly-Cookie + Bearer-Header, kein Client-seitiges Token-Storage), keine Secrets in `NEXT_PUBLIC_*`-Vars.
+
+Ein Finding identifiziert, aber bewusst nicht automatisch gefixt (siehe unten): `mc_sse_token`-Cookie in `backend/app/routers/auth.py:202` ohne `secure=True`.
+
 ## Nicht gefixt (bewusst)
+
+**Low — `mc_sse_token`-Cookie ohne `Secure`-Flag** (`backend/app/routers/auth.py:202`)
+Das Cookie ist `httponly=True` und `samesite="lax"`, aber nicht `secure=True` — es würde auch über Klartext-HTTP übertragen. Laut `SECURITY.md` läuft MC bewusst nur im vertrauenswürdigen Netz (localhost/Tailscale, hinter Caddy), oft ohne TLS im internen Segment. Ein pauschales `secure=True` würde den dokumentierten HTTP-über-Tailscale-Zugriffspfad brechen; ein korrektes bedingtes Secure-Flag (z. B. via `X-Forwarded-Proto` hinter Caddy) braucht Tests gegen den echten Reverse-Proxy-Aufbau, die im Rahmen dieses Audits nicht verifizierbar waren. Empfehlung für Follow-up: `secure=` aus `X-Forwarded-Proto`/`request.url.scheme` ableiten und gegen die Caddy-Konfiguration testen.
 
