@@ -174,10 +174,19 @@ async def test_state_unknown_when_pgrep_itself_errors():
 
 
 @pytest.mark.asyncio
-async def test_state_unknown_without_a_process_name():
-    state = await runtime_manager.get_runtime_state(_rt(process_name=None), host=_host())
+async def test_state_unknown_without_any_handle():
+    """Ohne Handle ist der Zustand unbeobachtbar — nicht "ready", nicht
+    "stopped". Der Satz sagt, was fehlt."""
+    probe = AsyncMock(return_value=True)
+    with patch.object(runtime_manager, "_probe_http", probe):
+        state = await runtime_manager.get_runtime_state(
+            _rt(process_name=None, container_name=None), host=_host()
+        )
     assert state["state"] == "unknown"
-    assert state["container_status"] == "no_process_name"
+    assert state["container_status"] == "unconfigured"
+    assert "beweist nichts" in state["state_message"]
+    # Ein antwortender Port darf daran nichts ändern — er wird nicht gefragt.
+    probe.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -411,6 +420,216 @@ async def test_restart_aborts_when_the_stop_failed():
 
     assert result["ok"] is False
     start.assert_not_awaited()
+
+
+# ── Handle: Prozessname ODER Containername ───────────────────────────────────
+#
+# Vorfall 03.09.2026: ein Rezept-Start hat zuerst das laufende Modell verdrängt
+# und den Speicher geleert — und ERST DANACH gemeldet, dass die Runtime kein
+# Handle hat. Ergebnis: altes Modell tot, neues nie gestartet. Die zwei Tests
+# unten sind der Regressionsschutz dafür; der Rest deckt den Containernamen als
+# gleichwertiges Handle ab (viele Startskripte starten in Wahrheit Container).
+
+
+@pytest.mark.asyncio
+async def test_start_checks_preconditions_before_evicting_the_box():
+    """REGRESSION: ohne Handle darf NICHTS angefasst werden.
+
+    Kein ``ensure_exclusive_host`` (das laufende Modell lebt weiter), kein
+    ``host_memory_prep`` und kein Startversuch — der Fehler stand von Anfang
+    an fest und wird gemeldet, bevor der erste Eingriff passiert.
+    """
+    seen = {"evict": 0, "prep": 0, "switching": 0, "impl": 0}
+
+    async def evict(rt, **kw):
+        seen["evict"] += 1
+        return {"ok": True, "message": "", "stopped": []}
+
+    async def prep(rt, **kw):
+        seen["prep"] += 1
+        return None
+
+    async def mark(*a, **kw):
+        seen["switching"] += 1
+
+    async def impl(rt, **kw):
+        seen["impl"] += 1
+        return {"ok": True, "message": "up"}
+
+    with patch.object(runtime_manager, "ensure_exclusive_host", evict), \
+            patch.object(runtime_manager.host_memory_prep, "prepare_for_runtime", prep), \
+            patch.object(runtime_manager.runtime_grace, "mark_switching", mark), \
+            patch.object(runtime_manager, "_start_runtime_impl", impl), \
+            patch.object(runtime_manager, "_emit_exclusive_event", AsyncMock()):
+        result = await runtime_manager.start_runtime(
+            _rt(process_name=None, container_name=None), host=_host()
+        )
+
+    assert result["ok"] is False
+    assert "process_name/container_name" in result["message"]
+    assert seen == {"evict": 0, "prep": 0, "switching": 0, "impl": 0}
+
+
+@pytest.mark.asyncio
+async def test_start_without_a_launch_command_also_stops_before_eviction():
+    seen = []
+
+    async def evict(rt, **kw):
+        seen.append("evict")
+        return {"ok": True, "message": "", "stopped": []}
+
+    with patch.object(runtime_manager, "ensure_exclusive_host", evict), \
+            patch.object(runtime_manager, "_emit_exclusive_event", AsyncMock()):
+        result = await runtime_manager.start_runtime(_rt(launch_command=""), host=_host())
+
+    assert result["ok"] is False
+    assert "launch_command" in result["message"]
+    assert seen == []
+
+
+def test_preflight_leaves_other_runtime_types_alone():
+    """Nur Host-Engines haben diese Vorbedingung — ein Docker-Start wird über
+    das Label wiedergefunden und braucht kein eigenes Handle."""
+    docker_rt = {"runtime_type": "vllm_docker", "launch_command": "", "process_name": None}
+    assert runtime_manager.ssh_process_start_preflight(docker_rt) is None
+    assert runtime_manager.ssh_process_start_preflight(_rt()) is None
+
+
+@pytest.mark.asyncio
+async def test_handle_running_asks_pgrep_and_docker_in_one_command():
+    """Ein Name, ein SSH-Befehl, beide Prüfarten: ``process_name`` ist das
+    generische Handle-Feld, aus dem Feldnamen wird nicht auf die Art
+    geschlossen (Entscheid 03.09.2026)."""
+    calls = []
+
+    async def handler(cmd, **kw):
+        calls.append(cmd)
+        return ("", "", 0)
+
+    with _ssh(handler):
+        running = await runtime_manager._ssh_handle_running(
+            _rt(process_name=None, container_name="engine-box"), host=_host()
+        )
+
+    assert running is True
+    assert len(calls) == 1
+    assert "pgrep -x engine-box" in calls[0]
+    assert "docker inspect -f '{{.State.Running}}' engine-box" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_a_container_name_in_the_process_name_field_is_checked_too():
+    """DER ENTSCHEIDENDE FALL: im Katalog steht ein CONTAINER-Name im Feld
+    ``process_name``. ``pgrep`` findet ihn nie — der Docker-Zweig desselben
+    Befehls muss ihn finden."""
+    calls = []
+
+    async def handler(cmd, **kw):
+        calls.append(cmd)
+        # Shell-Semantik des Befehls: pgrep trifft nicht, docker inspect sagt
+        # true → der Gesamtbefehl endet mit 0.
+        return ("", "", 0)
+
+    with _ssh(handler):
+        running = await runtime_manager._ssh_handle_running(
+            _rt(process_name="engine-box"), host=_host()
+        )
+
+    assert running is True
+    assert "pgrep -x engine-box" in calls[0]
+    assert "docker inspect -f '{{.State.Running}}' engine-box" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_handle_running_is_false_when_neither_kind_matches():
+    """Exit 1 = weder ein Prozess noch ein laufender Container dieses Namens."""
+    with _ssh(lambda cmd, **kw: ("", "", 1)):
+        running = await runtime_manager._ssh_handle_running(
+            _rt(process_name=None, container_name="engine-box"), host=_host()
+        )
+    assert running is False
+
+
+@pytest.mark.asyncio
+async def test_handle_running_raises_when_the_check_itself_errors():
+    """Alles über Exit 1 ist ein Fehler der Prüfung, kein „läuft nicht" —
+    sonst hielte eine kaputte Prüfung eine volle Box für frei."""
+    with _ssh(lambda cmd, **kw: ("", "bad option", 2)), pytest.raises(RuntimeError):
+        await runtime_manager._ssh_handle_running(
+            _rt(process_name=None, container_name="engine-box"), host=_host()
+        )
+
+
+@pytest.mark.asyncio
+async def test_handle_running_checks_every_configured_name():
+    """Sind beide Felder gesetzt, genügt EIN Treffer — je Name ein Befehl."""
+    calls = []
+
+    async def handler(cmd, **kw):
+        calls.append(cmd)
+        return ("", "", 0 if "engine-box" in cmd else 1)
+
+    with _ssh(handler):
+        running = await runtime_manager._ssh_handle_running(
+            _rt(container_name="engine-box"), host=_host()
+        )
+
+    assert running is True
+    assert len(calls) == 2
+    assert "pgrep -x ds4-server" in calls[0]
+    assert "pgrep -x engine-box" in calls[1]
+
+
+@pytest.mark.asyncio
+async def test_state_uses_the_container_handle_when_no_process_name_is_set():
+    with _ssh(lambda cmd, **kw: ("true", "", 0)), \
+            patch.object(runtime_manager, "_probe_http", AsyncMock(return_value=True)):
+        state = await runtime_manager.get_runtime_state(
+            _rt(process_name=None, container_name="engine-box"), host=_host()
+        )
+    assert state["state"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_stop_falls_back_to_both_kinds_for_one_handle():
+    """Spiegelbild der Prüfung: derselbe Name kann ein Prozess ODER ein
+    Container sein, also beendet der Rückfall beides."""
+    calls = []
+
+    async def handler(cmd, **kw):
+        calls.append(cmd)
+        if cmd.startswith("pgrep"):
+            return ("", "", 1)  # Verifikation: nichts mehr da
+        return ("", "", 0)
+
+    with _ssh(handler):
+        result = await runtime_manager.stop_runtime(
+            _rt(process_name=None, stop_command=None, container_name="engine-box"),
+            host=_host(),
+        )
+
+    assert result["ok"] is True
+    stop_cmd = calls[0]
+    assert "pkill -x engine-box" in stop_cmd
+    assert "docker stop engine-box" in stop_cmd
+
+
+@pytest.mark.asyncio
+async def test_start_verifies_a_container_handle_after_the_launch():
+    alive = iter([1, 0])  # vor dem Start weg, danach da
+
+    async def handler(cmd, **kw):
+        if cmd.startswith("pgrep"):
+            return ("", "", next(alive, 0))
+        return ("", "", 0)
+
+    with _ssh(handler), patch.object(runtime_manager, "_probe_http", AsyncMock(return_value=False)):
+        result = await runtime_manager._start_runtime_impl(
+            _rt(process_name=None, container_name="engine-box"), host=_host()
+        )
+
+    assert result["ok"] is True, result["message"]
+    assert "engine-box" in result["message"]
 
 
 # ── Exclusivity across engine types ──────────────────────────────────────────

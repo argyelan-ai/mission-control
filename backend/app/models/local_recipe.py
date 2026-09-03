@@ -102,6 +102,11 @@ class LocalRecipe(SQLModel, table=True):
     # Standard-Port des Rezepts. Die Oberfläche braucht ihn für den Satz
     # „Port 8000 auf dieser Box belegt durch …", ohne den Befehl zu parsen.
     port: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    # Rezept-Umschalter P2: braucht das Rezept die Box exklusiv? Das Feld ist
+    # die Wahrheit, sobald es gesetzt ist; NULL heisst „das Rezept sagt
+    # nichts" und dann greift die alte Heuristik (min_vram_gb gesetzt →
+    # exklusiv) als Fallback — siehe recipe_switcher.recipe_is_exclusive.
+    exclusive: bool | None = Field(default=None, sa_column=Column(Boolean, nullable=True))
 
     # One-click installation (PR 6). The command that puts the engine ON the
     # box — cloning a repo, building it, fetching weights. Runs once, as a
@@ -113,6 +118,11 @@ class LocalRecipe(SQLModel, table=True):
     # stop_command / process_name. Templated like the launch command, because
     # a stop script usually needs the same port.
     stop_template: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Prozess- ODER Container-Name — MC prüft beides: erst ``pgrep -x``, sonst
+    # ``docker inspect``. Viele Startskripte einer Host-Engine starten in
+    # Wahrheit einen Container; ohne diesen Namen könnte MC den Start zwar
+    # auslösen, ihn danach aber weder sehen noch stoppen. Darum ist das Feld
+    # für ssh_process-Rezepte Startbedingung, nicht Kür.
     process_name: str | None = Field(default=None, max_length=64)
 
     # Attribution. Community engines and quants are somebody's work; the card

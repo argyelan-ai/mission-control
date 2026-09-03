@@ -1,4 +1,4 @@
-"""Tests for scripts/mc-node-agent.py's pure parser functions (Fleet & Rezepte
+"""Tests for scripts/node-agent/mc-node-agent.py's pure parser functions (Fleet & Rezepte
 v2, Phase 1). No network, no subprocess, no real /proc — every sample is a
 literal string fixture, loaded via importlib like scripts/context_detect.py's
 test twin (test_context_detect_python.py) since the agent lives outside the
@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = REPO_ROOT / "scripts" / "mc-node-agent.py"
+MODULE_PATH = REPO_ROOT / "scripts" / "node-agent" / "mc-node-agent.py"
 
 
 def _load_agent():
@@ -655,7 +655,7 @@ class TestHttpPostJson:
         process may already have ssl imported transitively via other
         libraries) so `'ssl' in sys.modules` is a meaningful signal."""
         script = tmp_path / "probe.py"
-        module_path = Path(__file__).resolve().parents[2] / "scripts" / "mc-node-agent.py"
+        module_path = Path(__file__).resolve().parents[2] / "scripts" / "node-agent" / "mc-node-agent.py"
         script.write_text(
             "import sys, socket, threading, importlib.util\n"
             f"spec = importlib.util.spec_from_file_location('agent', {str(module_path)!r})\n"

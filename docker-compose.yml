@@ -281,13 +281,16 @@ services:
       # Telegram-inbound import of jarvis_core is lazy + feature-gated, so a
       # pure image run without this mount is unaffected (feature stays off).
       - ./jarvis_core:/app/jarvis_core:ro
-      # mc-node-agent single-file source (Fleet & Rezepte v2, Phase 1) —
-      # same reasoning as jarvis_core above: GET /api/v1/nodes/agent-script
-      # (routers/nodes.py) serves THIS running instance's own copy, so a
-      # paired device's agent always matches the API it talks to instead of
-      # drifting from a hardcoded GitHub URL pinned to `main`. Missing mount
-      # → that endpoint returns 404, feature-gated the same way.
-      - ./scripts/mc-node-agent.py:/app/scripts/mc-node-agent.py:ro
+      # mc-node-agent Quelle (Fleet & Rezepte v2, Phase 1) — wie jarvis_core
+      # oben: GET /api/v1/nodes/agent-script (routers/nodes.py) liefert die
+      # Kopie DIESER laufenden Instanz, damit der Agent einer gepaarten Box
+      # immer zur API passt, mit der er redet. Fehlt der Mount → 404,
+      # feature-gated wie jarvis_core.
+      # VERZEICHNIS statt Einzeldatei (P2, 02.09.2026): ein Einzeldatei-
+      # Bind-Mount hängt am Inode; `git checkout` im Deploy-Worktree schreibt
+      # die Datei neu und der Mount zeigte danach ins Leere (404, belegt
+      # 01.09.2026). Ein Verzeichnis löst den Namen bei jedem Zugriff neu auf.
+      - ./scripts/node-agent:/app/scripts/node-agent:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

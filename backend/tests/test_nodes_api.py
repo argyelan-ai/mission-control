@@ -96,12 +96,12 @@ async def test_install_command_serves_agent_script_from_this_instance(auth_clien
 
 
 @pytest.mark.asyncio
-async def test_agent_script_served_unauthenticated_when_mounted(client):
+async def test_agent_script_served_unauthenticated_when_mounted(client, tmp_path):
     """The endpoint is deliberately auth-free — an unpaired device has no
     credential yet, that's the whole point of the flow it kicks off."""
     fake_source = "#!/usr/bin/env python3\nprint('mc-node-agent stand-in for the mount test')\n"
-    with patch("app.routers.nodes._AGENT_SCRIPT_PATH") as mock_path:
-        mock_path.read_text.return_value = fake_source
+    (tmp_path / "mc-node-agent.py").write_text(fake_source, encoding="utf-8")
+    with patch("app.routers.nodes._AGENT_SCRIPT_DIR", tmp_path):
         resp = await client.get("/api/v1/nodes/agent-script")
     assert resp.status_code == 200
     assert resp.text == fake_source
@@ -109,13 +109,13 @@ async def test_agent_script_served_unauthenticated_when_mounted(client):
 
 
 @pytest.mark.asyncio
-async def test_agent_script_404_when_mount_missing(client):
+async def test_agent_script_404_when_mount_missing(client, tmp_path):
     """A plain image run without the docker-compose bind mount must get a
     clean 404 (feature-gated), never an unhandled 500 (jarvis_core convention)."""
-    with patch("app.routers.nodes._AGENT_SCRIPT_PATH") as mock_path:
-        mock_path.read_text.side_effect = FileNotFoundError("no such file")
+    with patch("app.routers.nodes._AGENT_SCRIPT_DIR", tmp_path / "missing-mount"):
         resp = await client.get("/api/v1/nodes/agent-script")
     assert resp.status_code == 404
+    assert "scripts/node-agent" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

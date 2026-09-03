@@ -61,7 +61,7 @@ from app.services.agent_runtime_switch import (
     probe_runtime_model_info,
 )
 from app.services import host_memory_prep
-from app.services.host_resolver import resolve_host_for_runtime
+from app.services.host_resolver import resolve_host_for_runtime, ssh_capable
 from app.services.runtime_grace import (
     SOURCE_AUTO_RECOVERY,
     clear_switching,
@@ -418,7 +418,7 @@ class RuntimeWatcher:
             logger.debug("probe-guard: host resolution failed for %s: %s",
                          runtime.slug, exc)
             return False
-        if host is None or host.kind != "ssh":
+        if not ssh_capable(host):
             return False
 
         from app.services.runtime_manager import _ssh_run  # noqa: SLF001
@@ -536,7 +536,7 @@ class RuntimeWatcher:
             return False
 
         host = await resolve_host_for_runtime(session, runtime)
-        if host is None or host.kind != "ssh":
+        if not ssh_capable(host):
             return False
 
         from app.services.runtime_manager import _ssh_run  # noqa: SLF001
@@ -803,7 +803,7 @@ class RuntimeWatcher:
             logger.debug("auto-recovery: host resolution failed for %s: %s",
                          runtime.slug, exc)
             return
-        if host is None or host.kind != "ssh":
+        if not ssh_capable(host):
             return
 
         sibling = await self._active_exclusive_sibling(session, redis, runtime)

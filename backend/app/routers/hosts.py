@@ -28,14 +28,49 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import require_user, require_role, Role
 from app.database import get_session
-from app.models.host import Host
+from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
 from app.services import host_bootstrap, host_onboarding, host_probe, launch_template, runtime_manager
-from app.services.host_resolver import ResolvedHost, resolved_host_from_row
+from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 _ALLOWED_KINDS = ("ssh", "flask_wol", "local", "agent")
+
+# Rezept-Umschalter P2: Geräterolle — nur head/worker oder leer. Die Rolle ist
+# eine Vorbelegung für den Duo-Dialog, keine Regel: sie sperrt nirgends etwas,
+# darum wird sie nur auf Tippfehler geprüft (models/host.normalise_role, dieselbe
+# Regel im Pairing-Code und im Passwort-Onboarding).
+_validate_role = normalise_role
+
+
+def _validate_fabric_ip(v: str | None) -> str | None:
+    """Trimmen, leer → None. P3 schreibt das Feld unverändert als
+    HEAD_IP/WORKER_IP in die .env des Rezepts — ein Leerzeichen dort wäre
+    eine tote Adresse (Review 03.09.2026)."""
+    if v is None:
+        return None
+    v = v.strip()
+    return v or None
+
+
+def _require_ssh_capable(host: Host, what: str) -> None:
+    """400 mit Satz, wenn MC die Box nicht per SSH erreichen kann.
+
+    Seit P2 zählt nicht mehr ``kind == "ssh"``, sondern ob eine SSH-Adresse
+    da ist (host_resolver.ssh_capable): eine per Pairing angelegte
+    ``kind=agent``-Box mit ``ssh_host`` ist genauso erreichbar.
+    """
+    if ssh_capable(host):
+        return
+    if host.kind == "agent":
+        detail = (
+            f"Box '{host.slug}' hat keinen SSH-Zugang — {what} braucht eine SSH-Adresse. "
+            "Unter Geräte-Einstellungen 'SSH-Adresse' eintragen."
+        )
+    else:
+        detail = f"Host '{host.slug}' hat kind='{host.kind}' — {what} gibt es nur für SSH-Hosts."
+    raise HTTPException(status_code=400, detail=detail)
 
 
 def _validate_kind(v: str) -> str:
@@ -72,11 +107,25 @@ class HostCreate(BaseModel):
     notes: str | None = None
     enabled: bool = True
     ui_order: int = 0
+    # Rezept-Umschalter P2: Geräterolle (head | worker | null) und die
+    # Verbund-Adresse, unter der sich die Boxen gegenseitig erreichen.
+    role: str | None = Field(default=None, max_length=16)
+    fabric_ip: str | None = Field(default=None, max_length=128)
 
     @field_validator("kind")
     @classmethod
     def _kind_create(cls, v: str) -> str:
         return _validate_kind(v)
+
+    @field_validator("role")
+    @classmethod
+    def _role_create(cls, v: str | None) -> str | None:
+        return _validate_role(v)
+
+    @field_validator("fabric_ip")
+    @classmethod
+    def _fabric_ip_create(cls, v: str | None) -> str | None:
+        return _validate_fabric_ip(v)
 
     @field_validator("control_url")
     @classmethod
@@ -98,11 +147,23 @@ class HostUpdate(BaseModel):
     notes: str | None = None
     enabled: bool | None = None
     ui_order: int | None = None
+    role: str | None = Field(default=None, max_length=16)
+    fabric_ip: str | None = Field(default=None, max_length=128)
 
     @field_validator("kind")
     @classmethod
     def _kind_update(cls, v: str | None) -> str | None:
         return _validate_kind(v) if v is not None else None
+
+    @field_validator("role")
+    @classmethod
+    def _role_update(cls, v: str | None) -> str | None:
+        return _validate_role(v)
+
+    @field_validator("fabric_ip")
+    @classmethod
+    def _fabric_ip_update(cls, v: str | None) -> str | None:
+        return _validate_fabric_ip(v)
 
     @field_validator("control_url")
     @classmethod
@@ -218,11 +279,7 @@ async def probe_host(
         host = await _get_host(session, body.host_id)
         if not host:
             raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' nicht gefunden")
-        if host.kind != "ssh":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Host '{host.slug}' hat kind='{host.kind}' — Probe gibt es nur für SSH-Hosts.",
-            )
+        _require_ssh_capable(host, "Probe")
         resolved = resolved_host_from_row(host)
     else:
         if not body.ssh_host:
@@ -279,6 +336,13 @@ class HostOnboardBody(BaseModel):
     display_name: str | None = Field(default=None, max_length=128)
     bootstrap: bool = True
     install_agent: bool = True
+    # P2: Geräterolle darf auf jedem Weg mitkommen, der eine Box anlegt.
+    role: str | None = Field(default=None, max_length=16)
+
+    @field_validator("role")
+    @classmethod
+    def _role_onboard(cls, v: str | None) -> str | None:
+        return normalise_role(v)
 
 
 @router.post("/onboard", status_code=202)
@@ -319,6 +383,7 @@ async def onboard_host(
         display_name=body.display_name,
         bootstrap=body.bootstrap,
         install_agent=body.install_agent,
+        role=body.role,
     )
     try:
         job_id = await host_onboarding.start_onboarding(params)
@@ -442,11 +507,7 @@ async def bootstrap_host(
     host = await _get_host(session, host_id)
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
-    if host.kind != "ssh":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Host '{host.slug}' hat kind='{host.kind}' — Bootstrap gibt es nur für SSH-Hosts.",
-        )
+    _require_ssh_capable(host, "Bootstrap")
 
     current = await host_bootstrap.get_status(str(host.id))
     if current and current.get("status") == host_bootstrap.STATUS_RUNNING:
