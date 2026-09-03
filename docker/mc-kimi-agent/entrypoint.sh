@@ -22,7 +22,7 @@ KIMI_HOME="${KIMI_CODE_HOME:-/home/agent/.kimi-code}"
 BOOTSTRAP_URL="${MC_API_URL:-http://backend:8000}/api/v1/internal/bootstrap?agent_name=${AGENT_NAME}"
 BOOTSTRAP_RESPONSE=""
 for _attempt in 1 2 3 4 5 6; do
-    BOOTSTRAP_RESPONSE=$(curl -sf --max-time 5 "$BOOTSTRAP_URL" 2>/dev/null) && break
+    BOOTSTRAP_RESPONSE=$(curl -sf --max-time 5 -H "Authorization: Bearer ${INTERNAL_BOOTSTRAP_SECRET:-}" "$BOOTSTRAP_URL" 2>/dev/null) && break
     echo "[entrypoint] Bootstrap Versuch $_attempt fehlgeschlagen, retry in 3s..."
     sleep 3
 done

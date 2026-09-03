@@ -32,6 +32,16 @@
         reverse_proxy livekit:7880
     }
 
+    # Internal-only endpoints (agent bootstrap: hands out Vault secrets in
+    # plaintext) must never be reachable from outside the Docker network,
+    # regardless of MC_BIND_ADDRESS. Must come BEFORE the generic /api/*
+    # handle below — Caddy takes the first matching handle, not the most
+    # specific one (PR #404 Rex review: this exception did not exist before,
+    # despite internal.py's docstring claiming it did).
+    handle /api/v1/internal/* {
+        respond 403
+    }
+
     # API + Health → backend
     handle /api/* {
         reverse_proxy backend:8000
