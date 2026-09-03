@@ -1095,6 +1095,14 @@ async def effort_capabilities(agent) -> dict[str, object]:
             "effort": current if current in levels else None,
             "effortShared": False,
             "effortReason": None,
+            # Die Statuszeile ist JUENGER als jedes usage-Ereignis: ein
+            # Shift+Tab-Wechsel steht sofort dort, waehrend das letzte usage
+            # noch die Stufe des vorigen Zugs traegt (Live-Befund 03.09.2026:
+            # Chip zeigte nach Neuladen "high", Pane sagte "low"). Das
+            # Frontend laesst darum bei ``effortLive`` diesen Wert ueber
+            # ``usage.effort`` gewinnen — bei Claude Code bleibt es beim
+            # settings.json-Standard, der nur fuer NEUE Sessions gilt.
+            "effortLive": True,
         }
 
     if kind == "docker":

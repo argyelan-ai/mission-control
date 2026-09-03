@@ -330,8 +330,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * Standard aus settings.json. `usageAt` haelt fest, welches usage bei der
    * Bestaetigung galt; kommt ein anderes, ist es das juengere Wissen. */
   const confirmedIsNewest = confirmedEffort != null && confirmedEffort.usageAt === usage;
+  /* Ausnahme `effortLive` (omp): capabilities.effort kommt aus der Statuszeile
+   * der LAUFENDEN Session und ist juenger als das letzte usage, das nach einem
+   * Shift+Tab-Wechsel noch den vorigen Zug beschreibt. */
   const currentEffort =
-    (confirmedIsNewest ? confirmedEffort!.level : null) ?? usage?.effort ?? capabilities?.effort ?? null;
+    (confirmedIsNewest ? confirmedEffort!.level : null) ??
+    (capabilities?.effortLive ? capabilities.effort : null) ??
+    usage?.effort ??
+    capabilities?.effort ??
+    null;
 
   /* Der Agent im Composer kann wechseln, ohne dass die Komponente neu
    * montiert wird — eine Bestaetigung fuer den vorigen Agenten darf dann
