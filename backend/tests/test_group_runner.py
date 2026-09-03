@@ -183,11 +183,69 @@ async def test_brief_carries_length_budget(async_session: AsyncSession):
     msgs = await _thread_messages(async_session, group.thread_id)
     brief = next(m for m in msgs if m.seq == round_row.brief_seq)
 
-    assert "2–4 Sätzen" in brief.body                  # Längenbudget
+    assert "Kein Absatz länger als 2 Sätze" in brief.body   # Längenbudget
     assert "Ergebnis-Dokument" in brief.body           # wohin die Substanz gehört
     assert "Quellen-URL" in brief.body                 # Quellen-Pflicht bleibt
     # Der Brief selbst bleibt knapp — er ist der grösste Kostenhebel je Runde.
-    assert len(brief.body) < 1400
+    assert len(brief.body) < 1700
+
+
+@pytest.mark.asyncio
+async def test_brief_invites_tables_and_shows_multiline_send(async_session: AsyncSession):
+    """Marks Wunsch 02.09.2026: die Agenten sollen Tabellen machen können.
+    Der Raum rendert GFM (Tabellen, Listen) und klappt Beiträge zu — eine
+    kompakte Tabelle stört also niemanden mehr. Der Brief muss das SAGEN, und
+    zeigen, wie man mehrzeilig sendet (Heredoc über stdin), sonst zerreisst
+    die Shell-Quotierung die Pipes."""
+    group, *_ = await _make_running_group(async_session)
+    await _tick(async_session)
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    brief = next(m for m in msgs if m.seq == round_row.brief_seq)
+
+    assert "Tabelle" in brief.body
+    assert f"mc msg --thread {group.thread_id} - <<'EOF'" in brief.body
+
+
+@pytest.mark.asyncio
+async def test_brief_demands_structured_format(async_session: AsyncSession):
+    """Marks Wunsch 02.09.2026 (zweiter Teil): nicht im Fliesstext, sondern
+    mit Tabellen, Bulletpoints und sauber formatierten Nachrichten. Der Raum
+    klappt Beiträge zu und zeigt nur die erste Zeile — die MUSS die
+    Kernaussage sein. Danach Stichpunkte mit festem Gerüst, keine Absätze."""
+    group, *_ = await _make_running_group(async_session)
+    await _tick(async_session)
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    brief = next(m for m in msgs if m.seq == round_row.brief_seq)
+
+    assert "Kernaussage" in brief.body        # Zeile 1 = Vorschau-Zeile
+    assert "Fliesstext" in brief.body         # explizit verboten
+    assert "- Grund:" in brief.body           # Bullet-Gerüst
+    assert "- Quelle:" in brief.body
+    # Das Beispiel im Brief lebt das Gerüst vor: Kernsatz, Bullets, Tabelle.
+    body = brief.body
+    pos = body.index("Position in einem Satz.")
+    assert pos < body.index("- Grund:", pos) < body.index("| Option |", pos)
+
+
+@pytest.mark.asyncio
+async def test_lead_prompt_demands_structured_verdict(async_session: AsyncSession):
+    """Auch das Urteil des Leads: Marker + Kernaussage in Zeile 1, dann
+    Stichpunkte — der Lead-Beitrag steht offen im Raum und prägt den Ton."""
+    group, alpha, beta, gamma = await _make_running_group(async_session)
+    await _tick(async_session)
+    await _agent_says(async_session, group, beta, "A. Quelle: https://x.org")
+    await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
+    await _tick(async_session)
+
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
+    assert "Kernaussage" in lead_prompt.body
+    assert "Fliesstext" in lead_prompt.body
+    assert "- Konsens:" in lead_prompt.body
+    assert "- Dissens:" in lead_prompt.body
 
 
 @pytest.mark.asyncio
@@ -264,11 +322,13 @@ async def test_speaker_timeout_default_is_generous(async_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_lead_prompt_shortens_contributions(async_session: AsyncSession):
     """Kontext als Delta statt Volltext: 2000 Zeichen je Beitrag waren der
-    Hauptgrund für 30 000+ Token pro Runde. Deckel jetzt 400."""
+    Hauptgrund für 30 000+ Token pro Runde. Deckel 400 → 1200 (02.09.2026),
+    damit eine kompakte Vergleichstabelle den Lead ganz erreicht — ein
+    Aufsatz aber weiterhin nicht."""
     group, alpha, beta, gamma = await _make_running_group(async_session)
     await _tick(async_session)
     await _agent_says(
-        async_session, group, beta, "A" * 1000 + " Quelle: https://x.org"
+        async_session, group, beta, "A" * 2000 + " Quelle: https://x.org"
     )
     await _agent_says(async_session, group, gamma, "B. Quelle: https://y.org")
     await _tick(async_session)
@@ -276,8 +336,8 @@ async def test_lead_prompt_shortens_contributions(async_session: AsyncSession):
     round_row = await _current_round(async_session, group)
     msgs = await _thread_messages(async_session, group.thread_id)
     lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
-    assert "A" * 350 in lead_prompt.body      # der Anfang steht drin
-    assert "A" * 500 not in lead_prompt.body  # aber gekürzt
+    assert "A" * 1100 in lead_prompt.body      # der Anfang steht drin
+    assert "A" * 1300 not in lead_prompt.body  # aber gekürzt
 
 
 @pytest.mark.asyncio
@@ -296,6 +356,7 @@ async def test_lead_prompt_demands_short_verdict_and_long_document(
     msgs = await _thread_messages(async_session, group.thread_id)
     lead_prompt = next(m for m in msgs if m.seq == round_row.lead_prompt_seq)
     assert "zwei bis drei Sätze" in lead_prompt.body
+    assert "Tabelle" in lead_prompt.body        # ein Vergleich darf tabellarisch sein
     assert "mc group-doc" in lead_prompt.body   # die Substanz geht ins Dokument
     # Reihenfolge bleibt: erst Urteil, dann Dokument.
     assert "Zuerst das Urteil, dann das Dokument" in lead_prompt.body

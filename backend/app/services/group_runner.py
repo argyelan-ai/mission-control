@@ -78,7 +78,10 @@ _STALE_PREFIX = "NICHTS NEUES"
 # Vorher 2000 Zeichen je Beitrag — das waren 30 000–41 800 Token pro Runde
 # (Live-Messung 22.08.). Der Chat trägt die Meinungsbildung, die Substanz
 # steht im Ergebnis-Dokument; zum Weiterdenken reicht der Kern.
-_CONTRIB_LIMIT = 400   # Beitrag eines Sprechers im Lead-Auftrag
+# 400 → 1200 (02.09.2026): seit Beiträge Tabellen tragen dürfen, muss eine
+# kompakte Vergleichstabelle (6 Zeilen ≈ 300–600 Zeichen) den Lead GANZ
+# erreichen — abgeschnitten wäre sie wertlos. Ein Aufsatz passt weiterhin nicht.
+_CONTRIB_LIMIT = 1200  # Beitrag eines Sprechers im Lead-Auftrag
 _HEADER_LIMIT = 300    # Vorrunden-Delta und Operator-Einwürfe im Brief
 
 
@@ -282,9 +285,33 @@ class GroupRunnerService:
             f"mit GENAU EINEM Beitrag: `mc msg --thread {group.thread_id} \"…\"`.",
             # Der grösste Hebel gegen Textwände: ohne Längenbudget schreibt ein
             # so beauftragter Agent einen Aufsatz — er tut genau, was dasteht.
-            "- **Antworte in 2–4 Sätzen**: deine Position, ein Grund, eine "
-            "Quelle als Link. Ausführliche Belege gehören ins Ergebnis-Dokument, "
-            "nicht in den Raum.",
+            # Zweiter Hebel (Marks Wunsch 02.09.2026): kein Fliesstext, sondern
+            # ein festes Gerüst. Der Raum klappt Beiträge zu und zeigt nur die
+            # erste Zeile — sie MUSS die Kernaussage tragen, sonst liest der
+            # Operator eine Vorschau wie "Hallo zusammen, ich habe mir …".
+            "- **Format (Pflicht, kein Fliesstext):** Zeile 1 = deine Kernaussage "
+            "in EINEM Satz (der Raum zeigt zugeklappt nur diese Zeile). Danach "
+            "Stichpunkte statt Absätze: `- Grund: …`, `- Einwand/Risiko: …`, "
+            "`- Quelle: https://…`. Kein Absatz länger als 2 Sätze. Ausführliche "
+            "Belege gehören ins Ergebnis-Dokument, nicht in den Raum.",
+            # Der Raum rendert Markdown (GFM) — eine kompakte Tabelle ist für
+            # Vergleiche das bessere Format als drei Sätze mit Zahlen.
+            # Mehrzeilig NUR per Heredoc über stdin: in einem "…"-Argument
+            # zerreisst die Shell die Pipes und Zeilenumbrüche.
+            "- Zahlen und Vergleiche als Tabelle (max. ~6 Zeilen), nie als Satz "
+            "mit fünf Kommas. Mehrzeilig senden per Heredoc:",
+            "```",
+            f"mc msg --thread {group.thread_id} - <<'EOF'",
+            "Position in einem Satz.",
+            "- Grund: …",
+            "- Einwand/Risiko: …",
+            "- Quelle: https://…",
+            "",
+            "| Option | Wert | Quelle |",
+            "|---|---|---|",
+            "| A | … | https://… |",
+            "EOF",
+            "```",
             "- Quellen-Pflicht bleibt: eine Behauptung ohne Quellen-URL ist kein "
             "Beitrag — der nackte Link genügt, kein Zitat-Block.",
             "- Antworte NICHT auf andere Mitglieder per @-Mention — die Engine "
@@ -488,13 +515,18 @@ class GroupRunnerService:
             ),
             f"1. Antworte mit `mc msg --thread {group.thread_id}` und beginne dein "
             "Urteil mit GENAU EINEM Marker:",
-            "   - `ZIEL ERREICHT: <dein Verdikt in zwei bis drei Sätzen>`",
-            "   - `WEITER: <was noch offen ist>`",
+            "   - `ZIEL ERREICHT: <Kernaussage in einem Satz>`",
+            "   - `WEITER: <was noch offen ist, ein Satz>`",
             "   - `FRAGE AN OPERATOR: <deine Frage>`",
             # Der Synthese-Beitrag war die grösste einzelne Textwand im Raum
             # (bis 4900 Zeichen). Die Substanz ist im Dokument nicht verloren,
-            # sondern dort erst am richtigen Platz.
-            "**Halte den Chat-Beitrag kurz: Marker + zwei bis drei Sätze.** Die "
+            # sondern dort erst am richtigen Platz. Der Lead-Beitrag steht als
+            # einziger OFFEN im Raum — er prägt den Ton: Gerüst statt Fliesstext.
+            "**Format (Pflicht, kein Fliesstext):** Zeile 1 = Marker + Kernaussage, "
+            "darunter Stichpunkte `- Konsens: …`, `- Dissens: …`, `- Nächster Schritt: …` "
+            "(je ein Satz, insgesamt zwei bis drei Sätze). Ein Vergleich darf als "
+            "kompakte Tabelle darunter stehen, wenn sie das Urteil trägt "
+            f"(mehrzeilig per `mc msg --thread {group.thread_id} - <<'EOF' … EOF`). Die "
             "ausführliche Synthese mit Quellen und Dissens gehört ins "
             "Ergebnis-Dokument, nicht in den Raum.",
             "Eine Antwort ohne Marker wertet die Runde als gescheitert.",

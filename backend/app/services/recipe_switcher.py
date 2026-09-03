@@ -62,6 +62,17 @@ REASON_RUNNING = "läuft bereits auf dieser Box"
 REASON_NO_SSH = "Box hat keinen SSH-Zugang — MC kann hier nichts starten"
 REASON_DUO_PHASE3 = "Zweibox-Start kommt in Phase 3"
 REASON_RECIPE_HIDDEN = "Rezept ist ausgeblendet"
+#: Eine Host-Engine (``ssh_process``) startet MC über SSH und findet sie danach
+#: nur an einem Namen wieder: Prozessname (``pgrep -x``) oder Containername
+#: (``docker inspect``) — viele Rezept-Startskripte starten in Wahrheit einen
+#: Container. Ohne einen der beiden wäre der Start ein Einbahnweg: gestartet,
+#: aber nie wieder sichtbar oder stoppbar. Darum grau in der Liste und 422
+#: beim Start, BEVOR eine Instanz angelegt oder eine Box freigeräumt wird
+#: (Vorfall 03.09.2026: die Verdrängung lief vor der Prüfung).
+REASON_NO_HANDLE = (
+    "Kein Prozess-/Container-Name hinterlegt — MC könnte starten, "
+    "aber nicht sehen oder stoppen"
+)
 
 
 def reason_port_busy(port: int, blocker_name: str) -> str:
@@ -79,6 +90,10 @@ DEFAULT_PORT = 8000
 COMMAND_DRIVEN_RUNTIME_TYPES: frozenset[str] = frozenset(
     {"vllm_docker", "llamacpp_docker", "ssh_process"}
 )
+
+#: Die Engine, die keinen Docker-Daemon hinter sich hat — ihr Lebenszyklus
+#: hängt an einem Namen auf der Box (siehe REASON_NO_HANDLE).
+SSH_PROCESS_ENGINE = "ssh_process"
 
 
 class RecipeStartError(Exception):
@@ -146,6 +161,23 @@ def has_launch_command(recipe: LocalRecipe) -> bool:
     return recipe.engine in launch_template.DEFAULT_TEMPLATES
 
 
+def recipe_needs_handle(recipe: LocalRecipe) -> bool:
+    """Gilt die Handle-Pflicht für dieses Rezept?
+
+    Nur für Host-Engines. Docker-Engines bekommen ihren Containernamen aus
+    dem Template bzw. werden über das Label ``mc.runtime.slug`` wiedergefunden
+    — für die wäre ein Pflichtfeld eine Lüge.
+    """
+    return recipe.engine == SSH_PROCESS_ENGINE
+
+
+def recipe_handle(recipe: LocalRecipe, instance: Runtime | None) -> str:
+    """Der hinterlegte Prozess- oder Containername, Instanz schlägt Katalog."""
+    if instance is not None:
+        return (instance.process_name or instance.container_name or "").strip()
+    return (recipe.process_name or "").strip()
+
+
 def host_can_ssh(host: Host) -> bool:
     """MC startet über SSH — ohne SSH-Zugang kann es hier nichts starten."""
     return host.kind == "ssh" and bool((host.ssh_host or "").strip())
@@ -159,12 +191,52 @@ def recipe_claims_box(recipe: LocalRecipe, instance: Runtime | None) -> bool:
     return recipe.min_vram_gb is not None
 
 
-async def probe_running(runtime: Runtime) -> bool:
-    """Ist die Instanz gesund? Live-HTTP-Probe am Head, nie geraten.
+async def probe_running(
+    runtime: Runtime, *, host: ResolvedHost | None = None
+) -> bool:
+    """Ist DIESE Instanz gesund? Nie geraten — und für Host-Engines nie am
+    Port allein entschieden.
+
+    WARUM DER PORT ALLEIN NICHT REICHT (Live-Befund 03.09.2026)
+    -----------------------------------------------------------
+    Mehrere Rezepte einer Box benutzen denselben Port. Antwortet dort eine
+    FREMDE Engine, hielt die Liste eine Instanz für laufend, die nie
+    gestartet war — und zeigte für dieses Rezept „läuft bereits auf dieser
+    Box", während in Wahrheit ein anderes Modell lief. Für Host-Engines
+    (``ssh_process``) gilt darum dieselbe UND-Regel wie in
+    ``runtime_manager.get_runtime_state``: das Handle muss auf der Box laufen
+    UND der Port antworten. Ohne hinterlegtes Handle ist die Antwort immer
+    „läuft nicht" — es gibt schlicht keinen Beleg, und ein unbelegtes „läuft"
+    ist genau die Lüge, die den Umschalter blockiert hat.
+
+    Docker-Rezepte behalten vorerst die reine HTTP-Probe — dort ist derselbe
+    Port-Trugschluss denkbar, aber nicht beobachtet; der Umbau wäre eine
+    docker-inspect-Runde je Instanz und gehört in einen eigenen Schritt.
 
     Eigene Funktion, damit Tests sie ersetzen können, ohne ins Netz zu gehen.
     """
     from app.services import runtime_manager
+
+    if runtime.runtime_type == SSH_PROCESS_ENGINE:
+        handle = (runtime.process_name or runtime.container_name or "").strip()
+        if not handle:
+            return False
+        if host is None:
+            # Ohne aufgelöste Box würde die SSH-Prüfung auf den Standard-Host
+            # der Einstellungen zurückfallen und die falsche Kiste befragen.
+            # Lieber kein Beleg als ein Beleg von woanders.
+            return False
+        try:
+            alive = await runtime_manager._ssh_handle_running(  # noqa: SLF001 — dieselbe Prüfung wie get_runtime_state
+                runtime.to_registry_dict(), host=host
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Box nicht erreichbar = kein Beleg. „Läuft" behaupten wir nur,
+            # wenn wir es gesehen haben.
+            logger.debug("probe: Handle-Prüfung fehlgeschlagen für %s: %s", runtime.slug, exc)
+            return False
+        if not alive:
+            return False
 
     return await runtime_manager._probe_http(  # noqa: SLF001 — dieselbe Probe wie get_runtime_state
         runtime.endpoint, runtime.healthcheck_path or "/v1/models"
@@ -212,8 +284,17 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
     """
     recipes, hosts, runtimes, members = await _load_fleet(session)
     host_slug_by_id = {h.id: h.slug for h in hosts}
+    # Host-Engines werden über SSH nachgeprüft; dafür braucht die Probe die
+    # Box der Instanz. Nur Boxen mit SSH-Zugang — bei allen anderen bleibt es
+    # bei „kein Beleg".
+    resolved_by_host_id = {
+        h.id: resolved_host_from_row(h) for h in hosts if host_can_ssh(h)
+    }
 
-    probes = await asyncio.gather(*(probe_running(rt) for rt in runtimes), return_exceptions=True)
+    probes = await asyncio.gather(
+        *(probe_running(rt, host=resolved_by_host_id.get(rt.host_id)) for rt in runtimes),
+        return_exceptions=True,
+    )
     running_by_id: dict[uuid.UUID, bool] = {
         rt.id: (result is True) for rt, result in zip(runtimes, probes)
     }
@@ -283,7 +364,10 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
         command_ok = bool((instance.launch_command or "").strip()) if instance else has_launch_command(recipe)
         if not command_ok:
             reason = REASON_NO_COMMAND
-        startable = command_ok and fit != "none"
+        handle_ok = not recipe_needs_handle(recipe) or bool(recipe_handle(recipe, instance))
+        if command_ok and not handle_ok:
+            reason = REASON_NO_HANDLE
+        startable = command_ok and handle_ok and fit != "none"
         if running:
             # Ein laufendes Rezept ist gesetzt, nicht startbar — der Grund sagt
             # das, statt „keine freie Box" oder „Port belegt" zu behaupten.
@@ -453,6 +537,18 @@ async def start_recipe_on_host(
         )
     ).all()
     instance = next((rt for rt in runtimes if recipe_matches_runtime(recipe, rt)), None)
+
+    # VOR dem Anlegen der Instanz: eine Host-Engine ohne Handle darf gar nicht
+    # erst in den Startpfad. Sonst legt MC eine Zeile an, räumt die Box frei
+    # (Verdrängung) — und scheitert danach an einer Bedingung, die von Anfang
+    # an feststand (Vorfall 03.09.2026).
+    command_ok = (
+        bool((instance.launch_command or "").strip())
+        if instance is not None
+        else has_launch_command(recipe)
+    )
+    if command_ok and recipe_needs_handle(recipe) and not recipe_handle(recipe, instance):
+        raise RecipeStartError(422, REASON_NO_HANDLE)
 
     created = False
     if instance is None:

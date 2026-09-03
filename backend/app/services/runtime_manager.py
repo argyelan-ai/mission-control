@@ -1163,6 +1163,74 @@ def _process_name(runtime: dict) -> str:
     return (runtime.get("process_name") or "").strip()
 
 
+def _container_name_of(runtime: dict) -> str:
+    return (runtime.get("container_name") or "").strip()
+
+
+def _ssh_handle_names(runtime: dict) -> list[str]:
+    """Alle hinterlegten Handles dieser Runtime, ohne Dubletten.
+
+    ``process_name`` ist das GENERISCHE Handle: der Katalog trägt dort den
+    Prozess- ODER den Containernamen ein (Entscheid 03.09.2026, siehe
+    ``models/local_recipe.py``). Es gibt darum keine Rangfolge zwischen den
+    Feldern — jeder gesetzte Name wird auf beide Arten geprüft.
+    """
+    names: list[str] = []
+    for value in (_process_name(runtime), _container_name_of(runtime)):
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
+def _ssh_handle_label(runtime: dict) -> str:
+    """Der Name für Meldungen — der erste hinterlegte Handle."""
+    names = _ssh_handle_names(runtime)
+    return names[0] if names else ""
+
+
+#: Sätze für die Vorbedingungen eines ssh_process-Starts. Als Konstanten,
+#: weil Vorprüfung (start_runtime), Netz (_start_runtime_impl) und die
+#: Rezeptliste denselben Wortlaut zeigen müssen.
+SSH_PROCESS_NO_COMMAND = "Keine launch_command konfiguriert."
+SSH_PROCESS_NO_HANDLE = (
+    "Kein process_name/container_name konfiguriert — MC könnte den Prozess "
+    "starten, danach aber weder sehen noch stoppen."
+)
+#: Derselbe Mangel aus Sicht der Zustandsabfrage: ohne Handle ist die Runtime
+#: nicht „gestoppt" und schon gar nicht „bereit", sondern unbeobachtbar.
+SSH_PROCESS_UNCONFIGURED = (
+    "Kein process_name/container_name konfiguriert — MC kann diese Runtime "
+    "nicht beobachten. Der antwortende Port beweist nichts: auf demselben "
+    "Port kann eine andere Engine laufen."
+)
+
+
+def ssh_process_start_preflight(runtime: dict) -> str | None:
+    """Kann dieser ssh_process-Start überhaupt gelingen? Satz oder None.
+
+    WARUM DAS VOR ALLEM ANDEREN LAUFEN MUSS (Vorfall 03.09.2026)
+    -------------------------------------------------------------
+    Ein Rezept-Start hat damals in dieser Reihenfolge gearbeitet: erst die
+    Box freigeräumt (``ensure_exclusive_host`` stoppte das laufende Modell),
+    dann den Seitenspeicher geleert — und ERST DANN im Start-Zweig gemerkt,
+    dass die Runtime gar kein Handle hat, mit dem MC den neuen Prozess
+    später wiederfinden könnte. Ergebnis: das laufende Modell war tot, das
+    neue nie gestartet. Eine Vorbedingung, die man erst nach der Verdrängung
+    prüft, ist keine Vorbedingung.
+
+    Geprüft wird nur, was ohne Netzzugriff feststeht — ein Startbefehl und
+    ein Handle (Prozess- ODER Containername). Alles, was die Box selbst
+    beantworten muss (läuft schon? Speicher frei?), bleibt im Start-Zweig.
+    """
+    if runtime.get("runtime_type") != SSH_PROCESS_TYPE:
+        return None
+    if not (runtime.get("launch_command") or "").strip():
+        return SSH_PROCESS_NO_COMMAND
+    if not _ssh_handle_label(runtime):
+        return SSH_PROCESS_NO_HANDLE
+    return None
+
+
 def _ssh_probe_path(endpoint: str, healthcheck_path: str | None) -> str:
     """Health path that doesn't double the ``/v1`` segment.
 
@@ -1177,22 +1245,56 @@ def _ssh_probe_path(endpoint: str, healthcheck_path: str | None) -> str:
     return path
 
 
-async def _ssh_process_running(
-    process_name: str, *, host: ResolvedHost | None = None
-) -> bool:
-    """True when ``pgrep -x <name>`` finds a process. Raises on SSH failure.
+def _handle_alive_command(name: str) -> str:
+    """Ein Befehl, der beide Arten prüft, wie ein Handle „läuft" heissen kann.
 
-    Raising (instead of returning False) is deliberate: "SSH is broken" and
-    "the engine is not running" are different answers, and the callers that
-    care — state detection, stop verification — must not confuse the two.
+    ``-x`` (exakter Name) statt eines Musters: ein Muster träfe den
+    ``bash -lc "… start.sh"``-Wrapper, den SSH-Befehl selbst und jeden Editor
+    mit dem Namen im Fenstertitel — und ``pkill`` auf diese Menge ist, wie man
+    die Shell eines Kollegen abschiesst.
+
+    Exit 0 = läuft, 1 = läuft nicht. Ein SSH-Fehler kommt als Ausnahme durch:
+    „wir erreichen die Box nicht" ist eine andere Antwort als „es läuft nicht",
+    und wer sie verwechselt, hält eine volle Box für frei.
     """
-    _, _, exit_code = await _ssh_run(
-        f"pgrep -x {shlex_quote(process_name)} > /dev/null 2>&1", host=host, timeout=20
+    q = shlex_quote(name)
+    return (
+        f"pgrep -x {q} >/dev/null 2>&1 || "
+        f"[ \"$(docker inspect -f '{{{{.State.Running}}}}' {q} 2>/dev/null)\" = true ]"
     )
-    # pgrep: 0 = found, 1 = nothing matched, >1 = usage/error.
-    if exit_code > 1:
-        raise RuntimeError(f"pgrep schlug fehl (exit {exit_code})")
-    return exit_code == 0
+
+
+async def _ssh_handle_running(
+    runtime: dict, *, host: ResolvedHost | None = None
+) -> bool:
+    """Läuft diese ssh_process-Runtime? Jeder Handle, beide Prüfarten.
+
+    Nicht jede „Host-Engine" ist ein nackter Prozess: viele Rezept-Startskripte
+    starten in Wahrheit einen Container und legen sich schlafen. Für die ist
+    ``pgrep -x`` blind — der Beobachtungspunkt ist dann der Containername.
+    Weil ``process_name`` das generische Handle-Feld ist, wird jeder
+    hinterlegte Name auf BEIDE Arten geprüft, statt aus dem Feldnamen auf die
+    Art zu schliessen. Ein Treffer genügt.
+
+    Der Watcher kennt diesen Rückfall schon
+    (``runtime_watcher._served_answer_is_own``); hier bekommt der Lebenszyklus
+    dieselbe Regel, damit Start, Zustand und Stopp nicht auf verschiedene
+    Wahrheiten schauen.
+    """
+    names = _ssh_handle_names(runtime)
+    if not names:
+        raise RuntimeError(SSH_PROCESS_NO_HANDLE)
+    for name in names:
+        _, _, exit_code = await _ssh_run(
+            _handle_alive_command(name), host=host, timeout=20
+        )
+        if exit_code == 0:
+            return True
+        if exit_code > 1:
+            # 0/1 sind die einzigen erwarteten Ausgänge; alles darüber ist ein
+            # Fehler der Prüfung selbst und darf nicht als „läuft nicht" gelten.
+            raise RuntimeError(f"Handle-Prüfung schlug fehl (exit {exit_code})")
+    return False
 
 
 # Module-level so tests can shrink them (mirrors _verify_poll_interval).
@@ -1201,7 +1303,7 @@ _ssh_process_stop_timeout = 20.0
 
 
 async def verify_ssh_process_started(
-    process_name: str,
+    runtime: dict,
     *,
     host: ResolvedHost | None = None,
     timeout: float | None = None,
@@ -1223,10 +1325,13 @@ async def verify_ssh_process_started(
     )
     while True:
         try:
-            if await _ssh_process_running(process_name, host=host):
+            if await _ssh_handle_running(runtime, host=host):
                 return True
         except Exception as exc:  # noqa: BLE001
-            logger.warning("verify-ssh-process: pgrep raised for %s: %s", process_name, exc)
+            logger.warning(
+                "verify-ssh-process: Handle-Prüfung schlug fehl für %s: %s",
+                _ssh_handle_label(runtime), exc,
+            )
         if asyncio.get_running_loop().time() >= deadline:
             return False
         if _verify_poll_interval:
@@ -1234,7 +1339,7 @@ async def verify_ssh_process_started(
 
 
 async def verify_ssh_process_stopped(
-    process_name: str,
+    runtime: dict,
     *,
     host: ResolvedHost | None = None,
     timeout: float | None = None,
@@ -1252,9 +1357,12 @@ async def verify_ssh_process_stopped(
     )
     while True:
         try:
-            still_running = await _ssh_process_running(process_name, host=host)
+            still_running = await _ssh_handle_running(runtime, host=host)
         except Exception as exc:  # noqa: BLE001 — unknown counts as still busy
-            logger.warning("verify-ssh-stopped: pgrep raised for %s: %s", process_name, exc)
+            logger.warning(
+                "verify-ssh-stopped: Handle-Prüfung schlug fehl für %s: %s",
+                _ssh_handle_label(runtime), exc,
+            )
             still_running = True
         if not still_running:
             return True
@@ -1265,29 +1373,37 @@ async def verify_ssh_process_stopped(
 
 
 async def stop_ssh_process(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Stop an ssh_process runtime: its own ``stop_command``, else ``pkill -x``.
+    """Stop an ssh_process runtime: its own ``stop_command``, else der Rückfall
+    über beide Handle-Arten.
 
     The engine's script wins when it exists because it usually knows more than
     we do (ds4's stop.sh waits for the port to be released, which pkill does
-    not). Either way the result is verified against the process table — a
-    stop_command that exits 0 without stopping anything is a lie we can catch.
+    not). Either way the result is verified against the box — a stop_command
+    that exits 0 without stopping anything is a lie we can catch.
     """
-    process_name = _process_name(runtime)
+    handle = _ssh_handle_label(runtime)
     stop_command = (runtime.get("stop_command") or "").strip()
-    if not process_name and not stop_command:
+    if not handle and not stop_command:
         return {
             "ok": False,
             "message": (
-                "ssh_process-Runtime ohne process_name und ohne stop_command — "
-                "MC hat keinen Weg, den Prozess zu beenden."
+                "ssh_process-Runtime ohne process_name/container_name und ohne "
+                "stop_command — MC hat keinen Weg, den Prozess zu beenden."
             ),
         }
 
     if stop_command:
         command = f"bash -lc {shlex_quote(stop_command)}"
     else:
-        # pkill exits 1 when nothing matched — already stopped, not an error.
-        command = f"pkill -x {shlex_quote(process_name)} || true"
+        # Spiegelbild der Prüfung: derselbe Name kann ein Prozess ODER ein
+        # Container sein, also beendet der Rückfall beides. `pkill` und
+        # `docker stop` melden 1, wenn nichts passte — schon gestoppt ist kein
+        # Fehler, darum jeweils `|| true`.
+        command = "; ".join(
+            f"pkill -x {shlex_quote(name)} || true; "
+            f"docker stop {shlex_quote(name)} >/dev/null 2>&1 || true"
+            for name in _ssh_handle_names(runtime)
+        )
     try:
         _, stderr, exit_code = await _ssh_run(command, host=host, timeout=180)
     except Exception as exc:  # noqa: BLE001
@@ -1300,26 +1416,27 @@ async def stop_ssh_process(runtime: dict, *, host: ResolvedHost | None = None) -
             "message": stderr or f"stop_command schlug fehl (exit {exit_code})",
         }
 
-    if not process_name:
+    if not handle:
         # Nothing to verify against — the stop_command is all we have.
         return {
             "ok": True,
             "message": f"{runtime.get('display_name') or runtime.get('id')}: stop_command ausgeführt.",
         }
 
-    gone = await verify_ssh_process_stopped(process_name, host=host)
+    gone = await verify_ssh_process_stopped(runtime, host=host)
     if not gone:
+        check = _handle_alive_command(handle)
         return {
             "ok": False,
             "message": (
-                f"Prozess '{process_name}' läuft nach dem Stop-Befehl weiter — "
-                f"Speicher ist nicht frei. Auf der Box prüfen: pgrep -x {process_name}"
+                f"Prozess '{handle}' läuft nach dem Stop-Befehl weiter — "
+                f"Speicher ist nicht frei. Auf der Box prüfen: {check}"
             ),
         }
     await runtime_grace.clear_switching(_grace_slug(runtime))
     return {
         "ok": True,
-        "message": f"{runtime.get('display_name') or runtime.get('id')} gestoppt (Prozess '{process_name}' beendet).",
+        "message": f"{runtime.get('display_name') or runtime.get('id')} gestoppt (Prozess '{handle}' beendet).",
     }
 
 
@@ -1462,14 +1579,28 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
         return {"state": "stopped", "http_reachable": False, "container_status": container_status}
 
     if runtime_type == SSH_PROCESS_TYPE:
-        process_name = _process_name(runtime)
-        if not process_name:
-            # Without a process name there is nothing to observe. "unknown" is
-            # the honest answer — "stopped" would invite a start that then
-            # cannot be stopped again.
-            return {"state": "unknown", "http_reachable": False, "container_status": "no_process_name"}
+        # Der Zustand einer Host-Engine ist eine UND-Verknüpfung: das Handle
+        # muss auf der Box laufen UND der Port antworten. Der Port allein
+        # beweist nichts — mehrere Rezepte teilen sich denselben Port, und am
+        # 03.09.2026 galt deshalb eine nie gestartete Instanz als „läuft",
+        # weil eine fremde Engine auf Port und Adresse antwortete.
+        if not _ssh_handle_label(runtime):
+            # Ohne Handle (Prozess- ODER Containername) gibt es nichts zu
+            # beobachten. "unknown" ist die ehrliche Antwort — "stopped" würde
+            # zu einem Start einladen, der danach nicht mehr stoppbar wäre,
+            # und "ready" wäre eine Behauptung ohne jeden Beleg. Es wird
+            # bewusst NICHT geprobt: das Ergebnis dürfte nichts ändern.
+            return {
+                "state": "unknown",
+                "http_reachable": False,
+                "container_status": "unconfigured",
+                # Eigener Schlüssel, weil der Zustand in den Routern in die
+                # Runtime-Antwort hineingemischt wird ({**rt, **state}) — ein
+                # generisches "message" würde dort mit allem kollidieren.
+                "state_message": SSH_PROCESS_UNCONFIGURED,
+            }
         try:
-            running = await _ssh_process_running(process_name, host=host)
+            running = await _ssh_handle_running(runtime, host=host)
         except Exception as e:  # noqa: BLE001
             logger.warning("SSH fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"state": "unknown", "http_reachable": False, "container_status": "ssh_error"}
@@ -1718,8 +1849,10 @@ async def start_runtime(
 ) -> dict:
     """Starts a runtime (see :func:`_start_runtime_impl`).
 
-    Three things wrap the actual start:
+    Four things wrap the actual start:
 
+    * **Vorbedingungen** (03.09.2026) — was ohne Netzzugriff feststeht
+      (:func:`ssh_process_start_preflight`) wird VOR jedem Eingriff geprüft.
     * **Exclusivity** (PR6) — an ``exclusive_memory`` runtime frees its box
       first (:func:`ensure_exclusive_host`) and refuses to start if it can't.
       Runtimes without the flag are untouched, so vLLM behaves exactly as
@@ -1745,6 +1878,16 @@ async def start_runtime(
     runtime_type = runtime.get("runtime_type")
     is_docker = runtime_type in DOCKER_ENGINE_TYPES
     is_ssh_process = runtime_type == SSH_PROCESS_TYPE
+
+    # Vorbedingungen ZUERST — vor Verdrängung, Grace-Marker und Speicher-Prep.
+    # Am 03.09.2026 lief es umgekehrt: die Verdrängung beendete das laufende
+    # Modell, der Cache-Dropper räumte den Speicher, und erst der Start-Zweig
+    # stellte fest, dass die Runtime kein Handle hat. Ein Fehler, der VOR dem
+    # ersten Eingriff feststeht, muss auch vor ihm gemeldet werden: hier wurde
+    # noch nichts angefasst.
+    blocker = ssh_process_start_preflight(runtime)
+    if blocker:
+        return {"ok": False, "message": blocker}
 
     if (is_docker or is_ssh_process) and runtime.get("exclusive_memory"):
         exclusive = await ensure_exclusive_host(runtime, host=host)
@@ -1998,18 +2141,14 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
     if runtime_type == SSH_PROCESS_TYPE:
-        process_name = _process_name(runtime)
+        # Netz, nicht Erstprüfung: dieselben Vorbedingungen laufen schon in
+        # start_runtime VOR der Verdrängung (Vorfall 03.09.2026). Hier bleiben
+        # sie, weil _start_runtime_impl auch direkt aufgerufen wird.
+        blocker = ssh_process_start_preflight(runtime)
+        if blocker:
+            return {"ok": False, "message": blocker}
+        handle = _ssh_handle_label(runtime)
         launch_command = (runtime.get("launch_command") or "").strip()
-        if not launch_command:
-            return {"ok": False, "message": "Keine launch_command konfiguriert."}
-        if not process_name:
-            return {
-                "ok": False,
-                "message": (
-                    "Kein process_name konfiguriert — MC könnte den Prozess starten, "
-                    "danach aber weder sehen noch stoppen."
-                ),
-            }
         try:
             # Idempotent: the engines this serves ship idempotent start scripts
             # (ds4's start.sh exits early when the port already answers), but
@@ -2044,28 +2183,28 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                     "message": stderr or f"launch_command schlug fehl (exit {exit_code}). Logs: {log_path}",
                 }
 
-            appeared = await verify_ssh_process_started(process_name, host=host)
+            appeared = await verify_ssh_process_started(runtime, host=host)
             if not appeared:
                 logger.error(
                     "Runtime %s: launch exited 0 but no '%s' process appeared. Log: %s",
-                    runtime["id"], process_name, log_path,
+                    runtime["id"], handle, log_path,
                 )
                 return {
                     "ok": False,
                     "message": (
                         f"{runtime['display_name']} gestartet, aber kein Prozess "
-                        f"'{process_name}' erschienen (wahrscheinlich Crash beim Start "
+                        f"'{handle}' erschienen (wahrscheinlich Crash beim Start "
                         f"oder Engine nicht installiert). Logs auf der Box: {log_path}"
                     ),
                 }
             logger.info(
                 "ssh_process gestartet: %s (Prozess %s, log %s)",
-                runtime["id"], process_name, log_path,
+                runtime["id"], handle, log_path,
             )
             return {
                 "ok": True,
                 "message": (
-                    f"{runtime['display_name']} gestartet (Prozess '{process_name}' läuft). "
+                    f"{runtime['display_name']} gestartet (Prozess '{handle}' läuft). "
                     f"Gewichte laden dauert je nach Grösse mehrere Minuten. Logs: {log_path}"
                 ),
             }
