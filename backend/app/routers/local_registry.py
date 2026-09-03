@@ -31,7 +31,7 @@ from app.models.host import Host
 from app.models.local_recipe import LocalRecipe
 from app.models.runtime import Runtime
 from app.services import launch_template, local_registry, recipe_install, recipe_switcher
-from app.services.host_resolver import resolved_host_from_row
+from app.services.host_resolver import resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/local-registry", tags=["local-registry"])
 
@@ -66,6 +66,11 @@ class LocalRecipeOut(BaseModel):
     # und Standard-Port (darf fehlen).
     topology: dict
     port: int | None
+    # P2: sagt das Rezept selbst, ob es die Box exklusiv braucht (null =
+    # Heuristik über min_vram_gb). ``exclusive_effective`` ist das fertig
+    # gerechnete Ergebnis, damit die Oberfläche nichts nachrechnet.
+    exclusive: bool | None
+    exclusive_effective: bool
     tags: list[str]
     notes: str | None
     enabled: bool
@@ -129,6 +134,8 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
         env=dict(recipe.env) if recipe.env else None,
         topology={"nodes": recipe_switcher.recipe_nodes(recipe.topology)},
         port=recipe.port,
+        exclusive=recipe.exclusive,
+        exclusive_effective=recipe_switcher.recipe_is_exclusive(recipe),
         tags=list(recipe.tags or []),
         notes=recipe.notes,
         enabled=recipe.enabled,
@@ -228,7 +235,16 @@ async def _get_ssh_host(session: AsyncSession, host_id: str) -> Host:
             host = None
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
-    if host.kind != "ssh":
+    # P2: nicht mehr ``kind == "ssh"``, sondern „hat eine SSH-Adresse" — eine
+    # per Pairing angelegte Box mit ssh_host ist genauso installierbar.
+    if not ssh_capable(host):
+        if host.kind == "agent":
+            # 409 wie der Umschalter (REASON_NO_SSH): die Box ist da, ihr
+            # fehlt nur die Adresse — ein Zustand, den der Betreiber beheben kann.
+            raise HTTPException(
+                status_code=409,
+                detail=f"Box '{host.slug}' hat keinen SSH-Zugang — Installation braucht eine SSH-Adresse.",
+            )
         raise HTTPException(
             status_code=400,
             detail=f"Host '{host.slug}' hat kind='{host.kind}' — Installation gibt es nur für SSH-Hosts.",

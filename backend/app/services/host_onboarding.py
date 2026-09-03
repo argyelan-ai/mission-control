@@ -33,7 +33,7 @@ live log via services/job_log.JobLog):
      password prompt there either (sudo -n only) — a `needs_sudo` outcome
      becomes this job's terminal status too, with the same instructions.
   6. Optional: install the node-agent over the SSH session we already have —
-     write scripts/mc-node-agent.py (this instance's own copy, same file
+     write scripts/node-agent/mc-node-agent.py (this instance's own copy, same file
      GET /api/v1/nodes/agent-script serves), mint a pairing code internally
      (routers/nodes.py.mint_pairing_code — no HTTP round-trip to ourselves),
      then `--pair CODE --install` via systemd if passwordless sudo works,
@@ -177,6 +177,8 @@ class OnboardParams:
     display_name: str | None = None
     bootstrap: bool = True
     install_agent: bool = True
+    # P2: Geräterolle (head | worker | None) — landet in hosts.role.
+    role: str | None = None
 
 
 class _Run:
@@ -404,6 +406,10 @@ class _Run:
                     existing_host.kind = "ssh"
                     if p.display_name:
                         existing_host.display_name = p.display_name
+                    # P2: nur überschreiben, wenn ausdrücklich eine Rolle mitkam —
+                    # ein Re-Onboarding ohne Angabe lässt die alte Rolle stehen.
+                    if p.role is not None:
+                        existing_host.role = p.role
                     host = existing_host
                 else:
                     host = Host(
@@ -413,6 +419,7 @@ class _Run:
                         ssh_host=p.address,
                         ssh_user=p.username,
                         ssh_credential_id=credential.id,
+                        role=p.role,
                     )
                 session.add(host)
                 try:

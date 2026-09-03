@@ -117,6 +117,9 @@ class RecipeSpec(BaseModel):
     # optional — fehlend heisst Solo ohne Port-Angabe, wie jede alte Zeile.
     topology: dict | None = None
     port: int | None = PydanticField(default=None, ge=1, le=65535)
+    # P2: belegt das Rezept die Box exklusiv? Fehlend = das Rezept sagt
+    # nichts, dann gilt die Heuristik (min_vram_gb gesetzt).
+    exclusive: bool | None = None
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
     enabled: bool = True
@@ -317,6 +320,7 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         env=spec.env_map or None,
         topology=spec.topology_map,
         port=spec.port,
+        exclusive=spec.exclusive,
         tags=list(spec.tags or []),
         notes=spec.notes,
         enabled=spec.enabled,
@@ -357,6 +361,7 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("env", spec.env_map or None),
         ("topology", spec.topology_map),
         ("port", spec.port),
+        ("exclusive", spec.exclusive),
         ("tags", list(spec.tags or [])),
         ("notes", spec.notes),
     ):

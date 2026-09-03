@@ -28,10 +28,13 @@ bewusst immer eine leere Liste (Platzhalter für Phase 3 — Befehlsausführung)
 """
 import hashlib
 import hmac
+import os
 import secrets
+import socket
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Security, status
 from fastapi.responses import PlainTextResponse
@@ -42,10 +45,11 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Role, require_role, require_user
-from app.config import node_agent_base_url
+from app.config import node_agent_base_url, node_agent_base_urls, settings
 from app.database import get_session
-from app.models.host import Host
+from app.models.host import Host, normalise_role
 from app.models.host_pairing_code import HostPairingCode
+from app.services import address_classify
 from app.services import device_state as device_state_service
 from app.utils import ensure_aware, slugify, utcnow
 
@@ -62,11 +66,18 @@ _HEARTBEAT_MIN_INTERVAL_S = 5  # rate guard — see heartbeat()
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CODE_LENGTH = 8
 
-# Where the docker-compose bind mount (./scripts/mc-node-agent.py ->
-# /app/scripts/mc-node-agent.py:ro) lands inside the backend container —
-# same "soft, feature-gated" convention as jarvis_core's /app/jarvis_core
-# mount (docker-compose.yml). See get_agent_script() below.
-_AGENT_SCRIPT_PATH = Path("/app/scripts/mc-node-agent.py")
+# Wo der docker-compose-Mount des Agenten-VERZEICHNISSES
+# (./scripts/node-agent -> /app/scripts/node-agent:ro) im Backend-Container
+# landet — dieselbe „weich, feature-gated"-Konvention wie jarvis_core.
+#
+# Warum ein Verzeichnis und nicht mehr die Einzeldatei (P2, 02.09.2026):
+# ein Einzeldatei-Bind-Mount hängt am Inode der Datei. `git checkout` im
+# Deploy-Worktree schreibt die Datei NEU (anderer Inode) — der Mount zeigte
+# danach ins Leere und GET /agent-script lieferte 404, obwohl die Datei auf
+# der Platte da war (belegt 01.09.2026). Ein Verzeichnis-Mount löst den
+# Namen bei jedem Zugriff neu auf und überlebt das. Siehe get_agent_script().
+_AGENT_SCRIPT_DIR = Path("/app/scripts/node-agent")
+_AGENT_SCRIPT_NAME = "mc-node-agent.py"
 
 _AGENT_INSTALL_PATH = "/usr/local/bin/mc-node-agent.py"
 
@@ -79,7 +90,7 @@ def _hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-def _build_install_command(code: str) -> str:
+def _build_install_command(code: str, base_url: str | None = None) -> str:
     """Downloads to a real path first (not `curl | python3 -`): --install's
     systemd unit needs a stable ExecStart path, which a stdin-piped script
     can never have (no __file__ to point at).
@@ -91,12 +102,125 @@ def _build_install_command(code: str) -> str:
     would hand out an agent that doesn't match the API it's talking to.
     Serving the running instance's own copy (GET /agent-script) makes the
     two inseparable by construction.
+
+    ``base_url`` = eine der Adressen aus :func:`install_base_urls`; ohne
+    Angabe die bisherige eine Adresse (Rückwärtskompatibilität).
     """
-    base_url = node_agent_base_url()
+    base_url = (base_url or node_agent_base_url()).rstrip("/")
     return (
         f"sudo curl -fsSL {base_url}/api/v1/nodes/agent-script -o {_AGENT_INSTALL_PATH} && "
         f"sudo python3 {_AGENT_INSTALL_PATH} --mc-url {base_url} --pair {code} --install"
     )
+
+
+# ── Install-Befehl mit Adress-Wahl (P2, Vertrag 02.09.2026) ─────────────────
+#
+# Eine Box im LAN erreicht MC nicht unter der Tailscale-Adresse (und
+# umgekehrt). Statt zu raten, bekommt die Oberfläche EINE Zeile je Adresse,
+# unter der dieses MC erreichbar ist, mit Beschriftung — der Betreiber
+# nimmt die, die zu seiner Box passt.
+#
+# Woher die Adressen kommen (Reihenfolge = Vertrauen):
+#   1. MC_NODE_AGENT_BASE_URL — seit P2 auch eine Liste, kommagetrennt.
+#   2. MC_BASE_URL (ausser localhost — das erreicht keine fremde Box).
+#   3. PUBLIC_HOST (wie phone_test_url: nackter Host, http:// davor).
+#   4. Netz-Schnittstellen des Backend-Prozesses — NUR ausserhalb von
+#      Docker. Im Container sind das Bridge-Adressen (172.x), unter denen
+#      keine Box MC erreicht; die LAN-Adresse des Mac kennt der Container
+#      nicht. Schema+Port kommen dann von MC_BASE_URL („so wie MC sonst
+#      erreicht wird, nur andere Adresse").
+# Beschriftung über address_classify: Tailscale-Netz → „Tailscale", private
+# IP → „LAN", öffentliche IP → „Öffentlich", DNS-Name → „Adresse". Sortiert
+# Tailscale → LAN → Adresse → Öffentlich, doppelte Adressen fallen weg.
+
+_LABELS = {
+    address_classify.CLASS_TAILSCALE: "Tailscale",
+    address_classify.CLASS_LAN: "LAN",
+    address_classify.CLASS_PUBLIC: "Öffentlich",
+    address_classify.CLASS_UNKNOWN: "Adresse",
+}
+_LABEL_RANK = {"Tailscale": 0, "LAN": 1, "Adresse": 2, "Öffentlich": 3}
+_LOCALHOST_NAMES = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
+
+
+def _running_in_container() -> bool:
+    return os.path.exists("/.dockerenv")
+
+
+def _interface_addresses() -> list[str]:
+    """Private IPv4-Adressen der eigenen Schnittstellen — best effort, nie
+    eine Exception. Im Container leer (siehe Block-Kommentar oben)."""
+    if _running_in_container():
+        return []
+    found: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addr = info[4][0]
+            if addr not in found and address_classify.is_lan(addr):
+                found.append(addr)
+    except (socket.gaierror, OSError):
+        return []
+    return found
+
+
+def _with_host(reference_url: str, host: str) -> str:
+    """Schema + Port der Referenz-URL, aber mit anderer Adresse."""
+    parts = urlsplit(reference_url if "://" in reference_url else f"http://{reference_url}")
+    port = f":{parts.port}" if parts.port else ""
+    return urlunsplit((parts.scheme or "http", f"{host}{port}", "", "", ""))
+
+
+def install_base_urls() -> list[dict[str, str]]:
+    """Alle Adressen, unter denen eine Box dieses MC erreichen kann —
+    ``[{"label": "Tailscale", "url": "https://…"}, {"label": "LAN", …}]``.
+
+    Immer mindestens ein Eintrag: fehlt jede Konfiguration, bleibt es die
+    bisherige eine Adresse (node_agent_base_url), damit ``install_command``
+    nie leer wird.
+    """
+    raw: list[str] = list(node_agent_base_urls())
+    if settings.mc_base_url:
+        raw.append(settings.mc_base_url)
+    if settings.public_host:
+        raw.append(f"http://{settings.public_host}")
+    reference = raw[0] if raw else node_agent_base_url()
+    raw.extend(_with_host(reference, addr) for addr in _interface_addresses())
+
+    # Dubletten nach ADRESSE, nicht nach URL: steht der Tailscale-Name schon
+    # als https:// in der Liste, darf PUBLIC_HOST ihn nicht nochmal als
+    # http:// nachreichen — auf einer https-only-Instanz wäre die Zeile tot.
+    # Die zuerst genannte (vertrauenswürdigere) Quelle gewinnt.
+    seen_hosts: set[str] = set()
+    entries: list[dict[str, str]] = []
+    for url in raw:
+        url = (url or "").strip().rstrip("/")
+        if not url:
+            continue
+        host = address_classify.extract_host(url).lower()
+        if host in _LOCALHOST_NAMES or host in seen_hosts:
+            continue
+        seen_hosts.add(host)
+        entries.append({"label": _LABELS[address_classify.classify_address(url)], "url": url})
+    if not entries:
+        entries.append({"label": "Adresse", "url": node_agent_base_url().rstrip("/")})
+
+    entries.sort(key=lambda e: _LABEL_RANK[e["label"]])
+    # Zwei LAN-Adressen → „LAN", „LAN 2": die Beschriftung bleibt eindeutig.
+    counts: dict[str, int] = {}
+    for entry in entries:
+        counts[entry["label"]] = counts.get(entry["label"], 0) + 1
+        if counts[entry["label"]] > 1:
+            entry["label"] = f"{entry['label']} {counts[entry['label']]}"
+    return entries
+
+
+def build_install_commands(code: str) -> list[dict[str, str]]:
+    """Eine Zeile je Adresse — ``[{"label", "url", "cmd"}]``. Die erste ist
+    zugleich das alte Feld ``install_command``."""
+    return [
+        {"label": e["label"], "url": e["url"], "cmd": _build_install_command(code, e["url"])}
+        for e in install_base_urls()
+    ]
 
 
 async def _unique_slug(session: AsyncSession, hostname: str) -> str:
@@ -154,13 +278,31 @@ async def _authenticate_node(
 class PairingCodeCreate(BaseModel):
     host_id: str | None = None
     display_name_hint: str | None = Field(default=None, max_length=128)
+    # P2: Rolle + SSH-Adresse vom Betreiber — am Code gespeichert, beim
+    # Einlösen auf den Host übertragen (Chef-Entscheid 02.09.2026).
+    role: str | None = Field(default=None, max_length=16)
+    ssh_host: str | None = Field(default=None, max_length=128)
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v: str | None) -> str | None:
+        return normalise_role(v)
+
+
+class InstallCommand(BaseModel):
+    label: str  # „Tailscale" | „LAN" | „Adresse" | „Öffentlich" (+ Nummer bei Dubletten)
+    url: str
+    cmd: str
 
 
 class PairingCodeResponse(BaseModel):
     code: str
     expires_at: datetime
     host_id: str | None
+    # Rückwärtskompatibel: die erste Zeile aus install_commands.
     install_command: str
+    # P2: eine Zeile je Adresse, unter der dieses MC erreichbar ist.
+    install_commands: list[InstallCommand]
 
 
 class PairRequest(BaseModel):
@@ -169,6 +311,12 @@ class PairRequest(BaseModel):
     os: str | None = Field(default=None, max_length=64)
     arch: str | None = Field(default=None, max_length=32)
     agent_version: str | None = Field(default=None, max_length=32)
+    # Bleibt nur aus Kompatibilität im Schema und wird NICHT übernommen
+    # (Review 03.09.2026): /pair ist unauthentifiziert — wer den Code hat,
+    # darf sich melden, aber nicht bestimmen, wohin MC später mit seinem
+    # SSH-Schlüssel verbindet und Befehle schickt. Die SSH-Adresse kommt
+    # ausschliesslich vom Betreiber (Pairing-Code, Formular, PATCH).
+    ssh_host: str | None = Field(default=None, max_length=128)
 
 
 class PairResponse(BaseModel):
@@ -199,7 +347,7 @@ class NodeTelemetry(BaseModel):
 
 
 class InventoryEntry(BaseModel):
-    """One scanned model directory (scripts/mc-node-agent.py's
+    """One scanned model directory (scripts/node-agent/mc-node-agent.py's
     scan_model_inventory). ``hf_repo_id`` is only set for HF-cache-style
     entries (models--Org--Name); local models-local dirs leave it null and
     rely on name/size matching in Phase 2 instead."""
@@ -285,6 +433,8 @@ async def mint_pairing_code(
     *,
     host_id: uuid.UUID | None = None,
     display_name_hint: str | None = None,
+    role: str | None = None,
+    ssh_host: str | None = None,
 ) -> HostPairingCode:
     """Core of POST /pairing-codes, factored out so services/host_onboarding.py
     (Phase 2 — the auto-onboarding job mints one internally to install the
@@ -303,6 +453,8 @@ async def mint_pairing_code(
         code=code,
         host_id=host_id,
         display_name_hint=display_name_hint,
+        role=role,
+        ssh_host=(ssh_host or "").strip() or None,
         expires_at=expires_at,
     )
     session.add(pairing)
@@ -310,14 +462,18 @@ async def mint_pairing_code(
     return pairing
 
 
-def read_agent_script_or_none() -> str | None:
-    """The running instance's own scripts/mc-node-agent.py, or None if the
-    docker-compose bind mount (_AGENT_SCRIPT_PATH) isn't present. Shared by
-    GET /agent-script and services/host_onboarding.py (which writes the file
-    straight over the SSH session it already has — no HTTP round-trip to
-    this same backend)."""
+def read_agent_script_or_none(script_dir: Path | None = None) -> str | None:
+    """Das eigene scripts/node-agent/mc-node-agent.py dieser Instanz, oder
+    None, wenn der docker-compose-Mount (_AGENT_SCRIPT_DIR) fehlt. Genutzt
+    von GET /agent-script und services/host_onboarding.py (schreibt die Datei
+    direkt über die SSH-Sitzung, die es schon hat — kein HTTP-Umweg).
+
+    Liest bei JEDEM Aufruf frisch aus dem Verzeichnis (kein Cache): nach
+    einem Deploy liegt dort die neue Datei, und genau die soll raus.
+    """
+    path = (script_dir or _AGENT_SCRIPT_DIR) / _AGENT_SCRIPT_NAME
     try:
-        return _AGENT_SCRIPT_PATH.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except OSError:
         return None
 
@@ -341,19 +497,27 @@ async def create_pairing_code(
         if not host:
             raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' nicht gefunden")
 
-    pairing = await mint_pairing_code(session, host_id=host_uuid, display_name_hint=body.display_name_hint)
+    pairing = await mint_pairing_code(
+        session,
+        host_id=host_uuid,
+        display_name_hint=body.display_name_hint,
+        role=body.role,
+        ssh_host=body.ssh_host,
+    )
 
+    commands = build_install_commands(pairing.code)
     return PairingCodeResponse(
         code=pairing.code,
         expires_at=pairing.expires_at,
         host_id=str(host_uuid) if host_uuid else None,
-        install_command=_build_install_command(pairing.code),
+        install_command=commands[0]["cmd"],
+        install_commands=[InstallCommand(**c) for c in commands],
     )
 
 
 @router.get("/agent-script", response_class=PlainTextResponse)
 async def get_agent_script():
-    """Serves THIS instance's own scripts/mc-node-agent.py (review finding
+    """Serves THIS instance's own scripts/node-agent/mc-node-agent.py (review finding
     #10, 30.08.2026) — see _build_install_command's docstring for why that
     matters. UNAUTHENTICATED on purpose: mission-control is a public repo
     (PUBLIC-UPSTREAM seit 03.07.2026), this file carries no secrets, and an
@@ -361,7 +525,7 @@ async def get_agent_script():
     yet — that's the whole point of the pairing flow this file kicks off.
 
     Requires the docker-compose bind mount (jarvis_core's convention, see
-    _AGENT_SCRIPT_PATH) — a plain image run without it is a clean 404, not
+    _AGENT_SCRIPT_DIR) — a plain image run without it is a clean 404, not
     a crash, same as jarvis_core's "feature stays off" fallback.
     """
     script = read_agent_script_or_none()
@@ -370,7 +534,7 @@ async def get_agent_script():
             status_code=404,
             detail=(
                 "mc-node-agent.py ist auf dieser Instanz nicht verfügbar — "
-                "fehlt der docker-compose-Mount ./scripts/mc-node-agent.py:/app/scripts/mc-node-agent.py:ro?"
+                "fehlt der docker-compose-Mount ./scripts/node-agent:/app/scripts/node-agent:ro?"
             ),
         )
     return PlainTextResponse(script)
@@ -432,6 +596,15 @@ async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
     host.agent_token_hash = _hash_token(token)
     if body.agent_version is not None:
         host.agent_version = body.agent_version
+    # P2: Rolle + SSH-Adresse NUR vom Pairing-Code (Betreiber beim Minten).
+    # Rangfolge: was am Host schon steht (Formular/Einstellungen) bleibt,
+    # sonst der Code. ``body.ssh_host`` (Geräte-Meldung) wird bewusst
+    # ignoriert — dieser Endpunkt ist unauthentifiziert, und die Adresse
+    # entscheidet, wohin MC später per SSH Befehle schickt (Review 03.09.).
+    if pairing.role is not None and host.role is None:
+        host.role = pairing.role
+    if pairing.ssh_host and not (host.ssh_host or "").strip():
+        host.ssh_host = pairing.ssh_host
     session.add(host)
 
     pairing.used_at = utcnow()

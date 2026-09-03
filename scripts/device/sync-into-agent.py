@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Schreibt die Steuer-Skripte aus scripts/device/ als Text in
-scripts/mc-node-agent.py (Block zwischen den CONTROL_FILES-Markern).
+scripts/node-agent/mc-node-agent.py (Block zwischen den CONTROL_FILES-Markern).
 
 Warum: der Agent ist EINE Datei (siehe dessen Moduldoc) und muss die
 Skripte selbst mitbringen. Die Dateien hier sind die lesbare Fassung;
@@ -10,7 +10,7 @@ Nach jeder Änderung an einem Skript also:  python3 scripts/device/sync-into-age
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-AGENT = HERE.parent / "mc-node-agent.py"
+AGENT = HERE.parent / "node-agent" / "mc-node-agent.py"
 BEGIN = "# >>> CONTROL_FILES"
 END = "# <<< CONTROL_FILES"
 

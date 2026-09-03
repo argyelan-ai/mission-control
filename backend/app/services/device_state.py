@@ -27,7 +27,7 @@ GPU_MODES = ("boost", "normal", "eco", "eco+")
 # Review M5 (02.09.2026): enger gezogen. 64 GB Reserve wäre auf einer
 # 128-GB-Box die halbe Maschine, 16 GB reicht für jede sinnvolle Einstellung
 # (im Feld: 5 GB). MTU unter 1500 hat keinen Nutzen, nur einen leisen
-# Leistungseinbruch im Verbund. IDENTISCH zu scripts/mc-node-agent.py
+# Leistungseinbruch im Verbund. IDENTISCH zu scripts/node-agent/mc-node-agent.py
 # (MIN_FREE_KBYTES_MIN/MAX, MTU_MIN/MAX) und zu den Wrappern in scripts/device/.
 MIN_FREE_KBYTES_RANGE = (65_536, 16_777_216)   # 64 MB … 16 GB, in KB
 MTU_RANGE = (1_500, 9_000)                      # Ethernet-Standard … Jumbo-Frames
