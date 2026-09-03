@@ -1486,7 +1486,7 @@ async def test_model_options_capabilities_falls_back_to_static_aliases_when_cata
     caps = await agent_chat_input.model_options_capabilities(agent)
 
     options = {o["command"]: o for o in caps["modelOptions"]}
-    assert set(options) == {"default", "opus", "sonnet", "haiku"}
+    assert set(options) == {"default", "opus", "sonnet", "haiku", "fable"}
     assert options["opus"] == {
         "command": "opus", "label": "Opus", "contextWindow": 1_000_000,
     }
@@ -1588,7 +1588,9 @@ async def test_model_options_capabilities_prefers_discovered_catalog_over_static
     caps = await agent_chat_input.model_options_capabilities(agent)
 
     commands = [o["command"] for o in caps["modelOptions"]]
-    assert commands == ["default", "opus", "Qwen/Qwen3.6-35B-A3B-FP8"]
+    # "fable" haengt hinten dran: der Picker verschweigt es (siehe
+    # _PICKER_HIDDEN_CLAUDE_ALIASES) — alles davor ist der Katalog verbatim.
+    assert commands == ["default", "opus", "Qwen/Qwen3.6-35B-A3B-FP8", "fable"]
     # Known aliases in the catalog still resolve a window via model_aliases.
     options = {o["command"]: o for o in caps["modelOptions"]}
     assert options["opus"]["contextWindow"] == 1_000_000
@@ -2611,3 +2613,62 @@ async def test_effort_capabilities_omp_without_status_line_cannot_switch(monkeyp
     assert caps["canSwitchEffort"] is False
     assert caps["effortReason"] == "no_pane"
     assert caps["effortLevels"] == ["off", "minimal", "low", "medium", "high", "xhigh"]
+
+
+async def test_model_options_capabilities_adds_fable_when_the_picker_hides_it(monkeypatch):
+    """Live 03.09.2026 (Claude Code 2.1.259, OAuth-Token im Container): der
+    /model-Picker listet Default/Sonnet/Opus/Haiku — Fable fehlt, obwohl
+    ``/model fable`` angenommen wird, persistiert ("model": "fable") und die
+    Statuszeile danach "Fable 5.1" zeigt; erst DANN taucht die Zeile im Picker
+    auf. Der Katalog spiegelt den Picker und verschwieg Fable darum jedem
+    Claude-Agenten. Die verbuergten, aber versteckten Aliasse werden angehaengt
+    — mit Fenster aus der Konfiguration, hinten, ohne Doppel."""
+    from app.services import agent_chat_input
+
+    catalog = [
+        {"command": "default", "label": "Default"},
+        {"command": "sonnet", "label": "Sonnet"},
+        {"command": "opus", "label": "Opus"},
+        {"command": "haiku", "label": "Haiku"},
+    ]
+    await _patch_model_options_deps(monkeypatch, agent_chat_input, catalog=catalog, observed={})
+
+    agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    caps = await agent_chat_input.model_options_capabilities(agent)
+
+    commands = [o["command"] for o in caps["modelOptions"]]
+    assert commands == ["default", "sonnet", "opus", "haiku", "fable"]
+    options = {o["command"]: o for o in caps["modelOptions"]}
+    assert options["fable"] == {
+        "command": "fable", "label": "Fable", "contextWindow": 1_000_000,
+    }
+
+
+async def test_model_options_capabilities_does_not_duplicate_fable_once_the_picker_lists_it(monkeypatch):
+    from app.services import agent_chat_input
+
+    catalog = [
+        {"command": "default", "label": "Default"},
+        {"command": "fable", "label": "Fable"},
+        {"command": "opus", "label": "Opus"},
+    ]
+    await _patch_model_options_deps(monkeypatch, agent_chat_input, catalog=catalog, observed={})
+
+    caps = await agent_chat_input.model_options_capabilities(
+        _StubAgent(slug="rex", agent_runtime="cli-bridge")
+    )
+    assert [o["command"] for o in caps["modelOptions"]] == ["default", "fable", "opus"]
+
+
+async def test_model_options_capabilities_never_adds_claude_aliases_to_a_foreign_harness(monkeypatch):
+    """openclaude validiert und persistiert sofort — ein geratenes Token
+    schaltet dort echte Agenten um. Die Ergaenzung gilt nur fuer Claude Code."""
+    from app.services import agent_chat_input
+
+    catalog = [{"command": "opus", "label": "Opus 4.1"}]
+    await _patch_model_options_deps(monkeypatch, agent_chat_input, catalog=catalog, observed={})
+
+    caps = await agent_chat_input.model_options_capabilities(
+        _StubAgent(slug="rex", agent_runtime="cli-bridge", harness="openclaude")
+    )
+    assert [o["command"] for o in caps["modelOptions"]] == ["opus"]

@@ -127,8 +127,11 @@ export function GroupMessage({
     const merged = alsoContains ?? [];
     // Die Trennlinie macht sichtbar, dass hier mehrere Auftraege stehen —
     // sonst laese sich der aufgeklappte Block als ein einziger langer Text.
+    // Als Markdown-Linie (---), weil der Block seit 03.09.2026 als Markdown
+    // gerendert wird: Runden-Brief und Synthese-Auftrag tragen Ueberschriften,
+    // Fettdruck und die Format-Tabelle — als Rohtext war das unlesbar.
     const fullBody = merged.length
-      ? [body, ...merged].join("\n\n────────\n\n")
+      ? [body, ...merged].join("\n\n---\n\n")
       : body;
     const long =
       merged.length > 0 || body.length > SYSTEM_COLLAPSE_CHARS || lines.length > 3;
@@ -191,17 +194,17 @@ export function GroupMessage({
           </button>
 
           <Unfold open={systemOpen}>
-            <pre
+            <div
               data-testid="group-system-body"
-              className="mt-1.5 ml-5 max-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-[1.7] p-2 rounded-sm scroll-quiet"
+              className="mt-1.5 ml-5 max-h-[360px] overflow-auto text-[13px] leading-[1.6] p-2.5 rounded-sm scroll-quiet [&>*:last-child]:mb-0"
               style={{
                 background: "var(--color-bg-elevated)",
                 color: C.textMuted,
                 border: `1px solid ${C.border}`,
               }}
             >
-              {fullBody}
-            </pre>
+              <MarkdownContent content={fullBody} compact />
+            </div>
           </Unfold>
         </div>
       </div>
