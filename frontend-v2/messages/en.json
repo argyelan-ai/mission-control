@@ -2236,7 +2236,10 @@
     },
     "devices": {
       "modeGroupLabel": "Choose GPU mode",
-      "showNumbers": "Numbers",
+      "details": "Details",
+      "chipLocked": "locked",
+      "chipError": "error",
+      "chipBoost": "risk",
       "modeEcoPlus": "eco+",
       "modeEco": "eco",
       "modeNormal": "normal",

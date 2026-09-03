@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SlotStage } from "../SlotStage";
 import { api } from "@/lib/api";
@@ -316,6 +317,50 @@ describe("SlotStage", () => {
     expect(screen.queryByText("No model of its own — telemetry for this box")).not.toBeInTheDocument();
   });
 
+  // Wunsch des Betreibers 03.09.2026: die Worker-Kachel zeigt das Modell,
+  // das über sie läuft — Zustand, Name und Kennung des Kopfes — nicht nur
+  // „Teil von". Die Zeile „Teil von" bleibt als Herkunft darunter.
+  it("shows the head runtime's model on the worker tile, with the membership line beneath", async () => {
+    // Echte Antwortform von GET /runtimes: { runtimes: [...] }
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [
+      makeRuntime({ id: "rt-1", slug: "glm", display_name: "GLM Verbund", model_identifier: "glm-5.3-flash-exl3", runtime_type: "vllm_docker", state: "ready" }),
+    ] } as never);
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = {
+      host, runtimes: [],
+      workerOf: { runtimeId: "rt-1", runtimeDisplayName: "GLM Verbund", headSlug: "alpha", role: "worker", nodeRank: 1 },
+    };
+
+    renderWithQuery(
+      <SlotStage
+        group={group}
+        live={{ glm: { reachable: true, latency_ms: 21, served_model: "GLM-5.3-Flash-EXL3" } as RuntimeLiveStatus }}
+        sizeGb={noopSizeGb}
+        onOpen={() => {}}
+      />,
+    );
+
+    const block = await screen.findByTestId("worker-now-block");
+    expect(within(block).getByText("GLM Verbund")).toBeInTheDocument();
+    expect(within(block).getByText(/GLM-5\.3-Flash-EXL3/)).toBeInTheDocument();
+    expect(within(block).getByText("SERVING")).toBeInTheDocument();
+    expect(within(block).getByText("Part of: GLM Verbund · head → alpha")).toBeInTheDocument();
+    // Kein eigener Umschalter — das ist die Sicht des Kopfes.
+    expect(screen.queryByText("+ Model")).not.toBeInTheDocument();
+  });
+
+  it("keeps the plain membership line when the head runtime cannot be resolved", async () => {
+    vi.spyOn(api.runtimes, "list").mockRejectedValue(new Error("offline"));
+    const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const group: HostGroup = {
+      host, runtimes: [],
+      workerOf: { runtimeId: "rt-1", runtimeDisplayName: "GLM Verbund", headSlug: "alpha", role: "worker", nodeRank: 1 },
+    };
+    renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+    expect(await screen.findByText("Part of: GLM Verbund · head → alpha")).toBeInTheDocument();
+    expect(screen.queryByTestId("worker-now-block")).toBeNull();
+  });
+
   it("falls back to the generic worker hint when workerOf is absent", async () => {
     const host = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
     const group: HostGroup = { host, runtimes: [] };
@@ -349,7 +394,10 @@ describe("SlotStage", () => {
     // Die Referenzwerte sind als solche markiert (HONESTY RULE) — die echten
     // Live-Werte stehen daneben in der Telemetrie-Spalte.
     expect(screen.getByTestId("compact-mode-boost")).toHaveTextContent("≈60 W");
-    expect(screen.getByText(/^Measured: /)).toBeInTheDocument();
+    // Standardmässig zu — der Erklärsatz kommt erst mit „Details".
+    expect(screen.queryByText(/^Measured: /)).toBeNull();
+    await userEvent.click(screen.getByTestId("device-toggle-detail"));
+    expect(await screen.findByText(/^Measured: /)).toBeInTheDocument();
     expect(screen.getByText("55 °C")).toBeInTheDocument();
   });
 
