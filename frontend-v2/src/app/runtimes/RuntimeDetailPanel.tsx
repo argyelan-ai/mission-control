@@ -598,7 +598,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           {/* Dieselbe Liste, dieselbe Quelle wie in der Gerätekachel —
               kein zweiter Datenweg (Vertrag 02.09.2026). */}
           {caps.recipeSwitcher && runtime.host && (
-            <HostRecipeSwitcher hostId={runtime.host.id} compact hideWhenEmpty />
+            <HostRecipeSwitcher hostId={runtime.host.id} hostName={runtime.host.slug} compact hideWhenEmpty />
           )}
           {caps.contextSettings && (
             <button

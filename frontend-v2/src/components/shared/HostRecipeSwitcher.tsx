@@ -91,13 +91,33 @@ export function humanApiError(err: Error): string {
 const MENU_WIDTH = 380;
 const MENU_MARGIN = 8;
 
+/**
+ * Duo-Start (P3): das Rezept läuft über zwei Boxen. Welche die zweite ist,
+ * entscheidet der Operator in der Bestätigungszeile — nicht das Backend
+ * heimlich. Drei Fälle, alle aus echten Feldern:
+ *   - mehrere Kandidaten → Auswahlfeld
+ *   - genau einer        → sein Name als Text (nichts zu wählen)
+ *   - keiner             → Start gesperrt, mit Grund als Satz
+ * Fehlt dem Rezept die Umgebungs-Zuordnung (`env_ready:false`), ist der Start
+ * ebenfalls gesperrt — MC könnte die .env auf dem Kopf nicht schreiben.
+ */
+export function duoStartBlocker(recipe: HostRecipe): "env" | "no-worker" | null {
+  if (recipe.topology.nodes === 1) return null;
+  if (recipe.env_ready === false) return "env";
+  if (recipe.candidate_workers.length === 0) return "no-worker";
+  return null;
+}
+
 export function HostRecipeSwitcher({
   hostId,
+  hostName = null,
   servingName = null,
   compact = false,
   hideWhenEmpty = false,
 }: {
   hostId: string;
+  /** Name dieser Box — die Erfolgsmeldung eines Duo-Starts nennt beide Boxen. */
+  hostName?: string | null;
   /** Name dessen, was die Box gerade fährt — als Fallback-Beschriftung, wenn
    *  kein Rezept `running` meldet (z.B. ein Modell ausserhalb des Katalogs). */
   servingName?: string | null;
@@ -111,7 +131,9 @@ export function HostRecipeSwitcher({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<HostRecipe | null>(null);
-  const [starting, setStarting] = useState<{ slug: string; name: string; since: number } | null>(null);
+  // Gewählte Worker-Box für das Rezept in der Bestätigungszeile (nur Duo).
+  const [workerHostId, setWorkerHostId] = useState<string | null>(null);
+  const [starting, setStarting] = useState<{ slug: string; name: string; since: number; worker: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -132,15 +154,33 @@ export function HostRecipeSwitcher({
   }, [recipes, starting]);
 
   const startMutation = useMutation({
-    mutationFn: (recipe: HostRecipe) => api.hosts.startRecipe(hostId, recipe.slug),
-    onMutate: (recipe) => {
+    // Solo bleibt ein Aufruf ohne Körper — nur der Duo-Start schickt die
+    // gewählte Worker-Box mit ({"worker_host_id"}, Vertrag P3).
+    mutationFn: ({ recipe, worker }: { recipe: HostRecipe; worker: string | null }) =>
+      worker
+        ? api.hosts.startRecipe(hostId, recipe.slug, { worker_host_id: worker })
+        : api.hosts.startRecipe(hostId, recipe.slug),
+    onMutate: ({ recipe, worker }) => {
       setError(null);
       setConfirm(null);
-      setStarting({ slug: recipe.slug, name: recipe.display_name, since: Date.now() });
+      setStarting({
+        slug: recipe.slug,
+        name: recipe.display_name,
+        since: Date.now(),
+        worker: recipe.candidate_workers.find((w) => w.host_id === worker)?.slug ?? null,
+      });
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      // Das Backend nennt die Box, die es wirklich genommen hat — die zeigen
+      // wir, nicht unsere Vorauswahl (sie könnte abweichen).
+      if (result?.worker_slug) {
+        setStarting((s) => (s ? { ...s, worker: result.worker_slug as string } : s));
+      }
       queryClient.invalidateQueries({ queryKey: hostRecipesKey(hostId) });
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+      // Ein Duo-Start ändert die Belegung der Flotte (runtime_hosts) und den
+      // gemerkten Autostart-Slug am Kopf — beides hängt an ["hosts"].
+      queryClient.invalidateQueries({ queryKey: ["hosts"] });
     },
     onError: (err: Error) => {
       setStarting(null);
@@ -211,7 +251,19 @@ export function HostRecipeSwitcher({
   const select = (recipe: HostRecipe) => {
     setOpen(false);
     setConfirm(recipe);
+    // Vorauswahl = erster Kandidat (dieselbe Reihenfolge, die das Backend
+    // ohne Angabe nehmen würde) — der Operator kann sie ändern.
+    setWorkerHostId(recipe.topology.nodes === 1 ? null : recipe.candidate_workers[0]?.host_id ?? null);
   };
+
+  const blocker = confirm ? duoStartBlocker(confirm) : null;
+  const startingLabel = starting
+    ? starting.worker
+      ? hostName
+        ? t("startingDuo", { name: starting.name, head: hostName, worker: starting.worker })
+        : t("startingDuoNoHead", { name: starting.name, worker: starting.worker })
+      : t("starting", { name: starting.name })
+    : "";
 
   return (
     // display:contents — Auslöser, Bestätigung und Fehlerzeile sind direkte
@@ -251,11 +303,45 @@ export function HostRecipeSwitcher({
           data-testid="recipe-confirm"
         >
           <span className="font-mono truncate max-w-[260px]" style={{ color: C.textPrimary }}>{confirm.display_name}</span>
+
+          {/* Zweibox-Rezept: welche Box ist die zweite? Steht IN der Zeile,
+              direkt vor „Starten" — die Wahl gehört zur Entscheidung, nicht
+              in ein eigenes Fenster. */}
+          {confirm.topology.nodes !== 1 && blocker == null && (
+            <span className="flex items-center gap-1.5" data-testid="recipe-worker-choice">
+              <span className="text-[10px] uppercase" style={{ color: C.textMuted, letterSpacing: "0.08em" }}>
+                {t("workerLabel")}
+              </span>
+              {confirm.candidate_workers.length === 1 ? (
+                <span className="font-mono text-[11px]" style={{ color: C.textSecondary }} data-testid="recipe-worker-single">
+                  {confirm.candidate_workers[0].slug}
+                </span>
+              ) : (
+                <select
+                  aria-label={t("workerLabel")}
+                  data-testid="recipe-worker-select"
+                  value={workerHostId ?? ""}
+                  onChange={(e) => setWorkerHostId(e.target.value)}
+                  className="rounded-sm px-1.5 py-0.5 font-mono text-[11px] cursor-pointer"
+                  style={{ background: C.bgElevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
+                >
+                  {confirm.candidate_workers.map((w) => (
+                    <option key={w.host_id} value={w.host_id}>{w.slug}</option>
+                  ))}
+                </select>
+              )}
+            </span>
+          )}
+
           <button
             type="button"
-            onClick={() => startMutation.mutate(confirm)}
-            className="rounded-sm px-2 py-1 text-[10px] font-semibold cursor-pointer"
-            style={{ background: C.accent, color: C.bgDeep }}
+            disabled={blocker != null}
+            onClick={() => startMutation.mutate({ recipe: confirm, worker: confirm.topology.nodes === 1 ? null : workerHostId })}
+            className="rounded-sm px-2 py-1 text-[10px] font-semibold cursor-pointer disabled:cursor-not-allowed"
+            style={{
+              background: blocker != null ? C.bgHover : C.accent,
+              color: blocker != null ? C.textDim : C.bgDeep,
+            }}
             data-testid="recipe-confirm-start"
           >
             {t("confirmStart")}
@@ -268,8 +354,23 @@ export function HostRecipeSwitcher({
           >
             {t("cancel")}
           </button>
-          {servingName && (
+          {servingName && blocker == null && (
             <span className="text-[10px]" style={{ color: C.textMuted }}>{t("evictHint", { name: servingName })}</span>
+          )}
+
+          {/* Gesperrt: der Grund als ganzer Satz in der Zeile — wer den Knopf
+              grau sieht, soll nicht raten müssen, was fehlt. */}
+          {blocker != null && (
+            <span
+              className="text-[10px] w-full whitespace-normal"
+              style={{ color: STATUS_TEXT.warning }}
+              data-testid="recipe-worker-blocked"
+              data-blocker={blocker}
+            >
+              {blocker === "env"
+                ? confirm.reason ?? t("workerEnvMissing")
+                : confirm.reason ?? t("workerNone")}
+            </span>
           )}
         </div>
       )}
@@ -284,7 +385,7 @@ export function HostRecipeSwitcher({
           role="status"
         >
           <span aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse" style={{ background: STATUS.warning }} />
-          <span className="font-mono truncate max-w-[260px]">{t("starting", { name: starting?.name ?? "" })}</span>
+          <span className="font-mono truncate max-w-[420px]">{startingLabel}</span>
         </div>
       )}
 
