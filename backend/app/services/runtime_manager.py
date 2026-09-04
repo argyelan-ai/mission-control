@@ -2237,7 +2237,16 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                     # a mysteriously "unreachable" runtime minutes later.
                     # llama-server never matches "vllm serve", so llamacpp rows
                     # get the equivalent check on their own process name.
-                    if is_llamacpp:
+                    if multi_box:
+                        # Verbund: der Rezept-Container läuft erst Prüfungen und
+                        # Patches, der vllm-Prozess kommt Minuten später — und
+                        # der Worker auf der zweiten Box wartet derweil. Der
+                        # Container ist hier der Beweis; ob der Endpunkt kommt,
+                        # entscheidet die normale Probe (Live 04.09.2026, 23:20:
+                        # „kein vllm-serve-Prozess" bei einem gesunden Start).
+                        serving = "serving"
+                        process_label, likely_cause = ("verbund", "")
+                    elif is_llamacpp:
                         serving = await verify_llamacpp_process_started(
                             str(runtime_slug), host=host
                         )

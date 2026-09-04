@@ -514,9 +514,11 @@ async def test_multi_box_start_never_wakes_the_old_head_container():
 
     with patch.object(runtime_manager, "_ssh_run", _ssh), \
          patch.object(runtime_manager, "verify_spark_container_started", AsyncMock(return_value=True)) as verify, \
-         patch.object(runtime_manager, "verify_spark_vllm_process_started", AsyncMock(return_value="serving")) as proc:
+         patch.object(runtime_manager, "verify_spark_vllm_process_started", AsyncMock(return_value="absent")) as proc:
         result = await runtime_manager._start_runtime_impl(dict(_DUO_RUNTIME))
-    assert proc.await_args.kwargs["container_name"] == "duo-head"
+    # Verbund: der Container ist der Beweis, die Prozess-Suche wird nicht befragt
+    # (sie würde bei Rezept-Containern minutenlang „absent" melden).
+    assert proc.await_count == 0
 
     assert result["ok"] is True, result
     assert not any(c.startswith("docker start") or "docker inspect" in c for c in commands), commands
