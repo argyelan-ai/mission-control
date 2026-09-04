@@ -417,7 +417,10 @@ class RuntimeWatcher:
         else:
             return True
         if not anchor:
-            return True
+            # Host-Engine ohne Handle: es gibt keinen Beleg, dass DIESE Instanz
+            # antwortet. Auf einem geteilten Port wäre es sonst das Modell des
+            # Nachbarn, das hier eingetragen wird (Live-Befund 04.09.2026).
+            return runtime.runtime_type != SSH_PROCESS_TYPE
 
         try:
             host = await resolve_host_for_runtime(session, runtime)

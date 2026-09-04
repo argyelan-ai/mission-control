@@ -173,8 +173,15 @@ def recipe_matches_runtime(recipe: LocalRecipe, runtime: Runtime) -> bool:
          seite für ihr „läuft"-Badge schon immer benutzt hat.
     """
     topology = runtime.topology if isinstance(runtime.topology, dict) else {}
-    if topology.get("recipe_slug") == recipe.slug:
-        return True
+    backlink = topology.get("recipe_slug")
+    if backlink:
+        # Ein expliziter Rückverweis entscheidet — in BEIDE Richtungen. Eine
+        # Instanz, die auf ein anderes Rezept zeigt, ist nie unsere, auch wenn
+        # ihr ``model_identifier`` zufällig passt (Live-Befund 04.09.2026: zwei
+        # Rezepte auf demselben Port, der Wächter schrieb der gestoppten
+        # Instanz das Modell der laufenden zu — und der Umschalter hielt das
+        # laufende Rezept für gestoppt).
+        return backlink == recipe.slug
     ref = (recipe.recipe_ref or "").strip()
     if ref and runtime.launch_command and ref in runtime.launch_command:
         return True
@@ -447,7 +454,7 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
     # Boxen antworten. Eine Box, die im Dialog wählbar ist und beim Klick
     # abgelehnt wird, wäre genau die Unehrlichkeit, die ADR-077 abgeschafft hat.
     free_workers = worker_candidates(
-        [h for h in hosts if host_can_ssh(h)], host, state.exclusive_busy
+        [h for h in hosts if host_can_ssh(h)], host, foreign_exclusive_busy(state, host)
     )
     ssh_ok = host_can_ssh(host)
 
@@ -646,6 +653,23 @@ async def build_runtime_from_recipe(
     )
 
 
+def foreign_exclusive_busy(state: FleetState, head: Host) -> set[uuid.UUID]:
+    """Boxen, die durch FREMDE exklusive Instanzen belegt sind.
+
+    Fremd = der Head der belegenden Instanz ist eine andere Box. Instanzen
+    mit diesem Head verdrängt ein Start von hier ohnehin (Worker zuerst, dann
+    Head) — ihre Worker-Box ist darum ein gültiger Kandidat. Ohne diese
+    Unterscheidung liesse sich ein laufender Verbund nie durch einen anderen
+    ersetzen: „keine freie zweite Box", obwohl die Box nur vom eigenen
+    Vorgänger belegt ist (Live-Befund 04.09.2026).
+    """
+    return {
+        hid
+        for hid, rts in state.occupied.items()
+        if any(rt.exclusive_memory and rt.host_id != head.id for rt in rts)
+    }
+
+
 def duo_worker_candidates(
     state: FleetState, head: Host, instance: Runtime | None
 ) -> list[dict[str, Any]]:
@@ -655,15 +679,8 @@ def duo_worker_candidates(
     Belegung. Sonst könnte man einen laufenden Verbund nie neu starten — seine
     Worker-Box wäre durch ihn selbst blockiert.
     """
-    busy = {
-        hid
-        for hid, rts in state.occupied.items()
-        if any(
-            rt.exclusive_memory and (instance is None or rt.id != instance.id) for rt in rts
-        )
-    }
     ssh_hosts = [h for h in state.hosts if host_can_ssh(h)]
-    return worker_candidates(ssh_hosts, head, busy)
+    return worker_candidates(ssh_hosts, head, foreign_exclusive_busy(state, head))
 
 
 async def _require_ssh_alive(host: Host) -> None:

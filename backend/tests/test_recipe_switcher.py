@@ -257,7 +257,9 @@ async def test_busy_hosts_include_members_from_runtime_hosts(auth_client, sessio
 
     assert entry["busy_hosts"] == ["box-a", "box-b"]
     # box-b ist Mitglied eines laufenden exklusiven Verbunds → kein Kandidat mehr.
-    assert [w["slug"] for w in entry["candidate_workers"]] == ["box-c"]
+    # box-b ist nur vom EIGENEN Verbund (Head box-a) belegt — ein Start von
+    # box-a verdrängt ihn ohnehin, darum bleibt box-b wählbar (04.09.2026).
+    assert [w["slug"] for w in entry["candidate_workers"]] == ["box-b", "box-c"]
 
 
 @pytest.mark.asyncio
@@ -786,5 +788,6 @@ async def test_running_duo_is_fitted_not_reported_as_no_free_box(auth_client, se
     assert entry["reason"] == "läuft bereits auf dieser Box"
     assert entry["busy_hosts"] == ["box-a", "box-b"]
     # Für einen NEUEN Start ist box-b nicht frei — Kandidatenliste bleibt leer.
-    assert entry["candidate_workers"] == []
+    # Der eigene Worker bleibt wählbar — ein Neustart verdrängt den Vorgänger (04.09.2026).
+    assert [w["slug"] for w in entry["candidate_workers"]] == ["box-b"]
 
