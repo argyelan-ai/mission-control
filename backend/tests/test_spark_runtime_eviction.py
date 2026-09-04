@@ -547,3 +547,19 @@ async def test_multi_box_stop_goes_through_the_recipe_stop_command():
     assert result["ok"] is True
     assert multi.await_count == 1
     assert ssh.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_box_ssh_process_gets_the_long_appear_window():
+    runtime = {
+        "id": "duo-ssh", "slug": "duo-ssh", "display_name": "Duo SSH",
+        "runtime_type": "ssh_process", "endpoint": "http://192.0.2.10:8888/v1",
+        "process_name": "duo-ssh-1", "launch_command": "cd ~/r && setsid nohup ./start.sh &",
+        "topology": {"nodes": 2},
+    }
+    with patch.object(runtime_manager, "_ssh_run", AsyncMock(return_value=("", "", 0))), \
+         patch.object(runtime_manager, "get_runtime_state", AsyncMock(return_value={"state": "stopped"})), \
+         patch.object(runtime_manager, "verify_ssh_process_started", AsyncMock(return_value=True)) as verify:
+        result = await runtime_manager._start_runtime_impl(runtime)
+    assert result["ok"] is True, result
+    assert verify.await_args.kwargs["timeout"] == runtime_manager._MULTI_BOX_APPEAR_TIMEOUT

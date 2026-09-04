@@ -2353,7 +2353,14 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                     "message": stderr or f"launch_command schlug fehl (exit {exit_code}). Logs: {log_path}",
                 }
 
-            appeared = await verify_ssh_process_started(runtime, host=host)
+            appeared = await verify_ssh_process_started(
+                runtime,
+                host=host,
+                # Ein Verbund richtet erst NFS/Worker per SSH ein; sein Handle
+                # erscheint ~1 min nach dem Startbefehl (Live 04.09.2026, 22:47:
+                # Container kam nach 50 s, MC hatte schon „kein Prozess" gemeldet).
+                timeout=_MULTI_BOX_APPEAR_TIMEOUT if _is_multi_box_dict(runtime) else None,
+            )
             if not appeared:
                 logger.error(
                     "Runtime %s: launch exited 0 but no '%s' process appeared. Log: %s",
