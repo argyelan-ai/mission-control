@@ -6,6 +6,7 @@ plus a live SSE tail. Parsing/session-resolution lives in
 from __future__ import annotations
 
 import asyncio
+import json
 import dataclasses
 import re
 import uuid
@@ -338,6 +339,13 @@ async def stream_agent_chat(
     async def _generator():
         await tailer_manager.acquire(str(agent_id), path, agent)
         try:
+            # ``state`` geht nur bei Aenderung ueber den Kanal. Laeuft der
+            # Tailer schon (ein anderer Client sieht zu), bekaeme dieser
+            # Client bis zur naechsten Aenderung keinen Zustand — „Status
+            # unklar" waehrend der Agent sichtbar arbeitet (04.09.2026).
+            cached = tailer_manager.last_state(str(agent_id))
+            if cached is not None:
+                yield {"event": "chat_event", "data": json.dumps({"kind": "state", **cached})}
             async for frame in _sse_generator([channel]):
                 yield frame
         finally:

@@ -1901,3 +1901,84 @@ async def test_preview_state_remembers_the_agent_for_the_sent_anchor(manager, tm
     agent.id = "agent-1"
     state = await manager._start_preview(agent)
     assert state["agent_id"] == "agent-1"
+
+
+# ── omp-Parsing-Bugs (Marks Screenshots, 04.09.2026) ──────────────────────
+
+
+def _assistant_text_line(text: str, msg_uuid: str = "a1") -> str:
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": msg_uuid,
+            "timestamp": "2026-09-04T16:00:00Z",
+            "isSidechain": False,
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "id": f"msg_{msg_uuid}",
+                "content": [{"type": "text", "text": text}],
+            },
+        }
+    )
+
+
+async def test_preview_on_connect_starts_after_the_last_transcript_message(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Wer den Chat oeffnet (oder das Handy neu verbindet), bekam als Vorschau
+    den GANZEN Bildschirm — also die fertige alte Antwort noch einmal, bei
+    Status idle (SSE-Mitschnitt omp-Agent 04.09.2026, 16:35:30Z). Der Tailer
+    steigt am Dateiende ein und kannte darum keinen Anker. Er muss ihn aus
+    der letzten Nachricht des Transkripts holen."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-seed.jsonl"
+    session_file.write_text(
+        _user_line("Wie hoch ist der Uetliberg?") + "\n"
+        + _assistant_text_line("Der Uetliberg ist **869 Meter** hoch.") + "\n"
+    )
+    stream_file = tmp_path / "pane.log"
+    stream_file.write_bytes(
+        " Wie hoch ist der Uetliberg?\r\n\r\n Der Uetliberg ist 869 Meter hoch.\r\n\r\n❯ \r\n".encode()
+    )
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-seed", session_file, agent)
+    try:
+        await asyncio.sleep(0.3)
+    finally:
+        await manager.release("agent-seed")
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert previews == [], f"alte Antwort als Vorschau: {previews}"
+
+
+async def test_manager_remembers_the_last_state_for_late_clients(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """``state`` geht nur bei AENDERUNG ueber den Kanal. Ein zweiter Client
+    (Handy, waehrend der Desktop offen ist) sah darum bis zur naechsten
+    Aenderung „Status unklar" — bei einer langen Tool-Phase minutenlang
+    (Marks Screenshot 04.09.2026). Der Manager merkt sich den letzten Stand,
+    damit der Router ihn dem Neuankoemmling sofort geben kann."""
+    import app.services.transcript_chat as transcript_chat
+
+    session_file = tmp_path / "sess-late.jsonl"
+    session_file.write_text("")
+    monkeypatch.setattr(
+        transcript_chat, "capture_pane", _async_return("✻ Thinking… (esc to interrupt)\n")
+    )
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    assert manager.last_state("agent-late") is None
+    await manager.acquire("agent-late", session_file, agent)
+    try:
+        assert await _wait_until(
+            lambda: (manager.last_state("agent-late") or {}).get("status") == "working"
+        )
+    finally:
+        await manager.release("agent-late")
+    assert manager.last_state("agent-late") is None, "nach dem letzten Client vergessen"

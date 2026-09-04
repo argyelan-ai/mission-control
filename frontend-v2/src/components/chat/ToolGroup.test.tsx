@@ -74,6 +74,27 @@ describe("summarizeActivity", () => {
   it("ignores thinking events when deciding whether the run failed", () => {
     expect(summarizeActivity([thinking(), thinking()]).hasError).toBe(false);
   });
+
+  // Marks Screenshot 04.09.2026: „84 Tools verwendet, 2× nachgedacht" mit
+  // rotem ⚠ — das las sich als „der ganze Lauf ist gescheitert". Tatsaechlich
+  // war EIN mc-Aufruf mit 400 zurueckgekommen und wurde wiederholt. Die Zeile
+  // muss sagen, wie viele fehlschlugen, sonst traegt das Icon eine Alarmstufe,
+  // die die Zahl nicht hergibt.
+  it("names how many tools failed in the visible line", () => {
+    const s = summarizeActivity([tool(), tool({ status: "error" }), tool(), thinking()]);
+    expect(s.failed).toBe(1);
+    expect(s.label).toBe("3 Tools verwendet, 1 fehlgeschlagen, nachgedacht");
+  });
+
+  it("pluralises the failed count", () => {
+    const s = summarizeActivity([tool({ status: "error" }), tool({ status: "error" })]);
+    expect(s.label).toBe("2 Tools verwendet, 2 fehlgeschlagen");
+  });
+
+  it("counts a failed command as failed too", () => {
+    const s = summarizeActivity([tool({ name: "Bash", status: "error" })]);
+    expect(s.failed).toBe(1);
+  });
 });
 
 describe("ToolGroup", () => {
@@ -104,6 +125,13 @@ describe("ToolGroup", () => {
   it("shows a warning icon when the run contains a failed tool", () => {
     render(<ToolGroup events={[tool(), tool({ status: "error" })]} detailLevel="normal" />);
     expect(screen.getByTestId("tool-group-error-icon")).toBeInTheDocument();
+  });
+
+  it("paints a partial failure as a warning, not as the run's failure", () => {
+    // Ein fehlgeschlagenes Tool unter vielen ist eine Warnung (Bernstein) —
+    // Rot ist dem Lauf vorbehalten, der wirklich gescheitert ist.
+    render(<ToolGroup events={[tool(), tool({ status: "error" })]} detailLevel="normal" />);
+    expect(screen.getByTestId("tool-group-error-icon").style.color).toBe("rgb(185, 143, 77)");
   });
 
   it("announces the failure to screen readers, not just in colour", () => {
