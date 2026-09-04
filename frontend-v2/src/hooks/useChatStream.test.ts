@@ -425,7 +425,7 @@ describe("markUnconfirmedEchoes", () => {
   });
 
   it("does not call the message that STARTED the turn queued", () => {
-    // Operator finding 04.09.2026 on Sparky (omp): the first message of a
+    // Operator finding 04.09.2026 on an omp agent: the first message of a
     // turn wore the clock icon until the turn ended, because omp only writes
     // the transcript at the end. That message was never held — it is the
     // reason the agent is working. It waits silently, without a clock.
