@@ -923,11 +923,16 @@ async def evict_spark_runtime_containers(
     }
 
 
+#: Wie lange ein Zweibox-Verbund Zeit hat, bis sein Head-Container erscheint.
+_MULTI_BOX_APPEAR_TIMEOUT = 120.0
+
+
 async def verify_spark_container_started(
     slug: str,
     *,
     host: ResolvedHost | None = None,
     timeout: float = 12.0,
+    container_name: str | None = None,
 ) -> bool:
     """Poll for a container carrying ``mc.runtime.slug=<slug>`` to appear.
 
@@ -943,14 +948,13 @@ async def verify_spark_container_started(
     import asyncio
 
     safe = _sanitize_slug(slug)
+    query = f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}"
+    if container_name:
+        query += f"; docker ps -q --filter name={shlex_quote('^/' + container_name + '$')}"
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
         try:
-            out, _, ec = await _ssh_run(
-                f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}",
-                host=host,
-                timeout=20,
-            )
+            out, _, ec = await _ssh_run(query, host=host, timeout=20)
         except Exception as exc:  # noqa: BLE001
             logger.warning("verify: poll raised for %s: %s", slug, exc)
             out, ec = "", -1
@@ -967,6 +971,7 @@ async def verify_spark_vllm_process_started(
     *,
     host: ResolvedHost | None = None,
     timeout: float = 90.0,
+    container_name: str | None = None,
 ) -> str:
     """Poll for an actual ``vllm serve`` process inside the labelled container.
 
@@ -997,15 +1002,15 @@ async def verify_spark_vllm_process_started(
     import asyncio
 
     safe = _sanitize_slug(slug)
+    query = f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}"
+    if container_name:
+        # Rezept-Container ohne MC-Label: der Anker-Name zählt (04.09.2026).
+        query += f"; docker ps -q --filter name={shlex_quote('^/' + container_name + '$')}"
     deadline = asyncio.get_running_loop().time() + timeout
     saw_clean_read = False
     while True:
         try:
-            out, _, ec = await _ssh_run(
-                f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}",
-                host=host,
-                timeout=20,
-            )
+            out, _, ec = await _ssh_run(query, host=host, timeout=20)
         except Exception as exc:  # noqa: BLE001
             logger.warning("verify-process: container lookup raised for %s: %s", slug, exc)
             out, ec = "", -1
@@ -1755,6 +1760,15 @@ def _grace_slug(runtime: dict) -> str | None:
 # ── Memory exclusivity across engines ────────────────────────────────────────
 
 
+def _is_multi_box_dict(runtime: dict) -> bool:
+    """Registry-Dict-Variante von :func:`_is_multi_box_instance`."""
+    topology = runtime.get("topology") if isinstance(runtime.get("topology"), dict) else {}
+    try:
+        return int(topology.get("nodes") or 1) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
 def _is_multi_box_instance(runtime: "Runtime") -> bool:
     topology = runtime.topology if isinstance(runtime.topology, dict) else {}
     try:
@@ -2132,7 +2146,13 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
             # Path A — try `docker start` on a previously-known container.
             # Skipped when container_name is empty (sparkrun assigns random
             # IDs at launch — only launch_command is set in that case).
-            if container_name:
+            # Ein Verbund mit eigenem Startbefehl wird NIE über `docker start`
+            # des alten Head-Containers geweckt: der Worker auf der zweiten Box
+            # käme nicht mit, der Head stürbe beim NCCL-Aufbau (Live 04.09.2026,
+            # 21:30 — sah 20 Minuten lang wie ein Start aus). Nur das Rezept
+            # weiss, wie beide Boxen starten.
+            multi_box = _is_multi_box_dict(runtime) and bool(launch_command)
+            if container_name and not multi_box:
                 _, _, inspect_ec = await _ssh_run(
                     f"docker inspect -f '{{{{.State.Status}}}}' {container_name} 2>/dev/null",
                     host=host,
@@ -2184,7 +2204,15 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                 # slug to poll for (no label to match → keep old optimistic ok).
                 runtime_slug = runtime.get("slug") or runtime.get("id")
                 if runtime_slug:
-                    appeared = await verify_spark_container_started(str(runtime_slug), host=host)
+                    appeared = await verify_spark_container_started(
+                        str(runtime_slug),
+                        host=host,
+                        # Rezept-Container tragen kein MC-Label — der Anker-Name
+                        # zählt genauso. Ein Verbund richtet erst den Worker per
+                        # SSH ein, der Head erscheint darum später (Live 04.09.).
+                        container_name=container_name or None,
+                        timeout=_MULTI_BOX_APPEAR_TIMEOUT if multi_box else 12.0,
+                    )
                     if not appeared:
                         logger.error(
                             "Runtime %s: launch_command exited 0 but no labelled "
@@ -2219,7 +2247,7 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                         )
                     else:
                         serving = await verify_spark_vllm_process_started(
-                            str(runtime_slug), host=host
+                            str(runtime_slug), host=host, container_name=container_name or None
                         )
                         process_label, likely_cause = (
                             "vllm-serve",
@@ -2440,6 +2468,10 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
 
     if runtime_type in DOCKER_ENGINE_TYPES:
         container_name = (runtime.get("container_name") or "").strip()
+        if _is_multi_box_dict(runtime) and (runtime.get("stop_command") or "").strip():
+            # Verbund: nur der eigene Stopp-Befehl nimmt den Worker mit
+            # (Live 04.09.2026: docker stop am Head liess ihn als Waise zurück).
+            return await stop_multi_box_instance(runtime, host=host)
         # RC-1 fix: container_name is None right after a recipe switch (sparkrun
         # assigns a fresh random id each run). Running `docker stop ` with an
         # empty arg errors and was silently swallowed, leaving the old model up.
