@@ -104,6 +104,50 @@ await sleep(80);
 const afterTurnEnd = records().filter((r) => r.kind === "progress" && r.at === "tool_heartbeat").length;
 assert(afterTurnEnd === atTurnEnd, "turn_end clears running tools (no stray heartbeat)");
 
+// ── Open model request = alive (04.09.2026, follow-up to the tool fix) ──────
+// Measured live on omp 16.4.6 / GLM-5.3 (26k-token prompt): between turn_start
+// and the assistant message_start there were 58 s with NO event at all
+// (prefill); a hidden-reasoning model or a bigger context stretches that to
+// minutes. So the request window turn_start → assistant message_end must
+// heartbeat exactly like a running tool.
+fireWith("session_start", {});
+const mhb = () => records().filter((r) => r.kind === "progress" && r.at === "model_heartbeat").length;
+fireWith("turn_start", { turnIndex: 2 });
+const ms = records().filter((r) => r.kind === "model_start");
+assert(ms.length >= 1, "turn_start emits a model_start record");
+await sleep(80);
+assert(mhb() >= 2, "model_heartbeat while the request is open, before any token (got " + mhb() + ")");
+fireWith("message_start", { message: { role: "assistant", content: [] } });
+fireWith("message_update", { message: { role: "assistant" } });
+fireWith("message_end", { message: { role: "assistant", content: [] } });
+const me = records().filter((r) => r.kind === "model_end");
+assert(me.length === 1, "assistant message_end emits one model_end record");
+const mAtEnd = mhb();
+await sleep(80);
+assert(mhb() === mAtEnd, "no model_heartbeat once the assistant message ended");
+// user/toolResult messages must NOT toggle the request window
+fireWith("turn_start", { turnIndex: 3 });
+fireWith("message_start", { message: { role: "user" } });
+fireWith("message_end", { message: { role: "user" } });
+const mUser = mhb();
+await sleep(80);
+assert(mhb() > mUser, "a user message_end does not close the model window");
+// turn_end closes everything
+fireWith("turn_end", { turnIndex: 3, message: { stopReason: "stop", content: [] }, toolResults: [] });
+const mTe = mhb();
+await sleep(80);
+assert(mhb() === mTe, "turn_end closes the model window (no stray heartbeat)");
+// heartbeat label follows the phase: tool wins while a tool runs
+fireWith("turn_start", { turnIndex: 4 });
+fireWith("message_end", { message: { role: "assistant", content: [] } });
+fireWith("tool_execution_start", { toolName: "bash", toolCallId: "call-9" });
+const tBefore = records().filter((r) => r.kind === "progress" && r.at === "tool_heartbeat").length;
+await sleep(60);
+assert(records().filter((r) => r.kind === "progress" && r.at === "tool_heartbeat").length > tBefore,
+  "tool phase heartbeats as tool_heartbeat");
+fireWith("tool_execution_end", { toolCallId: "call-9" });
+fireWith("turn_end", { turnIndex: 4, message: { stopReason: "stop", content: [] }, toolResults: [] });
+
 Date.now = realNow;
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

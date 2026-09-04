@@ -1044,3 +1044,57 @@ def test_turn_end_clears_running_tool_state():
     outcome = h.run(idle_timeout=3)
     assert outcome.watchdog_reason == "idle"
     assert outcome.watchdog_tool is None
+
+
+# ── Open model request = alive (04.09.2026) ─────────────────────────────────
+
+def _ms():
+    return {"kind": "model_start"}
+
+
+def _mend():
+    return {"kind": "model_end"}
+
+
+def test_model_heartbeat_keeps_idle_watchdog_quiet_during_prefill():
+    # Request open, no token for 12 s > idle 3 s — only model heartbeats arrive.
+    hb = {"kind": "progress", "at": "model_heartbeat"}
+    batches = [[{"kind": "session_start"}], [_ms()]]
+    for _ in range(6):
+        batches += [[hb], []]
+    batches += [[_mend()], [_te("stop", text=REFLECTION)]]
+    outcome = _Harness(batches).run(idle_timeout=3)
+    assert outcome.watchdog_killed is False
+    assert bridge.classify(outcome).kind is Kind.FINISH
+
+
+def test_idle_kill_during_open_request_names_the_model_phase():
+    # model_start, then silence: the hook itself stopped (omp wedged/frozen) —
+    # the watchdog must fire and the diagnosis must say the request was open.
+    outcome = _Harness([[{"kind": "session_start"}], [_ms()]]).run(idle_timeout=3)
+    assert outcome.watchdog_killed is True
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_phase == "model"
+    assert outcome.watchdog_tool is None
+    assert "Modell-Anfrage" in bridge.classify(outcome).detail
+
+
+def test_idle_kill_after_model_end_does_not_name_the_model_phase():
+    outcome = _Harness([[{"kind": "session_start"}], [_ms()], [_mend()]]).run(idle_timeout=3)
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_phase is None
+    assert "kein Fortschritt" in bridge.classify(outcome).detail
+
+
+def test_tool_phase_wins_over_model_phase_in_diagnosis():
+    outcome = _Harness([[{"kind": "session_start"}], [_ms()], [_ts("bash", "c1")]]).run(idle_timeout=3)
+    assert outcome.watchdog_tool == "bash"
+    assert "bash" in bridge.classify(outcome).detail
+
+
+def test_default_idle_timeout_is_900s():
+    # Stage-1 safety net: the cloud default moved 300 → 900 s (hidden
+    # reasoning / long prefill must not be killed by a guess).
+    import inspect
+    sig = inspect.signature(bridge.run_native_turn)
+    assert sig.parameters["idle_timeout"].default == 900.0
