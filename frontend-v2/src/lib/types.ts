@@ -2229,6 +2229,13 @@ export interface HostRecipe {
   busy_hosts: string[];
   /** Freie Boxen für einen Zweibox-Start — Phase 3 nutzt sie. */
   candidate_workers: HostRecipeCandidateWorker[];
+  /**
+   * P3: Hat das Rezept eine Umgebungs-Zuordnung (env_file + env_map), damit MC
+   * die .env auf dem Kopf schreiben kann? Nur für Zweibox-Rezepte gefüllt;
+   * false = nicht startbar, das Backend liefert den Grund in `reason`.
+   * Optional, solange ältere Backends das Feld nicht schicken.
+   */
+  env_ready?: boolean;
 }
 
 /** Antwort von POST /hosts/{host_id}/recipes/{slug}/start. Der Vertrag legt
@@ -2238,6 +2245,38 @@ export interface HostRecipeStartResult {
   ok?: boolean;
   message?: string | null;
   runtime_id?: string | null;
+  runtime_slug?: string | null;
+  created?: boolean;
+  /** P3, nur Zweibox-Start: die Box, die als Worker mitgestartet wurde. */
+  worker_host_id?: string | null;
+  worker_slug?: string | null;
+  /** Schlüssel, die MC in die Rezept-.env auf dem Kopf geschrieben hat. */
+  env_written?: string[] | null;
+}
+
+// ── Autostart je Box (Rezept-Umschalter P3) ──────────────────────────────────
+
+/** Diese Box ist Worker einer Instanz — der Kopf entscheidet den Autostart. */
+export interface HostAutostartViaHead {
+  host_id: string;
+  slug: string;
+}
+
+/**
+ * GET/PUT /api/v1/hosts/{host_id}/autostart — Marks Ein/Aus-Schalter je Box.
+ * `enabled` ist der Schalter, `recipe_slug` das zuletzt über den Umschalter
+ * gestartete Rezept (das MC nach Ausfall/Neustart wieder hochzieht).
+ */
+export interface HostAutostartStatus {
+  host_id: string;
+  enabled: boolean;
+  recipe_slug: string | null;
+  recipe_display_name: string | null;
+  role: HostRole | null;
+  via_head: HostAutostartViaHead | null;
+  last_attempt_at: string | null; // ISO
+  /** Ein Satz, z.B. „Gestartet 04.09. 18:02" — nie ein Code. */
+  last_result: string | null;
 }
 
 // Harness/Provider-Decoupling (ADR-056) — compat matrix for the harness
@@ -2488,6 +2527,14 @@ export interface Host {
   notes: string | null;
   enabled: boolean;
   ui_order: number;
+  /**
+   * P3 — Autostart je Box. Der Wächter belebt nur wieder, wenn der Schalter an
+   * ist UND die Runtime zu `autostart_recipe_slug` passt. Optional, solange
+   * ältere Backends die Felder nicht schicken; Details liefert
+   * GET /hosts/{id}/autostart (HostAutostartStatus).
+   */
+  autostart_enabled?: boolean;
+  autostart_recipe_slug?: string | null;
   created_at: string;
   updated_at: string;
 }

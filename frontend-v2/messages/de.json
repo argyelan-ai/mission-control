@@ -2598,7 +2598,12 @@
       "loadFailed": "Rezepte konnten nicht geladen werden: {message}",
       "loading": "Rezepte werden geladen …",
       "empty": "Keine Rezepte für diese Box.",
-      "dismiss": "Meldung schliessen"
+      "dismiss": "Meldung schliessen",
+      "workerLabel": "Worker-Box",
+      "workerNone": "Keine freie zweite Box — dieses Rezept braucht zwei Boxen.",
+      "workerEnvMissing": "Dem Rezept fehlt die Umgebungs-Zuordnung — MC kann die .env auf dieser Box nicht schreiben.",
+      "startingDuo": "startet {name} auf {head} + {worker} …",
+      "startingDuoNoHead": "startet {name} — zweite Box: {worker} …"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
@@ -2636,7 +2641,25 @@
       "unknown": "Unbekannt"
     },
     "nameDrift": "Name",
-    "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell."
+    "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell.",
+    "hostAutostart": {
+      "title": "Autostart",
+      "ariaLabel": "Autostart für diese Box",
+      "statusOn": "an",
+      "statusOff": "aus",
+      "statusUnknown": "unbekannt",
+      "subtitleOn": "startet {recipe} nach Ausfall oder Neustart",
+      "subtitleOnNoRecipe": "an — es ist noch kein Rezept gemerkt; MC merkt sich das nächste, das du hier startest",
+      "subtitleOff": "aus — MC startet nichts von selbst",
+      "subtitleUnknown": "Zustand nicht lesbar — MC weiss gerade nicht, ob der Autostart an ist",
+      "viaHead": "Autostart über Head {slug}",
+      "viaHeadHint": "Diese Box ist Worker — den Autostart schaltest du am Kopf.",
+      "lastAttempt": "Letzter Versuch: {result}",
+      "lastAttemptAt": "Letzter Versuch {when}: {result}",
+      "saveFailed": "Umschalten fehlgeschlagen: {message}",
+      "adminOnly": "Nur Admins dürfen den Autostart schalten.",
+      "loading": "Autostart wird geladen …"
+    }
   },
   "bench": {
     "common": {

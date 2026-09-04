@@ -2225,13 +2225,29 @@ export const api = {
     recipes: (hostId: string): Promise<import("@/lib/types").HostRecipe[]> =>
       request(`/api/v1/hosts/${hostId}/recipes`),
     // Solo: Instanz anlegen falls nötig, dann der normale start_runtime-Pfad.
-    // Zweibox-Rezepte antworten in Phase 1 mit 409 + Grund — der Aufrufer
-    // zeigt den Satz an, statt ihn zu schlucken.
+    // P3: Zweibox-Rezepte bekommen die gewählte Worker-Box als Körper mit
+    // ({"worker_host_id"}); ohne Körper wählt das Backend den ersten
+    // Kandidaten. Fehler (409/422) kommen als Satz — der Aufrufer zeigt ihn
+    // an, statt ihn zu schlucken.
     startRecipe: (
       hostId: string,
       slug: string,
+      body?: { worker_host_id: string },
     ): Promise<import("@/lib/types").HostRecipeStartResult> =>
-      request(`/api/v1/hosts/${hostId}/recipes/${encodeURIComponent(slug)}/start`, { method: "POST" }),
+      request(`/api/v1/hosts/${hostId}/recipes/${encodeURIComponent(slug)}/start`, {
+        method: "POST",
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }),
+    // Autostart je Box (P3): Marks Ein/Aus-Schalter. GET liest den Zustand,
+    // PUT setzt ihn (nur Admin) und antwortet mit demselben Objekt — darum
+    // kein Optimistic-Update im Frontend nötig.
+    autostart: (hostId: string): Promise<import("@/lib/types").HostAutostartStatus> =>
+      request(`/api/v1/hosts/${hostId}/autostart`),
+    setAutostart: (
+      hostId: string,
+      data: { enabled: boolean; recipe_slug?: string | null },
+    ): Promise<import("@/lib/types").HostAutostartStatus> =>
+      request(`/api/v1/hosts/${hostId}/autostart`, { method: "PUT", body: JSON.stringify(data) }),
   },
 
   // ── mc-node-agent pairing (Fleet & Rezepte v2, Phase 1) ──────────────────────
