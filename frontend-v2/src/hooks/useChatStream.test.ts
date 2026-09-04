@@ -413,15 +413,26 @@ describe("markUnconfirmedEchoes", () => {
   // ten seconds, so the timer accused a message that was perfectly safe.
 
   it("never warns while the agent is mid-turn, no matter how long it takes", () => {
-    const a = echo({ sentAt: 1_000 });
+    const a = echo({ sentAt: 1_000, midTurn: true });
     const [result] = markUnconfirmedEchoes([a], 1_000 + ECHO_CONFIRM_TIMEOUT_MS * 10, true);
 
     expect(result.status).toBe("queued");
   });
 
   it("shows a mid-turn send as queued straight away", () => {
-    const a = echo({ sentAt: 1_000 });
+    const a = echo({ sentAt: 1_000, midTurn: true });
     expect(markUnconfirmedEchoes([a], 1_100, true)[0].status).toBe("queued");
+  });
+
+  it("does not call the message that STARTED the turn queued", () => {
+    // Operator finding 04.09.2026 on an omp agent: the first message of a
+    // turn wore the clock icon until the turn ended, because omp only writes
+    // the transcript at the end. That message was never held — it is the
+    // reason the agent is working. It waits silently, without a clock.
+    const a = echo({ sentAt: 1_000, midTurn: false });
+    const result = markUnconfirmedEchoes([a], 1_000 + ECHO_CONFIRM_TIMEOUT_MS * 10, true);
+
+    expect(result[0].status).toBe("pending");
   });
 
   it("returns a queued echo to waiting once the turn is over", () => {

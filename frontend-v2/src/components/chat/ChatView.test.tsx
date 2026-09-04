@@ -922,7 +922,7 @@ describe("ChatView", () => {
     let sendResolved = false;
     vi.mocked(api.chat.sendText).mockImplementation(() => {
       // Asserted inside the request: the echo must already have happened.
-      expect(echoSent).toHaveBeenCalledWith("los gehts");
+      expect(echoSent).toHaveBeenCalledWith("los gehts", expect.any(Boolean));
       sendResolved = true;
       return Promise.resolve(undefined);
     });
@@ -934,6 +934,31 @@ describe("ChatView", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(sendResolved).toBe(true);
+  });
+
+  it("tells the echo whether the agent was already mid-turn when it was sent", async () => {
+    // The message that STARTS a turn is not queued (operator finding
+    // 04.09.2026: on omp it wore the clock until the turn ended). Only a
+    // send into a running turn is.
+    const echoSent = vi.fn();
+    vi.mocked(api.chat.sendText).mockResolvedValue(undefined);
+    mockUseChatStream.mockReturnValue(
+      mkStream({ echoSent, state: { kind: "state", status: "working", prompt: null } })
+    );
+    const user = userEvent.setup();
+    renderChatView();
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "noch was");
+    await user.keyboard("{Enter}");
+    expect(echoSent).toHaveBeenCalledWith("noch was", true);
+
+    echoSent.mockClear();
+    mockUseChatStream.mockReturnValue(
+      mkStream({ echoSent, state: { kind: "state", status: "idle", prompt: null } })
+    );
+    renderChatView();
+    await user.type(screen.getAllByPlaceholderText("Message the agent…").at(-1)!, "erster zug");
+    await user.keyboard("{Enter}");
+    expect(echoSent).toHaveBeenCalledWith("erster zug", false);
   });
 
   it("withdraws the echo when the send fails", async () => {

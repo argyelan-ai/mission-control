@@ -560,7 +560,7 @@ export function ChatView({
     // not a second later when the tailer has polled the transcript. The request
     // failing removes the echo again — an echo that outlived a failed send would
     // be the one thing worse than the old delay.
-    stream.echoSent(text);
+    stream.echoSent(text, stream.state?.status === "working");
     deliver(text);
   }
 
