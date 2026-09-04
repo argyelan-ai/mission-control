@@ -490,3 +490,60 @@ async def test_multi_box_stop_is_honest_when_the_head_anchor_survives():
             result = await runtime_manager.stop_multi_box_instance(runtime)
     assert result["ok"] is False
     assert "duo-head" in result["message"]
+
+
+# ── 04.09.2026: Zweibox-Verbund — Start/Stop/Verifikation ────────────────────
+
+_DUO_RUNTIME = {
+    "id": "duo-a", "slug": "duo-a", "display_name": "Duo A",
+    "runtime_type": "vllm_docker", "endpoint": "http://192.0.2.10:8000/v1",
+    "container_name": "duo-head", "launch_command": "cd ~/recipe && nohup ./start.sh &",
+    "stop_command": "cd ~/recipe && ./stop.sh", "topology": {"nodes": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_multi_box_start_never_wakes_the_old_head_container():
+    """`docker start` des alten Heads liesse den Worker zurück — der Verbund
+    startet immer über seinen Startbefehl."""
+    commands: list[str] = []
+
+    async def _ssh(cmd: str, **kwargs):
+        commands.append(cmd)
+        return ("", "", 0)
+
+    with patch.object(runtime_manager, "_ssh_run", _ssh), \
+         patch.object(runtime_manager, "verify_spark_container_started", AsyncMock(return_value=True)) as verify, \
+         patch.object(runtime_manager, "verify_spark_vllm_process_started", AsyncMock(return_value="serving")) as proc:
+        result = await runtime_manager._start_runtime_impl(dict(_DUO_RUNTIME))
+    assert proc.await_args.kwargs["container_name"] == "duo-head"
+
+    assert result["ok"] is True, result
+    assert not any(c.startswith("docker start") or "docker inspect" in c for c in commands), commands
+    assert any("./start.sh" in c for c in commands)
+    assert verify.await_args.kwargs["container_name"] == "duo-head"
+    assert verify.await_args.kwargs["timeout"] == runtime_manager._MULTI_BOX_APPEAR_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_verify_accepts_the_anchor_name_without_label():
+    ssh = AsyncMock(return_value=("abc123", "", 0))
+    with patch.object(runtime_manager, "_ssh_run", ssh):
+        ok = await runtime_manager.verify_spark_container_started(
+            "duo-a", container_name="duo-head", timeout=1
+        )
+    assert ok is True
+    assert "name='^/duo-head$'" in ssh.call_args.args[0]
+    assert "mc.runtime.slug=duo-a" in ssh.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_multi_box_stop_goes_through_the_recipe_stop_command():
+    multi = AsyncMock(return_value={"ok": True, "message": "Verbund gestoppt"})
+    ssh = AsyncMock(return_value=("", "", 0))
+    with patch.object(runtime_manager, "stop_multi_box_instance", multi), \
+         patch.object(runtime_manager, "_ssh_run", ssh):
+        result = await runtime_manager.stop_runtime(dict(_DUO_RUNTIME))
+    assert result["ok"] is True
+    assert multi.await_count == 1
+    assert ssh.await_count == 0
