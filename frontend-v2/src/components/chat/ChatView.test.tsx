@@ -239,7 +239,7 @@ describe("liveEventUuid", () => {
 
   it("never animates an event the agent has already answered", () => {
     // Live-Beweis 04.09.2026: omp schreibt die Aufgaben-Nachricht erst am
-    // Zug-ENDE ins Transcript. Waehrend Sparky an der NEUEN Aufgabe arbeitete,
+    // Zug-ENDE ins Transcript. Waehrend der omp-Agent an der NEUEN Aufgabe arbeitete,
     // pulsierte darum die Karte der ALTEN — die laengst beantwortet war.
     const evs = [outside("a"), mkTool(), mkMsg({ role: "assistant" })];
     expect(liveEventUuid(evs, "working")).toBeNull();
