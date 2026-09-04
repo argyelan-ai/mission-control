@@ -96,7 +96,7 @@ async def test_evict_stops_label_and_solo_containers():
     assert "sparkrun_" in discovery_cmd and "_solo" in discovery_cmd
     assert "com.docker.compose.project" in discovery_cmd
     stop_cmd = ssh.call_args_list[2].args[0]
-    assert stop_cmd == "docker stop sparkrun_oldid_solo"
+    assert stop_cmd == "docker stop -t 120 sparkrun_oldid_solo"
 
 
 @pytest.mark.asyncio
@@ -431,3 +431,62 @@ async def test_start_runtime_no_verify_without_slug():
         result = await runtime_manager.start_runtime(rt)
     # No slug → can't poll for a label, so we keep the previous behaviour.
     assert result["ok"] is True
+
+
+# ── 04.09.2026: ein Zeitüberlauf beim docker stop ist kein Scheitern ─────────
+
+
+@pytest.mark.asyncio
+async def test_evict_stop_timeout_is_verified_not_declared_failed():
+    """Live-Befund: GLM-Head brauchte ~60 s, die SSH-Frist lief ab, MC meldete
+    „fehlgeschlagen" — der Container starb trotzdem. Entscheidend ist die
+    Kontrolle danach, nicht die Ausnahme des Stop-Befehls."""
+    def _side_effect(cmd: str, **kwargs):
+        pre = _happy_discovery_and_ownership(cmd, "sparkrun_slow_solo")
+        if pre is not None:
+            return pre
+        if cmd.startswith("docker stop"):
+            raise TimeoutError()
+        return ("", "", 0)  # Poll: weg
+
+    ssh = AsyncMock(side_effect=_side_effect)
+    with patch.object(runtime_manager, "_ssh_run", ssh), \
+         patch.object(runtime_manager, "_evict_poll_interval", 0):
+        result = await runtime_manager.evict_spark_runtime_containers("qwen-general")
+    assert result["ok"] is True
+    stop_cmd = next(c.args[0] for c in ssh.call_args_list if c.args[0].startswith("docker stop"))
+    assert stop_cmd.startswith("docker stop -t 120 ")
+
+
+@pytest.mark.asyncio
+async def test_multi_box_instance_is_stopped_via_its_own_stop_command():
+    runtime = {
+        "slug": "duo-a", "runtime_type": "vllm_docker", "container_name": "duo-head",
+        "stop_command": "cd ~/recipe && ./stop.sh", "topology": {"nodes": 2},
+    }
+    ssh = AsyncMock(return_value=("", "", 0))
+    with patch.object(runtime_manager, "_ssh_run", ssh), \
+         patch.object(runtime_manager, "anchor_running", AsyncMock(return_value=False)):
+        result = await runtime_manager.stop_multi_box_instance(runtime)
+    assert result["ok"] is True
+    assert "./stop.sh" in ssh.call_args_list[0].args[0]
+    assert ssh.call_args_list[0].kwargs["timeout"] == 300
+
+
+@pytest.mark.asyncio
+async def test_multi_box_stop_is_honest_when_the_head_anchor_survives():
+    runtime = {
+        "slug": "duo-a", "runtime_type": "vllm_docker", "container_name": "duo-head",
+        "stop_command": "./stop.sh", "topology": {"nodes": 2},
+    }
+    fast = patch.object(runtime_manager.asyncio, "sleep", AsyncMock())
+    with patch.object(runtime_manager, "_ssh_run", AsyncMock(return_value=("", "", 0))), \
+         patch.object(runtime_manager, "anchor_running", AsyncMock(return_value=True)), fast:
+        loop_time = [0.0]
+        def _t():
+            loop_time[0] += 50
+            return loop_time[0]
+        with patch.object(runtime_manager.asyncio.get_running_loop(), "time", _t):
+            result = await runtime_manager.stop_multi_box_instance(runtime)
+    assert result["ok"] is False
+    assert "duo-head" in result["message"]
