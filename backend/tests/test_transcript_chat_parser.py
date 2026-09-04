@@ -894,3 +894,11 @@ def test_queue_operation_lines_stay_silent():
     # selbst kommt ueber den attachment-Eintrag (oder als user-Eintrag, wenn
     # die Warteschlange erst nach dem Zug abgearbeitet wird).
     assert parse_transcript_line(QUEUE_OPERATION_LINE) == []
+
+
+def test_teammate_message_carries_its_source():
+    """Herkunft fuer das Chat-Motiv (04.09.2026): Rueckmeldung eines
+    Teamkollegen/Subagenten — Titel gibt es hier keinen, der Absender steht
+    in ``teammate``."""
+    (ev,) = parse_transcript_line(json.dumps(_teammate_line()))
+    assert ev["source"] == {"kind": "teammate", "title": None}

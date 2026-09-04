@@ -20,6 +20,7 @@ import userEvent from "@testing-library/user-event";
 import {
   ChatView,
   buildTimelineItems,
+  liveEventUuid,
   modelBadgeUuids,
   ACTIVITY_GROUP_MIN_SIZE,
   headerSideReservation,
@@ -226,6 +227,26 @@ function mkThinking(overrides: Partial<ThinkingEvent> = {}): ThinkingEvent {
 function mkMsg(overrides: Partial<MessageEvent> = {}): MessageEvent {
   return { ...MSG, uuid: `m-${Math.random()}`, ...overrides };
 }
+
+describe("liveEventUuid", () => {
+  const outside = (uuid: string) =>
+    mkMsg({ uuid, role: "teammate", teammate: "task-1.md", source: { kind: "task", title: "x" } });
+
+  it("names the newest outside event while the agent is working", () => {
+    const evs = [outside("a"), mkTool(), outside("b"), mkMsg({ role: "assistant" })];
+    expect(liveEventUuid(evs, "working")).toBe("b");
+  });
+
+  it("names nothing while the agent is not working", () => {
+    expect(liveEventUuid([outside("a")], "idle")).toBeNull();
+    expect(liveEventUuid([outside("a")], null)).toBeNull();
+  });
+
+  it("ignores teammate turns without a source", () => {
+    const evs = [outside("a"), mkMsg({ role: "teammate", teammate: null, source: null })];
+    expect(liveEventUuid(evs, "working")).toBe("a");
+  });
+});
 
 describe("buildTimelineItems", () => {
   it("collapses consecutive tool/thinking events into one activity run", () => {

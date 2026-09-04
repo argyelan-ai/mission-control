@@ -338,6 +338,39 @@ def _strip_read_format(content: str) -> str:
     return "\n".join(_LINE_NUMBER.sub("", line) for line in lines)
 
 
+_TASK_FILE_RE = re.compile(r"^task-.*\.md$")
+_INBOX_FILE_RE = re.compile(r"^\d{6,}__.*\.msg$")
+_NEW_TASK_RE = re.compile(r"^# New Task:\s*(?P<title>.+?)\s*$", re.MULTILINE)
+
+
+def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
+    """Herkunft einer ``@datei``-Erwaehnung, maschinenlesbar fuer das Chat-Motiv.
+
+    Zeilen „von aussen" sollen zugeklappt auf einen Blick erkennbar sein, mit
+    eigenem Motiv je Herkunft. Das Frontend soll dafuer nicht an Dateinamen
+    herumraten, also entscheidet der Parser:
+
+    * ``task-….md`` → ``task``. Der Titel steht in der Auftragsdatei erst
+      hinter der Operating Card — also weit hinter den
+      ``_MENTION_TRUNCATE_LEN`` Zeichen, die im Chat mitgezeigt werden. Er
+      wird deshalb hier aus dem UNGEKUERZTEN Inhalt gelesen.
+    * ``.msg-nudge.msg`` → ``nudge`` (Anstoss „schau in den Posteingang").
+    * ``0000000N__….msg`` → ``inbox`` (ueber MC zugestellte Nachricht).
+
+    Ohne einzelnen Absender (mehrere Dateien) wird keine Herkunft behauptet.
+    """
+    if not name:
+        return None
+    if _TASK_FILE_RE.match(name):
+        m = _NEW_TASK_RE.search(content)
+        return {"kind": "task", "title": m.group("title") if m else None}
+    if "nudge" in name:
+        return {"kind": "nudge", "title": None}
+    if _INBOX_FILE_RE.match(name):
+        return {"kind": "inbox", "title": None}
+    return None
+
+
 class OmpLineParser:
     """Zustandsbehafteter Zeilen-Parser: eine Rohzeile -> 0..n ChatEvents.
 
@@ -478,14 +511,17 @@ class OmpLineParser:
             return []
         parts: list[str] = []
         paths: list[str] = []
+        raw: list[str] = []
         for entry in files:
             if not isinstance(entry, dict):
                 continue
             path = entry.get("path") or ""
             content = entry.get("content")
-            body = _strip_read_format(str(content))[:_MENTION_TRUNCATE_LEN] if content else ""
+            full = _strip_read_format(str(content)) if content else ""
+            body = full[:_MENTION_TRUNCATE_LEN]
             parts.append(f"@{path}\n{body}".rstrip())
             paths.append(str(path))
+            raw.append(full)
         text = "\n\n".join(p for p in parts if p)
         if not text:
             return []
@@ -497,6 +533,7 @@ class OmpLineParser:
                 "ts": ts,
                 "role": "teammate",
                 "teammate": sender or None,
+                "source": _mention_source(sender, raw[0] if len(raw) == 1 else ""),
                 "text": text,
                 "model": None,
                 "sidechain": False,
@@ -673,6 +710,10 @@ class OmpLineParser:
                 "ts": ts,
                 "role": "teammate",
                 "teammate": custom_type if isinstance(custom_type, str) and custom_type else None,
+                "source": {
+                    "kind": "system",
+                    "title": custom_type if isinstance(custom_type, str) and custom_type else None,
+                },
                 "text": content[:_RESULT_TRUNCATE_LEN],
                 "model": None,
                 "sidechain": False,
