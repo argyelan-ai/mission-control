@@ -213,6 +213,14 @@ async def login(
         samesite="lax",
         max_age=settings.jwt_access_token_expire_minutes * 60,
         path="/",
+        # Secure only when the request actually arrived over TLS. Behind
+        # Caddy (TLS termination) uvicorn runs with --proxy-headers
+        # (backend/Dockerfile), so ProxyHeadersMiddleware rewrites
+        # scope["scheme"] from X-Forwarded-Proto and this is "https".
+        # A plain-HTTP login (localhost / LAN / Tailscale without TLS)
+        # must NOT get Secure — the browser would drop the cookie and
+        # lock the user out of their own UI. Never set this unconditionally.
+        secure=request.url.scheme == "https",
     )
     return response
 
