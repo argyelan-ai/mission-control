@@ -360,7 +360,7 @@ async def test_build_runtime_env_omp_vllm_docker_gets_slow_timeout(async_session
 
     env = await build_runtime_env(rt, async_session, agent=agent)
 
-    assert env["OMP_TURN_IDLE_TIMEOUT"] == "600"
+    assert env["OMP_TURN_IDLE_TIMEOUT"] == "1800"
 
 
 @pytest.mark.asyncio
@@ -381,7 +381,7 @@ async def test_build_runtime_env_omp_lmstudio_and_unsloth_get_slow_timeout(async
 
         env = await build_runtime_env(rt, async_session, agent=agent)
 
-        assert env["OMP_TURN_IDLE_TIMEOUT"] == "600", f"runtime_type={rtype} must get slow timeout"
+        assert env["OMP_TURN_IDLE_TIMEOUT"] == "1800", f"runtime_type={rtype} must get slow timeout"
 
 
 @pytest.mark.asyncio
@@ -405,7 +405,7 @@ async def test_build_runtime_env_omp_openai_compatible_local_host_gets_slow_time
 
     env = await build_runtime_env(rt, async_session, agent=agent)
 
-    assert env["OMP_TURN_IDLE_TIMEOUT"] == "600"
+    assert env["OMP_TURN_IDLE_TIMEOUT"] == "1800"
 
 
 @pytest.mark.asyncio
