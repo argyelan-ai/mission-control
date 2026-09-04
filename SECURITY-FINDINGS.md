@@ -39,7 +39,7 @@ Geprüft: f-string-SQL (`agents.py:1180`, `vault_index.py:160/179`, `mc_henry_su
 
 Geprüft: `docker-compose.yml` — alle Service-Ports binden an `127.0.0.1` außer Caddy (`${MC_BIND_ADDRESS:-127.0.0.1}`), kein `privileged: true` in irgendeiner Compose-Datei, `docker.sock` wird nur read-only in `docker-socket-proxy` gemountet (kein Direktzugriff des Backends), Proxy whitelistet explizit nur die benötigten API-Pfade (BUILD/SWARM/SYSTEM=0). Frontend: kein `dangerouslySetInnerHTML`, kein `localStorage`/`sessionStorage` (Auth läuft komplett über httpOnly-Cookie + Bearer-Header, kein Client-seitiges Token-Storage), keine Secrets in `NEXT_PUBLIC_*`-Vars.
 
-Ein Finding identifiziert, aber bewusst nicht automatisch gefixt (siehe unten): `mc_sse_token`-Cookie in `backend/app/routers/auth.py:202` ohne `secure=True`.
+Ein Finding wurde im Follow-up-PR (SSE-Cookie Secure-Flag) geschlossen: `mc_sse_token`-Cookie in `backend/app/routers/auth.py` setzte kein `Secure`-Flag. Details unten unter "Gefixt im Follow-up".
 
 ## Etappe E — Auth-Coverage (nachträglich, PR #404 Rex-Review)
 
@@ -53,15 +53,15 @@ Die drei in der Findings-Tabelle oben aufgeführten Vektoren wurden gezielt nach
 | IDOR / Ownership | Sauber, wo stichprobenartig geprüft — `agent_scoped` hängt durchgängig an `require_scope(...)`, Task-Zugriff prüft `assigned_agent_id`/`owner_agent_id`, Deliverable-Pfade mit `..`-Reject plus `realpath()` + Prefix-Check. |
 | Secrets in Migrations/Seeds | Sauber — 193 Alembic-Revisionen, keine hartkodierten Credentials. |
 
-## Nicht gefixt (bewusst)
+## Gefixt im Follow-up (SSE-Cookie Secure-Flag-PR)
 
-**Low — `mc_sse_token`-Cookie ohne `Secure`-Flag** (`backend/app/routers/auth.py:202`)
+**Low — `mc_sse_token`-Cookie ohne `Secure`-Flag** (`backend/app/routers/auth.py`) — GEFIXT
 
-Das Cookie ist `httponly=True` und `samesite="lax"`, aber nicht `secure=True` — es würde auch über Klartext-HTTP übertragen. Wichtig für die Risikoeinschätzung: `mc_sse_token` ist **kein reines SSE-Cookie** — `require_user` (`auth.py:136`) fällt für **jede** Route auf dieses Cookie zurück, wenn kein Bearer-Token vorliegt. Es ist ein vollwertiges Session-Credential, kein auf SSE beschränktes Sonderformat, und sollte auch so eingeschätzt werden.
+Das Cookie ist `httponly=True` und `samesite="lax"`, trug aber kein `secure` — es würde auch über Klartext-HTTP übertragen. Wichtig für die Risikoeinschätzung: `mc_sse_token` ist **kein reines SSE-Cookie** — `require_user` fällt für **jede** Route auf dieses Cookie zurück, wenn kein Bearer-Token vorliegt. Es ist ein vollwertiges Session-Credential.
 
-Laut `SECURITY.md` läuft MC bewusst im vertrauenswürdigen Netz. Präziser als "oft ohne TLS im internen Segment": über **Tailscale** ist die Leitung durch WireGuard ohnehin verschlüsselt, ein fehlendes `Secure`-Flag ist dort also nachrangig. Bei `MC_BIND_ADDRESS=0.0.0.0` im **LAN** (dem in `docker-compose.yml:362` dokumentierten Multi-Device-Modus, z. B. Handy ohne Tailscale) ist es dagegen echtes Klartext im lokalen Netz — dort ist das Risiko real, nicht nur theoretisch.
+**Gewähltes Kriterium:** `secure=request.url.scheme == "https"` (ASGI `scope["scheme"]`). Hinter Caddy läuft Uvicorn mit `--proxy-headers --forwarded-allow-ips=*` (backend/Dockerfile, PR #404) — `ProxyHeadersMiddleware` leitet das Scheme aus `X-Forwarded-Proto` des vertrauenswürdigen Proxies ab, das Flag greift also korrekt hinter dem Reverse Proxy. Bei reinem HTTP (localhost, LAN per `MC_BIND_ADDRESS=0.0.0.0`, Tailscale ohne TLS) wird `Secure` bewusst NICHT gesetzt — ein pauschales `secure=True` hätte der Browser beim Klartext-Login verworfen und den Nutzer aus der eigenen UI ausgesperrt.
 
-Ein pauschales `secure=True` würde den dokumentierten HTTP-Zugriffspfad brechen; ein korrektes bedingtes Secure-Flag (z. B. via `X-Forwarded-Proto` hinter Caddy) braucht Tests gegen den echten Reverse-Proxy-Aufbau, die im Rahmen dieses Audits nicht verifizierbar waren. Empfehlung für Follow-up: `secure=` aus `X-Forwarded-Proto`/`request.url.scheme` ableiten und gegen die Caddy-Konfiguration testen — sinnvollerweise im selben Zug wie die Proxy-Header-Vertrauenskonfiguration oben (beide brauchen dieselbe Grundlage).
+Beide Richtungen per Test belegt (`backend/tests/test_sse_cookie_secure_flag.py`): HTTPS-Login setzt `Secure`, Klartext-HTTP-Login nicht — und die Session funktioniert danach über den Cookie auf einer `require_user`-Route (`/api/v1/auth/me` → 200).
 
 **Low — Session-Token per Query-Parameter** (`backend/app/auth.py:127`)
 
