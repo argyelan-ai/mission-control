@@ -315,7 +315,13 @@ export function liveEventUuid(events: TimelineChatEvent[], status: StateEvent["s
   if (status !== "working") return null;
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev.kind === "message" && ev.role === "teammate" && ev.source) return ev.uuid;
+    if (ev.kind !== "message") continue; // Werkzeuge/Denken = der Agent arbeitet daran
+    // Die erste Nachricht von hinten entscheidet: ist es eine Ereignis-Karte,
+    // arbeitet der Agent gerade an ihr. Alles andere (Antwort, Operator-Text)
+    // heisst: das Ereignis ist beantwortet — es darf nicht mehr pulsieren.
+    // omp schreibt die Aufgaben-Nachricht erst am Zug-Ende ins Transcript;
+    // ohne diese Regel pulsierte waehrend des Zugs die VORIGE Aufgabe (04.09.).
+    return ev.role === "teammate" && ev.source ? ev.uuid : null;
   }
   return null;
 }
