@@ -50,7 +50,21 @@ break in ways that look like model problems:
    heartbeating every 3s. `classify()` now names the trigger (deadline / idle /
    child_dead) in the blocker text instead of one generic "kein Stream-Fortschritt".
 
-Both were live bugs on the omp path (Sparky) — fixed in PR #68. See also
+3. **A running tool is alive — and must say so.** The delta heartbeat (2.)
+   covers *generation*; it is silent while a tool *executes*. One `bash` call
+   running a 17-minute test suite produced no event between
+   `tool_execution_start` and `_end`, and the idle watchdog (600s on local
+   models) killed a working agent (04.09.2026). The hook therefore emits
+   `tool_start` / `tool_end` (with `toolName` + `toolCallId`) and, while ≥1
+   tool is in flight, a timer heartbeat `progress @ tool_heartbeat` every
+   `OMP_TOOL_HEARTBEAT_MS` (30s). The timer runs on omp's event loop, so it
+   proves the *process* is alive — a TUI that wedges inside a tool still
+   trips the idle watchdog, and the blocker then names the tool. The wall
+   clock (`OMP_TASK_DEADLINE`) is untouched: a tool that never ends is still
+   stopped. Any other harness with an idle watchdog needs the same three
+   signals: tool start, periodic liveness while running, tool end.
+
+1.–2. were live bugs on the omp path — fixed in PR #68; 3. followed on 04.09.2026. See also
 `mc_cli/config.py` (the file contract) and `bridge.py:supervise_stream` /
 `run_native_turn` (the watchdog).
 
@@ -62,7 +76,7 @@ Both were live bugs on the omp path (Sparky) — fixed in PR #68. See also
 |---|---|
 | `entrypoint.sh` | Container PID 1. Bootstraps tokens, renders `models.yml`, skips the omp setup wizard (`omp config set`), then boots the 3-window tmux: **Win0 = native TUI**, **Win1 = `bridge.py --serve`**, **Win2 = recycler**. |
 | `launch-omp.sh` | Single source of truth for the native TUI invocation (`omp --hook … --model … --cwd …`). Used by the entrypoint (boot) and by `bridge.py` (per-task relaunch). Sources `omp.env` so a `tmux respawn-window` still gets provider/model. |
-| `turn-end-hook.mjs` | ESM hook (`omp --hook`). Subscribes to omp lifecycle events and appends one JSON line per event (`session_start`/`turn_end`/`agent_end`/progress) to a signal file. The completion **oracle** — never throws, no-ops on missing fields. |
+| `turn-end-hook.mjs` | ESM hook (`omp --hook`). Subscribes to omp lifecycle events and appends one JSON line per event (`session_start`/`turn_end`/`agent_end`/`tool_start`/`tool_end`/progress) to a signal file. The completion **oracle** — never throws, no-ops on missing fields. |
 | `bridge.py` | The heart. `serve_loop` polls `/me/poll`; per task it relaunches Window 0 with the task cwd, injects the dispatch as an `@file` mention via `tmux send-keys`, tails the hook signal, folds it into a `RunOutcome`, and runs the **unchanged** `classify()` → `decide_lifecycle()` → `McCliLifecycle` (ack/finish/blocked + finish→blocked fallback). Includes the SIGKILL watchdog. |
 | `omp-recycler.sh` | Window-2 recycler. Keeps **both** the TUI (Win0) and the bridge (Win1) alive; only touches the TUI when idle (the bridge owns it during a task). |
 | `tests/test_bridge.py` | Golden tests for the NDJSON reducer/classifier (real captured streams). |
