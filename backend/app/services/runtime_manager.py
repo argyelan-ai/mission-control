@@ -27,6 +27,7 @@ State detection for unsloth:
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 from shlex import quote as shlex_quote
 
@@ -1746,6 +1747,7 @@ async def ensure_exclusive_host(
     *,
     host: ResolvedHost | None = None,
     session: AsyncSession | None = None,
+    host_id: uuid.UUID | None = None,
 ) -> dict:
     """Free the box before an ``exclusive_memory`` runtime starts.
 
@@ -1765,18 +1767,25 @@ async def ensure_exclusive_host(
     ``session`` may be passed by a caller that already holds one; otherwise a
     short-lived one is opened. The lifecycle API speaks registry dicts, not
     rows, and the host binding lives in the DB — so this has to look.
+
+    ``host_id`` frees a SPECIFIC box instead of the runtime's own one
+    (Rezept-Umschalter P3): ein Zweibox-Start räumt zuerst die Worker-Box,
+    die in ``runtimes.host_id`` gar nicht steht. Ohne den Parameter bleibt
+    alles wie bisher — die Box der Runtime.
     """
     if not runtime.get("exclusive_memory"):
         return {"ok": True, "message": "Runtime beansprucht die Box nicht exklusiv.", "stopped": []}
 
     slug = _grace_slug(runtime)
     if session is not None:
-        return await _ensure_exclusive_host(session, runtime, slug, host=host)
+        return await _ensure_exclusive_host(session, runtime, slug, host=host, host_id=host_id)
 
     from app.services.runtime_model_resolver import session_scope
 
     async with session_scope() as own_session:
-        return await _ensure_exclusive_host(own_session, runtime, slug, host=host)
+        return await _ensure_exclusive_host(
+            own_session, runtime, slug, host=host, host_id=host_id
+        )
 
 
 async def _ensure_exclusive_host(
@@ -1785,6 +1794,7 @@ async def _ensure_exclusive_host(
     slug: str | None,
     *,
     host: ResolvedHost | None = None,
+    host_id: uuid.UUID | None = None,
 ) -> dict:
     from app.services.host_resolver import resolve_host_for_runtime
 
@@ -1797,13 +1807,45 @@ async def _ensure_exclusive_host(
     # Same host only. A NULL host_id means "the settings fallback box" — two
     # NULLs are the same box, which is why this is an explicit IS NULL rather
     # than an equality that would never match.
-    host_id = row.host_id if row is not None else None
+    if host_id is None:
+        host_id = row.host_id if row is not None else None
     statement = (
         statement.where(Runtime.host_id.is_(None))
         if host_id is None
         else statement.where(Runtime.host_id == host_id)
     )
     others = [rt for rt in (await session.exec(statement)).all() if rt.slug != slug]
+
+    # Rezept-Umschalter P3: eine Box wird auch von einem VERBUND belegt, dessen
+    # Head woanders steht (``runtime_hosts``). Bis P3 wurde diese Tabelle nur
+    # gelesen; jetzt, wo sie gefüllt wird, muss die Verdrängung sie kennen —
+    # sonst startet ein Solo-Rezept auf einer Box, auf der noch die zweite
+    # Hälfte eines laufenden Verbunds arbeitet. Für Boxen ohne Mitgliedschaft
+    # (heute die grosse Mehrheit) liefert die Abfrage nichts und alles bleibt,
+    # wie es war.
+    if host_id is not None:
+        from app.models.runtime_host import RuntimeHost
+
+        member_ids = [
+            r.runtime_id
+            for r in (
+                await session.exec(select(RuntimeHost).where(RuntimeHost.host_id == host_id))
+            ).all()
+        ]
+        known = {rt.id for rt in others}
+        if member_ids:
+            member_runtimes = (
+                await session.exec(
+                    select(Runtime).where(
+                        Runtime.id.in_(member_ids),
+                        Runtime.enabled == True,  # noqa: E712
+                        Runtime.exclusive_memory == True,  # noqa: E712
+                    )
+                )
+            ).all()
+            others.extend(
+                rt for rt in member_runtimes if rt.slug != slug and rt.id not in known
+            )
 
     stopped: list[str] = []
     for other in others:

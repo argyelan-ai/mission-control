@@ -16,6 +16,8 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.activity import ActivityEvent
+from app.models.host import Host
+from app.models.local_recipe import LocalRecipe
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys
 from app.services import host_memory_prep, runtime_grace
@@ -54,6 +56,44 @@ async def _mk_runtime(session: AsyncSession, **overrides) -> Runtime:
     await session.commit()
     await session.refresh(rt)
     return rt
+
+
+async def _autostart_box(
+    session: AsyncSession, slug: str, *, model: str = "some-model", recipe_slug: str = "recipe-x"
+) -> Host:
+    """Eine Box, die den Autostart eingeschaltet hat — plus das Rezept, das
+    dort zuletzt lief (Rezept-Umschalter P3, 04.09.2026).
+
+    Seit P3 entscheidet die BOX, ob der Wächter etwas wiederbeleben darf
+    (``hosts.autostart_enabled`` + ``autostart_recipe_slug``), nicht mehr die
+    Engine-Art. Eine Runtime mit ``host_id`` auf eine Box ohne diesen Schalter
+    wird also NIE gestartet — genau deshalb legen diese Tests eine echte Box
+    an, statt eine erfundene UUID zu setzen.
+    """
+    existing = (
+        await session.exec(select(LocalRecipe).where(LocalRecipe.slug == recipe_slug))
+    ).first()
+    if existing is None:
+        session.add(
+            LocalRecipe(
+                slug=recipe_slug,
+                display_name=recipe_slug,
+                engine="vllm_docker",
+                model_identifier=model,
+            )
+        )
+    host = Host(
+        slug=slug,
+        display_name=slug.upper(),
+        kind="ssh",
+        ssh_host="192.0.2.10",
+        autostart_enabled=True,
+        autostart_recipe_slug=recipe_slug,
+    )
+    session.add(host)
+    await session.commit()
+    await session.refresh(host)
+    return host
 
 
 async def _event_types(session: AsyncSession) -> list[str]:
@@ -467,8 +507,8 @@ async def _mk_exclusive_pair(
     unreachable, each looking at the other and finding nothing to block
     itself) also firing.
     """
-    host_id = uuid.uuid4()
-    other_host_id = host_id if same_host else uuid.uuid4()
+    host_id = (await _autostart_box(async_session, "box-a")).id
+    other_host_id = host_id if same_host else (await _autostart_box(async_session, "box-b")).id
     subject = await _mk_runtime(
         async_session, slug="qwen-general", exclusive_memory=True, host_id=host_id,
     )
@@ -593,7 +633,7 @@ async def test_recovery_proceeds_when_the_sibling_is_not_exclusive(
 ):
     """A non-exclusive_memory runtime never claims the whole box, so it must
     never block a recovery either way."""
-    host_id = uuid.uuid4()
+    host_id = (await _autostart_box(async_session, "box-a")).id
     subject = await _mk_runtime(
         async_session, slug="qwen-general", exclusive_memory=True, host_id=host_id,
     )
@@ -619,7 +659,7 @@ async def test_recovery_proceeds_with_no_exclusive_siblings_at_all(
     the box with) must recover exactly as it did before PR 10."""
     await _mk_runtime(
         async_session, slug="lone-exclusive", exclusive_memory=True,
-        host_id=uuid.uuid4(),
+        host_id=(await _autostart_box(async_session, "box-a")).id,
     )
 
     start_mock = await _run_until_recovery(
