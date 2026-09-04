@@ -6,6 +6,19 @@
  * two files in sync; the backend module docstring is the source of truth.
  */
 
+/** Woher eine Zeile „von aussen" stammt (Backend `_mention_source` in
+ *  `omp_chat.py` bzw. `_parse_teammate_message` in `transcript_chat.py`).
+ *  `task` = Auftrag (Dispatch-Datei), `nudge` = Anstoss „Posteingang lesen",
+ *  `inbox` = ueber MC zugestellte Nachricht, `teammate` = Rueckmeldung eines
+ *  Subagenten/einer anderen Sitzung, `system` = Meldung des Harness selbst.
+ *  `title` ist nur beim Auftrag gefuellt (aus der ungekuerzten Datei). */
+export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system";
+
+export interface MessageSource {
+  kind: MessageSourceKind;
+  title: string | null;
+}
+
 export interface MessageEvent {
   kind: "message";
   uuid: string;
@@ -21,6 +34,9 @@ export interface MessageEvent {
   /** Nur bei `role: "teammate"`: wer geschrieben hat. `null`, wenn die
    *  Nachricht keinen Absender trug — dann wird nichts behauptet. */
   teammate?: string | null;
+  /** Nur bei `role: "teammate"`: die Herkunft, sofern der Parser sie sicher
+   *  kennt. `null`/fehlend = keine Behauptung, die Zeile bleibt schlicht. */
+  source?: MessageSource | null;
 }
 
 export interface ToolEvent {

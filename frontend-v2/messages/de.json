@@ -2840,6 +2840,16 @@
   },
   "chat": {
     "showMore": "Mehr anzeigen",
-    "showLess": "Weniger anzeigen"
+    "showLess": "Weniger anzeigen",
+    "event": {
+      "task": "Aufgabe",
+      "nudge": "Hinweis",
+      "inbox": "Nachricht",
+      "teammate": "Rückmeldung",
+      "system": "System",
+      "fromMc": "Mission Control",
+      "expand": "Inhalt anzeigen",
+      "collapse": "Inhalt ausblenden"
+    }
   }
 }
