@@ -978,3 +978,72 @@ def test_recipe_spec_round_trips_env_file_and_env_map_and_an_update_moves_them()
     # Und die Engine-Tuning-Spalte bleibt davon unberührt (zwei Felder, ein Name
     # war die Falle: `env` = Tuning, `env_map` = Adressen).
     assert row.env is None
+
+
+# ---------------------------------------------------------------------------
+# Nachlese 04.09.2026 (Live-Befunde nach dem P3-Deploy)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_explicit_backlink_beats_a_matching_model_identifier(auth_client, session):
+    """Zwei Rezepte auf demselben Port: der Wächter hatte der GESTOPPTEN
+    Instanz das Modell der laufenden zugeschrieben. Ihr Rückverweis zeigt aber
+    auf ein anderes Rezept — damit ist sie nie unsere Instanz."""
+    box_a = await _host(session, "box-a")
+    box_b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    duo = await _duo_recipe(session, "recipe-duo", model_identifier="org/shared-model")
+    await _recipe(session, "recipe-solo", model_identifier="org/solo-model")
+    stale = await _runtime(
+        session, "solo-instance", box_a, runtime_type="ssh_process",
+        model_identifier="org/shared-model",  # vom Nachbarn geerbt
+        topology={"nodes": 1, "recipe_slug": "recipe-solo"},
+    )
+    real = await _runtime(
+        session, "duo-instance", box_a, model_identifier="org/shared-model",
+        topology={"nodes": 2, "recipe_slug": duo.slug},
+    )
+    session.add(RuntimeHost(runtime_id=real.id, host_id=box_b.id, role="worker", node_rank=1))
+    await session.commit()
+
+    assert recipe_switcher.recipe_matches_runtime(duo, stale) is False
+    assert recipe_switcher.recipe_matches_runtime(duo, real) is True
+
+    with _probe({"duo-instance"}):
+        body = (await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json()
+    entry = next(e for e in body if e["slug"] == "recipe-duo")
+    assert entry["instance_runtime_id"] == str(real.id)
+    assert entry["running"] is True
+
+
+@pytest.mark.asyncio
+async def test_worker_of_a_foreign_duo_is_not_a_candidate(auth_client, session):
+    """Belegt ein Verbund mit ANDEREM Head die Box, bleibt sie tabu — nur die
+    Belegung durch den eigenen Vorgänger ist verdrängbar."""
+    box_a = await _host(session, "box-a")
+    box_b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    box_c = await _host(session, "box-c", ssh_host="192.0.2.12")
+    duo = await _duo_recipe(session, "recipe-duo")
+    foreign = await _runtime(
+        session, "foreign-head", box_c, topology={"nodes": 2, "recipe_slug": "recipe-other"}
+    )
+    session.add(RuntimeHost(runtime_id=foreign.id, host_id=box_b.id, role="worker", node_rank=1))
+    await session.commit()
+
+    with _probe({"foreign-head"}):
+        body = (await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json()
+    entry = next(e for e in body if e["slug"] == duo.slug)
+    assert [w["slug"] for w in entry["candidate_workers"]] == []
+    assert entry["fit"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_drift_guard_never_trusts_a_host_engine_without_anchor(session):
+    """ssh_process ohne Handle: kein Beleg, dass diese Instanz antwortet —
+    also folgt der Wächter dem gemeldeten Modell NICHT."""
+    box_a = await _host(session, "box-a")
+    no_anchor = await _runtime(session, "no-anchor", box_a, runtime_type="ssh_process")
+    docker_no_anchor = await _runtime(session, "docker-no-anchor", box_a, container_name=None)
+    watcher = RuntimeWatcher()
+    assert await watcher._served_answer_is_own(session, no_anchor) is False  # noqa: SLF001
+    assert await watcher._served_answer_is_own(session, docker_no_anchor) is True  # noqa: SLF001
