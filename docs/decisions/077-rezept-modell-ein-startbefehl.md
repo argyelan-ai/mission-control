@@ -183,9 +183,119 @@ Label-Verifikation. Nur eine sparkrun-Zeile **ohne** jeden Befehl wird
 |---|---|---|
 | P0 Daten | `topology` + `port` am Katalog (Migration 0191), Katalog nachtragen | ✅ #388 |
 | P1 Sichtbar + sparkrun raus | eine Schnittstelle, beide Umschalter, Pflicht-Startbefehl, Umwandlung | ✅ Backend #388 · Frontend #381 |
-| P2 Rolle + SSH | `hosts.role` (head/worker), Box-Wizard erfasst Rolle + SSH für jede Box | offen |
-| P3 Duo-Start | Worker-Wahl beim Start, MC schreibt `HEAD_IP`/`WORKER_IP` in die `.env` des Rezepts, Schreibpfad `runtime_hosts`, Verdrängung über alle Mitglieder | offen |
+| P2 Rolle + SSH | `hosts.role` (head/worker), Box-Wizard erfasst Rolle + SSH für jede Box | ✅ |
+| P3 Duo-Start + Autostart je Box | Worker-Wahl beim Start, MC schreibt die Adressen in die `.env` des Rezepts (`env_file`/`env_map`, Migration 0193), Schreibpfad `runtime_hosts`, Verdrängung über alle Mitglieder, Autostart-Schalter je Box statt blinder Wiederbelebung | ✅ |
 | P4 Vorflug | RAM/Disk-Prüfung über alle Ziel-Boxen aus der Telemetrie | offen |
+
+## P3-Umsetzung (04.09.2026)
+
+Der Zweibox-Start ist da, und mit ihm ein zweiter Beschluss, den der Betrieb
+erzwungen hat: **Autostart ist eine Eigenschaft der Box, keine der Runtime.**
+
+### Was MC beim Duo-Start tut — und was nicht
+
+MC spricht weiter nur mit dem Head (Regel 5 bleibt). Dazu kommen genau drei
+Schritte, alle in `services/recipe_switcher.start_recipe_on_host`:
+
+1. **Worker wählen.** Der Betreiber nennt eine Box (`POST …/start` mit
+   `{"worker_host_id"}`) oder MC nimmt den ersten Kandidaten aus
+   `candidate_workers` (Worker-Rolle zuerst, P2). Keine freie Box → 409 mit
+   Satz, kein halber Start.
+2. **`.env` schreiben.** `services/recipe_env` rendert die Zuordnung aus dem
+   Katalog und schreibt sie über die eine SSH-Primitive auf den Head.
+3. **Mitgliedschaft festhalten.** `runtime_hosts` bekommt endlich seinen
+   Schreibpfad: Head rank 0, Worker rank 1, idempotent (löschen, dann neu).
+
+Gestartet wird danach wie immer über `runtime_manager.start_runtime`. Kein
+neuer Multi-Host-Startcode, kein zweiter Lebenszyklus.
+
+### Entscheid 1: Platzhalter statt fester Schlüsselnamen
+
+`local_recipes.env_map` ist eine flache Zuordnung `{"ENV_KEY": "{platzhalter}"}`
+statt zweier fest verdrahteter Namen `HEAD_IP`/`WORKER_IP`. Erlaubt sind
+`{head_ip}` `{worker_ip}` (die SSH-Adresse), `{head_fabric_ip}`
+`{worker_fabric_ip}` (das Verbund-Kabel, NULL fällt auf die SSH-Adresse
+zurück) und `{head_ssh}` `{worker_ssh}` (`user@host`).
+
+Grund: jedes Rezept nennt seine Variablen anders, und die Adresse, die das
+Rezept braucht, ist nicht immer dieselbe — über das Verbund-Kabel reden die
+Boxen unter anderen Adressen als MC mit ihnen. Zwei feste Namen hätten genau
+ein Rezept bedient. **Kein Gerätename im Katalog:** die Zuordnung sagt nur,
+welche ROLLE in welchen Schlüssel gehört; welche Box das ist, entscheidet erst
+der Start. Ein unbekannter Platzhalter ist ein 422 mit Satz, kein stiller
+Fallback — ein Verbund, der die falsche Box anfasst, wäre schlimmer als einer,
+der gar nicht startet.
+
+Fehlt einem Zweibox-Rezept `env_file` oder `env_map`, ist es in der Liste grau
+(`env_ready: false`) und beim Start ein 422. Das steht ohne Netzzugriff fest,
+also wird es geprüft, bevor irgendetwas angefasst wird.
+
+### Entscheid 2: Autostart je Box ersetzt die blinde Wiederbelebung
+
+`runtime_watcher._maybe_auto_recover` entschied bisher an der Engine-Art
+(Docker ja, alles andere nie) und startete alles, was auf einer Box ausfiel.
+Wer das verhindern wollte — etwa für einen Handtest auf der Box — musste
+`runtimes.enabled` umlegen; ein Trick mit Nebenwirkungen, und einer, der beim
+Rezept-Vergleich am 04.09. mitten in eine Messung hineingestartet hat.
+
+Jetzt entscheidet die Box: `hosts.autostart_enabled` (Standard **aus**) plus
+`hosts.autostart_recipe_slug` (wird bei jedem Rezept-Start gesetzt, auch bei
+Solo). Aus heisst: MC startet auf dieser Box von sich aus gar nichts. An
+heisst: MC startet genau dieses eine Rezept wieder — keine andere Runtime auf
+derselben Box, auch wenn sie gleichzeitig ausfällt. Die Zuordnung Runtime ↔
+Rezept macht `recipe_matches_runtime`, dieselbe wie überall sonst.
+
+Es bleibt **ein** Mechanismus, kein zweiter daneben: alle Schwellen (3 Proben,
+2 Versuche, 15-Minuten-Cooldown, Redis-Claim, Geschwister-Prüfung) gelten
+unverändert, und `settings.runtime_auto_recovery_enabled` bleibt der Not-Aus
+über allem. Neu ist nur, wer gefragt wird. Zwei Folgen:
+
+* Die Docker-Sperre fällt, aber nur bis zu den Engines, die MC über einen
+  Befehl startet (`vllm_docker`, `llamacpp_docker`, `ssh_process` — genau die
+  Rezept-Engines). LM Studio und Cloud bleiben aussen vor: dort gäbe es nichts
+  zu starten.
+* Eine Verbund-Instanz wird über `recipe_switcher.start_recipe_on_host`
+  wiederbelebt, nicht über `start_runtime` — sonst stünde in ihrer `.env` noch
+  die Adresse von gestern. Die Worker-Box kommt aus
+  `runtimes.topology.worker_host_id`.
+
+Nach jedem Versuch stehen `autostart_last_attempt_at` und
+`autostart_last_result` an der Box (ein Satz für die Kachel), dazu ein
+Ereignis `host.autostart_attempt`. Der Schalter selbst wird über
+`GET/PUT /api/v1/hosts/{host_id}/autostart` bedient (Lesen: jeder, Schalten:
+Admin). Einschalten ohne je ein Rezept gestartet zu haben ist ein 422 mit
+Satz statt ein Schalter, der nie etwas tut.
+
+### Entscheid 3: Verdrängung über die Mitglieder, Worker zuerst
+
+Eine Box wird auch von einem Verbund belegt, dessen Head woanders steht. Seit
+`runtime_hosts` gefüllt wird, muss die Verdrängung das sehen, sonst zieht der
+nächste Solo-Start einem laufenden Verbund die zweite Box unter den Füssen
+weg. `runtime_manager.ensure_exclusive_host` bekommt darum zwei Ergänzungen:
+ein optionales `host_id` (räume DIESE Box frei, nicht die der Runtime) und den
+Blick in `runtime_hosts`. Für eine Box ohne Mitgliedschaften — heute die
+grosse Mehrheit — ändert sich nichts.
+
+Reihenfolge: **erst die Worker-Box, dann der Head** (den räumt `start_runtime`
+selbst). Andersherum stünde der Head kurz leer, während die Worker-Box noch
+das alte Modell hält. Und beides erst, nachdem beide Boxen per SSH geantwortet
+haben — eine Box freizuräumen und danach zu merken, dass die zweite gar nicht
+erreichbar ist, wäre der Vorfall vom 03.09. in gross.
+
+### Bewusste Abweichungen
+
+* **Der Reihenfolge-Vorschlag „`.env` vor der Instanz" wurde getauscht.** Die
+  Instanz (eine DB-Zeile) entsteht vor dem ersten Eingriff auf einer Box; sie
+  wird gebraucht, um die Verdrängung von der eigenen Instanz zu unterscheiden.
+  Angefasst wird auf den Boxen weiterhin erst nach allen Prüfungen.
+* **`candidate_workers` zeigt nur Boxen mit SSH-Zugang.** Eine Box, die im
+  Dialog wählbar wäre und beim Klick abgelehnt würde, ist genau die
+  Unehrlichkeit, die dieses ADR abgeschafft hat.
+
+### Was P3 nicht tut
+
+Kein Boot-Signal vom node-agent (die Proben reichen, ≈4,5 min), kein
+RAM/Disk-Vorflug über beide Boxen (P4), kein Umschalter auf der Worker-Kachel.
 
 Zu P3, geprüft am 02.09.: Das Start-Skript des Zweibox-Rezepts lädt seine
 `.env` **vor** den Standardwerten (`set -a`, dann `HEAD_IP="${HEAD_IP:-…}"`).
@@ -210,4 +320,14 @@ zwei, idempotent), nicht als Umgebungsvariable mitgeben.
 - Vertrag: `docs/plans/2026-09-02-rezept-umschalter-vertrag.md`
 - Verwandte ADRs: ADR-036 (`launch_command`, wird hier zur Pflicht), ADR-048 (Host-Registry, `resolved_host_from_row`),
   ADR-054 („Engine leads, MC follows" — `running` nur aus der Probe), ADR-059 (superseded; Prozess-Check `verify_spark_vllm_process_started` bleibt), ADR-057 (Engine Control)
+- P3 (04.09.2026): `backend/alembic/versions/0193_p3_duo_autostart.py`,
+  `backend/app/services/recipe_env.py` (`render_env_map`, `upsert_env_file`),
+  `backend/app/services/recipe_switcher.py` (`start_recipe_on_host` mit `worker_host_id`,
+  `set_runtime_members`, `duo_worker_candidates`, `recipe_env_ready`, `FleetState`),
+  `backend/app/services/runtime_manager.py` (`ensure_exclusive_host(host_id=…)` + `runtime_hosts`),
+  `backend/app/services/runtime_watcher.py` (`_autostart_target`, `_autostart_start`,
+  `_record_autostart_attempt`), `backend/app/routers/hosts.py` (`GET/PUT /{host_id}/autostart`),
+  `backend/app/routers/host_recipes.py` (Body `{"worker_host_id"}`),
+  `backend/app/models/host.py` + `backend/app/models/local_recipe.py`,
+  Tests: `backend/tests/test_recipe_switcher_p3.py`
 - Skill für neue Rezepte: `~/.claude/skills/mc-recipe-integration/SKILL.md`

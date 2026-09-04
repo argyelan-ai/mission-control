@@ -71,6 +71,12 @@ class LocalRecipeOut(BaseModel):
     # gerechnete Ergebnis, damit die Oberfläche nichts nachrechnet.
     exclusive: bool | None
     exclusive_effective: bool
+    # P3: wo die .env des Rezepts liegt und welcher Schlüssel welche Adresse
+    # bekommt. ``env_ready`` ist die fertig gerechnete Antwort auf „kann MC
+    # dieses Rezept als Verbund starten?" — die Oberfläche rechnet nichts nach.
+    env_file: str | None
+    env_map: dict[str, str] | None
+    env_ready: bool
     tags: list[str]
     notes: str | None
     enabled: bool
@@ -136,6 +142,9 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
         port=recipe.port,
         exclusive=recipe.exclusive,
         exclusive_effective=recipe_switcher.recipe_is_exclusive(recipe),
+        env_file=recipe.env_file,
+        env_map=dict(recipe.env_map) if recipe.env_map else None,
+        env_ready=recipe_switcher.recipe_env_ready(recipe),
         tags=list(recipe.tags or []),
         notes=recipe.notes,
         enabled=recipe.enabled,

@@ -108,6 +108,26 @@ class LocalRecipe(SQLModel, table=True):
     # exklusiv) als Fallback — siehe recipe_switcher.recipe_is_exclusive.
     exclusive: bool | None = Field(default=None, sa_column=Column(Boolean, nullable=True))
 
+    # ── Rezept-Umschalter P3: die .env des Rezepts (Entwurf 04.09.2026) ──────
+    #
+    # Ein Zweibox-Rezept orchestriert seinen Worker SELBST (ADR-077, Regel 5).
+    # Gesteuert wird es über seine eigene `.env` auf dem Head: das Startskript
+    # lädt sie VOR den Standardwerten, die `.env` gewinnt also gegen alles,
+    # was MC als Umgebungsvariable mitgeben könnte. Darum schreibt MC beim
+    # Duo-Start genau diese Datei — idempotent, nur die hier genannten
+    # Schlüssel (services/recipe_env.py).
+    #
+    # env_file: absoluter Pfad ODER ~-Pfad auf dem Head. `~` bleibt für die
+    # Shell der Box stehen; MC löst es nicht lokal auf (der Backend-Container
+    # hat ein anderes Zuhause als der Betreiber auf der Box).
+    env_file: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # env_map: {"ENV_KEY": "{platzhalter}"} — welcher Schlüssel welche Adresse
+    # bekommt. Erlaubte Platzhalter: services/recipe_env.PLACEHOLDERS. Ein Wert
+    # darf Text drumherum haben ("tcp://{worker_fabric_ip}:29500").
+    # KEINE Gerätedaten: der Katalog sagt nur, WELCHE Rolle in welchen
+    # Schlüssel gehört — welche Box das ist, entscheidet erst der Start.
+    env_map: dict[str, str] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
     # One-click installation (PR 6). The command that puts the engine ON the
     # box — cloning a repo, building it, fetching weights. Runs once, as a
     # background job with a live log (services/recipe_install), never as part
