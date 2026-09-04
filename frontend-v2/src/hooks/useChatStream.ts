@@ -59,6 +59,11 @@ export interface PendingEcho {
   status: EchoStatus;
   /** True once the single `agent_starting` retry has been used up. */
   retried?: boolean;
+  /** Sent while the agent was already mid-turn — the only case the CLI
+   *  actually holds the line. The message that STARTS a turn is never held,
+   *  it is the reason the agent is working (operator finding 04.09.2026 on
+   *  omp, which writes the transcript only at the end of the turn). */
+  midTurn?: boolean;
 }
 
 /** Kommandos, deren ERFOLG die Sitzung wegwirft. Ihre Bestaetigung kann per
@@ -159,8 +164,9 @@ export function markUnconfirmedEchoes(
   let changed = false;
   const next = echoes.map((e) => {
     if (agentWorking) {
-      // Mid-turn: show the queue, don't start a clock.
-      if (e.status === "pending") {
+      // Mid-turn: show the queue, don't start a clock. Only a line sent INTO
+      // the running turn is queued; the one that started it just waits.
+      if (e.status === "pending" && e.midTurn) {
         changed = true;
         return { ...e, status: "queued" as const };
       }
@@ -423,8 +429,9 @@ export interface UseChatStreamResult {
   /** Locally-rendered messages awaiting their transcript confirmation, oldest
    *  first. Render these AFTER `events`. */
   pendingEchoes: PendingEcho[];
-  /** Call the moment a send is dispatched — before the request resolves. */
-  echoSent: (text: string) => void;
+  /** Call the moment a send is dispatched — before the request resolves.
+   *  `midTurn`: the agent was already working when this was sent. */
+  echoSent: (text: string, midTurn?: boolean) => void;
   /** Call when that send failed: the echo is removed again, since nothing was
    *  delivered and a lingering bubble would claim otherwise. */
   echoFailed: (text: string) => void;
@@ -527,11 +534,11 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     for (const ev of buffered) dispatch(ev);
   }, [historyQuery.isError]);
 
-  const echoSent = useCallback((text: string) => {
+  const echoSent = useCallback((text: string, midTurn = false) => {
     echoSeqRef.current += 1;
     setPendingEchoes((prev) => [
       ...prev,
-      { id: `echo-${echoSeqRef.current}`, text, sentAt: Date.now(), status: "pending" },
+      { id: `echo-${echoSeqRef.current}`, text, sentAt: Date.now(), status: "pending", midTurn },
     ]);
     setAwaitingResponse(true);
   }, []);
