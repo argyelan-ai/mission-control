@@ -221,6 +221,9 @@ def _parse_teammate_message(
                 "ts": ts,
                 "role": "teammate",
                 "teammate": id_match.group("id") if id_match else None,
+                # Herkunft fuer das Chat-Motiv: Rueckmeldung eines
+                # Teamkollegen; einen Titel gibt es hier nicht.
+                "source": {"kind": "teammate", "title": None},
                 "text": payload.strip(),
                 "model": None,
                 "sidechain": sidechain,

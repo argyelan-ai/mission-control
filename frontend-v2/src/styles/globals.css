@@ -561,8 +561,66 @@ body {
 .effort-fill[data-pending="true"] { animation: effort-breathe 900ms ease-in-out infinite; }
 .effort-fill[data-settled="true"] { animation: effort-settle 320ms cubic-bezier(0.2, 0, 0, 1); }
 
+/* ── Status-Zeile als Livefeed (Operator-Wunsch 04.09.2026): Leucht-Punkt mit
+   auslaufendem Ring, das Arbeits-Wort buchstabenweise mit Lichtlauf. Alles
+   nur transform/opacity/background-position; Farbe kommt aus --status-dot,
+   damit Warn- und Ruhezustaende ihre eigene Farbe behalten. */
+.status-dot[data-live="true"] {
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--status-dot) 55%, transparent);
+  animation: status-dotpulse 1.6s ease-in-out infinite;
+}
+.status-dot[data-live="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  border: 1px solid var(--status-dot);
+  opacity: 0;
+  animation: status-ring 1.6s ease-out infinite;
+}
+@keyframes status-dotpulse {
+  0%, 100% { transform: scale(0.9); }
+  50% { transform: scale(1.15); }
+}
+@keyframes status-ring {
+  0% { transform: scale(0.5); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.status-word { display: inline-flex; font-weight: 500; letter-spacing: 0.01em; }
+.status-letter {
+  display: inline-block;
+  white-space: pre; /* ein Leerzeichen-Span behaelt seine Breite */
+  background: linear-gradient(90deg, #5890ca 0%, #e6f1ff 50%, #5890ca 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation-name: status-wave, status-sweep, status-letter-in;
+  animation-duration: 1.8s, 2.2s, 260ms;
+  animation-timing-function: ease-in-out, linear, cubic-bezier(0.2, 0, 0, 1);
+  animation-iteration-count: infinite, infinite, 1;
+  animation-fill-mode: none, none, backwards;
+}
+@keyframes status-wave {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+@keyframes status-sweep {
+  0% { background-position: 150% 0; }
+  100% { background-position: -50% 0; }
+}
+@keyframes status-letter-in {
+  0% { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
 /* ── Reduced Motion: alle Deko-Loops aus, Interaktion bleibt instant */
 @media (prefers-reduced-motion: reduce) {
+  .status-dot[data-live="true"], .status-dot[data-live="true"]::after, .status-letter { animation: none; }
+  .status-dot[data-live="true"]::after { display: none; }
+  /* Ohne Lichtlauf bleibt der Verlauf stehen — hell genug, dass das Wort
+     lesbar ist, statt halb dunkelblau auf dunkelgrau. */
+  .status-letter { background: none; color: #8fc1ff; }
   .unfold, .unfold-inner, .chevron-turn { transition: none; }
   .effort-fill[data-pending="true"], .effort-fill[data-settled="true"] { animation: none; }
   .animate-float { animation: none; }

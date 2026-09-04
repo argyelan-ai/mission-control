@@ -176,6 +176,30 @@ describe("ChatMessage — Anhänge", () => {
 });
 
 describe("ChatMessage — Teamkollegen-Nachricht", () => {
+  it("renders a teammate turn WITH a source as an event card", () => {
+    render(
+      <ChatMessage
+        ev={mkEvent({ role: "teammate", teammate: "task-1.md", text: "brief", source: { kind: "task", title: "Beweis" } })}
+      />,
+    );
+    expect(screen.getByTestId("event-card")).toBeTruthy();
+    expect(screen.queryByTestId("teammate-row")).toBeNull();
+  });
+
+  it("marks the event card live only when told so", () => {
+    const ev = mkEvent({ role: "teammate", teammate: "task-1.md", text: "brief", source: { kind: "task", title: "Beweis" } });
+    const { rerender } = render(<ChatMessage ev={ev} />);
+    expect(screen.getByTestId("event-card")).toHaveAttribute("data-live", "false");
+    rerender(<ChatMessage ev={ev} live />);
+    expect(screen.getByTestId("event-card")).toHaveAttribute("data-live", "true");
+  });
+
+  it("keeps the plain teammate row when the parser claimed no source", () => {
+    render(<ChatMessage ev={mkEvent({ role: "teammate", teammate: null, source: null, text: "x" })} />);
+    expect(screen.getByTestId("teammate-row")).toBeTruthy();
+    expect(screen.queryByTestId("event-card")).toBeNull();
+  });
+
   function mkTeammate(text: string, teammate: string | null = "qwen-research") {
     return { kind: "message", role: "teammate", teammate, uuid: "t1",
              ts: "2026-08-19T10:00:00Z", text, model: null, sidechain: false } as never;
