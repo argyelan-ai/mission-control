@@ -34,7 +34,8 @@ break in ways that look like model problems:
    `bridge.py:write_task_context_env` does. Fallback: `mc recover` rewrites it.
 
 2. **Emit a streaming progress heartbeat, not just turn/tool-boundary events.**
-   The no-progress watchdog (`OMP_TURN_IDLE_TIMEOUT`, 300s) measures liveness
+   The no-progress watchdog (`OMP_TURN_IDLE_TIMEOUT`, default 900s; the backend hands slow local
+   runtimes 1800s) measures liveness
    from the hook's `progress` records. If the harness only emits at
    `turn_start` / `tool_execution_end`, a **single long generation** (e.g. the
    model writing a 2000-line file in one tool call — no `tool_execution_end`
@@ -64,7 +65,22 @@ break in ways that look like model problems:
    stopped. Any other harness with an idle watchdog needs the same three
    signals: tool start, periodic liveness while running, tool end.
 
-1.–2. were live bugs on the omp path — fixed in PR #68; 3. followed on 04.09.2026. See also
+4. **An open model request is alive — before the first token.** Measured on
+   omp 16.4.6 against a local GLM-5.3 with a 26k-token prompt: between
+   `turn_start` and the assistant's `message_start` there were **58 s with no
+   event at all** (prefill). Hidden reasoning or a bigger context stretches
+   that to minutes — still no delta, still no tool, so 2. and 3. are both
+   silent. The hook therefore treats the request window
+   `turn_start → assistant message_end` like a running tool: `model_start` /
+   `model_end` records plus `progress @ model_heartbeat` on the same timer
+   (`OMP_TOOL_HEARTBEAT_MS`). User / toolResult messages do not touch the
+   window; `turn_end` / `agent_end` / `session_start` close it. If omp
+   freezes inside a request the idle watchdog still fires and the blocker
+   says „Modell-Anfrage offen" (`watchdog_phase == "model"`). As a safety net
+   the idle defaults moved 300→900 s (cloud) and 600→1800 s (local) on the
+   same day — a guessed number must never kill a thinking model.
+
+1.–2. were live bugs on the omp path — fixed in PR #68; 3. and 4. followed on 04.09.2026. See also
 `mc_cli/config.py` (the file contract) and `bridge.py:supervise_stream` /
 `run_native_turn` (the watchdog).
 

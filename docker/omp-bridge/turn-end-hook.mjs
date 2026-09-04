@@ -103,9 +103,10 @@ export default (api) => {
     // Liveness heartbeats so the bridge's no-progress watchdog can tell a
     // legitimately-busy TUI (streaming / long tool run) from a wedged one.
     // These carry NO decision weight — they only prove forward progress.
-    api.on("turn_start", () =>
-      emit({ kind: "progress", at: "turn_start", ts: Date.now() })
-    );
+    api.on("turn_start", () => {
+      emit({ kind: "progress", at: "turn_start", ts: Date.now() });
+      openModelRequest();
+    });
 
     // Running tool = alive (04.09.2026). One silent bash call (a 17-minute test
     // suite) produces NO event between tool_execution_start and _end, so the
@@ -123,7 +124,17 @@ export default (api) => {
     const TOOL_HEARTBEAT_MS = Math.max(
       5, Number(process.env.OMP_TOOL_HEARTBEAT_MS) || 30000
     );
+    // Open model request = alive (04.09.2026, same day, second lesson). Measured
+    // on a 26k-token prompt: between turn_start and the assistant's
+    // message_start omp emits NOTHING for 58 s (prefill on the local box);
+    // hidden reasoning or a bigger context stretches that to minutes — still
+    // no token, still no event. So the request window
+    //   turn_start  →  assistant message_end
+    // heartbeats too (model_heartbeat). model_start / model_end let the bridge
+    // name the phase („Modell-Anfrage offen") if omp wedges inside it. User
+    // and toolResult messages do not touch the window.
     const runningTools = new Map(); // toolCallId -> toolName
+    let modelInFlight = false;
     let heartbeat = null;
     const stopHeartbeat = () => {
       if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
@@ -132,13 +143,35 @@ export default (api) => {
       if (heartbeat) return;
       heartbeat = setInterval(() => {
         try {
-          if (runningTools.size === 0) return stopHeartbeat();
-          emit({ kind: "progress", at: "tool_heartbeat", ts: Date.now() });
+          if (runningTools.size === 0 && !modelInFlight) return stopHeartbeat();
+          emit({
+            kind: "progress",
+            at: runningTools.size ? "tool_heartbeat" : "model_heartbeat",
+            ts: Date.now(),
+          });
         } catch (_e) { /* never propagate into the TUI */ }
       }, TOOL_HEARTBEAT_MS);
       if (heartbeat && typeof heartbeat.unref === "function") heartbeat.unref();
     };
-    const clearTools = () => { runningTools.clear(); stopHeartbeat(); };
+    const openModelRequest = () => {
+      if (modelInFlight) return;
+      modelInFlight = true;
+      emit({ kind: "model_start", ts: Date.now() });
+      startHeartbeat();
+    };
+    const closeModelRequest = () => {
+      if (!modelInFlight) return;
+      modelInFlight = false;
+      emit({ kind: "model_end", ts: Date.now() });
+      if (runningTools.size === 0) stopHeartbeat();
+    };
+    const isAssistant = (ev) =>
+      !!(ev && ev.message && ev.message.role === "assistant");
+    api.on("message_start", (ev) => { if (isAssistant(ev)) openModelRequest(); });
+    api.on("message_end", (ev) => { if (isAssistant(ev)) closeModelRequest(); });
+    const clearTools = () => {
+      runningTools.clear(); modelInFlight = false; stopHeartbeat();
+    };
     const callId = (ev, fallback) =>
       String((ev && (ev.toolCallId || ev.toolCallID || ev.id)) || fallback);
 
@@ -164,7 +197,7 @@ export default (api) => {
         kind: "tool_end", toolCallId: id === "null" ? null : id,
         isError: !!(ev && ev.isError), ts: Date.now(),
       });
-      if (runningTools.size === 0) stopHeartbeat();
+      if (runningTools.size === 0 && !modelInFlight) stopHeartbeat();
     });
     // No tool survives a turn / response boundary — a missed end event must
     // never leave a phantom "running" tool heartbeating forever.
