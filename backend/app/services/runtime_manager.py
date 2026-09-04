@@ -2237,7 +2237,16 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                     # a mysteriously "unreachable" runtime minutes later.
                     # llama-server never matches "vllm serve", so llamacpp rows
                     # get the equivalent check on their own process name.
-                    if is_llamacpp:
+                    if multi_box:
+                        # Verbund: der Rezept-Container läuft erst Prüfungen und
+                        # Patches, der vllm-Prozess kommt Minuten später — und
+                        # der Worker auf der zweiten Box wartet derweil. Der
+                        # Container ist hier der Beweis; ob der Endpunkt kommt,
+                        # entscheidet die normale Probe (Live 04.09.2026, 23:20:
+                        # „kein vllm-serve-Prozess" bei einem gesunden Start).
+                        serving = "serving"
+                        process_label, likely_cause = ("verbund", "")
+                    elif is_llamacpp:
                         serving = await verify_llamacpp_process_started(
                             str(runtime_slug), host=host
                         )
@@ -2353,7 +2362,14 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                     "message": stderr or f"launch_command schlug fehl (exit {exit_code}). Logs: {log_path}",
                 }
 
-            appeared = await verify_ssh_process_started(runtime, host=host)
+            appeared = await verify_ssh_process_started(
+                runtime,
+                host=host,
+                # Ein Verbund richtet erst NFS/Worker per SSH ein; sein Handle
+                # erscheint ~1 min nach dem Startbefehl (Live 04.09.2026, 22:47:
+                # Container kam nach 50 s, MC hatte schon „kein Prozess" gemeldet).
+                timeout=_MULTI_BOX_APPEAR_TIMEOUT if _is_multi_box_dict(runtime) else None,
+            )
             if not appeared:
                 logger.error(
                     "Runtime %s: launch exited 0 but no '%s' process appeared. Log: %s",
