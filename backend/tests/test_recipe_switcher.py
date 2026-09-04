@@ -162,7 +162,10 @@ async def test_host_lookup_accepts_slug_and_unknown_is_404(auth_client, session)
 async def test_duo_needs_a_free_second_box(auth_client, session):
     box_a = await _host(session, "box-a")
     box_b = await _host(session, "box-b", ssh_host="192.0.2.11")
-    await _recipe(session, "recipe-duo", topology={"nodes": 2})
+    # P3: ein Duo-Rezept ist nur startbar, wenn der Katalog sagt, wohin die
+    # Adressen gehören — sonst ist der Eintrag grau (env_ready=False).
+    await _recipe(session, "recipe-duo", topology={"nodes": 2},
+                  env_file="~/rezept/.env", env_map={"WORKER_IP": "{worker_ip}"})
 
     with _probe(set()):
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-duo"]
@@ -528,15 +531,19 @@ async def test_start_creates_the_instance_and_starts_it(auth_client, session):
 
 
 @pytest.mark.asyncio
-async def test_start_of_a_two_box_recipe_is_refused_in_phase_1(auth_client, session):
+async def test_start_of_a_two_box_recipe_without_env_map_is_422(auth_client, session):
+    """Bis P3 antwortete jeder Duo-Start mit „kommt in Phase 3". Seit P3 läuft
+    er — aber nur, wenn der Katalog sagt, wohin die Adresse der zweiten Box
+    gehört. Ohne das steht der Fehler von Anfang an fest, also 422 und keine
+    halbfertige Instanz (der Rest des Duo-Starts: test_recipe_switcher_p3.py)."""
     box_a = await _host(session, "box-a")
     await _host(session, "box-b", ssh_host="192.0.2.11")
     await _recipe(session, "recipe-duo", topology={"nodes": 2})
     start = AsyncMock()
     with patch("app.services.runtime_manager.start_runtime", start):
         resp = await auth_client.post(f"/api/v1/hosts/{box_a.id}/recipes/recipe-duo/start")
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "Zweibox-Start kommt in Phase 3"
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == recipe_switcher.REASON_NO_ENV_MAP
     start.assert_not_awaited()
     assert (await session.exec(select(Runtime))).all() == []
 
