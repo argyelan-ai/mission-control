@@ -109,7 +109,11 @@ async def build_runtime_env(
             or (runtime.runtime_type == "openai_compatible" and runtime.host_id is not None)
         )
         if _is_slow_local_runtime:
-            tokens["OMP_TURN_IDLE_TIMEOUT"] = "600"
+            # 04.09.2026: raised 600 → 1800 s. Prefill on a 26k-token prompt
+            # alone took 58 s of total silence; hidden reasoning runs minutes.
+            # The hook heartbeats through that window now, this is the net
+            # underneath (a wedged omp is still caught within 30 min).
+            tokens["OMP_TURN_IDLE_TIMEOUT"] = "1800"
             # Per-task wall clock (OMP_TASK_DEADLINE, bridge default 1 h).
             # 03.09.2026: a working 20-minute security audit on a local model
             # was killed at the old 1200 s deadline while still streaming
