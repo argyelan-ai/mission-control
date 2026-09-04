@@ -265,6 +265,8 @@ _RESULT_TRUNCATE_LEN = 4000
 
 #: Ein ``fileMention``-Eintrag traegt den ganzen Dateiinhalt. Im Chat zeigen
 #: wir Kopf + Anfang, nicht die ganze Datei.
+_READ_HEADER = re.compile(r"^\[.*#[0-9A-Za-z]+\]$")
+_LINE_NUMBER = re.compile(r"^\d+:")
 _MENTION_TRUNCATE_LEN = 2000
 
 
@@ -323,6 +325,17 @@ def _blocks_to_text(content: Any) -> str:
         elif btype == "image":
             parts.append(f"[Bild: {block.get('mimeType') or 'image'}]")
     return "\n".join(parts)
+
+
+def _strip_read_format(content: str) -> str:
+    """omp legt den Inhalt einer ``@datei`` in seinem Leseformat ab:
+    ``[pfad#HASH]`` als Kopfzeile, dann jede Zeile mit ``N:`` davor. Das ist
+    omps Zeilenzaehler, nicht der Auftrag — im Chat stand er trotzdem
+    (``1:# Operating Card — Alpha``, Marks Screenshot 04.09.2026)."""
+    lines = content.split("\n")
+    if lines and _READ_HEADER.match(lines[0]):
+        lines = lines[1:]
+    return "\n".join(_LINE_NUMBER.sub("", line) for line in lines)
 
 
 class OmpLineParser:
@@ -470,7 +483,7 @@ class OmpLineParser:
                 continue
             path = entry.get("path") or ""
             content = entry.get("content")
-            body = str(content)[:_MENTION_TRUNCATE_LEN] if content else ""
+            body = _strip_read_format(str(content))[:_MENTION_TRUNCATE_LEN] if content else ""
             parts.append(f"@{path}\n{body}".rstrip())
             paths.append(str(path))
         text = "\n\n".join(p for p in parts if p)

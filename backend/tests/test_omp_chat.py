@@ -844,3 +844,32 @@ def test_omp_status_line_thinking_level_reads_every_observed_form():
 def test_status_line_thinking_level_takes_the_last_status_line():
     pane = _omp_pane("◒ high") + _omp_pane("◔ low")
     assert omp_chat.status_line_thinking_level(pane) == "low"
+
+
+def test_file_mention_body_drops_omps_line_numbers_and_header():
+    """omp speichert den Dateiinhalt in seinem internen Leseformat:
+    ``[pfad#HASH]`` als Kopfzeile, dann jede Zeile mit ``N:`` davor. Im Chat
+    stand darum ``1:# Operating Card — Alpha`` … als „Beitrag" (Marks
+    Screenshot 04.09.2026). Der Beitrag ist der Auftrag, nicht omps Zeilenzaehler."""
+    line = json.dumps(
+        {
+            "type": "message",
+            "id": "78ba0375",
+            "timestamp": "2026-09-04T16:36:00.000Z",
+            "message": {
+                "role": "fileMention",
+                "files": [
+                    {
+                        "path": "/home/agent/.omp/tasks/task-0001.md",
+                        "content": "[/home/agent/.omp/tasks/task-0001.md#BFF7]\n1:# Operating Card\n2:\n3:- ACK first\n10:Zeile zehn",
+                        "lineCount": 10,
+                    }
+                ],
+            },
+        }
+    )
+    (ev,) = parse(line)
+    assert ev["role"] == "teammate"
+    assert ev["text"] == (
+        "@/home/agent/.omp/tasks/task-0001.md\n# Operating Card\n\n- ACK first\nZeile zehn"
+    )

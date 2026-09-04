@@ -199,6 +199,28 @@ describe("ChatMessage — Teamkollegen-Nachricht", () => {
     expect(screen.queryByText(/qwen-research/)).toBeNull();
   });
 
+  // Marks Screenshot 04.09.2026: der eingespielte Auftrag (@task-….md, 2000
+  // Zeichen Operating Card) stand als Wand im Verlauf. Er bekommt denselben
+  // Klapp-Mechanismus wie ein langer Auftrag in der Operator-Blase.
+  describe("Klappe fuer lange Nutzlasten", () => {
+    let restore: (() => void) | undefined;
+    afterEach(() => { restore?.(); restore = undefined; });
+
+    it("laesst eine kurze Rueckmeldung offen", () => {
+      restore = stubScrollHeight(40);
+      render(<ChatMessage ev={mkTeammate("fertig")} />);
+      expect(screen.getByTestId("teammate-text")).toHaveAttribute("data-clamped", "false");
+      expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    });
+
+    it("klappt eine lange Nutzlast zu und bietet den Aufklapper", () => {
+      restore = stubScrollHeight(USER_CLAMP_MAX_PX * 4);
+      render(<ChatMessage ev={mkTeammate("@/home/agent/.omp/tasks/task-1.md\n# Operating Card\n…", "task-1.md")} />);
+      expect(screen.getByTestId("teammate-text")).toHaveAttribute("data-clamped", "true");
+      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+    });
+  });
+
   it("zeigt den Inhalt", () => {
     render(<ChatMessage ev={mkTeammate("Recherche fertig: 128 GB")} />);
     expect(screen.getByText(/128 GB/)).toBeTruthy();

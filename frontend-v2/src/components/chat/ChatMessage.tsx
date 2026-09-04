@@ -20,9 +20,24 @@ const USER_CLAMP_LINES = 10;
 const USER_LINE_HEIGHT_PX = 23; // 14px × 1.6, rounded — matches the compact `p`
 export const USER_CLAMP_MAX_PX = USER_CLAMP_LINES * USER_LINE_HEIGHT_PX;
 
-/** Renders the user's markdown, clamped until the reader asks for the rest.
- *  The expander only appears when there is genuinely something hidden. */
-function ClampedUserContent({ text }: { text: string }) {
+/** A body that is clamped until the reader asks for the rest. The expander
+ *  only appears when there is genuinely something hidden. Shared by the
+ *  operator bubble (markdown) and the teammate row (plain text): a dispatch
+ *  file mention from omp arrives as a teammate turn and carried the whole
+ *  Operating Card — 300 lines in the middle of the history (04.09.2026). */
+function ClampedContent({
+  text,
+  testId,
+  className,
+  style,
+  children,
+}: {
+  text: string;
+  testId: string;
+  className?: string;
+  style?: React.CSSProperties;
+  children: React.ReactNode;
+}) {
   // Der Aufklapper stand bis 22.08.2026 fest auf Deutsch — in der
   // englischen Oberflaeche also mitten im Satz die falsche Sprache.
   const tChat = useTranslations("chat");
@@ -53,12 +68,12 @@ function ClampedUserContent({ text }: { text: string }) {
     <>
       <div
         ref={contentRef}
-        data-testid="user-message-content"
+        data-testid={testId}
         data-clamped={clamped}
-        className="[&>*:last-child]:mb-0"
-        style={clamped ? { maxHeight: USER_CLAMP_MAX_PX, overflow: "hidden" } : undefined}
+        className={className}
+        style={{ ...style, ...(clamped ? { maxHeight: USER_CLAMP_MAX_PX, overflow: "hidden" } : {}) }}
       >
-        <MarkdownContent content={text} compact />
+        {children}
       </div>
       {overflows && (
         <button
@@ -72,6 +87,14 @@ function ClampedUserContent({ text }: { text: string }) {
         </button>
       )}
     </>
+  );
+}
+
+function ClampedUserContent({ text }: { text: string }) {
+  return (
+    <ClampedContent text={text} testId="user-message-content" className="[&>*:last-child]:mb-0">
+      <MarkdownContent content={text} compact />
+    </ClampedContent>
   );
 }
 
@@ -154,13 +177,14 @@ export function ChatMessage({
                 Kommata zwar von selbst um — Rueckmeldungen sind aber
                 beliebiger Text, und seit gebuendelte Bloecke einzeln
                 ankommen, sind mehrzeilige Nutzlasten der Normalfall. */}
-            <span
-              data-testid="teammate-text"
+            <ClampedContent
+              text={ev.text}
+              testId="teammate-text"
               className="break-words whitespace-pre-wrap"
               style={{ color: C.textSecondary }}
             >
               {ev.text}
-            </span>
+            </ClampedContent>
           </div>
         </div>
       </div>

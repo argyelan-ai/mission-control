@@ -24,7 +24,7 @@ import pyte
 
 #: Rueckfall-Groesse des nachgerechneten Bildschirms, wenn tmux nicht sagt, wie
 #: gross die Pane wirklich ist. Die echte Groesse ist PFLICHT (Live-Gate
-#: 01.09.2026: Sparkys Pane war 168x45, mit 80 Spalten brach jede Zeile bei
+#: 01.09.2026: die Pane des omp-Agenten war 168x45, mit 80 Spalten brach jede Zeile bei
 #: Zeichen 80 ab und der Rest ging beim Neuzeichnen verloren). Der Rueckblick
 #: faengt weggescrollte Zeilen auf.
 COLS, ROWS, HISTORY = 80, 24, 3000
@@ -53,6 +53,20 @@ _TABLE_ROW = re.compile(r"^\s*│(.*│.*)│\s*$")
 _TABLE_DIVIDER = re.compile(r"^\s*├[─┼]*┼[─┼]*┤\s*$")
 _FENCE = re.compile(r"^\s*```")
 
+#: omps Willkommens-Kasten nach jedem (Task-)Neustart: zwei Spalten (Logo /
+#: Tips), also fuer den Tabellen-Umbau eine Tabelle. Live stand
+#: ``| Welcome back! | # for prompt actions |`` einen ganzen Zug lang ueber
+#: der Vorschau (omp-Agent, 04.09.2026). Erkannt am Titel, uebersprungen bis zum
+#: unteren Rand.
+_OMP_BANNER_TOP = re.compile(r"^\s*╭─+\s*omp v[\d.]+\s*─+╮\s*$")
+_BOX_BOTTOM = re.compile(r"^\s*╰[─┴]*╯\s*$")
+
+#: Das Echo eines eingespielten Auftrags (``bridge.py:inject_file``): mit
+#: dieser Zeile beginnt der Zug. Was davor steht — alte Antwort, Banner —
+#: gehoert nicht in die Vorschau, egal ob das Transkript schon einen Anker
+#: kennt (den kennt es bei omp erst am Zugende).
+_DISPATCH_ECHO = re.compile(r"^\s*@\S*/\.omp/tasks/task-[0-9a-f-]+\.md\s*$")
+
 _FURNITURE = re.compile(
     r"""
       ^\s*[─━═╭╰│╮╯┌└├┤]                    # Rahmen- und Trennlinien (├ = omp-Box)
@@ -73,6 +87,7 @@ _FURNITURE = re.compile(
     | ^\s*[▐▝▎]                               # Claude Code: Logo-Banner + „▎ Using …" nach Neustart
     | ^\s*Update\ Available\s*$                # omp: Update-Banner nach Frischstart
     | ^\s*New\ version\ .*Run:\ omp\ update      #   … zweite Zeile davon
+    | ^\s*lines\)\s*$                          # omp: Umbruch-Rest von „└─ Read … (144" / „lines)"
     """,
     re.VERBOSE,
 )
@@ -129,8 +144,22 @@ class PanePreview:
         return text
 
     def text(self) -> str:
-        """Der sichtbare Inhalt ohne den Rahmen der Oberflaeche."""
-        return "\n".join(self._content_lines()).strip()
+        """Der sichtbare Inhalt ohne den Rahmen der Oberflaeche — und ohne
+        alles vor dem letzten Auftrags-Echo (siehe ``_dispatch_floor``)."""
+        lines = self._lines()
+        cut = self._dispatch_floor(lines, -1)
+        return "\n".join(self._filter(lines[cut + 1 :])).strip()
+
+    @staticmethod
+    def _dispatch_floor(lines: list[str], cut: int) -> int:
+        """Der Schnitt liegt nie VOR dem letzten Auftrags-Echo. Ohne diesen
+        Boden trug die Vorschau nach einem Task-Neustart die alte Antwort und
+        den Willkommens-Kasten — der Anker aus dem Transkript zeigte noch auf
+        den vorigen Zug, oder es gab (Neuverbinden) gar keinen."""
+        for i in range(len(lines) - 1, cut, -1):
+            if _DISPATCH_ECHO.match(lines[i]):
+                return i
+        return cut
 
     @staticmethod
     def anchor_from(text: str) -> str:
@@ -209,6 +238,7 @@ class PanePreview:
         return self._after(lines, cut)
 
     def _after(self, lines: list[str], cut: int) -> str:
+        cut = self._dispatch_floor(lines, cut)
         rest = lines[cut + 1 :]
         # Ist die Marke die letzte Codezeile einer Antwort, folgt ihr direkt
         # der schliessende Zaun '```' — der gehoert noch zur Marke, sonst
@@ -254,8 +284,16 @@ class PanePreview:
                 indent = min(len(l) - len(l.lstrip()) for l in code if l.strip())
                 out.extend(l[indent:] for l in code)
 
+        in_banner = False   # innerhalb von omps Willkommens-Kasten
+
         for i, raw in enumerate(lines):
             line = raw.strip()
+            if in_banner:
+                in_banner = not _BOX_BOTTOM.match(raw)
+                continue
+            if _OMP_BANNER_TOP.match(raw):
+                in_banner = True
+                continue
             if _FENCE.match(raw) and not in_tool:
                 if code is None:
                     code = []

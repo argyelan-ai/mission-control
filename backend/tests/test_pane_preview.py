@@ -132,7 +132,7 @@ def test_empty_stream_yields_no_preview():
 
 
 def test_screen_takes_the_real_pane_size():
-    """Live gesehen: Sparkys Pane ist 168x45, der Emulator rechnete mit 80 —
+    """Live gesehen: die Pane des omp-Agenten ist 168x45, der Emulator rechnete mit 80 —
     jede Zeile brach bei Zeichen 80 ab ("…ins Lan")."""
     long_line = "Ein Fjord ist ein langer, schmaler und tiefer Meeresarm, der sich tief ins Land hineinzieht und dort endet."
     assert len(long_line) > 80
@@ -474,3 +474,75 @@ def test_answer_ending_in_a_code_fence_leaves_no_preview_behind():
     assert preview.text_after(PanePreview.anchor_from(answer)) == ""
     preview.feed("Neu.\r\n")
     assert preview.text_after(PanePreview.anchor_from(answer)) == "Neu."
+
+
+# ── omp-Parsing-Bugs (Marks Screenshots, 04.09.2026) ──────────────────────
+
+OMP_WELCOME_BANNER = (
+    "╭─── omp v16.4.6 ────────────────────────────────────────────────────────────╮\r\n"
+    "│                          │ Tips                                            │\r\n"
+    "│      Welcome back!       │ # for prompt actions                            │\r\n"
+    "│                          │ / for commands                                  │\r\n"
+    "│       ▀██████████▀       │ ! to run bash                                   │\r\n"
+    "│        ╘██    ██         │ $ to run python                                 │\r\n"
+    "│         ██    ██         │ ─────────────────────────────────────────────── │\r\n"
+    "│         ██    ██         │ LSP Servers                                     │\r\n"
+    "│        ▄██▄  ▄██▄        │ No LSP servers                                  │\r\n"
+    "│                          │                                                 │\r\n"
+    "│         MC model         │                                                 │\r\n"
+    "│        mc-openai         │                                                 │\r\n"
+    "│                          │ ─────────────────────────────────────────────── │\r\n"
+    "│                          │ Recent sessions                                 │\r\n"
+    "│                          │ No recent sessions                              │\r\n"
+    "╰──────────────────────────┴─────────────────────────────────────────────────╯\r\n"
+    "\r\n"
+    "────────────────────────────────────────────────────────────────────────────────\r\n"
+    " Update Available\r\n"
+    " New version 18.1.10 is available. Run: omp update\r\n"
+    "────────────────────────────────────────────────────────────────────────────────\r\n"
+)
+
+DISPATCH_ECHO = (
+    " @/home/agent/.omp/tasks/task-2e719c4e-dfcc-4104-a128-3d7d1bb71b6b.md\r\n"
+    "\r\n"
+    "└─ Read /home/agent/.omp/tasks/task-2e719c4e-dfcc-4104-a128-3d7d1bb71b6b.md (144\r\n"
+    "lines)\r\n"
+    "\r\n"
+)
+
+
+def test_omp_welcome_banner_is_furniture_not_a_table():
+    """Nach jedem Task-Neustart zeichnet omp seinen Willkommens-Kasten. Der
+    hat zwei Spalten — und wurde vom Tabellen-Umbau zur Markdown-Tabelle
+    ``| Welcome back! | # for prompt actions |`` samt Logo-Bloecken. Live
+    (omp-Agent, 04.09.2026) stand diese „Tabelle" den ganzen Zug lang ueber der
+    Vorschau."""
+    p = PanePreview(80, 40)
+    p.feed(OMP_WELCOME_BANNER + " Hallo, ich lese den Auftrag.\r\n")
+    assert p.text() == "Hallo, ich lese den Auftrag."
+
+
+def test_task_dispatch_echo_cuts_off_everything_before_it():
+    """Der Auftrag kommt per ``@task-….md`` in den Composer — das Echo dieser
+    Zeile ist der Zugbeginn. Alles davor (alte Antwort, Banner) gehoert NICHT
+    in die Vorschau, auch ohne Anker aus dem Transkript (Neuverbinden) und
+    auch mit einem Anker, der noch auf die alte Antwort zeigt."""
+    p = PanePreview(80, 40)
+    p.feed(
+        " Antwort: Der Text hat genau einen Absatz.\r\n"
+        " TASK_COMPLETE\r\n"
+        + OMP_WELCOME_BANNER
+        + DISPATCH_ECHO
+        + " Ich lese die Operating Card.\r\n"
+    )
+    assert p.text() == "Ich lese die Operating Card."
+    assert p.text_after("Antwort: Der Text hat genau einen Absatz.") == "Ich lese die Operating Card."
+    # Der Anker der alten Antwort trifft nicht mehr (Bildschirm nach Neustart
+    # geleert) — auch dann darf der Rueckfall nicht den ganzen Bildschirm zeigen.
+    assert p.text_after("Etwas, das nirgends steht.") == "Ich lese die Operating Card."
+
+
+def test_dispatch_echo_without_new_output_leaves_nothing():
+    p = PanePreview(80, 40)
+    p.feed(OMP_WELCOME_BANNER + DISPATCH_ECHO)
+    assert p.text() == ""
