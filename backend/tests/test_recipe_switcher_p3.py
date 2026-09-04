@@ -1047,3 +1047,38 @@ async def test_drift_guard_never_trusts_a_host_engine_without_anchor(session):
     watcher = RuntimeWatcher()
     assert await watcher._served_answer_is_own(session, no_anchor) is False  # noqa: SLF001
     assert await watcher._served_answer_is_own(session, docker_no_anchor) is True  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_eviction_of_a_running_duo_uses_its_stop_command_not_docker_stop(session):
+    """Ein laufender Verbund wird über seinen eigenen Stopp-Befehl verdrängt —
+    nur der kennt die Worker-Box. docker stop am Head liesse den Worker als
+    Waise zurück (Live 04.09.2026)."""
+    from app.services import runtime_manager
+
+    box_a = await _host(session, "box-a")
+    box_b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    old = await _runtime(
+        session, "duo-old", box_a, container_name="duo-old-head",
+        stop_command="cd ~/old && ./stop.sh", topology={"nodes": 2, "recipe_slug": "recipe-old"},
+    )
+    session.add(RuntimeHost(runtime_id=old.id, host_id=box_b.id, role="worker", node_rank=1))
+    new = await _runtime(session, "duo-new", box_a, topology={"nodes": 2, "recipe_slug": "recipe-new"})
+    await session.commit()
+
+    multi = AsyncMock(return_value={"ok": True, "message": "Verbund gestoppt"})
+    evict = AsyncMock(return_value={"ok": True, "message": "sweep", "stopped": []})
+    with patch.object(runtime_manager, "get_runtime_state", AsyncMock(return_value={"state": "ready"})), \
+         patch("app.services.host_resolver.resolve_host_for_runtime", AsyncMock(return_value=None)), \
+         patch.object(runtime_manager, "stop_multi_box_instance", multi), \
+         patch.object(runtime_manager, "evict_spark_runtime_containers", evict), \
+         patch.object(runtime_manager.runtime_grace, "clear_switching", AsyncMock()):
+        result = await runtime_manager.ensure_exclusive_host(
+            {**new.to_registry_dict(), "slug": new.slug}, session=session, host_id=box_a.id
+        )
+
+    assert result["ok"] is True, result
+    assert multi.await_count == 1
+    assert evict.await_count == 0
+    evicted = multi.await_args.args[0]
+    assert "duo-old" in (evicted.get("slug") or evicted.get("id") or "")

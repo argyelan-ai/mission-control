@@ -29,6 +29,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
+import asyncio
 from shlex import quote as shlex_quote
 
 import asyncssh
@@ -732,6 +733,11 @@ async def _emit_ownership_blocked_event(slug: str | None, blocked: list[dict]) -
         logger.debug("ownership-blocked event emit failed for %s: %s", slug, exc)
 
 
+#: Frist für ``docker stop`` bei der Verdrängung (Sekunden). Zweibox-Engines
+#: brauchen zum Beenden bis zu einer Minute — 04.09.2026 live gemessen.
+_EVICT_STOP_GRACE = 120
+
+
 async def evict_spark_runtime_containers(
     slug: str | None,
     *,
@@ -829,22 +835,29 @@ async def evict_spark_runtime_containers(
         # `xargs -r`-equivalent via an explicit id list: empty is impossible
         # here (safe_to_stop is non-empty in this branch), but the ids are
         # still individually quoted — same injection posture as before.
-        stop_cmd = "docker stop " + " ".join(shlex_quote(c) for c in safe_to_stop)
+        # Grosse Engines (Zweibox-Verbund, NCCL, --privileged) brauchen zum
+        # sauberen Beenden deutlich länger als Dockers 10-s-Standard. Live
+        # 04.09.2026: GLM-Head brauchte ~60 s; die 30-s-SSH-Frist lief ab, MC
+        # meldete „Eviction-Stop fehlgeschlagen: " (leere Nachricht = Timeout),
+        # der Container starb trotzdem — halb verdrängt, Worker blieb als Waise.
+        # Darum: docker stop mit eigener Frist, und ein Zeitüberlauf ist KEIN
+        # Scheitern — entscheidend ist die Kontrolle unten, ob die Container
+        # wirklich weg sind.
+        stop_grace = int(max(timeout, _EVICT_STOP_GRACE))
+        stop_cmd = f"docker stop -t {stop_grace} " + " ".join(shlex_quote(c) for c in safe_to_stop)
         try:
-            stopped_out, stop_err, _ = await _ssh_run(stop_cmd, host=host, timeout=max(timeout, 30))
-        except Exception as exc:  # noqa: BLE001 — surface as a clean failure
-            logger.warning("evict: stop command raised for %s: %s", slug, exc)
-            return {
-                "ok": False,
-                "message": f"Eviction-Stop fehlgeschlagen: {exc}",
-                "stopped": [],
-                "blocked": blocked,
-            }
+            stopped_out, stop_err, _ = await _ssh_run(stop_cmd, host=host, timeout=stop_grace + 30)
+        except Exception as exc:  # noqa: BLE001 — verifizieren statt aufgeben
+            logger.warning(
+                "evict: stop command raised for %s: %r — checking whether the containers are gone anyway",
+                slug, exc,
+            )
+            stopped_out, stop_err = "", ""
         stopped = [x for x in stopped_out.splitlines() if x.strip()]
         if stop_err:
             logger.info("evict: docker stop stderr for %s: %s", slug, stop_err)
 
-    if blocked and not stopped:
+    if blocked and not safe_to_stop:
         return {
             "ok": False,
             "message": (
@@ -1742,6 +1755,51 @@ def _grace_slug(runtime: dict) -> str | None:
 # ── Memory exclusivity across engines ────────────────────────────────────────
 
 
+def _is_multi_box_instance(runtime: "Runtime") -> bool:
+    topology = runtime.topology if isinstance(runtime.topology, dict) else {}
+    try:
+        return int(topology.get("nodes") or 1) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
+async def stop_multi_box_instance(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+    """Verbund über seinen eigenen ``stop_command`` beenden und am Head prüfen.
+
+    Der Befehl darf lange dauern (Worker per SSH, NCCL-Abbau) — Frist 300 s.
+    Erfolg heisst: der Anker am Head (Container/Handle) ist danach weg. Ohne
+    Anker gilt nur der Exit-Code des Befehls.
+    """
+    stop_command = (runtime.get("stop_command") or "").strip()
+    command = f"bash -lc {shlex_quote(stop_command)}"
+    try:
+        _, stderr, exit_code = await _ssh_run(command, host=host, timeout=300)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"SSH-Fehler beim Stoppen des Verbunds: {exc!r}"}
+    if exit_code != 0:
+        return {
+            "ok": False,
+            "message": stderr.strip() or f"stop_command des Verbunds schlug fehl (exit {exit_code})",
+        }
+    names = runtime_anchor_names(runtime)
+    if not names:
+        return {"ok": True, "message": "Verbund gestoppt (stop_command ausgeführt, kein Anker zum Prüfen)."}
+    deadline = asyncio.get_running_loop().time() + 90
+    while True:
+        try:
+            alive = await anchor_running(runtime, host=host)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "message": f"Anker nach dem Stopp nicht prüfbar: {exc!r}"}
+        if not alive:
+            return {"ok": True, "message": "Verbund gestoppt (Anker am Head weg)."}
+        if asyncio.get_running_loop().time() > deadline:
+            return {
+                "ok": False,
+                "message": f"Anker '{names[0]}' läuft 90 s nach dem stop_command noch — Verbund nicht frei.",
+            }
+        await asyncio.sleep(3)
+
+
 async def ensure_exclusive_host(
     runtime: dict,
     *,
@@ -1865,7 +1923,13 @@ async def _ensure_exclusive_host(
             continue
 
         logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
-        if other.runtime_type in DOCKER_ENGINE_TYPES:
+        if _is_multi_box_instance(other) and (other.stop_command or "").strip():
+            # Ein Verbund lebt auf mehreren Boxen; nur sein eigener Stopp-Befehl
+            # kennt den Worker (ADR-077: das Rezept orchestriert seine zweite
+            # Box). Ein blosses ``docker stop`` am Head liesse den Worker als
+            # Waise mit belegtem Speicher zurück (Live 04.09.2026).
+            result = await stop_multi_box_instance(other_dict, host=other_host)
+        elif other.runtime_type in DOCKER_ENGINE_TYPES:
             result = await evict_spark_runtime_containers(
                 other.slug,
                 container_name=(other.container_name or None),
