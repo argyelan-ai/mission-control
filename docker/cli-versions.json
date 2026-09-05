@@ -1,13 +1,13 @@
 {
   "openclaude": {
-    "version": "0.7.0"
+    "version": "0.30.0"
   },
   "claude": {
     "version": "2.1.207"
   },
   "omp": {
-    "version": "16.4.6",
-    "sha256": "aeb951f860904fd7d3c374698b873c273379635968aff32d0b0e00601aa2901c"
+    "version": "18.1.10",
+    "sha256": "aba7beb612459789e539db980c95680c26d26ca0d67776152fce70cc6e1dac06"
   },
   "kimi": {
     "version": "0.29.1",
