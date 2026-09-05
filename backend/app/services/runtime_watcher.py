@@ -423,7 +423,7 @@ class RuntimeWatcher:
         if runtime.runtime_type in DOCKER_ENGINE_TYPES:
             anchor, mode = container, "docker"
         elif runtime.runtime_type == SSH_PROCESS_TYPE:
-            anchor, mode = (process or container), ("process" if process else "docker")
+            anchor, mode = (process or container), "handle"
         else:
             return True
         if not anchor:
