@@ -59,6 +59,14 @@ logger = logging.getLogger("mc.agent_runtime_switch")
 LOCK_TTL_SECONDS = 120
 HEALTH_TIMEOUT_RECREATE = 90
 HEALTH_TIMEOUT_RESTART = 30
+# Live-Befund 05.09.2026: der omp-TUI braucht nach einem Neustart laenger als
+# 30 s, bis die Prompt-Glyphen in Fenster 0 stehen — zwei Wechsel scheiterten
+# mit "timeout after 30s — window not ready", obwohl der Container gesund war
+# und danach normal antwortete. Die Pruefung wartet nicht die Frist ab, sondern
+# endet, sobald die Glyphen erscheinen (_wait_for_window_ready pollt alle
+# poll_interval Sekunden); die Frist ist nur die Obergrenze. Eine zu kurze
+# Obergrenze kostet also einen unnoetigen Rollback, eine grosszuegige nichts.
+HEALTH_TIMEOUT_RESTART_OMP = HEALTH_TIMEOUT_RECREATE
 
 # OpenAI-compatible runtime types where a `/models` probe is meaningful.
 # Cloud (Anthropic, Ollama) already ship a model_identifier from the seed.
@@ -914,7 +922,6 @@ async def switch_agent_runtime(
                 # Step 9 — wait for container to be reachable.
                 # D-12: respawn_mode delegates to tmux capture-pane polling instead of
                 # docker inspect, matching the respawn restart path above.
-                timeout = HEALTH_TIMEOUT_RECREATE if image_change else HEALTH_TIMEOUT_RESTART
                 # ADR-049: the omp runtime now runs omp's native TUI in Window 0 (not the
                 # headless bridge print). Anchor readiness on the TUI's prompt glyphs via
                 # pane scrape regardless of image_change — the initial openclaude→omp
@@ -926,6 +933,15 @@ async def switch_agent_runtime(
                     if effective_new_harness
                     else new_runtime.runtime_type == "omp"
                 )
+                # Der Neustart eines omp-Containers bekommt dieselbe Frist wie
+                # ein Neuerstellen: gewartet wird auf die TUI-Glyphen, und die
+                # brauchen laenger als 30 s (Live-Befund 05.09.2026).
+                if image_change:
+                    timeout = HEALTH_TIMEOUT_RECREATE
+                elif is_omp:
+                    timeout = HEALTH_TIMEOUT_RESTART_OMP
+                else:
+                    timeout = HEALTH_TIMEOUT_RESTART
                 await publish_switch_progress(agent.id, "waiting_healthy")
                 health = await wait_for_agent_healthy(
                     agent,

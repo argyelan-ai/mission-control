@@ -399,8 +399,14 @@ class RuntimeWatcher:
 
         Anchor rules:
         - docker engines → ``container_name`` must be ``running``,
-        - ``ssh_process`` → ``process_name`` (fallback ``container_name``)
-          must be alive per ``pgrep -x``,
+        - ``ssh_process`` → jedes hinterlegte Handle (``process_name`` und
+          ``container_name``) wird von ``runtime_manager.anchor_running``
+          auf BEIDE Arten geprueft: ``pgrep -x`` ODER ``docker inspect``.
+          Seit #396 darf ``process_name`` naemlich ein Containername sein —
+          viele Rezept-Startskripte starten in Wahrheit einen Container.
+          Nur ``pgrep`` zu fragen war dafuer blind: die eigene Engine galt
+          als fremd, ``model_identifier`` blieb auf dem HF-Pfad stehen und ein
+          Agent bekam 404 (Live-Befund 05.09.2026),
         - rows WITHOUT an anchor (omp & friends — deliberately "switchbar"
           pointers at whatever the box serves) keep following the engine:
           for them drift IS the feature, not the bug.
@@ -417,7 +423,7 @@ class RuntimeWatcher:
         if runtime.runtime_type in DOCKER_ENGINE_TYPES:
             anchor, mode = container, "docker"
         elif runtime.runtime_type == SSH_PROCESS_TYPE:
-            anchor, mode = (process or container), ("process" if process else "docker")
+            anchor, mode = (process or container), "handle"
         else:
             return True
         if not anchor:
@@ -435,7 +441,7 @@ class RuntimeWatcher:
         if not ssh_capable(host):
             return False
 
-        from app.services.runtime_manager import _ssh_run  # noqa: SLF001
+        from app.services.runtime_manager import _ssh_run, anchor_running  # noqa: SLF001
 
         try:
             if mode == "docker":
@@ -445,11 +451,18 @@ class RuntimeWatcher:
                     host=host, timeout=20,
                 )
                 return ec == 0 and out.strip() == "running"
-            _, _, ec = await _ssh_run(
-                f"pgrep -x {shlex_quote(anchor)} > /dev/null 2>&1",
-                host=host, timeout=20,
+            # Eine Regel fuer Host-Engines: dieselbe Pruefung, die auch Start,
+            # Zustand und Stopp benutzen — Prozess ODER Container, ein Treffer
+            # genuegt. Wirft sie (SSH tot, Pruefung selbst fehlerhaft), faellt
+            # das unten auf „nicht eigen" zurueck.
+            return await anchor_running(
+                {
+                    "runtime_type": runtime.runtime_type,
+                    "process_name": process,
+                    "container_name": container,
+                },
+                host=host,
             )
-            return ec == 0
         except Exception as exc:  # noqa: BLE001
             logger.debug("probe-guard: anchor check failed for %s (%s): %s",
                          runtime.slug, anchor, exc)
