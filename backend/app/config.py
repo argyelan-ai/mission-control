@@ -340,6 +340,22 @@ class Settings(BaseSettings):
     # switch-grace state — planned switches stay silent either way.
     runtime_auto_recovery_enabled: bool = True
 
+    # Slot-Runtimes (ADR-078): beim Backend-Start bekommt jede Head-Box eine
+    # ankerlose Zeile („<Box> :8000"), an der ihre Agenten hängen, statt an der
+    # Zeile eines einzelnen Rezepts.
+    #
+    # Das ist der AUS-Schalter für genau diesen Automatismus und damit der
+    # dauerhafte Rückweg: ``scripts/slot_rollback.py`` hängt die Agenten zurück
+    # und löscht die Zeilen — aber der nächste Backend-Start würde sie sofort
+    # wieder anlegen und wieder umhängen. Mit ``SLOT_RUNTIMES_ENABLED=false``
+    # in der ``.env`` bleibt der Rückbau bestehen (Review 05.09.2026, H2).
+    #
+    # AUS heisst NUR: keine neuen Slot-Zeilen, kein Umhängen. Vorhandene
+    # Slot-Zeilen funktionieren weiter (der Drift-Wächter folgt ihnen, das
+    # Bereitschafts-Tor greift) — ein Schalter darf keine laufende Flotte
+    # zerlegen, nur aufhören, Neues anzulegen.
+    slot_runtimes_enabled: bool = True
+
     # Pre-start memory prep wait (PR 10): after dropping the page cache and
     # lowering the watermark, prepare_for_runtime additionally waits up to
     # this long for MemAvailable to clear its threshold before handing
