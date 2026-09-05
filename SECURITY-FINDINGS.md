@@ -39,7 +39,7 @@ Geprüft: f-string-SQL (`agents.py:1180`, `vault_index.py:160/179`, `mc_henry_su
 
 Geprüft: `docker-compose.yml` — alle Service-Ports binden an `127.0.0.1` außer Caddy (`${MC_BIND_ADDRESS:-127.0.0.1}`), kein `privileged: true` in irgendeiner Compose-Datei, `docker.sock` wird nur read-only in `docker-socket-proxy` gemountet (kein Direktzugriff des Backends), Proxy whitelistet explizit nur die benötigten API-Pfade (BUILD/SWARM/SYSTEM=0). Frontend: kein `dangerouslySetInnerHTML`, kein `localStorage`/`sessionStorage` (Auth läuft komplett über httpOnly-Cookie + Bearer-Header, kein Client-seitiges Token-Storage), keine Secrets in `NEXT_PUBLIC_*`-Vars.
 
-Ein Finding ist noch offen und liegt im Follow-up-PR #416 (SSE-Cookie Secure-Flag): `mc_sse_token`-Cookie in `backend/app/routers/auth.py` setzt kein `Secure`-Flag. Details unten unter "Offen im Follow-up-PR #416".
+Das letzte Finding (SSE-Cookie Secure-Flag) ist mit PR #416 gefixt: `mc_sse_token`-Cookie in `backend/app/routers/auth.py` setzt `Secure`, sobald die Anfrage über HTTPS kommt. Details unten unter "Gefixt in PR #416".
 
 ## Etappe E — Auth-Coverage (nachträglich, PR #404 Rex-Review)
 
@@ -53,15 +53,11 @@ Die drei in der Findings-Tabelle oben aufgeführten Vektoren wurden gezielt nach
 | IDOR / Ownership | Sauber, wo stichprobenartig geprüft — `agent_scoped` hängt durchgängig an `require_scope(...)`, Task-Zugriff prüft `assigned_agent_id`/`owner_agent_id`, Deliverable-Pfade mit `..`-Reject plus `realpath()` + Prefix-Check. |
 | Secrets in Migrations/Seeds | Sauber — 193 Alembic-Revisionen, keine hartkodierten Credentials. |
 
-## Offen im Follow-up-PR #416 (SSE-Cookie Secure-Flag)
+## Gefixt in PR #416 (SSE-Cookie Secure-Flag)
 
-**Low — `mc_sse_token`-Cookie ohne `Secure`-Flag** (`backend/app/routers/auth.py`) — **OFFEN, liegt in PR #416** (`security/sse-cookie-secure-flag`, noch nicht gemergt)
+**Low — `mc_sse_token`-Cookie ohne `Secure`-Flag** (`backend/app/routers/auth.py`) — **GEFIXT in PR #416** (`security/sse-cookie-secure-flag`): `secure=request.url.scheme == "https"`, Test `backend/tests/test_sse_cookie_secure_flag.py`
 
-> Dieser Abschnitt stand vorher auf "GEFIXT" und nannte einen Test als Beleg, den es in
-> `main` nicht gibt. Das Repo ist oeffentlich — eine offene Session-Cookie-Schwaeche als
-> geschlossen zu beschreiben ist die schlechteste Kombination. Bis #416 gemergt ist gilt:
-> `secure=` wird **nicht** gesetzt. Der Rest des Abschnitts beschreibt den geplanten Fix
-> aus #416, nicht den Ist-Zustand.
+> Stand nach Merge von #416: `secure=` wird gesetzt, wenn die Anfrage über HTTPS kommt (Tailscale-HTTPS-Zugang); über Klartext-HTTP im LAN bleibt das Cookie ohne `Secure`, sonst würde die Session dort nicht funktionieren.
 
 Das Cookie ist `httponly=True` und `samesite="lax"`, trug aber kein `secure` — es würde auch über Klartext-HTTP übertragen. Wichtig für die Risikoeinschätzung: `mc_sse_token` ist **kein reines SSE-Cookie** — `require_user` fällt für **jede** Route auf dieses Cookie zurück, wenn kein Bearer-Token vorliegt. Es ist ein vollwertiges Session-Credential.
 
