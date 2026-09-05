@@ -485,7 +485,8 @@ async def test_duo_start_writes_the_env_members_and_the_autostart_slug(auth_clie
     assert runtime.host_id == box_a.id
 
     await session.refresh(box_a)
-    assert box_a.autostart_recipe_slug == "recipe-duo"
+    # Erst der Wächter setzt das Autostart-Rezept — nach bestätigter Antwort (05.09.2026).
+    assert box_a.autostart_recipe_slug is None
 
 
 @pytest.mark.asyncio
@@ -708,8 +709,8 @@ async def test_a_solo_start_also_remembers_the_recipe_on_the_box(auth_client, se
         resp = await auth_client.post(f"/api/v1/hosts/{box_a.id}/recipes/recipe-x/start")
     assert resp.status_code == 200
     await session.refresh(box_a)
-    assert box_a.autostart_recipe_slug == "recipe-x"
-    # Der Schalter selbst bleibt aus: gemerkt ≠ eingeschaltet.
+    # Ein Klick allein merkt nichts — erst die bestätigte Antwort (05.09.2026).
+    assert box_a.autostart_recipe_slug is None
     assert box_a.autostart_enabled is False
 
 
@@ -1082,3 +1083,42 @@ async def test_eviction_of_a_running_duo_uses_its_stop_command_not_docker_stop(s
     assert evict.await_count == 0
     evicted = multi.await_args.args[0]
     assert "duo-old" in (evicted.get("slug") or evicted.get("id") or "")
+
+
+@pytest.mark.asyncio
+async def test_autostart_recipe_follows_the_confirmed_answer(async_session, fake_redis):
+    """Erst wenn die neue Instanz nachweislich antwortet, wechselt das
+    Autostart-Rezept der Box — ein gescheiterter Start lässt den Vorgänger
+    stehen (Live 05.09.2026: DeepSeek fiel, GLM kam nie zurück)."""
+    box_a = await _host(async_session, "box-a", autostart_enabled=True, autostart_recipe_slug="recipe-old")
+    await _runtime(
+        async_session, "new-instance", box_a, container_name="new-head",
+        model_identifier="org/new", topology={"nodes": 2, "recipe_slug": "recipe-new"},
+    )
+    watcher = RuntimeWatcher(interval=90)
+    with patch("app.services.runtime_watcher.probe_runtime_model_info",
+               new=AsyncMock(return_value=ProbedModel("org/new", None))), \
+         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)), \
+         patch.object(RuntimeWatcher, "_served_answer_is_own", AsyncMock(return_value=True)):
+        await watcher.tick(session=async_session)
+    await async_session.refresh(box_a)
+    assert box_a.autostart_recipe_slug == "recipe-new"
+
+
+@pytest.mark.asyncio
+async def test_a_neighbours_answer_does_not_move_the_autostart_recipe(async_session, fake_redis):
+    """Antwortet auf dem Port der Nachbar (Anker dieser Instanz läuft nicht),
+    bleibt das Autostart-Rezept, wie es war."""
+    box_a = await _host(async_session, "box-a", autostart_enabled=True, autostart_recipe_slug="recipe-old")
+    await _runtime(
+        async_session, "stopped-instance", box_a, container_name="stopped-head",
+        model_identifier="org/new", topology={"nodes": 1, "recipe_slug": "recipe-new"},
+    )
+    watcher = RuntimeWatcher(interval=90)
+    with patch("app.services.runtime_watcher.probe_runtime_model_info",
+               new=AsyncMock(return_value=ProbedModel("org/new", None))), \
+         patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)), \
+         patch.object(RuntimeWatcher, "_served_answer_is_own", AsyncMock(return_value=False)):
+        await watcher.tick(session=async_session)
+    await async_session.refresh(box_a)
+    assert box_a.autostart_recipe_slug == "recipe-old"

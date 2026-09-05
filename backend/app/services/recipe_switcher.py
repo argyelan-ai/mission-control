@@ -864,15 +864,11 @@ async def start_recipe_on_host(
             resolved_host_from_row(host), recipe.env_file or "", env_values
         )
 
-    # Merken, was zuletzt über den Umschalter gestartet wurde — auch bei Solo
-    # und auch bei ausgeschaltetem Autostart. Der Schalter entscheidet, OB
-    # wiederbelebt wird; diese Zeile, WAS dann startet.
-    if host.autostart_recipe_slug != recipe.slug:
-        host.autostart_recipe_slug = recipe.slug
-        session.add(host)
-        await session.commit()
-        await session.refresh(host)
-
+    # Das Autostart-Rezept der Box wird NICHT hier gesetzt, sondern erst,
+    # wenn der Wächter die neue Instanz antworten sieht
+    # (``runtime_watcher._confirm_autostart_recipe``). Ein Rezept, das nie
+    # hochkommt, darf den Vorgänger nicht aus dem Autostart verdrängen
+    # (Live 05.09.2026: DeepSeek scheiterte, GLM kam nie zurück).
     result = await runtime_manager.start_runtime(instance.model_dump(), host=resolved)
     if not result.get("ok"):
         raise RecipeStartError(400, str(result.get("message") or "Start fehlgeschlagen"))

@@ -346,6 +346,10 @@ class RuntimeWatcher:
             served_context_len=served_ctx,
             consecutive_failures=0,
         )
+        try:
+            await self._confirm_autostart_recipe(session, runtime)
+        except Exception:  # noqa: BLE001 — Buchhaltung darf die Probe nicht kosten
+            logger.exception("autostart bookkeeping failed for %s", runtime.slug)
         model_would_change = served != (runtime.model_identifier or "")
         ctx_would_change = served_ctx is not None and self._context_would_change(
             runtime, served_ctx
@@ -905,6 +909,41 @@ class RuntimeWatcher:
                 severity="warning",
                 detail={"slug": runtime.slug, "attempts": attempt},
             )
+
+    async def _confirm_autostart_recipe(self, session: AsyncSession, runtime: Runtime) -> None:
+        """Das Autostart-Rezept der Box folgt dem Rezept, das WIRKLICH läuft.
+
+        Live-Befund 05.09.2026: ein Klick auf DeepSeek setzte das Rezept sofort
+        um; DeepSeek scheiterte an seiner Speicherprüfung, der Wächter versuchte
+        4× DeepSeek — und GLM, das vorher lief, kam nie von selbst zurück.
+        Darum zählt erst die bestätigte Antwort des Endpunkts, und nur wenn
+        die Antwort nachweislich von DIESER Instanz kommt (Anker am Host),
+        nicht vom Nachbarn auf demselben Port.
+        """
+        if runtime.host_id is None:
+            return
+        topology = runtime.topology if isinstance(runtime.topology, dict) else {}
+        recipe_slug = str(topology.get("recipe_slug") or "").strip()
+        if not recipe_slug:
+            return
+        from app.models.host import Host
+
+        host = await session.get(Host, runtime.host_id)
+        if host is None or host.autostart_recipe_slug == recipe_slug:
+            return
+        if not await self._served_answer_is_own(session, runtime):
+            return
+        old = host.autostart_recipe_slug
+        host.autostart_recipe_slug = recipe_slug
+        session.add(host)
+        await session.commit()
+        await emit_event(
+            session,
+            "host.autostart_recipe_confirmed",
+            f"{host.slug}: Autostart folgt jetzt {recipe_slug} (läuft bestätigt; vorher {old or '—'})",
+            severity="info",
+            detail={"host_id": str(host.id), "slug": host.slug, "recipe_slug": recipe_slug, "previous": old},
+        )
 
     async def _autostart_target(
         self, session: AsyncSession, runtime: Runtime
