@@ -142,4 +142,50 @@ describe("RuntimeDetailPanel", () => {
     await screen.findByText("claude-opus-5");
     expect(screen.queryByText("Name")).not.toBeInTheDocument();
   });
+
+  // ── Slot-Runtime (ADR-078) ──────────────────────────────────────────────
+  describe("Slot-Zeile", () => {
+    const slot = makeRuntime({
+      slug: "box-a-slot",
+      display_name: "BOX-A :8000 (aktuell: recipe-x)",
+      runtime_type: "openai_compatible",
+      endpoint: "http://192.0.2.10:8000/v1",
+      model_identifier: "recipe-x",
+      is_slot: true,
+      autostart_supported: false,
+      host: { id: "box-a", slug: "box-a", display_name: "BOX-A" },
+    });
+
+    it("zeigt Modell, Endpunkt und den Hinweis — aber keine Knöpfe", async () => {
+      const recipes = vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+      renderWithQuery(<RuntimeDetailPanel open runtime={slot} onClose={() => {}} />);
+
+      // Modell: nur Anzeige, kein Stift (die Zeile folgt der Engine).
+      expect(await screen.findByText("recipe-x")).toBeInTheDocument();
+      expect(screen.queryByTitle("Edit model")).not.toBeInTheDocument();
+      // Endpunkt — was ein Agent tatsächlich anspricht.
+      expect(screen.getByText("http://192.0.2.10:8000/v1")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "This row is never started or stopped — it only shows what the box answers with."
+        )
+      ).toBeInTheDocument();
+      // Keine Steuerung, kein Rezept-Umschalter, kein Autostart.
+      expect(screen.queryByTitle("Start")).not.toBeInTheDocument();
+      expect(screen.queryByTitle("Stop")).not.toBeInTheDocument();
+      expect(screen.queryByText("Automation")).not.toBeInTheDocument();
+      await waitFor(() => expect(recipes).not.toHaveBeenCalled());
+    });
+
+    it("listet die gebundenen Agenten", async () => {
+      vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+      vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+        runtime_slug: "box-a-slot",
+        count: 1,
+        agents: [{ id: "a1", name: "agent-one", agent_runtime: "cli-bridge" }],
+      });
+      renderWithQuery(<RuntimeDetailPanel open runtime={slot} onClose={() => {}} />);
+      expect(await screen.findByText("agent-one")).toBeInTheDocument();
+    });
+  });
 });

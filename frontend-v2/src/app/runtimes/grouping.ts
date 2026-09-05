@@ -149,6 +149,24 @@ export interface PanelCapabilities {
 
 export function panelCapabilities(rt: Runtime): PanelCapabilities {
   const probe = PROBEABLE_TYPES.has(rt.runtime_type);
+  // Slot-Runtime (ADR-078): die feste Box-URL, an der die Agenten hängen.
+  // Sie hat keinen Startbefehl, keinen Anker und kein eigenes Rezept — jeder
+  // Knopf hier griffe ins Leere. Der Riegel hängt am Kennzeichen `is_slot`,
+  // nicht am Typ oder an einzelnen Spalten: ein versehentlich gesetztes
+  // Autostart-Flag in der DB darf der Oberfläche nie einen Knopf zeigen.
+  // „Erneut prüfen" (probe) bleibt: das liest nur, was die Box antwortet —
+  // und genau das IST diese Zeile.
+  if (rt.is_slot) {
+    return {
+      lifecycle: false,
+      wake: false,
+      probe,
+      modelEditor: false,
+      recipeSwitcher: false,
+      contextSettings: false,
+      autostart: false,
+    };
+  }
   return {
     lifecycle: LIFECYCLE_TYPES.has(rt.runtime_type),
     wake: rt.power_managed === true,
@@ -197,15 +215,29 @@ export function pickServing(
   live?: Record<string, RuntimeLiveStatus>
 ): Runtime | null {
   const liveFor = (rt: Runtime) => live?.[rt.slug ?? rt.id];
+  // Slot-Runtime (ADR-078) ausschliessen: sie zeigt auf DENSELBEN Endpunkt
+  // wie das laufende Rezept, ist also genauso erreichbar — und mit ui_order 0
+  // würde sie den Gleichstand gewinnen und die Bühne kapern. Die Bühne zeigt,
+  // WAS läuft (das Rezept); die Slot-Zeile ist die Adresse, unter der die
+  // Agenten es erreichen, und bekommt ihre eigene ruhige Zeile.
+  const candidates = group.runtimes.filter((rt) => !rt.is_slot);
 
-  const switching = group.runtimes.filter((rt) => liveFor(rt)?.status === "switching");
+  const switching = candidates.filter((rt) => liveFor(rt)?.status === "switching");
   if (switching.length > 0) return pickBest(switching);
 
-  const activeState = group.runtimes.filter((rt) => SERVING_STATES.includes(rt.state ?? "unknown"));
+  const activeState = candidates.filter((rt) => SERVING_STATES.includes(rt.state ?? "unknown"));
   if (activeState.length > 0) return pickBest(activeState);
 
-  const reachable = group.runtimes.filter((rt) => liveFor(rt)?.reachable === true);
+  const reachable = candidates.filter((rt) => liveFor(rt)?.reachable === true);
   if (reachable.length > 0) return pickBest(reachable);
 
   return null;
+}
+
+/** Die Slot-Zeile dieser Box (ADR-078) — die feste „Box-URL", an der die
+ *  Agenten hängen. null, solange das Backend für die Box keine angelegt hat
+ *  (ältere Stände, Boxen ohne befehlsgetriebene Runtime). Gibt es mehrere,
+ *  gewinnt die erste in der ohnehin sortierten Gruppenliste. */
+export function pickSlot(group: HostGroup): Runtime | null {
+  return group.runtimes.find((rt) => rt.is_slot === true) ?? null;
 }

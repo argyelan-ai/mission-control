@@ -366,6 +366,7 @@ export function RuntimeDetailPanel({
 
 function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: RuntimeLiveStatus }) {
   const t = useTranslations("runtimes");
+  const tSlot = useTranslations("runtimes.slot");
   const queryClient = useQueryClient();
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -457,6 +458,17 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           {typeLabel(runtime.runtime_type)}
           {runtime.host && ` · ${runtime.host.display_name}`}
         </span>
+        {/* Slot-Runtime (ADR-078): gleicher Chip wie auf der Bühne, damit man
+            die Zeile in beiden Ansichten am selben Zeichen wiedererkennt. */}
+        {runtime.is_slot && (
+          <span
+            className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide shrink-0"
+            style={{ background: C.bgHover, color: C.textSecondary, border: `1px solid ${C.borderSubtle}` }}
+            title={tSlot("hint")}
+          >
+            {tSlot("chip")}
+          </span>
+        )}
       </div>
 
       {isAsleep && (
@@ -530,6 +542,23 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
               {runtime.model_identifier ?? "—"}
             </span>
           </div>
+        )}
+
+        {/* Slot-Runtime (ADR-078): die feste Box-Adresse. Der Endpunkt ist
+            hier die eigentliche Nachricht — das ist, was ein Agent anspricht.
+            Danach ein Satz, warum es hier nichts zu starten gibt. */}
+        {runtime.is_slot && (
+          <>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
+                {tSlot("endpointLabel")}
+              </span>
+              <span className="font-mono text-xs truncate" style={{ color: C.textSecondary }}>
+                {runtime.endpoint}
+              </span>
+            </div>
+            <p className="text-[11px]" style={{ color: C.textDim }}>{tSlot("noStartStop")}</p>
+          </>
         )}
 
         {(live || (runtime.display_name_drift && runtime.display_name_drift.length > 0)) && (

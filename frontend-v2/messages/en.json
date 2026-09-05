@@ -2627,6 +2627,14 @@
       "registerTitle": "Runtime register",
       "registerHint": "Every configured runtime — click to open its settings panel (context, autostart, agent binding)."
     },
+    "slot": {
+      "rowLabel": "Agent URL",
+      "chip": "Slot",
+      "hint": "This box's fixed address. Agents are bound to it and always get the model that is currently running.",
+      "endpointLabel": "Endpoint",
+      "noStartStop": "This row is never started or stopped — it only shows what the box answers with.",
+      "pickerGroup": "Box addresses"
+    },
     "loadFailed": "Load failed.",
     "unloadFailed": "Unload failed.",
     "unload": "Unload",
