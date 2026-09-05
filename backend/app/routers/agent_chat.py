@@ -26,6 +26,7 @@ from app.redis_client import RedisKeys
 from app.services.agent_chat_input import (
     AgentBusyError,
     AgentStartingError,
+    BossDeliveryError,
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
@@ -63,6 +64,17 @@ _INPUT_NOT_SUPPORTED = {"reason": "input_not_supported"}
 _EFFORT_SWITCH_FAILED = {"reason": "effort_switch_failed"}
 _AGENT_BUSY = {"reason": "agent_busy"}
 _AGENT_STARTING = {"reason": "agent_starting"}
+# 502: die host-pty-bridge hat einen Boss-Tastendruck nicht bestaetigt
+# (nicht erreichbar, kein Ack, tmux-Fehler). Das Echo im Chat wird
+# zurueckgenommen — nie 204 fuer etwas, das nirgends ankam (05.09.2026).
+_BOSS_DELIVERY_FAILED = "boss_delivery_failed"
+
+
+def _boss_delivery_failed(e: BossDeliveryError) -> JSONResponse:
+    return JSONResponse(
+        status_code=502,
+        content={"reason": _BOSS_DELIVERY_FAILED, "detail": str(e)[:300]},
+    )
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
 
@@ -422,6 +434,8 @@ async def post_chat_input(
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:
         return JSONResponse(status_code=409, content=_AGENT_STARTING)
+    except BossDeliveryError as e:
+        return _boss_delivery_failed(e)
 
 
 @router.post("/agents/{agent_id}/chat/attachment", status_code=201)
@@ -525,6 +539,8 @@ async def post_chat_keys(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except BossDeliveryError as e:
+        return _boss_delivery_failed(e)
 
 
 @router.post("/agents/{agent_id}/chat/effort", status_code=204)
@@ -574,3 +590,5 @@ async def post_chat_effort(
         )
     except EffortSwitchFailedError:
         return JSONResponse(status_code=409, content=_EFFORT_SWITCH_FAILED)
+    except BossDeliveryError as e:
+        return _boss_delivery_failed(e)
