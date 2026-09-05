@@ -34,10 +34,14 @@
 
     # Internal-only endpoints (agent bootstrap: hands out Vault secrets in
     # plaintext) must never be reachable from outside the Docker network,
-    # regardless of MC_BIND_ADDRESS. Must come BEFORE the generic /api/*
-    # handle below — Caddy takes the first matching handle, not the most
-    # specific one (PR #404 Rex review: this exception did not exist before,
-    # despite internal.py's docstring claiming it did).
+    # regardless of MC_BIND_ADDRESS. (PR #404 Rex review: this exception did
+    # not exist before, despite internal.py's docstring claiming it did.)
+    #
+    # Order in this file does not decide the match: Caddy sorts `handle`
+    # blocks by path specificity when it adapts the config, so
+    # /api/v1/internal/* wins over /api/* wherever it stands — verified with
+    # `caddy adapt` on the generated JSON routes. It is written first anyway
+    # because that is how it reads to a human.
     handle /api/v1/internal/* {
         respond 403
     }

@@ -69,10 +69,17 @@ async def test_bootstrap_accepts_correct_secret(
         f"/api/v1/internal/bootstrap?agent_name={agent.name}",
         headers={"Authorization": f"Bearer {with_bootstrap_secret}"},
     )
-    # 200 (tokens found) or 404 ("no tokens for agent") — both mean the auth
-    # check let it through and business logic ran, which is what this test
-    # verifies. 401 would mean the auth check itself failed.
-    assert resp.status_code in (200, 404), resp.text
+    # PR #404 Review, NIEDRIG-2: das war frueher "200 oder 404" und bewies
+    # damit nur, dass der Auth-Check nicht 401 warf — nicht, dass ueberhaupt
+    # etwas ausgeliefert wird. Der Endpunkt setzt AGENT_RECYCLER_ENABLED und
+    # CONTEXT_MAX immer, ein existierender Agent muss also 200 mit Inhalt
+    # liefern (404 hiesse: Agent nicht gefunden oder gar keine Tokens).
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert isinstance(body, dict) and body, resp.text
+    assert "CONTEXT_MAX" in body, (
+        f"Bootstrap lieferte kein CONTEXT_MAX — Payload: {sorted(body)}"
+    )
 
 
 @pytest.mark.asyncio

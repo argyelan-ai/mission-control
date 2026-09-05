@@ -205,8 +205,11 @@ def _check_bootstrap_secret(request: "Request | None") -> None:
 
 @router.get("/bootstrap")
 async def agent_bootstrap(
+    # Kein `= None`: FastAPI injiziert Request immer. Mit Default stand hier
+    # eine Annotation, die den Optional-Fall nur vortaeuschte (PR #404 Review,
+    # NIEDRIG-3) — und `Request | None` laesst FastAPI gar nicht erst starten.
+    request: Request,
     agent_name: str = Query(..., description="Agent-Name (z.B. 'rex', 'boss')"),
-    request: Request = None,
     session: AsyncSession = Depends(get_session),
 ):
     """Bootstrap endpoint: container fetches its tokens at startup.
