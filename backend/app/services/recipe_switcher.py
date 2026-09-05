@@ -171,7 +171,17 @@ def recipe_matches_runtime(recipe: LocalRecipe, runtime: Runtime) -> bool:
          vorhandenen sparkrun-Runtimes aus (Vertrag: bleiben unverändert).
       3. gleicher ``model_identifier`` — dasselbe Signal, das die Katalog-
          seite für ihr „läuft"-Badge schon immer benutzt hat.
+
+    Eine SLOT-Zeile ist NIE die Instanz eines Rezepts (ADR-078). Sie trägt per
+    Definition den ``model_identifier`` des gerade laufenden Rezepts — Signal 3
+    würde also genau dieses Rezept matchen, und weil die Slot-Zeile keinen
+    Startbefehl hat, wäre das laufende Rezept danach nie wieder startbar
+    (422 „Startbefehl fehlt"). Derselbe Ausschluss macht auch das „läuft"-Badge
+    der Katalogseite wieder ehrlich (``local_registry._running_matcher`` benutzt
+    dieselbe Regel).
     """
+    if runtime.is_slot:
+        return False
     topology = runtime.topology if isinstance(runtime.topology, dict) else {}
     backlink = topology.get("recipe_slug")
     if backlink:
@@ -334,6 +344,10 @@ async def _load_fleet(
                 select(Runtime).where(
                     Runtime.enabled == True,  # noqa: E712
                     Runtime.host_id.is_not(None),
+                    # ADR-078: eine Slot-Zeile ist kein Motor, sondern der
+                    # Platzhalter für den, der gerade läuft. Sie darf eine Box
+                    # NIE belegen — sonst hielte jede Box sich selbst besetzt.
+                    Runtime.is_slot == False,  # noqa: E712
                 )
             )
         ).all()
@@ -749,7 +763,13 @@ async def start_recipe_on_host(
 
     Raises :class:`RecipeStartError` mit HTTP-Status + Satz.
     """
-    from app.services import recipe_env, runtime_manager, runtime_readiness
+    from app.services import (
+        recipe_env,
+        runtime_grace,
+        runtime_manager,
+        runtime_readiness,
+        slot_runtimes,
+    )
 
     if not recipe.enabled:
         raise RecipeStartError(409, REASON_RECIPE_HIDDEN)
@@ -869,9 +889,47 @@ async def start_recipe_on_host(
     # (``runtime_watcher._confirm_autostart_recipe``). Ein Rezept, das nie
     # hochkommt, darf den Vorgänger nicht aus dem Autostart verdrängen
     # (Live 05.09.2026: DeepSeek scheiterte, GLM kam nie zurück).
-    result = await runtime_manager.start_runtime(instance.model_dump(), host=resolved)
+    # ── Slot-Zeile der Head-Box: Übergangs-Marker VOR dem Start (ADR-078) ────
+    # Der Grace-Marker hängt am Slug (``runtime_grace``). Der Umschalter setzt
+    # ihn auf die REZEPT-Zeile — die Slot-Zeile hat einen anderen Slug und
+    # zählte während der 8–30 min Ladezeit Fehlversuche, feuerte nach drei
+    # Proben ``runtime.unreachable`` und rief die Auto-Recovery. Bei JEDEM
+    # Wechsel (Architektur-Review 05.09.2026, B4). Also markieren wir sie hier
+    # mit — der Wächter räumt den Marker selbst weg, sobald sie antwortet.
+    slot = await slot_runtimes.find_slot_runtime(session, host.id)
+    if slot is not None:
+        await runtime_grace.mark_switching(
+            slot.slug, runtime_grace.PHASE_LOADING, runtime_grace.SOURCE_SWITCH
+        )
+
+    try:
+        result = await runtime_manager.start_runtime(instance.model_dump(), host=resolved)
+    except Exception:
+        if slot is not None:
+            await runtime_grace.clear_switching(slot.slug)
+        raise
     if not result.get("ok"):
+        # Kein Start = kein Wechsel: der Marker muss weg, sonst sieht die
+        # Oberfläche 20 Minuten lang ein „wechselt gerade", das nie endet.
+        if slot is not None:
+            await runtime_grace.clear_switching(slot.slug)
         raise RecipeStartError(400, str(result.get("message") or "Start fehlgeschlagen"))
+
+    # Ziel-Modell SOFORT in die Slot-Zeile, nicht erst nach zwei Wächter-Proben
+    # (bis zu drei Minuten, in denen jeder Agent den alten Namen anfragt und
+    # 404 bekommt). Der Wächter korrigiert später, falls die Engine doch etwas
+    # anderes serviert als der Katalog sagt — Engine führt, MC folgt.
+    if slot is not None:
+        try:
+            await slot_runtimes.write_slot_state(
+                session,
+                host.id,
+                model=recipe.model_identifier,
+                context_len=recipe.context_len,
+            )
+        except Exception:  # noqa: BLE001 — ein erfolgreicher Start bleibt erfolgreich
+            logger.exception("slot: Sofort-Schreiben für Box %s fehlgeschlagen", host.slug)
+
     await runtime_readiness.invalidate_readiness(instance.slug)
     return {
         "ok": True,
