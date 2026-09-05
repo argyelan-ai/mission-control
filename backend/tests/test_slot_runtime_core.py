@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -656,3 +658,402 @@ async def test_model_defaults_is_slot_to_false(session):
     await session.refresh(rt)
     assert rt.is_slot is False
     assert rt.to_registry_dict()["is_slot"] is False
+
+
+# ── 12. Nachbesserungen aus dem adversarialen Review (05.09.2026) ────────────
+
+
+@pytest.mark.asyncio
+async def test_auto_recovery_riegel_haelt_auch_ohne_den_autostart_riegel(
+    session, isolate_redis_singleton
+):
+    """H/N1: der Riegel in ``_maybe_auto_recover`` war ungetestet.
+
+    Der frühere Test war grün, weil schon ``_autostart_target`` abwies — der
+    zweite Riegel hätte fehlen können, ohne dass es jemand merkt. Hier wird
+    ``_autostart_target`` bewusst überbrückt (er liefert ein gültiges Ziel),
+    sodass NUR noch die ``is_slot``-Prüfung in ``_maybe_auto_recover`` zwischen
+    der Slot-Zeile und einem echten Startversuch steht.
+
+    Die Zeile trägt hier absichtlich ``vllm_docker``: mit dem vertragsgemässen
+    ``openai_compatible`` würde schon die Engine-Art abweisen, und der Test
+    bewiese wieder nichts. Genau dieser Fall — jemand hat der Slot-Zeile eine
+    Docker-Art gegeben — ist die Lage, für die der Riegel da ist. (Nachgeprüft:
+    ersetzt man ``if runtime.is_slot`` durch ``if False``, wird dieser Test rot.)
+    """
+    from app.services.runtime_watcher import RuntimeWatcher
+
+    host = await _host(session, autostart_enabled=True, autostart_recipe_slug="recipe-x")
+    recipe = await _recipe(session)
+    slot = await _slot_runtime(
+        session, host, model_identifier=recipe.model_identifier,
+        runtime_type="vllm_docker", container_name="mc-box-a",
+    )
+    watcher = RuntimeWatcher()
+
+    started = AsyncMock(return_value={"ok": True})
+    bypass = AsyncMock(return_value=(host, recipe))
+    with patch.object(watcher, "_autostart_target", bypass), \
+         patch.object(watcher, "_autostart_start", started), \
+         patch.object(watcher, "_host_answers", AsyncMock(return_value=True)), \
+         patch.object(watcher, "_active_exclusive_sibling", AsyncMock(return_value=None)), \
+         patch.object(watcher, "_record_autostart_attempt", AsyncMock()), \
+         patch("app.services.runtime_watcher.resolve_host_for_runtime",
+               AsyncMock(return_value=SimpleNamespace(ssh_host="192.0.2.10"))), \
+         patch("app.services.runtime_watcher.ssh_capable", lambda _h: True):
+        await watcher._maybe_auto_recover(session, isolate_redis_singleton, slot, fails=3)
+    assert started.await_count == 0
+
+    # Sabotage: NUR das Kennzeichen fällt weg — sonst ändert sich nichts.
+    slot.is_slot = False
+    with patch.object(watcher, "_autostart_target", bypass), \
+         patch.object(watcher, "_autostart_start", started), \
+         patch.object(watcher, "_host_answers", AsyncMock(return_value=True)), \
+         patch.object(watcher, "_active_exclusive_sibling", AsyncMock(return_value=None)), \
+         patch.object(watcher, "_record_autostart_attempt", AsyncMock()), \
+         patch("app.services.runtime_watcher.resolve_host_for_runtime",
+               AsyncMock(return_value=SimpleNamespace(ssh_host="192.0.2.10"))), \
+         patch("app.services.runtime_watcher.ssh_capable", lambda _h: True):
+        await watcher._maybe_auto_recover(session, isolate_redis_singleton, slot, fails=3)
+    assert started.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_watcher_erneuert_den_slot_marker_solange_die_instanz_laedt(
+    session, isolate_redis_singleton
+):
+    """M1: ein 30-Minuten-Kaltstart darf keinen Fehlalarm auslösen.
+
+    Der Grace-Marker lebt 20 Minuten. Solange die REZEPT-Zeile in Grace ist,
+    bekommt die Slot-Zeile ihren Marker neu — beide sterben damit gleichzeitig,
+    statt dass die Slot-Zeile ab Minute 21 ``runtime.unreachable`` feuert.
+    """
+    from app.services import runtime_grace
+    from app.services.runtime_watcher import RuntimeWatcher
+
+    host = await _host(session)
+    slot = await _slot_runtime(session, host)
+    instance = await _recipe_runtime(session, "recipe-x-box-a", host)
+    watcher = RuntimeWatcher()
+
+    marker = {"phase": runtime_grace.PHASE_LOADING, "source": runtime_grace.SOURCE_SWITCH}
+    await watcher._refresh_slot_grace(session, instance, marker)
+    assert await runtime_grace.get_switching(slot.slug) is not None
+
+    # Sabotage 1: eine Zeile ohne Box hat keine Slot-Zeile, die sie mitziehen
+    # könnte — und darf trotzdem nicht stolpern.
+    await runtime_grace.clear_switching(slot.slug)
+    boxless = await _recipe_runtime(session, "recipe-y", None)
+    await watcher._refresh_slot_grace(session, boxless, marker)
+    assert await runtime_grace.get_switching(slot.slug) is None
+
+    # Sabotage 2: die Slot-Zeile markiert sich nicht endlos selbst.
+    await watcher._refresh_slot_grace(session, slot, marker)
+    assert await runtime_grace.get_switching(slot.slug) is None
+
+
+@pytest.mark.asyncio
+async def test_probe_runde_zieht_den_slot_marker_wirklich_mit(
+    session, isolate_redis_singleton
+):
+    """M1, Verdrahtung: die Methode allein nuetzt nichts, wenn sie niemand ruft.
+
+    Hier laeuft eine echte Probe-Runde: die Rezept-Zeile antwortet nicht und
+    steht in Grace (= laedt). Danach muss die Slot-Zeile denselben Marker haben.
+    """
+    from app.services import runtime_grace
+    from app.services.runtime_watcher import RuntimeWatcher
+
+    host = await _host(session)
+    slot = await _slot_runtime(session, host)
+    instance = await _recipe_runtime(session, "recipe-x-box-a", host)
+    watcher = RuntimeWatcher()
+
+    await runtime_grace.mark_switching(
+        instance.slug, runtime_grace.PHASE_LOADING, runtime_grace.SOURCE_SWITCH
+    )
+    assert await runtime_grace.get_switching(slot.slug) is None
+
+    silent = SimpleNamespace(model_id=None, context_len=None)
+    with patch("app.services.runtime_watcher.probe_runtime_model_info",
+               AsyncMock(return_value=silent)), \
+         patch.object(watcher, "_check_crash_loop", AsyncMock(return_value=False)):
+        await watcher._probe_one(session, instance)
+
+    assert await runtime_grace.get_switching(slot.slug) is not None
+
+
+@pytest.mark.asyncio
+async def test_warnung_feuert_nach_45_minuten_auch_ohne_marker(
+    session, isolate_redis_singleton
+):
+    """H1: die Warnung hing am Grace-Marker — der stirbt nach 20 Minuten.
+
+    Das Alter kommt jetzt aus einem eigenen Zähler, der beim ERSTEN Aufschub
+    gesetzt wird und lange genug lebt. Hier wird er auf „vor 50 Minuten"
+    zurückdatiert, während gar kein Marker mehr steht (nur eine tote Box) —
+    genau die Lage, in der die Warnung früher nie kam.
+    """
+    from app.redis_client import RedisKeys
+    from app.services import dispatch_delivery as dd
+
+    host = await _host(session)
+    slot = await _slot_runtime(session, host)
+    agent = await _agent(session, slot)
+    task = await _task(session)
+
+    await isolate_redis_singleton.set(
+        RedisKeys.runtime_live(slot.slug), json.dumps({"reachable": False})
+    )
+    old = datetime.now(timezone.utc) - timedelta(minutes=50)
+    await isolate_redis_singleton.set(
+        dd._DEFER_KEY.format(task_id=str(task.id)),
+        json.dumps({"first": old.isoformat(), "last_event": None}),
+    )
+
+    events: list[tuple[str, str]] = []
+
+    async def _emit(_s, event_type, _title, **kw):
+        events.append((event_type, kw.get("severity", "info")))
+
+    with patch.object(dd, "emit_event", _emit):
+        allowed = await dd._check_runtime_readiness(
+            task, agent, session, task.board_id, str(agent.id)
+        )
+    assert allowed is False
+    assert events == [("dispatch.deferred_runtime_loading", "warning")]
+
+    # Sabotage: frisch aufgeschoben → nur „info", keine Warnung.
+    await isolate_redis_singleton.delete(dd._DEFER_KEY.format(task_id=str(task.id)))
+    events.clear()
+    with patch.object(dd, "emit_event", _emit):
+        await dd._check_runtime_readiness(
+            task, agent, session, task.board_id, str(agent.id)
+        )
+    assert events == [("dispatch.deferred_runtime_loading", "info")]
+
+
+@pytest.mark.asyncio
+async def test_wartende_aufgabe_erzeugt_hoechstens_alle_5_minuten_ein_ereignis(
+    session, isolate_redis_singleton
+):
+    """M2: der Nachzügler-Wächter fragt alle 30 s — das darf nicht 60 Ereignisse
+    je Wechsel bedeuten."""
+    from app.redis_client import RedisKeys
+    from app.services import dispatch_delivery as dd
+
+    host = await _host(session)
+    slot = await _slot_runtime(session, host)
+    agent = await _agent(session, slot)
+    task = await _task(session)
+    await isolate_redis_singleton.set(
+        RedisKeys.runtime_live(slot.slug), json.dumps({"reachable": False})
+    )
+
+    events: list[str] = []
+
+    async def _emit(_s, event_type, _title, **_kw):
+        events.append(event_type)
+
+    with patch.object(dd, "emit_event", _emit):
+        for _ in range(10):  # 10 Runden à 30 s = 5 Minuten
+            await dd._check_runtime_readiness(
+                task, agent, session, task.board_id, str(agent.id)
+            )
+    assert len(events) == 1, events
+
+    # Nach Ablauf des Fensters kommt genau EIN weiteres Ereignis.
+    raw = await isolate_redis_singleton.get(dd._DEFER_KEY.format(task_id=str(task.id)))
+    doc = json.loads(raw)
+    doc["last_event"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=dd.DEFER_EVENT_INTERVAL_SECONDS + 5)
+    ).isoformat()
+    await isolate_redis_singleton.set(
+        dd._DEFER_KEY.format(task_id=str(task.id)), json.dumps(doc)
+    )
+    with patch.object(dd, "emit_event", _emit):
+        await dd._check_runtime_readiness(
+            task, agent, session, task.board_id, str(agent.id)
+        )
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_wartezaehler_wird_geloescht_sobald_die_box_wieder_antwortet(
+    session, isolate_redis_singleton
+):
+    """Sonst zählte der NÄCHSTE Wechsel ab dem alten Startpunkt und warnte sofort."""
+    from app.redis_client import RedisKeys
+    from app.services import dispatch_delivery as dd
+
+    host = await _host(session)
+    slot = await _slot_runtime(session, host)
+    agent = await _agent(session, slot)
+    task = await _task(session)
+    key = dd._DEFER_KEY.format(task_id=str(task.id))
+
+    await isolate_redis_singleton.set(
+        RedisKeys.runtime_live(slot.slug), json.dumps({"reachable": False})
+    )
+    with patch.object(dd, "emit_event", AsyncMock()):
+        await dd._check_runtime_readiness(
+            task, agent, session, task.board_id, str(agent.id)
+        )
+    assert await isolate_redis_singleton.get(key) is not None
+
+    await isolate_redis_singleton.set(
+        RedisKeys.runtime_live(slot.slug), json.dumps({"reachable": True})
+    )
+    assert await dd._check_runtime_readiness(
+        task, agent, session, task.board_id, str(agent.id)
+    ) is True
+    assert await isolate_redis_singleton.get(key) is None
+
+
+@pytest.mark.asyncio
+async def test_schalter_haelt_den_rueckbau_ueber_den_neustart(session):
+    """H2: ohne Schalter legte der nächste Backend-Start alles wieder an."""
+    from app.config import settings
+
+    host = await _host(session)
+    await _recipe_runtime(session, "recipe-x-box-a", host)
+
+    original = settings.slot_runtimes_enabled
+    try:
+        settings.slot_runtimes_enabled = False
+        summary = await slot_runtimes.ensure_slot_runtimes(session)
+        assert summary["created"] == [] and summary.get("disabled") is True
+        assert await slot_runtimes.find_slot_runtime(session, host.id) is None
+
+        # Sabotage: Schalter an → dieselbe Lage legt sehr wohl eine Zeile an.
+        settings.slot_runtimes_enabled = True
+        summary = await slot_runtimes.ensure_slot_runtimes(session)
+        assert summary["created"] == ["box-a-slot"]
+    finally:
+        settings.slot_runtimes_enabled = original
+
+
+@pytest.mark.asyncio
+async def test_endpunkt_der_slot_zeile_ist_deterministisch(session):
+    """M4: ohne feste Reihenfolge entschied die DB, welchen Endpunkt eine Box bekommt."""
+    host = await _host(session)
+    # Absichtlich in „falscher" Reihenfolge angelegt.
+    await _recipe_runtime(
+        session, "recipe-z-box-a", host, endpoint="http://192.0.2.10:9000/v1", ui_order=5
+    )
+    await _recipe_runtime(
+        session, "recipe-a-box-a", host, endpoint="http://192.0.2.10:8000/v1", ui_order=1
+    )
+
+    summary = await slot_runtimes.ensure_slot_runtimes(session)
+    assert summary["created"] == ["box-a-slot"]
+    slot = await slot_runtimes.find_slot_runtime(session, host.id)
+    assert slot.endpoint == "http://192.0.2.10:8000/v1"  # ui_order 1 gewinnt, nie der Zufall
+
+
+@pytest.mark.asyncio
+async def test_ohne_instanz_gewinnt_die_tailscale_adresse(session):
+    """M4: eine LAN-Adresse kann aus dem Container ins Leere laufen.
+
+    Eine Tailscale-Route auf dem Host kapert genau diese LAN-Adresse — der
+    Wächter warnt später selbst davor und schlägt die Tailscale-Adresse vor.
+    """
+    host = await _host(
+        session, slug="box-b", role="head", ssh_host="192.0.2.20",
+        tailscale_host="box-b.example.ts.net",
+    )
+    summary = await slot_runtimes.ensure_slot_runtimes(session)
+    assert summary["created"] == ["box-b-slot"]
+    slot = await slot_runtimes.find_slot_runtime(session, host.id)
+    assert slot.endpoint == "http://box-b.example.ts.net:8000/v1"
+
+
+# ── 13. Der Rückweg (Skript slot_rollback.py) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rollback_haengt_zurueck_und_loescht_die_zeile(session):
+    from scripts import slot_rollback
+
+    host = await _host(session)
+    target = await _recipe_runtime(session, "recipe-x-box-a", host)
+    slot = await _slot_runtime(session, host)
+    agent = await _agent(session, slot)
+
+    with patch.object(slot_rollback, "AsyncSession", _session_factory(session)):
+        moved = await slot_rollback.rollback(dry_run=False, keep_rows=False)
+    assert moved == 1
+    await session.refresh(agent)
+    assert agent.runtime_id == target.id
+    assert agent.pending_runtime_sync is True
+    assert (await session.exec(select(Runtime).where(Runtime.is_slot == True))).all() == []  # noqa: E712
+
+
+@pytest.mark.asyncio
+async def test_rollback_bricht_ab_und_schreibt_nichts_wenn_ein_ziel_fehlt(session):
+    """H3: vorher wurde Agent für Agent committet und die Zeile trotzdem gelöscht
+    — eine Fremdschlüssel-Verletzung im halb fertigen Rückbau."""
+    from scripts import slot_rollback
+
+    host = await _host(session)
+    target = await _recipe_runtime(session, "recipe-x-box-a", host)
+    slot_a = await _slot_runtime(session, host)
+    ok_agent = await _agent(session, slot_a, name="agent-a")
+
+    # Zweite Box OHNE Rezept-Zeile: für ihren Agenten gibt es kein Ziel.
+    host_b = await _host(session, slug="box-b", role="head")
+    slot_b = await _slot_runtime(session, host_b)
+    slot_b.slug = "box-b-slot"
+    session.add(slot_b)
+    await session.commit()
+    lost_agent = await _agent(session, slot_b, name="agent-b")
+
+    with patch.object(slot_rollback, "AsyncSession", _session_factory(session)):
+        result = await slot_rollback.rollback(dry_run=False, keep_rows=False)
+    assert result < 0
+
+    # NICHTS wurde geschrieben — auch nicht für den Agenten, der ein Ziel hatte.
+    await session.refresh(ok_agent)
+    await session.refresh(lost_agent)
+    assert ok_agent.runtime_id == slot_a.id
+    assert ok_agent.runtime_id != target.id
+    assert lost_agent.runtime_id == slot_b.id
+    rows = (await session.exec(select(Runtime).where(Runtime.is_slot == True))).all()  # noqa: E712
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_rollback_probelauf_schreibt_nichts(session):
+    from scripts import slot_rollback
+
+    host = await _host(session)
+    await _recipe_runtime(session, "recipe-x-box-a", host)
+    slot = await _slot_runtime(session, host)
+    agent = await _agent(session, slot)
+
+    with patch.object(slot_rollback, "AsyncSession", _session_factory(session)):
+        moved = await slot_rollback.rollback(dry_run=True, keep_rows=False)
+    assert moved == 1
+    await session.refresh(agent)
+    assert agent.runtime_id == slot.id  # unverändert
+    rows = (await session.exec(select(Runtime).where(Runtime.is_slot == True))).all()  # noqa: E712
+    assert len(rows) == 1
+
+
+def _session_factory(existing):
+    """Das Skript öffnet seine eigene Sitzung — im Test ist es dieselbe.
+
+    ``AsyncSession(engine, ...)`` als Kontext-Manager nachgebildet, damit das
+    Skript unverändert laufen kann und der Test danach denselben Zustand sieht.
+    """
+    class _Factory:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return existing
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    return _Factory

@@ -66,7 +66,10 @@ Konkret:
 5. **Bereitschafts-Tor:** `dispatch_delivery._check_runtime_readiness` verschiebt
    die Zustellung, solange die Slot-Zeile in Grace ist oder die letzte Probe
    `reachable = false` sah — mit Ereignis `dispatch.deferred_runtime_loading`
-   und einer Warnung nach 45 Minuten.
+   und einer Warnung nach 45 Minuten. Das Alter kommt aus einem **eigenen
+   Wartezähler je Aufgabe** (`mc:dispatch:defer:<task_id>`), nicht aus dem
+   Grace-Marker: der lebt nur 20 Minuten, die Warnung hätte also nie gefeuert.
+   Derselbe Zähler drosselt das Ereignis auf höchstens eines alle 5 Minuten.
 6. **Reload statt Neustart:** `runtime_propagation._sync_one` rendert die
    omp-Konfiguration IM Container neu (`docker exec … render-omp-config.sh`);
    `docker restart` bleibt der Rückfallweg.
@@ -76,7 +79,14 @@ Konkret:
 8. **Daten sind Instanz-Sache:** die Migration legt KEINE Zeilen an. Der
    Backend-Start führt `slot_runtimes.ensure_slot_runtimes()` aus (idempotent,
    wie `repair_legacy_sparkrun_rows`) und hängt die cli-bridge-Agenten der Box
-   um. Rückweg: `backend/scripts/slot_rollback.py`.
+   um. Rückweg: `backend/scripts/slot_rollback.py` **plus** der Schalter
+   `SLOT_RUNTIMES_ENABLED=false` — ohne ihn legte der nächste Backend-Start
+   alles wieder an, der Rückweg hätte also nur bis zum nächsten Deploy gehalten.
+9. **Der Wechsel bleibt ein Wechsel, auch wenn er lange dauert:** solange die
+   Rezept-Instanz in Grace ist, erneuert der Wächter den Marker der Slot-Zeile
+   (`runtime_watcher._refresh_slot_grace`). Beide Marker sterben damit
+   gleichzeitig. Ohne das feuerte ein ehrlicher 30-Minuten-Kaltstart ab
+   Minute 21 `runtime.unreachable` für die Slot-Zeile.
 
 ## Warum `host_id` bleibt (und nicht NULL wird)
 
@@ -138,9 +148,15 @@ also unbrauchbar genau in der Übergangszeit, um die es hier geht.
   Probe-Guard bleibt für alle ANDEREN Zeilen unverändert scharf — nur die
   Slot-Zeile darf folgen.
 
-**Rückweg**
-`docker compose exec backend python -m scripts.slot_rollback` hängt jeden Agenten
-zurück an die Rezept-Zeile seiner Box (bevorzugt die laufende, sonst die aus dem
-Ereignis `agent.slot_rebound`) und löscht die Slot-Zeilen. `--dry-run` zeigt
-den Plan, `--keep-rows` lässt die Zeilen stehen. Die Rezept-Zeilen selbst
-werden nie angefasst, es geht also nichts verloren.
+**Rückweg — zwei Schritte**
+1. `SLOT_RUNTIMES_ENABLED=false` in die `.env`, Backend neu starten. Ohne diesen
+   Schritt legt `ensure_slot_runtimes()` beim nächsten Start alles wieder an.
+2. `docker compose exec backend python -m scripts.slot_rollback` hängt jeden
+   Agenten zurück an die Rezept-Zeile seiner Box (bevorzugt die laufende, sonst
+   die aus dem Ereignis `agent.slot_rebound`) und löscht die Slot-Zeilen.
+   `--dry-run` zeigt den Plan, `--keep-rows` lässt die Zeilen stehen.
+
+Das Skript ist **alles oder nichts**: findet sich für auch nur einen Agenten
+kein Ziel, bricht es ab, bevor es irgendetwas schreibt (Exit-Code 2), und eine
+Slot-Zeile wird nur gelöscht, wenn nachweislich kein Agent mehr an ihr hängt.
+Die Rezept-Zeilen selbst werden nie angefasst, es geht also nichts verloren.

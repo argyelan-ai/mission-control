@@ -1291,12 +1291,19 @@ Wer sie ueberall ausschliesst (immer an is_slot, nie am Typ)
 
 Uebergangszeit (8-30 min Ladezeit)
   runtime_grace.mark_switching(slot)          Wechsel ist kein Ausfall
+  runtime_watcher._refresh_slot_grace         Marker erneuern, solange die
+                                              Instanz laedt (TTL sonst 20 min)
   dispatch_delivery._check_runtime_readiness  Aufgabe wartet statt zu scheitern
-                                              (Ereignis dispatch.deferred_runtime_loading)
+                                              (dispatch.deferred_runtime_loading,
+                                               max. 1 Ereignis / 5 min je Aufgabe,
+                                               Warnung nach 45 min)
+  mc:dispatch:defer:<task_id>                 eigener Wartezaehler je Aufgabe —
+                                              die Quelle fuer die 45-min-Warnung
 
 Anlegen / Rueckweg
   main lifespan → slot_runtimes.ensure_slot_runtimes()   idempotent, keine Migration-Daten
-  backend/scripts/slot_rollback.py                       Agenten zurueck + Zeilen weg
+  SLOT_RUNTIMES_ENABLED=false                            Schalter: nichts anlegen, nichts umhaengen
+  backend/scripts/slot_rollback.py                       Agenten zurueck + Zeilen weg (alles oder nichts)
 ```
 
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
