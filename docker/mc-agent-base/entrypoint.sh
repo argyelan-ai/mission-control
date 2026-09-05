@@ -143,6 +143,50 @@ fi
 # env-Fallback (Dockerfile backt seit der Sanierung KEIN Default-Modell mehr
 # ein) waere OPENAI_MODEL leer/unbekannt — lieber gar nicht starten als mit
 # dem falschen oder gar keinem Modell laufen.
+#
+# ADR-078 (05.09.2026): der Riegel bleibt, der SOFORTIGE Abbruch nicht.
+# Seit alle Agenten einer Box an EINER Slot-Zeile hängen, heisst „kein Modell"
+# meistens nicht „Bootstrap kaputt", sondern „die Box lädt gerade ein anderes
+# Rezept" (8–30 Minuten). Ein Exit schickte den Container dafür in einen
+# Neustart-Kreisel. Also: bis zu 30 Minuten alle 20 Sekunden erneut fragen —
+# und erst dann aufgeben. Ein stiller Rückfall auf ein altes Modell bleibt
+# ausgeschlossen: gewartet wird auf den ECHTEN Wert, nie auf einen Default.
+_wait_for_bootstrap_model() {
+    _waited=0
+    while [ "$_waited" -lt 1800 ]; do
+        echo "[entrypoint] Kein Modell von MC — warte auf die Box (${_waited}s/1800s)"
+        sleep 20
+        _waited=$((_waited + 20))
+        _RETRY=$(curl -sf --max-time 5 "$BOOTSTRAP_URL" 2>/dev/null) || continue
+        _RETRY_EXPORTS=$(echo "$_RETRY" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for k in ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY"):
+        v = d.get(k)
+        if v:
+            print(f"{k}={v}")
+except Exception:
+    sys.exit(1)
+' 2>/dev/null) || continue
+        _R_MODEL=$(echo "$_RETRY_EXPORTS" | grep '^OPENAI_MODEL=' | cut -d= -f2-)
+        _R_URL=$(echo "$_RETRY_EXPORTS" | grep '^OPENAI_BASE_URL=' | cut -d= -f2-)
+        _R_KEY=$(echo "$_RETRY_EXPORTS" | grep '^OPENAI_API_KEY=' | cut -d= -f2-)
+        [ -n "$_R_KEY" ] && export OPENAI_API_KEY="$_R_KEY"
+        if [ -n "$_R_MODEL" ] && [ -n "$_R_URL" ]; then
+            export OPENAI_MODEL="$_R_MODEL"
+            export OPENAI_BASE_URL="$_R_URL"
+            echo "[entrypoint] Modell da: $OPENAI_MODEL"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ -z "${OPENAI_MODEL:-}" ] || [ -z "${OPENAI_BASE_URL:-}" ]; then
+    _wait_for_bootstrap_model || true
+fi
+
 if [ -z "${OPENAI_MODEL:-}" ]; then
     echo "[entrypoint] FATAL: OPENAI_MODEL not set (bootstrap failed and no env fallback) — refusing to boot with an unknown model" >&2
     exit 1
