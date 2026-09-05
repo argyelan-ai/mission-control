@@ -174,7 +174,9 @@ async def login(
 ):
     """Authenticate with email and password, returns JWT."""
     # request.client.host is only the REAL client IP because uvicorn runs
-    # with --proxy-headers --forwarded-allow-ips=* (backend/Dockerfile) —
+    # with --proxy-headers (backend/Dockerfile) and a trust list that contains
+    # Caddy but not the host gateway (backend/docker-entrypoint.sh exports
+    # FORWARDED_ALLOW_IPS, computed in app/proxy_trust.py) —
     # without that, this is unconditionally Caddy's own container IP for
     # every request, which buckets every user's login attempts together
     # (PR #404 Rex review: 5 failed attempts from anyone locks out
