@@ -412,6 +412,14 @@ class RuntimeWatcher:
         """
         from shlex import quote as shlex_quote
 
+        if runtime.is_slot:
+            # ADR-078: eine Slot-Zeile IST der Zeiger auf „was die Box gerade
+            # serviert". Für sie ist die Antwort des Ports per Definition die
+            # eigene — sie hat keinen Anker und soll auch keinen haben. Diese
+            # Prüfung steht VOR der Typ-Verzweigung, damit die Regel nicht
+            # daran hängt, welchen runtime_type jemand der Zeile gegeben hat.
+            return True
+
         container = (runtime.container_name or "").strip()
         process = (runtime.process_name or "").strip()
         if runtime.runtime_type in DOCKER_ENGINE_TYPES:
@@ -475,6 +483,17 @@ class RuntimeWatcher:
         await session.commit()
         await session.refresh(runtime)
         await invalidate_cached_model(runtime.slug)
+        if runtime.is_slot:
+            # ADR-078: der Name einer Slot-Zeile trägt das laufende Modell
+            # („<Box> :8000 (aktuell: …)"). Wandert das Modell und der Name
+            # nicht mit, zeigt die Oberfläche nach dem ersten Rezeptwechsel
+            # etwas Falsches an. Best effort — Kosmetik kostet nie eine Runde.
+            try:
+                from app.services.slot_runtimes import refresh_slot_display_name
+
+                await refresh_slot_display_name(session, runtime)
+            except Exception:  # noqa: BLE001
+                logger.exception("slot display name refresh failed for %s", runtime.slug)
         logger.info("runtime %s model drift confirmed: %r → %r",
                     runtime.slug, old, served)
         await emit_event(
@@ -812,6 +831,12 @@ class RuntimeWatcher:
             return
         if not runtime.enabled:
             return
+        if runtime.is_slot:
+            # ADR-078: eine Slot-Zeile hat nichts, was man starten könnte —
+            # keinen Startbefehl, keinen Anker. Ohne diesen Riegel meldeten
+            # Slot- UND Rezeptzeile denselben Ausfall und es liefen ZWEI
+            # Startpfade auf dieselbe Box (Betriebs-Review 05.09.2026, A3).
+            return
 
         host_row, recipe = await self._autostart_target(session, runtime)
         if runtime.host_id is not None:
@@ -958,6 +983,13 @@ class RuntimeWatcher:
         sonst (ADR-077: ein Ort rechnet, einer zeigt).
         """
         if runtime.host_id is None:
+            return None, None
+        if runtime.is_slot:
+            # ADR-078: die Slot-Zeile ist nie die Instanz eines Rezepts — sie
+            # darf also auch nie das Autostart-Ziel einer Box sein. Doppelt
+            # geriegelt (recipe_matches_runtime sagt für sie ohnehin nein),
+            # weil ein Autostart auf einer Zeile ohne Startbefehl nichts
+            # anderes als eine Endlosschleife wäre.
             return None, None
         from app.models.host import Host
         from app.models.local_recipe import LocalRecipe
