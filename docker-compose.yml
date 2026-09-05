@@ -144,6 +144,15 @@ services:
       # printenv came back empty while the unit tests were all green).
       STT_BASE_URL: ${STT_BASE_URL:-}
       STT_MODEL: ${STT_MODEL:-}
+      # Agent bootstrap auth (PR #404 Rex review, HIGH): agents fetch their
+      # tokens at startup via Bearer INTERNAL_BOOTSTRAP_SECRET
+      # (docker/.env.shared via start-all.sh, written by setup.sh into .env).
+      # Like every backend var, it must be mapped HERE explicitly — the .env
+      # alone never reaches the container (same trap as STT_BASE_URL above,
+      # found live 2026-07-30). Empty in a dev .env = endpoint stays open,
+      # exactly like local dev; production (ENVIRONMENT=production) refuses
+      # to boot without it (config.py::validate_boot_secrets).
+      INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:-}
       # Jarvis Intelligence (ADR-062): frontier delegation (ask_frontier) + the
       # daily morning briefing job. Empty model → jarvis_core default (gpt-5.5).
       # ask_frontier is off by default (per-request cost); the briefing job has

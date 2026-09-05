@@ -46,7 +46,21 @@ USER mcuser
 EXPOSE 8000
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# --proxy-headers: without this, request.client.host is ALWAYS the Caddy
+# container's IP for every request (Caddy is a separate container in the
+# compose network; uvicorn's own default forwarded_allow_ips is 127.0.0.1,
+# which Caddy is not) — the login rate limiter and slowapi's
+# get_remote_address both key on this and end up bucketing every real client
+# together (PR #404 Rex review, MEDIUM/LOW).
+#
+# WHICH senders we believe is decided at startup, not here: docker-entrypoint.sh
+# exports FORWARDED_ALLOW_IPS (uvicorn reads that env var) with this container's
+# own subnets MINUS the bridge gateways — Caddy is trusted, a host process
+# reaching us through the published 127.0.0.1:8000 port is not. `backend` DOES
+# publish a host port (docker-compose.yml, the host agents need it), so the
+# earlier "'*' is safe, no host port" reasoning was simply wrong.
+# See app/proxy_trust.py for the measurement behind it.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--proxy-headers"]
 
 # ── release target (default) ─────────────────────────────────────────────────
 FROM base AS release
@@ -64,4 +78,6 @@ EXPOSE 8000
 # Migrationen brauchen laufenden Container" fuer frische Installs.
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# See the dev-target CMD above for why --proxy-headers is required and where
+# the trust list comes from (PR #404 Rex review, MEDIUM/LOW + HOCH-1).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers"]
