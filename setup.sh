@@ -60,6 +60,12 @@ fi
 # hand-copied .env.example) — the fresh-install branch above never runs then.
 grep -q '^HOST_UID=' .env || { echo "HOST_UID=$(id -u)" >> .env; echo "✅ backfilled HOST_UID=$(id -u)"; }
 grep -q '^MC_REPO_PATH=' .env || { echo "MC_REPO_PATH=$(pwd)" >> .env; echo "✅ backfilled MC_REPO_PATH=$(pwd)"; }
+# Ohne dieses Secret antwortet /api/v1/internal/bootstrap mit 401 und JEDER
+# Agent-Container bricht beim Start ab (docker/*/entrypoint.sh). Ein .env aus
+# der Zeit vor PR #404 hat den Key nicht — der Fresh-Install-Zweig oben laeuft
+# dann nicht, also hier nachziehen. Danach `bash scripts/start-all.sh`, das
+# schreibt docker/.env.shared neu, ueber das die Container den Wert bekommen.
+grep -q '^INTERNAL_BOOTSTRAP_SECRET=' .env || { echo "INTERNAL_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env; echo "✅ backfilled INTERNAL_BOOTSTRAP_SECRET (neu erzeugt — danach scripts/start-all.sh ausfuehren)"; }
 
 # Your own agent fleet. Same pattern as .env from .env.example above, and for
 # the same reason: docker/docker-compose.agents.yml has to exist BEFORE the
