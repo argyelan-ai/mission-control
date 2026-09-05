@@ -199,6 +199,16 @@ class Settings(BaseSettings):
     # Secrets encryption (Fernet key for MC-managed secrets)
     secrets_encryption_key: str = ""
 
+    # Shared secret for GET /api/v1/internal/bootstrap (PR #404 Rex review,
+    # HIGH finding): that endpoint hands agent containers their vault tokens
+    # (MC_AGENT_TOKEN, GH_TOKEN, provider keys) in plaintext on every
+    # startup — it must not be reachable by anyone who can just guess an
+    # agent name. Checked in routers/internal.py via secrets.compare_digest
+    # against an `Authorization: Bearer <token>` header. Empty (dev/test
+    # default) keeps today's open behavior for local development;
+    # validate_boot_secrets() below refuses to boot in production without it.
+    internal_bootstrap_secret: str = ""
+
     # Subagent dispatch (chat_send_isolated instead of chat_send for workers)
     # Kill-switch: USE_SUBAGENT_DISPATCH=false in .env → immediate legacy mode
     use_subagent_dispatch: bool = True
@@ -611,6 +621,14 @@ def validate_boot_secrets(s: Settings | None = None) -> None:
             "SECRETS_ENCRYPTION_KEY is empty — the encrypted secrets vault "
             "(LLM provider keys) cannot work. Any stable passphrase is "
             "accepted; best: openssl rand -hex 32"
+        )
+    if not s.internal_bootstrap_secret:
+        problems.append(
+            "INTERNAL_BOOTSTRAP_SECRET is empty — GET /api/v1/internal/"
+            "bootstrap would hand out every agent's vault secrets "
+            "(MC_AGENT_TOKEN, GH_TOKEN, provider keys) to anyone who can "
+            "reach it and guess an agent name. Generate one: "
+            "openssl rand -hex 32"
         )
     if problems:
         raise RuntimeError(

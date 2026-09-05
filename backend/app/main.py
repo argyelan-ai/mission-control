@@ -845,13 +845,40 @@ app.add_middleware(
 )
 
 # ── Rate Limiting (slowapi) ─────────────────────────────────────────────────
+# PR #404 Rex review (MEDIUM): Limiter + default_limits + the exception
+# handler were wired up, but without SlowAPIMiddleware (or a single
+# @limiter.limit decorator — repo-wide grep found zero) default_limits was
+# never enforced. It read as "there is global rate limiting" while there was
+# none. SlowAPIMiddleware makes default_limits apply to every HTTP route.
+# PathExemptSlowAPIMiddleware is that middleware minus the routes that must
+# never be counted (Agent-Container, /api/v1/internal, /health, SSE) —
+# Begruendung in app/rate_limit.py (PR #404 Review, MITTEL-1).
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+from app.rate_limit import PathExemptSlowAPIMiddleware
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    # 600/minute, not 120: the key is the client IP, and Marks Browser is ONE
+    # IP for the entire UI (TanStack-Polling ueber viele Endpunkte + SSE-
+    # Reconnects). Bei 120 sieht ein 429 in der UI aus wie ein Backend-Ausfall.
+    # Maschinen-Verkehr, /health und SSE zaehlen gar nicht mehr mit — siehe
+    # app/rate_limit.py (PR #404 Review, MITTEL-1).
+    default_limits=["600/minute"],
+    # Every test-client request shares one fake client address (slowapi's
+    # get_remote_address falls back to "127.0.0.1" when request.client is
+    # unset, which is how httpx's ASGITransport calls look) — a live
+    # 120/minute budget shared across the ENTIRE test session would make
+    # unrelated tests fail with spurious 429s once ~120 requests had run.
+    # test_rate_limiting_middleware.py exercises the real enforcement path
+    # by swapping in its own low-limit Limiter, independent of this flag.
+    enabled=settings.environment != "test",
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(PathExemptSlowAPIMiddleware)
 
 # Register all routers
 app.include_router(auth.router)
