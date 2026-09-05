@@ -122,54 +122,49 @@ else
     export MC_AGENT_TOKEN="${MC_TOKEN:-}"
 fi
 
-# ── 2. Render omp's native models.yml provider from the OpenAI-style env ─────
-# omp resolves models PROFILE-FIRST: with OMP_PROFILE=mc-agent it reads
-# $HOME/.omp/profiles/mc-agent/agent/models.yml (a file at $PI_CODING_AGENT_DIR
-# is IGNORED once OMP_PROFILE is set). omp's built-in `openai` provider does NOT
-# resolve a vLLM-served model from OPENAI_BASE_URL, so a models.yml is mandatory.
-# We render a dedicated `mc-openai` provider (auth: none = keyless vLLM) so
-# runtime.endpoint stays the single source of truth and no token routing is
-# duplicated. bridge.py selects `mc-openai/${OPENAI_MODEL}`.
-OMP_PROFILE="${OMP_PROFILE:-mc-agent}"
-MODELS_DIR="${HOME}/.omp/profiles/${OMP_PROFILE}/agent"
-mkdir -p "$MODELS_DIR"
-# No baked-in defaults (ADR-054): the model/endpoint MUST come from the MC
-# bootstrap (runtime row) or the rendered .env. A silent fallback to a stale
-# model caused exactly the drift bug this feature removes — fail loudly.
-if [ -z "${OPENAI_BASE_URL:-}" ] || [ -z "${OPENAI_MODEL:-}" ]; then
-    echo "[entrypoint] FATAL: OPENAI_BASE_URL/OPENAI_MODEL not set (bootstrap failed and no env fallback) — refusing to boot with an unknown model" >&2
-    exit 1
+# ── 2. omp-Konfiguration rendern (ausgelagert, ADR-078) ─────────────────────
+# models.yml + omp.env entstehen seit 05.09.2026 in render-omp-config.sh und
+# NICHT mehr hier. Grund: MC muss dieselben Dateien im LAUFENDEN Container neu
+# schreiben können (`docker exec <container> render-omp-config.sh`), wenn hinter
+# der Box-URL ein anderes Modell startet. Zwei Kopien derselben Vorlage wären
+# genau die Drift, die ADR-054 abgeschafft hat — also gibt es nur noch eine, und
+# der Entrypoint ist ihr erster Aufrufer.
+#
+# Die Voraussetzungen (Profil, Signal-Datei, Pfade) stehen VOR dem Aufruf, weil
+# das Skript sie in omp.env schreibt.
+export OMP_PROFILE="${OMP_PROFILE:-mc-agent}"
+export OMP_HOME="${OMP_HOME:-${HOME}/.omp}"
+export OMP_HOOK_FILE="$HOOK_FILE"
+export OMP_TURN_SIGNAL_FILE="${OMP_TURN_SIGNAL_FILE:-${OMP_HOME}/turn-signal.ndjson}"
+export OMP_DEFAULT_CWD OMP_LAUNCHER="$LAUNCHER"
+export OMP_ENV_FILE="${OMP_HOME}/omp.env"
+mkdir -p "$(dirname "$OMP_TURN_SIGNAL_FILE")" "${OMP_HOME}/tasks"
+: > "$OMP_TURN_SIGNAL_FILE"   # fresh signal on boot
+
+# KEIN sofortiger Abbruch mehr, wenn das Modell fehlt (ADR-078, Auflage 5).
+# Bis 05.09.2026 stand hier `exit 1`. Das war richtig, solange „kein Modell"
+# nur „Bootstrap kaputt" hiess. Seit alle Agenten einer Box an EINER Slot-Zeile
+# hängen, heisst es meistens: die Box lädt gerade ein anderes Rezept. Ein Exit
+# schickte den Container dann in einen Neustart-Kreisel, statt einfach zu
+# warten. Also: bis zu 30 Minuten alle 20 Sekunden erneut fragen — und erst
+# DANN ehrlich aufgeben (Docker startet neu, der nächste Versuch wartet wieder).
+# Ein stiller Rückfall auf ein altes Modell bleibt ausgeschlossen (ADR-054).
+if ! /opt/omp-bridge/render-omp-config.sh --no-bootstrap 2>/dev/null; then
+    echo "[entrypoint] Noch kein Modell — warte auf MC (bis 30 min, alle 20 s)"
+    if ! /opt/omp-bridge/render-omp-config.sh --wait 1800; then
+        echo "[entrypoint] FATAL: nach 30 Minuten immer noch kein Modell von MC — Abbruch" >&2
+        exit 1
+    fi
 fi
+
+# Die gerenderten Werte zurück in diese Shell holen: start_native reicht sie
+# gleich per `tmux set-environment -g` an die Fenster weiter.
+set -a
+# shellcheck disable=SC1090
+. "$OMP_ENV_FILE"
+set +a
 _BASE_URL="${OPENAI_BASE_URL}"
 _MODEL="${OPENAI_MODEL}"
-# Auth line for the rendered provider: keyed endpoints (e.g. Ollama Cloud)
-# get the bootstrap-delivered OPENAI_API_KEY; keyless local vLLM keeps
-# auth: none. Rendered as a single pre-built line to keep the heredoc simple.
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-    _AUTH_LINE="    apiKey: ${OPENAI_API_KEY}"
-else
-    _AUTH_LINE="    auth: none"
-fi
-cat > "${MODELS_DIR}/models.yml" <<YAML
-providers:
-  mc-openai:
-    name: MC OpenAI-compatible endpoint
-    baseUrl: ${_BASE_URL}
-    api: openai-completions
-${_AUTH_LINE}
-    models:
-      - id: ${_MODEL}
-        name: MC model
-        # Without this flag omp renders vLLM's separated reasoning deltas
-        # as plain assistant text instead of a collapsible thinking block.
-        # Harmless for non-reasoning models (the field simply never arrives).
-        reasoning: true
-        contextWindow: ${OMP_CONTEXT_WINDOW:-262144}
-        maxTokens: ${OMP_MAX_TOKENS:-32768}
-YAML
-export OMP_PROFILE
-export OMP_MODEL_SELECTOR="mc-openai/${_MODEL}"
-echo "[entrypoint] models.yml rendered at ${MODELS_DIR}/models.yml (provider mc-openai -> ${_BASE_URL}, model ${_MODEL})"
 
 # ── 2b. Skip the first-run setup wizard so the TUI boots STRAIGHT to chat ────
 # Verified in-container (omp v16.2.13): a hand-written config.yml is NOT honored
@@ -180,34 +175,6 @@ omp config set startup.setupWizard false >/dev/null 2>&1 \
     && omp config set setupVersion 1 >/dev/null 2>&1 \
     && echo "[entrypoint] wizard skipped (startup.setupWizard=false, setupVersion=1)" \
     || echo "[entrypoint] WARN: omp config set failed — TUI may show the setup wizard"
-
-# ── 2c. Signal file + env file so the hook and the per-task relaunch agree ───
-export OMP_HOME="${OMP_HOME:-${HOME}/.omp}"
-export OMP_HOOK_FILE="$HOOK_FILE"
-export OMP_TURN_SIGNAL_FILE="${OMP_TURN_SIGNAL_FILE:-${OMP_HOME}/turn-signal.ndjson}"
-export OMP_DEFAULT_CWD OMP_LAUNCHER="$LAUNCHER"
-mkdir -p "$(dirname "$OMP_TURN_SIGNAL_FILE")" "${OMP_HOME}/tasks"
-: > "$OMP_TURN_SIGNAL_FILE"   # fresh signal on boot
-
-# omp.env — sourced by launch-omp.sh so a `tmux respawn-window` (which does not
-# inherit the poller's shell) still gets provider/model/profile. Belt-and-
-# suspenders with the `tmux set-environment -g` below.
-export OMP_ENV_FILE="${OMP_HOME}/omp.env"
-cat > "$OMP_ENV_FILE" <<ENVFILE
-OPENAI_BASE_URL=${_BASE_URL}
-OPENAI_MODEL=${_MODEL}
-OPENAI_API_KEY=${OPENAI_API_KEY:-sk-noauth}
-OMP_MODEL_SELECTOR=${OMP_MODEL_SELECTOR}
-OMP_PROFILE=${OMP_PROFILE}
-OMP_HOME=${OMP_HOME}
-PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-${OMP_HOME}/agent}
-OMP_HOOK_FILE=${HOOK_FILE}
-OMP_TURN_SIGNAL_FILE=${OMP_TURN_SIGNAL_FILE}
-OMP_DEFAULT_CWD=${OMP_DEFAULT_CWD}
-HOME=${HOME}
-PATH=${PATH}
-ENVFILE
-chmod 600 "$OMP_ENV_FILE"
 
 # ── 3. tmux layout (~/.tmux.conf keeps a large scrollback for the pane SSE) ──
 # mouse on: the Sessions-page web terminal forwards wheel events as mouse CSI

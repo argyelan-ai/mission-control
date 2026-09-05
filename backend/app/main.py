@@ -165,6 +165,8 @@ async def lifespan(app: FastAPI):
     await _seed_runtimes()
     await _seed_local_recipes()
     await _seed_hosts()
+    # NACH _seed_hosts: die Slot-Zeilen leiten sich aus den Boxen ab.
+    await _ensure_slot_runtimes()
     await _seed_github_token()
     await scheduler.start()
     await watchdog.start()
@@ -601,6 +603,32 @@ async def _seed_hosts() -> None:
             await seed_hosts(session)
     except Exception as e:
         logger.warning("Host seeding failed (non-critical): %s", e)
+
+
+async def _ensure_slot_runtimes() -> None:
+    """Slot-Zeile je Head-Box anlegen und Agenten umhängen (ADR-078).
+
+    Läuft bei jedem Start und ist idempotent — genau wie
+    ``repair_legacy_sparkrun_rows``. Die Migration legt bewusst KEINE Zeilen an
+    (Regel 7, ADR-077): welche Boxen es gibt, weiss nur die Datenbank des
+    Betreibers, nicht das Repo.
+
+    Nicht-kritisch: schlägt es fehl, bootet MC wie vorher — die Agenten hängen
+    dann eben weiter an ihren Rezept-Zeilen.
+    """
+    try:
+        from sqlmodel.ext.asyncio.session import AsyncSession
+        from app.services.slot_runtimes import ensure_slot_runtimes
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            summary = await ensure_slot_runtimes(session)
+        if summary.get("created") or summary.get("rebound"):
+            logger.info(
+                "Slot-Runtimes: %s angelegt, %s Agenten umgehängt",
+                len(summary.get("created") or []), len(summary.get("rebound") or []),
+            )
+    except Exception as e:
+        logger.warning("Slot-Runtime-Abgleich fehlgeschlagen (nicht kritisch): %s", e)
 
 
 async def _seed_github_token() -> None:
