@@ -154,10 +154,12 @@ fi
 _wait_for_bootstrap_model() {
     _waited=0
     while [ "$_waited" -lt 1800 ]; do
-        echo "[entrypoint] Kein Modell von MC — warte auf die Box (${_waited}s/1800s)"
-        sleep 20
-        _waited=$((_waited + 20))
-        _RETRY=$(curl -sf --max-time 5 "$BOOTSTRAP_URL" 2>/dev/null) || continue
+        _RETRY=$(curl -sf --max-time 5 "$BOOTSTRAP_URL" 2>/dev/null) || {
+            echo "[entrypoint] MC nicht erreichbar — warte (${_waited}s/1800s)"
+            sleep 20
+            _waited=$((_waited + 20))
+            continue
+        }
         _RETRY_EXPORTS=$(echo "$_RETRY" | python3 -c '
 import sys, json
 try:
@@ -168,7 +170,9 @@ try:
             print(f"{k}={v}")
 except Exception:
     sys.exit(1)
-' 2>/dev/null) || continue
+' 2>/dev/null) || _RETRY_EXPORTS=""
+        # Kein `continue` ohne Schlafen: eine kaputte Antwort wuerde sonst eine
+        # Endlosschleife mit voller CPU-Last drehen, statt zu warten.
         _R_MODEL=$(echo "$_RETRY_EXPORTS" | grep '^OPENAI_MODEL=' | cut -d= -f2-)
         _R_URL=$(echo "$_RETRY_EXPORTS" | grep '^OPENAI_BASE_URL=' | cut -d= -f2-)
         _R_KEY=$(echo "$_RETRY_EXPORTS" | grep '^OPENAI_API_KEY=' | cut -d= -f2-)
@@ -179,6 +183,12 @@ except Exception:
             echo "[entrypoint] Modell da: $OPENAI_MODEL"
             return 0
         fi
+        # Erst NACH dem Versuch schlafen: kam das Modell in genau der Sekunde
+        # herein, in der der Container hochfuhr, waere sonst eine ganze
+        # Wartestufe verschenkt.
+        echo "[entrypoint] Kein Modell von MC — warte auf die Box (${_waited}s/1800s)"
+        sleep 20
+        _waited=$((_waited + 20))
     done
     return 1
 }
