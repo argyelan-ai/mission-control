@@ -39,7 +39,12 @@ import type {
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { AgentActions } from "@/components/agent/AgentActions";
 import { EntityIcon } from "@/components/shared/EntityIcon";
-import { groupRuntimesByProvider, isRuntimeBlockedByLocality } from "@/lib/groupRuntimes";
+import {
+  groupRuntimesByProvider,
+  isRuntimeBlockedByLocality,
+  splitSlotRuntimes,
+  allowsRuntimeFallback,
+} from "@/lib/groupRuntimes";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -627,8 +632,12 @@ function SkillsTab({ agentId }: { agentId: string }) {
 // Phase 30 dropped the `openclaw` runtime entirely (CHECK constraint on
 // agents.agent_runtime). Color map reused from RuntimePill (defined above).
 
-function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: string }) {
+// Exportiert allein für den Test: der Runtime-Picker ist der Ort, an dem
+// Bindungsregeln sichtbar werden (Slot-Zeilen oben, kein Fallback für omp) —
+// die ganze 2000-Zeilen-Seite dafür zu mounten würde nichts zusätzlich prüfen.
+export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: string }) {
   const t = useTranslations("agents.detail");
+  const tSlot = useTranslations("runtimes.slot");
   const qc = useQueryClient();
   // Backend-derived (Agent.runtime_switchable). Never re-derive from harness:
   // the old `harness === "hermes"` compare locked grok/kimi/claude host agents
@@ -647,6 +656,12 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
   const [selected, setSelected] = useState<string | null>(agent.runtime_id ?? null);
   const [modalOpen, setModalOpen] = useState(false);
   const dirty = selected !== (agent.runtime_id ?? null);
+
+  // Slot-Runtime (ADR-078): die festen Box-Adressen stehen oben in einer
+  // eigenen Gruppe, alles andere behält die Reihenfolge des Servers.
+  const { slots: slotRuntimes, rest: otherRuntimes } = splitSlotRuntimes(
+    runtimesData?.runtimes ?? []
+  );
 
   const selectedRuntime = runtimesData?.runtimes.find((r) => r.id === selected || r.slug === selected);
   const borderColor = isSwitchable && selectedRuntime
@@ -719,7 +734,27 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
                 color: "var(--color-text-primary)",
               }}
             >
-              <option value="">{t("fallbackOption")}</option>
+              {/* Slot-Runtime (ADR-078): omp braucht eine gebundene Runtime.
+                  Ohne sie startet der Harness ohne Modell, und das Backend
+                  lehnt das Lösen der Bindung ohnehin mit 422 ab — die Option
+                  gar nicht anzubieten ist ehrlicher als ein Klick ins Leere. */}
+              {allowsRuntimeFallback(agent.harness) && (
+                <option value="">{t("fallbackOption")}</option>
+              )}
+              {/* Die festen Box-Adressen zuerst: an ihnen hängen die Agenten,
+                  sie folgen dem Modell, das gerade auf der Box läuft. Der Name
+                  kommt FERTIG vom Server („BOX-A :8000 (aktuell: <Modell>)") —
+                  hier wird nichts angehängt, sonst stünde das Modell zweimal. */}
+              {slotRuntimes.length > 0 && (
+                <optgroup label={tSlot("pickerGroup")}>
+                  {slotRuntimes.map((r) => (
+                    <option key={r.id} value={r.id} disabled={!r.enabled}>
+                      {r.display_name}
+                      {!r.enabled ? ` · ${t("runtimeDisabled")}` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
               {/* Grouped by vendor via <optgroup>: the API already returns the
                   rows in provider order, this only makes that visible. The
                   label comes from the server (`provider_label`) — deriving it
@@ -734,7 +769,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
                   entirely, matching the existing !r.enabled pattern below —
                   the row stays visible so the "why not" is explained instead
                   of the option just silently disappearing. */}
-              {groupRuntimesByProvider(runtimesData?.runtimes ?? []).map(
+              {groupRuntimesByProvider(otherRuntimes).map(
                 ({ label, runtimes }) => {
                   const options = runtimes.map((r) => {
                     const cloudBlocked = isRuntimeBlockedByLocality(r, isHostInplace);
