@@ -9,6 +9,16 @@ umlenkbar (z.B. Hermes -> hermes-worker auf User-Default-Socket).
 Bidirectional bytes — kein ttyd-Protocol. Resize via JSON
 {"type":"resize","cols":N,"rows":N}.
 
+Zweiter Modus `?mode=keys` (05.09.2026): KEIN pty, kein attach. Der Client
+schickt {"type":"send_keys","keys":[{"literal":"text"},{"named":"Enter"}]},
+die Bridge fuehrt pro Eintrag `tmux send-keys` aus und antwortet mit
+{"type":"ack","ok":true,"sent":N} bzw. {"ok":false,"error":...}. Grund: der
+pty-Weg verlor Bytes, die waehrend des Attach-Handshakes oder direkt vor dem
+Schliessen (-> tmux-Client wird beendet) ankamen — der Chat-Text zu Boss kam
+je nach Last mal ohne Enter, mal gar nicht an, waehrend hier "wrote N bytes"
+stand. send-keys geht direkt an den tmux-Server und das Ack kommt erst,
+wenn tmux zurueck ist.
+
 Sicherheit: session-Name + socket-Pfad werden strikt validiert
 (Regex / Pfad-Whitelist) bevor sie an `tmux` weitergereicht werden.
 Phase 24 / HERM-01.
@@ -95,6 +105,92 @@ def resolve_target(query_string: str) -> tuple[str, str]:
 # history nur den aktuellen idle-Banner zeigt. claude.log (via pipe-pane)
 # persistiert den vollen PTY-Stream — wir replay'en die letzten Aktivitaeten
 # damit der User sehen kann was Boss getan hat.
+_MODES = ("pty", "keys")
+
+
+def resolve_target_and_mode(query_string: str) -> tuple[str, str, str]:
+    """Wie resolve_target, plus ?mode=pty|keys (Default pty)."""
+    session_name, socket_path = resolve_target(query_string)
+    mode_values = parse_qs(query_string or "").get("mode", [])
+    mode = mode_values[0] if mode_values else "pty"
+    if mode not in _MODES:
+        raise ValueError(f"invalid mode: {mode!r}")
+    return session_name, socket_path, mode
+
+
+# Spiegel von backend/app/services/agent_chat_input._TMUX_NAMED_KEYS — die
+# Bridge prueft selbst, damit ein Client nie beliebige tmux-Argumente setzt.
+NAMED_KEYS = frozenset({"Escape", "Enter", "Up", "Down", "C-u"})
+TMUX_TIMEOUT = 5
+
+
+def send_keys_argv(socket_path: str, session_name: str, item) -> list[str]:
+    """Ein Eintrag der keys-Liste -> tmux-Aufruf. ValueError bei allem, was
+    nicht exakt {"literal": str} oder {"named": <Allowliste>} ist."""
+    if not isinstance(item, dict) or len(item) != 1:
+        raise ValueError(f"invalid key item: {item!r}")
+    base = ["tmux", "-S", socket_path, "send-keys", "-t", session_name]
+    if "literal" in item:
+        text = item["literal"]
+        if not isinstance(text, str):
+            raise ValueError("literal must be a string")
+        return base + ["-l", "--", text]
+    if "named" in item:
+        name = item["named"]
+        if name not in NAMED_KEYS:
+            raise ValueError(f"key not allowlisted: {name!r}")
+        return base + [name]
+    raise ValueError(f"invalid key item: {item!r}")
+
+
+async def run_tmux(argv: list[str]) -> None:
+    """Fuehrt einen tmux-Aufruf aus; RuntimeError mit stderr bei Exit != 0."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _out, err = await asyncio.wait_for(proc.communicate(), TMUX_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise RuntimeError(f"tmux timed out after {TMUX_TIMEOUT}s")
+    if proc.returncode != 0:
+        raise RuntimeError(err.decode(errors="replace").strip() or f"tmux exit {proc.returncode}")
+
+
+async def keys_handler(ws, session_name: str, socket_path: str, run=run_tmux) -> None:
+    """?mode=keys: pro Frame ein send_keys-Batch, pro Batch genau ein Ack.
+    Bricht den Batch beim ersten tmux-Fehler ab — ein Enter ohne den Text
+    davor waere schlimmer als gar nichts."""
+    async def ack(ok: bool, **fields) -> None:
+        await ws.send(json.dumps({"type": "ack", "ok": ok, **fields}))
+
+    async for msg in ws:
+        try:
+            d = json.loads(msg)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            await ack(False, error="frame is not JSON")
+            continue
+        if not isinstance(d, dict) or d.get("type") != "send_keys" or not isinstance(d.get("keys"), list):
+            await ack(False, error="expected {type:'send_keys', keys:[...]}")
+            continue
+        try:
+            argvs = [send_keys_argv(socket_path, session_name, item) for item in d["keys"]]
+        except ValueError as e:
+            await ack(False, error=str(e))
+            continue
+        sent = 0
+        try:
+            for argv in argvs:
+                await run(argv)
+                sent += 1
+        except Exception as e:  # noqa: BLE001 — jeder Fehler gehoert ins Ack
+            print(f"[bridge] send_keys failed after {sent}/{len(argvs)} (session={session_name}): {e}", file=sys.stderr)
+            await ack(False, error=str(e), sent=sent)
+            continue
+        print(f"[bridge] send_keys: {sent} key(s) delivered (session={session_name})", file=sys.stderr)
+        await ack(True, sent=sent)
+
+
 SCROLLBACK_BYTES = 128 * 1024  # 128 KB reicht fuer mehrere Task-Zyklen
 
 
@@ -132,12 +228,20 @@ async def handler(ws):
     raw_path = getattr(ws, "path", None) or getattr(getattr(ws, "request", None), "path", "")
     query_string = raw_path.split("?", 1)[1] if "?" in raw_path else ""
     try:
-        session_name, socket_path = resolve_target(query_string)
+        session_name, socket_path, mode = resolve_target_and_mode(query_string)
     except ValueError as e:
         print(f"[bridge] rejecting client: {e}", file=sys.stderr)
         try:
             await ws.close(code=1008, reason=str(e)[:120])
         except Exception:
+            pass
+        return
+
+    if mode == "keys":
+        print(f"[bridge] keys client connected (session={session_name})", file=sys.stderr)
+        try:
+            await keys_handler(ws, session_name, socket_path)
+        except websockets.ConnectionClosed:
             pass
         return
 

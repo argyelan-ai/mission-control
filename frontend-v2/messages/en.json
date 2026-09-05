@@ -2598,7 +2598,12 @@
       "loadFailed": "Could not load recipes: {message}",
       "loading": "Loading recipes …",
       "empty": "No recipes for this box.",
-      "dismiss": "Dismiss message"
+      "dismiss": "Dismiss message",
+      "workerLabel": "Worker box",
+      "workerNone": "No free second box — this recipe needs two boxes.",
+      "workerEnvMissing": "The recipe has no environment mapping — MC cannot write the .env on this box.",
+      "startingDuo": "starting {name} on {head} + {worker} …",
+      "startingDuoNoHead": "starting {name} — second box: {worker} …"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
@@ -2636,7 +2641,25 @@
       "unknown": "Unknown"
     },
     "nameDrift": "Name",
-    "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model."
+    "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model.",
+    "hostAutostart": {
+      "title": "Autostart",
+      "ariaLabel": "Autostart for this box",
+      "statusOn": "on",
+      "statusOff": "off",
+      "statusUnknown": "unknown",
+      "subtitleOn": "starts {recipe} after a failure or reboot",
+      "subtitleOnNoRecipe": "on — no recipe remembered yet; MC remembers the next one you start here",
+      "subtitleOff": "off — MC starts nothing on its own",
+      "subtitleUnknown": "state not readable — MC does not know right now whether autostart is on",
+      "viaHead": "Autostart via head {slug}",
+      "viaHeadHint": "This box is a worker — switch autostart on the head.",
+      "lastAttempt": "Last attempt: {result}",
+      "lastAttemptAt": "Last attempt {when}: {result}",
+      "saveFailed": "Could not switch: {message}",
+      "adminOnly": "Only admins may switch autostart.",
+      "loading": "Loading autostart …"
+    }
   },
   "bench": {
     "common": {
@@ -2817,6 +2840,16 @@
   },
   "chat": {
     "showMore": "Show more",
-    "showLess": "Show less"
+    "showLess": "Show less",
+    "event": {
+      "task": "Task",
+      "nudge": "Notice",
+      "inbox": "Message",
+      "teammate": "Reply",
+      "system": "System",
+      "fromMc": "Mission Control",
+      "expand": "Show content",
+      "collapse": "Hide content"
+    }
   }
 }

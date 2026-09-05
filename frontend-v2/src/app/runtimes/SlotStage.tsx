@@ -26,6 +26,7 @@ import { openModelsTab } from "./modelsTab";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { DeviceModeStrip, useDevices } from "./DeviceControl";
+import { HostAutostartRow } from "./HostAutostartRow";
 import { RoleChip } from "./RoleField";
 import { useAppStore } from "@/lib/store";
 import type { Device } from "@/lib/types";
@@ -280,7 +281,11 @@ function SwitchRow({
         {t("switchLabel")}
       </span>
 
-      <HostRecipeSwitcher hostId={group.host.id} servingName={serving?.display_name ?? null} />
+      <HostRecipeSwitcher
+        hostId={group.host.id}
+        hostName={group.host.slug}
+        servingName={serving?.display_name ?? null}
+      />
 
       <button
         onClick={() => openModelsTab("download")}
@@ -539,6 +544,10 @@ function WorkerTile({ group, device, live }: { group: HostGroup; device?: Device
         <TelemetryColumn hostId={group.host.id} />
       </div>
       <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
+      {/* Auch die Worker-Kachel zeigt den Autostart: gehört sie zu einem
+          Verbund, steht hier der Chip „über Head …"; läuft sie solo, ist es
+          ihr eigener Schalter. */}
+      <HostAutostartRow hostId={group.host.id} />
     </div>
   );
 }
@@ -626,6 +635,9 @@ export function SlotStage({
           zum Modell — darum unter dem Slot-Körper und über der Rezept-Zeile. */}
       <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
       <SwitchRow group={group} serving={serving} live={live} />
+      {/* Unter dem Umschalter: erst wählt man das Rezept, dann sagt man, ob MC
+          es nach einem Ausfall selbst wieder hochziehen darf. */}
+      <HostAutostartRow hostId={group.host.id} />
     </div>
   );
 }

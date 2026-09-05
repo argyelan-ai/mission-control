@@ -288,6 +288,14 @@ class RunOutcome:
     # killed at 1200.5 s with heartbeats every 3 s until the end.
     watchdog_reason: Optional[str] = None
     watchdog_limit: Optional[float] = None
+    # Tool the hook reported as still running when the watchdog fired (None if
+    # omp was between tools) — tells "wedged inside `bash`" from "model silent".
+    watchdog_tool: Optional[str] = None
+    # Phase the hook reported as open when the watchdog fired: "model" while a
+    # model request was in flight (turn_start → assistant message_end: prefill,
+    # hidden reasoning, first token pending), None otherwise. A running tool
+    # takes precedence (watchdog_tool set, phase None).
+    watchdog_phase: Optional[str] = None
 
     # Derived completion-contract signals (filled by classify()).
     sentinel_ok: bool = False
@@ -490,6 +498,16 @@ def _watchdog_detail(o: "RunOutcome") -> str:
         return (f"Zeitlimit für den Task erreicht ({lim}, OMP_TASK_DEADLINE) — "
                 "omp arbeitete noch, wurde vom Wall-Clock-Watchdog beendet.")
     if o.watchdog_reason == "idle":
+        if o.watchdog_tool:
+            return (f"omp gab {lim} lang kein Lebenszeichen, während das Werkzeug "
+                    f"`{o.watchdog_tool}` lief (OMP_TURN_IDLE_TIMEOUT) — vom Watchdog "
+                    "beendet. Ein laufendes Werkzeug allein zählt als lebendig; hier "
+                    "blieben auch die Herzschläge des Hooks aus.")
+        if o.watchdog_phase == "model":
+            return (f"omp gab {lim} lang kein Lebenszeichen, während eine Modell-Anfrage "
+                    "offen war (Prefill/Reasoning, noch kein Token; OMP_TURN_IDLE_TIMEOUT) "
+                    "— vom Watchdog beendet. Eine offene Anfrage allein zählt als "
+                    "lebendig; hier blieben auch die Herzschläge des Hooks aus.")
         return (f"omp lieferte {lim} lang kein Fortschritt (OMP_TURN_IDLE_TIMEOUT) — "
                 "vom Watchdog beendet.")
     if o.watchdog_reason == "child_dead":
@@ -2111,7 +2129,7 @@ def serve_loop(
     launcher = os.environ.get("OMP_LAUNCHER", "/opt/omp-bridge/launch-omp.sh")
     ready_timeout = float(os.environ.get("OMP_READY_TIMEOUT", "45"))
     turn_deadline = task_deadline_from_env(os.environ)
-    idle_timeout = float(os.environ.get("OMP_TURN_IDLE_TIMEOUT", "300"))
+    idle_timeout = float(os.environ.get("OMP_TURN_IDLE_TIMEOUT", "900"))
     isolation = os.environ.get("OMP_ISOLATION", "relaunch")  # relaunch | slash
 
     # comm_v2 thread-message state dirs (env-overridable, per-container).
@@ -2722,6 +2740,7 @@ def task_deadline_from_env(env: Mapping[str, str]) -> float:
 def _native_watchdog_kill(
     controller: NativeTuiController, outcome: RunOutcome, cwd: str,
     reason: Optional[str] = None, limit: Optional[float] = None,
+    tool: Optional[str] = None, phase: Optional[str] = None,
 ) -> RunOutcome:
     """SIGKILL + relaunch the TUI (respawn-window -k) so a wedged / dead omp is
     never left in Window 0, and flag the run so classify()->ABORT_HANG
@@ -2729,6 +2748,8 @@ def _native_watchdog_kill(
     outcome.watchdog_killed = True
     outcome.watchdog_reason = reason
     outcome.watchdog_limit = limit
+    outcome.watchdog_tool = tool
+    outcome.watchdog_phase = phase
     try:
         controller.relaunch(cwd)
     except Exception as e:  # noqa: BLE001 — recovery must not raise past here
@@ -2758,6 +2779,16 @@ def _observe_native_turn(
     last_text = ""
     last_err: Optional[str] = None
     last_toolerr = False
+    # Tools the hook reports as running (toolCallId -> toolName). A running tool
+    # IS forward progress (a 17-minute test suite is one silent bash call —
+    # 04.09.2026); the hook keeps stamping heartbeats while this is non-empty,
+    # so the idle watchdog still catches a TUI that wedges inside a tool.
+    running_tools: dict[str, str] = {}
+    # An open model request IS forward progress too (58 s of silence during
+    # prefill on a 26k-token prompt, minutes with hidden reasoning — 04.09.2026);
+    # the hook heartbeats (model_heartbeat) while this is set, so a TUI that
+    # freezes mid-request is still caught by the idle watchdog.
+    model_inflight = False
 
     while True:
         for rec in controller.drain():
@@ -2766,9 +2797,31 @@ def _observe_native_turn(
                 last_progress = now()
                 if kind == "session_start":
                     outcome.saw_session = True
+                    running_tools.clear()
+                    model_inflight = False
+                continue
+            if kind in ("model_start", "model_end"):
+                last_progress = now()
+                model_inflight = kind == "model_start"
+                continue
+            if kind == "tool_start":
+                last_progress = now()
+                running_tools[str(rec.get("toolCallId") or len(running_tools))] = (
+                    str(rec.get("toolName") or "?")
+                )
+                continue
+            if kind == "tool_end":
+                last_progress = now()
+                cid = rec.get("toolCallId")
+                if cid is not None and str(cid) in running_tools:
+                    del running_tools[str(cid)]
+                elif running_tools:
+                    running_tools.popitem()
                 continue
             if kind == "turn_end":
                 last_progress = now()
+                running_tools.clear()  # tool results are back in the model
+                model_inflight = False
                 outcome.turns += 1
                 sr = rec.get("stopReason")
                 last_sr = sr
@@ -2815,7 +2868,11 @@ def _observe_native_turn(
         if t - start > turn_deadline:
             return _native_watchdog_kill(controller, outcome, cwd, "deadline", turn_deadline)
         if idle_timeout and (t - last_progress) > idle_timeout:
-            return _native_watchdog_kill(controller, outcome, cwd, "idle", idle_timeout)
+            tool = next(iter(running_tools.values()), None) if running_tools else None
+            phase = "model" if (model_inflight and tool is None) else None
+            return _native_watchdog_kill(
+                controller, outcome, cwd, "idle", idle_timeout, tool=tool, phase=phase,
+            )
         sleep(poll_interval)
 
 
@@ -2828,7 +2885,7 @@ def run_native_turn(
     isolate: bool = True,
     ready_timeout: float = 45.0,
     turn_deadline: float = DEFAULT_TASK_DEADLINE_S,
-    idle_timeout: float = 300.0,
+    idle_timeout: float = 900.0,
     poll_interval: float = 1.0,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -2883,7 +2940,7 @@ def run_native_continue(
     nudge_prompt: str,
     task_file_path: str,
     turn_deadline: float = DEFAULT_TASK_DEADLINE_S,
-    idle_timeout: float = 300.0,
+    idle_timeout: float = 900.0,
     poll_interval: float = 1.0,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,

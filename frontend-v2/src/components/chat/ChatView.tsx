@@ -304,12 +304,39 @@ function TimelineSkeleton() {
   );
 }
 
-function renderTimelineEvent(ev: TimelineChatEvent, detailLevel: DetailLevel, showModel = false) {
+/**
+ * Welches Ereignis „von aussen" gerade lebt: das juengste mit bekannter
+ * Herkunft, und nur solange der Agent arbeitet. Nur dessen Motiv bewegt sich
+ * (EventCard/Motif) — ein Verlauf voller kreisender Ringe waere Laerm, ein
+ * einzelnes sagt „daran ist er gerade dran". Sobald der Agent still steht,
+ * steht auch das Motiv.
+ */
+export function liveEventUuid(events: TimelineChatEvent[], status: StateEvent["status"] | null): string | null {
+  if (status !== "working") return null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.kind !== "message") continue; // Werkzeuge/Denken = der Agent arbeitet daran
+    // Die erste Nachricht von hinten entscheidet: ist es eine Ereignis-Karte,
+    // arbeitet der Agent gerade an ihr. Alles andere (Antwort, Operator-Text)
+    // heisst: das Ereignis ist beantwortet — es darf nicht mehr pulsieren.
+    // omp schreibt die Aufgaben-Nachricht erst am Zug-Ende ins Transcript;
+    // ohne diese Regel pulsierte waehrend des Zugs die VORIGE Aufgabe (04.09.).
+    return ev.role === "teammate" && ev.source ? ev.uuid : null;
+  }
+  return null;
+}
+
+function renderTimelineEvent(
+  ev: TimelineChatEvent,
+  detailLevel: DetailLevel,
+  showModel = false,
+  live = false,
+) {
   switch (ev.kind) {
     case "notification":
       return <NotificationRow key={ev.uuid} ev={ev} />;
     case "message":
-      return <ChatMessage key={ev.uuid} ev={ev} showModel={showModel} />;
+      return <ChatMessage key={ev.uuid} ev={ev} showModel={showModel} live={live} />;
     case "tool":
       // toolUseId ?? uuid: parallel tool calls in one assistant turn share
       // the turn's uuid but carry distinct toolUseIds (useChatStream.ts).
@@ -630,6 +657,7 @@ export function ChatView({
   // Tail first; the remainder joins one frame later (see `renderAll`).
   const visibleItems = renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW);
   const modelBadges = modelBadgeUuids(visibleEvents);
+  const liveUuid = liveEventUuid(visibleEvents, stream.state?.status ?? null);
   // Single source for how alive this session is — see resolveAliveness for why
   // a missing server field must never be read as "ended".
   const aliveness = resolveAliveness(stream.session);
@@ -994,7 +1022,12 @@ export function ChatView({
                     />
                   );
                 }
-                return renderTimelineEvent(item.event, detailLevel, modelBadges.has(item.event.uuid));
+                return renderTimelineEvent(
+                  item.event,
+                  detailLevel,
+                  modelBadges.has(item.event.uuid),
+                  item.event.uuid === liveUuid,
+                );
               })
             )}
 

@@ -176,6 +176,30 @@ describe("ChatMessage — Anhänge", () => {
 });
 
 describe("ChatMessage — Teamkollegen-Nachricht", () => {
+  it("renders a teammate turn WITH a source as an event card", () => {
+    render(
+      <ChatMessage
+        ev={mkEvent({ role: "teammate", teammate: "task-1.md", text: "brief", source: { kind: "task", title: "Beweis" } })}
+      />,
+    );
+    expect(screen.getByTestId("event-card")).toBeTruthy();
+    expect(screen.queryByTestId("teammate-row")).toBeNull();
+  });
+
+  it("marks the event card live only when told so", () => {
+    const ev = mkEvent({ role: "teammate", teammate: "task-1.md", text: "brief", source: { kind: "task", title: "Beweis" } });
+    const { rerender } = render(<ChatMessage ev={ev} />);
+    expect(screen.getByTestId("event-card")).toHaveAttribute("data-live", "false");
+    rerender(<ChatMessage ev={ev} live />);
+    expect(screen.getByTestId("event-card")).toHaveAttribute("data-live", "true");
+  });
+
+  it("keeps the plain teammate row when the parser claimed no source", () => {
+    render(<ChatMessage ev={mkEvent({ role: "teammate", teammate: null, source: null, text: "x" })} />);
+    expect(screen.getByTestId("teammate-row")).toBeTruthy();
+    expect(screen.queryByTestId("event-card")).toBeNull();
+  });
+
   function mkTeammate(text: string, teammate: string | null = "qwen-research") {
     return { kind: "message", role: "teammate", teammate, uuid: "t1",
              ts: "2026-08-19T10:00:00Z", text, model: null, sidechain: false } as never;
@@ -197,6 +221,28 @@ describe("ChatMessage — Teamkollegen-Nachricht", () => {
     render(<ChatMessage ev={mkTeammate("fertig", null)} />);
     expect(screen.getByTestId("teammate-row")).toBeTruthy();
     expect(screen.queryByText(/qwen-research/)).toBeNull();
+  });
+
+  // Marks Screenshot 04.09.2026: der eingespielte Auftrag (@task-….md, 2000
+  // Zeichen Operating Card) stand als Wand im Verlauf. Er bekommt denselben
+  // Klapp-Mechanismus wie ein langer Auftrag in der Operator-Blase.
+  describe("Klappe fuer lange Nutzlasten", () => {
+    let restore: (() => void) | undefined;
+    afterEach(() => { restore?.(); restore = undefined; });
+
+    it("laesst eine kurze Rueckmeldung offen", () => {
+      restore = stubScrollHeight(40);
+      render(<ChatMessage ev={mkTeammate("fertig")} />);
+      expect(screen.getByTestId("teammate-text")).toHaveAttribute("data-clamped", "false");
+      expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    });
+
+    it("klappt eine lange Nutzlast zu und bietet den Aufklapper", () => {
+      restore = stubScrollHeight(USER_CLAMP_MAX_PX * 4);
+      render(<ChatMessage ev={mkTeammate("@/home/agent/.omp/tasks/task-1.md\n# Operating Card\n…", "task-1.md")} />);
+      expect(screen.getByTestId("teammate-text")).toHaveAttribute("data-clamped", "true");
+      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+    });
   });
 
   it("zeigt den Inhalt", () => {

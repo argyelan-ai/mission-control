@@ -106,6 +106,31 @@ class Host(SQLModel, table=True):
     # sie als HEAD_IP/WORKER_IP in die .env des Rezepts; NULL = ssh_host.
     fabric_ip: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
+    # ── Rezept-Umschalter P3: Autostart je Box (Entwurf 04.09.2026) ──────────
+    #
+    # Der EINE Schalter dafür, ob MC auf dieser Box von sich aus etwas startet.
+    # AUS (Standard) heisst: keine Wiederbelebung, egal was ausfällt — genau
+    # das, was ein Handtest auf der Box braucht. AN heisst: fällt das zuletzt
+    # über den Umschalter gestartete Rezept aus, startet MC es wieder — nur
+    # dieses eine, nie irgendeine andere Runtime auf der Box.
+    # Ersetzt den alten Trick, dafür `runtimes.enabled` umzulegen
+    # (services/runtime_watcher._maybe_auto_recover).
+    autostart_enabled: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+    # Das zuletzt über den Umschalter gestartete Rezept (Head-Sicht). Wird bei
+    # JEDEM Rezept-Start gesetzt, auch bei Solo und auch wenn der Schalter aus
+    # ist — der Schalter entscheidet nur, ob es wieder gestartet wird.
+    autostart_recipe_slug: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Was beim letzten Versuch passiert ist — für die Kachel, als ein Satz.
+    # Getrennte Spalten statt JSON, weil die Oberfläche genau zwei Dinge zeigt:
+    # wann, und wie es ausging.
+    autostart_last_attempt_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    autostart_last_result: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
     # ── kind=agent (Fleet & Rezepte v2, Phase 1) ─────────────────────────────
     #
     # A self-registered box that pushes telemetry over HTTPS instead of being

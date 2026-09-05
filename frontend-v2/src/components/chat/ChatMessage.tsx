@@ -1,77 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
 import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
+import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
+import { EventCard } from "./EventCard";
 import type { MessageEvent } from "@/lib/chatTypes";
+
+// Weiterhin von hier importierbar (Tests, ChatView) — die Umsetzung ist
+// nach ClampedContent.tsx gezogen, damit die Ereignis-Karte sie teilen kann.
+export { USER_CLAMP_MAX_PX };
 import type { EchoStatus } from "@/hooks/useChatStream";
 import type { Harness, HostHarness } from "@/lib/types";
 
-// ── User-bubble clamp ───────────────────────────────────────────────────────
-// A dispatch brief is thousands of characters. Left unclamped it becomes a wall
-// the reader has to scroll past every single time to reach what the agent
-// actually did. Ten lines is enough to recognise which brief this is; the rest
-// is one tap away.
-const USER_CLAMP_LINES = 10;
-const USER_LINE_HEIGHT_PX = 23; // 14px × 1.6, rounded — matches the compact `p`
-export const USER_CLAMP_MAX_PX = USER_CLAMP_LINES * USER_LINE_HEIGHT_PX;
-
-/** Renders the user's markdown, clamped until the reader asks for the rest.
- *  The expander only appears when there is genuinely something hidden. */
 function ClampedUserContent({ text }: { text: string }) {
-  // Der Aufklapper stand bis 22.08.2026 fest auf Deutsch — in der
-  // englischen Oberflaeche also mitten im Satz die falsche Sprache.
-  const tChat = useTranslations("chat");
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    const measure = () => {
-      // Same trap as the composer's auto-grow: the mobile stack keeps the
-      // off-screen pane mounted with `display: none`, where every metric reads
-      // 0 and would report "nothing is hidden" for a 3000-character brief.
-      if (el.scrollHeight === 0) return;
-      setOverflows(el.scrollHeight > USER_CLAMP_MAX_PX + USER_LINE_HEIGHT_PX / 2);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [text]);
-
-  const clamped = overflows && !expanded;
-
   return (
-    <>
-      <div
-        ref={contentRef}
-        data-testid="user-message-content"
-        data-clamped={clamped}
-        className="[&>*:last-child]:mb-0"
-        style={clamped ? { maxHeight: USER_CLAMP_MAX_PX, overflow: "hidden" } : undefined}
-      >
-        <MarkdownContent content={text} compact />
-      </div>
-      {overflows && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          className="mt-1.5 pt-1.5 w-full text-left text-[12px] font-medium cursor-pointer transition-colors"
-          style={{ color: C.textMuted, borderTop: `1px solid ${C.borderSubtle}` }}
-        >
-          {expanded ? tChat("showLess") : tChat("showMore")}
-        </button>
-      )}
-    </>
+    <ClampedContent text={text} testId="user-message-content" className="[&>*:last-child]:mb-0">
+      <MarkdownContent content={text} compact />
+    </ClampedContent>
   );
 }
 
@@ -108,6 +56,7 @@ export function ChatMessage({
   onWithdraw,
   onEdit,
   harness,
+  live = false,
 }: {
   ev: MessageEvent;
   showModel?: boolean;
@@ -123,6 +72,10 @@ export function ChatMessage({
   /** The CLI behind the agent. A mid-turn send means something different per
    *  harness (see `queuedNote`), so the waiting line names the right thing. */
   harness?: Harness | HostHarness | null;
+  /** Nur fuer Zeilen „von aussen": der Agent arbeitet gerade an genau
+   *  diesem Ereignis (juengstes Ereignis + Zustand `working`). Bewegt das
+   *  Motiv; alles andere bleibt gleich. */
+  live?: boolean;
 }) {
   // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
   // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
@@ -130,6 +83,9 @@ export function ChatMessage({
   // hat (Operator-Befund 19.08.2026: "ganz komische sachen"). Sie bekommt
   // darum eine eigene, ruhige Zeile: erkennbar fremd, ohne den Verlauf zu
   // dominieren.
+  if (ev.role === "teammate" && ev.source) {
+    return <EventCard ev={ev} source={ev.source} live={live} />;
+  }
   if (ev.role === "teammate") {
     return (
       <div className="w-full px-4 md:px-5 py-1.5">
@@ -154,13 +110,14 @@ export function ChatMessage({
                 Kommata zwar von selbst um — Rueckmeldungen sind aber
                 beliebiger Text, und seit gebuendelte Bloecke einzeln
                 ankommen, sind mehrzeilige Nutzlasten der Normalfall. */}
-            <span
-              data-testid="teammate-text"
+            <ClampedContent
+              text={ev.text}
+              testId="teammate-text"
               className="break-words whitespace-pre-wrap"
               style={{ color: C.textSecondary }}
             >
               {ev.text}
-            </span>
+            </ClampedContent>
           </div>
         </div>
       </div>

@@ -269,7 +269,6 @@ docker/mc-kimi-agent/lib/mc-pre-push.sh: freecode
 docker/mc-kimi-agent/lib/paste-verify.sh: sparky
 docker/mc-kimi-agent/lib/ui-detect.sh: sparky
 docker/mc-playwright/service.py: freecode, sparky
-docker/omp-bridge/README.md: sparky
 docker/omp-bridge/bridge.py: sparky
 docker/omp-bridge/context_detect.py: shakespeare, sparky
 docker/omp-bridge/tests/test_heartbeat_context.py: sparky

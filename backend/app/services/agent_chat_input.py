@@ -20,9 +20,14 @@ live terminal (``routers/cli_terminal.py``):
   parsed as a tmux flag and silently swallowed (fix round 1, reproduced live
   on tmux 3.6a).
 - **Boss (host, slug ``boss``/``boss-host``)**: a short-lived WebSocket
-  connection to the host-pty-bridge, same upstream URL construction as
-  ``_build_host_upstream_url``'s Boss branch in ``cli_terminal.py`` — raw
-  bytes written straight into the bridge's pty, no tmux involved.
+  connection to the host-pty-bridge in ``?mode=keys`` — the bridge runs the
+  same ``tmux send-keys`` calls against Boss's own tmux session (no docker,
+  the session lives on the host) and answers with an ack; ``send_text`` only
+  returns once that ack said ok (``BossDeliveryError`` -> 502 otherwise).
+  Until 05.09.2026 this path wrote raw bytes into a throwaway pty in which
+  ``tmux attach`` was still starting and closed right after the last byte —
+  bytes arriving in the attach handshake or just before the client was
+  terminated were lost, and the bridge still logged "wrote N bytes".
 
 Every other host-runtime agent (Hermes, Jarvis, ...) has no input channel at
 all — ``InputNotSupportedError`` for the router to turn into 409
@@ -173,7 +178,14 @@ _TMUX_NAMED_KEYS = frozenset({"Escape", "Enter", "Up", "Down", "C-u"})
 # other host agent has no input channel (Hermes, Jarvis, ...).
 _BOSS_SLUGS = ("boss", "boss-host")
 
-_BOSS_WS_URL = "ws://host.docker.internal:7682/"
+# ``?mode=keys``: die Bridge tippt per ``tmux send-keys`` und bestaetigt mit
+# einem Ack (05.09.2026). Der alte Modus (rohe Bytes in ein frisches pty,
+# in dem ``tmux attach`` gerade erst anlaeuft, dann sofort schliessen)
+# verlor je nach Last den Text oder das Enter — "wrote 57 bytes" im
+# Bridge-Log, nichts beim Modell. Marks Nachricht vom 05.09. 10:38 kam so
+# nie an; per tmux send-keys von Hand getippt antwortete Boss sofort.
+_BOSS_WS_URL = "ws://host.docker.internal:7682/?mode=keys"
+_BOSS_ACK_TIMEOUT_SECONDS = 10
 
 _BRACKETED_PASTE_START = "\x1b[200~"
 _BRACKETED_PASTE_END = "\x1b[201~"
@@ -182,13 +194,6 @@ _BRACKETED_PASTE_END = "\x1b[201~"
 # on every send_text() to a cli-bridge agent so chat activity counts as
 # activity, not just task dispatch.
 _RECYCLER_MARKER_PATH = "/home/agent/.claude/last-task.marker"
-
-# Gap between the text frame and the Enter frame on the Boss WS path. Sending
-# text + "\r" as ONE frame (or as two frames back-to-back with no gap) makes
-# the Claude TUI's paste detection swallow the Enter as part of the pasted
-# text instead of submitting it — the message sits in the input box forever
-# (fix round 2, reproduced live: text landed but never submitted for hours).
-_BOSS_ENTER_DELAY_SECONDS = 0.15
 
 # Effort switching (v1, docker-only). Die Stufen, die der Argument-Validator
 # der jeweiligen CLI selbst akzeptiert — erhoben mit dem persistenzfreien
@@ -304,6 +309,14 @@ class AgentBusyError(Exception):
     prompt — an effort switch preflight refuses to touch a busy session."""
 
 
+class BossDeliveryError(Exception):
+    """Raised when the host-pty-bridge did not confirm a Boss keystroke
+    batch: bridge unreachable, no ack within the timeout, or an ack with
+    ``ok=false`` (tmux error). The router turns it into 502 so the chat
+    withdraws its echo — a 204 for a message that never reached the CLI
+    was the bug this replaces."""
+
+
 class AgentStartingError(Exception):
     """Raised when send_text's readiness gate never saw the pane become
     ready within its poll budget — the CLI is still booting/loading plugins,
@@ -380,27 +393,39 @@ async def _touch_recycler_marker(slug: str) -> None:
     )
 
 
-async def _send_boss_bytes(*payloads: bytes, delay_before_last: float = 0.0) -> None:
-    """Opens a short-lived WS connection to the host-pty-bridge, writes each
-    payload in order as its OWN frame, then closes. If ``delay_before_last``
-    is set, waits that long before sending the final payload — needed when
-    the last payload is a submitting ``Enter``, since sending it back-to-back
-    with the preceding text (or worse, concatenated into one frame) makes the
-    Claude TUI treat the whole thing as a paste and never submit (fix round 2).
-    Never raises for the same reason as ``_run_docker_exec`` — a dead bridge
-    just means the keystroke is lost, not a request the caller can retry
-    meaningfully."""
+async def _send_boss_keys(keys: list[dict]) -> None:
+    """Delivers one ``send_keys`` batch to the host-pty-bridge (``?mode=keys``)
+    and waits for its ack. ``keys`` items are ``{"literal": text}`` (typed
+    via ``tmux send-keys -l``) or ``{"named": "Enter"}`` (a named tmux key
+    from ``_TMUX_NAMED_KEYS``). Raises ``BossDeliveryError`` unless the
+    bridge answered ``ok=true`` — unlike the old raw-pty write this never
+    reports success it cannot vouch for."""
+    frame = json.dumps({"type": "send_keys", "keys": keys})
     try:
         async with ws_client.connect(
             _BOSS_WS_URL, open_timeout=5, ping_interval=None,
         ) as ws:
-            last_index = len(payloads) - 1
-            for i, payload in enumerate(payloads):
-                if i == last_index and delay_before_last:
-                    await asyncio.sleep(delay_before_last)
-                await ws.send(payload)
-    except Exception:
-        logger.warning("chat input: boss WS delivery failed", exc_info=True)
+            await ws.send(frame)
+            raw = await asyncio.wait_for(ws.recv(), _BOSS_ACK_TIMEOUT_SECONDS)
+    except Exception as e:
+        logger.warning("chat input: boss bridge unreachable or silent", exc_info=True)
+        raise BossDeliveryError(f"bridge: {e}") from e
+    try:
+        ack = json.loads(raw)
+    except (TypeError, ValueError) as e:
+        raise BossDeliveryError(f"bridge sent no ack: {raw!r}") from e
+    if not isinstance(ack, dict) or ack.get("type") != "ack" or not ack.get("ok"):
+        error = ack.get("error") if isinstance(ack, dict) else raw
+        logger.warning("chat input: boss bridge rejected keys: %s", error)
+        raise BossDeliveryError(str(error))
+
+
+def _boss_key_item(key: str) -> dict:
+    """``ALLOWED_KEYS`` name -> send_keys item: named tmux key or literal
+    character (digits / y / n)."""
+    if key in _TMUX_NAMED_KEYS:
+        return {"named": key}
+    return {"literal": ALLOWED_KEYS[key]}
 
 
 def _target_kind(agent) -> str:
@@ -536,11 +561,14 @@ async def send_text(agent, text: str) -> None:
         note_sent(str(getattr(agent, "id", "") or slug), text)
         return
 
-    # kind == "boss" — text and its submitting Enter MUST be separate frames
-    # with a gap between them (see _send_boss_bytes docstring / fix round 2).
-    await _send_boss_bytes(
-        text.encode(), b"\r", delay_before_last=_BOSS_ENTER_DELAY_SECONDS
-    )
+    # kind == "boss" — same shape as the docker path (literal text, multi-line
+    # as one bracketed paste, then a named Enter), delivered by the bridge via
+    # tmux send-keys and acknowledged (see _send_boss_keys).
+    if "\n" in text:
+        typed = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
+    else:
+        typed = text
+    await _send_boss_keys([{"literal": typed}, {"named": "Enter"}])
     note_sent(str(getattr(agent, "id", "") or slug), text)
 
 
@@ -582,15 +610,8 @@ async def send_keys(agent, keys: list[str]) -> None:
                 await _run_docker_exec(_docker_argv(slug, "-l", "--", ALLOWED_KEYS[key]))
         return
 
-    # kind == "boss" — delay_before_last wirkt auch bei EINEM Frame: connect,
-    # kurz setzen lassen, dann schreiben. Ohne den Settle-Moment verpufft ein
-    # einzelnes Byte im Attach-Handshake der Bridge (live gesehen 19.08.2026:
-    # Enter auf den Effort-Bestaetigungsdialog kam nie an, waehrend Text+Enter
-    # mit Frame-Abstand immer funktionierte).
-    await _send_boss_bytes(
-        *(ALLOWED_KEYS[key].encode() for key in keys),
-        delay_before_last=_BOSS_ENTER_DELAY_SECONDS,
-    )
+    # kind == "boss" — one acknowledged send_keys batch (see _send_boss_keys).
+    await _send_boss_keys([_boss_key_item(key) for key in keys])
 
 
 async def set_effort(agent, level: str) -> None:
@@ -856,10 +877,7 @@ async def _set_effort_boss(agent, level: str) -> None:
         except OSError:
             baseline_size = None
 
-    await _send_boss_bytes(
-        f"/effort {level}".encode(), b"\r",
-        delay_before_last=_BOSS_ENTER_DELAY_SECONDS,
-    )
+    await _send_boss_keys([{"literal": f"/effort {level}"}, {"named": "Enter"}])
 
     marker = f"effort level to {level}"
     confirmed_dialog = False
@@ -888,7 +906,7 @@ async def _set_effort_boss(agent, level: str) -> None:
             # Wechsel gerade selbst ausgeloest hat und das Eingabefeld dafuer
             # ohnehin frei sein muss.
             confirmed_dialog = True
-            await _send_boss_bytes(b"\r", delay_before_last=_BOSS_ENTER_DELAY_SECONDS)
+            await _send_boss_keys([{"named": "Enter"}])
             continue
         try:
             current = await asyncio.to_thread(find_active_session, tdir)

@@ -963,3 +963,138 @@ def test_child_death_watchdog_reports_child_dead():
     outcome = h.run(turn_deadline=1000, idle_timeout=1000, ready_timeout=100)
     assert outcome.watchdog_reason == "child_dead"
     assert "Prozess" in bridge.classify(outcome).detail
+
+
+# ---------------------------------------------------------------------------
+# Running tool = alive (04.09.2026): an omp agent ran a 17-minute test suite as
+# ONE silent bash call. The hook only stamped progress on tool END, so the idle
+# watchdog (OMP_TURN_IDLE_TIMEOUT=600) SIGKILLed a working TUI mid-run. The hook
+# now emits tool_start / tool_end records plus heartbeats while a tool runs;
+# the bridge must treat both as progress and name the running tool on a kill.
+# ---------------------------------------------------------------------------
+
+def _ts(name="bash", cid="c1"):
+    return {"kind": "tool_start", "toolName": name, "toolCallId": cid}
+
+
+def _tend(cid="c1"):
+    return {"kind": "tool_end", "toolCallId": cid}
+
+
+def test_tool_start_and_tool_end_records_count_as_progress():
+    # idle=3 s; the only records between ready and the terminal turn are a
+    # tool_start (t=3) and a tool_end (t=5). Both must reset last_progress,
+    # otherwise the idle watchdog kills at t=5 (last progress t=1).
+    h = _Harness([
+        [{"kind": "session_start"}], [], [_ts()], [], [_tend()], [],
+        [_te("stop", text=REFLECTION)],
+    ])
+    outcome = h.run(idle_timeout=3)
+    assert outcome.watchdog_killed is False
+    assert bridge.classify(outcome).kind is Kind.FINISH
+
+
+def test_tool_heartbeat_keeps_idle_watchdog_quiet_during_long_tool():
+    # A long silent tool: only heartbeats arrive (every 2 s) for 12 s > idle 3 s.
+    hb = {"kind": "progress", "at": "tool_heartbeat"}
+    batches = [[{"kind": "session_start"}], [_ts()]]
+    for _ in range(6):
+        batches += [[hb], []]
+    batches += [[_tend()], [_te("stop", text=REFLECTION)]]
+    h = _Harness(batches)
+    outcome = h.run(idle_timeout=3)
+    assert outcome.watchdog_killed is False
+    assert bridge.classify(outcome).kind is Kind.FINISH
+
+
+def test_idle_kill_during_tool_names_the_tool():
+    # tool_start arrives, then the hook goes silent (omp wedged INSIDE a tool):
+    # the idle watchdog must still fire, and the diagnosis must say which tool.
+    h = _Harness([[{"kind": "session_start"}], [_ts("bash", "c9")]])
+    outcome = h.run(idle_timeout=3)
+    assert outcome.watchdog_killed is True
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_tool == "bash"
+    detail = bridge.classify(outcome).detail
+    assert "bash" in detail and "kein Lebenszeichen" in detail
+
+
+def test_idle_kill_after_tool_end_does_not_name_a_tool():
+    h = _Harness([[{"kind": "session_start"}], [_ts()], [_tend()]])
+    outcome = h.run(idle_timeout=3)
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_tool is None
+    assert "kein Fortschritt" in bridge.classify(outcome).detail
+
+
+def test_deadline_still_fires_while_tool_runs():
+    # Sabotage guard: a tool that never ends must NOT disable the wall clock.
+    hb = {"kind": "progress", "at": "tool_heartbeat"}
+    batches = [[{"kind": "session_start"}], [_ts()]] + [[hb]] * 30
+    h = _Harness(batches)
+    outcome = h.run(turn_deadline=10, idle_timeout=1000)
+    assert outcome.watchdog_killed is True
+    assert outcome.watchdog_reason == "deadline"
+
+
+def test_turn_end_clears_running_tool_state():
+    # toolUse turn_end (tool result fed back) then silence: no tool is running
+    # any more, so a later idle kill must not blame a stale tool name.
+    h = _Harness([[{"kind": "session_start"}], [_ts()], [_te("toolUse")]])
+    outcome = h.run(idle_timeout=3)
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_tool is None
+
+
+# ── Open model request = alive (04.09.2026) ─────────────────────────────────
+
+def _ms():
+    return {"kind": "model_start"}
+
+
+def _mend():
+    return {"kind": "model_end"}
+
+
+def test_model_heartbeat_keeps_idle_watchdog_quiet_during_prefill():
+    # Request open, no token for 12 s > idle 3 s — only model heartbeats arrive.
+    hb = {"kind": "progress", "at": "model_heartbeat"}
+    batches = [[{"kind": "session_start"}], [_ms()]]
+    for _ in range(6):
+        batches += [[hb], []]
+    batches += [[_mend()], [_te("stop", text=REFLECTION)]]
+    outcome = _Harness(batches).run(idle_timeout=3)
+    assert outcome.watchdog_killed is False
+    assert bridge.classify(outcome).kind is Kind.FINISH
+
+
+def test_idle_kill_during_open_request_names_the_model_phase():
+    # model_start, then silence: the hook itself stopped (omp wedged/frozen) —
+    # the watchdog must fire and the diagnosis must say the request was open.
+    outcome = _Harness([[{"kind": "session_start"}], [_ms()]]).run(idle_timeout=3)
+    assert outcome.watchdog_killed is True
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_phase == "model"
+    assert outcome.watchdog_tool is None
+    assert "Modell-Anfrage" in bridge.classify(outcome).detail
+
+
+def test_idle_kill_after_model_end_does_not_name_the_model_phase():
+    outcome = _Harness([[{"kind": "session_start"}], [_ms()], [_mend()]]).run(idle_timeout=3)
+    assert outcome.watchdog_reason == "idle"
+    assert outcome.watchdog_phase is None
+    assert "kein Fortschritt" in bridge.classify(outcome).detail
+
+
+def test_tool_phase_wins_over_model_phase_in_diagnosis():
+    outcome = _Harness([[{"kind": "session_start"}], [_ms()], [_ts("bash", "c1")]]).run(idle_timeout=3)
+    assert outcome.watchdog_tool == "bash"
+    assert "bash" in bridge.classify(outcome).detail
+
+
+def test_default_idle_timeout_is_900s():
+    # Stage-1 safety net: the cloud default moved 300 → 900 s (hidden
+    # reasoning / long prefill must not be killed by a guess).
+    import inspect
+    sig = inspect.signature(bridge.run_native_turn)
+    assert sig.parameters["idle_timeout"].default == 900.0

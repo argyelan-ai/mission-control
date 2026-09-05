@@ -120,13 +120,23 @@ class RecipeSpec(BaseModel):
     # P2: belegt das Rezept die Box exklusiv? Fehlend = das Rezept sagt
     # nichts, dann gilt die Heuristik (min_vram_gb gesetzt).
     exclusive: bool | None = None
+    # P3: die .env des Rezepts. env_file = Pfad auf dem Head (``~`` erlaubt,
+    # es gehört der Shell der Box), env_map = {"ENV_KEY": "{platzhalter}"}.
+    # Kein Gerätename im Katalog — welche Box gemeint ist, entscheidet der
+    # Start (services/recipe_env.PLACEHOLDERS).
+    env_file: str | None = None
+    env_map: dict[str, str] | None = None
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
     enabled: bool = True
 
     @property
-    def env_map(self) -> dict[str, str]:
+    def env_tuning(self) -> dict[str, str]:
         return {str(k): str(v) for k, v in (self.env or {}).items()}
+
+    @property
+    def env_map_clean(self) -> dict[str, str] | None:
+        return {str(k): str(v) for k, v in self.env_map.items()} if self.env_map else None
 
     @property
     def topology_map(self) -> dict | None:
@@ -317,10 +327,12 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         author_url=spec.author_url,
         source_registry=spec.source_registry,
         source_url=spec.source_url,
-        env=spec.env_map or None,
+        env=spec.env_tuning or None,
         topology=spec.topology_map,
         port=spec.port,
         exclusive=spec.exclusive,
+        env_file=spec.env_file,
+        env_map=spec.env_map_clean,
         tags=list(spec.tags or []),
         notes=spec.notes,
         enabled=spec.enabled,
@@ -358,10 +370,12 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("author_url", spec.author_url),
         ("source_registry", spec.source_registry),
         ("source_url", spec.source_url),
-        ("env", spec.env_map or None),
+        ("env", spec.env_tuning or None),
         ("topology", spec.topology_map),
         ("port", spec.port),
         ("exclusive", spec.exclusive),
+        ("env_file", spec.env_file),
+        ("env_map", spec.env_map_clean),
         ("tags", list(spec.tags or [])),
         ("notes", spec.notes),
     ):

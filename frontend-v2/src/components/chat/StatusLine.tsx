@@ -160,6 +160,35 @@ function resolveDisplay(
   }
 }
 
+/**
+ * Das Arbeits-Wort buchstabenweise (Livefeed-Look, Operator-Wunsch
+ * 04.09.2026): jeder Buchstabe ist ein eigenes <span>, damit ein Lichtlauf
+ * durch die Buchstaben ziehen und ein neues Wort buchstabenweise
+ * hereinkommen kann (CSS `.status-letter`, globals.css). Die Ellipse bleibt
+ * ein ruhiges Zeichen am Ende. Der `key` am Wort sorgt dafuer, dass beim
+ * Wechsel neue Buchstaben eingehaengt werden — ihre Eintritts-Animation ist
+ * der „Swap". Nur der Arbeits-Zustand wird so gesetzt; jede andere Zeile
+ * bleibt schlichter Text.
+ */
+function LetterWord({ word }: { word: string }) {
+  return (
+    <span key={word} className="status-word" aria-label={`${word}…`}>
+      {Array.from(word).map((ch, i) => (
+        <span
+          key={i}
+          data-letter=""
+          aria-hidden="true"
+          className="status-letter"
+          style={{ animationDelay: `${i * 60}ms, ${i * 40}ms, ${i * 35}ms` }}
+        >
+          {ch}
+        </span>
+      ))}
+      <span aria-hidden="true">…</span>
+    </span>
+  );
+}
+
 export function StatusLine({
   state,
   connected,
@@ -170,6 +199,7 @@ export function StatusLine({
   // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
   const display = resolveDisplay(state, connected, aliveness, sending, workingWord);
+  const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status
@@ -179,19 +209,18 @@ export function StatusLine({
       style={{ color: display.textColor }}
       aria-live="polite"
     >
-      <span className="relative inline-flex h-1.5 w-1.5 shrink-0">
-        <span
-          className="absolute inset-0 rounded-full"
-          style={{ backgroundColor: display.dotColor }}
-        />
-        {display.pulse && (
-          <span
-            className="absolute inset-0 animate-ping rounded-full"
-            style={{ backgroundColor: display.dotColor, opacity: 0.6 }}
-          />
-        )}
+      {/* Leucht-Punkt mit auslaufendem Ring, solange etwas passiert (CSS
+          `.status-dot[data-live]`); still und ohne Schein in jedem Ruhe- oder
+          Warnzustand. Farbe bleibt die des Zustands. */}
+      <span
+        data-testid="status-dot"
+        data-live={display.pulse}
+        className="status-dot relative inline-flex h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: display.dotColor, ["--status-dot" as string]: display.dotColor }}
+      />
+      <span data-testid="status-label">
+        {working ? <LetterWord word={workingWord} /> : display.label}
       </span>
-      <span>{display.label}</span>
     </div>
   );
 }

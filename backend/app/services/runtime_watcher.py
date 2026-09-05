@@ -88,6 +88,13 @@ _STARTUP_GRACE = 20  # seconds — let DB/Redis/other services come up first
 # Auto-recovery (PR5). One attempt per runtime per cooldown window; after this
 # many consecutive attempts that did not bring the engine back, stop and hand
 # over to the operator rather than restarting in a loop.
+#: Rezept-Umschalter P3: die Engines, die MC über einen Startbefehl hochfährt —
+#: genau die drei Engines, die ein Rezept haben kann (models/local_recipe.ENGINES).
+#: Bis P3 war die Auto-Wiederbelebung auf Docker beschränkt, weil niemand einen
+#: Host-Prozess ungefragt neu starten wollte. Mit dem Schalter an der Box ist es
+#: eine bewusste Entscheidung des Betreibers, also darf ``ssh_process`` mit.
+COMMAND_DRIVEN_ENGINE_TYPES = frozenset(DOCKER_ENGINE_TYPES) | {SSH_PROCESS_TYPE}
+
 AUTO_RECOVERY_COOLDOWN = 900  # 15 min — longer than a normal warmup
 AUTO_RECOVERY_MAX_ATTEMPTS = 2
 AUTO_RECOVERY_FAILURE_TTL = 6 * 3600  # attempts "age out" after 6h of quiet
@@ -339,6 +346,10 @@ class RuntimeWatcher:
             served_context_len=served_ctx,
             consecutive_failures=0,
         )
+        try:
+            await self._confirm_autostart_recipe(session, runtime)
+        except Exception:  # noqa: BLE001 — Buchhaltung darf die Probe nicht kosten
+            logger.exception("autostart bookkeeping failed for %s", runtime.slug)
         model_would_change = served != (runtime.model_identifier or "")
         ctx_would_change = served_ctx is not None and self._context_would_change(
             runtime, served_ctx
@@ -410,7 +421,10 @@ class RuntimeWatcher:
         else:
             return True
         if not anchor:
-            return True
+            # Host-Engine ohne Handle: es gibt keinen Beleg, dass DIESE Instanz
+            # antwortet. Auf einem geteilten Port wäre es sonst das Modell des
+            # Nachbarn, das hier eingetragen wird (Live-Befund 04.09.2026).
+            return runtime.runtime_type != SSH_PROCESS_TYPE
 
         try:
             host = await resolve_host_for_runtime(session, runtime)
@@ -761,41 +775,60 @@ class RuntimeWatcher:
     async def _maybe_auto_recover(
         self, session: AsyncSession, redis, runtime: Runtime, fails: int
     ) -> None:
-        """One start attempt for a docker engine whose host is back but whose
-        container is gone (PR5).
+        """One start attempt for an engine whose host is back but whose
+        process/container is gone (PR5; umgebaut in P3, 04.09.2026).
 
-        The autostart flag file (``runtime_autostart``) only covers "start on
-        host boot". After a hard crash the Spark comes back, the flag never
-        fires for an already-running host, and the engine stays down until
-        someone notices. This closes that gap — deliberately narrow:
+        WER ENTSCHEIDET, OB HIER ETWAS STARTET (P3)
+        --------------------------------------------
+        Bis P3 entschied das die Engine-Art: Docker ja, alles andere nie. Wer
+        eine Wiederbelebung verhindern wollte (Handtest auf der Box!), musste
+        ``runtimes.enabled`` umlegen — ein Trick mit Nebenwirkungen.
 
-        - only a CONFIRMED outage (fail counter at the unreachable threshold),
-          never a single blip,
-        - never during a planned switch (the caller returns early on grace),
-        - only docker engines on an SSH-reachable host — nothing else can be
-          started without operator context,
-        - only when the box itself answers again, so we don't hammer a box
-          that is simply off,
-        - one attempt per 15 min (Redis SET-nx claim, which also makes this
-          safe across workers),
-        - and after two consecutive attempts that did not bring the engine
-          back, we stop and tell the operator instead of retrying forever.
+        Jetzt entscheidet die BOX: ``hosts.autostart_enabled``. Aus (Standard)
+        heisst „MC startet hier von sich aus gar nichts". An heisst „starte
+        genau das Rezept, das zuletzt über den Umschalter lief"
+        (``hosts.autostart_recipe_slug``) — keine andere Runtime auf derselben
+        Box, auch keine, die zufällig gerade ausfällt.
 
-        Everything is best-effort: any failure here must leave the watcher
-        exactly as functional as it was before.
+        Eine Runtime OHNE ``host_id`` (Cloud, Settings-Fallback) hat keine Box,
+        die entscheiden könnte: für sie gilt unverändert die alte Regel
+        (nur Docker-Engines).
+
+        Die Schwellen bleiben, wie sie waren:
+
+        - nur ein BESTÄTIGTER Ausfall (Fehlerzähler an der Schwelle),
+        - nie während eines geplanten Wechsels (der Aufrufer steigt bei
+          Grace vorher aus),
+        - nur wenn die Box selbst wieder antwortet,
+        - ein Versuch je 15 Minuten (Redis-Claim, auch über Worker hinweg),
+        - nach zwei erfolglosen Versuchen Schluss, mit Meldung.
+
+        Alles best effort: ein Fehler hier lässt den Wächter genau so
+        funktionsfähig zurück, wie er vorher war.
         """
         if not settings.runtime_auto_recovery_enabled:
             return
         if fails < UNREACHABLE_EVENT_THRESHOLD:
             return
-        # DOCKER_ENGINE_TYPES only — ssh_process is deliberately NOT recovered
-        # automatically (PR6). A docker start is verifiable against a label the
-        # daemon owns; a host process is verifiable only against the process
-        # table, and the engines behind ssh_process today can spend an hour
-        # loading 110 GiB. Auto-restarting one of those on a probe timeout could
-        # relaunch a model that was mid-load, i.e. make the outage worse. Manual
-        # start stays one click away; a verified auto-recovery is a follow-up.
-        if not runtime.enabled or runtime.runtime_type not in DOCKER_ENGINE_TYPES:
+        if not runtime.enabled:
+            return
+
+        host_row, recipe = await self._autostart_target(session, runtime)
+        if runtime.host_id is not None:
+            # Die Box hat das letzte Wort — und sie hat es abgelehnt.
+            if host_row is None or recipe is None:
+                return
+            # Auch mit Schalter nur Engines, die MC über einen BEFEHL startet
+            # (das sind genau die drei Rezept-Engines). LM Studio startet über
+            # ``lms load``, Cloud-Runtimes gar nicht — für die gäbe es hier
+            # nichts zu starten.
+            if runtime.runtime_type not in COMMAND_DRIVEN_ENGINE_TYPES:
+                return
+        elif runtime.runtime_type not in DOCKER_ENGINE_TYPES:
+            # Runtime ohne Box: wie bisher NUR Docker. Ein Host-Prozess ist nur
+            # gegen die Prozesstabelle prüfbar, und die Engines dahinter laden
+            # schon mal eine Stunde — ein blinder Neustart könnte den Ausfall
+            # verschlimmern.
             return
         try:
             host = await resolve_host_for_runtime(session, runtime)
@@ -846,15 +879,8 @@ class RuntimeWatcher:
                     "consecutive_failures": fails},
         )
 
-        from app.services.runtime_manager import runtime_row_to_dict, start_runtime
-
-        try:
-            result = await start_runtime(
-                runtime_row_to_dict(runtime), host=host,
-                grace_source=SOURCE_AUTO_RECOVERY,
-            )
-        except Exception as exc:  # noqa: BLE001
-            result = {"ok": False, "message": f"start_runtime raised: {exc}"}
+        result = await self._autostart_start(session, runtime, host, host_row, recipe)
+        await self._record_autostart_attempt(session, host_row, recipe, result)
 
         if result.get("ok"):
             await emit_event(
@@ -883,6 +909,150 @@ class RuntimeWatcher:
                 severity="warning",
                 detail={"slug": runtime.slug, "attempts": attempt},
             )
+
+    async def _confirm_autostart_recipe(self, session: AsyncSession, runtime: Runtime) -> None:
+        """Das Autostart-Rezept der Box folgt dem Rezept, das WIRKLICH läuft.
+
+        Live-Befund 05.09.2026: ein Klick auf DeepSeek setzte das Rezept sofort
+        um; DeepSeek scheiterte an seiner Speicherprüfung, der Wächter versuchte
+        4× DeepSeek — und GLM, das vorher lief, kam nie von selbst zurück.
+        Darum zählt erst die bestätigte Antwort des Endpunkts, und nur wenn
+        die Antwort nachweislich von DIESER Instanz kommt (Anker am Host),
+        nicht vom Nachbarn auf demselben Port.
+        """
+        if runtime.host_id is None:
+            return
+        topology = runtime.topology if isinstance(runtime.topology, dict) else {}
+        recipe_slug = str(topology.get("recipe_slug") or "").strip()
+        if not recipe_slug:
+            return
+        from app.models.host import Host
+
+        host = await session.get(Host, runtime.host_id)
+        if host is None or host.autostart_recipe_slug == recipe_slug:
+            return
+        if not await self._served_answer_is_own(session, runtime):
+            return
+        old = host.autostart_recipe_slug
+        host.autostart_recipe_slug = recipe_slug
+        session.add(host)
+        await session.commit()
+        await emit_event(
+            session,
+            "host.autostart_recipe_confirmed",
+            f"{host.slug}: Autostart folgt jetzt {recipe_slug} (läuft bestätigt; vorher {old or '—'})",
+            severity="info",
+            detail={"host_id": str(host.id), "slug": host.slug, "recipe_slug": recipe_slug, "previous": old},
+        )
+
+    async def _autostart_target(
+        self, session: AsyncSession, runtime: Runtime
+    ) -> tuple[object | None, object | None]:
+        """Darf diese Runtime auf IHRER Box automatisch starten? (P3)
+
+        Liefert ``(host, recipe)``, wenn die Box den Autostart eingeschaltet
+        hat UND diese Runtime die Instanz des dort hinterlegten Rezepts ist.
+        Sonst ``(None, None)`` — und das heisst: nicht anfassen.
+
+        Die Zuordnung Runtime ↔ Rezept macht ``recipe_switcher`` und niemand
+        sonst (ADR-077: ein Ort rechnet, einer zeigt).
+        """
+        if runtime.host_id is None:
+            return None, None
+        from app.models.host import Host
+        from app.models.local_recipe import LocalRecipe
+        from app.services.recipe_switcher import recipe_matches_runtime
+
+        host = await session.get(Host, runtime.host_id)
+        if host is None or not host.autostart_enabled or not host.autostart_recipe_slug:
+            return None, None
+        recipe = (
+            await session.exec(
+                select(LocalRecipe).where(LocalRecipe.slug == host.autostart_recipe_slug)
+            )
+        ).first()
+        if recipe is None or not recipe_matches_runtime(recipe, runtime):
+            return None, None
+        return host, recipe
+
+    async def _autostart_start(
+        self, session: AsyncSession, runtime: Runtime, host, host_row, recipe
+    ) -> dict:
+        """Der Start selbst — Solo wie bisher, Verbund über den Umschalter.
+
+        Ein Zweibox-Rezept darf NICHT einfach ``start_runtime`` bekommen: seine
+        `.env` muss vorher die Adressen der beiden Boxen tragen und die
+        Worker-Box muss frei sein. Genau das macht
+        ``recipe_switcher.start_recipe_on_host`` — derselbe Weg wie ein Klick
+        des Betreibers, kein zweiter Startpfad.
+        """
+        from app.services.runtime_manager import runtime_row_to_dict, start_runtime
+
+        topology = runtime.topology if isinstance(runtime.topology, dict) else {}
+        nodes = 1
+        try:
+            nodes = int(topology.get("nodes", 1) or 1)
+        except (TypeError, ValueError):
+            nodes = 1
+
+        if nodes >= 2 and host_row is not None and recipe is not None:
+            from app.services import recipe_switcher
+
+            try:
+                return await recipe_switcher.start_recipe_on_host(
+                    session,
+                    host_row,
+                    recipe,
+                    worker_host_id=topology.get("worker_host_id"),
+                )
+            except recipe_switcher.RecipeStartError as exc:
+                return {"ok": False, "message": exc.detail}
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "message": f"Verbund-Start scheiterte: {exc}"}
+
+        try:
+            return await start_runtime(
+                runtime_row_to_dict(runtime), host=host,
+                grace_source=SOURCE_AUTO_RECOVERY,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "message": f"start_runtime raised: {exc}"}
+
+    async def _record_autostart_attempt(
+        self, session: AsyncSession, host_row, recipe, result: dict
+    ) -> None:
+        """Was beim letzten Versuch passierte, an der Box festhalten (P3).
+
+        Die Kachel zeigt genau einen Satz. Best effort: eine misslungene Notiz
+        darf einen gelungenen Start nicht in einen Fehler verwandeln.
+        """
+        if host_row is None:
+            return
+        ok = bool(result.get("ok"))
+        message = str(result.get("message") or "")
+        sentence = (
+            f"Gestartet — {message}" if ok else f"Fehlgeschlagen: {message or 'kein Grund gemeldet'}"
+        )
+        try:
+            host_row.autostart_last_attempt_at = datetime.now(timezone.utc)
+            host_row.autostart_last_result = sentence[:500]
+            session.add(host_row)
+            await session.commit()
+            await emit_event(
+                session,
+                "host.autostart_attempt",
+                f"{host_row.slug}: {sentence}",
+                severity="info" if ok else "warning",
+                detail={
+                    "host_id": str(host_row.id),
+                    "slug": host_row.slug,
+                    "ok": ok,
+                    "recipe_slug": getattr(recipe, "slug", None),
+                    "message": message,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("autostart: Notiz an %s fehlgeschlagen: %s", host_row.slug, exc)
 
     async def _active_exclusive_sibling(
         self, session: AsyncSession, redis, runtime: Runtime

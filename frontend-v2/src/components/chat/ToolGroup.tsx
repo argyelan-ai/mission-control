@@ -35,6 +35,8 @@ export interface ActivitySummary {
   label: string;
   /** True when any tool in the run failed — drives the warning icon. */
   hasError: boolean;
+  /** How many tool calls (commands included) ended in an error. */
+  failed: number;
   commands: number;
   tools: number;
   thoughts: number;
@@ -44,14 +46,14 @@ export function summarizeActivity(events: ActivityEvent[]): ActivitySummary {
   let commands = 0;
   let tools = 0;
   let thoughts = 0;
-  let hasError = false;
+  let failed = 0;
 
   for (const ev of events) {
     if (ev.kind === "thinking") {
       thoughts += 1;
       continue;
     }
-    if (ev.status === "error") hasError = true;
+    if (ev.status === "error") failed += 1;
     if (isCommandTool(ev)) commands += 1;
     else tools += 1;
   }
@@ -59,6 +61,11 @@ export function summarizeActivity(events: ActivityEvent[]): ActivitySummary {
   const parts: string[] = [];
   if (commands > 0) parts.push(`${commands} ${commands === 1 ? "Befehl" : "Befehle"} ausgeführt`);
   if (tools > 0) parts.push(`${tools} ${tools === 1 ? "Tool" : "Tools"} verwendet`);
+  // The failure used to be carried by colour alone: „35 Tools verwendet" with
+  // a red triangle read as „the whole run broke" on the operator's phone
+  // (04.09.2026) — it was one `mc review` 400 out of 35, retried and fine.
+  // Naming the number turns the alarm back into information.
+  if (failed > 0) parts.push(`${failed} fehlgeschlagen`);
   if (thoughts > 0) parts.push(thoughts === 1 ? "nachgedacht" : `${thoughts}× nachgedacht`);
 
   // Sentence-cases whatever landed first ("nachgedacht" → "Nachgedacht"; a
@@ -66,7 +73,7 @@ export function summarizeActivity(events: ActivityEvent[]): ActivitySummary {
   const joined = parts.join(", ");
   const label = joined.length > 0 ? joined.charAt(0).toUpperCase() + joined.slice(1) : "Aktivität";
 
-  return { label, hasError, commands, tools, thoughts };
+  return { label, hasError: failed > 0, failed, commands, tools, thoughts };
 }
 
 function leadingIcon(summary: ActivitySummary) {
@@ -120,11 +127,15 @@ export function ToolGroup({
         {/* Signal doctrine: colour is meaning, not emphasis. The failure gets
             exactly two carriers — the icon's shape/colour and the count — while
             the label stays ordinary text and the frame stays neutral. Painting
-            all four red made one bad tool out of sixty read as an alert box. */}
+            all four red made one bad tool out of sixty read as an alert box.
+            And it is a WARNING, not an error: a failed tool inside a run that
+            went on is a partial failure — red is reserved for the run itself
+            failing (the agent's own error line), amber for „something in here
+            went wrong, the number tells you how much". */}
         <Icon
           size={13}
           className="shrink-0"
-          style={{ color: summary.hasError ? STATUS_TEXT.error : C.textMuted }}
+          style={{ color: summary.hasError ? STATUS_TEXT.warning : C.textMuted }}
           data-testid={summary.hasError ? "tool-group-error-icon" : "tool-group-icon"}
           aria-hidden="true"
         />
@@ -137,7 +148,7 @@ export function ToolGroup({
         </span>
         <span
           className="shrink-0 font-mono text-[10px] font-medium tabular-nums"
-          style={{ color: summary.hasError ? STATUS_TEXT.error : C.textMuted }}
+          style={{ color: summary.hasError ? STATUS_TEXT.warning : C.textMuted }}
         >
           {events.length}
         </span>

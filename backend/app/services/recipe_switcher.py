@@ -23,11 +23,16 @@ Was hier passiert
   über das Label ``mc.runtime.slug``, ``exclusive_memory``-Verdrängung).
   Kein zweiter Lebenszyklus.
 
-Was hier bewusst NICHT passiert (P3)
------------------------------------
-Zweibox-Start (``nodes=2`` → 409 mit Satz), Schreibpfad ``runtime_hosts``,
-Worker-Wahl. ``candidate_workers`` (seit P2 mit Rolle, Worker zuerst) wird
-schon geliefert, damit P3 die Liste nicht neu erfinden muss.
+Zweibox-Start (P3, 04.09.2026)
+------------------------------
+``start_recipe_on_host`` startet jetzt auch ``nodes>=2``. MC spricht dabei
+weiter NUR mit dem Head (ADR-077, Regel 5): das Rezept holt seinen Worker
+selbst dazu. MC tut genau drei Dinge zusätzlich — die Worker-Box wählen (aus
+``candidate_workers``, oder die vom Betreiber genannte), die Adressen in die
+`.env` des Rezepts schreiben (``services/recipe_env``) und die Mitgliedschaft
+in ``runtime_hosts`` festhalten. Kein neuer Startpfad, kein zweiter
+Lebenszyklus: gestartet wird weiter über ``runtime_manager.start_runtime``
+auf dem Head.
 
 Gründe (``reason``) sind SÄTZE in einfacher Sprache, keine Codes — die
 Oberfläche zeigt sie unverändert an. Das Backend hat keine i18n-Schicht für
@@ -60,8 +65,36 @@ REASON_NO_COMMAND = "Startbefehl fehlt"
 REASON_NO_SECOND_BOX = "braucht 2 Boxen — keine freie zweite Box"
 REASON_RUNNING = "läuft bereits auf dieser Box"
 REASON_NO_SSH = "Box hat keinen SSH-Zugang — MC kann hier nichts starten"
-REASON_DUO_PHASE3 = "Zweibox-Start kommt in Phase 3"
 REASON_RECIPE_HIDDEN = "Rezept ist ausgeblendet"
+#: P3 — ein Zweibox-Rezept ohne .env-Zuordnung kann MC nicht starten: es
+#: wüsste nicht, wohin es die Adresse der zweiten Box schreiben soll. Das
+#: steht von Anfang an fest, also grau in der Liste und 422 beim Start.
+REASON_NO_ENV_MAP = (
+    "Rezept hat keine Umgebungs-Zuordnung (env_file/env_map) — Katalog nachtragen."
+)
+#: P3 — keine Box übrig, die Worker sein könnte.
+REASON_NO_FREE_WORKER = (
+    "Keine freie Worker-Box mit SSH-Zugang — alle anderen Boxen sind belegt "
+    "oder MC kann sie nicht erreichen"
+)
+
+
+def reason_box_is_worker(runtime_name: str) -> str:
+    """P3 — Solo-Start auf einer Box, die gerade Worker eines Verbunds ist."""
+    return (
+        f"Diese Box arbeitet gerade als zweite Box für '{runtime_name}' — "
+        f"erst den Verbund stoppen"
+    )
+
+
+def reason_worker_not_free(slug: str) -> str:
+    return f"Box '{slug}' steht als zweite Box nicht zur Verfügung (belegt, aus oder ohne SSH-Zugang)"
+
+
+def reason_host_unreachable(slug: str) -> str:
+    return f"Box '{slug}' ist per SSH nicht erreichbar — Start abgebrochen, bevor etwas angefasst wird"
+
+
 #: Eine Host-Engine (``ssh_process``) startet MC über SSH und findet sie danach
 #: nur an einem Namen wieder: Prozessname (``pgrep -x``) oder Containername
 #: (``docker inspect``) — viele Rezept-Startskripte starten in Wahrheit einen
@@ -140,8 +173,15 @@ def recipe_matches_runtime(recipe: LocalRecipe, runtime: Runtime) -> bool:
          seite für ihr „läuft"-Badge schon immer benutzt hat.
     """
     topology = runtime.topology if isinstance(runtime.topology, dict) else {}
-    if topology.get("recipe_slug") == recipe.slug:
-        return True
+    backlink = topology.get("recipe_slug")
+    if backlink:
+        # Ein expliziter Rückverweis entscheidet — in BEIDE Richtungen. Eine
+        # Instanz, die auf ein anderes Rezept zeigt, ist nie unsere, auch wenn
+        # ihr ``model_identifier`` zufällig passt (Live-Befund 04.09.2026: zwei
+        # Rezepte auf demselben Port, der Wächter schrieb der gestoppten
+        # Instanz das Modell der laufenden zu — und der Umschalter hielt das
+        # laufende Rezept für gestoppt).
+        return backlink == recipe.slug
     ref = (recipe.recipe_ref or "").strip()
     if ref and runtime.launch_command and ref in runtime.launch_command:
         return True
@@ -310,48 +350,112 @@ async def _load_fleet(
     return recipes, hosts, runtimes, members
 
 
-async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str, Any]]:
-    """Alle freigegebenen Rezepte aus Sicht EINER Box — exakt das Vertrags-Schema.
+def runtime_host_ids(runtime: Runtime, members: dict[uuid.UUID, list[RuntimeHost]]) -> list[uuid.UUID]:
+    """Alle Boxen, die diese Instanz belegt: Head plus Mitglieder.
 
-    Belegung kommt aus ``runtimes.host_id`` (Head) + ``runtime_hosts``
-    (Mitglieder) + einer laufenden Health-Probe je Instanz. Alle Probes laufen
-    parallel; eine Box mit 20 Runtimes wartet 5 s, nicht 100.
+    Ein Verbund belegt BEIDE Boxen, auch wenn nur der Head in
+    ``runtimes.host_id`` steht — sonst gälte die Worker-Box als frei und der
+    nächste Start würde sie unter dem laufenden Verbund wegziehen.
+    """
+    ids = [runtime.host_id] if runtime.host_id else []
+    ids.extend(m.host_id for m in members.get(runtime.id, []))
+    return ids
+
+
+class FleetState:
+    """Ein Blick auf die Flotte: wer läuft gerade wo (eine Probe je Instanz).
+
+    Eigene kleine Klasse, weil sowohl die Liste als auch der Start dieselbe
+    Frage stellen — „welche Box ist belegt?" — und zwei Antworten darauf genau
+    die Uneinigkeit wären, die ADR-077 abgeschafft hat.
+    """
+
+    def __init__(
+        self,
+        recipes: list[LocalRecipe],
+        hosts: list[Host],
+        runtimes: list[Runtime],
+        members: dict[uuid.UUID, list[RuntimeHost]],
+        running_by_id: dict[uuid.UUID, bool],
+    ) -> None:
+        self.recipes = recipes
+        self.hosts = hosts
+        self.runtimes = runtimes
+        self.members = members
+        self.running_by_id = running_by_id
+        self.host_by_id = {h.id: h for h in hosts}
+        self.occupied: dict[uuid.UUID, list[Runtime]] = {}
+        for rt in runtimes:
+            if not running_by_id.get(rt.id):
+                continue
+            for hid in runtime_host_ids(rt, members):
+                self.occupied.setdefault(hid, []).append(rt)
+        self.exclusive_busy = {
+            hid for hid, rts in self.occupied.items() if any(rt.exclusive_memory for rt in rts)
+        }
+
+    def hosts_of(self, runtime: Runtime) -> list[uuid.UUID]:
+        return runtime_host_ids(runtime, self.members)
+
+    def worker_member_runtimes(self, host_id: uuid.UUID) -> list[Runtime]:
+        """Laufende Instanzen, die diese Box als MITGLIED belegen (ihr Head ist
+        eine andere Box) — die Belegung, die ``runtimes.host_id`` nicht zeigt."""
+        return [
+            rt
+            for rt in self.occupied.get(host_id, [])
+            if rt.host_id != host_id
+        ]
+
+
+async def load_fleet_state(session: AsyncSession) -> FleetState:
+    """Flotte laden und JEDE Instanz einmal probieren (parallel).
+
+    Alle Probes laufen gleichzeitig; eine Box mit 20 Runtimes wartet 5 s,
+    nicht 100.
     """
     recipes, hosts, runtimes, members = await _load_fleet(session)
-    host_slug_by_id = {h.id: h.slug for h in hosts}
-    # Host-Engines werden über SSH nachgeprüft; dafür braucht die Probe die
-    # Box der Instanz. Nur Boxen mit SSH-Zugang — bei allen anderen bleibt es
-    # bei „kein Beleg".
-    resolved_by_host_id = {
-        h.id: resolved_host_from_row(h) for h in hosts if host_can_ssh(h)
-    }
-
+    resolved_by_host_id = {h.id: resolved_host_from_row(h) for h in hosts if host_can_ssh(h)}
     probes = await asyncio.gather(
         *(probe_running(rt, host=resolved_by_host_id.get(rt.host_id)) for rt in runtimes),
         return_exceptions=True,
     )
-    running_by_id: dict[uuid.UUID, bool] = {
-        rt.id: (result is True) for rt, result in zip(runtimes, probes)
-    }
+    running_by_id = {rt.id: (result is True) for rt, result in zip(runtimes, probes)}
+    return FleetState(recipes, hosts, runtimes, members, running_by_id)
+
+
+def recipe_env_ready(recipe: LocalRecipe) -> bool:
+    """Kann MC für dieses Rezept die Adressen der Boxen hinterlegen?
+
+    Nur für Zweibox-Rezepte eine echte Frage — ein Solo-Rezept braucht keine
+    zweite Adresse und ist darum immer „bereit".
+    """
+    if recipe_nodes(recipe.topology) < 2:
+        return True
+    return bool((recipe.env_file or "").strip()) and bool(recipe.env_map)
+
+
+async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str, Any]]:
+    """Alle freigegebenen Rezepte aus Sicht EINER Box — exakt das Vertrags-Schema.
+
+    Belegung kommt aus ``runtimes.host_id`` (Head) + ``runtime_hosts``
+    (Mitglieder) + einer laufenden Health-Probe je Instanz.
+    """
+    state = await load_fleet_state(session)
+    recipes, hosts, runtimes = state.recipes, state.hosts, state.runtimes
+    running_by_id = state.running_by_id
+    host_slug_by_id = {h.id: h.slug for h in hosts}
+    occupied = state.occupied
 
     def _hosts_of(rt: Runtime) -> list[uuid.UUID]:
-        ids = [rt.host_id] if rt.host_id else []
-        ids.extend(m.host_id for m in members.get(rt.id, []))
-        return ids
+        return state.hosts_of(rt)
 
-    # Welche Box wird gerade von welcher laufenden Runtime belegt?
-    occupied: dict[uuid.UUID, list[Runtime]] = {}
-    for rt in runtimes:
-        if not running_by_id[rt.id]:
-            continue
-        for hid in _hosts_of(rt):
-            occupied.setdefault(hid, []).append(rt)
-
-    exclusive_busy = {
-        hid for hid, rts in occupied.items() if any(rt.exclusive_memory for rt in rts)
-    }
     # Wirklich freie Boxen (Worker-Rolle zuerst, P2) — für einen NEUEN Start.
-    free_workers = worker_candidates(hosts, host, exclusive_busy)
+    # P3: nur Boxen mit SSH-Zugang, denn der Duo-Start prüft vorher, ob BEIDE
+    # Boxen antworten. Eine Box, die im Dialog wählbar ist und beim Klick
+    # abgelehnt wird, wäre genau die Unehrlichkeit, die ADR-077 abgeschafft hat.
+    free_workers = worker_candidates(
+        [h for h in hosts if host_can_ssh(h)], host, foreign_exclusive_busy(state, host)
+    )
     ssh_ok = host_can_ssh(host)
 
     entries: list[dict[str, Any]] = []
@@ -392,7 +496,12 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
         handle_ok = not recipe_needs_handle(recipe) or bool(recipe_handle(recipe, instance))
         if command_ok and not handle_ok:
             reason = REASON_NO_HANDLE
-        startable = command_ok and handle_ok and fit != "none"
+        # P3: ein Zweibox-Rezept ohne .env-Zuordnung kann MC nicht starten —
+        # das steht ohne Netzzugriff fest, also grau statt „klick und scheitere".
+        env_ready = recipe_env_ready(recipe)
+        if command_ok and handle_ok and not env_ready:
+            reason = REASON_NO_ENV_MAP
+        startable = command_ok and handle_ok and env_ready and fit != "none"
         if running:
             # Ein laufendes Rezept ist gesetzt, nicht startbar — der Grund sagt
             # das, statt „keine freie Box" oder „Port belegt" zu behaupten.
@@ -435,6 +544,9 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
                 "reason": reason,
                 "busy_hosts": busy_hosts,
                 "candidate_workers": candidate_workers if nodes >= 2 else [],
+                # P3: sagt der Oberfläche, ob der Duo-Dialog überhaupt etwas
+                # zu wählen hat. Solo-Rezepte sind immer bereit.
+                "env_ready": env_ready,
             }
         )
 
@@ -541,28 +653,120 @@ async def build_runtime_from_recipe(
     )
 
 
+def foreign_exclusive_busy(state: FleetState, head: Host) -> set[uuid.UUID]:
+    """Boxen, die durch FREMDE exklusive Instanzen belegt sind.
+
+    Fremd = der Head der belegenden Instanz ist eine andere Box. Instanzen
+    mit diesem Head verdrängt ein Start von hier ohnehin (Worker zuerst, dann
+    Head) — ihre Worker-Box ist darum ein gültiger Kandidat. Ohne diese
+    Unterscheidung liesse sich ein laufender Verbund nie durch einen anderen
+    ersetzen: „keine freie zweite Box", obwohl die Box nur vom eigenen
+    Vorgänger belegt ist (Live-Befund 04.09.2026).
+    """
+    return {
+        hid
+        for hid, rts in state.occupied.items()
+        if any(rt.exclusive_memory and rt.host_id != head.id for rt in rts)
+    }
+
+
+def duo_worker_candidates(
+    state: FleetState, head: Host, instance: Runtime | None
+) -> list[dict[str, Any]]:
+    """Die Boxen, die JETZT Worker werden könnten — aus Sicht dieses Starts.
+
+    Unterschied zur Liste: die eigene laufende Instanz zählt hier NICHT als
+    Belegung. Sonst könnte man einen laufenden Verbund nie neu starten — seine
+    Worker-Box wäre durch ihn selbst blockiert.
+    """
+    ssh_hosts = [h for h in state.hosts if host_can_ssh(h)]
+    return worker_candidates(ssh_hosts, head, foreign_exclusive_busy(state, head))
+
+
+async def _require_ssh_alive(host: Host) -> None:
+    """Antwortet die Box überhaupt? Ein ``true`` über SSH, sonst 502 mit Satz.
+
+    Läuft VOR jeder Verdrängung: eine Box freizuräumen und danach zu merken,
+    dass die zweite gar nicht erreichbar ist, wäre genau der Vorfall vom
+    03.09.2026 in gross (Modell tot, Verbund nie gestartet).
+    """
+    from app.services import runtime_manager
+
+    try:
+        _, _, code = await runtime_manager._ssh_run(  # noqa: SLF001 — die eine SSH-Primitive
+            "true", host=resolved_host_from_row(host), timeout=15
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RecipeStartError(502, reason_host_unreachable(host.slug)) from exc
+    if code != 0:
+        raise RecipeStartError(502, reason_host_unreachable(host.slug))
+
+
+async def set_runtime_members(
+    session: AsyncSession, runtime: Runtime, head: Host, worker: Host
+) -> None:
+    """Der Schreibpfad für ``runtime_hosts`` — idempotent.
+
+    Bis P3 wurde diese Tabelle nur GELESEN (ADR-077, Befund 2). Geschrieben
+    wird sie hier und nur hier: erst die alten Mitgliedschaften DIESER Instanz
+    weg, dann Head (rank 0) und Worker (rank 1) neu. Löschen-dann-schreiben
+    statt Upsert, weil sonst der Wechsel der Worker-Box in die Unique-Regel
+    (runtime_id, node_rank) liefe.
+    """
+    existing = (
+        await session.exec(select(RuntimeHost).where(RuntimeHost.runtime_id == runtime.id))
+    ).all()
+    for row in existing:
+        await session.delete(row)
+    await session.flush()
+    session.add(RuntimeHost(runtime_id=runtime.id, host_id=head.id, role="head", node_rank=0))
+    session.add(RuntimeHost(runtime_id=runtime.id, host_id=worker.id, role="worker", node_rank=1))
+    await session.commit()
+
+
 async def start_recipe_on_host(
-    session: AsyncSession, host: Host, recipe: LocalRecipe
+    session: AsyncSession,
+    host: Host,
+    recipe: LocalRecipe,
+    worker_host_id: str | None = None,
 ) -> dict[str, Any]:
-    """Solo-Start: Instanz anlegen, falls für diese Box keine existiert, dann
-    ``runtime_manager.start_runtime``. Duo wird in P1 ehrlich abgelehnt.
+    """Ein Rezept auf einer Box starten — Solo wie Verbund (P3).
+
+    ``host`` ist immer der HEAD: die Box, mit der MC redet. Bei einem
+    Zweibox-Rezept kommen drei Schritte dazu, mehr nicht (ADR-077, Regel 5 —
+    kein neuer Multi-Host-Startcode):
+
+    1. Worker-Box wählen (``worker_host_id`` oder der erste freie Kandidat),
+    2. die Adressen in die `.env` des Rezepts auf dem Head schreiben —
+       das Startskript holt sich seinen Worker daraus selbst,
+    3. die Mitgliedschaft in ``runtime_hosts`` festhalten, damit die nächste
+       Frage „ist diese Box frei?" beide Boxen sieht.
+
+    Reihenfolge mit Absicht: ALLES, was ohne Netzzugriff feststeht (Rezept
+    freigegeben, Startbefehl, Handle, .env-Zuordnung, freie Worker-Box), wird
+    geprüft, BEVOR irgendetwas auf einer Box angefasst wird. Danach erst
+    Erreichbarkeit, Verdrängung (Worker zuerst, dann Head), `.env`, Start.
 
     Raises :class:`RecipeStartError` mit HTTP-Status + Satz.
     """
+    from app.services import recipe_env, runtime_manager, runtime_readiness
+
     if not recipe.enabled:
         raise RecipeStartError(409, REASON_RECIPE_HIDDEN)
-    if recipe_nodes(recipe.topology) >= 2:
-        raise RecipeStartError(409, REASON_DUO_PHASE3)
     if not host_can_ssh(host):
         raise RecipeStartError(409, REASON_NO_SSH)
 
+    nodes = recipe_nodes(recipe.topology)
     resolved = resolved_host_from_row(host)
-    runtimes = (
-        await session.exec(
-            select(Runtime).where(Runtime.enabled == True, Runtime.host_id == host.id)  # noqa: E712
-        )
-    ).all()
-    instance = next((rt for rt in runtimes if recipe_matches_runtime(recipe, rt)), None)
+    state = await load_fleet_state(session)
+    instance = next(
+        (
+            rt
+            for rt in state.runtimes
+            if rt.host_id == host.id and recipe_matches_runtime(recipe, rt)
+        ),
+        None,
+    )
 
     # VOR dem Anlegen der Instanz: eine Host-Engine ohne Handle darf gar nicht
     # erst in den Startpfad. Sonst legt MC eine Zeile an, räumt die Box frei
@@ -575,6 +779,40 @@ async def start_recipe_on_host(
     )
     if command_ok and recipe_needs_handle(recipe) and not recipe_handle(recipe, instance):
         raise RecipeStartError(422, REASON_NO_HANDLE)
+
+    worker: Host | None = None
+    env_values: dict[str, str] = {}
+    if nodes >= 2:
+        if not recipe_env_ready(recipe):
+            raise RecipeStartError(422, REASON_NO_ENV_MAP)
+        candidates = duo_worker_candidates(state, host, instance)
+        if worker_host_id:
+            match = next((c for c in candidates if c["host_id"] == str(worker_host_id)), None)
+            if match is None:
+                named = state.host_by_id.get(_as_uuid(worker_host_id))
+                raise RecipeStartError(
+                    409, reason_worker_not_free(named.slug if named else str(worker_host_id))
+                )
+            worker = state.host_by_id[_as_uuid(match["host_id"])]
+        elif candidates:
+            worker = state.host_by_id[_as_uuid(candidates[0]["host_id"])]
+        else:
+            raise RecipeStartError(409, REASON_NO_FREE_WORKER)
+        try:
+            env_values = recipe_env.render_env_map(recipe.env_map, host, worker)
+        except ValueError as exc:
+            raise RecipeStartError(422, str(exc)) from exc
+        if not env_values:
+            raise RecipeStartError(422, REASON_NO_ENV_MAP)
+    else:
+        # Solo auf einer Box, die gerade als zweite Box eines laufenden
+        # Verbunds arbeitet: der Verbund steht nicht in ``runtimes.host_id``
+        # dieser Box, belegt sie aber trotzdem (Mitgliedschaft, siehe
+        # runtime_host_ids). Ohne diese Prüfung zöge ein Solo-Start dem
+        # laufenden Verbund die Box unter den Füssen weg.
+        blocker = next(iter(state.worker_member_runtimes(host.id)), None)
+        if blocker is not None:
+            raise RecipeStartError(409, reason_box_is_worker(blocker.display_name))
 
     created = False
     if instance is None:
@@ -591,8 +829,46 @@ async def start_recipe_on_host(
     elif not (instance.launch_command or "").strip():
         raise RecipeStartError(422, REASON_NO_COMMAND)
 
-    from app.services import runtime_manager, runtime_readiness
+    env_written: list[str] = []
+    if worker is not None:
+        # Die Topologie der Instanz hält fest, WELCHE zweite Box gemeint ist —
+        # der Wächter startet den Verbund später mit genau dieser wieder.
+        topology = dict(instance.topology or {})
+        topology.update(
+            {"nodes": nodes, "recipe_slug": recipe.slug, "worker_host_id": str(worker.id)}
+        )
+        instance.topology = topology
+        session.add(instance)
+        await session.commit()
+        await session.refresh(instance)
+        await set_runtime_members(session, instance, host, worker)
 
+        await _require_ssh_alive(host)
+        await _require_ssh_alive(worker)
+
+        # Verdrängung über alle Mitglieder: erst die Worker-Box, dann der Head
+        # (den räumt ``start_runtime`` selbst über ``ensure_exclusive_host``).
+        # Andersherum stünde der Head kurz leer, während die Worker-Box noch
+        # das alte Modell hält — und der Start liefe in eine halb belegte Box.
+        if instance.exclusive_memory:
+            freed = await runtime_manager.ensure_exclusive_host(
+                instance.model_dump(),
+                host=resolved_host_from_row(worker),
+                session=session,
+                host_id=worker.id,
+            )
+            if not freed.get("ok"):
+                raise RecipeStartError(409, str(freed.get("message")))
+
+        env_written = await recipe_env.upsert_env_file(
+            resolved_host_from_row(host), recipe.env_file or "", env_values
+        )
+
+    # Das Autostart-Rezept der Box wird NICHT hier gesetzt, sondern erst,
+    # wenn der Wächter die neue Instanz antworten sieht
+    # (``runtime_watcher._confirm_autostart_recipe``). Ein Rezept, das nie
+    # hochkommt, darf den Vorgänger nicht aus dem Autostart verdrängen
+    # (Live 05.09.2026: DeepSeek scheiterte, GLM kam nie zurück).
     result = await runtime_manager.start_runtime(instance.model_dump(), host=resolved)
     if not result.get("ok"):
         raise RecipeStartError(400, str(result.get("message") or "Start fehlgeschlagen"))
@@ -603,4 +879,14 @@ async def start_recipe_on_host(
         "runtime_id": str(instance.id),
         "runtime_slug": instance.slug,
         "created": created,
+        "worker_host_id": str(worker.id) if worker is not None else None,
+        "worker_slug": worker.slug if worker is not None else None,
+        "env_written": env_written,
     }
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    try:
+        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None

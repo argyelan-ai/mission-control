@@ -29,12 +29,30 @@ const mkState = (status: StateEvent["status"]): StateEvent => ({
 describe("StatusLine", () => {
   /** Der Arbeits-Text wechselt jetzt (Operator-Wunsch: wie in der Claude-Code-CLI).
    *  Getestet wird darum die Menge der erlaubten Woerter, nicht ein festes. */
-  const workingText = () =>
-    screen.getByText((t) => WORKING_WORDS.some((w) => t === `${w}…`)).textContent;
+  // Das Arbeits-Wort ist buchstabenweise in <span>s zerlegt (Livefeed-Look,
+  // 04.09.2026) — gelesen wird darum der Text des ganzen Labels.
+  const workingText = () => screen.getByTestId("status-label").textContent;
 
   it("shows one of the rotating working verbs for working", () => {
     render(<StatusLine state={mkState("working")} connected />);
     expect(WORKING_WORDS.map((w) => `${w}…`)).toContain(workingText());
+  });
+
+  it("dresses the working state as a livefeed: glowing dot, letter-wise word", () => {
+    render(<StatusLine state={mkState("working")} connected />);
+    const dot = screen.getByTestId("status-dot");
+    expect(dot).toHaveAttribute("data-live", "true");
+    const letters = screen.getByTestId("status-label").querySelectorAll("[data-letter]");
+    expect(letters.length).toBeGreaterThan(3);
+    // Keine Ellipse in Buchstaben zerlegt — sie bleibt ruhig stehen.
+    expect(screen.getByTestId("status-label").textContent?.endsWith("…")).toBe(true);
+  });
+
+  it("keeps quiet states plain: no live dot, no letter spans", () => {
+    render(<StatusLine state={mkState("idle")} connected />);
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "false");
+    expect(screen.getByTestId("status-label").querySelectorAll("[data-letter]").length).toBe(0);
+    expect(screen.getByText("Bereit")).toBeInTheDocument();
   });
 
   it("rotates the verb while the agent keeps working", () => {
@@ -114,6 +132,7 @@ describe("StatusLine", () => {
   it("never pulses on an ended session", () => {
     const { container } = render(<StatusLine state={mkState("working")} connected aliveness="ended" />);
     expect(container.querySelector(".animate-ping")).toBeNull();
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "false");
   });
 
   it("still shows live statuses while the session is active", () => {
@@ -192,5 +211,5 @@ describe("StatusLine — Arbeits-Verb (Render-Reinheit)", () => {
 });
 
 function workingWordOf() {
-  return screen.getByText((t) => WORKING_WORDS.some((w) => t === `${w}…`)).textContent;
+  return screen.getByTestId("status-label").textContent;
 }

@@ -221,6 +221,9 @@ def _parse_teammate_message(
                 "ts": ts,
                 "role": "teammate",
                 "teammate": id_match.group("id") if id_match else None,
+                # Herkunft fuer das Chat-Motiv: Rueckmeldung eines
+                # Teamkollegen; einen Titel gibt es hier nicht.
+                "source": {"kind": "teammate", "title": None},
                 "text": payload.strip(),
                 "model": None,
                 "sidechain": sidechain,
@@ -1397,6 +1400,20 @@ _RESULT_TRUNCATE_LEN = 4000
 _STATS_TOOLS = ("Edit", "Write")
 
 
+def _last_message_anchor(path: Path, adapter: Any) -> str:
+    """Letzter Absatz der letzten Nachricht im Transkript — die Anker-Saat
+    fuer die Vorschau beim Start des Tailers. Fail-silent: ohne Nachricht
+    (oder bei Lesefehler) bleibt der Anker leer."""
+    try:
+        events = read_history(path, adapter, limit=20).get("events") or []
+    except Exception:  # noqa: BLE001
+        return ""
+    for ev in reversed(events):
+        if ev.get("kind") == "message":
+            return PanePreview.anchor_from(ev.get("text") or "")
+    return ""
+
+
 def read_history(
     path: Path,
     adapter: Any,
@@ -1655,6 +1672,12 @@ class ChatTailerManager:
         #: Agent-Zeile je laufendem Tailer — ``release`` braucht sie, um den
         #: Terminal-Strom wieder abzuschalten.
         self._agents: dict[str, Any] = {}
+        # Letzter veroeffentlichter Zustand je Agent. ``state`` geht nur bei
+        # AENDERUNG ueber den Kanal — ein spaeter dazukommender Client (das
+        # Handy, waehrend der Desktop offen ist) sah bis zur naechsten
+        # Aenderung „Status unklar", bei einer langen Tool-Phase minutenlang
+        # (04.09.2026). Der Router gibt ihm diesen Stand sofort.
+        self._last_states: dict[str, dict[str, Any]] = {}
 
     async def acquire(self, agent_id: str, path: Path, agent: Any | None = None) -> None:
         """Registers one more client for ``agent_id``. Starts the poll task
@@ -1692,6 +1715,11 @@ class ChatTailerManager:
                 self._run(agent_id, path, initial_offset, agent)
             )
 
+    def last_state(self, agent_id: str) -> dict[str, Any] | None:
+        """Der zuletzt veroeffentlichte ``state`` dieses Agenten — None, wenn
+        kein Tailer laeuft oder noch keine Sonde gelaufen ist."""
+        return self._last_states.get(agent_id)
+
     async def release(self, agent_id: str) -> None:
         """Drops one client for ``agent_id``. Cancels and awaits the poll
         task once the last client releases."""
@@ -1705,6 +1733,7 @@ class ChatTailerManager:
                     await task
             # Der Terminal-Strom laeuft nur, solange jemand zusieht. Ohne das
             # Abschalten schriebe tmux weiter in eine Datei, die niemand liest.
+            self._last_states.pop(agent_id, None)
             agent = self._agents.pop(agent_id, None)
             if agent is not None:
                 from app.services import pane_stream
@@ -1791,6 +1820,15 @@ class ChatTailerManager:
         # Terminal der Text laeuft). Der Pane-Strom hat ihn sofort. Er ist die
         # Kuer: schlaegt hier etwas fehl, faellt nur die Vorschau aus.
         preview_state = await self._start_preview(agent)
+        if preview_state is not None:
+            # Der Tailer steigt am Dateiende ein und kennt darum keinen
+            # Anker — die Vorschau zeigte beim Oeffnen den GANZEN Bildschirm,
+            # also die fertige alte Antwort noch einmal, bei Status idle
+            # (SSE-Mitschnitt omp-Agent 04.09.2026). Der Anker kommt deshalb aus
+            # der letzten Nachricht, die das Transkript schon hat.
+            preview_state["anchor"] = await asyncio.to_thread(
+                _last_message_anchor, current_path, adapter
+            )
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
@@ -1810,6 +1848,7 @@ class ChatTailerManager:
                         )
                         if new_state != last_pane_state:
                             last_pane_state = new_state
+                            self._last_states[agent_id] = new_state
                             await sse.broadcast(
                                 channel, "chat_event", {"kind": "state", **new_state}
                             )

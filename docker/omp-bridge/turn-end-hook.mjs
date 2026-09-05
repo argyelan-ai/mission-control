@@ -21,6 +21,8 @@
 //     uses it as the per-task demarcation after a TUI relaunch/reset.
 //   * agent_end fires when the agent finishes responding to one user message —
 //     a secondary terminal backstop.
+//   * tool_execution_start / _update / _end fire around every tool call
+//     (ev.toolName, ev.toolCallId; present in omp 16.4.6) — liveness only.
 //
 // ROBUSTNESS (non-negotiable): a hook that throws can wedge the TUI. Every
 // handler is wrapped; missing fields degrade to null; an unwritable signal
@@ -72,6 +74,8 @@ export default (api) => {
       return;
     }
 
+    const STREAM_HEARTBEAT_MS = 3000; // throttle for per-token / per-chunk events
+
     // Per-task demarcation: a fresh conversation (boot or relaunch/reset).
     api.on("session_start", () =>
       emit({ kind: "session_start", ts: Date.now() })
@@ -99,12 +103,107 @@ export default (api) => {
     // Liveness heartbeats so the bridge's no-progress watchdog can tell a
     // legitimately-busy TUI (streaming / long tool run) from a wedged one.
     // These carry NO decision weight — they only prove forward progress.
-    api.on("turn_start", () =>
-      emit({ kind: "progress", at: "turn_start", ts: Date.now() })
+    api.on("turn_start", () => {
+      emit({ kind: "progress", at: "turn_start", ts: Date.now() });
+      openModelRequest();
+    });
+
+    // Running tool = alive (04.09.2026). One silent bash call (a 17-minute test
+    // suite) produces NO event between tool_execution_start and _end, so the
+    // bridge's idle watchdog (OMP_TURN_IDLE_TIMEOUT) SIGKILLed a working TUI
+    // mid-run. Three signals fix that for good:
+    //   tool_start / tool_end  — the bridge learns WHICH tool runs (named in the
+    //                            diagnosis if omp still wedges inside it);
+    //   tool_heartbeat         — a timer stamps liveness every
+    //                            OMP_TOOL_HEARTBEAT_MS (30 s) while ≥1 tool is
+    //                            in flight. It runs on omp's event loop, so it
+    //                            proves the process is alive, not just the tool;
+    //   tool_execution_update  — streamed tool output, throttled like deltas.
+    // The task deadline (OMP_TASK_DEADLINE) is untouched: a tool that never
+    // ends is still stopped by the wall clock.
+    const TOOL_HEARTBEAT_MS = Math.max(
+      5, Number(process.env.OMP_TOOL_HEARTBEAT_MS) || 30000
     );
-    api.on("tool_execution_end", () =>
-      emit({ kind: "progress", at: "tool_execution_end", ts: Date.now() })
-    );
+    // Open model request = alive (04.09.2026, same day, second lesson). Measured
+    // on a 26k-token prompt: between turn_start and the assistant's
+    // message_start omp emits NOTHING for 58 s (prefill on the local box);
+    // hidden reasoning or a bigger context stretches that to minutes — still
+    // no token, still no event. So the request window
+    //   turn_start  →  assistant message_end
+    // heartbeats too (model_heartbeat). model_start / model_end let the bridge
+    // name the phase („Modell-Anfrage offen") if omp wedges inside it. User
+    // and toolResult messages do not touch the window.
+    const runningTools = new Map(); // toolCallId -> toolName
+    let modelInFlight = false;
+    let heartbeat = null;
+    const stopHeartbeat = () => {
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    };
+    const startHeartbeat = () => {
+      if (heartbeat) return;
+      heartbeat = setInterval(() => {
+        try {
+          if (runningTools.size === 0 && !modelInFlight) return stopHeartbeat();
+          emit({
+            kind: "progress",
+            at: runningTools.size ? "tool_heartbeat" : "model_heartbeat",
+            ts: Date.now(),
+          });
+        } catch (_e) { /* never propagate into the TUI */ }
+      }, TOOL_HEARTBEAT_MS);
+      if (heartbeat && typeof heartbeat.unref === "function") heartbeat.unref();
+    };
+    const openModelRequest = () => {
+      if (modelInFlight) return;
+      modelInFlight = true;
+      emit({ kind: "model_start", ts: Date.now() });
+      startHeartbeat();
+    };
+    const closeModelRequest = () => {
+      if (!modelInFlight) return;
+      modelInFlight = false;
+      emit({ kind: "model_end", ts: Date.now() });
+      if (runningTools.size === 0) stopHeartbeat();
+    };
+    const isAssistant = (ev) =>
+      !!(ev && ev.message && ev.message.role === "assistant");
+    api.on("message_start", (ev) => { if (isAssistant(ev)) openModelRequest(); });
+    api.on("message_end", (ev) => { if (isAssistant(ev)) closeModelRequest(); });
+    const clearTools = () => {
+      runningTools.clear(); modelInFlight = false; stopHeartbeat();
+    };
+    const callId = (ev, fallback) =>
+      String((ev && (ev.toolCallId || ev.toolCallID || ev.id)) || fallback);
+
+    api.on("tool_execution_start", (ev) => {
+      const id = callId(ev, "tool-" + (runningTools.size + 1));
+      const name = String((ev && (ev.toolName || ev.name)) || "?");
+      runningTools.set(id, name);
+      emit({ kind: "tool_start", toolName: name, toolCallId: id, ts: Date.now() });
+      startHeartbeat();
+    });
+    let lastToolUpdate = 0;
+    api.on("tool_execution_update", () => {
+      const now = Date.now();
+      if (now - lastToolUpdate < STREAM_HEARTBEAT_MS) return;
+      lastToolUpdate = now;
+      emit({ kind: "progress", at: "tool_execution_update", ts: now });
+    });
+    api.on("tool_execution_end", (ev) => {
+      const id = callId(ev, null);
+      if (id !== "null" && runningTools.has(id)) runningTools.delete(id);
+      else if (runningTools.size) runningTools.delete([...runningTools.keys()].pop());
+      emit({
+        kind: "tool_end", toolCallId: id === "null" ? null : id,
+        isError: !!(ev && ev.isError), ts: Date.now(),
+      });
+      if (runningTools.size === 0 && !modelInFlight) stopHeartbeat();
+    });
+    // No tool survives a turn / response boundary — a missed end event must
+    // never leave a phantom "running" tool heartbeating forever.
+    api.on("turn_end", clearTools);
+    api.on("agent_end", clearTools);
+    api.on("session_start", clearTools);
 
     // Streaming heartbeat. turn_start / tool_execution_end fire only at turn and
     // tool boundaries — so a SINGLE long generation (e.g. the model writing a
@@ -116,7 +215,6 @@ export default (api) => {
     // 16.3.8), so we stamp a THROTTLED progress heartbeat — enough to keep the
     // watchdog's last_progress fresh without appending one line per token.
     let lastStreamHeartbeat = 0;
-    const STREAM_HEARTBEAT_MS = 3000;
     api.on("message_update", () => {
       const now = Date.now();
       if (now - lastStreamHeartbeat < STREAM_HEARTBEAT_MS) return;

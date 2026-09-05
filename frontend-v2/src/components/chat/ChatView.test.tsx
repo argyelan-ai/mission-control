@@ -20,6 +20,7 @@ import userEvent from "@testing-library/user-event";
 import {
   ChatView,
   buildTimelineItems,
+  liveEventUuid,
   modelBadgeUuids,
   ACTIVITY_GROUP_MIN_SIZE,
   headerSideReservation,
@@ -226,6 +227,41 @@ function mkThinking(overrides: Partial<ThinkingEvent> = {}): ThinkingEvent {
 function mkMsg(overrides: Partial<MessageEvent> = {}): MessageEvent {
   return { ...MSG, uuid: `m-${Math.random()}`, ...overrides };
 }
+
+describe("liveEventUuid", () => {
+  const outside = (uuid: string) =>
+    mkMsg({ uuid, role: "teammate", teammate: "task-1.md", source: { kind: "task", title: "x" } });
+
+  it("names the newest outside event while the agent is working on it", () => {
+    const evs = [outside("a"), mkMsg({ role: "assistant" }), outside("b"), mkTool(), mkThinking()];
+    expect(liveEventUuid(evs, "working")).toBe("b");
+  });
+
+  it("never animates an event the agent has already answered", () => {
+    // Live-Beweis 04.09.2026: omp schreibt die Aufgaben-Nachricht erst am
+    // Zug-ENDE ins Transcript. Waehrend der omp-Agent an der NEUEN Aufgabe arbeitete,
+    // pulsierte darum die Karte der ALTEN — die laengst beantwortet war.
+    const evs = [outside("a"), mkTool(), mkMsg({ role: "assistant" })];
+    expect(liveEventUuid(evs, "working")).toBeNull();
+  });
+
+  it("treats an operator message after the card as the end of that item", () => {
+    const evs = [outside("a"), mkMsg({ role: "user" })];
+    expect(liveEventUuid(evs, "working")).toBeNull();
+  });
+
+  it("names nothing while the agent is not working", () => {
+    expect(liveEventUuid([outside("a")], "idle")).toBeNull();
+    expect(liveEventUuid([outside("a")], null)).toBeNull();
+  });
+
+  it("never lets a plain teammate row (no source) pulse, nor the card before it", () => {
+    // Eine Zeile ohne source ist trotzdem ein neueres Ereignis — der Agent
+    // arbeitet dann an ihr, nicht mehr an der Karte davor.
+    const evs = [outside("a"), mkMsg({ role: "teammate", teammate: null, source: null })];
+    expect(liveEventUuid(evs, "working")).toBeNull();
+  });
+});
 
 describe("buildTimelineItems", () => {
   it("collapses consecutive tool/thinking events into one activity run", () => {

@@ -632,3 +632,144 @@ async def host_metrics(
 
     metrics = await runtime_manager.get_host_metrics(resolved)
     return {"kind": host.kind, "slug": host.slug, **metrics}
+
+
+# ── Autostart je Box (Rezept-Umschalter P3, 04.09.2026) ──────────────────────
+#
+# Der EINE Schalter dafür, ob MC auf dieser Box von sich aus etwas startet.
+# Vorher gab es dafür nur einen Umweg: ``runtimes.enabled = false`` setzen,
+# damit der Wächter das Modell nicht mitten in einen Handtest hinein wieder
+# hochfährt. Das war ein Trick mit Nebenwirkungen (eine deaktivierte Runtime
+# verschwindet aus Listen). Jetzt sagt die Box selbst, ob sie automatisch
+# bedient werden will — und welches Rezept dann startet.
+
+
+class HostAutostartBody(BaseModel):
+    """``enabled`` ist Pflicht (es ist ein Schalter), ``recipe_slug`` optional:
+    ohne Angabe bleibt das Rezept, das zuletzt über den Umschalter startete."""
+
+    enabled: bool
+    recipe_slug: str | None = Field(default=None, max_length=64)
+
+
+async def _autostart_view(session: AsyncSession, host: Host) -> dict:
+    """Der Zustand des Schalters, fertig gerechnet — die Oberfläche zeigt nur.
+
+    ``via_head`` beantwortet die Frage, die eine Worker-Box sonst falsch
+    beantworten würde: „warum habe ich keinen eigenen Schalter?". Sie ist
+    Mitglied eines Verbunds; gestartet wird er über den Head, und der Schalter
+    steht dort.
+    """
+    from app.models.local_recipe import LocalRecipe
+    from app.models.runtime_host import RuntimeHost
+
+    display_name = None
+    if host.autostart_recipe_slug:
+        recipe = (
+            await session.exec(
+                select(LocalRecipe).where(LocalRecipe.slug == host.autostart_recipe_slug)
+            )
+        ).first()
+        display_name = recipe.display_name if recipe else None
+
+    via_head = None
+    membership = (
+        await session.exec(
+            select(RuntimeHost).where(
+                RuntimeHost.host_id == host.id, RuntimeHost.role == "worker"
+            )
+        )
+    ).first()
+    if membership is not None:
+        runtime = await session.get(Runtime, membership.runtime_id)
+        if runtime is not None and runtime.host_id and runtime.host_id != host.id:
+            head = await session.get(Host, runtime.host_id)
+            if head is not None:
+                via_head = {"host_id": str(head.id), "slug": head.slug}
+
+    return {
+        "host_id": str(host.id),
+        "slug": host.slug,
+        "enabled": bool(host.autostart_enabled),
+        "recipe_slug": host.autostart_recipe_slug,
+        "recipe_display_name": display_name,
+        "role": host.role,
+        "via_head": via_head,
+        "last_attempt_at": (
+            host.autostart_last_attempt_at.isoformat()
+            if host.autostart_last_attempt_at
+            else None
+        ),
+        "last_result": host.autostart_last_result,
+    }
+
+
+@router.get("/{host_id}/autostart")
+async def get_host_autostart(
+    host_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Steht der Autostart dieser Box an oder aus — und für welches Rezept?"""
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+    return await _autostart_view(session, host)
+
+
+@router.put("/{host_id}/autostart")
+async def set_host_autostart(
+    host_id: str,
+    body: HostAutostartBody,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Schalter umlegen. Admin-only aus demselben Grund wie der Rezept-Start:
+    hier wird entschieden, ob eine Box von sich aus Befehle bekommt."""
+    from app.models.local_recipe import LocalRecipe
+    from app.services.activity import emit_event
+
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+
+    slug = (body.recipe_slug or "").strip() or None
+    if slug is not None:
+        recipe = (await session.exec(select(LocalRecipe).where(LocalRecipe.slug == slug))).first()
+        if recipe is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Rezept '{slug}' steht nicht im Katalog — erst anlegen, dann einschalten.",
+            )
+        host.autostart_recipe_slug = slug
+    # Einschalten, ohne je ein Rezept gestartet zu haben, wäre ein Schalter ins
+    # Leere: MC wüsste nicht, was es starten soll. Lieber ein Satz als ein
+    # stiller Schalter, der nie etwas tut.
+    if body.enabled and not host.autostart_recipe_slug:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Für diese Box ist noch kein Rezept hinterlegt — erst ein Rezept "
+                "über den Umschalter starten, dann den Autostart einschalten."
+            ),
+        )
+
+    host.autostart_enabled = bool(body.enabled)
+    session.add(host)
+    await session.commit()
+    await session.refresh(host)
+
+    await emit_event(
+        session,
+        "host.autostart_changed",
+        f"{host.slug}: Autostart {'an' if host.autostart_enabled else 'aus'}"
+        + (f" ({host.autostart_recipe_slug})" if host.autostart_recipe_slug else ""),
+        severity="info",
+        detail={
+            "host_id": str(host.id),
+            "slug": host.slug,
+            "enabled": host.autostart_enabled,
+            "recipe_slug": host.autostart_recipe_slug,
+        },
+    )
+    return await _autostart_view(session, host)

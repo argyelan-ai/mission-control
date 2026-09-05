@@ -57,14 +57,21 @@ class _StubAgent:
 
 
 class _FakeWSConn:
-    def __init__(self, sent: list[bytes], events: list[tuple] | None = None):
+    def __init__(self, sent: list, events: list[tuple] | None = None, acks: list | None = None):
         self._sent = sent
         self._events = events
+        self._acks = acks
 
-    async def send(self, payload: bytes) -> None:
+    async def send(self, payload) -> None:
         self._sent.append(payload)
         if self._events is not None:
             self._events.append(("send", payload))
+
+    async def recv(self):
+        # Ohne vorgegebene Acks antwortet die Bridge wie live: ok.
+        if not self._acks:
+            return '{"type":"ack","ok":true,"sent":1}'
+        return self._acks.pop(0)
 
     async def __aenter__(self) -> "_FakeWSConn":
         return self
@@ -79,14 +86,23 @@ class _FakeWSClient:
     ``("sleep", delay)``) — needed to assert frame/delay ordering, not just
     the final set of bytes sent."""
 
-    def __init__(self):
-        self.sent: list[bytes] = []
+    def __init__(self, acks: list | None = None):
+        self.sent: list = []
         self.connected_urls: list[str] = []
         self.events: list[tuple] = []
+        self.acks = acks
 
     def connect(self, url: str, **kwargs):
         self.connected_urls.append(url)
-        return _FakeWSConn(self.sent, self.events)
+        return _FakeWSConn(self.sent, self.events, self.acks)
+
+
+def _keys_of(fake_client: "_FakeWSClient") -> list:
+    """Die send_keys-Eintraege des einzigen Frames, den der Boss-Pfad schickt."""
+    assert len(fake_client.sent) == 1, fake_client.sent
+    frame = json.loads(fake_client.sent[0])
+    assert frame["type"] == "send_keys"
+    return frame["keys"]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -474,7 +490,13 @@ async def test_run_docker_exec_timeout_does_not_raise(monkeypatch):
 # ══════════════════════════════════════════════════════════════════════════
 
 
-async def test_send_text_boss_sends_bytes_over_ws(monkeypatch):
+async def test_send_text_boss_delivers_via_bridge_keys_mode(monkeypatch):
+    """05.09.2026: Boss-Text geht als EIN send_keys-Frame (Text literal +
+    Enter benannt) an die Bridge im ``?mode=keys`` — sie tippt per
+    ``tmux send-keys`` direkt beim tmux-Server. Der alte Weg (rohe Bytes in
+    ein frisches pty mit laufendem ``tmux attach``, dann sofort zu) verlor je
+    nach Last den Text oder das Enter; Marks "prüfe mal bitte den task
+    957D6691" kam nie an, obwohl die Bridge "wrote 57 bytes" loggte."""
     from app.services import agent_chat_input
 
     fake_client = _FakeWSClient()
@@ -483,8 +505,50 @@ async def test_send_text_boss_sends_bytes_over_ws(monkeypatch):
     agent = _StubAgent(slug="boss", agent_runtime="host")
     await agent_chat_input.send_text(agent, "deploy the thing")
 
-    assert fake_client.connected_urls == ["ws://host.docker.internal:7682/"]
-    assert fake_client.sent == [b"deploy the thing", b"\r"]
+    assert fake_client.connected_urls == ["ws://host.docker.internal:7682/?mode=keys"]
+    assert _keys_of(fake_client) == [{"literal": "deploy the thing"}, {"named": "Enter"}]
+
+
+async def test_send_text_boss_multiline_uses_bracketed_paste_like_docker(monkeypatch):
+    from app.services import agent_chat_input
+
+    fake_client = _FakeWSClient()
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.send_text(agent, "zeile 1\nzeile 2")
+
+    keys = _keys_of(fake_client)
+    assert keys[0] == {"literal": f"{agent_chat_input._BRACKETED_PASTE_START}zeile 1\nzeile 2{agent_chat_input._BRACKETED_PASTE_END}"}
+    assert keys[1] == {"named": "Enter"}
+
+
+async def test_send_text_boss_raises_when_bridge_acks_failure(monkeypatch):
+    """Ein Nein der Bridge (tmux-Fehler) wird zum Fehler des Aufrufers —
+    der Router macht daraus 502, der Chat nimmt das Echo zurueck. Nie mehr
+    204 fuer eine Nachricht, die nirgends angekommen ist."""
+    from app.services import agent_chat_input
+
+    fake_client = _FakeWSClient(acks=['{"type":"ack","ok":false,"error":"no server running","sent":0}'])
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.BossDeliveryError, match="no server running"):
+        await agent_chat_input.send_text(agent, "deploy the thing")
+
+
+async def test_send_text_boss_raises_when_bridge_is_down(monkeypatch):
+    from app.services import agent_chat_input
+
+    class _DeadClient:
+        def connect(self, url, **kwargs):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(agent_chat_input, "ws_client", _DeadClient())
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    with pytest.raises(agent_chat_input.BossDeliveryError):
+        await agent_chat_input.send_text(agent, "deploy the thing")
 
 
 async def test_send_text_boss_does_not_touch_recycler_marker(monkeypatch):
@@ -509,31 +573,6 @@ async def test_send_text_boss_does_not_touch_recycler_marker(monkeypatch):
     assert docker_calls == []
 
 
-async def test_send_text_boss_sends_text_then_enter_as_separate_frames_with_delay(monkeypatch):
-    """Fix round 2 — reproduced live: text + '\\r' sent as one frame (or two
-    frames with no gap) makes the Claude TUI treat the Enter as part of a
-    paste and never submit. Text must land, THEN a delay, THEN Enter as its
-    own frame."""
-    from app.services import agent_chat_input
-
-    fake_client = _FakeWSClient()
-    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
-
-    async def _fake_sleep(delay):
-        fake_client.events.append(("sleep", delay))
-
-    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _fake_sleep)
-
-    agent = _StubAgent(slug="boss", agent_runtime="host")
-    await agent_chat_input.send_text(agent, "deploy the thing")
-
-    assert fake_client.events == [
-        ("send", b"deploy the thing"),
-        ("sleep", 0.15),
-        ("send", b"\r"),
-    ]
-
-
 async def test_send_text_boss_host_alias_slug(monkeypatch):
     from app.services import agent_chat_input
 
@@ -543,26 +582,21 @@ async def test_send_text_boss_host_alias_slug(monkeypatch):
     agent = _StubAgent(slug="boss-host", agent_runtime="host")
     await agent_chat_input.send_text(agent, "hi")
 
-    assert fake_client.sent == [b"hi", b"\r"]
+    assert _keys_of(fake_client) == [{"literal": "hi"}, {"named": "Enter"}]
 
 
-async def test_send_keys_boss_sends_mapped_bytes(monkeypatch):
+async def test_send_keys_boss_sends_named_and_literal_keys(monkeypatch):
     from app.services import agent_chat_input
 
     fake_client = _FakeWSClient()
     monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
-    await agent_chat_input.send_keys(agent, ["Up", "Enter"])
+    await agent_chat_input.send_keys(agent, ["Up", "Enter", "2"])
 
-    assert fake_client.sent == [b"\x1b[A", b"\r"]
+    assert _keys_of(fake_client) == [{"named": "Up"}, {"named": "Enter"}, {"literal": "2"}]
 
 
-# Zurueckziehen einer eingereihten Nachricht (live 03.09.2026, Claude Code
-# 2.1.259): "Up" holt die Warteschlange in die Eingabezeile
-# (``queue-operation popAll``), Ctrl+U leert die Zeile. Ohne Ctrl+U in der
-# Allowlist blieb der Text als Entwurf stehen und ging mit dem naechsten Send
-# zusammen raus.
 async def test_send_keys_docker_ctrl_u_is_a_named_tmux_key(monkeypatch):
     from app.services import agent_chat_input
 
@@ -580,7 +614,7 @@ async def test_send_keys_docker_ctrl_u_is_a_named_tmux_key(monkeypatch):
     assert "-l" not in calls[-1]
 
 
-async def test_send_keys_boss_ctrl_u_sends_nak_byte(monkeypatch):
+async def test_send_keys_boss_ctrl_u_is_a_named_key(monkeypatch):
     from app.services import agent_chat_input
 
     fake_client = _FakeWSClient()
@@ -589,7 +623,7 @@ async def test_send_keys_boss_ctrl_u_sends_nak_byte(monkeypatch):
     agent = _StubAgent(slug="boss", agent_runtime="host")
     await agent_chat_input.send_keys(agent, ["Up", "C-u"])
 
-    assert fake_client.sent == [b"\x1b[A", b"\x15"]
+    assert _keys_of(fake_client) == [{"named": "Up"}, {"named": "C-u"}]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1207,23 +1241,23 @@ async def test_set_effort_boss_types_via_bridge_and_verifies_in_transcript(monke
     import os, time as _t
     os.utime(f, (_t.time() - 300, _t.time() - 300))  # alt -> Preflight nicht busy
 
-    sent: list[bytes] = []
-    async def _fake_bridge(*payloads, delay_before_last=0.0):
-        sent.extend(payloads)
+    sent: list = []
+    async def _fake_bridge(keys):
+        sent.extend(keys)
         # CLI "antwortet" ins Transkript
         with open(f, "a") as fh:
             fh.write(_json.dumps({"type": "user", "message": {"content": "cmd"}}) + "\n")
             fh.write(_json.dumps({"type": "system", "text": "Set effort level to max (this session only)"}) + "\n")
 
     async def _sleep(d): pass
-    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    monkeypatch.setattr(agent_chat_input, "_send_boss_keys", _fake_bridge)
     monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
     import app.services.transcript_chat as tc
     monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
     await agent_chat_input.set_effort(agent, "max")
-    assert sent and sent[0] == b"/effort max"
+    assert sent and sent[0] == {"literal": "/effort max"}
 
 
 async def test_set_effort_boss_ignores_stale_confirmation(monkeypatch, tmp_path):
@@ -1238,11 +1272,11 @@ async def test_set_effort_boss_ignores_stale_confirmation(monkeypatch, tmp_path)
     import os, time as _t
     os.utime(f, (_t.time() - 300, _t.time() - 300))
 
-    sent: list[bytes] = []
-    async def _fake_bridge(*payloads, delay_before_last=0.0):
-        sent.extend(payloads)
+    sent: list = []
+    async def _fake_bridge(keys):
+        sent.extend(keys)
     async def _sleep(d): pass
-    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    monkeypatch.setattr(agent_chat_input, "_send_boss_keys", _fake_bridge)
     monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
     import app.services.transcript_chat as tc
     monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
@@ -1251,8 +1285,8 @@ async def test_set_effort_boss_ignores_stale_confirmation(monkeypatch, tmp_path)
     with pytest.raises(agent_chat_input.EffortSwitchFailedError):
         await agent_chat_input.set_effort(agent, "max")
     # Kommando + Enter + EIN blinder Dialog-Enter — aber KEIN Escape-Byte
-    assert b"\x1b" not in b"".join(sent)
-    assert sent.count(b"\r") == 2  # Submit-Enter + einmalige Dialog-Bestaetigung
+    assert {"named": "Escape"} not in sent
+    assert sent.count({"named": "Enter"}) == 2  # Submit-Enter + einmalige Dialog-Bestaetigung
 
 
 async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
@@ -1264,10 +1298,10 @@ async def test_set_effort_boss_busy_preflight_blocks(monkeypatch, tmp_path):
     f = tmp_path / "sess.jsonl"
     f.write_text(_json.dumps({"type": "user", "message": {"content": "mach was"}}) + "\n")
 
-    sent: list[bytes] = []
-    async def _fake_bridge(*payloads, delay_before_last=0.0):
-        sent.extend(payloads)
-    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    sent: list = []
+    async def _fake_bridge(keys):
+        sent.extend(keys)
+    monkeypatch.setattr(agent_chat_input, "_send_boss_keys", _fake_bridge)
     import app.services.transcript_chat as tc
     monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
 
@@ -1899,6 +1933,45 @@ async def test_post_chat_input_409_agent_starting(auth_client: AsyncClient, make
     assert resp.json() == {"reason": "agent_starting"}
 
 
+async def test_post_chat_input_502_when_boss_bridge_did_not_confirm(auth_client: AsyncClient, make_agent, monkeypatch):
+    """05.09.2026: Boss-Zustellung ohne Ack der Bridge ist ein Fehler, kein
+    204 — der Chat nimmt das Echo zurueck und sagt es dem Operator, statt
+    eine Nachricht als gesendet zu zeigen, die nie ankam."""
+    agent = await make_agent(name="Boss", agent_runtime="host")
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    async def _fake_send_text(a, text):
+        raise agent_chat_mod.BossDeliveryError("no server running on /tmp/x")
+
+    monkeypatch.setattr(agent_chat_mod, "send_text", _fake_send_text)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/input", json={"text": "hi"}
+    )
+
+    assert resp.status_code == 502
+    assert resp.json() == {"reason": "boss_delivery_failed", "detail": "no server running on /tmp/x"}
+
+
+async def test_post_chat_keys_502_when_boss_bridge_did_not_confirm(auth_client: AsyncClient, make_agent, monkeypatch):
+    agent = await make_agent(name="Boss", agent_runtime="host")
+
+    import app.routers.agent_chat as agent_chat_mod
+
+    async def _fake_send_keys(a, keys):
+        raise agent_chat_mod.BossDeliveryError("bridge: connection refused")
+
+    monkeypatch.setattr(agent_chat_mod, "send_keys", _fake_send_keys)
+
+    resp = await auth_client.post(
+        f"/api/v1/agents/{agent.id}/chat/keys", json={"keys": ["Escape"]}
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["reason"] == "boss_delivery_failed"
+
+
 async def test_post_chat_input_requires_auth(client: AsyncClient, make_agent):
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
 
@@ -2225,13 +2298,13 @@ async def test_set_effort_dialog_marker_only_counts_behind_the_command_echo(monk
 async def _boss_effort_env(monkeypatch, tmp_path, agent_chat_input):
     """Gemeinsame Verdrahtung der Boss-Effort-Tests: Bridge-Bytes sammeln,
     nicht schlafen, Transkript-Verzeichnis auf tmp_path."""
-    sent: list[bytes] = []
+    sent: list = []
 
-    async def _fake_bridge(*payloads, delay_before_last=0.0):
-        sent.extend(payloads)
+    async def _fake_bridge(keys):
+        sent.extend(keys)
 
     async def _sleep(d): pass
-    monkeypatch.setattr(agent_chat_input, "_send_boss_bytes", _fake_bridge)
+    monkeypatch.setattr(agent_chat_input, "_send_boss_keys", _fake_bridge)
     monkeypatch.setattr(agent_chat_input.asyncio, "sleep", _sleep)
     import app.services.transcript_chat as tc
     monkeypatch.setattr(tc, "resolve_transcript_dir", lambda a: tmp_path)
@@ -2283,7 +2356,7 @@ async def test_set_effort_boss_never_reads_whole_files(monkeypatch, tmp_path):
     with pytest.raises(agent_chat_input.EffortSwitchFailedError):
         await agent_chat_input.set_effort(agent, "max")
 
-    assert sent and sent[0] == b"/effort max"
+    assert sent and sent[0] == {"literal": "/effort max"}
     assert [c for c in read_text_calls if str(gross) in c] == [], read_text_calls
 
 
@@ -2317,7 +2390,7 @@ async def test_set_effort_boss_finds_confirmation_appended_after_first_sighting(
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
     await agent_chat_input.set_effort(agent, "max")
-    assert sent and sent[0] == b"/effort max"
+    assert sent and sent[0] == {"literal": "/effort max"}
 
 
 async def test_set_effort_boss_stat_race_does_not_trust_old_lines(monkeypatch, tmp_path):
@@ -2357,7 +2430,7 @@ async def test_set_effort_boss_stat_race_does_not_trust_old_lines(monkeypatch, t
     agent = _StubAgent(slug="boss", agent_runtime="host")
     with pytest.raises(agent_chat_input.EffortSwitchFailedError):
         await agent_chat_input.set_effort(agent, "max")
-    assert sent and sent[0] == b"/effort max"
+    assert sent and sent[0] == {"literal": "/effort max"}
 
 
 async def test_set_effort_boss_stat_race_does_not_fake_a_rejection(monkeypatch, tmp_path):
@@ -2402,7 +2475,7 @@ async def test_set_effort_boss_stat_race_does_not_fake_a_rejection(monkeypatch, 
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
     await agent_chat_input.set_effort(agent, "max")
-    assert sent and sent[0] == b"/effort max"
+    assert sent and sent[0] == {"literal": "/effort max"}
 
 
 async def test_effort_capabilities_non_boss_host_claude_agent_gets_no_switch(monkeypatch, tmp_path):

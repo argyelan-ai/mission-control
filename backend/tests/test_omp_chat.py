@@ -775,6 +775,7 @@ def test_no_event_invents_a_field_outside_the_frontend_contract():
         # das Feld nicht mitschleppen.
         if ev["kind"] == "message" and ev["role"] == "teammate":
             expected.add("teammate")
+            expected.add("source")
         assert set(ev) == expected, ev
         assert json.dumps(ev)  # JSON-serialisierbar, sonst bricht SSE
 
@@ -844,3 +845,89 @@ def test_omp_status_line_thinking_level_reads_every_observed_form():
 def test_status_line_thinking_level_takes_the_last_status_line():
     pane = _omp_pane("◒ high") + _omp_pane("◔ low")
     assert omp_chat.status_line_thinking_level(pane) == "low"
+
+
+def test_file_mention_body_drops_omps_line_numbers_and_header():
+    """omp speichert den Dateiinhalt in seinem internen Leseformat:
+    ``[pfad#HASH]`` als Kopfzeile, dann jede Zeile mit ``N:`` davor. Im Chat
+    stand darum ``1:# Operating Card — Alpha`` … als „Beitrag" (Marks
+    Screenshot 04.09.2026). Der Beitrag ist der Auftrag, nicht omps Zeilenzaehler."""
+    line = json.dumps(
+        {
+            "type": "message",
+            "id": "78ba0375",
+            "timestamp": "2026-09-04T16:36:00.000Z",
+            "message": {
+                "role": "fileMention",
+                "files": [
+                    {
+                        "path": "/home/agent/.omp/tasks/task-0001.md",
+                        "content": "[/home/agent/.omp/tasks/task-0001.md#BFF7]\n1:# Operating Card\n2:\n3:- ACK first\n10:Zeile zehn",
+                        "lineCount": 10,
+                    }
+                ],
+            },
+        }
+    )
+    (ev,) = parse(line)
+    assert ev["role"] == "teammate"
+    assert ev["text"] == (
+        "@/home/agent/.omp/tasks/task-0001.md\n# Operating Card\n\n- ACK first\nZeile zehn"
+    )
+
+
+# ── Herkunft (``source``) fuer Zeilen „von aussen" ─────────────────────────
+#
+# Marks Wunsch 04.09.2026: MC-Ereignisse im Chat sollen auf einen Blick als
+# „von aussen" erkennbar sein — zugeklappt, mit eigenem Motiv je Herkunft.
+# Dafuer traegt jede ``teammate``-Zeile eine maschinenlesbare Herkunft: das
+# Frontend soll nicht raten muessen, ob ``task-….md`` ein Auftrag ist.
+
+
+def _mention_line(path: str, content: str) -> str:
+    return json.dumps(
+        {
+            "type": "message",
+            "id": "src00001",
+            "timestamp": "2026-09-04T18:00:00.000Z",
+            "message": {"role": "fileMention", "files": [{"path": path, "content": content}]},
+        }
+    )
+
+
+def test_task_mention_carries_its_title_even_beyond_the_truncation():
+    """Der Titel steht in der Auftragsdatei erst NACH der Operating Card —
+    live in Zeile 81, weit hinter den 2000 Zeichen, die im Chat mitgezeigt
+    werden. Er muss also VOR dem Kuerzen gelesen werden, sonst hiesse jede
+    Karte nur ``task-….md``."""
+    content = "# Operating Card — Alpha\n" + ("- Regel\n" * 400) + "\n# New Task: Beweis #414: Chat-Vorschau\n\n## Description\nBitte…"
+    assert content.index("# New Task") > 2000
+    (ev,) = parse(_mention_line("/home/agent/.omp/tasks/task-fad09b4d-3d7d.md", content))
+    assert ev["source"] == {"kind": "task", "title": "Beweis #414: Chat-Vorschau"}
+
+
+def test_task_mention_without_title_line_is_still_a_task():
+    (ev,) = parse(_mention_line("/home/agent/.omp/tasks/task-0000.md", "# Operating Card\nnur Regeln"))
+    assert ev["source"] == {"kind": "task", "title": None}
+
+
+def test_nudge_mention_is_a_nudge():
+    (ev,) = parse(FILE_MENTION_LINE)
+    assert ev["teammate"] == ".msg-nudge.msg"
+    assert ev["source"] == {"kind": "nudge", "title": None}
+
+
+def test_delivered_message_file_is_inbox():
+    """``0000000N__….msg`` = eine ueber MC zugestellte Nachricht."""
+    (ev,) = parse(_mention_line("/home/agent/.omp/inbox/00000003__a1b2.msg", "Hallo Agent"))
+    assert ev["source"] == {"kind": "inbox", "title": None}
+
+
+def test_several_files_claim_no_source():
+    (ev,) = parse(TWO_FILE_MENTION_LINE)
+    assert ev["source"] is None
+
+
+def test_custom_message_is_a_system_notice():
+    (ev,) = parse(CUSTOM_MESSAGE_LINE)
+    assert ev["source"] == {"kind": "system", "title": "async-result"}
