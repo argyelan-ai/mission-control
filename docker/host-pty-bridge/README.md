@@ -43,3 +43,28 @@ launchctl unload ~/Library/LaunchAgents/com.openclaw.host-pty-bridge.plist
 ## Logs
 
 `~/.mc/agents/boss-host/logs/host-pty-bridge.{out,err}`
+
+## `?mode=keys` — Tastendrücke mit Bestätigung (seit 05.09.2026)
+
+Der Sessions-Chat schickt Boss-Nachrichten **nicht** mehr als rohe Bytes in
+ein Pseudo-Terminal, sondern so:
+
+```
+ws://127.0.0.1:7682/?mode=keys[&session=…&socket=…]
+→ {"type":"send_keys","keys":[{"literal":"text"},{"named":"Enter"}]}
+← {"type":"ack","ok":true,"sent":2}            # oder {"ok":false,"error":"…","sent":N}
+```
+
+Die Bridge führt pro Eintrag `tmux -S <socket> send-keys -t <session> -l -- <text>`
+bzw. `send-keys <Name>` aus (Namen: Escape, Enter, Up, Down, C-u — sonst
+`ok:false`) und antwortet erst, wenn tmux zurück ist. Das Backend wertet nur
+`ok:true` als zugestellt; alles andere wird `502 boss_delivery_failed`.
+
+**Warum:** Der pty-Weg spawnte pro Nachricht `tmux attach` in ein frisches pty,
+schrieb sofort hinein und beendete den Client direkt nach dem letzten Byte.
+Bytes im Attach-Handshake oder kurz vor dem Kill gingen verloren — je nach
+Last fehlte das Enter (Text sass unabgeschickt im Eingabefeld) oder der ganze
+Text, während das Log „wrote 57 bytes" meldete. Der pty-Modus bleibt für das
+Browser-Terminal (Sessions-Seite) bestehen.
+
+Tests: `python3 -m pytest docker/host-pty-bridge/tests -q`
