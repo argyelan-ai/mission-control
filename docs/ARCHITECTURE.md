@@ -1306,6 +1306,18 @@ Anlegen / Rueckweg
   backend/scripts/slot_rollback.py                       Agenten zurueck + Zeilen weg (alles oder nichts)
 ```
 
+**Reload statt Neustart:** ein Modellwechsel erreicht omp-Agenten über
+`docker exec <container> render-omp-config.sh` (schreibt `models.yml` +
+`omp.env`), nicht mehr über `docker restart`. `launch-omp.sh` liest `omp.env`
+bei jedem Window-Respawn neu ein und die Bridge respawnt Window 0 für jede
+Aufgabe — die nächste Aufgabe fährt also auf dem neuen Modell, ohne Neustart,
+ohne Health-Frist, ohne verlorene Sitzung. Nötig, weil an einer Slot-Zeile
+ALLE Agenten einer Box hängen. `docker restart` bleibt der Rückfall
+(`runtime_propagation._sync_one`; das Ereignis `agent.model_synced` nennt den
+genommenen Weg im Feld `mode`). Die Agenten-Entrypoints brechen ausserdem nicht
+mehr sofort ab, wenn noch kein Modell da ist, sondern fragen bis zu 30 Minuten
+lang nach — „kein Modell" heisst hier meist „die Box lädt gerade".
+
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
 - **Pfad:** `~/.mc/vault/`
