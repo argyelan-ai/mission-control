@@ -12,6 +12,7 @@ from app.config import Settings, validate_boot_secrets
 
 STRONG_JWT = "0f3a" * 16  # looks like `openssl rand -hex 32`
 VALID_FERNET = "x" * 43 + "="  # any non-empty passphrase is accepted (0.1.1 derives)
+STRONG_BOOTSTRAP_SECRET = "1b2c" * 16  # looks like `openssl rand -hex 32`
 
 
 def _settings(**overrides) -> Settings:
@@ -19,6 +20,7 @@ def _settings(**overrides) -> Settings:
         environment="production",
         jwt_secret_key=STRONG_JWT,
         secrets_encryption_key=VALID_FERNET,
+        internal_bootstrap_secret=STRONG_BOOTSTRAP_SECRET,
     )
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)
@@ -40,6 +42,13 @@ def test_production_with_env_example_jwt_placeholder_refuses_boot():
 def test_production_with_empty_encryption_key_refuses_boot():
     with pytest.raises(RuntimeError, match="SECRETS_ENCRYPTION_KEY"):
         validate_boot_secrets(_settings(secrets_encryption_key=""))
+
+
+def test_production_with_empty_bootstrap_secret_refuses_boot():
+    # PR #404 Rex review (HIGH): GET /api/v1/internal/bootstrap must not be
+    # reachable without a configured shared secret in production.
+    with pytest.raises(RuntimeError, match="INTERNAL_BOOTSTRAP_SECRET"):
+        validate_boot_secrets(_settings(internal_bootstrap_secret=""))
 
 
 def test_guard_error_points_to_setup_sh():

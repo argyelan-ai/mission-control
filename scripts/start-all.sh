@@ -93,7 +93,7 @@ fi
 # mc-container-lifecycle.
 ENV_SHARED="docker/.env.shared"
 if [ -f .env ]; then
-    grep -E "^(CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN)=" .env > "$ENV_SHARED"
+    grep -E "^(CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN|INTERNAL_BOOTSTRAP_SECRET)=" .env > "$ENV_SHARED"
     chmod 600 "$ENV_SHARED"
     echo "  [2b]  Shared Agent-Env regeneriert ($(wc -l < "$ENV_SHARED" | tr -d ' ') Vars)"
 fi

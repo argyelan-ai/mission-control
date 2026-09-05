@@ -33,11 +33,38 @@ OMP_DEFAULT_CWD="${OMP_DEFAULT_CWD:-/workspace}"
 # re-export was wrong for Qwen routing and is DROPPED).
 BOOTSTRAP_URL="${MC_API_URL:-http://backend:8000}/api/v1/internal/bootstrap?agent_name=${AGENT_NAME}"
 BOOTSTRAP_RESPONSE=""
+# Wir lesen den HTTP-Code mit (statt nur curl -sf), weil "leere Antwort" zwei
+# voellig verschiedene Dinge bedeuten kann: Backend noch nicht da (retry) oder
+# Secret falsch (kein Retry heilt das). Frueher lief der Container in BEIDEN
+# Faellen stumm ohne Tokens weiter — online aussehend, ohne zu arbeiten
+# (PR #404 Review, MITTEL-2).
+_BOOTSTRAP_BODY="/tmp/.mc-bootstrap-$$.json"
+BOOTSTRAP_HTTP=""
 for _attempt in 1 2 3 4 5 6; do
-    BOOTSTRAP_RESPONSE=$(curl -sf --max-time 5 "$BOOTSTRAP_URL" 2>/dev/null) && break
-    echo "[entrypoint] Bootstrap Versuch $_attempt fehlgeschlagen, retry in 3s..."
+    BOOTSTRAP_HTTP=$(curl -s -o "$_BOOTSTRAP_BODY" -w '%{http_code}' --max-time 5 -H "Authorization: Bearer ${INTERNAL_BOOTSTRAP_SECRET:-}" "$BOOTSTRAP_URL" 2>/dev/null)
+    [ -z "$BOOTSTRAP_HTTP" ] && BOOTSTRAP_HTTP="000"
+    if [ "$BOOTSTRAP_HTTP" = "200" ]; then
+        BOOTSTRAP_RESPONSE=$(cat "$_BOOTSTRAP_BODY" 2>/dev/null)
+        break
+    fi
+    if [ "$BOOTSTRAP_HTTP" = "401" ] || [ "$BOOTSTRAP_HTTP" = "403" ]; then
+        echo "[entrypoint] FATAL: bootstrap $BOOTSTRAP_HTTP — INTERNAL_BOOTSTRAP_SECRET fehlt oder passt nicht zum Backend (Quelle: docker/.env.shared). Agent-Images nach einem Backend-Deploy neu bauen und Container neu erzeugen." >&2
+        rm -f "$_BOOTSTRAP_BODY"
+        exit 1
+    fi
+    echo "[entrypoint] Bootstrap Versuch $_attempt fehlgeschlagen (HTTP $BOOTSTRAP_HTTP), retry in 3s..."
     sleep 3
 done
+rm -f "$_BOOTSTRAP_BODY"
+
+# 5xx kann beim Kaltstart voruebergehen, darum erst nach allen Versuchen
+# abbrechen — aber dann laut statt stumm.
+case "$BOOTSTRAP_HTTP" in
+    5??)
+        echo "[entrypoint] FATAL: bootstrap $BOOTSTRAP_HTTP — Backend antwortet mit Serverfehler; ohne Tokens startet der Agent nicht." >&2
+        exit 1
+        ;;
+esac
 
 if [ -n "$BOOTSTRAP_RESPONSE" ]; then
     _EXPORTS=$(echo "$BOOTSTRAP_RESPONSE" | python3 -c '

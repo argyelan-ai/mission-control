@@ -1,14 +1,18 @@
 """
 Internal endpoints — only reachable from the Docker network.
-Caddy must NOT forward /api/v1/internal/* to the outside.
+Caddy must NOT forward /api/v1/internal/* to the outside (enforced twice:
+Caddyfile `handle /api/v1/internal/* { respond 403 }` AND the bearer-secret
+check below — PR #404 Rex review, defense in depth).
 """
 import logging
+import secrets as _secrets
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
+from app.config import settings
 from app.database import get_session
 from app.services.secrets_helper import get_secret_plaintext_by_key
 from fastapi import Depends
@@ -180,17 +184,46 @@ async def build_runtime_env(
     return tokens
 
 
+def _check_bootstrap_secret(request: "Request | None") -> None:
+    """Reject the request unless it carries the shared bootstrap secret.
+
+    PR #404 Rex review (HIGH): the module docstring used to claim Caddy
+    already blocks external access to this route — it didn't, there was no
+    exception for /api/v1/internal/* in the Caddyfile. This check is the
+    app-level half of the defense-in-depth fix (Caddy 403-block is the
+    other half). Skipped entirely when INTERNAL_BOOTSTRAP_SECRET is unset
+    (local dev/test default) — validate_boot_secrets() refuses to boot in
+    production without it, so production can never fall through here.
+    """
+    if not settings.internal_bootstrap_secret:
+        return
+    auth_header = (request.headers.get("authorization") if request else None) or ""
+    provided = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+    if not provided or not _secrets.compare_digest(provided, settings.internal_bootstrap_secret):
+        raise HTTPException(401, "Missing or invalid bootstrap secret")
+
+
 @router.get("/bootstrap")
 async def agent_bootstrap(
+    # Kein `= None`: FastAPI injiziert Request immer. Mit Default stand hier
+    # eine Annotation, die den Optional-Fall nur vortaeuschte (PR #404 Review,
+    # NIEDRIG-3) — und `Request | None` laesst FastAPI gar nicht erst starten.
+    request: Request,
     agent_name: str = Query(..., description="Agent-Name (z.B. 'rex', 'boss')"),
-    request: Request = None,
     session: AsyncSession = Depends(get_session),
 ):
     """Bootstrap endpoint: container fetches its tokens at startup.
 
     Returns MC_AGENT_TOKEN + OPENAI_API_KEY — decrypted from the vault.
-    No auth header needed (network restriction via Caddy/Docker).
+    Requires `Authorization: Bearer <INTERNAL_BOOTSTRAP_SECRET>` whenever
+    that secret is configured (always true in production, enforced by
+    validate_boot_secrets()). Caddy additionally blocks this whole prefix
+    from outside the Docker network — see Caddyfile. Neither layer alone
+    used to be true; PR #404 Rex review found this endpoint reachable and
+    unauthenticated despite the previous docstring's claim otherwise.
     """
+    _check_bootstrap_secret(request)
+
     from app.models.agent import Agent
 
     # Find agent in DB (case-insensitive)

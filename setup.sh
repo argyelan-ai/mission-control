@@ -30,12 +30,14 @@ else
   # Fernet key for the secrets vault (32 bytes, url-safe base64)
   SECRETS_ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null \
       || openssl rand -base64 32 | tr '+/' '-_' | cut -c1-44)
+  INTERNAL_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
 
   sed_i "s|^LOCAL_AUTH_TOKEN=.*|LOCAL_AUTH_TOKEN=$LOCAL_AUTH_TOKEN|" .env
   sed_i "s|^DB_PASSWORD=.*|DB_PASSWORD=$DB_PASSWORD|" .env
   sed_i "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=$JWT_SECRET_KEY|" .env
   sed_i "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=$REDIS_PASSWORD|" .env
   sed_i "s|^SECRETS_ENCRYPTION_KEY=.*|SECRETS_ENCRYPTION_KEY=$SECRETS_ENCRYPTION_KEY|" .env
+  sed_i "s|^INTERNAL_BOOTSTRAP_SECRET=.*|INTERNAL_BOOTSTRAP_SECRET=$INTERNAL_BOOTSTRAP_SECRET|" .env
 
   # Host-specific values the containers need at runtime:
   # HOST_UID → tmux socket path for the host-pty bridge; MC_REPO_PATH →
@@ -49,6 +51,7 @@ else
   echo "   JWT_SECRET_KEY:         ${JWT_SECRET_KEY:0:8}..."
   echo "   REDIS_PASSWORD:         ${REDIS_PASSWORD:0:8}..."
   echo "   SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:0:8}..."
+  echo "   INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:0:8}..."
   echo "   HOST_UID:               $(id -u)"
   echo "   MC_REPO_PATH:           $(pwd)"
 fi
@@ -57,6 +60,12 @@ fi
 # hand-copied .env.example) — the fresh-install branch above never runs then.
 grep -q '^HOST_UID=' .env || { echo "HOST_UID=$(id -u)" >> .env; echo "✅ backfilled HOST_UID=$(id -u)"; }
 grep -q '^MC_REPO_PATH=' .env || { echo "MC_REPO_PATH=$(pwd)" >> .env; echo "✅ backfilled MC_REPO_PATH=$(pwd)"; }
+# Ohne dieses Secret antwortet /api/v1/internal/bootstrap mit 401 und JEDER
+# Agent-Container bricht beim Start ab (docker/*/entrypoint.sh). Ein .env aus
+# der Zeit vor PR #404 hat den Key nicht — der Fresh-Install-Zweig oben laeuft
+# dann nicht, also hier nachziehen. Danach `bash scripts/start-all.sh`, das
+# schreibt docker/.env.shared neu, ueber das die Container den Wert bekommen.
+grep -q '^INTERNAL_BOOTSTRAP_SECRET=' .env || { echo "INTERNAL_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env; echo "✅ backfilled INTERNAL_BOOTSTRAP_SECRET (neu erzeugt — danach scripts/start-all.sh ausfuehren)"; }
 
 # Your own agent fleet. Same pattern as .env from .env.example above, and for
 # the same reason: docker/docker-compose.agents.yml has to exist BEFORE the
