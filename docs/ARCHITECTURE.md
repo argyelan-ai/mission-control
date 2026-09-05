@@ -1262,6 +1262,43 @@ Alte `engine=sparkrun`-Zeilen wandelt der Startup um
 Abschnitte zu `switch-recipe`, `sparkrun_manager` und `SparkRecipeSwitcher`
 in diesem Dokument sind Historie.
 
+### Slot-Runtime je Head-Box (NEU 2026-09-05, ADR-078)
+
+Alle Rezepte einer GPU-Box hören auf **derselben URL** (Konvention: Port 8000).
+Ein Agent, der an der Runtime-Zeile eines bestimmten *Rezepts* hängt, fragt nach
+dem nächsten Wechsel ein Modell an, das niemand mehr serviert. Darum hängt er
+seit ADR-078 an einer **Slot-Zeile der Box** (`runtimes.is_slot = true`).
+
+```
+runtimes (is_slot = true)          ein Zeiger, kein Motor
+  runtime_type  openai_compatible  (der einzige Typ, dem der Waechter ankerlos folgt)
+  host_id       <Head-Box>         (bleibt gesetzt: sonst kurze omp-Zeitgeber, internal.py)
+  container_name/process_name      NULL   → kein Anker → "drift IS the feature"
+  launch_command/stop_command      NULL   → wird nie gestartet oder gestoppt
+  exclusive_memory                 false  → nie Verdraengungsopfer
+
+Wer schreibt hinein
+  recipe_switcher.start_recipe_on_host  Modell + Fenster SOFORT nach dem Start
+  runtime_watcher._handle_drift         danach fuehrt die Engine (2-Proben-Regel)
+  runtime_watcher._handle_context_drift dito fuer das Kontextfenster
+
+Wer sie ueberall ausschliesst (immer an is_slot, nie am Typ)
+  recipe_switcher.recipe_matches_runtime   nie Instanz eines Rezepts
+  recipe_switcher._load_fleet              nie Belegung einer Box
+  runtime_manager._ensure_exclusive_host   nie Verdraengungsopfer
+  runtime_watcher._autostart_target        nie Autostart-Ziel
+  runtime_watcher._maybe_auto_recover      nie Wiederbelebung
+
+Uebergangszeit (8-30 min Ladezeit)
+  runtime_grace.mark_switching(slot)          Wechsel ist kein Ausfall
+  dispatch_delivery._check_runtime_readiness  Aufgabe wartet statt zu scheitern
+                                              (Ereignis dispatch.deferred_runtime_loading)
+
+Anlegen / Rueckweg
+  main lifespan → slot_runtimes.ensure_slot_runtimes()   idempotent, keine Migration-Daten
+  backend/scripts/slot_rollback.py                       Agenten zurueck + Zeilen weg
+```
+
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
 - **Pfad:** `~/.mc/vault/`
