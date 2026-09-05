@@ -91,10 +91,26 @@ async def persist_briefing_message(
 
 
 #: Ab hier ist ein Wechsel kein „lädt noch" mehr, sondern ein Problem, das
-#: jemand ansehen sollte. Der Grace-Marker selbst lebt 20 Minuten
-#: (``runtime_grace.SWITCHING_TTL``) und wird von jedem Startversuch erneuert —
-#: ohne eigene Obergrenze könnte eine Aufgabe stumm unbegrenzt warten.
+#: jemand ansehen sollte.
 SWITCH_WAIT_WARN_SECONDS = 45 * 60
+
+#: Wie oft je Aufgabe höchstens ein „wartet"-Ereignis entsteht. Der
+#: Nachzügler-Wächter fragt das Tor alle 30 s; ohne Drosselung wären das bei
+#: einem 30-Minuten-Wechsel 60 Ereignisse je Agent — genau die Alarm-Müdigkeit,
+#: die dieses Feature abschaffen sollte (Review 05.09.2026, M2).
+DEFER_EVENT_INTERVAL_SECONDS = 5 * 60
+
+#: Redis-Schlüssel für den EIGENEN Wartezähler je Aufgabe.
+#:
+#: Warum nicht der Grace-Marker: der lebt nur 20 Minuten
+#: (``runtime_grace.SWITCHING_TTL``) und niemand erneuert ihn für eine
+#: Slot-Zeile. Nach 20 Minuten war ``switching = None``, das Alter also
+#: unbekannt — und die 45-Minuten-Warnung konnte NIE feuern, gerade bei der
+#: wirklich toten Box, für die sie gedacht ist (Review 05.09.2026, H1).
+#: Der eigene Zähler startet beim ERSTEN Aufschub und lebt lange genug, um
+#: auch einen 30-Minuten-Kaltstart plus Warnfrist zu überdauern.
+_DEFER_KEY = "mc:dispatch:defer:{task_id}"
+_DEFER_TTL = 6 * 60 * 60
 
 
 async def _check_runtime_readiness(
@@ -153,9 +169,13 @@ async def _check_runtime_readiness(
         switching = await get_switching(runtime.slug)
         reachable = await _runtime_reachable(runtime.slug)
         if switching is None and reachable is not False:
+            # Die Box antwortet wieder: der Wartezähler dieser Aufgabe hat
+            # seinen Zweck erfüllt. Weg damit, sonst zählt der NÄCHSTE Wechsel
+            # ab dem alten Startpunkt und würde sofort warnen.
+            await clear_deferral(str(task.id))
             return True
 
-        waited_seconds = _switch_age_seconds(switching)
+        waited_seconds, should_emit = await _note_deferral(str(task.id))
         model_hint = runtime.model_identifier or runtime.display_name or runtime.slug
         severity = "info"
         message = (
@@ -169,24 +189,28 @@ async def _check_runtime_readiness(
                 f"{int(waited_seconds // 60)} Minuten — Aufgabe '{task.title}' "
                 f"wartet immer noch. Bitte die Box ansehen."
             )
-        await emit_event(
-            session,
-            "dispatch.deferred_runtime_loading",
-            message,
-            board_id=board_id,
-            task_id=task.id,
-            agent_id=agent.id,
-            severity=severity,
-            detail={
-                "agent_name": agent.name,
-                "runtime": runtime.slug,
-                "model": runtime.model_identifier,
-                "phase": (switching or {}).get("phase"),
-                "source": (switching or {}).get("source"),
-                "waited_seconds": waited_seconds,
-                "reachable": reachable,
-            },
-        )
+            # Eine Warnung darf die Drosselung durchbrechen: sie ist der eine
+            # Satz, auf den jemand reagieren soll. Sie kommt trotzdem nur alle
+            # 5 Minuten, nicht alle 30 Sekunden.
+        if should_emit:
+            await emit_event(
+                session,
+                "dispatch.deferred_runtime_loading",
+                message,
+                board_id=board_id,
+                task_id=task.id,
+                agent_id=agent.id,
+                severity=severity,
+                detail={
+                    "agent_name": agent.name,
+                    "runtime": runtime.slug,
+                    "model": runtime.model_identifier,
+                    "phase": (switching or {}).get("phase"),
+                    "source": (switching or {}).get("source"),
+                    "waited_seconds": waited_seconds,
+                    "reachable": reachable,
+                },
+            )
         logger.info(
             "Dispatch verschoben: %s haengt an der Slot-Zeile %s "
             "(switching=%s, reachable=%s)",
@@ -223,8 +247,98 @@ async def _runtime_reachable(slug: str) -> bool | None:
         return None
 
 
+async def _note_deferral(task_id: str) -> tuple[float | None, bool]:
+    """Wartezähler dieser Aufgabe fortschreiben.
+
+    Liefert ``(gewartete Sekunden, soll ein Ereignis entstehen)``.
+
+    Zwei Zahlen in EINEM Redis-Dokument, weil sie dieselbe Lebensdauer haben:
+
+    * ``first`` — wann diese Aufgabe zum ERSTEN Mal aufgeschoben wurde. Das ist
+      die Quelle für die 45-Minuten-Warnung. Sie darf NICHT aus dem
+      Grace-Marker kommen: der stirbt nach 20 Minuten, und danach wäre das
+      Alter für immer unbekannt — die Warnung hätte nie gefeuert (H1).
+    * ``last_event`` — wann zuletzt ein Ereignis entstand, für die Drosselung
+      auf ``DEFER_EVENT_INTERVAL_SECONDS`` (M2).
+
+    Der Zähler wird gelöscht, sobald die Aufgabe wirklich zugestellt wird
+    (:func:`clear_deferral`) — der nächste Wechsel fängt also bei null an.
+
+    Fail-open: ist Redis weg, gibt es kein Alter und JEDES Mal ein Ereignis —
+    lieber zu laut als stumm, aber nie ein blockierter Dispatch.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    key = _DEFER_KEY.format(task_id=task_id)
+    try:
+        from app.redis_client import get_redis
+
+        redis = await get_redis()
+        raw = await redis.get(key)
+        doc: dict = {}
+        if raw is not None:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode()
+            try:
+                doc = _json.loads(raw) or {}
+            except ValueError:
+                doc = {}
+        first = _parse_stamp(doc.get("first")) or now
+        last_event = _parse_stamp(doc.get("last_event"))
+        waited = max(0.0, (now - first).total_seconds())
+        should_emit = (
+            last_event is None
+            or (now - last_event).total_seconds() >= DEFER_EVENT_INTERVAL_SECONDS
+        )
+        await redis.setex(
+            key,
+            _DEFER_TTL,
+            _json.dumps(
+                {
+                    "first": first.isoformat(),
+                    "last_event": (now if should_emit else last_event).isoformat()
+                    if (should_emit or last_event)
+                    else None,
+                }
+            ),
+        )
+        return waited, should_emit
+    except Exception:  # noqa: BLE001
+        logger.debug("Wartezähler für Aufgabe %s nicht verfügbar", task_id)
+        return None, True
+
+
+async def clear_deferral(task_id: str) -> None:
+    """Wartezähler wegräumen — die Aufgabe ist zugestellt. Best effort."""
+    try:
+        from app.redis_client import get_redis
+
+        redis = await get_redis()
+        await redis.delete(_DEFER_KEY.format(task_id=task_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _parse_stamp(value):
+    from datetime import datetime, timezone
+
+    if not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
 def _switch_age_seconds(switching: dict | None) -> float | None:
-    """Wie lange läuft dieser Wechsel schon? ``None``, wenn unbekannt."""
+    """Wie lange läuft dieser Wechsel schon? ``None``, wenn unbekannt.
+
+    Nur noch Zusatzinformation im Ereignis-Detail — das ALTER, an dem die
+    Warnung hängt, kommt aus :func:`_note_deferral`.
+    """
     from datetime import datetime, timezone
 
     started = (switching or {}).get("started_at")

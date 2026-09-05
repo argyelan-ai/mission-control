@@ -2603,7 +2603,8 @@
       "workerNone": "No free second box — this recipe needs two boxes.",
       "workerEnvMissing": "The recipe has no environment mapping — MC cannot write the .env on this box.",
       "startingDuo": "starting {name} on {head} + {worker} …",
-      "startingDuoNoHead": "starting {name} — second box: {worker} …"
+      "startingDuoNoHead": "starting {name} — second box: {worker} …",
+      "capacityNotes": "Capacity notes"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",

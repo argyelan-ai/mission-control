@@ -101,6 +101,16 @@ const MENU_MARGIN = 8;
  * Fehlt dem Rezept die Umgebungs-Zuordnung (`env_ready:false`), ist der Start
  * ebenfalls gesperrt — MC könnte die .env auf dem Kopf nicht schreiben.
  */
+/**
+ * Vorflug-Hinweise (P4): das Backend prüft RAM und Platte aller Ziel-Boxen
+ * aus der Telemetrie und schickt Sätze. Sie sperren nichts — ein harter
+ * Verstoss kommt als `startable:false` mit `reason`. Ältere Backends schicken
+ * das Feld nicht; dann gibt es eben nichts zu zeigen.
+ */
+export function capacityWarnings(recipe: HostRecipe): string[] {
+  return recipe.capacity?.warnings ?? [];
+}
+
 export function duoStartBlocker(recipe: HostRecipe): "env" | "no-worker" | null {
   if (recipe.topology.nodes === 1) return null;
   if (recipe.env_ready === false) return "env";
@@ -372,6 +382,22 @@ export function HostRecipeSwitcher({
                 : confirm.reason ?? t("workerNone")}
             </span>
           )}
+
+          {/* Vorflug-Hinweise dort, wo geklickt wird. Sie sperren nichts —
+              wer den Start trotzdem will, klickt ihn; er weiss jetzt nur,
+              woran er scheitern kann. */}
+          {capacityWarnings(confirm).length > 0 && (
+            <span
+              className="flex flex-col gap-0.5 text-[10px] w-full whitespace-normal"
+              style={{ color: STATUS_TEXT.warning }}
+              aria-label={t("capacityNotes")}
+              data-testid="recipe-confirm-capacity"
+            >
+              {capacityWarnings(confirm).map((w) => (
+                <span key={w}>{w}</span>
+              ))}
+            </span>
+          )}
         </div>
       )}
 
@@ -527,6 +553,20 @@ function RecipeGroup({
             {!r.startable && r.reason && (
               <span className="text-[10px] whitespace-normal" style={{ color: C.textMuted }} data-testid={`recipe-reason-${r.slug}`}>
                 {r.reason}
+              </span>
+            )}
+            {/* Vorflug (P4): „geht wahrscheinlich, aber knapp" — Hinweis in
+                Warnfarbe, damit man ihn nicht mit einem Riegel verwechselt. */}
+            {capacityWarnings(r).length > 0 && (
+              <span
+                className="flex flex-col gap-0.5 text-[10px] whitespace-normal"
+                style={{ color: STATUS_TEXT.warning }}
+                aria-label={t("capacityNotes")}
+                data-testid={`recipe-capacity-${r.slug}`}
+              >
+                {capacityWarnings(r).map((w) => (
+                  <span key={w}>{w}</span>
+                ))}
               </span>
             )}
           </button>

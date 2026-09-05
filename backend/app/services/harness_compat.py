@@ -189,3 +189,27 @@ def derive_harness(runtime: Runtime | None) -> str | None:
     if proto == "openai":
         return "openclaude"
     return None
+
+
+# Harnesses that CANNOT boot without a runtime binding.
+#
+# Background (incident 2026-09-05): the omp container renders its provider
+# config from OPENAI_BASE_URL/OPENAI_MODEL and refuses to start when they are
+# missing — `docker/omp-bridge/entrypoint.sh` prints
+# "FATAL: OPENAI_BASE_URL/OPENAI_MODEL not set" and exits 1, which turns into
+# a container restart loop. Those two variables come ONLY from the bound
+# runtime row (routers/internal.py::agent_bootstrap → build_runtime_env), so
+# an omp agent with runtime_id = NULL is dead on arrival. The claude /
+# openclaude images do have docker-compose env defaults, so clearing their
+# binding stays survivable.
+HARNESSES_REQUIRING_RUNTIME_BINDING: frozenset[str] = frozenset({"omp"})
+
+
+def requires_runtime_binding(harness: str | None) -> bool:
+    """True when an agent on this harness must keep a runtime binding.
+
+    Callers pass the EFFECTIVE harness (``agent.harness`` first, then
+    ``derive_harness(runtime)`` for legacy NULL rows) — the same precedence
+    the bootstrap and the switch service use.
+    """
+    return (harness or "") in HARNESSES_REQUIRING_RUNTIME_BINDING

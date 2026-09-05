@@ -921,11 +921,51 @@ async def update_agent(
 
     if runtime_change_present and new_runtime_id is None:
         # Explicit unset → simple DB-only path (clear runtime_id, no restart).
+        #
+        # Vorfall 2026-09-05: this path used to clear the binding of ANY agent,
+        # silently (no activity event, no log) — the UI's "Fallback
+        # (docker-compose env)" option leads straight here. For an omp agent
+        # there IS no compose fallback: without OPENAI_BASE_URL/OPENAI_MODEL
+        # its entrypoint aborts with FATAL and the container restart-loops. So
+        # such an unset is refused, and every allowed unset is now visible.
+        from app.models.runtime import Runtime as _RuntimeModel
+        from app.services.harness_compat import derive_harness, requires_runtime_binding
+
+        _old_runtime = (
+            await session.get(_RuntimeModel, agent.runtime_id)
+            if agent.runtime_id is not None
+            else None
+        )
+        _effective_harness = agent.harness or derive_harness(_old_runtime)
+        if requires_runtime_binding(_effective_harness):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Agent {agent.name} faehrt Harness '{_effective_harness}' und startet ohne "
+                    f"Runtime-Bindung nicht (Container-Entrypoint bricht ab). "
+                    f"Statt 'Fallback' eine andere Runtime waehlen."
+                ),
+            )
         agent.runtime_id = None
         agent.updated_at = utcnow()
         session.add(agent)
         await session.commit()
         await session.refresh(agent)
+        from app.services.activity import emit_event as _emit_event
+        await _emit_event(
+            session,
+            "agent.runtime_unbound",
+            f"{agent.name}: Runtime-Bindung entfernt "
+            f"({_old_runtime.slug if _old_runtime else 'keine'} → Fallback docker-compose env)",
+            severity="warning",
+            agent_id=agent.id,
+            board_id=agent.board_id,
+            detail={
+                "old_runtime": _old_runtime.slug if _old_runtime else None,
+                "harness": _effective_harness,
+                "changed_by": str(current_user.id),
+            },
+        )
     elif do_runtime_switch or do_harness_only_switch:
         from app.services.agent_runtime_switch import (
             switch_agent_runtime,

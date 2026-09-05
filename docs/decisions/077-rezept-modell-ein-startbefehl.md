@@ -185,7 +185,7 @@ Label-Verifikation. Nur eine sparkrun-Zeile **ohne** jeden Befehl wird
 | P1 Sichtbar + sparkrun raus | eine Schnittstelle, beide Umschalter, Pflicht-Startbefehl, Umwandlung | ✅ Backend #388 · Frontend #381 |
 | P2 Rolle + SSH | `hosts.role` (head/worker), Box-Wizard erfasst Rolle + SSH für jede Box | ✅ |
 | P3 Duo-Start + Autostart je Box | Worker-Wahl beim Start, MC schreibt die Adressen in die `.env` des Rezepts (`env_file`/`env_map`, Migration 0193), Schreibpfad `runtime_hosts`, Verdrängung über alle Mitglieder, Autostart-Schalter je Box statt blinder Wiederbelebung | ✅ |
-| P4 Vorflug | RAM/Disk-Prüfung über alle Ziel-Boxen aus der Telemetrie | offen |
+| P4 Vorflug | RAM/Disk-Prüfung über alle Ziel-Boxen aus der Telemetrie | ✅ |
 
 ## P3-Umsetzung (04.09.2026)
 
@@ -303,6 +303,70 @@ Steht der Wert in der `.env`, gewinnt die `.env` über die Umgebung. MC muss
 die zwei Schlüssel deshalb **in die `.env` des Rezepts schreiben** (nur diese
 zwei, idempotent), nicht als Umgebungsvariable mitgeben.
 
+## P4-Umsetzung (05.09.2026) — der „Vorflug"
+
+Bis P3 sagte der Umschalter nichts über die GRÖSSE einer Box. Ein
+Zweibox-Rezept braucht ~100 GiB je Box; auf einer zu kleinen oder vollen Box
+scheiterte der Start erst Minuten später mit einer vLLM-Meldung — nachdem MC
+das laufende Modell längst verdrängt hatte. P4 liest die Zahlen aus der
+letzten Node-Agent-Telemetrie (`hosts.agent_telemetry`, Vertrag
+`routers/nodes.NodeTelemetry`) und urteilt VORHER: in der Liste
+(`list_host_recipes`) und im Start (`start_recipe_on_host`, vor jeder
+Verdrängung). Eine Funktion, ein Satz — `evaluate_capacity` beantwortet beide
+Fragen, damit niemand zwei Erklärungen für dieselbe Sache bekommt.
+
+Auf einer GB10-Box ist Arbeitsspeicher = GPU-Speicher (unified memory); darum
+ist `mem_total` die richtige Grösse für `min_vram_gb` (die `vram_*`-Felder
+sind dort null). Gerechnet wird in GiB und beschriftet mit „GB" — wie im
+Katalog und im Rest der Oberfläche.
+
+### Die drei Regeln
+
+1. **Kapazität — hart.** `mem_total` jeder Ziel-Box (Head, beim Duo plus die
+   gewählte bzw. erste Worker-Box) muss `min_vram_gb` erreichen. Sonst grau
+   mit Satz und 409 beim Start: „Box 'box-a' hat 60 GB, Rezept braucht 100 GB."
+2. **Belegung — weich.** Ist weniger frei als das Rezept braucht UND macht der
+   Start dort nichts frei (keine exklusive Instanz zum Verdrängen), gibt es
+   eine Warnung: „Box 'box-a': nur 20 GB frei, Start kann am Speicher
+   scheitern." Startbar bleibt es. Verdrängt der Start ein exklusives Modell,
+   räumt er den Speicher selbst — dann wäre die Warnung falsch und entfällt.
+3. **Platte — weich, nur am Kopf.** Weniger frei als `est_weights_gb` gibt
+   einen Hinweis, keinen Riegel.
+
+### Was der Vorflug bewusst NICHT tut
+
+* **Ohne Telemetrie wird nichts gesperrt.** Eine Box ohne Heartbeat bekommt
+  den Hinweis „Kapazität unbekannt (keine Telemetrie)" und bleibt startbar.
+  Ein Riegel ohne Beleg wäre schlimmer als ein später Fehler — und er würde
+  jede SSH-Box ohne node-agent stilllegen.
+* **Die Platte sperrt nie.** Der Auftrag sah einen harten Riegel vor, falls
+  die Gewichte noch nicht auf der Box liegen. MC kann das heute nicht
+  feststellen: es gibt kein „installiert"-Feld am Katalog, und
+  `hosts.agent_inventory` ist ein Verzeichnis-Scan ohne Rezept-Bezug
+  (`recipe_install.py` prüft die Platte selbst per `df` und warnt ebenfalls
+  nur). Ein Riegel wäre geraten — also bleibt es ein Hinweis. Sobald es ein
+  belastbares „liegt schon da" gibt, kann daraus ein Riegel werden.
+* **Er misst nichts selbst.** Kein SSH, kein `free`/`df` zur Laufzeit — nur
+  der letzte Heartbeat. Das hält die Liste schnell und den Start ehrlich:
+  veraltete Zahlen führen höchstens zu einer Warnung, nie zu einem falschen
+  Riegel.
+
+### Antwortfeld
+
+Jeder Eintrag der Liste trägt zusätzlich `capacity`:
+
+```json
+{"ok": true,
+ "warnings": ["Box 'box-b': nur 30 GB frei, Start kann am Speicher scheitern."],
+ "boxes": [{"slug": "box-a", "mem_total_gb": 120.0, "mem_available_gb": 116.0, "disk_free_gb": 3200.0},
+           {"slug": "box-b", "mem_total_gb": 120.0, "mem_available_gb": 30.0, "disk_free_gb": 3200.0}]}
+```
+
+`ok:false` heisst harter Verstoss; der Satz dazu steht wie jeder andere Grund
+in `reason` (die Oberfläche hat genau einen Ort für Riegel). Die Warnungen
+zeigt `HostRecipeSwitcher` als Hinweistext unter dem Eintrag und noch einmal
+in der Bestätigungszeile — dort, wo geklickt wird.
+
 ## Referenzen
 
 - Betroffene Dateien:
@@ -330,4 +394,10 @@ zwei, idempotent), nicht als Umgebungsvariable mitgeben.
   `backend/app/routers/host_recipes.py` (Body `{"worker_host_id"}`),
   `backend/app/models/host.py` + `backend/app/models/local_recipe.py`,
   Tests: `backend/tests/test_recipe_switcher_p3.py`
+- P4 (05.09.2026): `backend/app/services/recipe_switcher.py` (`box_capacity`, `evaluate_capacity`,
+  `boxes_freed_by_start`, `_capacity_targets`, Sätze `reason_box_too_small` / `warn_*`),
+  `frontend-v2/src/components/shared/HostRecipeSwitcher.tsx` (`capacityWarnings`),
+  `frontend-v2/src/lib/types.ts` (`HostRecipeCapacity`),
+  Tests: `backend/tests/test_recipe_switcher_p4.py`,
+  `frontend-v2/src/components/shared/__tests__/HostRecipeSwitcher.capacity.test.tsx`
 - Skill für neue Rezepte: `~/.claude/skills/mc-recipe-integration/SKILL.md`

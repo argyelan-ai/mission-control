@@ -96,13 +96,22 @@ def slot_display_name(host: Host, endpoint: str, model: str | None) -> str:
 
 
 def _host_address(host: Host) -> str | None:
-    """Die Adresse, unter der MC die Box fragt.
+    """Die Adresse, unter der die AGENTEN die Box fragen.
 
-    ``ssh_host`` zuerst (das ist die Adresse, über die MC ohnehin startet und
-    stoppt), ``tailscale_host`` als Rückfall. Beides leer = die Box hat keine
-    Adresse, für die eine Slot-Zeile Sinn ergäbe.
+    ``tailscale_host`` zuerst, ``ssh_host`` als Rückfall — und das ist mit
+    Absicht andersherum als beim Starten und Stoppen.
+
+    Grund (teuer gelernt): eine LAN-Adresse kann aus einem Agenten-Container
+    heraus ins Leere laufen, während dieselbe Box über SSH tadellos antwortet —
+    eine Tailscale-Route auf dem Host kapert genau diese LAN-Adresse. Der
+    Wächter warnt bei einem LAN-Endpunkt sogar ausdrücklich und schlägt die
+    Tailscale-Adresse vor (``address_classify.suggest_endpoint_fix``). Diese
+    Zeile nimmt den Vorschlag gleich vorweg.
+
+    Beides leer = die Box hat keine Adresse, für die eine Slot-Zeile Sinn
+    ergäbe.
     """
-    return (host.ssh_host or "").strip() or (host.tailscale_host or "").strip() or None
+    return (host.tailscale_host or "").strip() or (host.ssh_host or "").strip() or None
 
 
 async def find_slot_runtime(
@@ -222,10 +231,14 @@ def _slot_endpoint(host: Host, host_runtimes: list[Runtime]) -> str | None:
     wenn es die nicht gibt, wird aus der Box-Adresse + Standard-Port eine
     gebaut.
     """
-    for rt in host_runtimes:
+    # Deterministisch sortiert: ohne feste Reihenfolge entschiede die
+    # Zeilenreihenfolge der Datenbank, welchen Endpunkt eine Box bekommt — bei
+    # zwei Rezept-Zeilen also der Zufall (Review 05.09.2026, M4).
+    ordered = sorted(host_runtimes, key=lambda rt: (rt.ui_order or 999, rt.slug))
+    for rt in ordered:
         if rt.enabled and rt.runtime_type in COMMAND_DRIVEN_TYPES and rt.endpoint:
             return rt.endpoint
-    for rt in host_runtimes:
+    for rt in ordered:
         if rt.runtime_type in COMMAND_DRIVEN_TYPES and rt.endpoint:
             return rt.endpoint
     address = _host_address(host)
@@ -239,7 +252,8 @@ def _current_model(host_runtimes: list[Runtime]) -> tuple[str | None, int | None
 
     Nur ein Startwert: ab der ersten Probe hat der Wächter das letzte Wort.
     """
-    for rt in host_runtimes:
+    ordered = sorted(host_runtimes, key=lambda rt: (rt.ui_order or 999, rt.slug))
+    for rt in ordered:
         if rt.enabled and rt.runtime_type in COMMAND_DRIVEN_TYPES and rt.model_identifier:
             return rt.model_identifier, rt.max_context_len
     return None, None
@@ -282,8 +296,19 @@ async def ensure_slot_runtimes(session: AsyncSession) -> dict[str, Any]:
     Alles best effort im Aufrufer: ein Fehler hier darf den Backend-Start
     nicht verhindern (siehe ``main._ensure_slot_runtimes``).
     """
+    from app.config import settings
     from app.services.activity import emit_event
     from app.services.harness_compat import derive_harness, is_compatible
+
+    if not settings.slot_runtimes_enabled:
+        # Der dauerhafte Rückweg (Review 05.09.2026, H2): ohne diesen Riegel
+        # legte der nächste Backend-Start die eben zurückgebauten Zeilen sofort
+        # wieder an — der „Rückweg" hätte nur bis zum nächsten Deploy gehalten.
+        logger.info(
+            "Slot-Runtimes sind per SLOT_RUNTIMES_ENABLED=false abgeschaltet — "
+            "es wird nichts angelegt und nichts umgehängt"
+        )
+        return {"created": [], "rebound": [], "skipped_no_endpoint": [], "disabled": True}
 
     hosts = list((await session.exec(select(Host).where(Host.enabled == True))).all())  # noqa: E712
     runtimes = list((await session.exec(select(Runtime))).all())

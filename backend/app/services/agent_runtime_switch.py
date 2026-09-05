@@ -59,6 +59,14 @@ logger = logging.getLogger("mc.agent_runtime_switch")
 LOCK_TTL_SECONDS = 120
 HEALTH_TIMEOUT_RECREATE = 90
 HEALTH_TIMEOUT_RESTART = 30
+# Live-Befund 05.09.2026: der omp-TUI braucht nach einem Neustart laenger als
+# 30 s, bis die Prompt-Glyphen in Fenster 0 stehen — zwei Wechsel scheiterten
+# mit "timeout after 30s — window not ready", obwohl der Container gesund war
+# und danach normal antwortete. Die Pruefung wartet nicht die Frist ab, sondern
+# endet, sobald die Glyphen erscheinen (_wait_for_window_ready pollt alle
+# poll_interval Sekunden); die Frist ist nur die Obergrenze. Eine zu kurze
+# Obergrenze kostet also einen unnoetigen Rollback, eine grosszuegige nichts.
+HEALTH_TIMEOUT_RESTART_OMP = HEALTH_TIMEOUT_RECREATE
 
 # OpenAI-compatible runtime types where a `/models` probe is meaningful.
 # Cloud (Anthropic, Ollama) already ship a model_identifier from the seed.
@@ -914,7 +922,6 @@ async def switch_agent_runtime(
                 # Step 9 — wait for container to be reachable.
                 # D-12: respawn_mode delegates to tmux capture-pane polling instead of
                 # docker inspect, matching the respawn restart path above.
-                timeout = HEALTH_TIMEOUT_RECREATE if image_change else HEALTH_TIMEOUT_RESTART
                 # ADR-049: the omp runtime now runs omp's native TUI in Window 0 (not the
                 # headless bridge print). Anchor readiness on the TUI's prompt glyphs via
                 # pane scrape regardless of image_change — the initial openclaude→omp
@@ -926,6 +933,15 @@ async def switch_agent_runtime(
                     if effective_new_harness
                     else new_runtime.runtime_type == "omp"
                 )
+                # Der Neustart eines omp-Containers bekommt dieselbe Frist wie
+                # ein Neuerstellen: gewartet wird auf die TUI-Glyphen, und die
+                # brauchen laenger als 30 s (Live-Befund 05.09.2026).
+                if image_change:
+                    timeout = HEALTH_TIMEOUT_RECREATE
+                elif is_omp:
+                    timeout = HEALTH_TIMEOUT_RESTART_OMP
+                else:
+                    timeout = HEALTH_TIMEOUT_RESTART
                 await publish_switch_progress(agent.id, "waiting_healthy")
                 health = await wait_for_agent_healthy(
                     agent,
@@ -1026,9 +1042,36 @@ async def _rollback(
     *,
     old_harness: str | None = None,
 ) -> None:
-    """Restore DB + files + image overlay + container to the pre-switch state."""
+    """Restore DB + files + image overlay + container to the pre-switch state.
+
+    Vorfall 2026-09-05: rolling back to "no binding at all" is NOT a safe state
+    for every harness. An omp agent without a runtime row gets no
+    OPENAI_BASE_URL/OPENAI_MODEL from the bootstrap, and its entrypoint then
+    refuses to boot (docker/omp-bridge/entrypoint.sh) — the container ends up
+    in a restart loop. So when the pre-switch state was "unbound" and the
+    harness cannot live without a binding, we keep the attempted binding
+    (a runtime that failed its health check still beats a container that
+    cannot start) and say so loudly.
+    """
+    from app.services.harness_compat import derive_harness, requires_runtime_binding
+
+    effective_harness = old_harness or agent.harness
+    if effective_harness is None and agent.runtime_id is not None:
+        # Legacy NULL-harness row: fall back to the runtime-derived harness,
+        # exactly like the bootstrap does.
+        effective_harness = derive_harness(await session.get(Runtime, agent.runtime_id))
+    kept_binding_id: uuid.UUID | None = None
+    if old_runtime_id is None and requires_runtime_binding(effective_harness):
+        kept_binding_id = agent.runtime_id
+        if kept_binding_id is not None:
+            logger.warning(
+                "rollback for %s would unbind an %s agent — keeping runtime %s instead",
+                agent.name, effective_harness, kept_binding_id,
+            )
+
     try:
-        agent.runtime_id = old_runtime_id
+        if kept_binding_id is None:
+            agent.runtime_id = old_runtime_id
         agent.harness = old_harness
         agent.updated_at = utcnow()
         session.add(agent)
@@ -1036,6 +1079,25 @@ async def _rollback(
         await session.refresh(agent)
     except Exception as e:  # pragma: no cover — defensive
         logger.error("rollback DB step failed for %s: %s", agent.name, e)
+
+    if kept_binding_id is not None:
+        try:
+            await emit_event(
+                session,
+                "agent.runtime_rollback_kept_binding",
+                f"{agent.name}: Rollback haette den Agenten ohne Runtime zurueckgelassen — "
+                f"Bindung bleibt bestehen (Harness '{effective_harness}' startet ohne Runtime nicht).",
+                severity="warning",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+                detail={
+                    "harness": effective_harness,
+                    "kept_runtime_id": str(kept_binding_id),
+                    "reason": "rollback_target_was_null",
+                },
+            )
+        except Exception as e:  # pragma: no cover
+            logger.error("emit rollback_kept_binding event failed for %s: %s", agent.name, e)
 
     if image_change:
         try:
