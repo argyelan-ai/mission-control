@@ -10,12 +10,12 @@ published — and five commits had already shipped the whole fleet compose file
 before anyone noticed. So the point of this page is not to feel bad about the
 backlog. It is to make sure the backlog can only ever get **shorter**.
 
-**251 tracked files** still carry at least one of the four names
+**252 tracked files** still carry at least one of the four names
 (`sparky`, `shakespeare`, `freecode`, `davinci`):
 
 | where | files |
 |---|---|
-| Tests and fixtures | 112 |
+| Tests and fixtures | 113 |
 | Code and scripts | 83 |
 | ADRs (dated records of real decisions) | 21 |
 | Migrations (they carry the data as it was) | 18 |
@@ -154,6 +154,7 @@ backend/tests/test_approval_install_hook.py: davinci
 backend/tests/test_bench_orchestrator_flow.py: sparky
 backend/tests/test_blocked_at_dedicated_timestamp.py: sparky
 backend/tests/test_blocker_guard_precommit.py: sparky
+backend/tests/test_bootstrap_auth.py: freecode
 backend/tests/test_bootstrap_gh_token.py: freecode
 backend/tests/test_bootstrap_recovery.py: freecode
 backend/tests/test_boss_orchestrator.py: sparky

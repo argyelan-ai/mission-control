@@ -173,6 +173,15 @@ async def login(
     session: AsyncSession = Depends(get_session),
 ):
     """Authenticate with email and password, returns JWT."""
+    # request.client.host is only the REAL client IP because uvicorn runs
+    # with --proxy-headers (backend/Dockerfile) and a trust list that contains
+    # Caddy but not the host gateway (backend/docker-entrypoint.sh exports
+    # FORWARDED_ALLOW_IPS, computed in app/proxy_trust.py) —
+    # without that, this is unconditionally Caddy's own container IP for
+    # every request, which buckets every user's login attempts together
+    # (PR #404 Rex review: 5 failed attempts from anyone locks out
+    # everyone for 15 min, and per-attacker limiting doesn't work at all).
+    # See test_proxy_headers_trust.py for the underlying mechanism.
     client_ip = request.client.host if request.client else "unknown"
     _check_rate_limit(client_ip)
 
@@ -206,6 +215,14 @@ async def login(
         samesite="lax",
         max_age=settings.jwt_access_token_expire_minutes * 60,
         path="/",
+        # Secure only when the request actually arrived over TLS. Behind
+        # Caddy (TLS termination) uvicorn runs with --proxy-headers
+        # (backend/Dockerfile), so ProxyHeadersMiddleware rewrites
+        # scope["scheme"] from X-Forwarded-Proto and this is "https".
+        # A plain-HTTP login (localhost / LAN / Tailscale without TLS)
+        # must NOT get Secure — the browser would drop the cookie and
+        # lock the user out of their own UI. Never set this unconditionally.
+        secure=request.url.scheme == "https",
     )
     return response
 

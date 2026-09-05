@@ -33,6 +33,15 @@
         reverse_proxy livekit:7880
     }
 
+    # Internal-only endpoints (agent bootstrap: hands out Vault secrets in
+    # plaintext) must never be reachable from outside the Docker network —
+    # this file is exactly the multi-device/Tailscale/LAN exposure case
+    # (PR #404 Rex review), so this block matters here more than anywhere.
+    # Must come BEFORE the generic /api/* handle below.
+    handle /api/v1/internal/* {
+        respond 403
+    }
+
     # API + health → backend
     handle /api/* {
         reverse_proxy backend:8000

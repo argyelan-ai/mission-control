@@ -31,8 +31,10 @@ mkdir -p ~/.mc/agents/boss-host/{claude-config,logs}
 cp ~/.mc/agents/boss/claude-config/{SOUL,TOOLS,USER,HEARTBEAT,MEMORY}.md \
    ~/.mc/agents/boss-host/claude-config/
 
-# 4. Token via Backend Bootstrap holen
+# 4. Token via Backend Bootstrap holen (INTERNAL_BOOTSTRAP_SECRET aus der
+#    Repo-.env — seit PR #404 Rex-Fix Pflicht, sonst 401)
 TOKEN=$(curl -sf "http://localhost:8000/api/v1/internal/bootstrap?agent_name=boss" \
+        -H "Authorization: Bearer $(grep '^INTERNAL_BOOTSTRAP_SECRET=' /path/to/mission-control/.env | cut -d= -f2-)" \
         | python3 -c "import json,sys; print(json.load(sys.stdin)['MC_AGENT_TOKEN'])")
 cat > ~/.mc/agents/boss-host/agent.env <<EOF
 MC_API_URL=http://localhost:8000
