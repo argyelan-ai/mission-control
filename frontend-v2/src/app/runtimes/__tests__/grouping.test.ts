@@ -101,6 +101,22 @@ describe("groupRuntimes", () => {
     expect(sparkGroup?.workerOf).toBeUndefined();
   });
 
+  it("a host that is worker of TWO verbünde shows the one that is running (05.09.2026)", () => {
+    const beta = makeHost({ slug: "beta", display_name: "Beta", kind: "agent" });
+    const member = { host_id: "beta", slug: "beta", display_name: "Beta", role: "worker" as const, node_rank: 1 };
+    const stopped = makeRuntime({
+      slug: "glm-verbund", display_name: "GLM Verbund", state: "stopped", ui_order: 1,
+      host: { id: "spark", slug: "spark", display_name: "Spark" }, member_hosts: [member],
+    });
+    const running = makeRuntime({
+      slug: "ds-verbund", display_name: "DeepSeek Verbund", state: "ready", ui_order: 2,
+      host: { id: "spark", slug: "spark", display_name: "Spark" }, member_hosts: [member],
+    });
+    // Reihenfolge der Liste darf keine Rolle spielen — der laufende gewinnt.
+    const g = groupRuntimes([stopped, running], [spark, beta]);
+    expect(g.hosts.find((hg) => hg.host.slug === "beta")?.workerOf?.runtimeId).toBe("ds-verbund");
+  });
+
   it("a host with no member_hosts entry anywhere has no workerOf", () => {
     const g = groupRuntimes([], [spark]);
     expect(g.hosts[0].workerOf).toBeUndefined();

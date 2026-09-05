@@ -76,8 +76,13 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
   // membership per host wins if a host were ever listed twice — shouldn't
   // happen (runtime_hosts.host_id has no cross-runtime uniqueness, but a
   // host is realistically a worker of one verbund at a time).
+  // Seit P3 (05.09.2026) ist eine Box realistisch Worker MEHRERER Verbünde
+  // (GLM und DeepSeek nutzen dieselbe zweite Box). Dann gewinnt der Verbund,
+  // der LÄUFT — sonst stand auf der Worker-Kachel „Teil von GLM", während
+  // DeepSeek antwortete (Marks Fund). Gleiche Reihenfolge wie die Bühne:
+  // aktiv vor gescheitert vor gestoppt.
   const workerOfByHostId = new Map<string, WorkerMembership>();
-  for (const rt of runtimes) {
+  for (const rt of sortGroup(runtimes)) {
     for (const member of rt.member_hosts ?? []) {
       if (workerOfByHostId.has(member.host_id)) continue;
       workerOfByHostId.set(member.host_id, {
