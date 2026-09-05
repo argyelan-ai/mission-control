@@ -1237,6 +1237,18 @@ class TaskMonitorMixin:
                     dispatched_agents.add(agent.id)  # Once per agent per tick
                     continue
 
+                # Bereitschafts-Tor (ADR-078): dieser Pfad ist der zweite Weg
+                # zum Agenten und hat das Tor bisher gar nicht gesehen. Ohne
+                # diese Zeilen würde die Aufgabe, die auto_dispatch_task gerade
+                # bewusst zurückgehalten hat, 30 s später hier doch zugestellt
+                # — in ein Modell, das noch lädt.
+                from app.services.dispatch_delivery import _check_runtime_readiness
+                if not await _check_runtime_readiness(
+                    task, agent, session, task.board_id, str(agent.id),
+                ):
+                    dispatched_agents.add(agent.id)
+                    continue
+
                 try:
                     message = await _build_dispatch_message(task, agent, session)
                     from app.services.cli_bridge_runner import dispatch_to_cli_bridge

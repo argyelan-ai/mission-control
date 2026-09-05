@@ -90,6 +90,13 @@ async def persist_briefing_message(
     )
 
 
+#: Ab hier ist ein Wechsel kein „lädt noch" mehr, sondern ein Problem, das
+#: jemand ansehen sollte. Der Grace-Marker selbst lebt 20 Minuten
+#: (``runtime_grace.SWITCHING_TTL``) und wird von jedem Startversuch erneuert —
+#: ohne eigene Obergrenze könnte eine Aufgabe stumm unbegrenzt warten.
+SWITCH_WAIT_WARN_SECONDS = 45 * 60
+
+
 async def _check_runtime_readiness(
     task: Task,
     agent: Agent,
@@ -97,18 +104,139 @@ async def _check_runtime_readiness(
     board_id: uuid.UUID,
     agent_id_str: str,
 ) -> bool:
-    """Structured check whether the runtime is ready.
+    """Ist die Runtime dieses Agenten gerade ansprechbar? (ADR-078)
 
-    Post Phase 29 / Gateway-Sunset: all remaining runtimes (cli-bridge, host,
-    claude-code, free-code-bridge, manual) self-poll via their own runners.
-    No readiness gate needed — return True unconditionally. The cli-bridge
-    poll.sh / launchd-host loops act as the de-facto liveness check.
+    Bis 05.09.2026 stand hier ``return True`` — es gab kein Bereitschafts-Tor.
+    Das war richtig, solange ein Agent an der Zeile SEINES Rezepts hing: war
+    die Zeile weg, war der Agent es auch. Mit der Slot-Zeile teilen sich alle
+    Agenten einer Box EINE Runtime-Zeile, und ein Rezeptwechsel macht sie für
+    8–30 Minuten stumm. Eine Aufgabe, die in dieses Fenster fällt, ginge an
+    einen Agenten, dessen Modell 404 antwortet — und wäre verloren
+    (Betriebs-Review 05.09.2026, Fund A2).
 
-    Signature preserved for caller compatibility (auto_dispatch_task in
-    dispatch.py + any future shim). The async signature is kept so callers
-    don't need to drop `await`.
+    Zwei Signale, beide schon vorhanden, keins neu erfunden:
+
+    * der **Übergangs-Marker** (``runtime_grace.get_switching``) — jemand hat
+      diesen Start ausgelöst, die Stille ist geplant;
+    * der **Live-Schnappschuss** des Wächters (``mc:runtime:<slug>:live``) —
+      ``reachable = false`` heisst: die letzte Probe bekam keine Antwort.
+
+    Verzögert wird NUR für Agenten an einer Slot-Zeile. Jede andere Bindung
+    verhält sich exakt wie vorher — dieselbe Zurückhaltung, mit der auch das
+    Porsche-Tor (``services/runtime_readiness``) gebaut ist: ein Tor-Fehler
+    darf niemals die ganze Flotte anhalten.
+
+    WIE DIE VERZÖGERUNG WIRKT (am Code nachgeprüft, nicht angenommen)
+    -----------------------------------------------------------------
+    ``False`` setzt in ``dispatch.auto_dispatch_task`` ``dispatch_mode`` auf
+    ``"push_pending"``: es wird NICHTS ausgeliefert, ``task.dispatched_at``
+    bleibt NULL, der Status bleibt ``inbox``. Genau diese Kombination sucht
+    ``watchdog/task_monitor._check_undispatched_tasks`` alle 30 s und stellt
+    erneut zu — und ruft dieses Tor dabei erneut auf. Die Aufgabe wartet also
+    sichtbar und startet von selbst, sobald das Modell antwortet; es musste
+    dafür keine zweite Warteschlange gebaut werden.
+
+    Fail-open: jeder unerwartete Fehler lässt die Zustellung zu.
     """
-    return True
+    runtime_id = getattr(agent, "runtime_id", None)
+    if runtime_id is None:
+        return True
+    try:
+        from app.models.runtime import Runtime
+
+        runtime = await session.get(Runtime, runtime_id)
+        if runtime is None or not runtime.is_slot:
+            return True
+
+        from app.services.runtime_grace import get_switching
+
+        switching = await get_switching(runtime.slug)
+        reachable = await _runtime_reachable(runtime.slug)
+        if switching is None and reachable is not False:
+            return True
+
+        waited_seconds = _switch_age_seconds(switching)
+        model_hint = runtime.model_identifier or runtime.display_name or runtime.slug
+        severity = "info"
+        message = (
+            f"{agent.name}: {model_hint} lädt noch — Aufgabe '{task.title}' "
+            f"wartet und wird zugestellt, sobald das Modell antwortet."
+        )
+        if waited_seconds is not None and waited_seconds >= SWITCH_WAIT_WARN_SECONDS:
+            severity = "warning"
+            message = (
+                f"{agent.name}: {model_hint} lädt seit "
+                f"{int(waited_seconds // 60)} Minuten — Aufgabe '{task.title}' "
+                f"wartet immer noch. Bitte die Box ansehen."
+            )
+        await emit_event(
+            session,
+            "dispatch.deferred_runtime_loading",
+            message,
+            board_id=board_id,
+            task_id=task.id,
+            agent_id=agent.id,
+            severity=severity,
+            detail={
+                "agent_name": agent.name,
+                "runtime": runtime.slug,
+                "model": runtime.model_identifier,
+                "phase": (switching or {}).get("phase"),
+                "source": (switching or {}).get("source"),
+                "waited_seconds": waited_seconds,
+                "reachable": reachable,
+            },
+        )
+        logger.info(
+            "Dispatch verschoben: %s haengt an der Slot-Zeile %s "
+            "(switching=%s, reachable=%s)",
+            agent.name, runtime.slug, bool(switching), reachable,
+        )
+        return False
+    except Exception:  # noqa: BLE001 — ein Tor-Fehler darf die Flotte nie anhalten
+        logger.exception("Bereitschafts-Tor fehlgeschlagen — Zustellung wird erlaubt")
+        return True
+
+
+async def _runtime_reachable(slug: str) -> bool | None:
+    """Was die letzte Wächter-Probe gesehen hat: ``True`` / ``False`` / ``None``.
+
+    ``None`` heisst „noch nie geprobt" (frischer Backend-Start, Redis leer) —
+    das ist ausdrücklich KEIN Grund zu warten, sonst stünde nach jedem Neustart
+    die ganze Flotte still.
+    """
+    try:
+        import json as _json
+
+        from app.redis_client import RedisKeys, get_redis
+
+        redis = await get_redis()
+        raw = await redis.get(RedisKeys.runtime_live(slug))
+        if raw is None:
+            return None
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode()
+        data = _json.loads(raw)
+        value = data.get("reachable")
+        return value if isinstance(value, bool) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _switch_age_seconds(switching: dict | None) -> float | None:
+    """Wie lange läuft dieser Wechsel schon? ``None``, wenn unbekannt."""
+    from datetime import datetime, timezone
+
+    started = (switching or {}).get("started_at")
+    if not started:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(started))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
 
 
 async def _deliver_dispatch_message(
