@@ -29,7 +29,11 @@ middleware is the one place that covers every current and future route.
 """
 from __future__ import annotations
 
-from slowapi.middleware import SlowAPIMiddleware
+from slowapi.middleware import (
+    SlowAPIMiddleware,
+    _find_route_handler,
+    sync_check_limits,
+)
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -71,14 +75,51 @@ def is_rate_limit_exempt(path: str) -> bool:
 
 
 class PathExemptSlowAPIMiddleware(SlowAPIMiddleware):
-    """SlowAPIMiddleware that skips the exempt paths above.
+    """SlowAPIMiddleware that skips the exempt paths above — and that still
+    counts when slowapi cannot identify the route handler.
 
-    Subclassing keeps slowapi's own behaviour (headers, exception handler,
-    per-route decorators) intact for everything else — we only decide earlier
-    whether a request is counted at all.
+    Two jobs:
+
+    1. Skip the exempt paths (see above) before anything is counted.
+    2. Survive newer FastAPI versions. slowapi decides whether to count by
+       looking up the route handler in ``app.routes`` and needs a ``.endpoint``
+       attribute on it (``_find_route_handler``). FastAPI 0.141 wraps included
+       routers in ``_IncludedRouter`` objects that have no ``.endpoint``, so the
+       lookup returns ``None`` — and slowapi treats "handler unknown" as
+       "exempt". Measured on fastapi 0.141.1 / starlette 1.6.0: EVERY route,
+       ``/health`` included, came back exempt and nothing was rate limited at
+       all. That is exactly the failure this PR set out to fix (code that reads
+       like protection and is none), one FastAPI version later, and it fails
+       silently — the pinned 0.133 in requirements.lock still works, so nothing
+       would have shown up until the next dependency bump.
+
+       So: when slowapi finds a handler we hand over to it unchanged (per-route
+       ``@limiter.limit`` decorators keep working). When it does not, we run the
+       check ourselves with ``handler=None``. slowapi keys the default limits on
+       the URL path in that case (``_key_style`` defaults to ``"url"``), which is
+       precisely the global per-IP-per-path budget we want.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if is_rate_limit_exempt(request.url.path):
             return await call_next(request)
-        return await super().dispatch(request, call_next)
+
+        app = request.app
+        limiter = app.state.limiter
+        if not limiter.enabled:
+            return await call_next(request)
+
+        if _find_route_handler(app.routes, request.scope) is not None:
+            # slowapi can do its normal job, including route decorators.
+            return await super().dispatch(request, call_next)
+
+        error_response, should_inject_headers = sync_check_limits(
+            limiter, request, None, app
+        )
+        if error_response is not None:
+            return error_response
+
+        response = await call_next(request)
+        if should_inject_headers:
+            response = limiter._inject_headers(response, request.state.view_rate_limit)
+        return response

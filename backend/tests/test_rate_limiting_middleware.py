@@ -70,6 +70,53 @@ async def test_default_limit_is_enforced_by_middleware(
 
 
 @pytest.mark.asyncio
+async def test_still_counts_when_slowapi_cannot_resolve_the_handler(
+    client: AsyncClient, tiny_rate_limit, monkeypatch
+):
+    """The silent-inert case, pinned down.
+
+    slowapi decides "count or not" by looking up the route handler in
+    app.routes and reading its `.endpoint`. FastAPI 0.141 wraps included
+    routers in objects that have no `.endpoint`, the lookup returns None, and
+    slowapi treats "handler unknown" as "exempt" — measured: EVERY route was
+    exempt and nothing was limited at all, on an app that looks fully
+    protected. requirements.lock still pins 0.133, so this would have stayed
+    invisible until the next dependency bump.
+
+    Here we force the lookup to fail on the pinned version too, so the
+    fallback in PathExemptSlowAPIMiddleware stays covered either way.
+    """
+    monkeypatch.setattr(
+        "app.rate_limit._find_route_handler", lambda routes, scope: None
+    )
+
+    statuses = []
+    for _ in range(5):
+        resp = await client.get(COUNTED_ROUTE)
+        statuses.append(resp.status_code)
+
+    assert 429 in statuses, (
+        f"expected a 429 among {statuses} — with an unresolvable route handler "
+        "the middleware fell back to slowapi's 'unknown means exempt' and "
+        "silently stopped rate limiting everything"
+    )
+
+
+@pytest.mark.asyncio
+async def test_exempt_paths_stay_exempt_without_a_resolvable_handler(
+    client: AsyncClient, tiny_rate_limit, monkeypatch
+):
+    """And the exemption must survive that same fallback path."""
+    monkeypatch.setattr(
+        "app.rate_limit._find_route_handler", lambda routes, scope: None
+    )
+
+    statuses = [(await client.get("/health")).status_code for _ in range(10)]
+
+    assert 429 not in statuses, f"/health got rate limited ({statuses})"
+
+
+@pytest.mark.asyncio
 async def test_health_is_never_rate_limited(client: AsyncClient, tiny_rate_limit):
     """MITTEL-1: /health is a liveness probe. A 429 there reads as an outage,
     and the frontend polls it. 10 calls against a 3/minute budget."""
