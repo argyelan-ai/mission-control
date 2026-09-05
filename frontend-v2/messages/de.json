@@ -2627,6 +2627,14 @@
       "registerTitle": "Runtime-Register",
       "registerHint": "Alle eingerichteten Runtimes — Klick öffnet das Einstellungs-Panel (Context, Autostart, Agent-Bindung)."
     },
+    "slot": {
+      "rowLabel": "Agenten-URL",
+      "chip": "Slot",
+      "hint": "Feste Adresse dieser Box. Die Agenten hängen daran und bekommen immer das Modell, das gerade läuft.",
+      "endpointLabel": "Endpunkt",
+      "noStartStop": "Diese Zeile wird nie gestartet oder gestoppt — sie zeigt nur, was die Box antwortet.",
+      "pickerGroup": "Box-Adressen"
+    },
     "loadFailed": "Laden fehlgeschlagen.",
     "unloadFailed": "Entladen fehlgeschlagen.",
     "unload": "Entladen",
