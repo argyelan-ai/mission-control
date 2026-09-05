@@ -2603,7 +2603,8 @@
       "workerNone": "Keine freie zweite Box — dieses Rezept braucht zwei Boxen.",
       "workerEnvMissing": "Dem Rezept fehlt die Umgebungs-Zuordnung — MC kann die .env auf dieser Box nicht schreiben.",
       "startingDuo": "startet {name} auf {head} + {worker} …",
-      "startingDuoNoHead": "startet {name} — zweite Box: {worker} …"
+      "startingDuoNoHead": "startet {name} — zweite Box: {worker} …",
+      "capacityNotes": "Hinweise zur Kapazität"
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
