@@ -1875,6 +1875,13 @@ async def _ensure_exclusive_host(
     statement = select(Runtime).where(
         Runtime.enabled == True,  # noqa: E712
         Runtime.exclusive_memory == True,  # noqa: E712
+        # ADR-078: eine Slot-Zeile hält keinen Speicher — sie zeigt nur, was
+        # die Box gerade serviert. Sie darf nie Verdrängungsopfer sein: es
+        # gibt nichts zu stoppen, und ein fehlgeschlagener Stopp würde den
+        # ganzen Start abbrechen. Der Riegel hängt an is_slot und nicht an
+        # exclusive_memory allein, damit ein versehentlich gesetztes Flag
+        # keinen Start blockieren kann.
+        Runtime.is_slot == False,  # noqa: E712
     )
     # Same host only. A NULL host_id means "the settings fallback box" — two
     # NULLs are the same box, which is why this is an explicit IS NULL rather
@@ -1912,6 +1919,7 @@ async def _ensure_exclusive_host(
                         Runtime.id.in_(member_ids),
                         Runtime.enabled == True,  # noqa: E712
                         Runtime.exclusive_memory == True,  # noqa: E712
+                        Runtime.is_slot == False,  # noqa: E712 — ADR-078
                     )
                 )
             ).all()

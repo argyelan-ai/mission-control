@@ -135,6 +135,37 @@ class Runtime(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # ── Slot-Runtime (ADR-078, 05.09.2026) ───────────────────────────────────
+    # "Diese Zeile ist nicht ein Modell, sondern der PLATZ, den die Box gerade
+    # serviert." Auf einer Head-Box hören alle Rezepte auf derselben URL; ein
+    # Agent, der an der Zeile eines bestimmten Rezepts hängt, fragt nach dem
+    # nächsten Rezeptwechsel einen Modellnamen an, den niemand mehr serviert.
+    # Agenten hängen darum an der Slot-Zeile der Box, und der Drift-Wächter
+    # schreibt hier ein, was die Box tatsächlich serviert (Modell + Fenster).
+    #
+    # Das Kennzeichen ist ABSICHTLICH explizit und nicht aus "kein Anker + kein
+    # launch_command" abgeleitet: recipe_matches_runtime erkennt eine Instanz
+    # auch am gleichen model_identifier — und genau den trägt die Slot-Zeile per
+    # Definition. Eine Konvention hätte das laufende Rezept unstartbar gemacht.
+    #
+    # Eine Slot-Zeile ist per Vertrag: runtime_type "openai_compatible", KEIN
+    # container_name/process_name/launch_command, exclusive_memory=false — und
+    # sie BEHÄLT ihre host_id (die Head-Box). Die host_id ist kein Zufall: sie
+    # ist es, die routers/internal.py die langen omp-Zeitgeber (Idle 30 min,
+    # Deadline 2 h) rendern lässt.
+    #
+    # Wo dieses Feld ausschliesst (alle Stellen hängen an is_slot, nie am Typ):
+    #   recipe_switcher.recipe_matches_runtime  → nie Instanz eines Rezepts
+    #   recipe_switcher._load_fleet             → nie Belegung einer Box
+    #   runtime_manager._ensure_exclusive_host  → nie Verdrängungsopfer
+    #   runtime_watcher._autostart_target /
+    #     _maybe_auto_recover                   → nie automatisch gestartet
+    #   runtime_watcher._served_answer_is_own   → folgt IMMER der Engine
+    is_slot: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+
     # Pre-start memory prep (PR 8), exclusive_memory runtimes on a GB10 only.
     #
     # vLLM sizes its KV cache against MemFree as CUDA sees it, and on this box
@@ -229,6 +260,7 @@ class Runtime(SQLModel, table=True):
             "stop_command": self.stop_command,
             "process_name": self.process_name,
             "exclusive_memory": self.exclusive_memory,
+            "is_slot": self.is_slot,
             "prestart_watermark_kb": self.prestart_watermark_kb,
             "prestart_min_available_kb": self.prestart_min_available_kb,
         }

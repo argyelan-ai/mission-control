@@ -601,6 +601,13 @@ async def list_runtimes(
             # runtime, which today is all of them. The runtime's OWN host_id
             # (the head) is NOT duplicated in here, it stays in "host" above.
             "member_hosts": member_hosts_by_runtime.get(rt.id, []),
+            # Slot-Runtime (ADR-078): eine Zeile ohne Startbefehl und ohne
+            # Anker kann nicht per Flag auf einer Box hochfahren. Der Wert wird
+            # hier HART überschrieben statt nur beim Anlegen gesetzt, damit ein
+            # versehentlich gesetztes Flag in der DB der Oberfläche nie einen
+            # Knopf zeigt, der ins Leere greift. `is_slot` selbst kommt aus
+            # rt_dict (model_dump) — daran hängt die Gruppierung im Picker.
+            "autostart_supported": False if rt.is_slot else rt.autostart_supported,
         })
     result.sort(key=_grouped_sort_key)
     return {"runtimes": result}

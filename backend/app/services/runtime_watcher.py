@@ -63,9 +63,12 @@ from app.services.agent_runtime_switch import (
 from app.services import host_memory_prep
 from app.services.host_resolver import resolve_host_for_runtime, ssh_capable
 from app.services.runtime_grace import (
+    PHASE_LOADING,
     SOURCE_AUTO_RECOVERY,
+    SOURCE_SWITCH,
     clear_switching,
     get_switching,
+    mark_switching,
 )
 from app.services.runtime_manager import DOCKER_ENGINE_TYPES, SSH_PROCESS_TYPE
 from app.services.runtime_model_resolver import (
@@ -282,6 +285,14 @@ class RuntimeWatcher:
                     phase=switching.get("phase"),
                     switch_source=switching.get("source"),
                 )
+                # ADR-078: solange DIESE Instanz lädt, lädt auch die Box —
+                # also bekommt die Slot-Zeile der Box denselben Marker mit
+                # derselben Restlaufzeit. Ohne diese Zeilen lief der
+                # Slot-Marker nach 20 Minuten aus (``SWITCHING_TTL``) und ein
+                # ehrlicher 30-Minuten-Kaltstart feuerte ab Minute 21
+                # ``runtime.unreachable`` für die Slot-Zeile — Fehlalarm bei
+                # jedem langsamen Wechsel (Review 05.09.2026, M1).
+                await self._refresh_slot_grace(session, runtime, switching)
                 return
             fails = await self._bump_failures(redis, runtime.slug)
             await self._write_live(
@@ -380,6 +391,35 @@ class RuntimeWatcher:
         if served_ctx is not None:
             await self._handle_context_drift(session, redis, runtime, served_ctx)
 
+    async def _refresh_slot_grace(
+        self, session: AsyncSession, runtime: Runtime, switching: dict
+    ) -> None:
+        """Den Marker der Slot-Zeile mitziehen, solange die Instanz lädt.
+
+        Der Marker der Rezept-Instanz wird bei jedem Startversuch neu gesetzt;
+        der Slot-Marker hatte bisher nur die eine Startzeit. Diese Runde ist der
+        Beleg „die Box ist gerade beim Laden" — also wird er hier erneuert. Er
+        stirbt damit genau dann, wenn auch der Marker der Instanz stirbt.
+
+        Nichts davon darf eine Wächter-Runde kosten: alles best effort, und
+        Zeilen ohne Box oder Slot-Zeilen selbst werden übersprungen.
+        """
+        if runtime.is_slot or runtime.host_id is None:
+            return
+        try:
+            from app.services.slot_runtimes import find_slot_runtime
+
+            slot = await find_slot_runtime(session, runtime.host_id)
+            if slot is None or slot.slug == runtime.slug:
+                return
+            await mark_switching(
+                slot.slug,
+                switching.get("phase") or PHASE_LOADING,
+                switching.get("source") or SOURCE_SWITCH,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("slot grace refresh failed for %s", runtime.slug)
+
     @staticmethod
     def _context_would_change(runtime: Runtime, served_ctx: int) -> bool:
         """Mirror of ``_handle_context_drift``'s no-op guard, evaluated BEFORE
@@ -417,6 +457,14 @@ class RuntimeWatcher:
         this guard exists to stop. The next healthy tick re-evaluates.
         """
         from shlex import quote as shlex_quote
+
+        if runtime.is_slot:
+            # ADR-078: eine Slot-Zeile IST der Zeiger auf „was die Box gerade
+            # serviert". Für sie ist die Antwort des Ports per Definition die
+            # eigene — sie hat keinen Anker und soll auch keinen haben. Diese
+            # Prüfung steht VOR der Typ-Verzweigung, damit die Regel nicht
+            # daran hängt, welchen runtime_type jemand der Zeile gegeben hat.
+            return True
 
         container = (runtime.container_name or "").strip()
         process = (runtime.process_name or "").strip()
@@ -488,6 +536,17 @@ class RuntimeWatcher:
         await session.commit()
         await session.refresh(runtime)
         await invalidate_cached_model(runtime.slug)
+        if runtime.is_slot:
+            # ADR-078: der Name einer Slot-Zeile trägt das laufende Modell
+            # („<Box> :8000 (aktuell: …)"). Wandert das Modell und der Name
+            # nicht mit, zeigt die Oberfläche nach dem ersten Rezeptwechsel
+            # etwas Falsches an. Best effort — Kosmetik kostet nie eine Runde.
+            try:
+                from app.services.slot_runtimes import refresh_slot_display_name
+
+                await refresh_slot_display_name(session, runtime)
+            except Exception:  # noqa: BLE001
+                logger.exception("slot display name refresh failed for %s", runtime.slug)
         logger.info("runtime %s model drift confirmed: %r → %r",
                     runtime.slug, old, served)
         await emit_event(
@@ -825,6 +884,12 @@ class RuntimeWatcher:
             return
         if not runtime.enabled:
             return
+        if runtime.is_slot:
+            # ADR-078: eine Slot-Zeile hat nichts, was man starten könnte —
+            # keinen Startbefehl, keinen Anker. Ohne diesen Riegel meldeten
+            # Slot- UND Rezeptzeile denselben Ausfall und es liefen ZWEI
+            # Startpfade auf dieselbe Box (Betriebs-Review 05.09.2026, A3).
+            return
 
         host_row, recipe = await self._autostart_target(session, runtime)
         if runtime.host_id is not None:
@@ -971,6 +1036,13 @@ class RuntimeWatcher:
         sonst (ADR-077: ein Ort rechnet, einer zeigt).
         """
         if runtime.host_id is None:
+            return None, None
+        if runtime.is_slot:
+            # ADR-078: die Slot-Zeile ist nie die Instanz eines Rezepts — sie
+            # darf also auch nie das Autostart-Ziel einer Box sein. Doppelt
+            # geriegelt (recipe_matches_runtime sagt für sie ohnehin nein),
+            # weil ein Autostart auf einer Zeile ohne Startbefehl nichts
+            # anderes als eine Endlosschleife wäre.
             return None, None
         from app.models.host import Host
         from app.models.local_recipe import LocalRecipe
