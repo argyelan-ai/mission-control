@@ -291,6 +291,23 @@ async def agent_bootstrap(
         rt_env = await build_runtime_env(runtime, session, agent=agent)
         tokens.update(rt_env)
 
+    # Vorfall 2026-09-05: an omp agent without a runtime binding gets no
+    # OPENAI_BASE_URL/OPENAI_MODEL here, its entrypoint aborts with FATAL and
+    # the container restart-loops — previously with nothing in the MC log
+    # pointing at the missing binding. Say it once, clearly, per bootstrap.
+    from app.services.harness_compat import derive_harness, requires_runtime_binding
+
+    _effective_harness = agent.harness or derive_harness(runtime)
+    if requires_runtime_binding(_effective_harness) and (
+        not tokens.get("OPENAI_BASE_URL") or not tokens.get("OPENAI_MODEL")
+    ):
+        logger.warning(
+            "bootstrap(%s): Harness '%s' braucht eine Runtime-Bindung, aber "
+            "runtime_id=%s liefert kein OPENAI_BASE_URL/OPENAI_MODEL — der "
+            "Container-Entrypoint wird mit FATAL abbrechen. Runtime zuweisen.",
+            agent_name, _effective_harness, agent.runtime_id,
+        )
+
     # Provider auth (ADR-056, amended 2026-07-05): agent secret > runtime
     # secret for openai protocol; CLAUDE_CODE_OAUTH_TOKEN for anthropic. No
     # global vault fallback — an agent with neither secret bound simply gets
