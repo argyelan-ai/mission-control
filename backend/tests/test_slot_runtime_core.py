@@ -960,12 +960,12 @@ async def test_ohne_instanz_gewinnt_die_tailscale_adresse(session):
     """
     host = await _host(
         session, slug="box-b", role="head", ssh_host="192.0.2.20",
-        tailscale_host="box-b.example.ts.net",
+        tailscale_host="box-b.vpn.invalid",
     )
     summary = await slot_runtimes.ensure_slot_runtimes(session)
     assert summary["created"] == ["box-b-slot"]
     slot = await slot_runtimes.find_slot_runtime(session, host.id)
-    assert slot.endpoint == "http://box-b.example.ts.net:8000/v1"
+    assert slot.endpoint == "http://box-b.vpn.invalid:8000/v1"
 
 
 # ── 13. Der Rückweg (Skript slot_rollback.py) ────────────────────────────────
