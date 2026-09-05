@@ -2236,6 +2236,28 @@ export interface HostRecipe {
    * Optional, solange ältere Backends das Feld nicht schicken.
    */
   env_ready?: boolean;
+  /**
+   * P4 „Vorflug": passt das Rezept auf die Ziel-Boxen? Das Backend liest die
+   * Zahlen aus der Node-Agent-Telemetrie und rechnet fertig — die Oberfläche
+   * zeigt nur. Harte Verstösse (Box kleiner als das Rezept) laufen wie alles
+   * andere über `startable:false` + `reason`; `warnings` sind Sätze, die
+   * nichts sperren. Optional, solange ältere Backends das Feld nicht schicken.
+   */
+  capacity?: HostRecipeCapacity;
+}
+
+export interface HostRecipeCapacity {
+  /** false = harter Verstoss; der Satz dazu steht in `reason`. */
+  ok: boolean;
+  /** Ganze Sätze in einfacher Sprache — Hinweis, kein Riegel. */
+  warnings: string[];
+  /** Die gelesenen Zahlen je Ziel-Box (Kopf zuerst); null = nicht gemeldet. */
+  boxes: {
+    slug: string;
+    mem_total_gb: number | null;
+    mem_available_gb: number | null;
+    disk_free_gb: number | null;
+  }[];
 }
 
 /** Antwort von POST /hosts/{host_id}/recipes/{slug}/start. Der Vertrag legt

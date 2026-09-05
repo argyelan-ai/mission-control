@@ -112,6 +112,36 @@ def reason_port_busy(port: int, blocker_name: str) -> str:
     return f"Port {port} auf dieser Box belegt durch {blocker_name}"
 
 
+# ── P4 „Vorflug": Sätze zur Kapazität ────────────────────────────────────────
+
+
+def reason_box_too_small(slug: str, have_gb: float, need_gb: float) -> str:
+    """Harter Riegel: die Box ist schlicht kleiner als das Rezept."""
+    return f"Box '{slug}' hat {_gb(have_gb)} GB, Rezept braucht {_gb(need_gb)} GB."
+
+
+def warn_capacity_unknown(slug: str) -> str:
+    """Kein Heartbeat = kein Urteil. Wir sagen das, statt zu blockieren."""
+    return f"Box '{slug}': Kapazität unbekannt (keine Telemetrie)."
+
+
+def warn_memory_tight(slug: str, free_gb: float) -> str:
+    return f"Box '{slug}': nur {_gb(free_gb)} GB frei, Start kann am Speicher scheitern."
+
+
+def warn_disk_tight(slug: str, free_gb: float, need_gb: float) -> str:
+    return (
+        f"Box '{slug}': nur {_gb(free_gb)} GB Platte frei, "
+        f"die Gewichte brauchen etwa {_gb(need_gb)} GB."
+    )
+
+
+def _gb(value: float) -> str:
+    """Zahlen für Menschen: 120 statt 120.0, aber 0.5 bleibt 0.5."""
+    rounded = round(float(value), 1)
+    return str(int(rounded)) if rounded == int(rounded) else str(rounded)
+
+
 #: Standard-Port, wenn weder Katalog noch Instanz einen nennen. 8000 ist der
 #: Port, den vLLM und die üblichen Rezept-Wrapper ohne Angabe öffnen — ein
 #: Rezept mit anderem Port trägt ihn im Katalog (``local_recipes.port``).
@@ -258,6 +288,132 @@ def worker_candidates(hosts: list[Host], head: Host, exclusive_busy: set[uuid.UU
     free = [h for h in hosts if h.id != head.id and h.id not in exclusive_busy]
     free.sort(key=lambda h: (0 if h.role == "worker" else 1, h.ui_order, h.slug))
     return [{"host_id": str(h.id), "slug": h.slug, "role": h.role} for h in free]
+
+
+# ── P4 „Vorflug": passt das Rezept auf die Boxen? ────────────────────────────
+#
+# Die Zahlen kommen aus der letzten Node-Agent-Telemetrie (``hosts.agent_telemetry``,
+# Vertrag ``routers/nodes.NodeTelemetry``): ``mem_total_mb`` / ``mem_available_mb``
+# sind MiB aus /proc/meminfo, ``disk_total_gb`` / ``disk_used_gb`` GiB aus
+# statvfs. Wir rechnen in GiB und beschriften sie „GB" — genau wie der Katalog
+# (``min_vram_gb``, ``est_weights_gb``) und der Rest der Oberfläche das tun.
+#
+# Auf einer GB10-Box ist Arbeitsspeicher = GPU-Speicher (unified memory), darum
+# ist ``mem_total`` hier die richtige Grösse für ``min_vram_gb``. Die
+# ``vram_*``-Felder sind auf diesen Boxen null (siehe NodeTelemetry).
+
+
+def box_capacity(host: Host) -> dict[str, Any] | None:
+    """Die drei Zahlen einer Box — oder None, wenn keine Telemetrie da ist.
+
+    „Keine Telemetrie" heisst: kein Heartbeat, oder ein Heartbeat ganz ohne
+    diese Felder (eine Box mitten im Hochlauf, ein alter Agent). Halb gefüllt
+    ist dagegen ein gültiges Ergebnis mit ``None`` an den fehlenden Stellen —
+    eine fehlende Plattenzahl darf die Speicherprüfung nicht mitreissen.
+    """
+    telemetry = host.agent_telemetry if isinstance(host.agent_telemetry, dict) else None
+    if not telemetry:
+        return None
+
+    def _num(key: str) -> float | None:
+        value = telemetry.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    mem_total_mb = _num("mem_total_mb")
+    mem_available_mb = _num("mem_available_mb")
+    disk_total_gb = _num("disk_total_gb")
+    disk_used_gb = _num("disk_used_gb")
+    disk_free_gb = (
+        round(disk_total_gb - disk_used_gb, 1)
+        if disk_total_gb is not None and disk_used_gb is not None
+        else None
+    )
+    if mem_total_mb is None and mem_available_mb is None and disk_free_gb is None:
+        return None
+    return {
+        "slug": host.slug,
+        "mem_total_gb": round(mem_total_mb / 1024, 1) if mem_total_mb is not None else None,
+        "mem_available_gb": (
+            round(mem_available_mb / 1024, 1) if mem_available_mb is not None else None
+        ),
+        "disk_free_gb": disk_free_gb,
+    }
+
+
+def _unknown_capacity(host: Host) -> dict[str, Any]:
+    return {"slug": host.slug, "mem_total_gb": None, "mem_available_gb": None, "disk_free_gb": None}
+
+
+def evaluate_capacity(
+    recipe: LocalRecipe,
+    boxes: list[Host],
+    *,
+    frees_memory: set[uuid.UUID] | None = None,
+) -> dict[str, Any]:
+    """Der Vorflug für EINEN Start: trägt jede Ziel-Box dieses Rezept?
+
+    ``boxes`` ist der Head zuerst, danach die zweite Box (bei einem
+    Zweibox-Rezept). ``frees_memory`` sind die Boxen, auf denen dieser Start
+    ein exklusives Modell verdrängt — dort macht er den Speicher selbst frei,
+    also wäre eine Warnung über „wenig frei" falsch.
+
+    Ergebnis (dasselbe Feld ``capacity`` in Liste und Start):
+      * ``ok`` — False nur bei einem HARTEN Verstoss (Box kleiner als
+        ``min_vram_gb``). Der Aufrufer macht daraus grau + 409.
+      * ``blocker`` — der Satz dazu (None, wenn ok).
+      * ``warnings`` — Sätze, die nichts sperren: unbekannte Kapazität,
+        wenig freier Speicher, wenig freie Platte.
+      * ``boxes`` — die gelesenen Zahlen, damit die Oberfläche nicht raten muss.
+
+    Zwei Dinge tut der Vorflug bewusst NICHT hart:
+    Ohne Telemetrie wird nichts gesperrt (ein blinder Riegel wäre schlimmer
+    als ein später Fehler), und die Platte sperrt nie — MC kann heute nicht
+    feststellen, ob die Gewichte schon auf der Box liegen (kein „installiert"-
+    Feld; ``agent_inventory`` ist ein Verzeichnis-Scan ohne Rezept-Bezug).
+    """
+    frees_memory = frees_memory or set()
+    need = recipe.min_vram_gb
+    weights = recipe.est_weights_gb
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    blocker: str | None = None
+
+    for index, host in enumerate(boxes):
+        cap = box_capacity(host)
+        if cap is None:
+            rows.append(_unknown_capacity(host))
+            if need is not None:
+                warnings.append(warn_capacity_unknown(host.slug))
+            continue
+        rows.append(cap)
+
+        total = cap["mem_total_gb"]
+        if need is not None and total is not None and total < need and blocker is None:
+            blocker = reason_box_too_small(host.slug, total, need)
+
+        free = cap["mem_available_gb"]
+        if (
+            need is not None
+            and free is not None
+            and free < need
+            and host.id not in frees_memory
+        ):
+            warnings.append(warn_memory_tight(host.slug, free))
+
+        # Platte nur am Kopf: dorthin lädt der Betreiber die Gewichte, der
+        # Worker holt sich seine selbst (oder hat sie schon).
+        disk_free = cap["disk_free_gb"]
+        if index == 0 and weights is not None and disk_free is not None and disk_free < weights:
+            warnings.append(warn_disk_tight(host.slug, disk_free, weights))
+
+    return {
+        "ok": blocker is None,
+        "blocker": blocker,
+        "warnings": warnings,
+        "boxes": rows,
+    }
 
 
 async def probe_running(
@@ -434,6 +590,54 @@ def recipe_env_ready(recipe: LocalRecipe) -> bool:
     return bool((recipe.env_file or "").strip()) and bool(recipe.env_map)
 
 
+def boxes_freed_by_start(
+    state: FleetState, recipe: LocalRecipe, instance: Runtime | None
+) -> set[uuid.UUID]:
+    """Boxen, auf denen DIESER Start selbst Speicher frei macht.
+
+    Ein exklusiver Start verdrängt die exklusive Instanz auf jeder Box, die er
+    belegt (``ensure_exclusive_host``, beim Verbund erst Worker, dann Head).
+    Über „nur noch wenig frei" auf so einer Box zu warnen wäre falsch — die
+    Verdrängung räumt sie ja gerade.
+    """
+    if not recipe_claims_box(recipe, instance):
+        return set()
+    return {
+        hid
+        for hid, rts in state.occupied.items()
+        if any(rt.exclusive_memory for rt in rts)
+    }
+
+
+def _capacity_targets(
+    state: FleetState,
+    head: Host,
+    nodes: int,
+    candidate_workers: list[dict[str, Any]],
+    own_other_boxes: set[uuid.UUID],
+) -> list[Host]:
+    """Die Boxen, die dieser Start belegen würde — Head zuerst.
+
+    Für ein Solo-Rezept ist das genau der Head. Für ein Zweibox-Rezept kommt
+    die Box dazu, die der Start OHNE Angabe nehmen würde: der erste Kandidat
+    (Worker-Rolle zuerst), sonst die zweite Box des eigenen laufenden
+    Verbunds. Wählt der Betreiber im Dialog eine andere, prüft der Start sie
+    noch einmal — mit derselben Funktion.
+    """
+    targets = [head]
+    if nodes < 2:
+        return targets
+    worker_id = None
+    if candidate_workers:
+        worker_id = _as_uuid(candidate_workers[0]["host_id"])
+    elif own_other_boxes:
+        worker_id = sorted(own_other_boxes, key=str)[0]
+    worker = state.host_by_id.get(worker_id) if worker_id else None
+    if worker is not None:
+        targets.append(worker)
+    return targets
+
+
 async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str, Any]]:
     """Alle freigegebenen Rezepte aus Sicht EINER Box — exakt das Vertrags-Schema.
 
@@ -501,7 +705,20 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
         env_ready = recipe_env_ready(recipe)
         if command_ok and handle_ok and not env_ready:
             reason = REASON_NO_ENV_MAP
-        startable = command_ok and handle_ok and env_ready and fit != "none"
+
+        # P4 „Vorflug": trägt die Box das Rezept überhaupt? Geprüft werden der
+        # Head und — beim Zweibox-Rezept — die Box, die der Start ohne weitere
+        # Angabe nehmen würde (erster Kandidat, sonst die des eigenen
+        # laufenden Verbunds).
+        capacity = evaluate_capacity(
+            recipe,
+            _capacity_targets(state, host, nodes, candidate_workers, own_other_boxes),
+            frees_memory=boxes_freed_by_start(state, recipe, instance),
+        )
+        if command_ok and handle_ok and env_ready and capacity["blocker"]:
+            reason = capacity["blocker"]
+
+        startable = command_ok and handle_ok and env_ready and capacity["ok"] and fit != "none"
         if running:
             # Ein laufendes Rezept ist gesetzt, nicht startbar — der Grund sagt
             # das, statt „keine freie Box" oder „Port belegt" zu behaupten.
@@ -547,6 +764,13 @@ async def list_host_recipes(session: AsyncSession, host: Host) -> list[dict[str,
                 # P3: sagt der Oberfläche, ob der Duo-Dialog überhaupt etwas
                 # zu wählen hat. Solo-Rezepte sind immer bereit.
                 "env_ready": env_ready,
+                # P4: die gelesenen Zahlen plus die weichen Hinweise. Harte
+                # Verstösse stehen wie alles andere in ``reason``.
+                "capacity": {
+                    "ok": capacity["ok"],
+                    "warnings": capacity["warnings"],
+                    "boxes": capacity["boxes"],
+                },
             }
         )
 
@@ -813,6 +1037,19 @@ async def start_recipe_on_host(
         blocker = next(iter(state.worker_member_runtimes(host.id)), None)
         if blocker is not None:
             raise RecipeStartError(409, reason_box_is_worker(blocker.display_name))
+
+    # P4 „Vorflug": passen die Zahlen? Steht ohne Netzzugriff fest und läuft
+    # darum HIER — vor der Instanz, vor der `.env`, vor jeder Verdrängung.
+    # Derselbe Satz wie in der Liste, damit niemand zwei Erklärungen für
+    # dieselbe Sache bekommt. Weiche Hinweise halten nichts auf: die Zahlen
+    # sind Schätzungen, und der Betreiber weiss unter Umständen mehr als wir.
+    capacity = evaluate_capacity(
+        recipe,
+        [host] + ([worker] if worker is not None else []),
+        frees_memory=boxes_freed_by_start(state, recipe, instance),
+    )
+    if capacity["blocker"]:
+        raise RecipeStartError(409, capacity["blocker"])
 
     created = False
     if instance is None:
