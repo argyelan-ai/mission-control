@@ -25,7 +25,7 @@ function renderWithQuery(ui: React.ReactElement) {
 function makeHost(over: Partial<Host> = {}): Host {
   return {
     id: over.slug ?? "spark", slug: "spark", display_name: "DGX Spark", kind: "ssh",
-    ssh_host: "100.67.20.66", ssh_user: null, ssh_key_path: null, ssh_credential_id: null,
+    ssh_host: "192.0.2.10", ssh_user: null, ssh_key_path: null, ssh_credential_id: null,
     role: "head", fabric_ip: "10.0.0.1", control_url: null,
     wol_mac_address: null, power_managed: false, notes: null, enabled: true,
     ui_order: 0, created_at: "", updated_at: "",
@@ -56,7 +56,7 @@ function makeRuntime(over: Partial<Runtime> = {}): Runtime {
   return {
     id: "rt-1", slug: "qwen38-flash-next", display_name: "Qwen3.8 Flash Next",
     runtime_type: "vllm_docker", provider: "vllm",
-    endpoint: "http://100.67.20.66:8000/v1", healthcheck_path: "/health",
+    endpoint: "http://192.0.2.10:8000/v1", healthcheck_path: "/health",
     container_name: null, role_tags: [], supports_tools: true,
     supports_reasoning: false, supports_streaming: true,
     preferred_context_len: 8192, max_context_len: 262144,
@@ -99,7 +99,7 @@ describe("BoxCockpit", () => {
     );
     expect(await screen.findByTestId("box-cockpit")).toBeInTheDocument();
     expect(screen.getByText("DGX Spark")).toBeInTheDocument();
-    expect(screen.getByText("Head · 100.67.20.66 · fabric 10.0.0.1")).toBeInTheDocument();
+    expect(screen.getByText("Head · 192.0.2.10 · fabric 10.0.0.1")).toBeInTheDocument();
     expect(screen.getByTestId("cockpit-group-telemetry")).toBeInTheDocument();
     expect(screen.getByTestId("cockpit-group-mode")).toBeInTheDocument();
     expect(screen.getByTestId("cockpit-group-autostart")).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe("BoxCockpit", () => {
     const stopSpy = vi
       .spyOn(api.runtimes, "stop")
       .mockImplementationOnce(() =>
-        Promise.reject(new Error('API 409: {"detail":{"code":"agent_busy","agents":[{"name":"Sparky","slug":"sparky","task_id":"t-1"}]}}'))
+        Promise.reject(new Error('API 409: {"detail":{"code":"agent_busy","agents":[{"name":"Alpha","slug":"alpha","task_id":"t-1"}]}}'))
       )
       .mockImplementationOnce(() => Promise.resolve({ ok: true, message: "stopped", autostart_disabled: true }));
 
@@ -221,7 +221,7 @@ describe("BoxCockpit", () => {
     const stopBtn = await screen.findByTestId("cockpit-stop");
     await act(async () => { stopBtn.click(); });
     expect(await screen.findByTestId("cockpit-stop-conflict")).toBeInTheDocument();
-    expect(screen.getByText(/Sparky/)).toBeInTheDocument();
+    expect(screen.getByText(/Alpha/)).toBeInTheDocument();
 
     const anyway = screen.getByTestId("cockpit-stop-anyway");
     await act(async () => { anyway.click(); });
