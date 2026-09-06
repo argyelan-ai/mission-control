@@ -251,3 +251,44 @@ async def test_a_busy_agent_on_an_unrelated_host_does_not_block(async_session, a
         resp = await auth_client.post(f"/api/v1/runtimes/{rt_a.slug}/stop")
 
     assert resp.status_code == 200, resp.text
+
+
+# ── 3. Riegel + Rand: Slot-Zeile, Cloud-Runtime ohne Host ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_slot_row_itself_cannot_be_stopped(async_session, auth_client):
+    """ADR-078: die Slot-Zeile ist nur eine Adresse (kein Startbefehl, kein
+    Anker) — ein Stop-Klick darauf waere ein No-Op, der aber faelschlich
+    Autostart der Box mit ausschalten wuerde. Muss vor jeder anderen Pruefung
+    (Dispatch-Gate, Autostart) mit 400 abgewiesen werden."""
+    host = await _host(async_session, autostart_enabled=True)
+    slot_rt = await _runtime(async_session, "recipe-slot-only", host, is_slot=True, runtime_type="openai_compatible")
+
+    stop_mock = AsyncMock(return_value={"ok": True, "message": "gestoppt"})
+    with patch("app.services.runtime_manager.stop_runtime", stop_mock):
+        resp = await auth_client.post(f"/api/v1/runtimes/{slot_rt.slug}/stop")
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"]["code"] == "slot_not_stoppable"
+    stop_mock.assert_not_awaited()
+
+    # Autostart bleibt unangetastet — der Riegel greift vor der Kopplung.
+    await async_session.refresh(host)
+    assert host.autostart_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_a_cloud_runtime_without_a_host_stops_cleanly_with_no_coupling(async_session, auth_client):
+    """Cloud-/HTTP-only-Runtimes haben keinen host_id (ADR-048) — die
+    Autostart-Kopplung darf dafuer weder krachen noch faelschlich eine Box
+    anfassen. Antwort bleibt explizit false/null, nicht einfach fehlend."""
+    rt = await _runtime(async_session, "recipe-cloud", host=None, runtime_type="cloud")
+
+    with _stop_ok():
+        resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/stop")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["autostart_disabled"] is False
+    assert body["host_slug"] is None

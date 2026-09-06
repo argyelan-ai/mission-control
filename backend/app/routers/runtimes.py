@@ -791,6 +791,14 @@ async def stop_runtime(
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
+    if rt.get("is_slot"):
+        # ADR-078: die Slot-Zeile ist nur eine Adresse (kein Startbefehl, kein
+        # Anker) — sie zu "stoppen" hiesse nichts. Stoppen laeuft ueber die
+        # Rezept-Zeile, die auf derselben Box laeuft.
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "slot_not_stoppable"},
+        )
 
     runtime_uuid = rt["id"] if isinstance(rt["id"], uuid.UUID) else uuid.UUID(str(rt["id"]))
     host_id = rt.get("host_id")
