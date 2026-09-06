@@ -1,12 +1,25 @@
 """Runtime → agent model propagation (Runtime & Model Management v1, ADR-054).
 
 When the runtime watcher confirms that an engine serves a different model,
-every cli-bridge agent bound to that runtime must reload it. The reload is a
-plain ``docker restart``: the container entrypoint re-runs the
-``/internal/bootstrap`` call and receives the fresh ``OPENAI_MODEL`` from the
-DB row (for the omp image this also re-renders ``models.yml`` and the model
-selector). ``respawn_window_only`` is deliberately NOT used here — a window
-respawn inherits the stale tmux environment and would keep the old model.
+every cli-bridge agent bound to that runtime must reload it.
+
+Zwei Wege, in dieser Reihenfolge (ADR-078, 05.09.2026):
+
+1. **Reload (omp).** ``docker exec <container> render-omp-config.sh`` schreibt
+   ``models.yml`` + ``omp.env`` im laufenden Container neu. ``launch-omp.sh``
+   liest ``omp.env`` bei jedem Window-Respawn neu ein, und die Bridge respawnt
+   Window 0 für jede Aufgabe — die nächste Aufgabe fährt also auf dem neuen
+   Modell, ohne Neustart. Wichtig, seit alle Agenten einer Box an derselben
+   Slot-Zeile hängen: ein Wechsel flaggt die ganze Flotte, und serielle
+   Neustarts mit je 60 s Health-Frist wären Minuten Stillstand.
+2. **Neustart (Rückfall, und der einzige Weg für alle anderen Harnesses).**
+   ``docker restart``: der Entrypoint ruft ``/internal/bootstrap`` neu und
+   bekommt das frische ``OPENAI_MODEL`` aus der DB-Zeile.
+
+``respawn_window_only`` ist hier weiterhin bewusst NICHT im Spiel — ein blosser
+Window-Respawn OHNE vorheriges Rendern erbt die alte tmux-Umgebung und behielte
+das alte Modell. Genau deshalb rendert Weg 1 die Datei zuerst und zieht die
+tmux-Server-Umgebung gleich mit nach.
 
 Busy agents are only flagged (``pending_runtime_sync``); the watcher's next
 tick retries until the agent is idle. A Redis failure counter trips a circuit
@@ -34,6 +47,7 @@ from app.services.agent_runtime_switch import (
 )
 from app.services.harness_compat import derive_harness
 from app.services.docker_agent_sync import (
+    _agent_slug,
     restart_docker_agent_container,
     sync_docker_agent_files,
     wait_for_agent_healthy,
@@ -44,6 +58,56 @@ logger = logging.getLogger(__name__)
 MAX_SYNC_ATTEMPTS = 3
 _FAIL_TTL = 3600  # failure counter window (seconds)
 _OMP_READY_SIGNALS = ("╭─", "❯")  # omp TUI prompt glyphs (ADR-049)
+
+#: Das Skript im omp-Image, das ``models.yml`` + ``omp.env`` schreibt
+#: (docker/omp-bridge/render-omp-config.sh, ADR-078). Liegt als Symlink in
+#: PATH, weil ``docker exec`` keine Login-Shell startet.
+_OMP_RENDER_SCRIPT = "render-omp-config.sh"
+#: Ein Rendern ist Dateien schreiben plus EIN Bootstrap-Aufruf — Sekunden.
+#: Länger warten hiesse, den Neustart-Rückfall unnötig lange zu verzögern.
+_OMP_RENDER_TIMEOUT = 30
+
+
+def reload_omp_config(agent: Agent) -> dict[str, str]:
+    """Das Modell IM laufenden Container neu rendern — statt ihn neu zu starten.
+
+    Warum das reicht (am Code nachgeprüft, nicht angenommen): ``launch-omp.sh``
+    liest ``omp.env`` bei JEDEM ``tmux respawn-window`` neu ein, und die Bridge
+    respawnt Window 0 für jede Aufgabe (``bridge.py``). Die nächste Aufgabe
+    fährt also auf dem neuen Modell — ohne Neustart, ohne 60-Sekunden-
+    Health-Frist, ohne Trust-Dialog, und ohne die laufende Sitzung zu verlieren.
+
+    Das war vor ADR-078 ein netter Vorteil und ist seitdem eine Notwendigkeit:
+    an einer Slot-Zeile hängen ALLE Agenten einer Box, ein Wechsel flaggt also
+    die ganze Flotte — seriell neu gestartet wären das Minuten Stillstand.
+
+    Gibt ``{"status": "reloaded"|"error: …"}`` zurück. Ein Fehler ist kein
+    Drama: der Aufrufer fällt auf den Neustart zurück.
+    """
+    import subprocess
+
+    slug = _agent_slug(agent)
+    container_name = f"mc-agent-{slug}"
+    # Gleiche Stolperdraht-Zusicherung wie im Neustart-Pfad: der Name kommt
+    # AUSSCHLIESSLICH aus dem Agenten-Slug, nie aus einem Modell- oder
+    # Runtime-Namen. Ein `docker exec` in einen Modell-Container wäre der
+    # Vorfall, den ADR-059 abgeschafft hat.
+    assert container_name.startswith("mc-agent-"), (
+        f"refusing to exec into non-agent container {container_name!r}"
+    )
+    try:
+        result = subprocess.run(
+            ["docker", "exec", container_name, _OMP_RENDER_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=_OMP_RENDER_TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001 — jeder Fehler heisst „Rückfall"
+        return {"status": f"error: {exc}", "container": container_name}
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[:200]
+        return {"status": f"error: {detail or result.returncode}", "container": container_name}
+    return {"status": "reloaded", "container": container_name}
 
 
 async def mark_agents_for_sync(session: AsyncSession, runtime: Runtime) -> int:
@@ -192,23 +256,43 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
         fail_key = RedisKeys.agent_model_sync_fails(str(agent.id))
         try:
             await sync_docker_agent_files(session, agent)
-            # Restart is a blocking subprocess call — run off the event loop so
-            # the watcher's asyncio loop isn't stalled for seconds per agent.
-            result = await asyncio.to_thread(restart_docker_agent_container, agent)
-            status = str(result.get("status", ""))
-            if status.startswith("error"):
-                raise RuntimeError(f"container restart failed: {status}")
             # B3 (harness-first, ADR-056 follow-up): the omp ready-signal glyphs
             # apply to whichever harness is actually running in the container,
             # not to a runtime_type label — agent.harness wins, derive_harness
             # is the legacy-row fallback (mirrors mark_agents_for_recreate above).
             effective_harness = agent.harness or derive_harness(runtime)
-            ready = _OMP_READY_SIGNALS if effective_harness == "omp" else None
-            health = await wait_for_agent_healthy(
-                agent, timeout=60, respawn_mode=False, ready_signals=ready
-            )
-            if not health.get("healthy"):
-                raise RuntimeError(f"health check failed: {health.get('reason')}")
+
+            # ── Reload statt Neustart (ADR-078) ──────────────────────────────
+            # Für omp reicht es, models.yml + omp.env IM Container neu zu
+            # schreiben: die nächste Aufgabe respawnt Window 0 und liest sie
+            # frisch. Kein Neustart heisst: keine Health-Frist, kein
+            # Trust-Dialog, keine verlorene Sitzung — und bei einer ganzen
+            # Flotte an derselben Slot-Zeile Sekunden statt Minuten.
+            # Schlägt der Exec fehl (altes Image ohne das Skript, Container
+            # gerade weg), bleibt der Neustart exakt wie vorher der Rückweg.
+            reloaded = False
+            if effective_harness == "omp":
+                reload_result = await asyncio.to_thread(reload_omp_config, agent)
+                reloaded = reload_result.get("status") == "reloaded"
+                if not reloaded:
+                    logger.info(
+                        "omp reload for %s not possible (%s) — falling back to restart",
+                        agent.name, reload_result.get("status"),
+                    )
+
+            if not reloaded:
+                # Restart is a blocking subprocess call — run off the event loop
+                # so the watcher's asyncio loop isn't stalled for seconds per agent.
+                result = await asyncio.to_thread(restart_docker_agent_container, agent)
+                status = str(result.get("status", ""))
+                if status.startswith("error"):
+                    raise RuntimeError(f"container restart failed: {status}")
+                ready = _OMP_READY_SIGNALS if effective_harness == "omp" else None
+                health = await wait_for_agent_healthy(
+                    agent, timeout=60, respawn_mode=False, ready_signals=ready
+                )
+                if not health.get("healthy"):
+                    raise RuntimeError(f"health check failed: {health.get('reason')}")
         except Exception as exc:  # noqa: BLE001 — every failure feeds the breaker
             fails = await _bump_failures(fail_key)
             logger.warning(
@@ -243,7 +327,13 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
             f"{runtime.model_identifier or runtime.slug} ({runtime.slug})",
             severity="info",
             agent_id=agent.id,
-            detail={"runtime": runtime.slug, "model": runtime.model_identifier},
+            detail={
+                "runtime": runtime.slug,
+                "model": runtime.model_identifier,
+                # „reload" = ohne Container-Neustart (ADR-078). Das ist der
+                # Beleg, den die Abnahme sucht: gleiche Uptime, neues Modell.
+                "mode": "reload" if reloaded else "restart",
+            },
         )
     finally:
         await _release_lock(agent.id)
