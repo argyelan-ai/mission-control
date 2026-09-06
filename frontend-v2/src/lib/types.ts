@@ -2208,6 +2208,15 @@ export interface RuntimeActionResult {
   host_slug?: string | null;
 }
 
+/** 409-Antwortkörper des Dispatch-Gates beim Stop (Spec §5): ein an diese
+ *  Runtime gebundener Agent arbeitet gerade. Assumption zur genauen Form,
+ *  solange der Backend-PR nicht gemergt ist — `agent`/`task` sind die im
+ *  Spec-Text genannten Felder. */
+export interface RuntimeStopConflict {
+  agent: string;
+  task: string;
+}
+
 // ── Rezept-Umschalter (GET /hosts/{host_id}/recipes) ────────────────────────
 // Vertrag vom 02.09.2026 (docs/plans/2026-09-02-rezept-umschalter-vertrag.md).
 // Das Backend liefert JEDE Aussage fertig — running, startable, fit, reason.
@@ -2632,6 +2641,25 @@ export interface HostMetricsHistory {
   points: HostMetricsHistoryPoint[];
   window: number; // seconds
   sample_seconds: number; // min. interval between recorded points
+}
+
+// ── Puls (GET /hosts/{id}/pulse, Runtimes-Bühne v2 §6) ──────────────────────
+// Poller-Ring von tok/s-Punkten der Head-Box. Ohne Metrik antwortet das
+// Backend mit leeren points + available:false statt 5xx — der Client zeigt
+// dann leere Zellen, nie eine Fehlermeldung (Spec §2 Zone 0/1).
+
+export interface HostPulsePoint {
+  t: number;
+  tps: number;
+}
+
+export interface HostPulse {
+  points: HostPulsePoint[];
+  now_tps: number | null;
+  idle_seconds: number | null;
+  /** false = keine Metrik-Quelle (Engine ohne /metrics, Box nicht erreichbar,
+   *  oder Endpoint noch nicht deployt/404) — nie ein Fehlerzustand für die UI. */
+  available: boolean;
 }
 
 // ── Box-Wizard (POST /hosts/probe, /hosts/{id}/bootstrap) ───────────────────

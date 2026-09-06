@@ -219,7 +219,9 @@ function AgentChipsRow({ runtime }: { runtime: Runtime }) {
 
 const PHASES: Array<NonNullable<RuntimeLiveStatus["phase"]>> = ["evicting", "launching", "loading"];
 
-function PhaseIndicator({ phase, message }: { phase?: string | null; message?: string | null }) {
+// Exported for reuse by the Fleet-Stage v2 PhaseBar (stage/PhaseBar.tsx) —
+// same evicting → launching → loading strip, one definition.
+export function PhaseIndicator({ phase, message }: { phase?: string | null; message?: string | null }) {
   return (
     <div className="flex-1 flex items-center gap-2" data-testid="phase-indicator">
       <div className="flex items-center gap-1.5 text-xs font-mono">

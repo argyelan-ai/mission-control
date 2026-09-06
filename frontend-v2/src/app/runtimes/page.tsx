@@ -39,6 +39,7 @@ import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
 import { SlotStage, typeLabel } from "./SlotStage";
+import { FleetStage } from "./stage/FleetStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
@@ -813,6 +814,12 @@ function UnassignedRow({ runtime, onOpen }: { runtime: Runtime; onOpen: (rt: Run
   );
 }
 
+// ── Runtimes-Bühne v2 ────────────────────────────────────────────────────────
+// Hinter einem Schalter (Spec §7, PR 4 "Stage"): Default v1, solange Marks
+// Klick-Abnahme (Desktop + Handy) noch aussteht. `NEXT_PUBLIC_*` wird beim
+// Build eingebacken — ein Wert-Wechsel braucht einen Frontend-Rebuild.
+export const RUNTIMES_STAGE_V2 = process.env.NEXT_PUBLIC_RUNTIMES_STAGE === "v2";
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function RuntimesPage() {
@@ -916,26 +923,48 @@ export default function RuntimesPage() {
             >
               {t("title")}
             </h1>
-            <p
-              className="text-[13px] mt-0.5"
-              style={{ color: C.textSecondary }}
-            >
-              {tSlot("subtitle")}
-            </p>
+            {/* Kein Seiten-Untertitel unter v2 (Spec §2) — die Bühne selbst
+                erklärt den Zustand der Flotte, eine zusätzliche Zeile hier
+                würde das nur doppeln. */}
+            {!RUNTIMES_STAGE_V2 && (
+              <p
+                className="text-[13px] mt-0.5"
+                style={{ color: C.textSecondary }}
+              >
+                {tSlot("subtitle")}
+              </p>
+            )}
           </div>
 
-          <button
-            onClick={() => setAddOpen(true)}
-            className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-            style={{
-              color: C.accent,
-              border: `1px solid ${C.borderAccent}`,
-              background: C.accentSubtle,
-            }}
-          >
-            <Plus size={11} />
-            {t("addRuntime")}
-          </button>
+          {RUNTIMES_STAGE_V2 ? (
+            <button
+              onClick={() => setAddOpen(true)}
+              aria-label={t("addRuntime")}
+              title={t("addRuntime")}
+              data-testid="add-runtime-icon"
+              className="flex items-center justify-center w-9 h-9 rounded-md transition-all cursor-pointer shrink-0"
+              style={{
+                color: C.accent,
+                border: `1px solid ${C.borderAccent}`,
+                background: C.accentSubtle,
+              }}
+            >
+              <Plus size={14} />
+            </button>
+          ) : (
+            <button
+              onClick={() => setAddOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
+              style={{
+                color: C.accent,
+                border: `1px solid ${C.borderAccent}`,
+                background: C.accentSubtle,
+              }}
+            >
+              <Plus size={11} />
+              {t("addRuntime")}
+            </button>
+          )}
         </div>
 
         {isLoading && (
@@ -1016,16 +1045,27 @@ export default function RuntimesPage() {
             {pageTab === "fleet" && !isEmpty && (
               <>
                 <div className="flex flex-col gap-6">
-                  {stageGroups.map((g) => (
-                    <SlotStage key={g.host.id} group={g} live={live} sizeGb={getSizeGb} onOpen={openPanel} />
-                  ))}
-
-                  {sleepingGroups.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                      {sleepingGroups.map((g) => (
-                        <SleepingHostLine key={g.host.id} group={g} />
+                  {RUNTIMES_STAGE_V2 ? (
+                    <FleetStage
+                      stageGroups={stageGroups}
+                      sleepingGroups={sleepingGroups}
+                      live={live}
+                      onOpen={openPanel}
+                    />
+                  ) : (
+                    <>
+                      {stageGroups.map((g) => (
+                        <SlotStage key={g.host.id} group={g} live={live} sizeGb={getSizeGb} onOpen={openPanel} />
                       ))}
-                    </div>
+
+                      {sleepingGroups.length > 0 && (
+                        <div className="flex flex-col gap-2">
+                          {sleepingGroups.map((g) => (
+                            <SleepingHostLine key={g.host.id} group={g} />
+                          ))}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
 

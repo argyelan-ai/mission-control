@@ -1930,6 +1930,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ context_length: contextLength ?? null }),
       }),
+    // Runtimes-Bühne v2 (Spec §5, Stop↔Autostart-PR): ein beschäftigter,
+    // gebundener Agent (current_task_id gesetzt) lässt den Stop ohne
+    // force=true mit 409 scheitern — die Bühne zeigt dann eine inline
+    // Bestätigung statt window.confirm (ActionBar.tsx).
     stop: (id: string, opts?: { force?: boolean }): Promise<RuntimeActionResult> =>
       request(
         `/api/v1/runtimes/${id}/stop${opts?.force ? "?force=true" : ""}`,
@@ -2184,6 +2188,17 @@ export const api = {
     // {points: []}, nie ein Fehler.
     metricsHistory: (id: string, window?: number): Promise<HostMetricsHistory> =>
       request(`/api/v1/hosts/${id}/metrics/history${window ? `?window=${window}` : ""}`),
+    // Runtimes-Bühne v2 (PR 1 Puls, Spec §6): tok/s-Ring der Head-Box. Der
+    // Endpoint kann noch fehlen (Backend-PR nicht deployt) — 404/jeder Fehler
+    // wird hier zu einer leeren, "not available" Antwort statt einem Reject,
+    // damit die Bühne nie einen Fehlerbanner für eine fehlende Metrik zeigt.
+    pulse: async (id: string): Promise<import("@/lib/types").HostPulse> => {
+      try {
+        return await request(`/api/v1/hosts/${id}/pulse`);
+      } catch {
+        return { points: [], now_tps: null, idle_seconds: null, available: false };
+      }
+    },
     // Box-Wizard: read-only inventory over SSH. An unreachable box is a 200
     // with reachable:false — only a malformed request rejects.
     probe: (
