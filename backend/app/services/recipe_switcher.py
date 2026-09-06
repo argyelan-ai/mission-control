@@ -991,6 +991,7 @@ async def start_recipe_on_host(
         recipe_env,
         runtime_grace,
         runtime_manager,
+        runtime_propagation,
         runtime_readiness,
         slot_runtimes,
     )
@@ -1158,12 +1159,35 @@ async def start_recipe_on_host(
     # anderes serviert als der Katalog sagt — Engine führt, MC folgt.
     if slot is not None:
         try:
-            await slot_runtimes.write_slot_state(
+            previous_model = slot.model_identifier
+            updated = await slot_runtimes.write_slot_state(
                 session,
                 host.id,
                 model=recipe.model_identifier,
                 context_len=recipe.context_len,
             )
+            # …und die Agenten an dieser Zeile müssen es auch erfahren.
+            # Warum HIER und nicht beim Wächter (Live-Befund 06.09.2026): den
+            # einzigen Sync-Auslöser hatte bis heute der Drift-Pfad
+            # (``runtime_watcher._handle_drift``) — und der sieht nach diesem
+            # Sofort-Schreiben gar keine Drift mehr, weil die Zeile schon den
+            # servierten Namen trägt. Ergebnis: die ``omp.env`` im Container
+            # behielt das alte ``OPENAI_MODEL``, und jede Anfrage lief in ein
+            # 404 auf ein Modell, das die Box nicht mehr kennt.
+            # Geflaggt wird nur bei ECHTEM Modellwechsel: ein Neustart
+            # desselben Rezepts soll nicht die ganze Flotte durch den
+            # Reload-Pfad schicken. Das Nachziehen von ``agents.model`` und der
+            # Reload selbst passieren im Sync-Lauf des Wächters
+            # (``runtime_propagation._sync_one``) — hier wird nur geflaggt,
+            # damit ein langsamer Reload nie einen Start blockiert.
+            if updated is not None and (updated.model_identifier or "") != (
+                previous_model or ""
+            ):
+                flagged = await runtime_propagation.mark_agents_for_sync(session, updated)
+                logger.info(
+                    "slot: %s Agent(en) an %s für den Modellwechsel %r → %r geflaggt",
+                    flagged, updated.slug, previous_model, updated.model_identifier,
+                )
         except Exception:  # noqa: BLE001 — ein erfolgreicher Start bleibt erfolgreich
             logger.exception("slot: Sofort-Schreiben für Box %s fehlgeschlagen", host.slug)
 

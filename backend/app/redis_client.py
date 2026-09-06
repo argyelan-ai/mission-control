@@ -475,6 +475,15 @@ class RedisKeys:
         """
         return f"mc:runtime-ctx-drift:{slug}"
 
+    # Drosselung für das Sicherheitsnetz „gebundener Agent trägt noch den
+    # alten Modellnamen" (ADR-078, Nachlese 06.09.2026). Ohne sie flaggte der
+    # Wächter die ganze Flotte in JEDER Runde neu, solange ein Sync nicht
+    # durchkommt. Die TTL ist bewusst kurz genug, dass ein einmal verlorener
+    # Sync von allein wiederkommt.
+    @staticmethod
+    def runtime_agent_model_guard(slug: str) -> str:
+        return f"mc:runtime-agent-model:{slug}"
+
     # ── Switch Grace + Auto-Recovery (PR5, services/runtime_grace.py) ────
     # runtime_switching: "this runtime is expected to be unreachable right
     # now" — set by start_runtime (Rezept-Start), cleared by the watcher once a
