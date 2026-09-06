@@ -14,9 +14,14 @@
  * "unreachable") bleibt Wort-only: weder `RuntimeLiveStatus` noch `Runtime`
  * tragen einen Phasenbeginn- oder Unreachable-Zeitstempel, ein erfundener
  * Wert wäre genau die Lüge, die diese Regel verbietet.
+ *
+ * Review-Nachtrag: ein eigener 60s-Ticker (useEffect/setInterval, siehe
+ * `servingSince`-Effekt unten) hält "up X" unabhängig von anderen Queries
+ * aktuell — TanStack Querys structural sharing hält die Puls-Abfrage-
+ * Referenz im Leerlauf stabil und löst sonst kein Re-Render aus.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -111,10 +116,26 @@ export function Stage({
   // Zeitstempel im Vertrag, s. Datei-Kopfkommentar). `live.serving_since`
   // ist der gespiegelte Wert extra für die Karte; `runtime.serving_since`
   // deckt den Rand ab, in dem der 30s-Live-Poll noch nicht nachgezogen hat,
-  // aber die 15s-Runtime-Liste schon. Neu bei jedem Render gelesen (kein
-  // eigener Ticker nötig) — Stage re-rendert ohnehin alle 5s über die
-  // Puls-Abfrage oben, oft genug für eine Minuten-Auflösung.
-  const uptime = status === "serving" ? formatUptimeParts(live?.serving_since ?? runtime.serving_since) : null;
+  // aber die 15s-Runtime-Liste schon.
+  const servingSince = status === "serving" ? (live?.serving_since ?? runtime.serving_since ?? null) : null;
+
+  // Review-Nachtrag (06.09.2026): TanStack Querys `structuralSharing` hält
+  // die Objekt-Referenz stabil, solange sich der Inhalt eines Polls nicht
+  // ändert — die Puls-Abfrage refetcht zwar alle 5s, liefert im Leerlauf
+  // aber denselben Inhalt und löst darum KEIN Re-Render aus. Ohne einen
+  // eigenen Ticker bliebe "up X" stehen, bis irgendeine andere Query (z.B.
+  // der 30s-Live-Poll) zufällig einen echten Wertwechsel bringt. Ein
+  // eigener 60s-Ticker läuft NUR, solange die Karte überhaupt eine
+  // Laufzeit zeigt — sobald `servingSince` null wird (Wechsel/Störung/
+  // unmount), räumt das Cleanup den Intervall sauber ab.
+  const [, forceUptimeTick] = useState(0);
+  useEffect(() => {
+    if (!servingSince) return;
+    const id = setInterval(() => forceUptimeTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [servingSince]);
+
+  const uptime = servingSince ? formatUptimeParts(servingSince) : null;
 
   const tps = pulse?.available ? pulse?.now_tps ?? null : null;
   const latencyMs = live?.latency_ms ?? null;
