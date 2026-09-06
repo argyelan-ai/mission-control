@@ -111,7 +111,7 @@ function StageRow({
       slot: pickSlot(group),
     }));
 
-  const stageMembers: StageMember[] = members.map(({ host, role, device }) => ({ host, role, device }));
+  const stageMembers: StageMember[] = members.map(({ host, role, device, slot }) => ({ host, role, device, slot }));
   const rtLive = live?.[runtime.slug ?? runtime.id];
   return (
     <Stage

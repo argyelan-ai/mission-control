@@ -246,7 +246,11 @@ export function BoxCockpit({
           <>
             <GroupRow label={t("groupConnection")} testId="cockpit-group-connection">
               <ConnectionGroup
-                runtimeSlug={(runtime?.slug ?? runtime?.id ?? active.slot?.slug ?? active.slot?.id) as string}
+                // Team-Lead-Fund 06.09.2026: die gebundenen Agenten hängen an
+                // der Slot-Runtime dieser Box (ADR-078), nicht am laufenden
+                // Rezept — Slot zuerst, `runtime` nur als Fallback für Boxen
+                // ohne eigene Slot-Zeile.
+                runtimeSlug={(active.slot?.slug ?? active.slot?.id ?? runtime?.slug ?? runtime?.id) as string}
                 endpoint={connectionEndpoint}
               />
             </GroupRow>

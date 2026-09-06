@@ -96,3 +96,57 @@ describe("Stage — title + corner", () => {
     expect(await screen.findByText("switching")).toBeInTheDocument();
   });
 });
+
+describe("Stage — Agents KPI reads the box's slot runtime (Team-Lead-Fund 06.09.2026)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 10, vram_used_mb: 1024, vram_total_mb: 8192, gpu_temp_c: 40 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+  });
+
+  it("counts agents bound to the head box's SLOT runtime (ADR-078), not the recipe runtime", async () => {
+    const recipeRuntime = makeRuntime({ slug: "qwen38-flash-next", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    const slotRuntime = makeRuntime({ slug: "dgx-spark-slot", is_slot: true });
+
+    const agentsSpy = vi.spyOn(api.runtimes.db, "agents").mockImplementation((slug: string) =>
+      Promise.resolve(
+        slug === "dgx-spark-slot"
+          ? { runtime_slug: slug, count: 3, agents: [
+              { id: "a1", name: "Alpha", agent_runtime: "cli-bridge" },
+              { id: "a2", name: "Beta", agent_runtime: "cli-bridge" },
+              { id: "a3", name: "Gamma", agent_runtime: "cli-bridge" },
+            ] }
+          : { runtime_slug: slug, count: 0, agents: [] }
+      )
+    );
+
+    renderWithQuery(
+      <Stage
+        runtime={recipeRuntime}
+        members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head", slot: slotRuntime }]}
+        onOpenCockpit={() => {}}
+      />
+    );
+
+    expect(await screen.findByText("3")).toBeInTheDocument();
+    expect(agentsSpy).toHaveBeenCalledWith("dgx-spark-slot");
+    expect(agentsSpy).not.toHaveBeenCalledWith("qwen38-flash-next");
+  });
+
+  it("falls back to the recipe runtime when the head box has no slot runtime yet", async () => {
+    const recipeRuntime = makeRuntime({ slug: "qwen38-flash-next", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    const agentsSpy = vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "qwen38-flash-next", count: 1, agents: [] });
+
+    renderWithQuery(
+      <Stage
+        runtime={recipeRuntime}
+        members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]}
+        onOpenCockpit={() => {}}
+      />
+    );
+
+    await screen.findByText("1");
+    expect(agentsSpy).toHaveBeenCalledWith("qwen38-flash-next");
+  });
+});
