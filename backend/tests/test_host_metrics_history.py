@@ -2,6 +2,7 @@
 
 Only RFC 5737 placeholder IPs (192.0.2.x) — public repo, no real addresses.
 """
+import asyncio
 import json
 import time
 from unittest.mock import AsyncMock, patch
@@ -146,6 +147,41 @@ async def test_get_redis_failure_before_write_does_not_break_metrics_endpoint(au
 
 
 @pytest.mark.asyncio
+async def test_redis_read_failure_returns_empty_points_not_5xx(auth_client):
+    """Review-Fund rev-437: ein Redis-Fehler beim LESEN des Rings (nicht nur
+    beim Schreiben) darf GET /metrics/history nie in einen 5xx umwandeln —
+    read_history_safe schluckt den Fehler, der Endpoint antwortet mit
+    points: [] und HTTP 200."""
+    created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body("gpu-box-read-fails"))).json()
+    with patch(
+        "app.services.host_metrics_history.read_history",
+        new=AsyncMock(side_effect=ConnectionError("redis unreachable")),
+    ):
+        resp = await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics/history")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "points": [],
+        "window": hmh.HISTORY_WINDOW_SECONDS,
+        "sample_seconds": hmh.HISTORY_DEDUPE_SECONDS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_redis_failure_before_read_does_not_break_history_endpoint(auth_client):
+    """Wie oben, aber der Fehler passiert schon beim get_redis()-Aufruf
+    selbst, bevor read_history_safe überhaupt läuft — auch das darf kein
+    5xx auslösen (der Router umschliesst den ganzen Lesezugriff)."""
+    created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body("gpu-box-get-redis-read-fails"))).json()
+    with patch(
+        "app.routers.hosts.get_redis",
+        new=AsyncMock(side_effect=RuntimeError("no redis connection")),
+    ):
+        resp = await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics/history")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["points"] == []
+
+
+@pytest.mark.asyncio
 async def test_history_empty_for_fresh_host(auth_client):
     """No /metrics call yet → 200 with empty points, never a 5xx."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body("gpu-box-fresh"))).json()
@@ -232,6 +268,28 @@ async def test_record_metrics_point_dedupe_service_level(fake_redis):
     wrote_second = await hmh.record_metrics_point(fake_redis, host_id, metrics)
     assert wrote_first is True
     assert wrote_second is False
+    points = await hmh.read_history(fake_redis, host_id)
+    assert len(points) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_metrics_point_concurrent_calls_write_exactly_once(fake_redis):
+    """Review-Fund rev-437: Dedupe muss atomar sein. Die alte Version las den
+    letzten Zeitstempel und schrieb dann erst — zwei gleichzeitige Aufrufe
+    (mehrere offene Tabs pollen denselben Host) konnten beide den Read VOR
+    dem jeweils anderen Write sehen und beide schreiben. Mit dem
+    ``SET NX EX``-Marker gewinnt garantiert genau einer, egal wie die beiden
+    Coroutinen interleaven (asyncio.gather zwingt hier keine bestimmte
+    Reihenfolge, das ist der Punkt)."""
+    host_id = "concurrent-dedupe-host"
+    metrics = {"reachable": True, "gpu_util_pct": 42, "ram_used_mb": 1, "ram_total_mb": 2, "gpu_temp_c": 3}
+
+    results = await asyncio.gather(
+        hmh.record_metrics_point(fake_redis, host_id, metrics),
+        hmh.record_metrics_point(fake_redis, host_id, metrics),
+    )
+
+    assert sorted(results) == [False, True]
     points = await hmh.read_history(fake_redis, host_id)
     assert len(points) == 1
 

@@ -651,7 +651,7 @@ async def host_metrics(
             redis = await get_redis()
             await host_metrics_history.record_metrics_point_safe(redis, str(host.id), metrics)
         except Exception as e:
-            host_metrics_history.log_history_write_failure(str(host.id), e)
+            host_metrics_history.log_history_failure(str(host.id), "geschrieben", e)
     return {"kind": host.kind, "slug": host.slug, **metrics}
 
 
@@ -716,13 +716,20 @@ async def host_metrics_history_endpoint(
 
     Punkte kommen ausschliesslich aus dem Schreibweg in host_metrics() oben —
     kein eigener Sammler. Leerer Ring (z.B. frisch angelegter Host, oder noch
-    kein Poll seit Neustart) → ``points: []`` mit HTTP 200, nie ein Fehler."""
+    kein Poll seit Neustart) → ``points: []`` mit HTTP 200, nie ein Fehler.
+    Ein Redis-Ausfall beim Lesen selbst ist ebenfalls kein 5xx (Review-Fund
+    rev-437) — try/except um den ganzen Zugriff inkl. ``get_redis()``, wie
+    beim Schreibweg oben, mit derselben gedrosselten Log-Warnung."""
     host = await _get_host(session, host_id)
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
 
-    redis = await get_redis()
-    points = await host_metrics_history.read_history(redis, str(host.id), window)
+    try:
+        redis = await get_redis()
+        points = await host_metrics_history.read_history_safe(redis, str(host.id), window)
+    except Exception as e:
+        host_metrics_history.log_history_failure(str(host.id), "gelesen", e)
+        points = []
     return {
         "points": points,
         "window": window,

@@ -69,6 +69,15 @@ class RedisKeys:
         return f"mc:host:{host_id}:metrics:history"
 
     @staticmethod
+    def host_metrics_history_dedupe_marker(host_id: str) -> str:
+        """Atomarer Dedupe-Marker fürs Ring-Schreiben (Review-Fund rev-437):
+        ``SET ... NX EX HISTORY_DEDUPE_SECONDS`` — nur wer den Marker setzen
+        kann, schreibt den Punkt. Ersetzt das racende "letzten Zeitstempel
+        lesen, dann schreiben" (zwei gleichzeitige Requests konnten beide
+        den Read vor dem jeweils anderen Write sehen und dedupe umgehen)."""
+        return f"mc:host:{host_id}:metrics:history:last"
+
+    @staticmethod
     def agents_events() -> str:
         return "mc:events:agents"
 
