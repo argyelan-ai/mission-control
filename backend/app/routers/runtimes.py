@@ -21,7 +21,7 @@ from app.models.host import Host
 from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
-from app.services import recipe_switcher, runtime_manager, runtime_readiness, runtime_naming
+from app.services import recipe_switcher, runtime_manager, runtime_readiness, runtime_naming, runtime_stop
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
@@ -773,16 +773,52 @@ async def start_runtime(
 @router.post("/{runtime_id}/stop")
 async def stop_runtime(
     runtime_id: str,
+    force: bool = False,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Stops a runtime (docker engines: vllm_docker / llamacpp_docker)."""
+    """Stops a runtime (docker engines: vllm_docker / llamacpp_docker).
+
+    Buehne v2 §5/§7 PR 2:
+    - Dispatch-Gate: ein Agent, der gerade auf dieser Runtime (oder ihrer
+      Slot-Zeile auf derselben Box, Duo) dispatcht, blockt den Stop mit 409 —
+      ausser ``force=true``.
+    - Autostart-Kopplung: nach einem erfolgreichen Stop geht
+      ``hosts.autostart_enabled`` aus, wenn es an war (sonst holt der
+      Waechter das Modell zurueck). Antwort traegt ``autostart_disabled`` +
+      ``host_slug``.
+    """
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
+
+    runtime_uuid = rt["id"] if isinstance(rt["id"], uuid.UUID) else uuid.UUID(str(rt["id"]))
+    host_id = rt.get("host_id")
+    if host_id is not None and not isinstance(host_id, uuid.UUID):
+        host_id = uuid.UUID(str(host_id))
+
+    busy_agents = await runtime_stop.find_busy_agents(session, runtime_uuid, host_id)
+    if busy_agents and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_busy",
+                "agents": runtime_stop.busy_agents_detail(busy_agents),
+            },
+        )
+
     result = await runtime_manager.stop_runtime(rt, host=host)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
+
+    if busy_agents and force:
+        runtime_row = await session.get(Runtime, runtime_uuid)
+        if runtime_row is not None:
+            await runtime_stop.emit_stop_forced(session, runtime_row, busy_agents)
+
+    coupling = await runtime_stop.apply_stop_autostart_coupling(session, host_id)
+    result = {**result, **coupling}
+
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result
 

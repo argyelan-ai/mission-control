@@ -2201,6 +2201,11 @@ export interface RuntimesResponse {
 export interface RuntimeActionResult {
   ok: boolean;
   message: string;
+  // Stop ↔ Autostart coupling (Buehne v2 §5/§7 PR 2) — only present on the
+  // stop response. true when a host's autostart_enabled was switched off as
+  // a side effect of this stop (it was on before).
+  autostart_disabled?: boolean;
+  host_slug?: string | null;
 }
 
 // ── Rezept-Umschalter (GET /hosts/{host_id}/recipes) ────────────────────────
