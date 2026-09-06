@@ -2710,7 +2710,9 @@
       "otherModel": "Other model",
       "cornerServing": "serving",
       "cornerSwitching": "switching",
-      "cornerUnreachable": "unreachable"
+      "cornerUnreachable": "unreachable",
+      "cornerUptimeHours": "up {h} h {m}",
+      "cornerUptimeMinutes": "up {m} min"
     },
     "cockpit": {
       "modeNoDevice": "No node agent is paired with this box — the mode list is unavailable.",

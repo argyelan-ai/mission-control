@@ -2710,7 +2710,9 @@
       "otherModel": "Anderes Modell",
       "cornerServing": "läuft",
       "cornerSwitching": "wechselt",
-      "cornerUnreachable": "nicht erreichbar"
+      "cornerUnreachable": "nicht erreichbar",
+      "cornerUptimeHours": "seit {h} h {m}",
+      "cornerUptimeMinutes": "seit {m} min"
     },
     "cockpit": {
       "modeNoDevice": "Kein Node-Agent mit dieser Box gekoppelt — die Modus-Liste ist nicht verfügbar.",
