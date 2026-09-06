@@ -13,7 +13,7 @@
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
-import type { Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
 import { pickServing, pickSlot } from "../grouping";
 import { useDevices } from "../DeviceControl";
@@ -82,33 +82,41 @@ export function buildStages(
 function StageRow({
   runtime,
   hostIds,
-  hostsById,
+  groupsByHostId,
   live,
   onOpenBoxCockpit,
 }: {
   runtime: Runtime;
   hostIds: string[];
-  hostsById: Map<string, Host>;
+  groupsByHostId: Map<string, HostGroup>;
   live?: Record<string, RuntimeLiveStatus>;
-  onOpenBoxCockpit: (members: StageMember[], runtime: Runtime, activeHostId: string) => void;
+  onOpenBoxCockpit: (members: BoxCockpitMember[], runtime: Runtime, activeHostId: string) => void;
 }) {
   const devices = useDevices();
   const memberOf = new Map((runtime.member_hosts ?? []).map((m) => [m.host_id, m]));
 
-  const members: StageMember[] = hostIds
-    .map((id) => hostsById.get(id))
-    .filter((h): h is Host => !!h)
-    .map((host) => ({
-      host,
-      role: host.id === hostIds[0] ? "head" : (memberOf.get(host.id)?.role ?? "worker"),
-      device: devices.get(host.id),
+  // Cockpit-Fund 06.09.2026 (Team-Lead-Sichtprüfung): die Connection-URL muss
+  // die Slot-Runtime dieser Box zeigen (ADR-078, `is_slot=true`), NICHT den
+  // Endpoint der laufenden Engine (`runtime` hier ist `pickServing()` — kann
+  // an der LAN-Adresse hängen, während die Slot-Zeile die stabile Adresse
+  // trägt, an der die Agenten wirklich hängen). Jedes Mitglied trägt darum
+  // seine EIGENE Slot-Runtime, nicht die der Bühne.
+  const members: BoxCockpitMember[] = hostIds
+    .map((id) => groupsByHostId.get(id))
+    .filter((g): g is HostGroup => !!g)
+    .map((group) => ({
+      host: group.host,
+      role: group.host.id === hostIds[0] ? "head" : (memberOf.get(group.host.id)?.role ?? "worker"),
+      device: devices.get(group.host.id),
+      slot: pickSlot(group),
     }));
 
+  const stageMembers: StageMember[] = members.map(({ host, role, device }) => ({ host, role, device }));
   const rtLive = live?.[runtime.slug ?? runtime.id];
   return (
     <Stage
       runtime={runtime}
-      members={members}
+      members={stageMembers}
       live={rtLive}
       onOpenCockpit={(headHostId) => onOpenBoxCockpit(members, runtime, headHostId)}
     />
@@ -167,7 +175,7 @@ export function FleetStage({
   onOpen: (rt: Runtime) => void;
 }) {
   const { stages, freeHostIds } = useMemo(() => buildStages(stageGroups, live), [stageGroups, live]);
-  const hostsById = useMemo(() => new Map(stageGroups.map((g) => [g.host.id, g.host])), [stageGroups]);
+  const groupsByHostId = useMemo(() => new Map(stageGroups.map((g) => [g.host.id, g])), [stageGroups]);
   const devices = useDevices();
   // Das Cockpit (Zahnrad, Spec §4) — ersetzt seit PR 5 das alte
   // RuntimeDetailPanel für Stage/FreeBox/AsleepBox. `onOpen` bleibt nur noch
@@ -189,7 +197,7 @@ export function FleetStage({
               key={runtime.id}
               runtime={runtime}
               hostIds={hostIds}
-              hostsById={hostsById}
+              groupsByHostId={groupsByHostId}
               live={live}
               onOpenBoxCockpit={(members, rt, activeHostId) => setCockpit({ members, runtime: rt, activeHostId })}
             />
@@ -204,7 +212,7 @@ export function FleetStage({
                 device={devices.get(g.host.id)}
                 onOpenCockpit={() =>
                   setCockpit({
-                    members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id) }],
+                    members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
                     runtime: slot,
                     activeHostId: g.host.id,
                   })
@@ -217,6 +225,7 @@ export function FleetStage({
       {sleepingGroups.map((g) => {
         const rt = g.runtimes.find((r) => r.power_managed === true);
         if (!rt) return null;
+        const slot = pickSlot(g);
         return (
           <AsleepBox
             key={g.host.id}
@@ -224,7 +233,7 @@ export function FleetStage({
             runtime={rt}
             onOpenCockpit={() =>
               setCockpit({
-                members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id) }],
+                members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
                 runtime: rt,
                 activeHostId: g.host.id,
               })

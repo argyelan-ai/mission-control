@@ -2759,7 +2759,11 @@
       "reprobe": "Erneut prüfen",
       "restart": "Neu starten",
       "stopAutostartOff": "Stopp · Autostart aus",
-      "fabricPrefix": "Fabric {ip}"
+      "fabricPrefix": "Fabric {ip}",
+      "lastAttempt": "letzter Versuch {when} · {status}",
+      "lastAttemptTimeOnly": "letzter Versuch {when}",
+      "resultOk": "ok",
+      "resultFailed": "fehlgeschlagen"
     }
   },
   "bench": {

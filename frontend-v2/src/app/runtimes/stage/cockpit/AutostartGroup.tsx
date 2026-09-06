@@ -14,6 +14,14 @@
  * (eine Zeile) — exakt der Fallback, den der Auftrag für diesen Fall nennt.
  * Der Log-Pfad aus dem Mockup entfällt ganz: kein Backend-Feld trägt ihn.
  *
+ * Team-Lead-Fund 06.09.2026 (Live-Sichtprüfung): `last_result` ist ein ganzer
+ * Meldungssatz vom Backend ("Gestartet — DeepSeek … Gewichte laden dauert …
+ * Logs: ~/.cache/…") — genau der Meldungstext, den die Spec für die Karte
+ * verbietet und der auch im Cockpit zu lang ist. Die Zeile zeigt jetzt NUR
+ * Zeit + ein Ergebnis-Wort (ok/failed), das aus `last_result` per
+ * Schlüsselwort erkannt wird — kein Fliesstext, kein Log-Pfad. Lässt sich
+ * kein sauberes Wort erkennen, bleibt nur die Zeit stehen.
+ *
  * Wiederverwendet dieselbe Query/Mutation/No-Optimistic-Update-Regel wie
  * `HostAutostartRow.tsx` (Karten-Fusszeile) — ein Datenweg, zwei Ansichten.
  */
@@ -21,16 +29,34 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Power } from "lucide-react";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { hostAutostartKey } from "../../HostAutostartRow";
 
+/** Mono, locale-unabhängig — "09/05 07:47" statt eines lokalisierten Satzes
+ *  mit Komma/AM-PM (der Meldungstext, den die Spec verbietet). */
+function compactWhen(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const FAIL_RE = /fail|error|fehler|gescheitert|abgebrochen|exit \d/i;
+const OK_RE = /\bok\b|started|gestartet|ready|bereit|success|erfolgreich/i;
+
+/** Ein Wort aus dem Meldungssatz erkennen, nie ihn zeigen. `null` = kein
+ *  sauberer Status erkennbar — dann bleibt nur die Zeit stehen. */
+function resultWord(result: string): "ok" | "failed" | null {
+  if (FAIL_RE.test(result)) return "failed";
+  if (OK_RE.test(result)) return "ok";
+  return null;
+}
+
 export function AutostartGroup({ hostId, isAdmin }: { hostId: string; isAdmin: boolean }) {
   const t = useTranslations("runtimes.hostAutostart");
   const tCockpit = useTranslations("runtimes.cockpit");
-  const locale = useLocale();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
 
@@ -77,11 +103,8 @@ export function AutostartGroup({ hostId, isAdmin }: { hostId: string; isAdmin: b
   const busy = loading || mutation.isPending;
   const recipeName = status?.recipe_display_name ?? status?.recipe_slug ?? null;
 
-  const attemptWhen = status?.last_attempt_at
-    ? new Date(status.last_attempt_at).toLocaleString(locale, {
-        day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
-      })
-    : null;
+  const attemptWhen = status?.last_attempt_at ? compactWhen(status.last_attempt_at) : null;
+  const attemptWord = status?.last_result ? resultWord(status.last_result) : null;
 
   return (
     <div data-testid="autostart-group" className="flex flex-col gap-2">
@@ -112,9 +135,11 @@ export function AutostartGroup({ hostId, isAdmin }: { hostId: string; isAdmin: b
         </span>
       </div>
 
-      {status?.last_result && (
-        <p className="text-[11px]" style={{ color: C.textDim }} data-testid="cockpit-autostart-last-attempt">
-          {attemptWhen ? t("lastAttemptAt", { when: attemptWhen, result: status.last_result }) : t("lastAttempt", { result: status.last_result })}
+      {attemptWhen && (
+        <p className="font-mono text-[11px]" style={{ color: C.textDim }} data-testid="cockpit-autostart-last-attempt">
+          {attemptWord
+            ? tCockpit("lastAttempt", { when: attemptWhen, status: tCockpit(attemptWord === "ok" ? "resultOk" : "resultFailed") })
+            : tCockpit("lastAttemptTimeOnly", { when: attemptWhen })}
         </p>
       )}
 

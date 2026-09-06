@@ -41,6 +41,13 @@ export interface BoxCockpitMember {
   host: Host;
   role: "head" | "worker" | null;
   device?: Device;
+  /**
+   * Die Slot-Runtime dieser Box (ADR-078, `is_slot=true`) — Team-Lead-Fund
+   * 06.09.2026: die Connection-URL muss IMMER diese Adresse zeigen, nicht die
+   * der laufenden Engine (`runtime` unten kann an der LAN-Adresse hängen,
+   * während die Slot-Zeile die stabile Adresse ist, an der Agenten hängen).
+   */
+  slot?: Runtime | null;
 }
 
 function GroupRow({ label, children, first, testId }: { label: string; children: React.ReactNode; first?: boolean; testId: string }) {
@@ -163,6 +170,13 @@ export function BoxCockpit({
 
   if (!active) return null;
 
+  // Team-Lead-Fund 06.09.2026: die Connection-URL zeigt die Slot-Runtime
+  // dieser Box (ADR-078), nicht `runtime.endpoint` (die laufende Engine kann
+  // an der LAN-Adresse hängen statt der stabilen Adresse, an der Agenten
+  // wirklich hängen). Fällt auf `runtime.endpoint` zurück, wenn diese Box
+  // (noch) keine eigene Slot-Zeile hat.
+  const connectionEndpoint = active.slot?.endpoint ?? runtime?.endpoint ?? null;
+
   const facts = [
     active.role ? (active.role === "head" ? tHosts("roleHead") : tHosts("roleWorker")) : null,
     active.host.ssh_host,
@@ -228,14 +242,19 @@ export function BoxCockpit({
           <AutostartGroup hostId={active.host.id} isAdmin={isAdmin} />
         </GroupRow>
 
-        {runtime ? (
+        {connectionEndpoint ? (
           <>
             <GroupRow label={t("groupConnection")} testId="cockpit-group-connection">
-              <ConnectionGroup runtimeSlug={(runtime.slug ?? runtime.id) as string} endpoint={runtime.endpoint} />
+              <ConnectionGroup
+                runtimeSlug={(runtime?.slug ?? runtime?.id ?? active.slot?.slug ?? active.slot?.id) as string}
+                endpoint={connectionEndpoint}
+              />
             </GroupRow>
-            <GroupRow label={t("groupRecipe")} testId="cockpit-group-recipe">
-              <RecipeGroup hostId={active.host.id} runtime={runtime} workerHost={siblings[0]?.host ?? null} />
-            </GroupRow>
+            {runtime && (
+              <GroupRow label={t("groupRecipe")} testId="cockpit-group-recipe">
+                <RecipeGroup hostId={active.host.id} runtime={runtime} workerHost={siblings[0]?.host ?? null} />
+              </GroupRow>
+            )}
           </>
         ) : (
           <GroupRow label={t("groupConnection")} testId="cockpit-group-connection">

@@ -231,6 +231,35 @@ describe("BoxCockpit", () => {
     expect(await screen.findByTestId("cockpit-message")).toHaveTextContent(/autostart/i);
   });
 
+  it("Connection URL shows the box's OWN slot-runtime endpoint (ADR-078), not the serving runtime's endpoint (Team-Lead-Fund 06.09.2026)", async () => {
+    const serving = makeRuntime({ endpoint: "http://198.51.100.20:8000/v1" });
+    const slot = makeRuntime({
+      id: "slot-1", slug: "spark-slot", is_slot: true, endpoint: "http://192.0.2.10:8000/v1",
+    });
+    renderWithQuery(
+      <BoxCockpit
+        open
+        onClose={() => {}}
+        members={[{ ...headMember, slot }]}
+        activeHostId="spark"
+        onSwitchActive={() => {}}
+        runtime={serving}
+      />
+    );
+    await screen.findByTestId("box-cockpit");
+    const copyBtn = await screen.findByTestId("connection-copy");
+    expect(copyBtn.textContent).toContain("192.0.2.10");
+    expect(copyBtn.textContent).not.toContain("198.51.100.20");
+  });
+
+  it("Connection URL falls back to the serving runtime's endpoint when the box has no slot runtime yet", async () => {
+    renderWithQuery(
+      <BoxCockpit open onClose={() => {}} members={[headMember]} activeHostId="spark" onSwitchActive={() => {}} runtime={makeRuntime({ endpoint: "http://192.0.2.20:8000/v1" })} />
+    );
+    const copyBtn = await screen.findByTestId("connection-copy");
+    expect(copyBtn.textContent).toContain("192.0.2.20");
+  });
+
   it("Re-probe and Restart call the runtime actions", async () => {
     const probeSpy = vi.spyOn(api.runtimes, "probeModel").mockResolvedValue({
       slug: "qwen38-flash-next", old_model_identifier: "a", new_model_identifier: "a", changed: false,
