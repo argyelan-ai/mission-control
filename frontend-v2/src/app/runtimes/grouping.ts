@@ -4,7 +4,18 @@ import type { Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 // endpoint with no bound host is a hosted API like Claude/Grok/Kimi, not an
 // orphaned box runtime. A host-bound openai_compatible runtime still routes
 // into its host group as normal (groupRuntimes checks rt.host first).
-export const CLOUD_TYPES = new Set<string>(["cloud", "grok", "kimi", "openai_compatible"]);
+//
+// voice_openai/voice_xai (Jarvis Voice, ADR-074) are hosted APIs too — no
+// box, no MC lifecycle. Live-verified against main (06.09.2026): these two
+// were missing here, so both voice rows fell into "unassigned" under the
+// Fleet tab (reads like a misconfiguration) instead of the Cloud tab where
+// every other hosted API lives. [Annahme: die genauen runtime_type-Werte
+// stammen aus dem noch nicht gemergten PR #339 (feat/jarvis-voice-runtime-switch,
+// Commit 6153eb17) — die einzige Stelle im Repo, die Jarvis Voice als Runtime
+// modelliert.]
+export const CLOUD_TYPES = new Set<string>([
+  "cloud", "grok", "kimi", "openai_compatible", "voice_openai", "voice_xai",
+]);
 
 const ACTIVE_STATES = new Set(["ready", "starting", "warming"]);
 
@@ -24,9 +35,12 @@ export interface HostGroup {
   host: Host;
   runtimes: Runtime[];
   /** Set whenever this host appears in SOME runtime's member_hosts, whether
-   *  or not it also has bound runtimes of its own. The stage decides what
-   *  to do with it (Phase 1a's WorkerTile only renders when there is
-   *  nothing else to show — see SlotStage.tsx). */
+   *  or not it also has bound runtimes of its own. Computed here since Phase
+   *  1a (30.08.2026); FleetStage v2 (PR 6 "Schliff") derives duo membership
+   *  from `Runtime.member_hosts` directly via `buildStages()` instead, so
+   *  this field currently has no consumer — kept for grouping.test.ts's
+   *  coverage and any future surface that wants a per-host "which verbund"
+   *  lookup without re-deriving it. */
   workerOf?: WorkerMembership;
 }
 

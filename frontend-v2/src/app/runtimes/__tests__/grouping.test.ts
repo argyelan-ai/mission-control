@@ -54,6 +54,18 @@ describe("groupRuntimes", () => {
     expect(g.unassigned).toEqual([]);
   });
 
+  // PR 6 "Schliff" fund (06.09.2026): Jarvis Voice's two runtimes (OpenAI
+  // Realtime / Grok xAI) were showing up as Unassigned rows under Fleet on
+  // main — voice_openai/voice_xai were missing from CLOUD_TYPES. Both are
+  // hosted APIs, same as cloud/grok/kimi/openai_compatible above.
+  it("routes the voice runtimes to cloud, not unassigned", () => {
+    const openaiVoice = makeRuntime({ slug: "voice-openai", runtime_type: "voice_openai", host: null });
+    const xaiVoice = makeRuntime({ slug: "voice-xai", runtime_type: "voice_xai", host: null });
+    const g = groupRuntimes([openaiVoice, xaiVoice], []);
+    expect(g.cloud.map((r) => r.slug)).toEqual(["voice-openai", "voice-xai"]);
+    expect(g.unassigned).toEqual([]);
+  });
+
   it("keeps a host group even when the host has no runtimes", () => {
     const g = groupRuntimes([], [spark]);
     expect(g.hosts).toHaveLength(1);
@@ -138,7 +150,9 @@ describe("groupRuntimes", () => {
 
 describe("CLOUD_TYPES", () => {
   it("contains exactly the hosted-API kinds", () => {
-    expect([...CLOUD_TYPES].sort()).toEqual(["cloud", "grok", "kimi", "openai_compatible"]);
+    expect([...CLOUD_TYPES].sort()).toEqual([
+      "cloud", "grok", "kimi", "openai_compatible", "voice_openai", "voice_xai",
+    ]);
   });
 });
 

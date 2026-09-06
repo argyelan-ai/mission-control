@@ -10,8 +10,9 @@
  * der fragt nach der Situation des Operators und öffnet dann den passenden
  * der vier bestehenden Wege (Onboarding / Pairing / BoxWizard / Formular).
  *
- * Metrics-bar-free (slot-stage redesign): live GPU/RAM/temp bars now live in
- * SlotStage's TelemetryColumn, not here — see docs/plans/2026-08-13
+ * Metrics-bar-free (slot-stage redesign): live GPU/RAM/temp bars live on the
+ * Fleet-tab's Bühne (v2 `MemberRow`/`HeatStrip`, formerly v1 `SlotStage`'s
+ * TelemetryColumn), not here — see docs/plans/2026-08-13
  * -runtimes-slot-stage-design.md.
  */
 

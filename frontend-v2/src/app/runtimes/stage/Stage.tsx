@@ -14,10 +14,11 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
-import { typeLabel } from "../SlotStage";
+import { typeLabel } from "../runtimeTypeLabel";
 import { fmtCtx } from "@/lib/utils";
 import { FlowEdge, type FlowKind } from "./FlowEdge";
 import { HeatStrip } from "./HeatStrip";
@@ -72,6 +73,7 @@ export function Stage({
 }) {
   const t = useTranslations("runtimes.stage");
   const currentUser = useAppStore((s) => s.currentUser);
+  const reduceMotion = useReducedMotion();
   const headHost = members.find((m) => m.role === "head" || m.role == null) ?? members[0];
 
   const { data: pulse } = useQuery({
@@ -175,15 +177,31 @@ export function Stage({
         data-testid="stage-members"
         data-duo={isDuo ? "true" : "false"}
       >
-        {members.map((m) => (
-          <MemberRowContainer
-            key={m.host.id}
-            host={m.host}
-            role={m.role}
-            device={m.device}
-            canControlDevice={currentUser?.role === "admin"}
-          />
-        ))}
+        {/* Duo→Solo-Übergang (Spec, PR 6 "Schliff"): verliert die Bühne ein
+            Mitglied (Verbund endet), blendet dessen Zeile statt abrupt zu
+            verschwinden — opacity + translateY, 200ms ease-out. `layout` lässt
+            die verbleibende(n) Zeile(n) sanft nachrücken statt zu springen.
+            `prefers-reduced-motion` → kein Übergang (initial=false, exit
+            entfällt effektiv da AnimatePresence ohne Animation sofort entfernt). */}
+        <AnimatePresence initial={false}>
+          {members.map((m) => (
+            <motion.div
+              key={m.host.id}
+              layout={!reduceMotion}
+              initial={reduceMotion ? false : { opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: 8 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+            >
+              <MemberRowContainer
+                host={m.host}
+                role={m.role}
+                device={m.device}
+                canControlDevice={currentUser?.role === "admin"}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
 
       <div className="relative" style={{ zIndex: 2 }}>
