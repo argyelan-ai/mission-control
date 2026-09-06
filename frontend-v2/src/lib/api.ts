@@ -2199,6 +2199,20 @@ export const api = {
         return { points: [], now_tps: null, idle_seconds: null, available: false };
       }
     },
+    // Runtimes-Bühne v2 (PR 3 Telemetrie-Verlauf, Spec §6): 1-h-Ring fürs
+    // Cockpit-Diagramm. Gleicher Honesty-Fallback wie pulse() — der
+    // Backend-PR läuft parallel, ein fehlender/404-Endpoint zeigt darum eine
+    // leere Reihe ("collecting…") statt eines Fehlerbanners.
+    metricsHistory: async (
+      id: string,
+      seconds = 3600
+    ): Promise<import("@/lib/types").HostMetricsHistory> => {
+      try {
+        return await request(`/api/v1/hosts/${id}/metrics/history?seconds=${seconds}`);
+      } catch {
+        return { points: [] };
+      }
+    },
     // Box-Wizard: read-only inventory over SSH. An unreachable box is a 200
     // with reachable:false — only a malformed request rejects.
     probe: (

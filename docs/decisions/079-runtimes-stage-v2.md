@@ -55,6 +55,39 @@ Neue Fleet-Ansicht (`frontend-v2/src/app/runtimes/stage/`) hinter
   `DeviceModeStrip` (kompakter Modus-Vierer, unverändert wiederverwendet),
   `grouping.ts` (`pickServing`/`pickSlot`, unverändert).
 
+### Cockpit (PR 5, `stage/cockpit/`)
+
+Das Zahnrad auf `ActionBar`/`FreeBox`/`AsleepBox` öffnet seit PR 5 `BoxCockpit`
+statt des alten `RuntimeDetailPanel` (das bleibt nur noch für Cloud/Unassigned-
+Runtimes in `page.tsx`'s Register-Tab). `FleetStage.tsx` hält den Cockpit-
+Zustand selbst (`{members, runtime, activeHostId}`) statt ihn nach `page.tsx`
+zu heben — die Bühne kennt bereits alle Mitglieder einer Karte, ein zweiter
+Lookup dort wäre doppelte Arbeit.
+
+- **Drawer/Sheet-Mechanik**: `SlideOverPanel` bekam einen neuen `hideHeader`-
+  Schalter (backward-kompatibel, Default `false`) — das Cockpit braucht einen
+  eigenen Kopf (Boxname + Mono-Fakten + Box-Umschalter bei Duo) statt des
+  generischen Panel-Titels, aber will Backdrop/Bottom-Sheet/Esc/Motion nicht
+  zweimal bauen.
+- **Fünf Gruppen** (`TelemetryChart`, `ModeList`, `AutostartGroup`,
+  `ConnectionGroup`, `RecipeGroup`) in der Anatomie [Label 92px | Inhalt]
+  (`.cockpit-grp`, Container-Query wie `.stage-kpi`).
+- **`ModeList`** teilt sich `useDeviceModeControl` (jetzt aus
+  `DeviceControl.tsx` exportiert) mit dem Vierer auf der Karte — ein
+  Mutations-Pfad, damit Karte und Cockpit nie auseinanderlaufen können.
+- **Telemetrie-Verlauf** (`GET /hosts/{id}/metrics/history`, PR 3): der
+  Backend-PR ist zum Zeitpunkt von PR 5 noch nicht gemergt.
+  `api.hosts.metricsHistory()` fängt jeden Fehler (inkl. 404) ab und liefert
+  `{points:[]}` — derselbe Honesty-Fallback wie `api.hosts.pulse()`; das
+  Diagramm zeigt dann "collecting…" statt eines Fehlers.
+- **HONESTY-Lücken, bewusst offen gelassen** statt erfundener Felder:
+  Autostart zeigt die letzten Start-**Ereignisse** nicht als Zeitleiste
+  (`ActivityEvent` trägt kein `host_id` — keine Korrelation ohne Raten
+  möglich), sondern fällt auf `HostAutostartStatus.last_attempt_at`/
+  `last_result` zurück (eine Zeile). Der Log-Pfad aus dem Mockup entfällt
+  ganz (kein Backend-Feld trägt ihn). Die Fan-Prozentzahl in Mode/Telemetry
+  entfällt ebenso (`DeviceState` trägt keine).
+
 ## Alternativen
 
 - **`SlotStage.tsx` in-place umbauen:** verworfen — kein Rückweg ohne Redeploy,

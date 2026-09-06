@@ -59,7 +59,9 @@ export function Stage({
   runtime: Runtime;
   members: StageMember[];
   live?: RuntimeLiveStatus;
-  onOpenCockpit: (rt: Runtime) => void;
+  /** Cockpit öffnet immer für die Head-Box (Spec §4: "Head-Box bei Duo" —
+   *  der Umschalter zu Worker sitzt im Cockpit-Kopf, nicht auf der Karte). */
+  onOpenCockpit: (headHostId: string) => void;
 }) {
   const t = useTranslations("runtimes.stage");
   const currentUser = useAppStore((s) => s.currentUser);
@@ -182,7 +184,7 @@ export function Stage({
             servingName={runtime.display_name}
             runtimeId={runtime.id}
             variant={status === "failed" ? "trouble" : "normal"}
-            onOpenCockpit={() => onOpenCockpit(runtime)}
+            onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
           />
         )}
       </div>

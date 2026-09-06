@@ -610,7 +610,13 @@ function CompactModeSwitch({
  * `stage/MemberRow.tsx`) dieselbe Sperr-/Nachzieh-/Mutations-Logik teilen,
  * statt sie zweimal zu pflegen. Reine Zustandslogik, kein JSX.
  */
-function useDeviceModeControl(device: Device, canControl: boolean) {
+/**
+ * Exportiert (Cockpit PR 5, Spec §4.2): die Modus-Liste im Cockpit teilt sich
+ * dieselbe Sperr-/Nachzieh-/Mutations-Logik mit dem Vierer auf der Karte, statt
+ * einen zweiten Zustand zu erfinden, der auseinanderlaufen könnte — "Karte
+ * (Vierer) und Cockpit zeigen denselben Zustand" (Spec §4).
+ */
+export function useDeviceModeControl(device: Device, canControl: boolean) {
   const queryClient = useQueryClient();
 
   const state = device.device_state;

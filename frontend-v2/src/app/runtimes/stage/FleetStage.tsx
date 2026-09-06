@@ -10,7 +10,7 @@
  * Seite den Leer-Zustand (Spec §3).
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import type { Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
@@ -20,6 +20,7 @@ import { useDevices } from "../DeviceControl";
 import { Stage, type StageMember } from "./Stage";
 import { FreeBox } from "./FreeBox";
 import { AsleepBox } from "./AsleepBox";
+import { BoxCockpit, type BoxCockpitMember } from "./cockpit/BoxCockpit";
 
 export interface BuiltStage {
   runtime: Runtime;
@@ -83,13 +84,13 @@ function StageRow({
   hostIds,
   hostsById,
   live,
-  onOpenCockpit,
+  onOpenBoxCockpit,
 }: {
   runtime: Runtime;
   hostIds: string[];
   hostsById: Map<string, Host>;
   live?: Record<string, RuntimeLiveStatus>;
-  onOpenCockpit: (rt: Runtime) => void;
+  onOpenBoxCockpit: (members: StageMember[], runtime: Runtime, activeHostId: string) => void;
 }) {
   const devices = useDevices();
   const memberOf = new Map((runtime.member_hosts ?? []).map((m) => [m.host_id, m]));
@@ -104,7 +105,14 @@ function StageRow({
     }));
 
   const rtLive = live?.[runtime.slug ?? runtime.id];
-  return <Stage runtime={runtime} members={members} live={rtLive} onOpenCockpit={onOpenCockpit} />;
+  return (
+    <Stage
+      runtime={runtime}
+      members={members}
+      live={rtLive}
+      onOpenCockpit={(headHostId) => onOpenBoxCockpit(members, runtime, headHostId)}
+    />
+  );
 }
 
 function EmptyStage({ groups, onOpenCockpit }: { groups: HostGroup[]; onOpenCockpit: (rt: Runtime) => void }) {
@@ -141,6 +149,12 @@ function EmptyStage({ groups, onOpenCockpit }: { groups: HostGroup[]; onOpenCock
   );
 }
 
+interface CockpitState {
+  members: BoxCockpitMember[];
+  runtime: Runtime | null;
+  activeHostId: string;
+}
+
 export function FleetStage({
   stageGroups,
   sleepingGroups,
@@ -155,6 +169,11 @@ export function FleetStage({
   const { stages, freeHostIds } = useMemo(() => buildStages(stageGroups, live), [stageGroups, live]);
   const hostsById = useMemo(() => new Map(stageGroups.map((g) => [g.host.id, g.host])), [stageGroups]);
   const devices = useDevices();
+  // Das Cockpit (Zahnrad, Spec §4) — ersetzt seit PR 5 das alte
+  // RuntimeDetailPanel für Stage/FreeBox/AsleepBox. `onOpen` bleibt nur noch
+  // für EmptyStage's "Start model" (öffnet den Rezept-Umschalter-Kontext,
+  // kein Box-Cockpit).
+  const [cockpit, setCockpit] = useState<CockpitState | null>(null);
 
   const freeGroups = stageGroups.filter((g) => freeHostIds.has(g.host.id));
   const isFullyEmpty = stages.length === 0;
@@ -172,19 +191,24 @@ export function FleetStage({
               hostIds={hostIds}
               hostsById={hostsById}
               live={live}
-              onOpenCockpit={onOpen}
+              onOpenBoxCockpit={(members, rt, activeHostId) => setCockpit({ members, runtime: rt, activeHostId })}
             />
           ))}
           {freeGroups.map((g) => {
             const slot = pickSlot(g);
-            const target = slot ?? g.runtimes[0] ?? null;
             return (
               <FreeBox
                 key={g.host.id}
                 host={g.host}
                 slot={slot}
                 device={devices.get(g.host.id)}
-                onOpenCockpit={() => target && onOpen(target)}
+                onOpenCockpit={() =>
+                  setCockpit({
+                    members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id) }],
+                    runtime: slot,
+                    activeHostId: g.host.id,
+                  })
+                }
               />
             );
           })}
@@ -193,8 +217,30 @@ export function FleetStage({
       {sleepingGroups.map((g) => {
         const rt = g.runtimes.find((r) => r.power_managed === true);
         if (!rt) return null;
-        return <AsleepBox key={g.host.id} host={g.host} runtime={rt} onOpenCockpit={() => onOpen(rt)} />;
+        return (
+          <AsleepBox
+            key={g.host.id}
+            host={g.host}
+            runtime={rt}
+            onOpenCockpit={() =>
+              setCockpit({
+                members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id) }],
+                runtime: rt,
+                activeHostId: g.host.id,
+              })
+            }
+          />
+        );
       })}
+
+      <BoxCockpit
+        open={cockpit != null}
+        onClose={() => setCockpit(null)}
+        members={cockpit?.members ?? []}
+        activeHostId={cockpit?.activeHostId ?? null}
+        onSwitchActive={(hostId) => setCockpit((cur) => (cur ? { ...cur, activeHostId: hostId } : cur))}
+        runtime={cockpit?.runtime ?? null}
+      />
     </div>
   );
 }

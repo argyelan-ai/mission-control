@@ -23,7 +23,10 @@ import type { RuntimeStopConflict } from "@/lib/types";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 
-function parseStopConflict(err: Error): RuntimeStopConflict | null {
+/** Exportiert (Cockpit PR 5): dieselbe 409-Konflikt-Erkennung wie hier, damit
+ *  der Stop-Knopf im Cockpit dieselbe inline Bestätigung zeigt statt eine
+ *  zweite Kopie dieser Logik zu pflegen. */
+export function parseStopConflict(err: Error): RuntimeStopConflict | null {
   const m = /^API 409: ([\s\S]*)$/.exec(err.message);
   if (!m) return null;
   try {
