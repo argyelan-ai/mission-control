@@ -465,6 +465,27 @@ class RedisKeys:
     def runtime_drift_candidate(slug: str) -> str:
         return f"mc:runtime-drift:{slug}"
 
+    # ── Runtime Pulse (Runtimes-Buehne v2, PR 1) ──────────────────────────
+    @staticmethod
+    def runtime_pulse_lock() -> str:
+        return "mc:runtime-pulse:lock"
+
+    @staticmethod
+    def host_pulse(host_id: str) -> str:
+        """Redis LIST of JSON {t, tps} points, LTRIM'd to 180 (15 min @ 5s)."""
+        return f"mc:host:{host_id}:pulse"
+
+    @staticmethod
+    def host_pulse_meta(host_id: str) -> str:
+        """JSON {available, last_ok, engine} — last poll outcome for this host."""
+        return f"mc:host:{host_id}:pulse:meta"
+
+    @staticmethod
+    def host_pulse_sample(host_id: str) -> str:
+        """Internal: last {t, counter, engine} sample used for the tok/s delta.
+        Not exposed via the API — GET /hosts/{id}/pulse only returns points/meta."""
+        return f"mc:host:{host_id}:pulse:sample"
+
     @staticmethod
     def runtime_context_drift_candidate(slug: str) -> str:
         """Two-probe confirmation for a changed served context window.
