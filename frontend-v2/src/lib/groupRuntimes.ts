@@ -1,4 +1,4 @@
-import type { Runtime } from "@/lib/types";
+import type { Agent, Runtime } from "@/lib/types";
 
 export type RuntimeGroup = { label: string | null; runtimes: Runtime[] };
 
@@ -43,6 +43,37 @@ export function groupRuntimesByProvider(runtimes: Runtime[]): RuntimeGroup[] {
  * cached response without the field must not suddenly grey out every
  * runtime for a host-inplace agent.
  */
+/**
+ * Slot-Runtime (ADR-078) — die festen Box-Adressen aus der Liste ziehen.
+ *
+ * Im Runtime-Picker eines Agenten ist die Slot-Zeile fast immer die richtige
+ * Wahl: sie ist die Adresse, unter der die Box antwortet, und sie folgt dem
+ * Modell, das gerade läuft. Darum steht sie oben — in ihrer eigenen Gruppe,
+ * nicht in die Anbieter-Gruppen des Servers gemischt.
+ *
+ * Die Reihenfolge INNERHALB beider Hälften bleibt die des Servers. Hier wird
+ * nur getrennt, nie sortiert — sonst gäbe es eine zweite Ordnungsregel.
+ */
+export function splitSlotRuntimes(runtimes: Runtime[]): { slots: Runtime[]; rest: Runtime[] } {
+  return {
+    slots: runtimes.filter((rt) => rt.is_slot === true),
+    rest: runtimes.filter((rt) => rt.is_slot !== true),
+  };
+}
+
+/**
+ * Darf dieser Agent OHNE Runtime-Bindung laufen (Fallback auf die
+ * docker-compose-Umgebung)?
+ *
+ * Für omp nicht: dieser Harness braucht eine gebundene Runtime, sonst startet
+ * er ohne Modell. Das Backend lehnt das Lösen der Bindung mit 422 ab — die
+ * Option gar nicht erst anzubieten ist ehrlicher als ein Klick, der in einer
+ * Fehlermeldung endet.
+ */
+export function allowsRuntimeFallback(harness: Agent["harness"] | undefined): boolean {
+  return harness !== "omp";
+}
+
 export function isRuntimeBlockedByLocality(_runtime: Runtime, _isHostInplace: boolean): boolean {
   // Bewusst immer false: Host-inplace-Agenten (Boss/claude, grok, kimi) fahren
   // produktiv Cloud-Runtimes — "host-inplace" sagt nichts über Netz-Erreichbarkeit.

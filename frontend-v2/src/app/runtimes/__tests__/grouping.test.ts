@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupRuntimes, CLOUD_TYPES, panelCapabilities, pickServing } from "../grouping";
+import { groupRuntimes, CLOUD_TYPES, panelCapabilities, pickServing, pickSlot } from "../grouping";
 import type { Runtime, Host, RuntimeLiveStatus } from "@/lib/types";
 
 function makeRuntime(over: Partial<Runtime>): Runtime {
@@ -207,5 +207,94 @@ describe("pickServing", () => {
   });
   it("returns null for an idle host", () => {
     expect(pickServing({ host: makeHost({}), runtimes: [makeRuntime({ state: "stopped" })] })).toBeNull();
+  });
+});
+
+// ── Slot-Runtime (ADR-078) ────────────────────────────────────────────────
+// Die Slot-Zeile ist die feste „Box-URL" einer Head-Box: die Agenten hängen
+// an ihr, sie folgt dem Modell, das gerade läuft, und sie wird nie gestartet
+// oder umgeschaltet. Sie behält ihre host_id — dass sie damit UNTER ihrer Box
+// steht und nicht bei „ohne Box", ist die Zusage, die diese Tests festhalten.
+describe("Slot-Runtime", () => {
+  const boxA = makeHost({ slug: "box-a", display_name: "BOX-A", ui_order: 1 });
+  const boxARef = { id: "box-a", slug: "box-a", display_name: "BOX-A" };
+
+  const makeSlot = (over: Partial<Runtime> = {}) =>
+    makeRuntime({
+      slug: "box-a-slot",
+      display_name: "BOX-A :8000 (aktuell: recipe-x)",
+      runtime_type: "openai_compatible",
+      endpoint: "http://192.0.2.10:8000/v1",
+      container_name: null,
+      process_name: null,
+      exclusive_memory: false,
+      autostart_supported: false,
+      is_slot: true,
+      ui_order: 0,
+      host: boxARef,
+      ...over,
+    });
+
+  it("gruppiert die Slot-Zeile unter ihrer Box, nicht bei 'ohne Box'", () => {
+    const slot = makeSlot();
+    const recipe = makeRuntime({ slug: "recipe-x", ui_order: 5, host: boxARef });
+    const g = groupRuntimes([slot, recipe], [boxA]);
+    expect(g.unassigned).toEqual([]);
+    expect(g.cloud).toEqual([]);
+    expect(g.hosts[0].runtimes.map((r) => r.slug)).toContain("box-a-slot");
+  });
+
+  it("pickServing zeigt das Rezept, nie die Slot-Zeile", () => {
+    // Beide antworten am selben Endpunkt, beide sind "ready", und die
+    // Slot-Zeile hat ui_order 0 — ohne Ausschluss würde sie die Bühne kapern.
+    const slot = makeSlot({ state: "ready" });
+    const recipe = makeRuntime({ slug: "recipe-x", state: "ready", ui_order: 5, host: boxARef });
+    const live: Record<string, RuntimeLiveStatus> = {
+      "box-a-slot": { reachable: true, served_model: "m", latency_ms: 3, last_probe_at: "", consecutive_failures: 0, drift: false },
+      "recipe-x": { reachable: true, served_model: "m", latency_ms: 3, last_probe_at: "", consecutive_failures: 0, drift: false },
+    };
+    const g = groupRuntimes([slot, recipe], [boxA]);
+    expect(pickServing(g.hosts[0], live)?.slug).toBe("recipe-x");
+  });
+
+  it("pickServing bleibt null, wenn NUR die Slot-Zeile erreichbar ist", () => {
+    const slot = makeSlot({ state: "ready" });
+    const live: Record<string, RuntimeLiveStatus> = {
+      "box-a-slot": { reachable: true, served_model: "m", latency_ms: 3, last_probe_at: "", consecutive_failures: 0, drift: false },
+    };
+    const g = groupRuntimes([slot], [boxA]);
+    expect(pickServing(g.hosts[0], live)).toBeNull();
+  });
+
+  it("pickSlot findet die Slot-Zeile der Box — und nur sie", () => {
+    const slot = makeSlot();
+    const recipe = makeRuntime({ slug: "recipe-x", ui_order: 5, host: boxARef });
+    const g = groupRuntimes([slot, recipe], [boxA]);
+    expect(pickSlot(g.hosts[0])?.slug).toBe("box-a-slot");
+    expect(pickSlot({ host: boxA, runtimes: [recipe] })).toBeNull();
+  });
+
+  it("panelCapabilities gibt der Slot-Zeile keine Knöpfe", () => {
+    const caps = panelCapabilities(makeSlot());
+    expect(caps.lifecycle).toBe(false);
+    expect(caps.recipeSwitcher).toBe(false);
+    expect(caps.autostart).toBe(false);
+    expect(caps.contextSettings).toBe(false);
+    expect(caps.modelEditor).toBe(false);
+    expect(caps.wake).toBe(false);
+  });
+
+  it("panelCapabilities sperrt auch bei falsch gesetzten Flags in der DB", () => {
+    // Sabotage-Probe: autostart_supported=true, power_managed, lmstudio-Typ.
+    // Am is_slot-Riegel muss trotzdem jeder Knopf aus bleiben.
+    const caps = panelCapabilities(
+      makeSlot({ autostart_supported: true, power_managed: true, runtime_type: "lmstudio" })
+    );
+    expect(caps.lifecycle).toBe(false);
+    expect(caps.recipeSwitcher).toBe(false);
+    expect(caps.autostart).toBe(false);
+    expect(caps.contextSettings).toBe(false);
+    expect(caps.modelEditor).toBe(false);
+    expect(caps.wake).toBe(false);
   });
 });

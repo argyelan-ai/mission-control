@@ -1791,6 +1791,13 @@ export interface Runtime {
    *  Runtime auf demselben Host gestoppt. NICHT dasselbe wie single_instance
    *  (das begrenzt Agent-Bindungen, nicht den Speicher). */
   exclusive_memory?: boolean;
+  /** Slot-Runtime (ADR-078): die feste „Box-URL"-Zeile einer Head-Box, an der
+   *  die Agenten hängen. Sie wird nie gestartet, gestoppt oder umgeschaltet —
+   *  sie zeigt nur, was auf der Box gerade antwortet. `display_name` kommt
+   *  FERTIG vom Server („BOX-A :8000 (aktuell: <Modell>)") und wird bei jedem
+   *  Modellwechsel nachgezogen; nie clientseitig zusammenbauen.
+   *  Sie behält ihre `host` (Head-Box) — daran hängt die Gruppierung. */
+  is_slot?: boolean;
   /** ssh_process: Prozessname für pgrep/pkill — das Gegenstück zu container_name. */
   process_name?: string | null;
   stop_command?: string | null;

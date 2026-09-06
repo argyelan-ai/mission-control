@@ -621,4 +621,65 @@ describe("SlotStage — migrated live-status/identity assertions", () => {
     await screen.findAllByText("Laguna 2.1");
     expect(screen.queryByText("Name")).not.toBeInTheDocument();
   });
+
+  // ── Slot-Runtime (ADR-078) ──────────────────────────────────────────────
+  describe("Slot-Zeile", () => {
+    const boxRef = { id: "box-a", slug: "box-a", display_name: "BOX-A" };
+    const slot = makeRuntime({
+      slug: "box-a-slot",
+      display_name: "BOX-A :8000 (aktuell: recipe-x)",
+      runtime_type: "openai_compatible",
+      endpoint: "http://192.0.2.10:8000/v1",
+      model_identifier: "recipe-x",
+      is_slot: true,
+      ui_order: 0,
+      state: "ready",
+      host: boxRef,
+    });
+    const recipe = makeRuntime({
+      slug: "recipe-x", display_name: "Recipe X", runtime_type: "vllm_docker",
+      state: "ready", model_identifier: "recipe-x", ui_order: 5, host: boxRef,
+    });
+    const host = makeHost({ slug: "box-a", display_name: "BOX-A" });
+
+    it("zeigt die Slot-Zeile als eigene ruhige Zeile mit Chip unter der Box", async () => {
+      const group: HostGroup = { host, runtimes: [slot, recipe] };
+      renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+      const row = await screen.findByTestId("slot-url-row");
+      expect(within(row).getByText("Agent URL")).toBeInTheDocument();
+      expect(within(row).getByText("Slot")).toBeInTheDocument();
+      // Der Name kommt FERTIG vom Server — nichts wird hier zusammengebaut.
+      expect(within(row).getByText("BOX-A :8000 (aktuell: recipe-x)")).toBeInTheDocument();
+    });
+
+    it("die Bühne zeigt das Rezept, nicht die Slot-Zeile", async () => {
+      const group: HostGroup = { host, runtimes: [slot, recipe] };
+      renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+      // Der grosse Jetzt-Block gehört dem Rezept.
+      await screen.findAllByText("Recipe X");
+      const row = await screen.findByTestId("slot-url-row");
+      // Der Slot-Name steht NUR in seiner eigenen Zeile.
+      expect(within(row).getByText("BOX-A :8000 (aktuell: recipe-x)")).toBeInTheDocument();
+      expect(screen.getAllByText("BOX-A :8000 (aktuell: recipe-x)")).toHaveLength(1);
+    });
+
+    it("Klick auf die Slot-Zeile öffnet ihr Detail-Panel", async () => {
+      const onOpen = vi.fn();
+      const group: HostGroup = { host, runtimes: [slot, recipe] };
+      renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={onOpen} />);
+
+      await userEvent.click(await screen.findByTestId("slot-url-row"));
+      expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ slug: "box-a-slot" }));
+    });
+
+    it("ohne Slot-Zeile bleibt die Bühne unverändert (keine leere Zeile)", async () => {
+      const group: HostGroup = { host, runtimes: [recipe] };
+      renderWithQuery(<SlotStage group={group} sizeGb={noopSizeGb} onOpen={() => {}} />);
+
+      await screen.findAllByText("Recipe X");
+      expect(screen.queryByTestId("slot-url-row")).not.toBeInTheDocument();
+    });
+  });
 });

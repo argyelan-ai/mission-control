@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { groupRuntimesByProvider, isRuntimeBlockedByLocality } from "@/lib/groupRuntimes";
+import {
+  groupRuntimesByProvider,
+  isRuntimeBlockedByLocality,
+  splitSlotRuntimes,
+  allowsRuntimeFallback,
+} from "@/lib/groupRuntimes";
 import type { Runtime } from "@/lib/types";
 
 const rt = (
@@ -72,5 +77,41 @@ describe("isRuntimeBlockedByLocality", () => {
   it("treats a missing locality field as local (older cached response must not grey out everything)", () => {
     const noLocalityRt = rt("legacy-row", null, { locality: undefined });
     expect(isRuntimeBlockedByLocality(noLocalityRt, true)).toBe(false);
+  });
+});
+
+// ── Slot-Runtime im Runtime-Picker (ADR-078) ────────────────────────────────
+describe("splitSlotRuntimes", () => {
+  it("zieht die Slot-Zeilen nach oben und lässt den Rest in Server-Reihenfolge", () => {
+    const list = [
+      rt("opus", "Anthropic Pro/Max"),
+      rt("box-a-slot", null, { is_slot: true }),
+      rt("recipe-x", null),
+      rt("box-b-slot", null, { is_slot: true }),
+    ];
+    const { slots, rest } = splitSlotRuntimes(list);
+    expect(slots.map((r) => r.slug)).toEqual(["box-a-slot", "box-b-slot"]);
+    expect(rest.map((r) => r.slug)).toEqual(["opus", "recipe-x"]);
+  });
+
+  it("bleibt bei Listen ohne Slot-Zeile unverändert", () => {
+    const list = [rt("opus", "Anthropic Pro/Max"), rt("recipe-x", null)];
+    const { slots, rest } = splitSlotRuntimes(list);
+    expect(slots).toEqual([]);
+    expect(rest.map((r) => r.slug)).toEqual(["opus", "recipe-x"]);
+  });
+});
+
+describe("allowsRuntimeFallback", () => {
+  it("versteckt den Fallback bei omp — dort ist die Bindung Pflicht (Backend antwortet sonst 422)", () => {
+    expect(allowsRuntimeFallback("omp")).toBe(false);
+  });
+
+  it("lässt den Fallback bei claude und den übrigen Harnessen stehen", () => {
+    expect(allowsRuntimeFallback("claude")).toBe(true);
+    expect(allowsRuntimeFallback("openclaude")).toBe(true);
+    expect(allowsRuntimeFallback("kimi")).toBe(true);
+    expect(allowsRuntimeFallback(null)).toBe(true);
+    expect(allowsRuntimeFallback(undefined)).toBe(true);
   });
 });

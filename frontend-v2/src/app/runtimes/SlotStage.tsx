@@ -19,7 +19,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
-import { pickServing, type HostGroup } from "./grouping";
+import { pickServing, pickSlot, type HostGroup } from "./grouping";
 import { useGpuSparkline } from "./useGpuSparkline";
 import { fmtCtx } from "@/lib/utils";
 import { openModelsTab } from "./modelsTab";
@@ -357,6 +357,49 @@ function NowBlock({ serving, live, sizeGb }: { serving: Runtime | null; live?: R
   );
 }
 
+// ── Slot-Zeile (Agenten-URL) ───────────────────────────────────────────────
+/**
+ * Die feste Adresse dieser Box (ADR-078, Slot-Runtime).
+ *
+ * Bewusst RUHIG: eine Zeile, kein Kasten, kein Knopf. Sie sagt nur, unter
+ * welchem Namen die Agenten die Box erreichen — der Name kommt FERTIG vom
+ * Server („BOX-A :8000 (aktuell: <Modell>)") und wird bei jedem Modellwechsel
+ * nachgezogen. Hier wird nichts zusammengebaut, nichts nachgerechnet.
+ *
+ * Kein Start/Stop/Autostart/Umschalter: diese Zeile hat keinen Startbefehl
+ * und kein eigenes Rezept (panelCapabilities sperrt das im Detail-Panel
+ * gleich mit). Klick öffnet das Panel — Modell, Endpunkt, gebundene Agenten.
+ */
+function SlotUrlRow({ slot, onOpen }: { slot: Runtime; onOpen: (rt: Runtime) => void }) {
+  const t = useTranslations("runtimes.slot");
+  return (
+    <button
+      type="button"
+      data-testid="slot-url-row"
+      onClick={() => onOpen(slot)}
+      title={t("hint")}
+      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      style={{ borderTop: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
+    >
+      <span
+        className="text-[10px] font-medium uppercase shrink-0"
+        style={{ color: C.textMuted, letterSpacing: "0.08em" }}
+      >
+        {t("rowLabel")}
+      </span>
+      <span
+        className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide shrink-0"
+        style={{ background: C.bgHover, color: C.textSecondary, border: `1px solid ${C.borderSubtle}` }}
+      >
+        {t("chip")}
+      </span>
+      <span className="font-mono text-xs truncate" style={{ color: C.textSecondary }}>
+        {slot.display_name}
+      </span>
+    </button>
+  );
+}
+
 // ── Geräte-Streifen ────────────────────────────────────────────────────────
 /**
  * Der GPU-Modus-Schalter, sofern diese Box ihn überhaupt haben darf.
@@ -590,13 +633,17 @@ export function SlotStage({
   onOpen: (rt: Runtime) => void;
 }) {
   const serving = useMemo(() => pickServing(group, live), [group, live]);
+  // Die Slot-Zeile (ADR-078) ist die Adresse der Box, kein Modell auf ihr —
+  // sie bekommt ihre eigene ruhige Zeile und zählt darum weder als „läuft"
+  // noch als vorhandenes Inventar für die Platzhalter-Entscheidung unten.
+  const slot = useMemo(() => pickSlot(group), [group]);
   // Every non-serving host runtime belongs here, not just lifecycle-capable
   // ones — a host-bound omp/openai_compatible/llamacpp_docker runtime has no
   // start/stop path, but it is still real inventory on this box and must not
   // silently disappear. The detail panel opened from a row gates Control
   // correctly on its own (panelCapabilities(rt).lifecycle).
   const readyRuntimes = useMemo(
-    () => group.runtimes.filter((rt) => rt.id !== serving?.id),
+    () => group.runtimes.filter((rt) => rt.id !== serving?.id && !rt.is_slot),
     [group, serving]
   );
 
@@ -634,6 +681,9 @@ export function SlotStage({
       {/* Zwischen Zustand und Rezept-Wechsel: der Modus gehört zur Box, nicht
           zum Modell — darum unter dem Slot-Körper und über der Rezept-Zeile. */}
       <DeviceStrip device={device} hostReachable={hostMetrics?.reachable} />
+      {/* Über dem Umschalter: erst steht da, unter welcher Adresse die
+          Agenten die Box erreichen — dann, was man dort starten kann. */}
+      {slot && <SlotUrlRow slot={slot} onOpen={onOpen} />}
       <SwitchRow group={group} serving={serving} live={live} />
       {/* Unter dem Umschalter: erst wählt man das Rezept, dann sagt man, ob MC
           es nach einem Ausfall selbst wieder hochziehen darf. */}

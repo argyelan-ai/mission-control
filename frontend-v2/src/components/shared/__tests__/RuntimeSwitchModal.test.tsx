@@ -162,6 +162,34 @@ describe("RuntimeSwitchModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // Slot-Runtime (ADR-078): das Backend lehnt z.B. das Lösen der Bindung
+  // eines omp-Agenten mit 422 ab und schickt den Grund als ganzen Satz.
+  // Der Operator muss den Satz lesen, nicht `API 422: {"detail":…}`.
+  it("zeigt einen 422-Fehler als Satz statt als rohes JSON", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: null });
+    const onConfirm = vi
+      .fn()
+      .mockRejectedValue(
+        new Error('API 422: {"detail":"omp braucht eine gebundene Runtime."}'),
+      );
+    renderWithQuery(
+      <RuntimeSwitchModal
+        open
+        onClose={() => {}}
+        agent={mkAgent()}
+        targetRuntimeId="rt-new"
+        onConfirm={onConfirm}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    expect(
+      await screen.findByText("omp braucht eine gebundene Runtime."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/API 422/)).not.toBeInTheDocument();
+  });
+
   // Task #26 — the switch now auto-triggers the agent restart; the success
   // panel must say plainly whether that restart ran, was skipped (busy
   // agent / opt-out), or was attempted and failed.

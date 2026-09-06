@@ -23,6 +23,7 @@ import { api } from "@/lib/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { notify } from "@/lib/notify";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 
 const SWITCH_STEPS: Array<{ key: string; label: string }> = [
   { key: "rendering", label: "Rendering config" },
@@ -185,7 +186,11 @@ export function RuntimeSwitchModal({
       onSwitched?.(result ?? null);
       setCompleted(result ?? preview ?? null);
     } catch (e) {
-      setError((e as Error).message ?? "Switch failed");
+      // Das Backend schickt Gründe als ganze Sätze im `detail` (z.B. 422
+      // „omp braucht eine gebundene Runtime"). Ungefiltert stünde hier
+      // `API 422: {"detail":"…"}` — der Operator soll den Satz lesen, nicht
+      // das JSON drumherum. Gleiches Muster wie im Rezept-Umschalter.
+      setError(humanApiError(e as Error) || "Switch failed");
     } finally {
       setSubmitting(false);
       if (longSwitchTimer.current) {
