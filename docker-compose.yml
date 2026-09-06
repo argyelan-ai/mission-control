@@ -325,6 +325,7 @@ services:
         PUBLIC_HOST: ${PUBLIC_HOST:-}
         # Wordmark/brand, e.g. "my-lab.io" ("main.accent" split at last dot).
         NEXT_PUBLIC_BRAND: ${NEXT_PUBLIC_BRAND:-}
+        NEXT_PUBLIC_RUNTIMES_STAGE: ${NEXT_PUBLIC_RUNTIMES_STAGE:-}
     restart: unless-stopped
     logging: *default-logging
     depends_on:
