@@ -27,7 +27,7 @@ describe("ActionBar — Stop dispatch gate", () => {
     vi.spyOn(api.runtimes, "stop").mockImplementationOnce(() =>
       Promise.reject(
         new Error(
-          'API 409: {"detail":{"code":"agent_busy","agents":[{"name":"Sparky","slug":"sparky","task_id":"t-1"}]}}'
+          'API 409: {"detail":{"code":"agent_busy","agents":[{"name":"Alpha","slug":"alpha","task_id":"t-1"}]}}'
         )
       )
     );
@@ -40,7 +40,7 @@ describe("ActionBar — Stop dispatch gate", () => {
     await act(async () => { stopBtn.click(); });
 
     await waitFor(() => expect(screen.getByTestId("stop-conflict-row")).toBeTruthy());
-    expect(screen.getByText(/Sparky/)).toBeTruthy();
+    expect(screen.getByText(/Alpha/)).toBeTruthy();
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
@@ -50,7 +50,7 @@ describe("ActionBar — Stop dispatch gate", () => {
       .mockImplementationOnce(() =>
         Promise.reject(
           new Error(
-            'API 409: {"detail":{"code":"agent_busy","agents":[{"name":"Sparky","slug":"sparky","task_id":"t-1"}]}}'
+            'API 409: {"detail":{"code":"agent_busy","agents":[{"name":"Alpha","slug":"alpha","task_id":"t-1"}]}}'
           )
         )
       )
