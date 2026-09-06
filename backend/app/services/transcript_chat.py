@@ -1842,6 +1842,10 @@ class ChatTailerManager:
                     probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
                     if agent is not None and probe_due:
                         last_probe_at = now
+                        # Die Sonde laeuft ohnehin alle paar Sekunden — hier
+                        # wird der Strom mitgeprueft (Container-Neustart).
+                        if preview_state is not None:
+                            await self._rearm_preview(preview_state)
                         pane_text = await capture_pane(agent)
                         new_state = await self._compute_pane_state(
                             agent, current_path, adapter, pane_text=pane_text
@@ -2151,10 +2155,43 @@ class ChatTailerManager:
                 "anchor": "",
                 # Fuer den Sende-Anker (agent_chat_input.pop_last_sent).
                 "agent_id": str(getattr(agent, "id", "") or ""),
+                # Fuer das Neu-Einschalten des Stroms (_rearm_preview).
+                "agent": agent,
             }
         except Exception:  # noqa: BLE001
             logger.warning("preview: Start fehlgeschlagen", exc_info=True)
             return None
+
+    async def _rearm_preview(self, state: dict[str, Any]) -> None:
+        """Schaltet den Strom wieder ein, wenn ein Container-Neustart ihn
+        gekappt hat — und wirft das eingefrorene Bild weg.
+
+        Ein Runtime-Wechsel startet den Container neu; der neue tmux-Server
+        kennt das ``pipe-pane`` nicht mehr. Der Emulator blieb auf dem letzten
+        Bild vor dem Neustart stehen, Marks neue Frage stand nie darin,
+        ``text_after`` fand keinen Anker und zeigte den GANZEN alten Verlauf,
+        bis das Transkript ihn abloeste (06.09.2026, omp-Agent). Der Anker
+        bleibt: er stammt aus Transkript oder Sende-Ereignis, nicht aus dem
+        Bild. Fehler sind nie fatal — dann bleibt es beim alten Verhalten.
+        """
+        agent = state.get("agent")
+        if agent is None:
+            return
+        try:
+            from app.services import pane_stream
+
+            path = await pane_stream.ensure(agent)
+        except Exception:  # noqa: BLE001
+            logger.warning("preview: Strom-Pruefung fehlgeschlagen", exc_info=True)
+            return
+        if path is None:
+            return
+        logger.info("preview: Strom neu eingeschaltet (agent=%s)", state.get("agent_id"))
+        state["path"] = path
+        state["offset"] = 0
+        state["screen"] = state["screen"].fresh()
+        state["pending"] = None
+        state["last_sent"] = ""
 
     async def _pump_preview(self, channel: str, state: dict[str, Any]) -> None:
         """Liest den Zuwachs des Stroms und schickt die Vorschau.
@@ -2186,13 +2223,11 @@ class ChatTailerManager:
             state["offset"] += len(chunk)
             return chunk
 
-        chunk = await asyncio.to_thread(_read)
-        if chunk:
-            state["screen"].feed(chunk)
-
         # Hat der Operator gerade etwas eingetippt, ist DAS der Anker — das
         # Transkript kennt die Nachricht bei omp erst am Ende des Zugs, und
         # bis dahin zeigte die Vorschau die ganze alte Historie (03.09.2026).
+        # Und ein Sende-Ereignis ist der Moment, den Strom zu pruefen: kam
+        # der Container zwischendurch neu, ist er tot (06.09.2026).
         if state.get("agent_id"):
             from app.services.agent_chat_input import pop_last_sent
 
@@ -2201,6 +2236,11 @@ class ChatTailerManager:
                 anchor = PanePreview.anchor_from(sent)
                 if anchor:
                     state["anchor"] = anchor
+                await self._rearm_preview(state)
+
+        chunk = await asyncio.to_thread(_read)
+        if chunk:
+            state["screen"].feed(chunk)
         anchor = state.get("anchor") or ""
         text = (state["screen"].text_after(anchor) if anchor else state["screen"].text()).strip()
         if not text:

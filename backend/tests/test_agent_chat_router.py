@@ -1982,3 +1982,103 @@ async def test_manager_remembers_the_last_state_for_late_clients(
     finally:
         await manager.release("agent-late")
     assert manager.last_state("agent-late") is None, "nach dem letzten Client vergessen"
+
+
+# ── Abgerissener Strom nach Container-Neustart (06.09.2026) ────────────────
+#
+# Ein Runtime-Wechsel startet den Container neu; das ``pipe-pane`` des alten
+# tmux-Servers ist damit weg. Der Tailer schaltete den Strom nur EINMAL beim
+# Start ein — der Emulator blieb auf dem letzten Bild vor dem Neustart
+# stehen. Marks neue Frage stand nie in dem Bild, ``text_after`` fand keinen
+# Anker und zeigte den GANZEN eingefrorenen Verlauf (alte 404-Meldung,
+# „1 %"-Zeile), bis das Transkript die Vorschau abloeste.
+
+
+async def test_preview_state_remembers_the_agent_for_the_rearm(manager, tmp_path, monkeypatch):
+    from app.services import pane_stream
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(tmp_path / "p.log"))
+    monkeypatch.setattr(pane_stream, "pane_size", _async_return((80, 24)))
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    agent.id = "agent-1"
+    state = await manager._start_preview(agent)
+    assert state["agent"] is agent
+
+
+async def test_sending_a_message_rearms_a_torn_stream_and_drops_the_frozen_screen(
+    tmp_path, fake_broadcast, manager, monkeypatch
+):
+    """Der Operator schickt eine Nachricht, der Strom ist tot: die Vorschau
+    darf danach NICHT das eingefrorene alte Bild zeigen, sondern nur, was der
+    neu eingeschaltete Strom liefert."""
+    from app.services import agent_chat_input, pane_stream
+    from app.services.pane_preview import PanePreview
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    agent.id = "agent-1"
+    stream = tmp_path / "omp.log"
+    stream.write_bytes("● Alte 404-Meldung von vor dem Neustart\r\nStatus 1 %\r\n".encode())
+    state = {
+        "path": stream, "offset": 0, "screen": PanePreview(), "last_sent": "",
+        "pending": None, "anchor": "", "agent_id": "agent-1", "agent": agent,
+    }
+    # Eingefrorenes Bild in den Emulator laden (Strom war bis dahin lebendig).
+    monkeypatch.setattr(pane_stream, "ensure", _async_return(None))
+    await manager._pump_preview("chan", state)
+    await manager._pump_preview("chan", state)
+    assert any("404" in d.get("text", "") for _, _, d in fake_broadcast if d.get("kind") == "preview")
+    fake_broadcast.clear()
+
+    # Container-Neustart: Datei wird beim Neu-Einschalten geleert, ``ensure``
+    # meldet den (neuen) Pfad. Danach tippt der Operator.
+    async def _ensure(a):
+        assert a is agent
+        stream.write_bytes(b"")
+        return stream
+
+    monkeypatch.setattr(pane_stream, "ensure", _ensure)
+    agent_chat_input.note_sent("agent-1", "hast du vision?")
+    await manager._pump_preview("chan", state)
+    assert state["offset"] == 0, "Leseposition zeigt noch in die alte Datei"
+    stream.write_bytes("> hast du vision?\r\n● Ja, ich sehe Bilder.\r\n".encode())
+    await manager._pump_preview("chan", state)
+    await manager._pump_preview("chan", state)
+
+    previews = [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]
+    assert previews, "keine Vorschau nach dem Neu-Einschalten"
+    assert "Ja, ich sehe Bilder" in previews[-1]["text"]
+    assert "404" not in previews[-1]["text"], "das eingefrorene alte Bild ist noch da"
+    assert "1 %" not in previews[-1]["text"]
+
+
+async def test_tailer_rearms_a_torn_stream_on_the_probe_tick(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Auch ohne Sende-Ereignis heilt sich der Strom: die Zustandssonde laeuft
+    ohnehin alle paar Sekunden — dort wird der Strom mitgeprueft."""
+    import app.services.transcript_chat as transcript_chat_mod
+    from app.services import pane_stream
+
+    session_file = tmp_path / "sess-rearm.jsonl"
+    session_file.write_text("")
+    stream_file = tmp_path / "pane.log"
+    stream_file.write_bytes(b"")
+    ensured = []
+
+    async def _ensure(agent):
+        ensured.append(agent)
+        return None
+
+    monkeypatch.setattr(pane_stream, "start", _async_return(stream_file))
+    monkeypatch.setattr(pane_stream, "stop", _async_return(None))
+    monkeypatch.setattr(pane_stream, "ensure", _ensure)
+    monkeypatch.setattr(transcript_chat_mod, "capture_pane", _async_return("❯ "))
+
+    agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
+    await manager.acquire("agent-rearm", session_file, agent)
+    try:
+        assert await _wait_until(lambda: len(ensured) >= 2, timeout=3.0), \
+            "die Sonde prueft den Strom nicht"
+        assert ensured[0] is agent
+    finally:
+        await manager.release("agent-rearm")

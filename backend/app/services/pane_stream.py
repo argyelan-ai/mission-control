@@ -140,3 +140,46 @@ async def stop(agent) -> None:
     if slug is None:
         return
     await asyncio.to_thread(_run, _docker_argv(slug, "pipe-pane", "-t", f"{slug}:0"))
+
+
+async def is_piping(agent) -> bool | None:
+    """Schreibt tmux gerade in die Strom-Datei? True/False — oder None, wenn
+    tmux nicht antwortet.
+
+    Ein Container-Neustart (Runtime-Wechsel) bringt einen neuen tmux-Server,
+    und der kennt das ``pipe-pane`` des alten nicht mehr. Der Chat-Tailer
+    stand dann auf dem letzten Bild vor dem Neustart und zeigte zu jeder neuen
+    Frage die alte Historie (06.09.2026, omp-Agent). ``#{pane_pipe}`` ist
+    tmux' eigenes Flag dafuer. Keine Antwort ist KEIN Urteil: ein Timeout darf
+    den Emulator nicht leeren.
+    """
+    slug = _slug(agent)
+    if slug is None:
+        return None
+
+    def _query() -> bool | None:
+        argv = _docker_argv(slug, "display", "-p", "-t", f"{slug}:0", "#{pane_pipe}")
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT_SECONDS)
+        except Exception as exc:  # noqa: BLE001 — Docker weg, Timeout
+            logger.warning("pane_stream: pane_pipe von %s unbekannt: %s", slug, exc)
+            return None
+        out = proc.stdout.strip()
+        if proc.returncode != 0 or out not in ("0", "1"):
+            return None
+        return out == "1"
+
+    return await asyncio.to_thread(_query)
+
+
+async def ensure(agent) -> Path | None:
+    """Schaltet den Strom wieder ein, wenn er abgerissen ist.
+
+    Rueckgabe: der Pfad, wenn neu eingeschaltet wurde (Datei ist dann geleert,
+    der Leser muss von vorn anfangen) — sonst None. Laeuft der Strom oder ist
+    sein Zustand unbekannt, wird nichts angefasst: ein zweites ``pipe-pane``
+    wuerde den Strom neu starten und die Datei leeren, mitten im Lesen.
+    """
+    if await is_piping(agent) is False:
+        return await start(agent)
+    return None
