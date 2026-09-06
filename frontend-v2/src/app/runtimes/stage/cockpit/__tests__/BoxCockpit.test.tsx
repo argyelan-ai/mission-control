@@ -76,7 +76,7 @@ const workerMember: BoxCockpitMember = {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
-  vi.spyOn(api.hosts, "metricsHistory").mockResolvedValue({ points: [] });
+  vi.spyOn(api.hosts, "metricsHistory").mockResolvedValue({ points: [], window: 3600, sample_seconds: 5 });
   vi.spyOn(api.hosts, "autostart").mockResolvedValue({
     host_id: "spark", enabled: true, recipe_slug: "qwen38-flash-next", recipe_display_name: "Qwen3.8 Flash Next",
     role: "head", via_head: null, last_attempt_at: null, last_result: null,

@@ -3,10 +3,12 @@
 /**
  * TelemetryChart — Cockpit-Gruppe „Telemetry" (Spec §4.1). SVG-Diagramm der
  * letzten Stunde aus `GET /hosts/{id}/metrics/history` (Spec §6, PR 3 —
- * Backend-PR läuft parallel; `api.hosts.metricsHistory` fängt jeden Fehler
- * inkl. 404 ab und liefert `{points:[]}`, siehe dessen Kommentar). Leer
- * (`points: []`) → ruhige Leerfläche mit „collecting…" statt eines Fehlers
- * (HONESTY RULE, wie Puls/HeatStrip).
+ * seit dem Rebase auf main (06.09.2026, #437 gemergt) der echte Endpoint,
+ * kein Honesty-Fallback in `api.hosts.metricsHistory` mehr nötig). Ein Host,
+ * der noch nie gepollt wurde, liefert trotzdem `points: []` (kein eigener
+ * Sammler, der Ring füllt sich erst am laufenden 5s-Poll) — die Leerfläche
+ * mit „collecting…" bleibt darum richtig, jetzt als echter Zwischenzustand
+ * statt eines Fallbacks für einen fehlenden Endpoint.
  *
  * GPU-Linie + Fläche 8% (C.accent), RAM gestrichelt (C.textMuted), Temp
  * (C.warning). Alle drei auf einer gemeinsamen 0–100-Skala (GPU/RAM als

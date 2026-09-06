@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.spyOn(api.hosts, "metrics").mockResolvedValue(metrics);
   vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
   vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
-  vi.spyOn(api.hosts, "metricsHistory").mockResolvedValue({ points: [] });
+  vi.spyOn(api.hosts, "metricsHistory").mockResolvedValue({ points: [], window: 3600, sample_seconds: 5 });
   vi.spyOn(api.hosts, "autostart").mockResolvedValue({
     host_id: "spark", enabled: false, recipe_slug: null, recipe_display_name: null,
     role: null, via_head: null, last_attempt_at: null, last_result: null,

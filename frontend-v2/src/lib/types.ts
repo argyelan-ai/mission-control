@@ -2667,24 +2667,6 @@ export interface HostPulse {
   available: boolean;
 }
 
-// ── Telemetrie-Verlauf (GET /hosts/{id}/metrics/history, Runtimes-Bühne v2
-// §6, PR 3 — Backend parallel in Arbeit): 1-h-Ring derselben Werte wie
-// GET /hosts/{id}/metrics, für das Cockpit-Diagramm (PR 5 §4.1). Wie beim
-// Puls antwortet ein fehlender/nicht deployter Endpoint mit leeren `points`
-// statt einem Fehler — der Client fängt jeden Reject ab (api.hosts.metricsHistory).
-export interface HostMetricsHistoryPoint {
-  t: number;
-  gpu: number | null;
-  ram_used: number | null;
-  ram_total: number | null;
-  temp: number | null;
-  fan: number | null;
-}
-
-export interface HostMetricsHistory {
-  points: HostMetricsHistoryPoint[];
-}
-
 // ── Box-Wizard (POST /hosts/probe, /hosts/{id}/bootstrap) ───────────────────
 
 export interface HostProbeGpu {
