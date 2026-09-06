@@ -116,3 +116,73 @@ async def test_pane_size_falls_back_to_80x24_when_tmux_is_unreachable(monkeypatc
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     assert await pane_stream.pane_size(_StubAgent(slug="rex")) == (80, 24)
+
+
+# ── Abgerissener Strom (Container-Neustart) ───────────────────────────────────
+#
+# Ein Runtime-Wechsel startet den Container neu; der neue tmux-Server kennt
+# das ``pipe-pane`` des alten nicht mehr. Der Chat-Tailer schaltete den Strom
+# nur einmal beim Start ein — danach stand der Emulator auf dem letzten Bild
+# vor dem Neustart, und jede neue Frage zeigte die alte Historie, bis das
+# Transkript sie abloeste (06.09.2026, omp-Agent).
+
+
+@pytest.mark.asyncio
+async def test_is_piping_reads_the_pane_pipe_flag_from_tmux(monkeypatch):
+    seen: list[list[str]] = []
+
+    def _fake_run(argv, **kwargs):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="1\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert await pane_stream.is_piping(_StubAgent(slug="rex")) is True
+    assert seen[-1][7:] == ["tmux", "display", "-p", "-t", "rex:0", "#{pane_pipe}"]
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, returncode=0, stdout="0\n", stderr=""),
+    )
+    assert await pane_stream.is_piping(_StubAgent(slug="rex")) is False
+
+
+@pytest.mark.asyncio
+async def test_is_piping_is_unknown_when_tmux_does_not_answer(monkeypatch):
+    """Kein Urteil ohne Antwort: ein Timeout darf NICHT als 'abgerissen'
+    gelten, sonst wuerde der Tailer bei jedem Docker-Schluckauf den Emulator
+    leeren."""
+    def _boom(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    assert await pane_stream.is_piping(_StubAgent(slug="rex")) is None
+    assert await pane_stream.is_piping(_StubAgent(agent_runtime="host", slug="boss")) is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_restarts_the_pipe_only_when_it_is_gone(monkeypatch, tmp_path):
+    monkeypatch.setattr(pane_stream, "AGENTS_ROOT", tmp_path)
+    calls: list[list[str]] = []
+    pipe_state = {"out": "0\n"}
+
+    def _fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=pipe_state["out"], stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    # Abgerissen -> neu eingeschaltet, Pfad kommt zurueck.
+    path = await pane_stream.ensure(_StubAgent(slug="rex"))
+    assert path == tmp_path / "rex" / "claude-config" / pane_stream.STREAM_FILENAME
+    assert any("pipe-pane" in c for c in calls), "der Strom wurde nicht neu eingeschaltet"
+
+    # Laeuft -> nichts anfassen (kein zweiter Schreiber, keine Leerung).
+    calls.clear()
+    pipe_state["out"] = "1\n"
+    assert await pane_stream.ensure(_StubAgent(slug="rex")) is None
+    assert not any("pipe-pane" in c for c in calls)
+
+    # Unbekannt (tmux stumm) -> ebenfalls nichts anfassen.
+    calls.clear()
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: (_ for _ in ()).throw(OSError("docker weg")))
+    assert await pane_stream.ensure(_StubAgent(slug="rex")) is None
