@@ -88,6 +88,8 @@ _FURNITURE = re.compile(
     | ^\s*Update\ Available\s*$                # omp: Update-Banner nach Frischstart
     | ^\s*New\ version\ .*Run:\ omp\ update      #   … zweite Zeile davon
     | ^\s*lines\)\s*$                          # omp: Umbruch-Rest von „└─ Read … (144" / „lines)"
+    | ^\s*⎋\s                                  # omp: Arbeitszeile „⎋ Working… <Zustand>"
+    | ^\s*π\s+>\s                              # omp: Statusleiste „π  > ◒ MC model > … 4% … 500K"
     """,
     re.VERBOSE,
 )
