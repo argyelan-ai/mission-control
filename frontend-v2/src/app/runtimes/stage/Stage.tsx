@@ -6,12 +6,22 @@
  * 3 Mitglieder · 4 Aktionen.
  *
  * HONESTY RULE (wie SlotStage, siehe dessen Kopfkommentar): nur echte Felder.
- * `Runtime` trägt keine Startzeit — die Karte zeigt darum keine erfundene
- * Laufzeit ("up 2 h 41" aus dem Mockup bleibt Referenz, keine Vorgabe für
- * ein Feld, das es nicht gibt).
+ * Seit #443 trägt `RuntimeLiveStatus.serving_since` (vom Wächter gesetzt/
+ * gelöscht, nie clientseitig abgeleitet) die Laufzeit der Ecke rechts oben
+ * ("up 2 h 41" / "up 34 min", Minuten-Auflösung) — fehlt der Wert (Modell
+ * gerade erst geladen, Wächter noch ohne Probe), bleibt die Ecke beim
+ * Zustandswort ("serving"). Wechsel-/Störungs-Ecke ("switching"/
+ * "unreachable") bleibt Wort-only: weder `RuntimeLiveStatus` noch `Runtime`
+ * tragen einen Phasenbeginn- oder Unreachable-Zeitstempel, ein erfundener
+ * Wert wäre genau die Lüge, die diese Regel verbietet.
+ *
+ * Review-Nachtrag: ein eigener 60s-Ticker (useEffect/setInterval, siehe
+ * `servingSince`-Effekt unten) hält "up X" unabhängig von anderen Queries
+ * aktuell — TanStack Querys structural sharing hält die Puls-Abfrage-
+ * Referenz im Leerlauf stabil und löst sonst kein Re-Render aus.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -19,6 +29,7 @@ import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { typeLabel } from "../runtimeTypeLabel";
+import { formatUptimeParts, pad2 } from "./uptimeFormat";
 import { fmtCtx } from "@/lib/utils";
 import { FlowEdge, type FlowKind } from "./FlowEdge";
 import { HeatStrip } from "./HeatStrip";
@@ -100,6 +111,32 @@ export function Stage({
   const flowKind = flowKindFor(status, idleSeconds);
   const isDuo = members.length > 1;
 
+  // Laufzeit-Ecke (#443/W3-Nachlese): nur solange serving — "switching"/
+  // "unreachable" bleiben Wort-only (kein Phasenbeginn-/Unreachable-
+  // Zeitstempel im Vertrag, s. Datei-Kopfkommentar). `live.serving_since`
+  // ist der gespiegelte Wert extra für die Karte; `runtime.serving_since`
+  // deckt den Rand ab, in dem der 30s-Live-Poll noch nicht nachgezogen hat,
+  // aber die 15s-Runtime-Liste schon.
+  const servingSince = status === "serving" ? (live?.serving_since ?? runtime.serving_since ?? null) : null;
+
+  // Review-Nachtrag (06.09.2026): TanStack Querys `structuralSharing` hält
+  // die Objekt-Referenz stabil, solange sich der Inhalt eines Polls nicht
+  // ändert — die Puls-Abfrage refetcht zwar alle 5s, liefert im Leerlauf
+  // aber denselben Inhalt und löst darum KEIN Re-Render aus. Ohne einen
+  // eigenen Ticker bliebe "up X" stehen, bis irgendeine andere Query (z.B.
+  // der 30s-Live-Poll) zufällig einen echten Wertwechsel bringt. Ein
+  // eigener 60s-Ticker läuft NUR, solange die Karte überhaupt eine
+  // Laufzeit zeigt — sobald `servingSince` null wird (Wechsel/Störung/
+  // unmount), räumt das Cleanup den Intervall sauber ab.
+  const [, forceUptimeTick] = useState(0);
+  useEffect(() => {
+    if (!servingSince) return;
+    const id = setInterval(() => forceUptimeTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [servingSince]);
+
+  const uptime = servingSince ? formatUptimeParts(servingSince) : null;
+
   const tps = pulse?.available ? pulse?.now_tps ?? null : null;
   const latencyMs = live?.latency_ms ?? null;
   const nowLineParts = [
@@ -142,17 +179,24 @@ export function Stage({
           >
             {shortModelTitle(runtime.display_name)}
           </span>
-          {/* Ecke rechts oben (Live-Sichtprüfung 06.09.2026): kein erfundenes
-              "up 2 h 41" (HONESTY RULE, s.o.) — stattdessen der Zustand als
-              Mono-Wort. Backend-Nachtrag offen: ein echtes Startzeit-/
-              Wechsel-Zeitpunkt-Feld (weder `Runtime` noch `RuntimeLiveStatus`
-              tragen eines) würde "switching 0:48" statt nur "switching"
-              erlauben. */}
+          {/* Ecke rechts oben (#443/W3-Nachlese): "up 2 h 41" / "up 34 min"
+              sobald `serving_since` da ist, sonst das Zustandswort — nie
+              erfunden (HONESTY RULE, s.o.). "switching"/"unreachable" bleiben
+              Wort-only: ein Phasenbeginn-/Unreachable-Zeitstempel existiert
+              im Vertrag (noch) nicht, s. Datei-Kopfkommentar. */}
           <span
             className="font-mono uppercase shrink-0"
             style={{ fontSize: "10px", letterSpacing: "0.08em", color: C.textMuted }}
           >
-            {status === "failed" ? t("cornerUnreachable") : status === "switching" ? t("cornerSwitching") : t("cornerServing")}
+            {status === "failed"
+              ? t("cornerUnreachable")
+              : status === "switching"
+                ? t("cornerSwitching")
+                : uptime
+                  ? uptime.hours >= 1
+                    ? t("cornerUptimeHours", { h: uptime.hours, m: pad2(uptime.minutes) })
+                    : t("cornerUptimeMinutes", { m: uptime.minutes })
+                  : t("cornerServing")}
           </span>
         </div>
         <HeatStrip pulse={pulse} dead={status === "failed"} />
