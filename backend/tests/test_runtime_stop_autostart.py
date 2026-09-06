@@ -165,7 +165,7 @@ async def test_a_busy_agent_blocks_the_stop_with_409(async_session, auth_client)
     host = await _host(async_session, autostart_enabled=True)
     rt = await _runtime(async_session, "recipe-d", host)
     task_id = uuid.uuid4()
-    await _agent(async_session, "Sparky", rt, current_task_id=task_id)
+    await _agent(async_session, "Agent-Alpha", rt, current_task_id=task_id)
 
     stop_mock = AsyncMock(return_value={"ok": True, "message": "gestoppt"})
     with patch("app.services.runtime_manager.stop_runtime", stop_mock):
@@ -174,7 +174,7 @@ async def test_a_busy_agent_blocks_the_stop_with_409(async_session, auth_client)
     assert resp.status_code == 409, resp.text
     detail = resp.json()["detail"]
     assert detail["code"] == "agent_busy"
-    assert detail["agents"][0]["name"] == "Sparky"
+    assert detail["agents"][0]["name"] == "Agent-Alpha"
     assert detail["agents"][0]["task_id"] == str(task_id)
     stop_mock.assert_not_awaited()
 
@@ -188,7 +188,7 @@ async def test_force_overrides_the_gate_and_logs_it(async_session, auth_client):
     host = await _host(async_session, autostart_enabled=True)
     rt = await _runtime(async_session, "recipe-e", host)
     task_id = uuid.uuid4()
-    await _agent(async_session, "Sparky", rt, current_task_id=task_id)
+    await _agent(async_session, "Agent-Alpha", rt, current_task_id=task_id)
 
     with _stop_ok():
         resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/stop?force=true")
@@ -203,8 +203,8 @@ async def test_force_overrides_the_gate_and_logs_it(async_session, auth_client):
         )
     ).all()
     assert len(events) == 1
-    assert "Sparky" in events[0].title
-    assert events[0].detail["agents"][0]["name"] == "Sparky"
+    assert "Agent-Alpha" in events[0].title
+    assert events[0].detail["agents"][0]["name"] == "Agent-Alpha"
 
 
 @pytest.mark.asyncio
