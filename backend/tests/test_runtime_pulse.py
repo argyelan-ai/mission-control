@@ -1,7 +1,9 @@
 """Runtime Pulse (Runtimes-Buehne v2, PR 1 — docs/specs/runtimes-buehne-v2.md §6/§7).
 
-Covers: Prometheus counter parsing (vLLM + SGLang fallback), tok/s delta
-computation across two probes, ring trim to 180 points, the
+Covers: Prometheus metric parsing (vLLM counter, SGLang counter fallback,
+SGLang gauge fallback), tok/s computation across two probes (delta for
+counters, direct value for the sglang:gen_throughput gauge — confirmed live
+against a running SGLang box, 06.09.2026), ring trim to 180 points, the
 GET /hosts/{id}/pulse endpoint (empty + populated), and that unreachable
 hosts are skipped without ever probing them.
 """
@@ -33,10 +35,16 @@ vllm:generation_tokens_total{model_name="a",finished_reason="stop"} 100.0
 vllm:generation_tokens_total{model_name="a",finished_reason="length"} 50.0
 """
 
-_SGLANG_METRICS = """
+_SGLANG_COUNTER_METRICS = """
 # HELP sglang:generation_tokens_total total
 # TYPE sglang:generation_tokens_total counter
 sglang:generation_tokens_total{name="x"} 500
+"""
+
+_SGLANG_GAUGE_METRICS = """
+# HELP sglang:gen_throughput Generation throughput (token/s).
+# TYPE sglang:gen_throughput gauge
+sglang:gen_throughput 87.3
 """
 
 _NO_KNOWN_METRICS = """
@@ -82,17 +90,25 @@ async def _mark_reachable(fake_redis, slug: str, reachable: bool = True) -> None
 
 def test_parse_vllm_counter():
     result = parse_token_counter(_VLLM_METRICS)
-    assert result == ("vllm", 12345.0)
+    assert result == ("vllm", 12345.0, "counter")
 
 
 def test_parse_sums_multiple_label_series():
     result = parse_token_counter(_VLLM_MULTI_LABEL_METRICS)
-    assert result == ("vllm", 150.0)
+    assert result == ("vllm", 150.0, "counter")
 
 
-def test_parse_sglang_fallback_when_no_vllm():
-    result = parse_token_counter(_SGLANG_METRICS)
-    assert result == ("sglang", 500.0)
+def test_parse_sglang_counter_fallback_when_no_vllm():
+    result = parse_token_counter(_SGLANG_COUNTER_METRICS)
+    assert result == ("sglang", 500.0, "counter")
+
+
+def test_parse_sglang_gauge_fallback_is_a_rate():
+    """sglang:gen_throughput is a gauge (token/s), not a counter — verified
+    live against a running SGLang box (06.09.2026). Only used when the
+    counter metric is absent (priority order in _METRIC_CANDIDATES)."""
+    result = parse_token_counter(_SGLANG_GAUGE_METRICS)
+    assert result == ("sglang", 87.3, "rate")
 
 
 def test_parse_returns_none_for_unknown_metrics():
@@ -198,6 +214,40 @@ async def test_poller_polls_reachable_host_and_fills_ring(async_session, fake_re
     meta = json.loads(await fake_redis.get(RedisKeys.host_pulse_meta(str(host.id))))
     assert meta["available"] is True
     assert meta["engine"] == "vllm"
+
+
+@pytest.mark.asyncio
+async def test_poller_sglang_gauge_used_directly_as_tps_no_delta(async_session, fake_redis):
+    """sglang:gen_throughput is a gauge already in tok/s — the FIRST probe
+    must already report the real value, unlike a counter (which needs a
+    second sample). No counter-sample bookkeeping key is written either."""
+    host = await _mk_host(async_session, slug="sglang-box")
+    rt = await _mk_slot_runtime(async_session, host, slug="sglang-slot")
+    await _mark_reachable(fake_redis, rt.slug, reachable=True)
+
+    mock_response = MagicMock(status_code=200, text=_SGLANG_GAUGE_METRICS)
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    poller = RuntimePulse(interval=5)
+    with patch("app.services.runtime_pulse.get_redis", _fake_get_redis(fake_redis)), \
+         patch("httpx.AsyncClient", return_value=mock_client):
+        await poller.tick(session=async_session)
+
+    raw = await fake_redis.lrange(RedisKeys.host_pulse(str(host.id)), 0, -1)
+    assert len(raw) == 1
+    point = json.loads(raw[0])
+    assert point["tps"] == 87.3  # gauge value used as-is, even on the first probe
+
+    meta = json.loads(await fake_redis.get(RedisKeys.host_pulse_meta(str(host.id))))
+    assert meta["available"] is True
+    assert meta["engine"] == "sglang"
+
+    # No counter-delta sample was written for a rate metric.
+    sample = await fake_redis.get(RedisKeys.host_pulse_sample(str(host.id)))
+    assert sample is None
 
 
 @pytest.mark.asyncio

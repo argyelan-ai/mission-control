@@ -4,10 +4,13 @@ A Bühne card's "Lebenszeichen" heat strip needs live tokens/second per host.
 This poller supplies it: every ``settings.runtime_pulse_interval`` seconds it
 scrapes the Prometheus ``/metrics`` endpoint of every host that carries a slot
 runtime (``runtimes.is_slot=True`` with a bound ``host_id`` — the fixed box
-endpoint, e.g. a Duo's Head box), reads the engine's cumulative generated-token
-counter (vLLM: ``vllm:generation_tokens_total``; SGLang fallback:
-``sglang:generation_tokens_total`` / ``sglang:gen_throughput``), and turns the
-delta between two probes into tokens/second.
+endpoint, e.g. a Duo's Head box), reads the engine's generation-token metric
+(vLLM: ``vllm:generation_tokens_total``, a cumulative counter — turns the
+delta between two probes into tokens/second; SGLang fallback:
+``sglang:generation_tokens_total``, also a counter, same delta math — or
+``sglang:gen_throughput``, which is **not** a counter but a gauge already
+reporting tokens/second, confirmed live against a running SGLang box
+2026-09-06: its value is used as the tok/s reading directly, no delta).
 
 Samples land in a capped Redis ring (``RedisKeys.host_pulse``, 180 points —
 15 minutes at the default 5s interval) plus a small meta doc
@@ -60,13 +63,20 @@ RING_MAX_POINTS = 180
 SCRAPE_TIMEOUT = 3.0  # seconds
 
 # Metric families to look for, in priority order. Each entry is
-# (engine, metric_name). The first one with at least one matching series in
-# the scraped text wins; all series for that metric name are summed (a
-# multi-model deployment can expose the counter with several label sets).
-_METRIC_CANDIDATES: tuple[tuple[str, str], ...] = (
-    ("vllm", "vllm:generation_tokens_total"),
-    ("sglang", "sglang:generation_tokens_total"),
-    ("sglang", "sglang:gen_throughput"),
+# (engine, metric_name, kind) — kind is "counter" (cumulative, needs the
+# delta-over-time math) or "rate" (already tokens/second, used as-is).
+# The first metric name with at least one matching series in the scraped
+# text wins; all series for that metric name are summed (a multi-model
+# deployment can expose the metric with several label sets).
+#
+# sglang:gen_throughput is a GAUGE, not a counter — verified against a live
+# SGLang box 2026-09-06 (team lead's cross-check on rev-436): treating it as
+# a counter and taking a delta would silently divide an already-a-rate value
+# by the poll interval, reporting throughput far too low.
+_METRIC_CANDIDATES: tuple[tuple[str, str, str], ...] = (
+    ("vllm", "vllm:generation_tokens_total", "counter"),
+    ("sglang", "sglang:generation_tokens_total", "counter"),
+    ("sglang", "sglang:gen_throughput", "rate"),
 )
 
 # One throttled warning per host per outage, not one per tick.
@@ -82,14 +92,16 @@ def _metric_line_pattern(metric_name: str) -> re.Pattern:
     )
 
 
-def parse_token_counter(text: str) -> tuple[str, float] | None:
+def parse_token_counter(text: str) -> tuple[str, float, str] | None:
     """Sum all series for the first matching metric family in ``text``.
 
-    Returns ``(engine, total)`` or ``None`` if none of the known metric
-    families appear at all (engine not exposing generation counters, or the
-    scrape returned something unrelated).
+    Returns ``(engine, total, kind)`` — ``kind`` is ``"counter"`` (caller
+    must diff against the previous sample) or ``"rate"`` (the value already
+    IS tokens/second) — or ``None`` if none of the known metric families
+    appear at all (engine not exposing generation metrics, or the scrape
+    returned something unrelated).
     """
-    for engine, metric_name in _METRIC_CANDIDATES:
+    for engine, metric_name, kind in _METRIC_CANDIDATES:
         pattern = _metric_line_pattern(metric_name)
         total = 0.0
         found = False
@@ -106,7 +118,7 @@ def parse_token_counter(text: str) -> tuple[str, float] | None:
                 continue
             found = True
         if found:
-            return engine, total
+            return engine, total, kind
     return None
 
 
@@ -213,10 +225,15 @@ class RuntimePulse:
             await self._write_meta(redis, host_id, available=False)
             return
 
-        engine, counter = parsed
+        engine, value, kind = parsed
         now = time.time()
-        tps = await self._compute_tps(redis, host_id, engine=engine, counter=counter, now=now)
-        await self._write_sample(redis, host_id, t=now, counter=counter, engine=engine)
+        if kind == "rate":
+            # Already tokens/second (e.g. sglang:gen_throughput, a gauge) —
+            # use it as-is, no delta, no counter-sample bookkeeping.
+            tps = round(max(value, 0.0), 2)
+        else:
+            tps = await self._compute_tps(redis, host_id, engine=engine, counter=value, now=now)
+            await self._write_sample(redis, host_id, t=now, counter=value, engine=engine)
         await self._push_point(redis, host_id, t=now, tps=tps)
         await self._write_meta(redis, host_id, available=True, last_ok=now, engine=engine)
 
