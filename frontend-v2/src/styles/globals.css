@@ -1144,3 +1144,44 @@ option {
   }
 }
 
+/* ── Runtimes-Bühne v2 — Cockpit (PR 5, Spec §4) ─────────────────────────────
+   Jede Gruppe folgt der Anatomie [Label (Mono, 92px) | Inhalt] — Container-
+   Query wie im Mockup (`.dw2 .grp`, `@container (min-width:480px)`), damit
+   die Zeile auf dem schmaleren 420px-Drawer gestapelt bleibt, aber im
+   breiteren Bottom-Sheet nebeneinander steht. Der Wurzelknoten trägt
+   `container-type: inline-size` inline (Komponente), gleiche Konvention wie
+   `.stage-kpi`. */
+.cockpit-grp {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@container (min-width: 480px) {
+  .cockpit-grp {
+    grid-template-columns: 92px 1fr;
+    gap: 16px;
+  }
+}
+
+/* Fusszeile (bg-deep): Re-probe · Restart nebeneinander, Stop auf dem
+   schmalen Drawer volle Breite darunter (wie `.dw2 .ft` im Mockup). */
+.cockpit-ft {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.cockpit-ft .cockpit-ft-stop {
+  grid-column: 1 / -1;
+}
+@container (min-width: 480px) {
+  .cockpit-ft {
+    display: flex;
+  }
+  .cockpit-ft .cockpit-ft-spacer {
+    flex: 1;
+  }
+  .cockpit-ft .cockpit-ft-stop {
+    grid-column: auto;
+  }
+}
+

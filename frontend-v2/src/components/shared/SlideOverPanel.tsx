@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 interface SlideOverPanelProps {
   open: boolean;
@@ -13,6 +14,12 @@ interface SlideOverPanelProps {
   title?: string;
   /** Width on md+ screens. Default: 420px */
   desktopWidth?: string;
+  /**
+   * Skip the built-in title/close header (Runtimes-Cockpit, PR 5): the
+   * caller renders its own header (box name + mono facts + close button),
+   * `title` still becomes the dialog's accessible name via `aria-label`.
+   */
+  hideHeader?: boolean;
 }
 
 /**
@@ -27,8 +34,15 @@ export function SlideOverPanel({
   className,
   title,
   desktopWidth = "420px",
+  hideHeader = false,
 }: SlideOverPanelProps) {
   const prefersReducedMotion = useReducedMotion();
+
+  // Review #440 Fund 4 (06.09.2026): keiner der fünf Nutzer rief den
+  // bestehenden Hook auf — Hintergrund konnte auf iOS unter dem offenen
+  // Sheet weiterscrollen. Zentral hier statt in jedem Aufrufer: behebt es
+  // für alle fünf auf einen Schlag.
+  useBodyScrollLock(open);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -86,7 +100,7 @@ export function SlideOverPanel({
             </div>
 
             {/* Header with close button */}
-            {title && (
+            {title && !hideHeader && (
               <div
                 className="flex items-center justify-between px-4 py-3 shrink-0"
                 style={{ borderBottom: "1px solid var(--color-border-subtle)" }}

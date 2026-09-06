@@ -32,6 +32,13 @@ export interface StageMember {
   host: Host;
   role: "head" | "worker" | null;
   device?: Device;
+  /**
+   * Die Slot-Runtime dieser Box (ADR-078, `is_slot=true`) — Team-Lead-Fund
+   * 06.09.2026: die Agenten hängen an DIESER Zeile, nicht an der laufenden
+   * Rezept-Runtime. Die Instrumente-Zelle "Agents" muss darum die Head-Box-
+   * Slot-Runtime abfragen, nicht `runtime` (das Rezept).
+   */
+  slot?: Runtime | null;
 }
 
 export type StageStatus = "serving" | "quiet" | "switching" | "failed";
@@ -59,7 +66,9 @@ export function Stage({
   runtime: Runtime;
   members: StageMember[];
   live?: RuntimeLiveStatus;
-  onOpenCockpit: (rt: Runtime) => void;
+  /** Cockpit öffnet immer für die Head-Box (Spec §4: "Head-Box bei Duo" —
+   *  der Umschalter zu Worker sitzt im Cockpit-Kopf, nicht auf der Karte). */
+  onOpenCockpit: (headHostId: string) => void;
 }) {
   const t = useTranslations("runtimes.stage");
   const currentUser = useAppStore((s) => s.currentUser);
@@ -72,9 +81,14 @@ export function Stage({
     refetchInterval: 5_000,
   });
 
+  // Team-Lead-Fund 06.09.2026: Agenten hängen an der Slot-Runtime der
+  // Head-Box (ADR-078), nicht am laufenden Rezept — `runtime` bleibt nur
+  // Fallback für Boxen ohne eigene Slot-Zeile (ältere Stände).
+  const agentsSlug = (headHost?.slot?.slug ?? headHost?.slot?.id ?? runtime.slug ?? runtime.id) as string;
   const { data: agentsData } = useQuery({
-    queryKey: ["runtime-agents", runtime.slug ?? runtime.id],
-    queryFn: () => api.runtimes.db.agents((runtime.slug ?? runtime.id) as string),
+    queryKey: ["runtime-agents", agentsSlug],
+    queryFn: () => api.runtimes.db.agents(agentsSlug),
+    enabled: !!agentsSlug,
     staleTime: 15_000,
     retry: false,
   });
@@ -182,7 +196,7 @@ export function Stage({
             servingName={runtime.display_name}
             runtimeId={runtime.id}
             variant={status === "failed" ? "trouble" : "normal"}
-            onOpenCockpit={() => onOpenCockpit(runtime)}
+            onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
           />
         )}
       </div>
