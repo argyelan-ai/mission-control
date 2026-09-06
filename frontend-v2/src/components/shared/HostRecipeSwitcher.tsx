@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
+import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { HostRecipe } from "@/lib/types";
@@ -298,7 +299,15 @@ export function HostRecipeSwitcher({
           aria-haspopup="listbox"
           aria-expanded={open}
           data-testid="recipe-dropdown-trigger"
-          className={`flex items-center gap-2 rounded-md cursor-pointer max-w-full ${compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"} ${primary ? "font-medium" : ""}`}
+          // Primär (Runtimes-Bühne v2, Spec §2 Zone 4 — Review #438 zweite
+          // Sichtprüfung 06.09.2026): eigene Grösse UNABHÄNGIG von `compact`
+          // — eine Primäraktion braucht ihre volle Höhe (40px), auch wenn
+          // sie neben kompakten Aktionsknöpfen steht. `compact` bleibt nur
+          // für den ruhigen Registerzeilen-Auslöser (Panel/SlotStage) in
+          // Kraft, wenn `primary` nicht gesetzt ist.
+          className={`flex items-center justify-center gap-2 rounded-md cursor-pointer max-w-full ${
+            primary ? "h-10 px-3.5 text-sm font-semibold" : compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"
+          }`}
           style={{
             background: primary ? C.accent : C.bgSurface,
             border: `1px solid ${primary ? C.accent : open ? C.borderAccent : C.border}`,
@@ -312,7 +321,11 @@ export function HostRecipeSwitcher({
             <span aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: STATUS.online }} />
           )}
           <span className={`truncate max-w-[260px] ${primary ? "" : "font-mono"}`}>{triggerLabel}</span>
-          <span aria-hidden style={{ color: primary ? C.onAccent : C.textDim, fontSize: "9px" }}>▾</span>
+          {primary ? (
+            <ChevronDown size={16} aria-hidden style={{ color: C.onAccent }} />
+          ) : (
+            <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>▾</span>
+          )}
         </button>
       )}
 

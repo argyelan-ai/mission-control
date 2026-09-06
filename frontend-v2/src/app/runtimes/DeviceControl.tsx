@@ -684,6 +684,72 @@ function useDeviceModeControl(device: Device, canControl: boolean) {
  * `useDeviceModeControl` — nur die Darstellung ist anders (keine Box, kein
  * "Details"-Knopf, kein Watt).
  */
+/**
+ * MiniModeSwitch — die vier reinen Textsegmente aus dem Mockup (`.seg.sm`),
+ * für `CompactDeviceModeSwitch` (Runtimes-Bühne v2 Zone 3). Zweite
+ * Sichtprüfung 06.09.2026 (Review #438 Fund A): `CompactModeSwitch`
+ * (Watt-Zahlen, Stromtreppen-Balken, Warndreieck bei boost, dunkle Pill-Box)
+ * ist die Zeile aus der HEUTIGEN Slot-Kachel (`DeviceModeStrip`) — die Bühne
+ * verlangt ausdrücklich NUR die vier Modusnamen als schmale, ruhige
+ * Segmentleiste, ohne jede Messwert-Andeutung. Kein Watt/Balken/Icon hier
+ * ist Absicht, nicht eine vergessene Ausbaustufe.
+ */
+function MiniModeSwitch({
+  current,
+  target,
+  pending,
+  disabled,
+  onPick,
+}: {
+  current: GpuMode | null;
+  target: GpuMode | null;
+  pending: boolean;
+  disabled: boolean;
+  onPick: (mode: GpuMode) => void;
+}) {
+  const t = useTranslations("runtimes.devices");
+  const selected = current ?? target;
+  const showTarget = pending && target != null && target !== selected;
+  const highlighted = showTarget ? target : selected;
+
+  return (
+    <div
+      className="inline-flex rounded-[3px] overflow-hidden"
+      style={{ border: `1px solid ${C.border}` }}
+      role="radiogroup"
+      aria-label={t("modeGroupLabel")}
+    >
+      {GPU_MODES.map((mode, i) => {
+        const active = mode === highlighted;
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={current === mode}
+            aria-label={t(MODE_LABEL_KEY[mode])}
+            disabled={disabled}
+            onClick={() => onPick(mode)}
+            data-testid={`mini-mode-${mode}`}
+            data-active={active ? "true" : "false"}
+            className="font-mono uppercase px-2.5 flex items-center justify-center cursor-pointer disabled:cursor-not-allowed min-h-11 sm:min-h-0"
+            style={{
+              fontSize: "11px",
+              letterSpacing: "0.04em",
+              height: "30px",
+              background: active ? C.accentSubtle : "transparent",
+              color: active ? C.accent : C.textMuted,
+              borderRight: i < GPU_MODES.length - 1 ? `1px solid ${C.border}` : "none",
+            }}
+          >
+            {t(MODE_LABEL_KEY[mode])}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CompactDeviceModeSwitch({
   device,
   canControl,
@@ -694,7 +760,7 @@ export function CompactDeviceModeSwitch({
   const { currentMode, targetMode, lock, pending, mutation, pick } = useDeviceModeControl(device, canControl);
   return (
     <div style={lock ? { opacity: 0.5 } : undefined} data-testid="compact-device-mode-switch">
-      <CompactModeSwitch
+      <MiniModeSwitch
         current={currentMode}
         target={lock ? null : targetMode}
         pending={pending}

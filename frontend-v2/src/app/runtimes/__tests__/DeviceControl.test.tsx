@@ -462,19 +462,24 @@ describe("DeviceModeStrip", () => {
 describe("CompactDeviceModeSwitch", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("renders only the four-mode switch — no label, no Details button, no measured-values box", async () => {
+  it("renders only the four plain-text segments — no label, no Details button, no watt/bars/icon/box (Review #438 zweite Sichtprüfung)", async () => {
     renderWithQuery(<CompactDeviceModeSwitch device={makeDevice()} canControl />);
     expect(screen.getByTestId("compact-device-mode-switch")).toBeInTheDocument();
-    expect(screen.getByTestId("compact-mode-normal")).toBeInTheDocument();
+    expect(screen.getByTestId("mini-mode-normal")).toBeInTheDocument();
     expect(screen.queryByTestId("device-toggle-detail")).not.toBeInTheDocument();
     expect(screen.queryByTestId("device-detail")).not.toBeInTheDocument();
     expect(screen.queryByText(/GPU MODE/i)).not.toBeInTheDocument();
+    // No watt figures, no wattage-driven bars, no risk icon on boost — the
+    // heavy CompactModeSwitch chrome from DeviceModeStrip must not appear.
+    expect(screen.queryByText(/≈\d/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("compact-bar-boost")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("compact-mode-boost")).not.toBeInTheDocument();
   });
 
   it("still applies the click → mutation logic (shared with DeviceModeStrip)", async () => {
     const set = vi.spyOn(api.nodes, "setDesiredState").mockResolvedValue({} as never);
     renderWithQuery(<CompactDeviceModeSwitch device={makeDevice()} canControl />);
-    await userEvent.click(screen.getByTestId("compact-mode-boost"));
+    await userEvent.click(screen.getByTestId("mini-mode-boost"));
     await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
     expect(set).toHaveBeenCalledWith("host-1", expect.objectContaining({ gpu_mode: "boost" }));
   });
@@ -483,6 +488,12 @@ describe("CompactDeviceModeSwitch", () => {
     renderWithQuery(
       <CompactDeviceModeSwitch device={makeDevice({ status: "yellow", reason: "stale", age_s: 200 })} canControl />
     );
-    expect(screen.getByTestId("compact-mode-eco")).toBeDisabled();
+    expect(screen.getByTestId("mini-mode-eco")).toBeDisabled();
+  });
+
+  it("marks the active mode via data-active, not a colored pill background", () => {
+    renderWithQuery(<CompactDeviceModeSwitch device={makeDevice()} canControl />);
+    expect(screen.getByTestId("mini-mode-eco")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("mini-mode-normal")).toHaveAttribute("data-active", "false");
   });
 });
