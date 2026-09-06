@@ -60,6 +60,15 @@ class RedisKeys:
         return f"mc:events:board:{board_id}"
 
     @staticmethod
+    def host_metrics_history(host_id: str) -> str:
+        """1h-Ring der GPU/RAM-Telemetrie je Host (Bühne v2, PR 3, §6/§7).
+        Liste, JSON-Punkte {t,gpu,ram_used,ram_total,temp,fan}, LTRIM auf
+        HISTORY_MAX_POINTS (services/host_metrics_history.py) — gefüllt vom
+        bestehenden 5s-Poll auf GET /hosts/{id}/metrics (kein zweiter
+        SSH-Weg), gedeckelt auf höchstens 1 Punkt je HISTORY_DEDUPE_SECONDS."""
+        return f"mc:host:{host_id}:metrics:history"
+
+    @staticmethod
     def agents_events() -> str:
         return "mc:events:agents"
 
