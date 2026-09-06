@@ -18,6 +18,8 @@ and both go through runtime_manager._ssh_run — there is exactly one SSH
 implementation in this codebase.
 """
 
+import json
+import time
 import uuid
 from datetime import datetime
 
@@ -30,6 +32,7 @@ from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
+from app.redis_client import RedisKeys, get_redis
 from app.services import host_bootstrap, host_onboarding, host_probe, launch_template, runtime_manager
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
@@ -632,6 +635,56 @@ async def host_metrics(
 
     metrics = await runtime_manager.get_host_metrics(resolved)
     return {"kind": host.kind, "slug": host.slug, **metrics}
+
+
+@router.get("/{host_id}/pulse")
+async def host_pulse(
+    host_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Tok/s heat strip data for a host (Runtimes-Buehne v2, PR 1).
+
+    Reads what ``services/runtime_pulse.RuntimePulse`` last wrote to Redis —
+    never probes anything itself. No data (poller off, host never reachable,
+    engine exposes no counter) is a normal, 200-OK answer: ``available:
+    false, points: []``. The card's heat strip renders 60 empty cells for
+    that, never an error.
+    """
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+
+    redis = await get_redis()
+    raw_points = await redis.lrange(RedisKeys.host_pulse(str(host.id)), 0, -1)
+    points = []
+    for raw in raw_points:
+        try:
+            points.append(json.loads(raw))
+        except (TypeError, ValueError):
+            continue
+
+    meta_raw = await redis.get(RedisKeys.host_pulse_meta(str(host.id)))
+    try:
+        meta = json.loads(meta_raw) if meta_raw else {}
+    except (TypeError, ValueError):
+        meta = {}
+
+    now_tps = points[-1]["tps"] if points else 0.0
+    idle_seconds = None
+    now = time.time()
+    for point in reversed(points):
+        if point.get("tps", 0) > 0.5:
+            idle_seconds = max(0, int(now - point["t"]))
+            break
+
+    return {
+        "available": bool(meta.get("available", False)),
+        "engine": meta.get("engine"),
+        "now_tps": now_tps,
+        "idle_seconds": idle_seconds,
+        "points": points,
+    }
 
 
 # ── Autostart je Box (Rezept-Umschalter P3, 04.09.2026) ──────────────────────
