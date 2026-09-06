@@ -40,6 +40,7 @@ from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services.agent_runtime_switch import (
+    HEALTH_TIMEOUT_RESTART_OMP,
     _acquire_lock,
     _lock_key,
     _release_lock,
@@ -57,6 +58,15 @@ logger = logging.getLogger(__name__)
 
 MAX_SYNC_ATTEMPTS = 3
 _FAIL_TTL = 3600  # failure counter window (seconds)
+#: Ruhe nach dem Aufgeben (Sekunden). Live-Befund 06.09.2026: der Zaehler gab
+#: nach 3 Versuchen auf und raeumte die Fahne weg — der Waechter setzte sie in
+#: der naechsten Runde wieder, also gab es Runde fuer Runde einen weiteren
+#: Neustart ("model sync for <Agent> failed (8/3)"). Solange dieser Schluessel
+#: steht, wird der Agent uebersprungen: hoechstens EIN Neustart je Vorfall,
+#: danach 15 Minuten Ruhe. Ein erzwungener Sync (Marks Knopf) hebt sie auf.
+_GIVEUP_COOLDOWN = 900
+#: Health-Frist des Rueckfall-Neustarts fuer alle Nicht-omp-Harnesses.
+_SYNC_HEALTH_TIMEOUT = 60
 _OMP_READY_SIGNALS = ("╭─", "❯")  # omp TUI prompt glyphs (ADR-049)
 
 #: Das Skript im omp-Image, das ``models.yml`` + ``omp.env`` schreibt
@@ -68,7 +78,7 @@ _OMP_RENDER_SCRIPT = "render-omp-config.sh"
 _OMP_RENDER_TIMEOUT = 30
 
 
-def reload_omp_config(agent: Agent) -> dict[str, str]:
+def reload_omp_config(agent: Agent, env: dict[str, str] | None = None) -> dict[str, str]:
     """Das Modell IM laufenden Container neu rendern — statt ihn neu zu starten.
 
     Warum das reicht (am Code nachgeprüft, nicht angenommen): ``launch-omp.sh``
@@ -80,6 +90,17 @@ def reload_omp_config(agent: Agent) -> dict[str, str]:
     Das war vor ADR-078 ein netter Vorteil und ist seitdem eine Notwendigkeit:
     an einer Slot-Zeile hängen ALLE Agenten einer Box, ein Wechsel flaggt also
     die ganze Flotte — seriell neu gestartet wären das Minuten Stillstand.
+
+    ``env`` sind die Werte, die der Container beim Start vom Bootstrap bekäme
+    (``build_runtime_env``) — sie gehen als ``docker exec -e`` mit, und das
+    Skript wird mit ``--no-bootstrap`` gerufen. Warum nicht einfach das Skript
+    selbst holen lassen? Live-Befund 06.09.2026: sein ``curl`` schickte den
+    ``Authorization: Bearer <INTERNAL_BOOTSTRAP_SECRET>`` nicht mit, den
+    ``/internal/bootstrap`` verlangt — jeder Reload endete mit „kein Modell
+    bekannt" und fiel auf den Neustart zurück. Das Skript ist inzwischen
+    repariert; die Werte hier mitzugeben bleibt trotzdem der richtige Weg:
+    dieselbe Quelle wie der Container-Start, keine zweite Wahrheit, und ein
+    Netzweg weniger.
 
     Gibt ``{"status": "reloaded"|"error: …"}`` zurück. Ein Fehler ist kein
     Drama: der Aufrufer fällt auf den Neustart zurück.
@@ -95,9 +116,26 @@ def reload_omp_config(agent: Agent) -> dict[str, str]:
     assert container_name.startswith("mc-agent-"), (
         f"refusing to exec into non-agent container {container_name!r}"
     )
+
+    values = {k: v for k, v in (env or {}).items() if v not in (None, "")}
+    missing = [k for k in ("OPENAI_BASE_URL", "OPENAI_MODEL") if not values.get(k)]
+    if missing:
+        # Ohne Modell hat ein Rendern keinen Sinn — und ein Exec ins Blaue
+        # hinein würde die Datei mit den alten Werten überschreiben.
+        return {
+            "status": f"error: Runtime-Zeile liefert kein {'/'.join(missing)}",
+            "container": container_name,
+        }
+
+    cmd = ["docker", "exec"]
+    for key in sorted(values):
+        cmd += ["-e", f"{key}={values[key]}"]
+    # --no-bootstrap: die Werte stehen schon oben; das Skript soll sie NICHT
+    # noch einmal über das Netz holen.
+    cmd += [container_name, _OMP_RENDER_SCRIPT, "--no-bootstrap"]
     try:
         result = subprocess.run(
-            ["docker", "exec", container_name, _OMP_RENDER_SCRIPT],
+            cmd,
             capture_output=True,
             text=True,
             timeout=_OMP_RENDER_TIMEOUT,
@@ -159,15 +197,35 @@ async def sync_pending_agents(
     for agent in result.all():
         if is_agent_busy(agent) and not force:
             continue
-        await _sync_one(session, agent)
+        await _sync_one(session, agent, force=force)
 
 
-async def _sync_one(session: AsyncSession, agent: Agent) -> None:
+async def _sync_one(session: AsyncSession, agent: Agent, *, force: bool = False) -> None:
     runtime = (
         await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
     )
     if runtime is None:
         # Binding vanished — nothing to sync against.
+        agent.pending_runtime_sync = False
+        session.add(agent)
+        await session.commit()
+        return
+
+    # ── Sperrfrist nach dem Aufgeben ────────────────────────────────────────
+    # Der Zaehler unten gibt nach MAX_SYNC_ATTEMPTS auf und raeumt die Fahne
+    # weg — der Waechter setzt sie in der naechsten Runde aber wieder, und so
+    # bekam ein kaputter Agent Runde fuer Runde einen weiteren Neustart
+    # (Live-Befund 06.09.2026: "failed (8/3)"). Solange die Frist laeuft, wird
+    # er uebersprungen. Ein erzwungener Sync (Marks Knopf) hebt sie auf.
+    giveup_key = RedisKeys.agent_model_sync_giveup(str(agent.id))
+    if force:
+        await _clear_failures(giveup_key)
+    elif await _key_exists(giveup_key):
+        logger.info(
+            "model sync for %s skipped — nach dem Aufgeben in der Sperrfrist "
+            "(%ss); Sync erzwingen hebt sie auf",
+            agent.name, _GIVEUP_COOLDOWN,
+        )
         agent.pending_runtime_sync = False
         session.add(agent)
         await session.commit()
@@ -209,6 +267,7 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
                     agent.name, fails, MAX_SYNC_ATTEMPTS, exc,
                 )
                 if fails >= MAX_SYNC_ATTEMPTS:
+                    await _start_giveup_cooldown(giveup_key)
                     agent.pending_runtime_sync = False
                     session.add(agent)
                     await session.commit()
@@ -223,6 +282,7 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
                     )
                 return
             await _clear_failures(fail_key)
+            await _clear_failures(giveup_key)
             agent.pending_runtime_sync = False
             if runtime.model_identifier:
                 agent.model = runtime.model_identifier
@@ -272,7 +332,15 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
             # gerade weg), bleibt der Neustart exakt wie vorher der Rückweg.
             reloaded = False
             if effective_harness == "omp":
-                reload_result = await asyncio.to_thread(reload_omp_config, agent)
+                # Dieselbe Quelle wie der Container-Start (keine zweite
+                # Wahrheit): was der Bootstrap liefern wuerde, geht als
+                # `docker exec -e` mit — siehe reload_omp_config.
+                from app.routers.internal import build_runtime_env
+
+                render_env = await build_runtime_env(runtime, session, agent=agent)
+                reload_result = await asyncio.to_thread(
+                    reload_omp_config, agent, render_env
+                )
                 reloaded = reload_result.get("status") == "reloaded"
                 if not reloaded:
                     logger.info(
@@ -287,9 +355,21 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
                 status = str(result.get("status", ""))
                 if status.startswith("error"):
                     raise RuntimeError(f"container restart failed: {status}")
-                ready = _OMP_READY_SIGNALS if effective_harness == "omp" else None
+                is_omp = effective_harness == "omp"
+                ready = _OMP_READY_SIGNALS if is_omp else None
+                # Der omp-TUI braucht nach einem Neustart laenger als 60 s, bis
+                # die Prompt-Glyphen stehen (Live-Befund 05./06.09.2026:
+                # "timeout after 60s — window not ready", Container danach
+                # gesund). Genau dieselbe Frist wie im Umschalter — eine
+                # grosszuegige Obergrenze kostet nichts, gewartet wird nur bis
+                # die Glyphen erscheinen.
                 health = await wait_for_agent_healthy(
-                    agent, timeout=60, respawn_mode=False, ready_signals=ready
+                    agent,
+                    timeout=(
+                        HEALTH_TIMEOUT_RESTART_OMP if is_omp else _SYNC_HEALTH_TIMEOUT
+                    ),
+                    respawn_mode=False,
+                    ready_signals=ready,
                 )
                 if not health.get("healthy"):
                     raise RuntimeError(f"health check failed: {health.get('reason')}")
@@ -300,6 +380,7 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
                 agent.name, fails, MAX_SYNC_ATTEMPTS, exc,
             )
             if fails >= MAX_SYNC_ATTEMPTS:
+                await _start_giveup_cooldown(giveup_key)
                 agent.pending_runtime_sync = False
                 session.add(agent)
                 await session.commit()
@@ -315,6 +396,7 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
             return
 
         await _clear_failures(fail_key)
+        await _clear_failures(giveup_key)
         agent.pending_runtime_sync = False
         if runtime.model_identifier:
             agent.model = runtime.model_identifier
@@ -347,6 +429,22 @@ async def _bump_failures(key: str) -> int:
         return fails
     except Exception:  # noqa: BLE001 — Redis optional; worst case we retry forever
         return 1
+
+
+async def _key_exists(key: str) -> bool:
+    try:
+        redis = await get_redis()
+        return bool(await redis.exists(key))
+    except Exception:  # noqa: BLE001 — Redis optional: ohne Redis keine Sperre
+        return False
+
+
+async def _start_giveup_cooldown(key: str) -> None:
+    try:
+        redis = await get_redis()
+        await redis.set(key, "1", ex=_GIVEUP_COOLDOWN)
+    except Exception:  # noqa: BLE001 — best effort, sonst wie bisher
+        pass
 
 
 async def _clear_failures(key: str) -> None:

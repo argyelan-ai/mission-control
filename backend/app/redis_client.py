@@ -548,6 +548,18 @@ class RedisKeys:
         return f"mc:agent:{agent_id}:model-sync-fails"
 
     @staticmethod
+    def agent_model_sync_giveup(agent_id: str) -> str:
+        """Sperrfrist nach einem aufgegebenen Modell-Sync (Live-Befund 06.09.).
+
+        Der Zaehler oben bricht nach MAX_SYNC_ATTEMPTS ab UND raeumt die Fahne
+        weg — der Waechter flaggt den Agenten in der naechsten Runde aber sofort
+        wieder, und jede Runde kostete einen weiteren Container-Neustart
+        ("failed (8/3)"). Dieser Schluessel haelt den Agenten in Ruhe, bis er
+        ablaeuft oder ein erzwungener Sync ihn loescht.
+        """
+        return f"mc:agent:{agent_id}:model-sync-giveup"
+
+    @staticmethod
     def agent_recreate_fails(agent_id: str) -> str:
         return f"mc:agent:{agent_id}:recreate-fails"
 

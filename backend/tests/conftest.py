@@ -137,6 +137,83 @@ async def isolate_redis_singleton():
 
 
 @pytest.fixture(autouse=True)
+def block_real_docker():
+    """No test may reach the developer's real Docker daemon.
+
+    Same reasoning as ``isolate_redis_singleton`` above, and it cost us a live
+    incident to learn it (06.09.2026): a propagation test that did NOT patch
+    ``reload_omp_config`` ran a real ``docker exec mc-agent-<name>
+    render-omp-config.sh`` on the dev box — where an agent container of that
+    very name was running — and wrote the test's fake endpoint/model into its
+    live ``omp.env``. Until then the call happened to fail (the script's bootstrap
+    was unauthenticated), so nobody noticed; the moment the fix made the call
+    work, the test rewrote production config.
+
+    Blocked is every ``docker`` call that could ACT on a container or image —
+    the verb list below. Pure parsing calls (``docker compose config``,
+    ``docker compose version``) stay allowed: they never reach the daemon, and
+    the compose-template contract test needs them. Tests that WANT to inspect a
+    blocked command still patch ``subprocess.run`` themselves — their patch
+    replaces this guard, so nothing here gets in their way.
+    """
+    import subprocess
+
+    # ``Popen`` bleibt bewusst unangetastet: es ist eine KLASSE, und Bibliotheken
+    # annotieren damit (``subprocess.Popen[bytes]``) — als Funktion ersetzt,
+    # bricht schon deren Import. MC ruft Docker ausschliesslich ueber
+    # ``subprocess.run`` (geprueft), die anderen Namen sind Guertel und
+    # Hosentraeger.
+    originals = {
+        name: getattr(subprocess, name)
+        for name in ("run", "call", "check_call", "check_output")
+    }
+    acting_verbs = {
+        "exec", "run", "start", "stop", "restart", "kill", "rm", "up", "down",
+        "create", "commit", "cp", "pull", "push", "build", "prune", "logs",
+    }
+
+    def _is_docker(cmd) -> bool:
+        if isinstance(cmd, (list, tuple)):
+            parts = [str(part) for part in cmd]
+        elif isinstance(cmd, str):
+            parts = cmd.split()
+        else:
+            return False
+        if not parts:
+            return False
+        head = parts[0]
+        if head != "docker" and not head.endswith("/docker"):
+            return False
+        return any(part in acting_verbs for part in parts[1:])
+
+    def _guard(name, original):
+        def _wrapped(cmd, *args, **kwargs):
+            if _is_docker(cmd):
+                raise AssertionError(
+                    f"subprocess.{name} tried to run Docker in a test: {cmd!r}. "
+                    "Patch the calling function (or subprocess.run) instead — "
+                    "a test must never touch real containers."
+                )
+            return original(cmd, *args, **kwargs)
+
+        return _wrapped
+
+    # Bewusst OHNE die monkeypatch-Fixture: eine autouse-Fixture, die
+    # monkeypatch anfordert, zieht deren Aufbau vor die DB-Session — und damit
+    # ihr Zuruecksetzen HINTER den Session-Abbau. Tests, die (wie
+    # test_bench_orchestrator_flow) asyncio.create_task patchen, raeumen dann
+    # in die falsche Reihenfolge hinein auf. Also selbst setzen und
+    # zuruecksetzen.
+    for name, original in originals.items():
+        setattr(subprocess, name, _guard(name, original))
+    try:
+        yield
+    finally:
+        for name, original in originals.items():
+            setattr(subprocess, name, original)
+
+
+@pytest.fixture(autouse=True)
 def reset_github_config_cache():
     """The github_config TTL cache must never leak between tests (ADR-055)."""
     from app.services.github_config import invalidate_github_config_cache
