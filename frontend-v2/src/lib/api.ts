@@ -88,6 +88,7 @@ import type {
   Host,
   HostCreate,
   HostMetrics,
+  HostMetricsHistory,
   HostOnboardLog,
   HostOnboardRequest,
   HostOnboardResponse,
@@ -2178,6 +2179,11 @@ export const api = {
       request(`/api/v1/hosts/${id}`, { method: "DELETE" }),
     metrics: (id: string): Promise<HostMetrics> =>
       request(`/api/v1/hosts/${id}/metrics`),
+    // Telemetrie-Verlauf 1h (Bühne v2 §6/§7 PR 3) — Ring gefüllt vom obigen
+    // metrics()-Poll, kein eigener Sammler. Leerer Host (noch kein Poll) →
+    // {points: []}, nie ein Fehler.
+    metricsHistory: (id: string, window?: number): Promise<HostMetricsHistory> =>
+      request(`/api/v1/hosts/${id}/metrics/history${window ? `?window=${window}` : ""}`),
     // Box-Wizard: read-only inventory over SSH. An unreachable box is a 200
     // with reachable:false — only a malformed request rejects.
     probe: (

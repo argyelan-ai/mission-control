@@ -60,6 +60,24 @@ class RedisKeys:
         return f"mc:events:board:{board_id}"
 
     @staticmethod
+    def host_metrics_history(host_id: str) -> str:
+        """1h-Ring der GPU/RAM-Telemetrie je Host (Bühne v2, PR 3, §6/§7).
+        Liste, JSON-Punkte {t,gpu,ram_used,ram_total,temp,fan}, LTRIM auf
+        HISTORY_MAX_POINTS (services/host_metrics_history.py) — gefüllt vom
+        bestehenden 5s-Poll auf GET /hosts/{id}/metrics (kein zweiter
+        SSH-Weg), gedeckelt auf höchstens 1 Punkt je HISTORY_DEDUPE_SECONDS."""
+        return f"mc:host:{host_id}:metrics:history"
+
+    @staticmethod
+    def host_metrics_history_dedupe_marker(host_id: str) -> str:
+        """Atomarer Dedupe-Marker fürs Ring-Schreiben (Review-Fund rev-437):
+        ``SET ... NX EX HISTORY_DEDUPE_SECONDS`` — nur wer den Marker setzen
+        kann, schreibt den Punkt. Ersetzt das racende "letzten Zeitstempel
+        lesen, dann schreiben" (zwei gleichzeitige Requests konnten beide
+        den Read vor dem jeweils anderen Write sehen und dedupe umgehen)."""
+        return f"mc:host:{host_id}:metrics:history:last"
+
+    @staticmethod
     def agents_events() -> str:
         return "mc:events:agents"
 

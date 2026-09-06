@@ -2615,6 +2615,25 @@ export interface HostMetrics {
   status?: string | null;
 }
 
+// ── Telemetrie-Verlauf 1h (Bühne v2 §6/§7 PR 3) ──────────────────────────────
+// Gefüllt vom bestehenden 5s-Poll von GET /hosts/{id}/metrics, kein eigener
+// Sammler. `fan` ist derzeit immer null — keine Metrikquelle liefert es.
+
+export interface HostMetricsHistoryPoint {
+  t: number; // unix seconds
+  gpu: number | null;
+  ram_used: number | null;
+  ram_total: number | null;
+  temp: number | null;
+  fan: number | null;
+}
+
+export interface HostMetricsHistory {
+  points: HostMetricsHistoryPoint[];
+  window: number; // seconds
+  sample_seconds: number; // min. interval between recorded points
+}
+
 // ── Box-Wizard (POST /hosts/probe, /hosts/{id}/bootstrap) ───────────────────
 
 export interface HostProbeGpu {
