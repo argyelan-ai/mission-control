@@ -100,6 +100,52 @@ async def test_unreachable_metrics_not_recorded(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_redis_write_failure_does_not_break_metrics_endpoint(auth_client):
+    """Review-Fund rev-437: record_metrics_point_safe schluckt Fehler beim
+    Ring-Schreiben (Redis down, Serializer kaputt, egal was) — der
+    5s-Metrics-Poll der ganzen Bühne darf davon nichts merken, die Metriken
+    kommen unverändert durch."""
+    created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body("gpu-box-redis-down"))).json()
+    with (
+        patch(
+            "app.services.runtime_manager._ssh_run",
+            new=AsyncMock(return_value=(_SSH_METRICS_STDOUT, "", 0)),
+        ),
+        patch(
+            "app.services.host_metrics_history.record_metrics_point",
+            new=AsyncMock(side_effect=ConnectionError("redis unreachable")),
+        ),
+    ):
+        resp = await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["reachable"] is True
+    assert data["gpu_util_pct"] == 35
+
+
+@pytest.mark.asyncio
+async def test_get_redis_failure_before_write_does_not_break_metrics_endpoint(auth_client):
+    """Auch wenn schon get_redis() selbst wirft (bevor record_metrics_point
+    überhaupt aufgerufen wird), muss der Metrics-Poll durchgehen — der
+    Router umschliesst den ganzen Ring-Schreibversuch, nicht nur den Aufruf
+    innerhalb des Service."""
+    created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body("gpu-box-get-redis-fails"))).json()
+    with (
+        patch(
+            "app.services.runtime_manager._ssh_run",
+            new=AsyncMock(return_value=(_SSH_METRICS_STDOUT, "", 0)),
+        ),
+        patch(
+            "app.routers.hosts.get_redis",
+            new=AsyncMock(side_effect=RuntimeError("no redis connection")),
+        ),
+    ):
+        resp = await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["reachable"] is True
+
+
+@pytest.mark.asyncio
 async def test_history_empty_for_fresh_host(auth_client):
     """No /metrics call yet → 200 with empty points, never a 5xx."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body("gpu-box-fresh"))).json()

@@ -19,11 +19,14 @@ Browser voraussetzt. Siehe PR-Beschreibung für die volle Abwägung.
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 import redis.asyncio as aioredis
 
 from app.redis_client import RedisKeys
+
+logger = logging.getLogger(__name__)
 
 # 720 Punkte @ 5s Poll-Intervall = 1h Fenster (Spec §6).
 HISTORY_MAX_POINTS = 720
@@ -32,6 +35,12 @@ HISTORY_WINDOW_SECONDS = 3600
 # können denselben Host gleichzeitig pollen — ein Punkt pro 4s reicht für
 # eine 1h/720-Punkte-Auflösung und verhindert doppelte/verdichtete Punkte.
 HISTORY_DEDUPE_SECONDS = 4
+
+# Wie oft (max.) ein Redis-Fehler beim Ring-Schreiben geloggt wird, je Host —
+# verhindert Log-Spam, wenn Redis für längere Zeit ausfällt (bei 5s-Poll
+# wären das sonst 12 identische Fehler pro Minute).
+_ERROR_LOG_THROTTLE_SECONDS = 60
+_last_error_logged_at: dict[str, float] = {}
 
 
 def metrics_to_history_point(metrics: dict, *, t: float | None = None) -> dict:
@@ -74,6 +83,39 @@ async def record_metrics_point(redis: aioredis.Redis, host_id: str, metrics: dic
     await redis.rpush(key, json.dumps(point))
     await redis.ltrim(key, -HISTORY_MAX_POINTS, -1)
     return True
+
+
+def log_history_write_failure(host_id: str, exc: Exception) -> None:
+    """Loggt einen fehlgeschlagenen Ring-Schreibversuch, gedrosselt auf
+    höchstens 1×/_ERROR_LOG_THROTTLE_SECONDS je Host — bei 5s-Poll wären das
+    sonst 12 identische Warnungen pro Minute, solange Redis down ist
+    (Review-Fund rev-437). Eigene Funktion, damit sowohl
+    ``record_metrics_point_safe`` (Fehler beim Schreiben selbst) als auch der
+    Router (Fehler schon beim ``get_redis()``) dieselbe Drossel teilen."""
+    now = time.time()
+    last_logged = _last_error_logged_at.get(host_id, 0.0)
+    if now - last_logged >= _ERROR_LOG_THROTTLE_SECONDS:
+        _last_error_logged_at[host_id] = now
+        logger.warning(
+            "Telemetrie-Verlauf für Host %s konnte nicht geschrieben werden "
+            "(gedrosseltes Log, max. 1/%ss): %s",
+            host_id, _ERROR_LOG_THROTTLE_SECONDS, exc,
+        )
+
+
+async def record_metrics_point_safe(redis: aioredis.Redis, host_id: str, metrics: dict) -> bool:
+    """Wie ``record_metrics_point``, aber schluckt jeden Fehler.
+
+    Der Telemetrie-Verlauf ist ein Nebenprodukt des 5s-Metrics-Polls, nie
+    sein Zweck — fällt Redis aus oder wirft der JSON-Serializer, darf das
+    den eigentlichen ``GET /hosts/{id}/metrics``-Aufruf (SlotStage-Poll der
+    ganzen Seite) NIE mitreissen (Review-Fund rev-437). Gibt False zurück,
+    wenn nicht geschrieben wurde (Fehler ODER Dedupe)."""
+    try:
+        return await record_metrics_point(redis, host_id, metrics)
+    except Exception as e:
+        log_history_write_failure(host_id, e)
+        return False
 
 
 async def read_history(

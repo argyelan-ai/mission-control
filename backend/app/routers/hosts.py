@@ -643,8 +643,15 @@ async def host_metrics(
         # Bühne v2 §6 PR 3: dieser Endpoint wird vom Frontend alle 5s
         # gepollt (SlotStage) — statt eines zweiten SSH-Wegs hängt sich der
         # 1h-Verlaufsring hier mit an (dedupliziert, siehe host_metrics_history).
-        redis = await get_redis()
-        await host_metrics_history.record_metrics_point(redis, str(host.id), metrics)
+        # Der ganze Block ist bewusst try/except-umschlossen (Review-Fund
+        # rev-437): ein Redis-Ausfall oder Serializer-Fehler beim Ring-Schreiben
+        # darf den eigentlichen Metrics-Poll der Seite nie mitreissen — die
+        # Telemetrie-Antwort geht in jedem Fall unverändert raus.
+        try:
+            redis = await get_redis()
+            await host_metrics_history.record_metrics_point_safe(redis, str(host.id), metrics)
+        except Exception as e:
+            host_metrics_history.log_history_write_failure(str(host.id), e)
     return {"kind": host.kind, "slug": host.slug, **metrics}
 
 
