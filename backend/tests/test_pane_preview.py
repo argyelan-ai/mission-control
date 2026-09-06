@@ -546,3 +546,21 @@ def test_dispatch_echo_without_new_output_leaves_nothing():
     p = PanePreview(80, 40)
     p.feed(OMP_WELCOME_BANNER + DISPATCH_ECHO)
     assert p.text() == ""
+
+
+# ── omp-Statusleiste und Arbeitszeile (Marks Screenshot 06.09.2026) ────────
+
+
+def test_omp_status_bar_and_working_line_are_furniture():
+    """Unten in der omp-Pane stehen zwei Zeilen Moebel: die Arbeitszeile
+    („⎋ Working…" mit rechtsbuendigem Zustandstext) und die Statusleiste
+    („π  > ◒ MC model > 📁 /workspace ▶───4%───500K─"). Beide standen in
+    der Live-Vorschau (SSE-Mitschnitt 06.09.2026) — die „1 %"-Zeile aus
+    Marks Screenshot ist genau diese Leiste."""
+    p = PanePreview(168, 10)
+    p.feed(
+        "Vorschau-Test 444 bestanden.\r\n"
+        "⎋ Working…" + " " * 100 + "Unklare Anfrage – Details folgen\r\n"
+        "π  > ◒ MC model > 📁 /workspace ▶─────4%──────────╎────────┃──────500K─\r\n"
+    )
+    assert p.text() == "Vorschau-Test 444 bestanden."
