@@ -25,6 +25,7 @@ import { KpiRow, type KpiCell } from "./KpiRow";
 import { MemberRowContainer } from "./MemberRow";
 import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
+import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
 
 export interface StageMember {
@@ -118,14 +119,30 @@ export function Stage({
       <div className="relative px-4 pt-4" style={{ zIndex: 2, opacity: status === "switching" ? 0.75 : 1 }}>
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dotColor }} />
-          <span className="display font-semibold text-[22px] sm:text-[28px] flex-1 min-w-0 truncate" style={{ color: C.textPrimary }}>
-            {runtime.display_name}
+          <span
+            className="display font-semibold text-[22px] sm:text-[28px] flex-1 min-w-0 truncate"
+            style={{ color: C.textPrimary }}
+            title={runtime.display_name}
+          >
+            {shortModelTitle(runtime.display_name)}
+          </span>
+          {/* Ecke rechts oben (Live-Sichtprüfung 06.09.2026): kein erfundenes
+              "up 2 h 41" (HONESTY RULE, s.o.) — stattdessen der Zustand als
+              Mono-Wort. Backend-Nachtrag offen: ein echtes Startzeit-/
+              Wechsel-Zeitpunkt-Feld (weder `Runtime` noch `RuntimeLiveStatus`
+              tragen eines) würde "switching 0:48" statt nur "switching"
+              erlauben. */}
+          <span
+            className="font-mono uppercase shrink-0"
+            style={{ fontSize: "10px", letterSpacing: "0.08em", color: C.textMuted }}
+          >
+            {status === "failed" ? t("cornerUnreachable") : status === "switching" ? t("cornerSwitching") : t("cornerServing")}
           </span>
         </div>
         <HeatStrip pulse={pulse} dead={status === "failed"} />
         <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }}>
           {status === "switching"
-            ? t("switchingTo", { model: runtime.display_name })
+            ? t("switchingTo", { model: shortModelTitle(runtime.display_name) })
             : status === "failed"
               ? t("engineUnreachable")
               : nowLineParts.length > 0

@@ -3,16 +3,23 @@
 /**
  * MemberRow — Zone 3 „Mitglieder" (Spec §2). Je Box: Punkt + Name + Rolle,
  * GPU-/RAM-Balken (nur `transform: scaleX`, kein Layout-Thrash), der
- * bestehende kompakte Modus-Vierer (`DeviceModeStrip`, wiederverwendet statt
- * neu gebaut) und die Temperatur rechts.
+ * bestehende kompakte Modus-Vierer (`CompactDeviceModeSwitch`, wiederverwendet
+ * statt neu gebaut) und die Temperatur rechts.
+ *
+ * Live-Sichtprüfung 06.09.2026: der volle `DeviceModeStrip` (Label „GPU MODE",
+ * „Details"-Knopf, Watt/Diagramm bei aufgeklappt) gehört hier NICHT hin — nur
+ * der nackte Vierer, Watt/Details bleiben dem Cockpit vorbehalten (PR 5). Und
+ * der Name zeigt nie den technischen Hostnamen-Zusatz ("GX10 (gx10-dd72)");
+ * die Rolle ist ein Mono-Uppercase-Text ohne Chip-Rahmen (Mockup `.who small`).
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C, STATUS } from "@/lib/colors";
 import type { Device, Host, HostMetrics } from "@/lib/types";
-import { RoleChip } from "../RoleField";
-import { DeviceModeStrip } from "../DeviceControl";
+import { CompactDeviceModeSwitch } from "../DeviceControl";
+import { shortHostName } from "./modelTitle";
 
 function Bar({ pct, ram = false }: { pct: number; ram?: boolean }) {
   return (
@@ -36,6 +43,22 @@ function Meter({ label, value, pct, ram = false }: { label: string; value: strin
       <Bar pct={pct} ram={ram} />
       <span style={{ color: C.textSecondary }} className="whitespace-nowrap">{value}</span>
     </div>
+  );
+}
+
+/** Plain Mono-Uppercase-Rollentext, wie das Mockup's `.who small` — kein
+ *  Rahmen, keine Fläche, anders als der Register-Chip `RoleChip`
+ *  (SlotStage/HostsSection), der auf der Bühne zu schwer wirkt. */
+function RoleText({ role }: { role: "head" | "worker" | null }) {
+  const t = useTranslations("runtimes.hosts");
+  if (!role) return null;
+  return (
+    <span
+      className="font-mono uppercase shrink-0"
+      style={{ fontSize: "10px", letterSpacing: "0.1em", color: C.textMuted }}
+    >
+      {role === "head" ? t("roleHead") : t("roleWorker")}
+    </span>
   );
 }
 
@@ -71,8 +94,8 @@ export function MemberRow({
           className="w-2 h-2 rounded-full shrink-0"
           style={{ background: online ? STATUS.online : C.textDim }}
         />
-        {name}
-        {role && <RoleChip role={role} />}
+        <span className="truncate" title={name}>{shortHostName(name)}</span>
+        <RoleText role={role} />
       </div>
       <div className="flex flex-col gap-1">
         <Meter label="GPU" value={gpuValue} pct={gpuPct} />
@@ -81,7 +104,7 @@ export function MemberRow({
       <div className="flex items-center justify-between gap-2 mt-0.5">
         {device ? (
           <div className="flex-1 min-w-0">
-            <DeviceModeStrip device={device} canControl={canControlDevice} />
+            <CompactDeviceModeSwitch device={device} canControl={canControlDevice} />
           </div>
         ) : (
           <span />

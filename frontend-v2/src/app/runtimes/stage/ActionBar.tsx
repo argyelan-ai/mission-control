@@ -6,11 +6,11 @@
  * bestehende RuntimeDetailPanel der Head-Runtime, das eigentliche Cockpit
  * kommt in PR 5) · Stop (Ghost, roter Text).
  *
- * Stop-Dispatch-Gate (Spec §5, Assumption zur genauen 409-Form — Backend-PR
- * parallel in Arbeit): ein 409 mit `agent`/`task` im Body zeigt eine inline
- * Bestätigungszeile ("Stop anyway") statt window.confirm; ein Klick darauf
- * wiederholt den Stop mit `force=true`. Jeder andere Fehler zeigt nur den
- * Satz aus humanApiError.
+ * Stop-Dispatch-Gate (Spec §5, Form verifiziert gegen den PR-2-Review-Vorlauf
+ * 06.09.2026: `detail:{code:"agent_busy", agents:[{name,slug,task_id}]}`): ein
+ * 409 zeigt eine inline Bestätigungszeile ("Stop anyway") statt
+ * window.confirm; ein Klick darauf wiederholt den Stop mit `force=true`.
+ * Jeder andere Fehler zeigt nur den Satz aus humanApiError.
  */
 
 import { useState } from "react";
@@ -29,7 +29,12 @@ function parseStopConflict(err: Error): RuntimeStopConflict | null {
   try {
     const parsed = JSON.parse(m[1]) as { detail?: unknown };
     const detail = parsed.detail;
-    if (detail && typeof detail === "object" && "agent" in detail && "task" in detail) {
+    if (
+      detail &&
+      typeof detail === "object" &&
+      (detail as { code?: unknown }).code === "agent_busy" &&
+      Array.isArray((detail as { agents?: unknown }).agents)
+    ) {
       return detail as RuntimeStopConflict;
     }
   } catch {
@@ -98,7 +103,7 @@ export function ActionBar({
         style={{ borderTop: `1px solid ${C.borderSubtle}`, color: C.textSecondary }}
         data-testid="stop-conflict-row"
       >
-        <span>{t("stopConflict", { agent: conflict.agent, task: conflict.task })}</span>
+        <span>{t("stopConflict", { agents: conflict.agents.map((a) => a.name).join(", ") })}</span>
         <div className="flex items-center gap-2 ml-auto">
           <button
             type="button"
@@ -141,7 +146,7 @@ export function ActionBar({
             {restartMutation.isPending ? t("restarting") : t("restartNow")}
           </button>
         ) : (
-          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact />
+          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} />
         )}
         <button
           type="button"
@@ -154,7 +159,7 @@ export function ActionBar({
         </button>
         <div className="flex-1 flex items-center gap-2 flex-wrap justify-end">
           {variant === "trouble" && (
-            <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact />
+            <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact label={t("otherModel")} />
           )}
           <button
             type="button"

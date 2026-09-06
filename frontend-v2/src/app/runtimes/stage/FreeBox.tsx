@@ -114,7 +114,7 @@ export function FreeBox({
         />
       </div>
       <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-        <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact />
+        <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact primary label={t("startModel")} />
         <button
           type="button"
           onClick={onOpenCockpit}

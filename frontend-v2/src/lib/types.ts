@@ -2209,12 +2209,17 @@ export interface RuntimeActionResult {
 }
 
 /** 409-Antwortkörper des Dispatch-Gates beim Stop (Spec §5): ein an diese
- *  Runtime gebundener Agent arbeitet gerade. Assumption zur genauen Form,
- *  solange der Backend-PR nicht gemergt ist — `agent`/`task` sind die im
- *  Spec-Text genannten Felder. */
+ *  Runtime gebundener Agent arbeitet gerade. Form verifiziert gegen den PR-2-
+ *  Review-Vorlauf (06.09.2026): `detail: {code:"agent_busy", agents:[...]}`. */
+export interface RuntimeStopConflictAgent {
+  name: string;
+  slug: string;
+  task_id: string;
+}
+
 export interface RuntimeStopConflict {
-  agent: string;
-  task: string;
+  code: "agent_busy" | string;
+  agents: RuntimeStopConflictAgent[];
 }
 
 // ── Rezept-Umschalter (GET /hosts/{host_id}/recipes) ────────────────────────

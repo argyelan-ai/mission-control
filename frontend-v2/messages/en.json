@@ -2672,7 +2672,7 @@
     "stage": {
       "stopFailed": "Stop failed: {message}",
       "restartFailed": "Restart failed: {message}",
-      "stopConflict": "{agent} is working on “{task}” right now.",
+      "stopConflict": "Working now: {agents}",
       "cancel": "Cancel",
       "stopAnyway": "Stop anyway",
       "restarting": "Restarting…",
@@ -2705,7 +2705,12 @@
       "boxesReady": "{count, plural, one {# box ready} other {# boxes ready}}",
       "nothingRunning": "Nothing is running",
       "nothingRunningHint": "Both boxes are reachable and free. Start a recipe, solo or as a duo.",
-      "startModel": "Start model"
+      "startModel": "Start model",
+      "switchModel": "Switch model",
+      "otherModel": "Other model",
+      "cornerServing": "serving",
+      "cornerSwitching": "switching",
+      "cornerUnreachable": "unreachable"
     }
   },
   "bench": {

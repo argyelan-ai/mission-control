@@ -603,19 +603,15 @@ function CompactModeSwitch({
 
 // ── Der Streifen in der Slot-Kachel ─────────────────────────────────────────
 
-export function DeviceModeStrip({
-  device,
-  canControl,
-}: {
-  device: Device;
-  canControl: boolean;
-}) {
-  const t = useTranslations("runtimes.devices");
-  const locale = useLocale();
+/**
+ * Der Zustand + die Klick-Logik hinter dem Modus-Schalter — extrahiert, damit
+ * `DeviceModeStrip` (volle Zeile mit Label/Details/Diagramm) und
+ * `CompactDeviceModeSwitch` (Runtimes-Bühne v2, nackter Vierer für
+ * `stage/MemberRow.tsx`) dieselbe Sperr-/Nachzieh-/Mutations-Logik teilen,
+ * statt sie zweimal zu pflegen. Reine Zustandslogik, kein JSX.
+ */
+function useDeviceModeControl(device: Device, canControl: boolean) {
   const queryClient = useQueryClient();
-  const reduce = useReducedMotion();
-
-  const [open, setOpen] = useState(false);
 
   const state = device.device_state;
   const currentMode: GpuMode | null =
@@ -677,6 +673,53 @@ export function DeviceModeStrip({
   const remaining = Math.max(0, Math.ceil(HEARTBEAT_SECONDS - elapsed));
   const progressPct = Math.min(100, (elapsed / HEARTBEAT_SECONDS) * 100);
   const shownMode: GpuMode | null = targetMode ?? currentMode;
+
+  return { state, currentMode, targetMode, lock, pending, mutation, pick, remaining, progressPct, shownMode, pickedAt };
+}
+
+/**
+ * CompactDeviceModeSwitch — der nackte Vierer ohne Label/Details/Diagramm,
+ * für die Runtimes-Bühne v2 (Spec §2 Zone 3: "kompakter Modus-Vierer").
+ * Teilt Klick-Logik/Sperren/Pending mit `DeviceModeStrip` über
+ * `useDeviceModeControl` — nur die Darstellung ist anders (keine Box, kein
+ * "Details"-Knopf, kein Watt).
+ */
+export function CompactDeviceModeSwitch({
+  device,
+  canControl,
+}: {
+  device: Device;
+  canControl: boolean;
+}) {
+  const { currentMode, targetMode, lock, pending, mutation, pick } = useDeviceModeControl(device, canControl);
+  return (
+    <div style={lock ? { opacity: 0.5 } : undefined} data-testid="compact-device-mode-switch">
+      <CompactModeSwitch
+        current={currentMode}
+        target={lock ? null : targetMode}
+        pending={pending}
+        disabled={!canControl || !!lock || mutation.isPending}
+        onPick={pick}
+      />
+    </div>
+  );
+}
+
+export function DeviceModeStrip({
+  device,
+  canControl,
+}: {
+  device: Device;
+  canControl: boolean;
+}) {
+  const t = useTranslations("runtimes.devices");
+  const locale = useLocale();
+  const reduce = useReducedMotion();
+
+  const [open, setOpen] = useState(false);
+
+  const { state, currentMode, targetMode, lock, pending, mutation, pick, remaining, progressPct, shownMode, pickedAt } =
+    useDeviceModeControl(device, canControl);
 
   return (
     <div

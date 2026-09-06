@@ -40,6 +40,7 @@ import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/List
 import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
 import { SlotStage, typeLabel } from "./SlotStage";
 import { FleetStage } from "./stage/FleetStage";
+import { RUNTIMES_STAGE_V2 } from "./stage/flag";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
@@ -813,12 +814,6 @@ function UnassignedRow({ runtime, onOpen }: { runtime: Runtime; onOpen: (rt: Run
     </button>
   );
 }
-
-// ── Runtimes-Bühne v2 ────────────────────────────────────────────────────────
-// Hinter einem Schalter (Spec §7, PR 4 "Stage"): Default v1, solange Marks
-// Klick-Abnahme (Desktop + Handy) noch aussteht. `NEXT_PUBLIC_*` wird beim
-// Build eingebacken — ein Wert-Wechsel braucht einen Frontend-Rebuild.
-export const RUNTIMES_STAGE_V2 = process.env.NEXT_PUBLIC_RUNTIMES_STAGE === "v2";
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 

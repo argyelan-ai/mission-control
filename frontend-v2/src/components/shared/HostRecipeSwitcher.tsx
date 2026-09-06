@@ -124,6 +124,8 @@ export function HostRecipeSwitcher({
   servingName = null,
   compact = false,
   hideWhenEmpty = false,
+  label = null,
+  primary = false,
 }: {
   hostId: string;
   /** Name dieser Box — die Erfolgsmeldung eines Duo-Starts nennt beide Boxen. */
@@ -136,6 +138,13 @@ export function HostRecipeSwitcher({
   /** Detail-Panel: ohne Rezepte gibt es dort nichts zu schalten — Kachel
    *  dagegen zeigt den Auslöser immer, damit die Zeile nicht verschwindet. */
   hideWhenEmpty?: boolean;
+  /** Runtimes-Bühne v2 (Spec §2 Zone 4): "Switch model"/"Start model"/"Other
+   *  model" statt des laufenden Rezeptnamens — das Rezept steht dort schon
+   *  im Kartentitel, der Auslöser ist eine Handlung, kein zweiter Statuswert. */
+  label?: string | null;
+  /** Runtimes-Bühne v2: Akzentfläche + dunkler Text statt der ruhigen
+   *  Registerzeile — für die primäre Aktion der Karte (Switch/Start model). */
+  primary?: boolean;
 }) {
   const t = useTranslations("runtimes.recipeSwitcher");
   const queryClient = useQueryClient();
@@ -255,7 +264,7 @@ export function HostRecipeSwitcher({
 
   if (hideWhenEmpty && recipesQuery.isSuccess && recipes.length === 0) return null;
 
-  const triggerLabel = runningRecipe?.display_name ?? servingName ?? t("selectRecipe");
+  const triggerLabel = label ?? runningRecipe?.display_name ?? servingName ?? t("selectRecipe");
   const isPending = startMutation.isPending || starting != null;
 
   const select = (recipe: HostRecipe) => {
@@ -289,18 +298,21 @@ export function HostRecipeSwitcher({
           aria-haspopup="listbox"
           aria-expanded={open}
           data-testid="recipe-dropdown-trigger"
-          className={`flex items-center gap-2 rounded-md cursor-pointer max-w-full ${compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"}`}
+          className={`flex items-center gap-2 rounded-md cursor-pointer max-w-full ${compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"} ${primary ? "font-medium" : ""}`}
           style={{
-            background: C.bgSurface,
-            border: `1px solid ${open ? C.borderAccent : C.border}`,
-            color: C.textPrimary,
+            background: primary ? C.accent : C.bgSurface,
+            border: `1px solid ${primary ? C.accent : open ? C.borderAccent : C.border}`,
+            color: primary ? C.onAccent : C.textPrimary,
           }}
         >
-          {runningRecipe && (
+          {/* Der Laufpunkt gehört zum Rezeptnamen im Auslöser — mit einem
+              eigenen Label (Switch/Start/Other model) steht dort keine
+              Statusaussage mehr, die er begleiten könnte. */}
+          {runningRecipe && !label && (
             <span aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: STATUS.online }} />
           )}
-          <span className="font-mono truncate max-w-[260px]">{triggerLabel}</span>
-          <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>▾</span>
+          <span className={`truncate max-w-[260px] ${primary ? "" : "font-mono"}`}>{triggerLabel}</span>
+          <span aria-hidden style={{ color: primary ? C.onAccent : C.textDim, fontSize: "9px" }}>▾</span>
         </button>
       )}
 

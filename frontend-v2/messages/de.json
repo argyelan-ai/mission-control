@@ -2672,7 +2672,7 @@
     "stage": {
       "stopFailed": "Stop fehlgeschlagen: {message}",
       "restartFailed": "Neustart fehlgeschlagen: {message}",
-      "stopConflict": "{agent} arbeitet gerade an „{task}“.",
+      "stopConflict": "Arbeitet gerade: {agents}",
       "cancel": "Abbrechen",
       "stopAnyway": "Trotzdem stoppen",
       "restarting": "Startet neu…",
@@ -2705,7 +2705,12 @@
       "boxesReady": "{count, plural, one {# Box bereit} other {# Boxen bereit}}",
       "nothingRunning": "Nichts läuft",
       "nothingRunningHint": "Beide Boxen sind erreichbar und frei. Starte ein Rezept, solo oder als Duo.",
-      "startModel": "Modell starten"
+      "startModel": "Modell starten",
+      "switchModel": "Modell wechseln",
+      "otherModel": "Anderes Modell",
+      "cornerServing": "läuft",
+      "cornerSwitching": "wechselt",
+      "cornerUnreachable": "nicht erreichbar"
     }
   },
   "bench": {
