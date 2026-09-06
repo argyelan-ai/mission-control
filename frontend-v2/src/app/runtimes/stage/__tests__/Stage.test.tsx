@@ -83,6 +83,73 @@ describe("Stage — title + corner", () => {
     expect(await screen.findByText("unreachable")).toBeInTheDocument();
   });
 
+  // #443/W3-Nachlese: the corner shows real elapsed time from `serving_since`
+  // once available, minute resolution, hours+minutes split at 1h.
+  it("corner shows 'up {h} h {m}' once serving_since is >= 1h old", async () => {
+    const since = new Date(Date.now() - (2 * 60 + 41) * 60_000).toISOString();
+    const rt = makeRuntime({ display_name: "Qwen3.8 27B", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    renderWithQuery(
+      <Stage
+        runtime={rt}
+        members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]}
+        live={{ reachable: true, served_model: "qwen38", latency_ms: 7, last_probe_at: "", consecutive_failures: 0, drift: false, serving_since: since }}
+        onOpenCockpit={() => {}}
+      />
+    );
+    expect(await screen.findByText("up 2 h 41")).toBeInTheDocument();
+  });
+
+  it("corner shows 'up {m} min' once serving_since is < 1h old", async () => {
+    const since = new Date(Date.now() - 34 * 60_000).toISOString();
+    const rt = makeRuntime({ display_name: "Qwen3.8 27B", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    renderWithQuery(
+      <Stage
+        runtime={rt}
+        members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]}
+        live={{ reachable: true, served_model: "qwen38", latency_ms: 7, last_probe_at: "", consecutive_failures: 0, drift: false, serving_since: since }}
+        onOpenCockpit={() => {}}
+      />
+    );
+    expect(await screen.findByText("up 34 min")).toBeInTheDocument();
+  });
+
+  it("falls back to Runtime.serving_since when the live-status mirror hasn't caught up yet", async () => {
+    const since = new Date(Date.now() - 5 * 60_000).toISOString();
+    const rt = makeRuntime({
+      display_name: "Qwen3.8 27B", serving_since: since,
+      host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    // No `live` prop at all — the 30s live-status poll may not have landed
+    // yet while the 15s runtime list already carries the DB value.
+    renderWithQuery(<Stage runtime={rt} members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]} onOpenCockpit={() => {}} />);
+    expect(await screen.findByText("up 5 min")).toBeInTheDocument();
+  });
+
+  it("HONESTY RULE: a stale serving_since on a FAILED runtime never shows a fabricated uptime", async () => {
+    const since = new Date(Date.now() - 60 * 60_000).toISOString();
+    const rt = makeRuntime({
+      display_name: "Qwen3.8 27B", state: "failed", serving_since: since,
+      host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    renderWithQuery(<Stage runtime={rt} members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]} onOpenCockpit={() => {}} />);
+    expect(await screen.findByText("unreachable")).toBeInTheDocument();
+    expect(screen.queryByText(/up \d/)).not.toBeInTheDocument();
+  });
+
+  it("an unparsable serving_since falls back to the state word, not NaN/Invalid Date", async () => {
+    const rt = makeRuntime({ display_name: "Qwen3.8 27B", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    renderWithQuery(
+      <Stage
+        runtime={rt}
+        members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]}
+        live={{ reachable: true, served_model: "qwen38", latency_ms: 7, last_probe_at: "", consecutive_failures: 0, drift: false, serving_since: "not-a-date" }}
+        onOpenCockpit={() => {}}
+      />
+    );
+    expect(await screen.findByText("serving")).toBeInTheDocument();
+    expect(screen.queryByText(/NaN|Invalid/)).not.toBeInTheDocument();
+  });
+
   it("corner shows 'switching' while a recipe switch is in progress", async () => {
     const rt = makeRuntime({ display_name: "Qwen3.8 27B", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
     renderWithQuery(
