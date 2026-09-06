@@ -112,11 +112,20 @@ describe("RuntimesPage", () => {
     vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [elsewhere] });
     vi.spyOn(api.hosts, "list").mockResolvedValue([emptyHost, otherHost]);
 
-    renderPage();
+    const { container } = renderPage();
 
-    const freeBox = await screen.findByTestId("free-box");
-    expect(within(freeBox).getAllByText("Empty Box").length).toBeGreaterThan(0);
-    expect(screen.getByTestId("stage-card")).toBeInTheDocument();
+    // Host-scoped selector, not text content (Fund #442 CI-Flake, PR 6
+    // Nachlese): while `hosts.list`/`runtimes.list` are still settling,
+    // BOTH hosts can transiently render as free (empty runtimes on both) —
+    // a bare `findByTestId("free-box")` + text match risks resolving on
+    // that transient state, or on the WRONG host's card, before the final
+    // paint (elsewhere serving, empty-box free) lands. `data-host-slug`
+    // (FreeBox.tsx) identifies the box unambiguously and `waitFor` keeps
+    // retrying until that exact combination exists.
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="free-box"][data-host-slug="empty-box"]')).toBeInTheDocument();
+    });
+    expect(await screen.findByTestId("stage-card")).toBeInTheDocument();
   });
 
   it("(c) a power-managed host whose runtimes lack the power_managed flag renders as a free box, never vanishes", async () => {
@@ -141,14 +150,16 @@ describe("RuntimesPage", () => {
     vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [bound, elsewhere] });
     vi.spyOn(api.hosts, "list").mockResolvedValue([host, otherHost]);
 
-    renderPage();
+    const { container } = renderPage();
 
-    const freeBox = await screen.findByTestId("free-box");
-    // "Porsche Box" legitimately appears twice inside the card (the card
-    // header AND its own MemberRow, since a solo FreeBox lists itself as its
-    // one member) — getAllByText(...).length > 0 confirms visibility without
-    // assuming which of the two renders it.
-    expect(within(freeBox).getAllByText("Porsche Box").length).toBeGreaterThan(0);
+    // Host-scoped selector, not text content (Fund #442 CI-Flake, PR 6
+    // Nachlese) — same reasoning as test (b): "Porsche Box" as a text query
+    // risks matching a transiently-free "spark" card before `runtimes.list`
+    // settles, or nothing at all if the resolved element isn't porsche's.
+    // `data-host-slug` (FreeBox.tsx) removes the ambiguity outright.
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="free-box"][data-host-slug="porsche"]')).toBeInTheDocument();
+    });
     expect(screen.queryByTestId("asleep-box")).not.toBeInTheDocument();
   });
 
