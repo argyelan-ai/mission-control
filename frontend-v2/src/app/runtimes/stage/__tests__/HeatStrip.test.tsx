@@ -11,7 +11,7 @@ function points(n: number, tps: (i: number) => number): HostPulse["points"] {
 }
 
 describe("bucketPulse", () => {
-  it("averages 3 points (5s each) into one 15s bucket, 60 buckets from 180 points", () => {
+  it("groups 3 points (5s each) into one 15s bucket, 60 buckets from 180 points", () => {
     const pts = points(180, () => 30);
     const buckets = bucketPulse(pts);
     expect(buckets).toHaveLength(60);
@@ -39,21 +39,30 @@ describe("bucketPulse", () => {
     expect(buckets[59]).toBe(60); // newest bucket (points 3-5, all loud) = "now"
   });
 
-  it("4 points (not a clean multiple of 3): the newest point's bucket is still the LAST cell, even partially diluted by older samples in the same 15s window", () => {
+  // Zweiter Live-Fund 06.09.2026 (nach dem Rechtsbündigkeits-Fix): Bucket-
+  // Wert = MAX statt Mittel der 3 Punkte — ein kurzer Burst bleibt sichtbar,
+  // statt in seinem 15s-Fenster mit ruhigeren Nachbarn verwässert zu werden.
+  it("4 points (not a clean multiple of 3): a single loud sample survives undiluted via MAX, not averaged away by quiet neighbours", () => {
     const pts = points(4, (i) => (i === 3 ? 53.8 : 0));
     const buckets = bucketPulse(pts);
-    // Buckets are fixed at 3 points/15s (established bucketing rule, matches
-    // the 180-point test above) — grouping from the END means the newest
-    // bucket is [points 1,2,3] (indices 1-3), the oldest leftover is [point
-    // 0] alone. The newest bucket's average is pulled down by the two
-    // quiet samples sharing its 15s window — a real limit of coarse 3-point
-    // averaging on a sparse ring, not something right-alignment fixes on its
-    // own. What alignment DOES guarantee: this activity sits at the RIGHT
-    // edge (cell 59), never bleeds into unrelated cells further left, and
-    // no cell left of 58 shows anything.
-    expect(buckets[59]).toBeCloseTo((0 + 0 + 53.8) / 3);
+    // Grouping from the END: newest bucket = [points 1,2,3] (indices 1-3),
+    // oldest leftover = [point 0] alone. MAX of [0,0,53.8] = 53.8 — the
+    // burst is NOT averaged down by its two quiet neighbours.
+    expect(buckets[59]).toBe(53.8);
     expect(buckets[58]).toBe(0);
     expect(buckets.slice(0, 58).every((v) => v === 0)).toBe(true);
+  });
+
+  it("Live-Beweis 06.09.2026: last12 = 0,0,0,16,33,31,31,32,32,31,34,32 → MAX per 15s bucket, not the mean", () => {
+    const raw = [0, 0, 0, 16, 33, 31, 31, 32, 32, 31, 34, 32];
+    const pts = points(raw.length, (i) => raw[i]);
+    const buckets = bucketPulse(pts);
+    // 4 buckets of 3, newest-first from the end: [31,34,32]→59, [32,32,31]→58,
+    // [16,33,31]→57, [0,0,0]→56.
+    expect(buckets[59]).toBe(34);
+    expect(buckets[58]).toBe(32);
+    expect(buckets[57]).toBe(33);
+    expect(buckets[56]).toBe(0);
   });
 });
 
@@ -78,11 +87,27 @@ describe("cellOpacity", () => {
   // verliert die Unterscheidung zwischen z.B. 60 und 90 tok/s.
   it("accepts a custom ceiling — a value at the ceiling is always full, below it scales down", () => {
     expect(cellOpacity(90, false, 90)).toBe(1);
-    expect(cellOpacity(45, false, 90)).toBeCloseTo(0.08 + 0.92 * 0.5);
+    expect(cellOpacity(45, false, 90)).toBeCloseTo(0.08 + 0.92 * Math.sqrt(0.5));
   });
 
   it("defaults to the 50 tok/s ceiling when none is given (no regression)", () => {
-    expect(cellOpacity(25, false)).toBeCloseTo(0.08 + 0.92 * 0.5);
+    expect(cellOpacity(25, false)).toBeCloseTo(0.08 + 0.92 * Math.sqrt(0.5));
+  });
+
+  // Zweiter Live-Fund 06.09.2026: 32 tok/s auf einer 50er-Decke (64% Last)
+  // wirkte "mittelgrau, halb tot" mit der linearen Kurve (0,08+0,92·0,64 =
+  // 0,67). Die Wurzelkurve hebt mittlere Lasten sichtbar an: 64% Last →
+  // ~92% Helligkeit statt 67%.
+  it("root curve lifts medium load noticeably brighter than the old linear formula would", () => {
+    const ceiling = 50;
+    const load64 = cellOpacity(32, false, ceiling);
+    const linearWouldHaveBeen = 0.08 + 0.92 * (32 / ceiling);
+    expect(load64).toBeGreaterThan(linearWouldHaveBeen);
+    expect(load64).toBeCloseTo(0.08 + 0.92 * Math.sqrt(32 / ceiling));
+  });
+
+  it("zero stays at the floor even under the root curve (sqrt(0) = 0)", () => {
+    expect(cellOpacity(0, false, 50)).toBeCloseTo(0.08);
   });
 });
 
@@ -129,6 +154,6 @@ describe("HeatStrip (render)", () => {
     const brightest = parseFloat(cells[59].style.opacity); // 80 tok/s bucket
     expect(brightest).toBe(1);
     expect(dimmer).toBeLessThan(brightest);
-    expect(dimmer).toBeCloseTo(0.08 + 0.92 * (40 / 80));
+    expect(dimmer).toBeCloseTo(0.08 + 0.92 * Math.sqrt(40 / 80));
   });
 });
