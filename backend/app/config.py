@@ -342,6 +342,11 @@ class Settings(BaseSettings):
     runtime_watcher_enabled: bool = True
     runtime_watcher_interval: int = 90  # seconds between probe ticks
 
+    # Runtimes-Buehne v2, PR 1 (docs/specs/runtimes-buehne-v2.md §6/§7) —
+    # Prometheus token-counter poller feeding the card's heat strip.
+    # 0 = poller disabled (RuntimePulse.start() no-ops).
+    runtime_pulse_interval: int = 5
+
     # PR5 kill-switch: when the watcher sees a confirmed outage on a docker
     # engine whose host answers again (box rebooted, container gone), it makes
     # exactly ONE start attempt, rate-limited by a 15-min cooldown and giving

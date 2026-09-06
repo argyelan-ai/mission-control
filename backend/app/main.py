@@ -122,6 +122,7 @@ from app.services.obsidian_export import obsidian_export
 from app.services.scheduler import scheduler
 from app.services.runtime_schedule_service import runtime_schedule_service
 from app.services.runtime_watcher import runtime_watcher
+from app.services.runtime_pulse import runtime_pulse
 from app.services.task_runner import task_runner
 from app.services.group_runner import group_runner
 from app.services.loop_runner import loop_runner
@@ -213,6 +214,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Qdrant payload index setup failed (non-fatal): %s", e)
     await runtime_schedule_service.start()
     await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
+    await runtime_pulse.start()  # Runtimes-Buehne v2 PR 1 — tok/s heat strip poller
     await cli_update_checker.start()  # CLI Tool Updates — periodic version check
     # Provider Model Catalog — hourly probe + "model.new_available" notification
     # so a newly shipped provider model no longer waits for someone to open the
@@ -468,6 +470,7 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "obsidian_export_started", False):
         await obsidian_export.stop()
     await runtime_watcher.stop()
+    await runtime_pulse.stop()
     await cli_update_checker.stop()
     await model_catalog_checker.stop()
     await local_registry_checker.stop()
