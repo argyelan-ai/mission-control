@@ -83,4 +83,40 @@ describe("buildStages", () => {
     expect(stages[0].runtime.slug).toBe("switching-rt");
     expect(freeHostIds.has("gx10")).toBe(true);
   });
+
+  // Review #438 Fund 3 (06.09.2026): a worker box that is BOTH a member of
+  // some other host's active duo runtime AND carries its own bound, serving
+  // solo runtime used to tear the duo card into two — a left-to-right scan
+  // hit the worker's OWN group before the head's group (its ui_order is
+  // lower here, reproducing the exact order from the review's repro) and
+  // spun up a second, standalone stage for the worker's solo runtime.
+  it("a worker with its OWN serving runtime AND duo membership: the duo wins, no second card", () => {
+    const workerFirst = makeHost({ slug: "gx10", display_name: "GX10", ui_order: 1, role: "worker" });
+    const headSecond = makeHost({ slug: "spark", display_name: "DGX Spark", ui_order: 2, role: "head" });
+
+    const duo = makeRuntime({
+      slug: "qwen-duo",
+      host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+      member_hosts: [{ host_id: "gx10", slug: "gx10", display_name: "GX10", role: "worker", node_rank: 1 }],
+    });
+    // gx10 ALSO carries its own directly-bound, currently-serving runtime —
+    // the exact combination the review reproduced.
+    const gx10Own = makeRuntime({
+      slug: "gx10-own-solo",
+      host: { id: "gx10", slug: "gx10", display_name: "GX10" },
+    });
+
+    const groups = groupRuntimes([gx10Own, duo], [workerFirst, headSecond]);
+    // Sanity: groupRuntimes really does put the worker's group before the
+    // head's group here (ui_order 1 < 2) — otherwise this test wouldn't
+    // exercise the bug at all.
+    expect(groups.hosts.map((g) => g.host.slug)).toEqual(["gx10", "spark"]);
+
+    const { stages, freeHostIds } = buildStages(groups.hosts);
+
+    expect(stages).toHaveLength(1);
+    expect(stages[0].runtime.slug).toBe("qwen-duo");
+    expect(stages[0].hostIds.sort()).toEqual(["gx10", "spark"]);
+    expect(freeHostIds.size).toBe(0);
+  });
 });

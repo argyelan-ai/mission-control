@@ -26,7 +26,20 @@ export interface BuiltStage {
   hostIds: string[];
 }
 
-/** Pure grouping — exported for the Vitest suite (no querying, no hooks). */
+/**
+ * Pure grouping — exported for the Vitest suite (no querying, no hooks).
+ *
+ * Two passes (Review #438 Fund 3, 06.09.2026): a worker box that is BOTH a
+ * member of some other host's active duo runtime AND carries its own bound
+ * (and currently serving) solo runtime would, in a single left-to-right
+ * pass, get processed on its own turn before the head's turn ever ran —
+ * `pickServing()` on the worker's OWN group finds its own runtime "active"
+ * and spins up a second, standalone stage for it, tearing the duo card in
+ * two. Pass 1 claims every duo/multi-host stage's host ids FIRST, using
+ * `serving.member_hosts` from whichever group discovers it (order among
+ * groups doesn't matter here, only "duo before solo" does) — pass 2 then
+ * only considers hosts pass 1 left untouched.
+ */
 export function buildStages(
   stageGroups: HostGroup[],
   live?: Record<string, RuntimeLiveStatus>
@@ -34,6 +47,21 @@ export function buildStages(
   const seen = new Set<string>();
   const stages: BuiltStage[] = [];
 
+  // Pass 1 — duo/multi-host stages claim their boxes first.
+  for (const group of stageGroups) {
+    if (seen.has(group.host.id)) continue;
+    const serving = pickServing(group, live);
+    if (!serving) continue;
+    const memberHosts = serving.member_hosts ?? [];
+    if (memberHosts.length === 0) continue; // solo runtime — pass 2 handles it
+    const hostIds = [group.host.id, ...memberHosts.map((m) => m.host_id)];
+    for (const id of hostIds) seen.add(id);
+    stages.push({ runtime: serving, hostIds });
+  }
+
+  // Pass 2 — solo stages, only for hosts pass 1 didn't already claim as a
+  // duo member (a worker whose own runtime lost this race stays hidden —
+  // it belongs to the duo card above, not a card of its own).
   for (const group of stageGroups) {
     if (seen.has(group.host.id)) continue;
     const serving = pickServing(group, live);

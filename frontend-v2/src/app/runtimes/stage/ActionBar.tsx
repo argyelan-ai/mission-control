@@ -133,14 +133,14 @@ export function ActionBar({
       {error && (
         <div className="text-xs" style={{ color: C.error }}>{error}</div>
       )}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="stage-actions">
         {variant === "trouble" ? (
           <button
             type="button"
             onClick={() => restartMutation.mutate()}
             disabled={restartMutation.isPending}
             data-testid="restart-now"
-            className="flex-1 sm:flex-none text-xs font-medium px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
+            className="text-xs font-medium px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
             style={{ background: C.accent, color: C.onAccent }}
           >
             {restartMutation.isPending ? t("restarting") : t("restartNow")}
@@ -148,16 +148,21 @@ export function ActionBar({
         ) : (
           <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} />
         )}
+        {/* 44px Touch-Ziel (DESIGN.md) mobil, 36px ab der 600px-Container-Breite —
+            gleiche Konvention wie die Icon-Knöpfe auf page.tsx (w-11 h-11 sm:w-7 sm:h-7).
+            Hier bewusst KEIN `sm:` (das ist Viewport-Breite): die Karte selbst trägt
+            `container-type: inline-size`, darum reagiert die Grösse auf die Karten-
+            breite über dieselbe @container-Regel wie `.stage-actions`. */}
         <button
           type="button"
           onClick={onOpenCockpit}
           aria-label={t("cockpitAria")}
-          className="w-9 h-9 flex items-center justify-center rounded-md cursor-pointer shrink-0"
+          className="stage-actions-gear w-11 h-11 flex items-center justify-center rounded-md cursor-pointer shrink-0"
           style={{ border: `1px solid ${C.borderActive}` }}
         >
           <Settings size={14} style={{ color: C.textSecondary }} />
         </button>
-        <div className="flex-1 flex items-center gap-2 flex-wrap justify-end">
+        <div className="stage-actions-row2">
           {variant === "trouble" && (
             <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact label={t("otherModel")} />
           )}

@@ -84,7 +84,7 @@ export function AsleepBox({
           type="button"
           onClick={onOpenCockpit}
           aria-label={t("cockpitAria")}
-          className="w-9 h-9 flex items-center justify-center rounded-md cursor-pointer shrink-0 ml-auto"
+          className="stage-actions-gear w-11 h-11 flex items-center justify-center rounded-md cursor-pointer shrink-0 ml-auto"
           style={{ border: `1px solid ${C.borderActive}` }}
         >
           <Settings size={14} style={{ color: C.textSecondary }} />

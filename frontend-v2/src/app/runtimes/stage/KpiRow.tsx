@@ -30,7 +30,14 @@ function Cell({ cell }: { cell: KpiCell }) {
   return (
     <div
       className="px-3.5 py-3 flex flex-col gap-0.5 min-w-0"
-      style={{ borderBottom: `1px solid ${C.borderSubtle}`, borderRight: `1px solid ${C.borderSubtle}` }}
+      // border-right is NOT set here (Review #438 Fund 4, 06.09.2026): an
+      // inline style always outranks a stylesheet rule, so the previous
+      // unconditional `borderRight` here made the `.stage-kpi` nth-child
+      // rules in globals.css dead code — the right edge showed a stray line
+      // at every breakpoint no matter what the CSS said. The border now
+      // lives entirely in `.stage-kpi > div` (globals.css), which the
+      // 2-/4-column nth-child rules can actually override.
+      style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
     >
       {cell.copyValue ? (
         <button

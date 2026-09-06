@@ -110,4 +110,32 @@ describe("ActionBar — Stop dispatch gate", () => {
     expect(screen.getByTestId("recipe-dropdown-trigger")).toHaveTextContent("Other model");
     expect(screen.getByTestId("stop-runtime")).toBeInTheDocument();
   });
+
+  // Review #438 Fund 5+6 (06.09.2026): mobile full-width stacking (Spec §2
+  // Zone 4 "Handy: primär volle Breite, Zahnrad daneben, Stop volle Breite
+  // darunter") lives in the `.stage-actions`/`.stage-actions-row2` container-
+  // query rules (globals.css), which jsdom cannot evaluate — this asserts
+  // the CSS hooks are actually wired up in the markup, not that the
+  // container query itself resolves (that needs a real browser/Playwright).
+  it("wires the mobile-stacking CSS hooks (stage-actions / stage-actions-row2)", async () => {
+    renderWithQuery(
+      <ActionBar hostId="spark" hostName="spark" servingName="Qwen3.8" runtimeId="rt-1" onOpenCockpit={() => {}} />
+    );
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    // HostRecipeSwitcher's DOM root (`display:contents`) still nests the
+    // button one level deep in the tree even though it renders as if it
+    // weren't there — `closest()` finds the real layout parent regardless.
+    expect(trigger.closest(".stage-actions")).toBeTruthy();
+    expect(screen.getByTestId("stop-runtime").parentElement).toHaveClass("stage-actions-row2");
+  });
+
+  it("the gear button carries the 44px-mobile CSS hook (stage-actions-gear)", async () => {
+    renderWithQuery(
+      <ActionBar hostId="spark" hostName="spark" servingName="Qwen3.8" runtimeId="rt-1" onOpenCockpit={() => {}} />
+    );
+    const gear = await screen.findByLabelText("Open cockpit");
+    expect(gear).toHaveClass("stage-actions-gear");
+    expect(gear).toHaveClass("w-11");
+    expect(gear).toHaveClass("h-11");
+  });
 });
