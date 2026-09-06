@@ -687,6 +687,26 @@ task-completion path. A Redis failure counter trips a circuit breaker after
 restart-loop). Force path for operators who don't want to wait:
 `POST /runtimes/db/{slug}/sync-agents`.
 
+#### Runtime Pulse — tok/s heat strip poller (NEU 2026-09-06, Runtimes-Bühne v2 PR 1)
+
+`services/runtime_pulse.py` is a second singleton loop (same pattern as the
+watcher above, `settings.runtime_pulse_interval` default 5s, 0 = off) that
+feeds the Bühne card's "Lebenszeichen" heat strip with live tokens/second.
+Every tick it walks every **slot runtime** (`runtimes.is_slot=True` with a
+bound `host_id` — the fixed box endpoint, e.g. a Duo's Head box), skips any
+host the watcher's own liveness cache (`mc:runtime-live:{slug}`) already
+marked unreachable (no second probe), and otherwise scrapes
+`GET {endpoint-base}/metrics` (Prometheus text; vLLM
+`vllm:generation_tokens_total`, SGLang fallback
+`sglang:generation_tokens_total` / `gen_throughput`). The delta between two
+probes' cumulative counters divided by the elapsed time is tok/s (first
+probe after a gap always reports 0, a counter reset clamps to 0 — never a
+raise, never negative). Samples land in a capped Redis ring
+(`mc:host:{host_id}:pulse`, 180 points) plus a meta doc
+(`mc:host:{host_id}:pulse:meta` — `available`/`last_ok`/`engine`).
+`GET /api/v1/hosts/{host_id}/pulse` (`routers/hosts.py`) reads both and
+never 5xx's; no data is `available: false, points: []`.
+
 #### Switch-Grace + Auto-Recovery (NEU 2026-08-05)
 
 Two operational gaps around the same fact: a Spark recipe switch takes
@@ -1418,6 +1438,7 @@ Alle ADRs in `docs/decisions/`:
 | Neue Task-Status / Workflow | `backend/app/models/task.py` + Routers + Frontend types | Watchdog + Task Lifecycle |
 | Runtime-Wechsel pro Agent | `backend/app/services/agent_runtime_switch.py` (atomic) | Tests + UI-Modal in `RuntimeSwitchModal.tsx` |
 | Runtime-Drift-Probing / -Intervall | `backend/app/services/runtime_watcher.py` (`settings.runtime_watcher_interval`/`_enabled`) | ADR-054 — 2-Probe-Confirm, `/runtimes/live-status` |
+| Tok/s-Puls je Box (Heat-Strip-Daten) | `backend/app/services/runtime_pulse.py` (`settings.runtime_pulse_interval`, 0=aus) + `routers/hosts.py::host_pulse` | Runtimes-Bühne v2 PR 1 — Prometheus-Scrape nur bei `runtime_live` reachable, Redis-Ring `mc:host:{id}:pulse` |
 | Runtime-Auto-Recovery (ein Startversuch nach bestätigtem Ausfall) | `backend/app/services/runtime_watcher.py` (`settings.runtime_auto_recovery_enabled`) | Kill-Switch `RUNTIME_AUTO_RECOVERY_ENABLED=false`; Cooldown 15 min, Aufgabe nach 2 Fehlversuchen. Switch-Grace bleibt aktiv |
 | Agent-Model-Sync nach Drift | `backend/app/services/runtime_propagation.py` (`docker restart`, kein respawn) | ADR-054 — Circuit-Breaker 3 Fehlversuche, Force-Route `POST /runtimes/db/{slug}/sync-agents` |
 | Engine-Control (Autostart-Flag) | `backend/app/services/runtime_autostart.py` (SSH via `runtime_manager._ssh_run`) | ADR-057 — `runtimes.autostart_supported`/`autostart_flag_path`, `GET/POST /runtimes/db/{slug}/autostart`, `AutostartToggle.tsx` |
