@@ -637,6 +637,10 @@ async def runtimes_live_status(
         # the cockpit can show a pending change the DB does not know about yet.
         served_ctx = data.get("served_context_len")
         data["context_drift"] = bool(served_ctx) and served_ctx != rt.max_context_len
+        # Laufzeit-Anzeige der Bühne (W3, 06.09.2026): serving_since lebt in
+        # der DB-Zeile (runtime_watcher/slot_runtimes setzen es), nicht im
+        # Redis-Snapshot — hier frisch angehängt statt im Wächter dupliziert.
+        data["serving_since"] = rt.serving_since.isoformat() if rt.serving_since else None
         live[rt.slug] = data
     return {
         "live": live,

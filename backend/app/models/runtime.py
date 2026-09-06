@@ -202,6 +202,23 @@ class Runtime(SQLModel, table=True):
         ),
     )
 
+    # Laufzeit-Anzeige der Bühne (W3, 06.09.2026): seit wann der Wächter
+    # DIESE Zeile ununterbrochen erreichbar sieht. Gesetzt bei der ersten
+    # erfolgreichen Probe nach einem Ausfall/Start (nur wenn leer —
+    # runtime_watcher._probe_one), auf NULL bei derselben Schwelle, die auch
+    # ``runtime.unreachable`` auslöst (UNREACHABLE_EVENT_THRESHOLD), und
+    # explizit auf jetzt beim bestätigten Rezept-Start der Slot-Zeile
+    # (services.slot_runtimes.write_slot_state) — die läuft während eines
+    # Wechsels in der Schalt-Gnadenfrist (``runtime_grace``) weiter und würde
+    # sonst die Uptime des VORHERIGEN Modells zeigen. Ein bereits laufendes
+    # Modell beim MC-Neustart: die erste Probe setzt den Wert nur, wenn er
+    # leer ist — der Wert bedeutet also "seit MC es sieht", nicht zwingend
+    # "seit dem echten Start der Engine".
+    serving_since: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
     # Verbund-UI Phase 1b (30.08.2026): declarative SOLL-topology for a
     # multi-node runtime — e.g. {"nodes": 2, "tp_total": 2, "roles":
     # ["head", "worker"]}. NULL for every solo runtime (the overwhelming
@@ -261,6 +278,7 @@ class Runtime(SQLModel, table=True):
             "process_name": self.process_name,
             "exclusive_memory": self.exclusive_memory,
             "is_slot": self.is_slot,
+            "serving_since": self.serving_since,
             "prestart_watermark_kb": self.prestart_watermark_kb,
             "prestart_min_available_kb": self.prestart_min_available_kb,
         }

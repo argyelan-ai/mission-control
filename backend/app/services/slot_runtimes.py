@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -159,6 +160,17 @@ async def write_slot_state(
     if model and slot.model_identifier != model:
         slot.model_identifier = model
         changed = True
+        # Laufzeit-Anzeige (W3, 06.09.2026): dieser Aufruf ist der bestätigte
+        # Rezept-Start (der einzige Aufrufer ist start_recipe_on_host, direkt
+        # nach dem erfolgreichen Startbefehl). Ohne diese Zeile bliebe die
+        # Slot-Zeile — die über jeden Wechsel hinweg dieselbe DB-Zeile ist —
+        # während der Schalt-Gnadenfrist unverändert erreichbar/unerreichbar
+        # markiert (``runtime_grace`` unterdrückt die Fehler-Schwelle, die
+        # sonst auf NULL setzt), und die Bühne zeigte die Uptime des ALTEN
+        # Modells weiter, obwohl gerade ein anderes einzieht. Bewusst NICHT
+        # "nur wenn leer" wie beim Wächter — jeder bestätigte Start ist ein
+        # neuer Zeitpunkt für die neue Belegung dieser Zeile.
+        slot.serving_since = datetime.now(timezone.utc)
     if context_len and slot.max_context_len != context_len:
         slot.max_context_len = context_len
         # ``preferred`` folgt nur, wo es „nimm das ganze Fenster" ausdrückte

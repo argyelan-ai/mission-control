@@ -1311,6 +1311,15 @@ Wer sie ueberall ausschliesst (immer an is_slot, nie am Typ)
   runtime_watcher._autostart_target        nie Autostart-Ziel
   runtime_watcher._maybe_auto_recover      nie Wiederbelebung
 
+Laufzeit-Anzeige der Buehne (W3, 2026-09-06): `runtimes.serving_since`
+(Migration 0195, nullable) — gesetzt/geloescht in `runtime_watcher._probe_one`
+beim Uebergang nicht erreichbar/unbekannt ↔ erreichbar (setzen nur wenn leer,
+loeschen bei derselben Schwelle wie `runtime.unreachable`), zusaetzlich neu
+gesetzt in `slot_runtimes.write_slot_state` beim bestaetigten Rezept-Start —
+sonst zeigte die Slot-Zeile waehrend der Schalt-Gnadenfrist die Uptime des
+VORHERIGEN Modells weiter. `GET /runtimes/live-status` liefert den Wert als
+ISO-String je Zeile.
+
 Uebergangszeit (8-30 min Ladezeit)
   runtime_grace.mark_switching(slot)          Wechsel ist kein Ausfall
   runtime_watcher._refresh_slot_grace         Marker erneuern, solange die

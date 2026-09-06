@@ -1798,6 +1798,13 @@ export interface Runtime {
    *  Modellwechsel nachgezogen; nie clientseitig zusammenbauen.
    *  Sie behält ihre `host` (Head-Box) — daran hängt die Gruppierung. */
   is_slot?: boolean;
+  /** Laufzeit-Anzeige der Bühne (W3): seit wann der Wächter diese Zeile
+   *  ununterbrochen erreichbar sieht (ISO-String), oder null solange sie
+   *  nicht erreichbar ist / seit dem letzten Ausfall noch keine erfolgreiche
+   *  Probe kam. Nie clientseitig aus anderen Feldern ableiten — der Server
+   *  setzt/löscht das bei jedem Probenwechsel und beim bestätigten
+   *  Rezept-Start neu. */
+  serving_since?: string | null;
   /** ssh_process: Prozessname für pgrep/pkill — das Gegenstück zu container_name. */
   process_name?: string | null;
   stop_command?: string | null;
@@ -2128,6 +2135,10 @@ export interface RuntimeLiveStatus {
   status?: string;
   phase?: "evicting" | "launching" | "loading" | string | null;
   switch_source?: string | null;
+  /** Laufzeit-Anzeige der Bühne (W3): siehe Runtime.serving_since — hier aus
+   *  der DB-Zeile in jeden Live-Status-Eintrag gespiegelt, damit die Karte es
+   *  ohne einen zweiten Request hat. */
+  serving_since?: string | null;
 }
 
 export interface RuntimesLiveResponse {
