@@ -33,7 +33,7 @@ from app.database import get_session
 from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import host_bootstrap, host_onboarding, host_probe, launch_template, runtime_manager
+from app.services import host_bootstrap, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -611,6 +611,11 @@ async def host_metrics(
       otherwise the same SSH probe as above (falls back byte-identically)
     - flask_wol → awake/health of the control server (mirrors unsloth_porsche state)
     - local     → empty object with kind field (the MC host doesn't measure itself)
+
+    Side effect (Bühne v2 §6 PR 3): a reachable ssh/agent reading also feeds
+    the 1h Redis history ring (services/host_metrics_history), deduped to at
+    most one point every HISTORY_DEDUPE_SECONDS — see
+    GET /{host_id}/metrics/history below.
     """
     host = await _get_host(session, host_id)
     if not host:
@@ -634,6 +639,19 @@ async def host_metrics(
         }
 
     metrics = await runtime_manager.get_host_metrics(resolved)
+    if host.kind in ("ssh", "agent") and metrics.get("reachable"):
+        # Bühne v2 §6 PR 3: dieser Endpoint wird vom Frontend alle 5s
+        # gepollt (SlotStage) — statt eines zweiten SSH-Wegs hängt sich der
+        # 1h-Verlaufsring hier mit an (dedupliziert, siehe host_metrics_history).
+        # Der ganze Block ist bewusst try/except-umschlossen (Review-Fund
+        # rev-437): ein Redis-Ausfall oder Serializer-Fehler beim Ring-Schreiben
+        # darf den eigentlichen Metrics-Poll der Seite nie mitreissen — die
+        # Telemetrie-Antwort geht in jedem Fall unverändert raus.
+        try:
+            redis = await get_redis()
+            await host_metrics_history.record_metrics_point_safe(redis, str(host.id), metrics)
+        except Exception as e:
+            host_metrics_history.log_history_failure(str(host.id), "geschrieben", e)
     return {"kind": host.kind, "slug": host.slug, **metrics}
 
 
@@ -684,6 +702,38 @@ async def host_pulse(
         "now_tps": now_tps,
         "idle_seconds": idle_seconds,
         "points": points,
+    }
+
+
+@router.get("/{host_id}/metrics/history")
+async def host_metrics_history_endpoint(
+    host_id: str,
+    window: int = Query(default=host_metrics_history.HISTORY_WINDOW_SECONDS, ge=1, le=host_metrics_history.HISTORY_WINDOW_SECONDS),
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """1h-Telemetrie-Verlauf je Host (Bühne v2 §6/§7 PR 3).
+
+    Punkte kommen ausschliesslich aus dem Schreibweg in host_metrics() oben —
+    kein eigener Sammler. Leerer Ring (z.B. frisch angelegter Host, oder noch
+    kein Poll seit Neustart) → ``points: []`` mit HTTP 200, nie ein Fehler.
+    Ein Redis-Ausfall beim Lesen selbst ist ebenfalls kein 5xx (Review-Fund
+    rev-437) — try/except um den ganzen Zugriff inkl. ``get_redis()``, wie
+    beim Schreibweg oben, mit derselben gedrosselten Log-Warnung."""
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+
+    try:
+        redis = await get_redis()
+        points = await host_metrics_history.read_history_safe(redis, str(host.id), window)
+    except Exception as e:
+        host_metrics_history.log_history_failure(str(host.id), "gelesen", e)
+        points = []
+    return {
+        "points": points,
+        "window": window,
+        "sample_seconds": host_metrics_history.HISTORY_DEDUPE_SECONDS,
     }
 
 
