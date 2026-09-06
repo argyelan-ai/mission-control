@@ -204,4 +204,31 @@ describe("HostRecipeSwitcher", () => {
     renderWithQuery(<HostRecipeSwitcher hostId="box-a" />);
     expect(await screen.findByTestId("recipe-load-error")).toHaveTextContent("Could not load recipes: API 500: boom");
   });
+
+  // Runtimes-Bühne v2 (Live-Sichtprüfung 06.09.2026): der Auslöser braucht auf
+  // der Bühne einen Handlungs-Text ("Switch model"/"Start model"/"Other
+  // model") statt des laufenden Rezeptnamens — der steht dort schon im
+  // Kartentitel.
+  it("label overrides the running-recipe name in the trigger", async () => {
+    renderWithQuery(<HostRecipeSwitcher hostId="box-a" servingName="Engine X" label="Switch model" />);
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    expect(trigger).toHaveTextContent("Switch model");
+    expect(trigger).not.toHaveTextContent("Engine X");
+    // Mit eigenem Label steht kein Statuspunkt mehr davor — er begleitete
+    // den Rezeptnamen, nicht die Handlung.
+    expect(trigger.querySelector("span.w-1\\.5.h-1\\.5")).toBeNull();
+  });
+
+  it("primary renders an accent-filled button instead of the quiet register row", async () => {
+    renderWithQuery(<HostRecipeSwitcher hostId="box-a" label="Start model" primary />);
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    expect(trigger.style.background).toBe("rgb(235, 232, 222)");
+  });
+
+  it("without label/primary the trigger keeps its previous look (no regression)", async () => {
+    renderWithQuery(<HostRecipeSwitcher hostId="box-a" servingName="Engine X" />);
+    const trigger = await screen.findByTestId("recipe-dropdown-trigger");
+    expect(trigger).toHaveTextContent("Engine X");
+    expect(trigger.style.background).toBe("rgb(38, 38, 38)");
+  });
 });

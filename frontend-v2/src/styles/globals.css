@@ -1058,3 +1058,89 @@ option {
   background-color: var(--action-hover);
 }
 
+/* ── Runtimes-Bühne v2 (feat/runtimes-stage-v2) ─────────────────────────────
+   Container queries for the Stage/FreeBox/AsleepBox card (Spec §2): the card
+   itself is `container-type: inline-size` (set inline by the component), so
+   these breakpoints respond to the CARD's own width — a narrow sidebar and a
+   wide desktop column both get the right layout, unlike a viewport media
+   query. Two zones use it: the 4-cell instrument row (2 cols narrow, 4 wide)
+   and the member list (stacked narrow, side-by-side duo from 600px). */
+.stage-kpi {
+  grid-template-columns: repeat(2, 1fr);
+}
+/* The right divider lives ENTIRELY here (Review #438 Fund 4, 06.09.2026):
+   KpiRow.tsx's Cell no longer sets an inline border-right — an inline style
+   always outranks a stylesheet rule, so these nth-child overrides were dead
+   code against it before. Default: every cell gets a right divider; each
+   breakpoint below zeroes it only at the card's actual right edge. */
+.stage-kpi > div {
+  border-right: 1px solid var(--color-border-subtle);
+}
+.stage-kpi > div:nth-child(2n) {
+  border-right: 0;
+}
+@container (min-width: 600px) {
+  .stage-kpi {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  /* 4-column case: column 2 is now an interior divider, not the edge — put
+     its border back. Only column 4 (4n) is the true right edge. */
+  .stage-kpi > div:nth-child(2n) {
+    border-right: 1px solid var(--color-border-subtle);
+  }
+  .stage-kpi > div:nth-child(4n) {
+    border-right: 0;
+  }
+}
+.stage-members[data-duo="true"] {
+  grid-template-columns: 1fr;
+}
+@container (min-width: 600px) {
+  .stage-members[data-duo="true"] {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stage-members[data-duo="true"] > div + div {
+    border-left: 1px solid var(--color-border-subtle);
+  }
+}
+
+/* Zone 4 Aktionen (Spec §2, Review #438 Fund 6, 06.09.2026): unter 600px
+   Kartenbreite fehlte das Mockup-Layout ("primär volle Breite, Zahnrad
+   daneben, Stop volle Breite darunter") komplett — ActionBar.tsx trug keine
+   einzige Breakpoint-Regel. `HostRecipeSwitcher`'s Wurzel ist
+   `display:contents`, ihr Auslöser-Button wird darum SELBST zum Grid-/
+   Flex-Kind von `.stage-actions` bzw. `.stage-actions-row2` — kein Wrapper-Div
+   dazwischen nötig. */
+.stage-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.stage-actions-row2 {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 8px;
+}
+@container (min-width: 600px) {
+  .stage-actions {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .stage-actions-row2 {
+    display: flex;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  /* Touch-Ziel bleibt 44px nur solange die Karte schmal (Handy) ist — ab
+     600px Kartenbreite darf das Zahnrad wieder die kompakte 36px-Grösse der
+     übrigen Icon-Knöpfe auf dieser Seite tragen (Review #438 Fund 5). */
+  .stage-actions-gear {
+    width: 36px;
+    height: 36px;
+  }
+}
+

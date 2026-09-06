@@ -603,19 +603,15 @@ function CompactModeSwitch({
 
 // ── Der Streifen in der Slot-Kachel ─────────────────────────────────────────
 
-export function DeviceModeStrip({
-  device,
-  canControl,
-}: {
-  device: Device;
-  canControl: boolean;
-}) {
-  const t = useTranslations("runtimes.devices");
-  const locale = useLocale();
+/**
+ * Der Zustand + die Klick-Logik hinter dem Modus-Schalter — extrahiert, damit
+ * `DeviceModeStrip` (volle Zeile mit Label/Details/Diagramm) und
+ * `CompactDeviceModeSwitch` (Runtimes-Bühne v2, nackter Vierer für
+ * `stage/MemberRow.tsx`) dieselbe Sperr-/Nachzieh-/Mutations-Logik teilen,
+ * statt sie zweimal zu pflegen. Reine Zustandslogik, kein JSX.
+ */
+function useDeviceModeControl(device: Device, canControl: boolean) {
   const queryClient = useQueryClient();
-  const reduce = useReducedMotion();
-
-  const [open, setOpen] = useState(false);
 
   const state = device.device_state;
   const currentMode: GpuMode | null =
@@ -677,6 +673,119 @@ export function DeviceModeStrip({
   const remaining = Math.max(0, Math.ceil(HEARTBEAT_SECONDS - elapsed));
   const progressPct = Math.min(100, (elapsed / HEARTBEAT_SECONDS) * 100);
   const shownMode: GpuMode | null = targetMode ?? currentMode;
+
+  return { state, currentMode, targetMode, lock, pending, mutation, pick, remaining, progressPct, shownMode, pickedAt };
+}
+
+/**
+ * CompactDeviceModeSwitch — der nackte Vierer ohne Label/Details/Diagramm,
+ * für die Runtimes-Bühne v2 (Spec §2 Zone 3: "kompakter Modus-Vierer").
+ * Teilt Klick-Logik/Sperren/Pending mit `DeviceModeStrip` über
+ * `useDeviceModeControl` — nur die Darstellung ist anders (keine Box, kein
+ * "Details"-Knopf, kein Watt).
+ */
+/**
+ * MiniModeSwitch — die vier reinen Textsegmente aus dem Mockup (`.seg.sm`),
+ * für `CompactDeviceModeSwitch` (Runtimes-Bühne v2 Zone 3). Zweite
+ * Sichtprüfung 06.09.2026 (Review #438 Fund A): `CompactModeSwitch`
+ * (Watt-Zahlen, Stromtreppen-Balken, Warndreieck bei boost, dunkle Pill-Box)
+ * ist die Zeile aus der HEUTIGEN Slot-Kachel (`DeviceModeStrip`) — die Bühne
+ * verlangt ausdrücklich NUR die vier Modusnamen als schmale, ruhige
+ * Segmentleiste, ohne jede Messwert-Andeutung. Kein Watt/Balken/Icon hier
+ * ist Absicht, nicht eine vergessene Ausbaustufe.
+ */
+function MiniModeSwitch({
+  current,
+  target,
+  pending,
+  disabled,
+  onPick,
+}: {
+  current: GpuMode | null;
+  target: GpuMode | null;
+  pending: boolean;
+  disabled: boolean;
+  onPick: (mode: GpuMode) => void;
+}) {
+  const t = useTranslations("runtimes.devices");
+  const selected = current ?? target;
+  const showTarget = pending && target != null && target !== selected;
+  const highlighted = showTarget ? target : selected;
+
+  return (
+    <div
+      className="inline-flex rounded-[3px] overflow-hidden"
+      style={{ border: `1px solid ${C.border}` }}
+      role="radiogroup"
+      aria-label={t("modeGroupLabel")}
+    >
+      {GPU_MODES.map((mode, i) => {
+        const active = mode === highlighted;
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={current === mode}
+            aria-label={t(MODE_LABEL_KEY[mode])}
+            disabled={disabled}
+            onClick={() => onPick(mode)}
+            data-testid={`mini-mode-${mode}`}
+            data-active={active ? "true" : "false"}
+            className="font-mono uppercase px-2.5 flex items-center justify-center cursor-pointer disabled:cursor-not-allowed min-h-11 sm:min-h-0"
+            style={{
+              fontSize: "11px",
+              letterSpacing: "0.04em",
+              height: "30px",
+              background: active ? C.accentSubtle : "transparent",
+              color: active ? C.accent : C.textMuted,
+              borderRight: i < GPU_MODES.length - 1 ? `1px solid ${C.border}` : "none",
+            }}
+          >
+            {t(MODE_LABEL_KEY[mode])}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function CompactDeviceModeSwitch({
+  device,
+  canControl,
+}: {
+  device: Device;
+  canControl: boolean;
+}) {
+  const { currentMode, targetMode, lock, pending, mutation, pick } = useDeviceModeControl(device, canControl);
+  return (
+    <div style={lock ? { opacity: 0.5 } : undefined} data-testid="compact-device-mode-switch">
+      <MiniModeSwitch
+        current={currentMode}
+        target={lock ? null : targetMode}
+        pending={pending}
+        disabled={!canControl || !!lock || mutation.isPending}
+        onPick={pick}
+      />
+    </div>
+  );
+}
+
+export function DeviceModeStrip({
+  device,
+  canControl,
+}: {
+  device: Device;
+  canControl: boolean;
+}) {
+  const t = useTranslations("runtimes.devices");
+  const locale = useLocale();
+  const reduce = useReducedMotion();
+
+  const [open, setOpen] = useState(false);
+
+  const { state, currentMode, targetMode, lock, pending, mutation, pick, remaining, progressPct, shownMode, pickedAt } =
+    useDeviceModeControl(device, canControl);
 
   return (
     <div
