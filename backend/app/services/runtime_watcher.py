@@ -102,6 +102,12 @@ AUTO_RECOVERY_COOLDOWN = 900  # 15 min — longer than a normal warmup
 AUTO_RECOVERY_MAX_ATTEMPTS = 2
 AUTO_RECOVERY_FAILURE_TTL = 6 * 3600  # attempts "age out" after 6h of quiet
 
+#: Drosselung des Sicherheitsnetzes „gebundener Agent trägt noch den alten
+#: Modellnamen" (ADR-078, Nachlese 06.09.2026). 10 Minuten: lang genug, dass
+#: ein laufender Sync (Reload = Sekunden, Neustart = bis 60 s Health-Frist) in
+#: Ruhe durchkommt, kurz genug, dass ein verlorener Sync von allein wiederkehrt.
+AGENT_MODEL_GUARD_TTL = 600
+
 # Crash-loop detection (PR8, hardened by Task #24). `restart: unless-stopped`
 # in a compose stack means a container that dies on boot is restarted
 # forever, and from outside that is indistinguishable from a model still
@@ -390,6 +396,68 @@ class RuntimeWatcher:
         # refreshed the row above, so the comparison here sees current values.
         if served_ctx is not None:
             await self._handle_context_drift(session, redis, runtime, served_ctx)
+        # Sicherheitsnetz, ganz zum Schluss: die Zeile stimmt, aber trägt ein
+        # gebundener Agent noch den alten Namen? (Nachlese 06.09.2026)
+        try:
+            await self._sync_stale_agent_models(session, redis, runtime)
+        except Exception:  # noqa: BLE001 — ein Netz darf die Runde nie kosten
+            logger.exception("agent model guard failed for %s", runtime.slug)
+
+    async def _sync_stale_agent_models(
+        self, session: AsyncSession, redis, runtime: Runtime
+    ) -> None:
+        """Antwortet die Runtime, muss jeder Agent daran ihr Modell fahren.
+
+        Der Drift-Pfad (``_handle_drift``) flaggt die Agenten nur, wenn sich
+        die ZEILE ändert. Seit ADR-078 schreibt der Umschalter das neue Modell
+        aber sofort selbst in die Slot-Zeile — danach gibt es keine Drift mehr,
+        und vor dieser Runde gab es damit auch keinen Sync (Live-Befund
+        06.09.2026: ``omp.env`` blieb auf dem alten Modell, jede Anfrage 404).
+        Der Umschalter flaggt inzwischen selbst; dies hier ist das Netz für
+        jeden anderen Weg, auf dem die beiden auseinanderlaufen können
+        (Backend-Neustart mitten im Wechsel, aufgegebener Sync, Handarbeit an
+        der Zeile).
+
+        Gedrosselt über einen SET-nx-Anspruch: sonst flaggte ein Sync, der
+        nicht durchkommt, die ganze Flotte in jeder Runde neu.
+
+        Ein Agent OHNE eingetragenes Modell (``agents.model`` leer) zählt
+        bewusst nicht als veraltet: leer ist kein Beleg für „fährt etwas
+        anderes", sondern nur fehlende Buchhaltung — und ein Netz, das auf
+        fehlende Buchhaltung reagiert, startet Container ohne Anlass neu.
+        """
+        model = (runtime.model_identifier or "").strip()
+        if not model:
+            return
+        from app.models.agent import Agent
+
+        bound = (
+            await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
+        ).all()
+        stale = [
+            agent
+            for agent in bound
+            if agent.agent_runtime == "cli-bridge"
+            and not agent.pending_runtime_sync
+            and (agent.model or "").strip()
+            and agent.model.strip() != model
+        ]
+        if not stale:
+            return
+        claimed = await redis.set(
+            RedisKeys.runtime_agent_model_guard(runtime.slug),
+            model,
+            nx=True,
+            ex=AGENT_MODEL_GUARD_TTL,
+        )
+        if not claimed:
+            return
+        flagged = await mark_agents_for_sync(session, runtime)
+        logger.info(
+            "runtime %s: %s Agent(en) trugen noch ein anderes Modell als %r — "
+            "%s für den Sync geflaggt",
+            runtime.slug, len(stale), model, flagged,
+        )
 
     async def _refresh_slot_grace(
         self, session: AsyncSession, runtime: Runtime, switching: dict
