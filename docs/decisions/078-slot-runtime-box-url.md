@@ -73,6 +73,17 @@ Konkret:
 6. **Reload statt Neustart:** `runtime_propagation._sync_one` rendert die
    omp-Konfiguration IM Container neu (`docker exec … render-omp-config.sh`);
    `docker restart` bleibt der Rückfallweg.
+   **Nachlese 06.09.2026:** Der Exec bringt die Werte MIT
+   (`-e OPENAI_BASE_URL=… -e OPENAI_MODEL=…` aus `build_runtime_env`, dazu
+   `--no-bootstrap`). Ohne sie holte das Skript sie selbst — und sein `curl`
+   schickte den Bootstrap-Schlüssel nicht mit (HTTP 401), also endete jeder
+   Reload mit „kein Modell bekannt" und fiel auf den Neustart zurück. Das
+   Skript schickt den Kopf jetzt ebenfalls und nennt den HTTP-Code; die Werte
+   kommen trotzdem aus derselben Quelle wie beim Container-Start. Der
+   Rückfall-Neustart wartet für omp `HEALTH_TIMEOUT_RESTART_OMP` (90 s) wie
+   der Umschalter, und ein aufgegebener Sync bekommt eine Sperrfrist von 15
+   Minuten — sonst flaggt der Wächter jede Runde neu und startet den Container
+   jedes Mal wieder ("failed (8/3)").
 7. **Kein Crash-Loop ohne Modell:** die Agenten-Entrypoints brechen nicht mehr
    sofort ab, wenn `OPENAI_MODEL` fehlt, sondern fragen den Bootstrap bis zu
    30 Minuten lang erneut.

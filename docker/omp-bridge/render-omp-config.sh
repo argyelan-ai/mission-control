@@ -57,9 +57,28 @@ MODELS_DIR="${HOME}/.omp/profiles/${OMP_PROFILE}/agent"
 # Genau die Schlüssel, die das Modell beschreiben. Tokens (MC_AGENT_TOKEN,
 # GH_TOKEN) fasst dieses Skript NICHT an — die gehören dem Entrypoint, und ein
 # Reload soll die laufende Anmeldung nicht anrühren.
+#
+# Der Aufruf braucht den Bootstrap-Schluessel im Kopf: `/internal/bootstrap`
+# verlangt `Authorization: Bearer <INTERNAL_BOOTSTRAP_SECRET>`, sonst 401
+# (backend/app/routers/internal.py::_check_bootstrap_secret). Bis 06.09.2026
+# fehlte der Kopf hier — jeder Reload endete mit „kein Modell bekannt", und MC
+# startete den Container ersatzweise neu. Darum steht der HTTP-Code jetzt auch
+# im Fehlertext: 401 heisst „Schluessel", nicht „Modell".
 fetch_bootstrap() {
     _url="${MC_API_URL:-http://backend:8000}/api/v1/internal/bootstrap?agent_name=${AGENT_NAME:-}"
-    _response=$(curl -sf --max-time 5 "$_url" 2>/dev/null) || return 1
+    _body="/tmp/.render-omp-bootstrap-$$.json"
+    _code=$(curl -s -o "$_body" -w '%{http_code}' --max-time 5 \
+        -H "Authorization: Bearer ${INTERNAL_BOOTSTRAP_SECRET:-}" \
+        "$_url" 2>/dev/null) || _code=""
+    [ -n "$_code" ] || _code="000"
+    if [ "$_code" != "200" ]; then
+        echo "[render-omp-config] bootstrap HTTP ${_code} — 401/403 heisst: INTERNAL_BOOTSTRAP_SECRET fehlt oder passt nicht zum Backend; 000 heisst: Backend nicht erreichbar" >&2
+        rm -f "$_body"
+        return 1
+    fi
+    _response=$(cat "$_body" 2>/dev/null)
+    rm -f "$_body"
+    [ -n "$_response" ] || return 1
     _exports=$(printf '%s' "$_response" | python3 -c '
 import sys, json
 try:
@@ -95,6 +114,19 @@ if [ "$DO_BOOTSTRAP" = "1" ]; then
         sleep "$WAIT_STEP"
         _waited=$((_waited + WAIT_STEP))
     done
+fi
+
+# ── Anmeldung behalten ───────────────────────────────────────────────────────
+# `docker exec` sieht nur die Umgebung, mit der der Container GESTARTET wurde —
+# den OPENAI_API_KEY, den der Entrypoint zur Laufzeit vom Bootstrap holt, also
+# nicht. Steht er schon in der omp.env, uebernehmen wir ihn: ein Reload wechselt
+# das Modell, er darf die laufende Anmeldung nicht wegwerfen.
+if [ -z "${OPENAI_API_KEY:-}" ] && [ -f "$OMP_ENV_FILE" ]; then
+    _existing_key=$(sed -n 's/^OPENAI_API_KEY=//p' "$OMP_ENV_FILE" | head -n 1)
+    if [ -n "$_existing_key" ] && [ "$_existing_key" != "sk-noauth" ]; then
+        OPENAI_API_KEY="$_existing_key"
+        export OPENAI_API_KEY
+    fi
 fi
 
 if [ -z "${OPENAI_BASE_URL:-}" ] || [ -z "${OPENAI_MODEL:-}" ]; then

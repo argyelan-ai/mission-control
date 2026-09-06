@@ -180,12 +180,16 @@ def test_reload_never_targets_a_non_agent_container(async_session):
         captured.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
+    env = {"OPENAI_BASE_URL": "http://192.0.2.10:8000/v1", "OPENAI_MODEL": "org/recipe-x"}
     with patch("subprocess.run", _fake_run):
-        result = rp.reload_omp_config(agent)
+        result = rp.reload_omp_config(agent, env)
 
     assert result["status"] == "reloaded"
-    assert captured[0][0:3] == ["docker", "exec", "mc-agent-agent-a"]
-    assert captured[0][3] == "render-omp-config.sh"
+    cmd = captured[0]
+    assert cmd[0:2] == ["docker", "exec"]
+    # Der Containername steht direkt vor dem Skript — dazwischen liegen nur die
+    # `-e`-Paare (seit der Nachlese 06.09.2026, siehe test_omp_reload_env.py).
+    assert cmd[cmd.index("render-omp-config.sh") - 1] == "mc-agent-agent-a"
 
 
 # ── Die Skripte selbst ───────────────────────────────────────────────────────
