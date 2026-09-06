@@ -214,6 +214,18 @@ class Runtime(SQLModel, table=True):
     # Modell beim MC-Neustart: die erste Probe setzt den Wert nur, wenn er
     # leer ist — der Wert bedeutet also "seit MC es sieht", nicht zwingend
     # "seit dem echten Start der Engine".
+    #
+    # Slot-Zeile: wird beim bestätigten Rezept-Start gesetzt, d.h. bei
+    # Kaltstarts bis zu Minuten zu früh — bewusst, damit nie ein alter Wert
+    # stehen bleibt.
+    #
+    # Restart (Review-Fund #443): ``POST /{id}/restart`` steckt dieselbe
+    # Schalt-Gnadenfrist wie ein Start — die unterdrückt die Fehlerzählung,
+    # die den Wert sonst löscht. ``routers/runtimes.restart_runtime`` setzt
+    # ihn darum von Hand auf NULL, auf der Zeile selbst UND ihrer Slot-Zeile
+    # (``slot_runtimes.reset_serving_since_for_restart``), sobald der
+    # Neustart ausgelöst ist; der Wächter setzt beim ersten erfolgreichen
+    # Probe danach neu.
     serving_since: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),

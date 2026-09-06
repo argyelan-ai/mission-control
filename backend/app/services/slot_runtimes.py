@@ -200,6 +200,37 @@ async def write_slot_state(
     return slot
 
 
+async def reset_serving_since_for_restart(session: AsyncSession, runtime: Runtime) -> None:
+    """Laufzeit-Anzeige (W3, 06.09.2026): ein ausgeloester Restart auf NULL.
+
+    Review-Fund #443: ``POST /{id}/restart`` haengt die Zeile in dieselbe
+    Schalt-Gnadenfrist (``runtime_grace``) wie ein Rezept-Start — und genau
+    diese Gnadenfrist unterdrueckt die Fehlerzaehlung, die ``serving_since``
+    sonst bei drei Fehlproben loescht (``runtime_watcher._probe_one``). Ohne
+    diesen Aufruf zeigte die Buehne nach einem Neustart die Uptime des
+    Modells weiter, das gerade neu laedt — bis zufaellig doch drei Fehlproben
+    durchkamen, oder (Slot-Zeile) bis zum naechsten ECHTEN Modellwechsel.
+
+    Loescht die Zeile selbst UND, wenn vorhanden, die Slot-Zeile derselben Box
+    (Duo: beide teilen dieselbe "seit wann"-Anzeige auf der Karte). Der
+    Waechter setzt beim ersten erfolgreichen Probe danach neu — best effort,
+    ein Fehler hier darf einen erfolgreichen Restart nicht rueckgaengig machen.
+    """
+    changed = False
+    if runtime.serving_since is not None:
+        runtime.serving_since = None
+        session.add(runtime)
+        changed = True
+    if runtime.host_id is not None and not runtime.is_slot:
+        slot = await find_slot_runtime(session, runtime.host_id)
+        if slot is not None and slot.serving_since is not None:
+            slot.serving_since = None
+            session.add(slot)
+            changed = True
+    if changed:
+        await session.commit()
+
+
 async def refresh_slot_display_name(session: AsyncSession, slot: Runtime) -> None:
     """Den „(aktuell: …)"-Teil nachziehen, nachdem der Wächter gedriftet ist.
 

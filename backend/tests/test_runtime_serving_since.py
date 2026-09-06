@@ -320,3 +320,99 @@ async def test_live_status_serving_since_null_when_unset(async_session, auth_cli
     body = (await auth_client.get("/api/v1/runtimes/live-status")).json()
 
     assert body["live"][rt.slug]["serving_since"] is None
+
+
+# ── 5. Restart-Endpunkt (Review-Fund #443) ───────────────────────────────────
+#
+# ``POST /{id}/restart`` haengt dieselbe Schalt-Gnadenfrist wie ein Start —
+# und die unterdrueckt die Fehlerzaehlung, die serving_since sonst loescht.
+# Ohne den expliziten Reset im Router bliebe der alte Wert stehen.
+
+
+async def _stub_ok(*_args, **_kwargs):
+    return {"ok": True, "message": "stub"}
+
+
+@pytest.mark.asyncio
+async def test_restart_resets_serving_since_on_solo_row(async_session, auth_client):
+    stale = datetime.now(timezone.utc) - timedelta(hours=2, minutes=41)
+    rt = await _mk_rt(
+        async_session, slug="restart-rt",
+        runtime_type="vllm_docker", container_name="mc-restart-rt",
+        serving_since=stale,
+    )
+
+    with patch(
+        "app.services.runtime_manager.restart_runtime",
+        new=AsyncMock(side_effect=_stub_ok),
+    ):
+        resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/restart")
+    assert resp.status_code == 200, resp.text
+
+    await async_session.refresh(rt)
+    assert rt.serving_since is None
+
+
+@pytest.mark.asyncio
+async def test_restart_resets_serving_since_on_slot_row_of_same_box(
+    async_session, auth_client
+):
+    """Neustart der Solo-Zeile OHNE Modellwechsel muss auch die Slot-Zeile
+    derselben Box zuruecksetzen — die Karte teilt die Uptime-Anzeige."""
+    host = await _host_row(async_session, slug="box-restart")
+    stale_solo = datetime.now(timezone.utc) - timedelta(hours=1)
+    stale_slot = datetime.now(timezone.utc) - timedelta(hours=5)
+    rt = await _mk_rt(
+        async_session, slug="restart-duo-rt", model="org/same-model",
+        runtime_type="vllm_docker", container_name="mc-restart-duo-rt",
+        host_id=host.id, serving_since=stale_solo,
+    )
+    slot = Runtime(
+        slug="box-restart-slot", host_id=host.id, display_name="BOX-RESTART :8000",
+        runtime_type="openai_compatible", endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="org/same-model", is_slot=True, exclusive_memory=False,
+        enabled=True, serving_since=stale_slot,
+    )
+    async_session.add(slot)
+    await async_session.commit()
+    await async_session.refresh(slot)
+
+    with patch(
+        "app.services.runtime_manager.restart_runtime",
+        new=AsyncMock(side_effect=_stub_ok),
+    ):
+        resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/restart")
+    assert resp.status_code == 200, resp.text
+
+    await async_session.refresh(rt)
+    await async_session.refresh(slot)
+    assert rt.serving_since is None
+    assert slot.serving_since is None
+
+
+@pytest.mark.asyncio
+async def test_restart_failure_leaves_serving_since_untouched(async_session, auth_client):
+    """Ein FEHLGESCHLAGENER Restart hat nichts bewegt — die alte Uptime bleibt
+    ehrlich stehen statt eine Zeile zu zeigen, die "seit 0 s" nicht liefen."""
+    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+    rt = await _mk_rt(
+        async_session, slug="restart-fail-rt",
+        runtime_type="vllm_docker", container_name="mc-restart-fail-rt",
+        serving_since=stale,
+    )
+
+    async def _stub_fail(*_a, **_kw):
+        return {"ok": False, "message": "boom"}
+
+    with patch(
+        "app.services.runtime_manager.restart_runtime",
+        new=AsyncMock(side_effect=_stub_fail),
+    ):
+        resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/restart")
+    assert resp.status_code == 400
+
+    await async_session.refresh(rt)
+    got = rt.serving_since
+    if got.tzinfo is None:
+        got = got.replace(tzinfo=timezone.utc)
+    assert got == stale
