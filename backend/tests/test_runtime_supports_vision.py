@@ -119,11 +119,17 @@ def test_migration_upgrade_adds_both_columns_not_null_default_false():
     # Der Seed ist ein Namens-/Slug-Muster — keine Gerätedaten (ADR-077 Regel 7).
     seed_sql = "\n".join(a[0] for a, _k in calls["execute"])
     assert "runtimes" in seed_sql and "local_recipes" in seed_sql
-    assert "glm53" in seed_sql
+    assert "glm53-exl3" in seed_sql
+    assert "glm-5.3-flash-exl3" in seed_sql.lower()
     assert "vision" in seed_sql.lower()
+    # Sabotage-Probe (Review-Fund 06.09.2026): kein bare "glm53%" mehr — das
+    # hätte auch glm53-dflash-sparks (nicht live bewiesen) mitgerissen.
+    assert "'glm53%'" not in seed_sql
     # Sabotage-Probe: kein Hostname/keine IP im Seed-Muster.
     assert "192." not in seed_sql
     assert "ssh" not in seed_sql.lower()
+    # Die Slot-Zeile folgt der Vision-Fähigkeit ihrer Box (Review-Fund).
+    assert "is_slot" in seed_sql
 
 
 def test_migration_downgrade_drops_both_columns():
@@ -133,6 +139,110 @@ def test_migration_downgrade_drops_both_columns():
 
     dropped = {a for a, _k in calls["drop_column"]}
     assert dropped == {("runtimes", "supports_vision"), ("local_recipes", "supports_vision")}
+
+
+# ── 1b. Seed-Logik, funktional (Review-Fund 06.09.2026) ──────────────────────
+#
+# Läuft die ECHTE WHERE-Klausel aus der Migrationsdatei gegen eine echte
+# SQLite-Tabelle — nicht nur eine String-Prüfung. Einzige Übersetzung:
+# ``ILIKE`` → ``LIKE`` (SQLite ist für ASCII per Default schon case-insensitiv
+# bei LIKE — identisches Verhalten für unsere reinen ASCII-Muster). Die
+# Boolean-Logik der Klausel selbst bleibt unverändert die aus der Migration.
+
+
+def _sqlite_where(pg_where: str) -> str:
+    return pg_where.replace("ILIKE", "LIKE")
+
+
+def _seed_test_db(rows: list[dict]) -> "sqlite3.Connection":
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE runtimes (
+            id TEXT PRIMARY KEY, host_id TEXT, slug TEXT, display_name TEXT,
+            model_identifier TEXT, is_slot INTEGER, supports_vision INTEGER
+        )
+        """
+    )
+    for row in rows:
+        conn.execute(
+            "INSERT INTO runtimes VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                row["id"], row.get("host_id"), row["slug"], row["display_name"],
+                row["model_identifier"], int(row.get("is_slot", False)),
+                int(row.get("supports_vision", False)),
+            ),
+        )
+    conn.commit()
+    return conn
+
+
+def _run_seed(conn, module) -> None:
+    conn.execute(f"UPDATE runtimes SET supports_vision = 1 WHERE {_sqlite_where(module._SEED_WHERE)}")
+    conn.execute(f"UPDATE runtimes SET supports_vision = 1 WHERE {_sqlite_where(module._SLOT_SYNC_WHERE)}")
+    conn.commit()
+
+
+def _vision(conn, slug: str) -> bool:
+    row = conn.execute(
+        "SELECT supports_vision FROM runtimes WHERE slug = ?", (slug,)
+    ).fetchone()
+    return bool(row[0])
+
+
+def test_seed_matches_the_reported_slot_row_directly():
+    """Der gemeldete Fall: die Slot-Zeile trägt den Modellnamen selbst schon
+    im eigenen model_identifier (Bindestrich-Schreibweise) — die erweiterte
+    Namens-Regel muss sie OHNE den Join-Schritt treffen."""
+    module, _ = _load_migration()
+    conn = _seed_test_db([
+        dict(id="1", host_id="h1", slug="dgx-spark-slot", is_slot=True,
+             display_name="DGX Spark :8000", model_identifier="org/GLM-5.3-Flash-EXL3"),
+    ])
+    _run_seed(conn, module)
+    assert _vision(conn, "dgx-spark-slot") is True
+
+
+def test_seed_leaves_dflash_variant_false():
+    """Sabotage-Probe: glm53-dflash-sparks ist NICHT live bewiesen und darf
+    nicht über ein zu breites 'glm53%'-Muster mitgerissen werden."""
+    module, _ = _load_migration()
+    conn = _seed_test_db([
+        dict(id="1", slug="glm53-dflash-sparks", display_name="GLM-5.3-Flash DFlash Sparks",
+             model_identifier="org/GLM-5.3-Flash-DFlash-Sparks"),
+    ])
+    _run_seed(conn, module)
+    assert _vision(conn, "glm53-dflash-sparks") is False
+
+
+def test_seed_slot_sync_inherits_vision_from_sibling_on_same_host():
+    """Eine Slot-Zeile deren EIGENER Name/Slug auf kein Muster passt, muss
+    trotzdem vision-fähig werden, wenn eine andere Zeile DERSELBEN Box exakt
+    denselben model_identifier bereits als vision-fähig trägt — die Slot-
+    Zeile serviert ja genau das, was diese Zeile beschreibt.
+
+    Sabotage-Probe: eine gleichnamige Zeile auf einer ANDEREN Box darf NICHT
+    anstecken (host_id-Bedingung)."""
+    module, _ = _load_migration()
+    conn = _seed_test_db([
+        # Bereits vision-fähig (durch eine frühere, hier nicht nachgebildete
+        # Regel) — Name/Slug matchen absichtlich KEIN Namensmuster.
+        dict(id="1", host_id="box-a", slug="recipe-x-box-a",
+             display_name="Recipe X (Box A)", model_identifier="org/custom-engine-9000",
+             supports_vision=True),
+        # Slot-Zeile derselben Box, gleicher model_identifier, eigener Name
+        # trifft kein Muster — muss über den Join true werden.
+        dict(id="2", host_id="box-a", slug="box-a-slot", is_slot=True,
+             display_name="BOX-A :8000", model_identifier="org/custom-engine-9000"),
+        # Gegenfall: gleicher model_identifier, aber ANDERE Box — bleibt false.
+        dict(id="3", host_id="box-b", slug="box-b-slot", is_slot=True,
+             display_name="BOX-B :8000", model_identifier="org/custom-engine-9000"),
+    ])
+    _run_seed(conn, module)
+    assert _vision(conn, "box-a-slot") is True
+    assert _vision(conn, "box-b-slot") is False
 
 
 async def test_runtime_and_local_recipe_expose_supports_vision_column():

@@ -29,11 +29,30 @@ einen externen Anbieter zu schicken, siehe render-omp-config.sh):
 
 Seed (Muster-Update, KEINE Gerätedaten — nur Namens-/Slug-Muster, siehe
 ADR-077 Regel 7): Zeilen, deren ``display_name``/``model_identifier`` "Vision"
-enthält, oder deren ``slug`` mit ``glm53`` beginnt, werden auf ``true``
-gesetzt — GLM-5.3-Flash EXL3 fährt Vision, live bewiesen (06.09.2026, rotes
-Testbild → "Rot"). Alles andere (z.B. Qwen3.8 Flash Next) bleibt ``false``.
-Ein frischer/öffentlicher Checkout ohne passende Zeilen führt ein No-Op-UPDATE
-aus — harmlos.
+enthält, oder deren ``slug``/``model_identifier`` auf die EXL3-Variante von
+GLM-5.3-Flash zeigt, werden auf ``true`` gesetzt — GLM-5.3-Flash EXL3 fährt
+Vision, live bewiesen (06.09.2026, rotes Testbild → "Rot"). Alles andere
+(z.B. Qwen3.8 Flash Next, aber auch ``glm53-dflash-sparks`` — nur die
+EXL3-Variante ist live bewiesen, DFlash bleibt ``false`` bis zum eigenen
+Beweis) bleibt ``false``. Ein frischer/öffentlicher Checkout ohne passende
+Zeilen führt ein No-Op-UPDATE aus — harmlos.
+
+Review-Fund (06.09.2026): die erste Fassung traf die Slot-Zeile der laufenden
+Box nicht — ihr ``model_identifier`` steht als ``GLM-5.3-Flash-EXL3`` in der
+DB (mit Punkt/Bindestrichen), nicht als zusammengeschriebenes ``glm53``, und
+enthält auch nicht das Wort "vision". Zwei Nachbesserungen:
+
+1. Das Namensmuster deckt jetzt explizit ``GLM-5.3-Flash-EXL3`` ab (als
+   Teilstring, ``ILIKE``, unabhängig von Gross-/Kleinschreibung) — zusätzlich
+   zum Katalog-Slug ``glm53-exl3%``.
+2. Ein zweiter Schritt zieht jede Slot-Zeile (``is_slot = true``) nach, deren
+   ``model_identifier`` exakt mit einer bereits als vision-fähig erkannten
+   Zeile DERSELBEN Box (``host_id``) übereinstimmt — unabhängig davon, ob ihr
+   eigener Name/Slug auf ein Muster passt. Eine Slot-Zeile serviert immer
+   genau das, was das aktuell laufende Rezept serviert; sie MUSS also dessen
+   Vision-Fähigkeit übernehmen, sonst bliebe die Box nach jedem Neustart des
+   Backends bis zum nächsten Rezept-Wechsel ohne Vision, obwohl sie längst
+   ein vision-fähiges Modell fährt.
 
 Revision ID: 0196_runtime_supports_vision
 Revises: 0195_runtime_serving_since
@@ -46,10 +65,30 @@ down_revision = "0195_runtime_serving_since"
 branch_labels = None
 depends_on = None
 
+# Nur die EXL3-Variante ist live bewiesen (06.09.2026) — ``glm53-dflash-
+# sparks``/DFlash bleibt bewusst aussen vor, bis sie ihren eigenen Beweis hat.
 _SEED_WHERE = """
     display_name ILIKE '%vision%'
     OR model_identifier ILIKE '%vision%'
-    OR slug ILIKE 'glm53%'
+    OR slug ILIKE 'glm53-exl3%'
+    OR model_identifier ILIKE '%glm-5.3-flash-exl3%'
+"""
+
+# Eine Slot-Zeile serviert IMMER genau das, was das aktuell laufende Rezept
+# auf derselben Box serviert — ihre Vision-Fähigkeit folgt also der Zeile mit
+# demselben model_identifier auf demselben Host, unabhängig vom eigenen
+# Namen/Slug (der bei einer Slot-Zeile "<Box> :8000" lautet, nie das Rezept
+# nennt).
+_SLOT_SYNC_WHERE = """
+    is_slot = true
+    AND supports_vision = false
+    AND EXISTS (
+        SELECT 1 FROM runtimes AS src
+        WHERE src.host_id = runtimes.host_id
+          AND src.model_identifier = runtimes.model_identifier
+          AND src.supports_vision = true
+          AND src.id != runtimes.id
+    )
 """
 
 
@@ -74,6 +113,7 @@ def upgrade() -> None:
     )
     op.execute(f"UPDATE runtimes SET supports_vision = true WHERE {_SEED_WHERE}")
     op.execute(f"UPDATE local_recipes SET supports_vision = true WHERE {_SEED_WHERE}")
+    op.execute(f"UPDATE runtimes SET supports_vision = true WHERE {_SLOT_SYNC_WHERE}")
 
 
 def downgrade() -> None:
