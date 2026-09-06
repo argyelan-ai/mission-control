@@ -171,6 +171,18 @@ class LocalRecipe(SQLModel, table=True):
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     notes: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
+    # Vision-Fähigkeit (W3, 06.09.2026): kann dieses Rezept Bilder lesen? Der
+    # Rezept-Umschalter kopiert diesen Wert beim Start in die Instanz-Zeile
+    # (services.recipe_switcher.build_runtime_from_recipe) UND in die
+    # Slot-Zeile der Box (services.slot_runtimes.write_slot_state) — siehe
+    # runtimes.supports_vision für den vollen Weg zu omp. Default false: ein
+    # neu importiertes Rezept blockt Bilder, bis jemand es als vision-fähig
+    # markiert.
+    supports_vision: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+
     # Operator decision — a refresh may update every other field but never
     # flips this back on (services/local_registry._apply_update).
     enabled: bool = Field(

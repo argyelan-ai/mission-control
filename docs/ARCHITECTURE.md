@@ -1349,6 +1349,15 @@ genommenen Weg im Feld `mode`). Die Agenten-Entrypoints brechen ausserdem nicht
 mehr sofort ab, wenn noch kein Modell da ist, sondern fragen bis zu 30 Minuten
 lang nach — „kein Modell" heisst hier meist „die Box lädt gerade".
 
+**Vision-Weitergabe (W3, 06.09.2026, ADR-078 Nachtrag):** `runtimes.
+supports_vision` / `local_recipes.supports_vision` (Migration 0196) laufen
+über denselben Reload-Kanal wie Modellname/Fenster — `build_runtime_env` setzt
+`OMP_MODEL_INPUT` (`text`|`text,image`), `render-omp-config.sh` rendert daraus
+`input:` in models.yml plus `omp config set modelRoles.vision` (nur wenn
+vision-fähig) bzw. `images.blockImages: true` (sonst) — Letzteres verhindert,
+dass omp bei fehlender Vision-Rolle auf einen ungeprüften externen
+Standard-Provider ausweicht (live am omp-Binary geprüft, siehe ADR-078).
+
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
 - **Pfad:** `~/.mc/vault/`

@@ -887,6 +887,10 @@ async def build_runtime_from_recipe(
         host_id=host.id,
         max_context_len=recipe.context_len,
         topology={"nodes": recipe_nodes(recipe.topology), "recipe_slug": recipe.slug},
+        # Vision-Fähigkeit (W3, 06.09.2026) vom Katalog in die Instanz —
+        # ohne diese Kopie bliebe jede frisch angelegte Rezept-Instanz beim
+        # sicheren Default false, egal was der Katalog sagt.
+        supports_vision=recipe.supports_vision,
         enabled=True,
     )
 
@@ -1165,6 +1169,7 @@ async def start_recipe_on_host(
                 host.id,
                 model=recipe.model_identifier,
                 context_len=recipe.context_len,
+                supports_vision=recipe.supports_vision,
             )
             # …und die Agenten an dieser Zeile müssen es auch erfahren.
             # Warum HIER und nicht beim Wächter (Live-Befund 06.09.2026): den

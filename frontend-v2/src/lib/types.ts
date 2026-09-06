@@ -1836,6 +1836,10 @@ export interface Runtime {
   supports_tools: boolean;
   supports_reasoning: boolean;
   supports_streaming: boolean;
+  /** Vision-Fähigkeit (W3, 06.09.2026): kann der servierte Motor Bilder lesen?
+   *  Getragen an omp via OMP_MODEL_INPUT (models.yml `input:` +
+   *  `modelRoles.vision` / `images.blockImages`). */
+  supports_vision: boolean;
   preferred_context_len: number;
   max_context_len: number;
   gpu_profile: string;
@@ -2196,6 +2200,7 @@ export interface RuntimeCreate {
   supports_tools?: boolean;
   supports_reasoning?: boolean;
   supports_streaming?: boolean;
+  supports_vision?: boolean;
   preferred_context_len?: number;
   max_context_len?: number;
   gpu_profile?: string;

@@ -106,6 +106,7 @@ async def seed_runtimes(session: AsyncSession) -> tuple[int, int]:
             supports_tools=bool(entry.get("supports_tools", False)),
             supports_reasoning=bool(entry.get("supports_reasoning", False)),
             supports_streaming=bool(entry.get("supports_streaming", True)),
+            supports_vision=bool(entry.get("supports_vision", False)),
             preferred_context_len=entry.get("preferred_context_len"),
             max_context_len=entry.get("max_context_len"),
             gpu_profile=entry.get("gpu_profile"),
