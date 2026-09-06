@@ -1310,10 +1310,111 @@ _OPENCLAUDE_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = tuple(
     )
 )
 
+# omp (oh-my-pi) hat ebenfalls eine eigene Builtin-Liste — live durch den
+# Kommando-Picker geblaettert (omp v18.1.10, 06.09.2026, Wegwerf-Session
+# ``omp --no-session --no-tools`` in einem omp-Container). Kein /effort,
+# kein /help, kein /thinking: die Denk-Stufe wechselt omp per Shift+Tab
+# (s. ``_OMP_THINKING_LEVELS``), nicht per Kommando.
+#
+# Beschreibungen woertlich aus dem Picker. Zeilen der Form "Plan: off",
+# "Model: <aktuelles Modell>", "Compact: context 1% used" sind dort
+# Zustands-Momentaufnahmen, keine Beschreibung -> bewusst ``None``, sonst
+# behauptet die Palette einen Zustand, der laengst nicht mehr stimmt.
+_OMP_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
+    {"name": "security", "description": 'Plan, run, inspect, import, and compare OMP-native security scans'},
+    {"name": "settings", "description": 'Open settings menu'},
+    {"name": "setup", "description": 'Open provider setup'},
+    {"name": "plan", "description": None},
+    {"name": "plan-review", "description": None},
+    {"name": "vibe", "description": None},
+    {"name": "goal", "description": None},
+    {"name": "guided-goal", "description": 'Have the agent interview you in chat, then set up goal mode'},
+    {"name": "loop", "description": None},
+    {"name": "queue", "description": 'Queue a message for after the agent yields'},
+    {"name": "model", "description": None},
+    {"name": "switch", "description": None},
+    {"name": "fast", "description": None},
+    {"name": "skillful", "description": None},
+    {"name": "extended-context", "description": None},
+    {"name": "computer", "description": None},
+    {"name": "prewalk", "description": 'Switch to a fast/cheap model at the next action (works even without --prewalk)'},
+    {"name": "advisor", "description": None},
+    {"name": "export", "description": 'Export session to HTML file'},
+    {"name": "trace", "description": "Open this session's trace in the stats dashboard"},
+    {"name": "dump", "description": 'Copy session transcript to clipboard (and write LLM request JSON to tmp)'},
+    {"name": "share", "description": 'Share session via an encrypted link (share server or secret gist)'},
+    {"name": "collab", "description": None},
+    {"name": "join", "description": 'Join a shared collab session'},
+    {"name": "leave", "description": None},
+    {"name": "browser", "description": None},
+    {"name": "copy", "description": 'Pick text or code from the conversation to copy'},
+    {"name": "open", "description": 'Open the last link from the conversation in your browser (or pick one with /copy)'},
+    {"name": "todo", "description": None},
+    {"name": "session", "description": 'Session management commands'},
+    {"name": "jobs", "description": None},
+    {"name": "usage", "description": 'Show provider usage and limits'},
+    {"name": "stats", "description": 'Launch the local stats dashboard'},
+    {"name": "changelog", "description": 'Show changelog entries'},
+    {"name": "hotkeys", "description": 'Show all keyboard shortcuts'},
+    {"name": "tools", "description": None},
+    {"name": "context", "description": None},
+    {"name": "extensions", "description": 'Open Extension Control Center dashboard'},
+    {"name": "agents", "description": 'Open the agents hub (per-agent model, prewalk, and advisor)'},
+    {"name": "git", "description": 'Open the git UI (split diff viewer, staging, commit composer)'},
+    {"name": "hub", "description": 'Open the live Agent Hub'},
+    {"name": "branch", "description": 'Rewind to a previous message, keeping the old path as a branch'},
+    {"name": "fork", "description": 'Create a new fork from a previous message'},
+    {"name": "tree", "description": 'Navigate session tree (switch branches)'},
+    {"name": "login", "description": None},
+    {"name": "logout", "description": 'Logout from OAuth provider'},
+    {"name": "mcp", "description": 'Manage MCP servers (add, list, remove, test)'},
+    {"name": "ssh", "description": 'Manage SSH hosts (add, list, remove)'},
+    {"name": "new", "description": 'Start a new session'},
+    {"name": "fresh", "description": None},
+    {"name": "clear", "description": None},
+    {"name": "drop", "description": 'Delete the current session and start a new one'},
+    {"name": "compact", "description": None},
+    {"name": "shake", "description": 'Drop heavy content from context (tool results, large blocks)'},
+    {"name": "handoff", "description": 'Hand off session context to a new session'},
+    {"name": "resume", "description": 'Resume a different session'},
+    {"name": "pin", "description": 'Pin or unpin a session at the top of the resume list'},
+    {"name": "btw", "description": 'Ask an ephemeral side question using the current session context'},
+    {"name": "tan", "description": 'Run a full background agent on tangential work'},
+    {"name": "omfg", "description": 'Forge a TTSR rule from a complaint to stop a recurring behavior'},
+    {"name": "cleanse", "description": 'Detect and fix project diagnostics with weighted parallel subagents'},
+    {"name": "retry", "description": 'Retry the last failed agent turn'},
+    {"name": "debug", "description": 'Open debug tools selector'},
+    {"name": "memory", "description": 'Inspect and operate memory maintenance'},
+    {"name": "rename", "description": 'Rename the current session'},
+    {"name": "move", "description": 'Move the current session to a different directory'},
+    {"name": "wt", "description": 'Move this session into a new worktree, changes included'},
+    {"name": "add-dir", "description": 'Add a workspace directory to this session (multi-root)'},
+    {"name": "remove-dir", "description": 'Remove a workspace directory from this session'},
+    {"name": "dirs", "description": "List this session's workspace directories"},
+    {"name": "exit", "description": 'Exit the application'},
+    {"name": "restart", "description": 'Restart omp with the same launch flags, resuming this session'},
+    {"name": "marketplace", "description": 'Manage marketplace plugin sources and installed plugins'},
+    {"name": "plugins", "description": 'View and manage installed plugins'},
+    {"name": "reload-plugins", "description": 'Reload all plugins (skills, commands, hooks, tools, agents, MCP)'},
+    {"name": "force", "description": None},
+    {"name": "live", "description": 'Start Codex-backed realtime voice mode'},
+    {"name": "pause", "description": 'Freeze all agents (main, subagents, advisor) until resumed'},
+    {"name": "quit", "description": 'Quit the application'},
+    {"name": "autoresearch", "description": 'Toggle builtin autoresearch mode, or pass off / clear, or a goal message.'},
+    {"name": "green", "description": 'Generate a prompt to iterate on CI failures until the branch is green (bundled)'},
+    {"name": "review", "description": 'Launch interactive code review (bundled)'},
+    {"name": "init", "description": 'Generate AGENTS.md for current codebase'},
+)
+
 _BUILTIN_SLASH_COMMANDS_BY_HARNESS: dict[str, tuple[dict[str, str | None], ...]] = {
     "claude": _BUILTIN_SLASH_COMMANDS,
     "openclaude": _OPENCLAUDE_BUILTIN_SLASH_COMMANDS,
+    "omp": _OMP_BUILTIN_SLASH_COMMANDS,
 }
+
+# Nur diese Harnesse lesen ``claude-config/skills`` — omp hat eigene
+# Skill-Ordner, die Claude-Skills waeren dort ein falsches Versprechen.
+_HARNESSES_WITH_CLAUDE_CONFIG_SKILLS = frozenset({"claude", "openclaude"})
 
 _SLASH_COMMANDS_CACHE_TTL_SECONDS = 60
 _slash_commands_cache: dict[str, tuple[float, list[dict[str, str | None]]]] = {}
@@ -1434,9 +1535,11 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     only: every other runtime gets builtins alone (no ``claude-config``
     mount to scan for skills)."""
     # Die Builtins sind CLI-Vokabular und pro Harness verschieden. Fuer eine
-    # fremde CLI (kimi, omp) waeren sie falsche Versprechen — dort bleibt die
-    # Liste leer, bis deren Harness eigene Kommandos meldet.
-    builtins = _BUILTIN_SLASH_COMMANDS_BY_HARNESS.get(getattr(agent, "harness", None) or "")
+    # fremde CLI ohne aufgenommene Liste (kimi) waeren sie falsche
+    # Versprechen — dort bleibt die Liste leer, bis deren Picker einmal
+    # live geblaettert wurde (claude/openclaude/omp sind aufgenommen).
+    harness = getattr(agent, "harness", None) or ""
+    builtins = _BUILTIN_SLASH_COMMANDS_BY_HARNESS.get(harness)
     if builtins is None:
         return {"slashCommands": []}
 
@@ -1444,7 +1547,7 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
 
     slug = getattr(agent, "slug", None)
     runtime = getattr(agent, "agent_runtime", None)
-    if runtime == "cli-bridge" and slug:
+    if runtime == "cli-bridge" and slug and harness in _HARNESSES_WITH_CLAUDE_CONFIG_SKILLS:
         commands = commands + await _discover_skill_commands(slug)
 
     return {"slashCommands": commands}

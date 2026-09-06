@@ -1206,6 +1206,43 @@ async def test_capabilities_foreign_cli_gets_nothing_claude_specific():
             await agent_chat_input.set_effort(agent, "high")
 
 
+async def test_slash_command_capabilities_omp_lists_omp_builtins(monkeypatch, tmp_path):
+    """omp bekam seit 18.08.2026 eine LEERE Palette („bis deren Harness eigene
+    Kommandos meldet"). Marks Befund 05.09.2026: der Composer zeigt dem
+    omp-Agenten beim Tippen von "/" nichts. Die omp-Builtins wurden live durch
+    den Picker geblaettert (omp v18.1.10, Wegwerf-Session) — sie muessen
+    kommen, Claude-Vokabular (/effort, /help) darf NICHT dabei sein, und die
+    claude-config-Skills gehoeren nicht in eine omp-Palette (omp liest den
+    Ordner nicht)."""
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
+    skills = tmp_path / ".mc" / "agents" / "ompy" / "claude-config" / "skills" / "mc-tdd"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text("---\nname: mc-tdd\ndescription: TDD\n---\n")
+    agent_chat_input._slash_commands_cache.clear()
+
+    agent = _StubAgent(slug="ompy", agent_runtime="cli-bridge", harness="omp")
+    names = [c["name"] for c in (await agent_chat_input.slash_command_capabilities(agent))["slashCommands"]]
+
+    for expected in ("compact", "model", "new", "shake", "autoresearch", "clear"):
+        assert expected in names
+    for foreign in ("effort", "help", "mc-tdd"):
+        assert foreign not in names
+    assert len(names) == len(set(names))
+
+    # Zustandstexte („Plan: off", „Model: …") sind Momentaufnahmen, keine
+    # Beschreibung -> bewusst leer; echte Einzeiler stehen woertlich drin.
+    by_name = {c["name"]: c["description"] for c in agent_chat_input._OMP_BUILTIN_SLASH_COMMANDS}
+    assert by_name["plan"] is None
+    assert by_name["model"] is None
+    assert by_name["shake"] == "Drop heavy content from context (tool results, large blocks)"
+
+    # kimi bleibt leer — dort ist die Liste weiterhin nicht aufgenommen.
+    kimi = _StubAgent(slug="kimi", agent_runtime="cli-bridge", harness="kimi")
+    assert await agent_chat_input.slash_command_capabilities(kimi) == {"slashCommands": []}
+
+
 async def test_effort_capabilities_host_claude_gets_ladder_but_no_switch(monkeypatch, tmp_path):
     """Boss-Gestalt (host + harness=claude, 18.08.2026): die Stufenleiter des
     Harness kommt mit, das Schaltrecht nicht — das Frontend proportioniert
