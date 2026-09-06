@@ -1930,8 +1930,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ context_length: contextLength ?? null }),
       }),
-    stop: (id: string): Promise<RuntimeActionResult> =>
-      request(`/api/v1/runtimes/${id}/stop`, { method: "POST" }),
+    stop: (id: string, opts?: { force?: boolean }): Promise<RuntimeActionResult> =>
+      request(
+        `/api/v1/runtimes/${id}/stop${opts?.force ? "?force=true" : ""}`,
+        { method: "POST" },
+      ),
     restart: (id: string): Promise<RuntimeActionResult> =>
       request(`/api/v1/runtimes/${id}/restart`, { method: "POST" }),
     // Wake a power_managed runtime's host via Wake-on-LAN (e.g. PORSCHE).
