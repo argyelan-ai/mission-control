@@ -1318,7 +1318,12 @@ loeschen bei derselben Schwelle wie `runtime.unreachable`), zusaetzlich neu
 gesetzt in `slot_runtimes.write_slot_state` beim bestaetigten Rezept-Start —
 sonst zeigte die Slot-Zeile waehrend der Schalt-Gnadenfrist die Uptime des
 VORHERIGEN Modells weiter. `GET /runtimes/live-status` liefert den Wert als
-ISO-String je Zeile.
+ISO-String je Zeile. Frontend (#443-Nachlese, `stage/Stage.tsx` +
+`stage/uptimeFormat.ts`): die Ecke rechts oben zeigt "up 2 h 41"/"up 34 min"
+statt nur "serving", sobald `live.serving_since` (Fallback `runtime.
+serving_since`) vorliegt — Minuten-Aufloesung, kein eigener Ticker (die
+5s-Puls-Abfrage der Karte erzwingt ohnehin genug Re-Renders). Fehlt der Wert
+oder ist die Runtime nicht im Zustand "serving", bleibt es beim Wort.
 
 Uebergangszeit (8-30 min Ladezeit)
   runtime_grace.mark_switching(slot)          Wechsel ist kein Ausfall
