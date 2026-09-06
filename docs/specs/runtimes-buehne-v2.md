@@ -46,7 +46,7 @@ Stop existiert (`POST /runtimes/{id}/stop`, `stop_ssh_process` mit Rezept-`stop_
 ## 7. Umsetzung — 3 Wellen, hinter Schalter `NEXT_PUBLIC_RUNTIMES_STAGE=v2` (Default v1 bis Abnahme)
 | PR | Inhalt | Live-Gate |
 |---|---|---|
-| 1 Puls | `runtime_pulse.py`, Redis-Ring, `GET /hosts/{id}/pulse`, Settings `RUNTIME_PULSE_INTERVAL` (0 = aus), Tests mit Fake-Metrik | Bench gegen Sparky → Bursts sichtbar; Engine weg → leer, kein 500 |
+| 1 Puls | `runtime_pulse.py`, Redis-Ring, `GET /hosts/{id}/pulse`, Settings `RUNTIME_PULSE_INTERVAL` (0 = aus), Tests mit Fake-Metrik | Bench gegen die Head-Box → Bursts sichtbar; Engine weg → leer, kein 500 |
 | 2 Stop+Autostart | Kopplung + Event + Dispatch-Gate, Tests | Stop via API → `autostart_enabled=false`, 20 min kein Wächter-Start; Stop bei arbeitendem Agent → 409 |
 | 3 Telemetrie-Verlauf | 1-h-Ring + Endpoint, Tests | nach 10 min 120 Punkte, Werte ≈ nvidia-smi |
 | 4 Stage | `Stage`, `FreeBox`, `AsleepBox`, `FlowEdge`, `HeatStrip`, `KpiRow`, `ActionBar`; Zustände Duo/Solo/Leer/Wechsel/Störung; ersetzt SlotStage/WorkerTile im Fleet-Tab hinter dem Schalter; Vitest | Marks Klick-Abnahme Desktop + Handy; Umschalten über neue Karte; Stop → „Leer" |
