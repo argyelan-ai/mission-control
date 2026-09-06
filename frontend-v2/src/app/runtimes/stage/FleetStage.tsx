@@ -161,6 +161,11 @@ interface CockpitState {
   members: BoxCockpitMember[];
   runtime: Runtime | null;
   activeHostId: string;
+  /** Review #440 Fund 2 (06.09.2026): das Zahnrad, das das Cockpit geöffnet
+   *  hat — beim Schliessen bekommt es den Fokus zurück (Spec §4 "Fokus-
+   *  Rückgabe"). `document.activeElement` ist im Klick-Handler synchron
+   *  bereits der geklickte Button, darum kein eigener Ref pro Aufrufer nötig. */
+  triggerElement: HTMLElement | null;
 }
 
 export function FleetStage({
@@ -183,6 +188,17 @@ export function FleetStage({
   // kein Box-Cockpit).
   const [cockpit, setCockpit] = useState<CockpitState | null>(null);
 
+  // Der Klick-Handler ruft dies synchron auf — `document.activeElement` ist
+  // in diesem Moment noch der geklickte Zahnrad-Knopf.
+  const openCockpit = (payload: Omit<CockpitState, "triggerElement">) => {
+    const triggerElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setCockpit({ ...payload, triggerElement });
+  };
+  const closeCockpit = () => {
+    cockpit?.triggerElement?.focus();
+    setCockpit(null);
+  };
+
   const freeGroups = stageGroups.filter((g) => freeHostIds.has(g.host.id));
   const isFullyEmpty = stages.length === 0;
 
@@ -199,7 +215,7 @@ export function FleetStage({
               hostIds={hostIds}
               groupsByHostId={groupsByHostId}
               live={live}
-              onOpenBoxCockpit={(members, rt, activeHostId) => setCockpit({ members, runtime: rt, activeHostId })}
+              onOpenBoxCockpit={(members, rt, activeHostId) => openCockpit({ members, runtime: rt, activeHostId })}
             />
           ))}
           {freeGroups.map((g) => {
@@ -211,7 +227,7 @@ export function FleetStage({
                 slot={slot}
                 device={devices.get(g.host.id)}
                 onOpenCockpit={() =>
-                  setCockpit({
+                  openCockpit({
                     members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
                     runtime: slot,
                     activeHostId: g.host.id,
@@ -232,7 +248,7 @@ export function FleetStage({
             host={g.host}
             runtime={rt}
             onOpenCockpit={() =>
-              setCockpit({
+              openCockpit({
                 members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
                 runtime: rt,
                 activeHostId: g.host.id,
@@ -244,7 +260,7 @@ export function FleetStage({
 
       <BoxCockpit
         open={cockpit != null}
-        onClose={() => setCockpit(null)}
+        onClose={closeCockpit}
         members={cockpit?.members ?? []}
         activeHostId={cockpit?.activeHostId ?? null}
         onSwitchActive={(hostId) => setCockpit((cur) => (cur ? { ...cur, activeHostId: hostId } : cur))}

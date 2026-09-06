@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 interface SlideOverPanelProps {
   open: boolean;
@@ -36,6 +37,12 @@ export function SlideOverPanel({
   hideHeader = false,
 }: SlideOverPanelProps) {
   const prefersReducedMotion = useReducedMotion();
+
+  // Review #440 Fund 4 (06.09.2026): keiner der fünf Nutzer rief den
+  // bestehenden Hook auf — Hintergrund konnte auf iOS unter dem offenen
+  // Sheet weiterscrollen. Zentral hier statt in jedem Aufrufer: behebt es
+  // für alle fünf auf einen Schlag.
+  useBodyScrollLock(open);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

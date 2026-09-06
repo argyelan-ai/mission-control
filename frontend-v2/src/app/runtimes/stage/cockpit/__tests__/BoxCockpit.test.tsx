@@ -260,6 +260,24 @@ describe("BoxCockpit", () => {
     expect(copyBtn.textContent).toContain("192.0.2.20");
   });
 
+  it("touch targets: close button and footer actions are >= 44px (Review #440 Fund 3)", async () => {
+    renderWithQuery(
+      <BoxCockpit open onClose={() => {}} members={[headMember]} activeHostId="spark" onSwitchActive={() => {}} runtime={makeRuntime()} />
+    );
+    const closeBtn = await screen.findByTestId("cockpit-close");
+    expect(closeBtn.className).toMatch(/\bmin-h-touch\b/);
+    expect(closeBtn.className).toMatch(/\bmin-w-touch\b/);
+    // The fixed 36px inline size the review flagged must be gone — height
+    // now comes from the min-h-touch utility class, not an inline style.
+    expect(closeBtn.style.width).toBe("");
+    expect(closeBtn.style.height).toBe("");
+
+    for (const testId of ["cockpit-reprobe", "cockpit-restart", "cockpit-stop"]) {
+      const btn = await screen.findByTestId(testId);
+      expect(btn.className).toMatch(/\bmin-h-touch\b/);
+    }
+  });
+
   it("Re-probe and Restart call the runtime actions", async () => {
     const probeSpy = vi.spyOn(api.runtimes, "probeModel").mockResolvedValue({
       slug: "qwen38-flash-next", old_model_identifier: "a", new_model_identifier: "a", changed: false,

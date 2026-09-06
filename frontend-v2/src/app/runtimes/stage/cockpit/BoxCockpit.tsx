@@ -196,8 +196,8 @@ export function BoxCockpit({
             onClick={onClose}
             aria-label={t("closeAria")}
             data-testid="cockpit-close"
-            className="flex items-center justify-center rounded-md cursor-pointer shrink-0"
-            style={{ width: 36, height: 36, border: `1px solid ${C.borderActive}`, gridColumn: 2, gridRow: "1 / 3" }}
+            className="flex items-center justify-center rounded-md cursor-pointer shrink-0 min-h-touch min-w-touch"
+            style={{ border: `1px solid ${C.borderActive}`, gridColumn: 2, gridRow: "1 / 3" }}
           >
             <X size={14} style={{ color: C.textSecondary }} />
           </button>
@@ -300,7 +300,7 @@ export function BoxCockpit({
             onClick={() => probeMutation.mutate()}
             disabled={!runtime || probeMutation.isPending}
             data-testid="cockpit-reprobe"
-            className="inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2.5 rounded-md cursor-pointer disabled:opacity-40"
+            className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
             style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
           >
             <RefreshCw size={12} />
@@ -311,7 +311,7 @@ export function BoxCockpit({
             onClick={() => restartMutation.mutate()}
             disabled={!runtime || restartMutation.isPending}
             data-testid="cockpit-restart"
-            className="inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2.5 rounded-md cursor-pointer disabled:opacity-40"
+            className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
             style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
           >
             <RotateCcw size={12} />
@@ -323,7 +323,7 @@ export function BoxCockpit({
             onClick={() => stopMutation.mutate(false)}
             disabled={!runtime || stopMutation.isPending}
             data-testid="cockpit-stop"
-            className="cockpit-ft-stop text-xs px-3 py-2.5 rounded-md cursor-pointer disabled:opacity-40"
+            className="cockpit-ft-stop text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
             style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
           >
             {t("stopAutostartOff")}
