@@ -2,12 +2,12 @@
 
 /**
  * PhaseBar — der Wechsel-Zustand ersetzt die Aktionen (Spec §2 Zone 4,
- * "Während Wechsel"). Wiederverwendet SlotStage's PhaseIndicator statt einer
- * zweiten evicting→launching→loading-Leiste.
+ * "Während Wechsel"). Wiederverwendet PhaseIndicator statt einer zweiten
+ * evicting→launching→loading-Leiste.
  */
 
 import { C } from "@/lib/colors";
-import { PhaseIndicator } from "../SlotStage";
+import { PhaseIndicator } from "./PhaseIndicator";
 
 export function PhaseBar({
   phase,

@@ -12,6 +12,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { C } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
@@ -201,62 +202,84 @@ export function FleetStage({
 
   const freeGroups = stageGroups.filter((g) => freeHostIds.has(g.host.id));
   const isFullyEmpty = stages.length === 0;
+  const reduceMotion = useReducedMotion();
+
+  // Duo→Solo-Übergang (Spec, PR 6 "Schliff"): löst sich ein Verbund auf (eine
+  // Mitglied-Box wird frei) oder startet ein Solo-Rezept auf der zweiten Box,
+  // verschwindet die alte Karte nicht abrupt — sie blendet aus, während die
+  // neue FreeBox/Stage-Karte mit demselben Fade darunter erscheint. Stable
+  // keys (runtime.id / host.id, unchanged from before) + `layout` auf jeder
+  // Karte lassen die übrigen Karten sanft nachrücken statt zu springen.
+  const cardMotionProps = reduceMotion
+    ? {}
+    : {
+        layout: true as const,
+        initial: { opacity: 0, y: 12 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: -12 },
+        transition: { duration: 0.2, ease: "easeOut" as const },
+      };
 
   return (
     <div className="flex flex-col gap-6" data-testid="fleet-stage">
       {isFullyEmpty && freeGroups.length > 0 && sleepingGroups.length === 0 ? (
         <EmptyStage groups={freeGroups} onOpenCockpit={onOpen} />
       ) : (
-        <>
+        <AnimatePresence initial={false}>
           {stages.map(({ runtime, hostIds }) => (
-            <StageRow
-              key={runtime.id}
-              runtime={runtime}
-              hostIds={hostIds}
-              groupsByHostId={groupsByHostId}
-              live={live}
-              onOpenBoxCockpit={(members, rt, activeHostId) => openCockpit({ members, runtime: rt, activeHostId })}
-            />
+            <motion.div key={runtime.id} {...cardMotionProps}>
+              <StageRow
+                runtime={runtime}
+                hostIds={hostIds}
+                groupsByHostId={groupsByHostId}
+                live={live}
+                onOpenBoxCockpit={(members, rt, activeHostId) => openCockpit({ members, runtime: rt, activeHostId })}
+              />
+            </motion.div>
           ))}
           {freeGroups.map((g) => {
             const slot = pickSlot(g);
             return (
-              <FreeBox
-                key={g.host.id}
+              <motion.div key={g.host.id} {...cardMotionProps}>
+                <FreeBox
+                  host={g.host}
+                  slot={slot}
+                  device={devices.get(g.host.id)}
+                  onOpenCockpit={() =>
+                    openCockpit({
+                      members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
+                      runtime: slot,
+                      activeHostId: g.host.id,
+                    })
+                  }
+                />
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      )}
+      <AnimatePresence initial={false}>
+        {sleepingGroups.map((g) => {
+          const rt = g.runtimes.find((r) => r.power_managed === true);
+          if (!rt) return null;
+          const slot = pickSlot(g);
+          return (
+            <motion.div key={g.host.id} {...cardMotionProps}>
+              <AsleepBox
                 host={g.host}
-                slot={slot}
-                device={devices.get(g.host.id)}
+                runtime={rt}
                 onOpenCockpit={() =>
                   openCockpit({
                     members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
-                    runtime: slot,
+                    runtime: rt,
                     activeHostId: g.host.id,
                   })
                 }
               />
-            );
-          })}
-        </>
-      )}
-      {sleepingGroups.map((g) => {
-        const rt = g.runtimes.find((r) => r.power_managed === true);
-        if (!rt) return null;
-        const slot = pickSlot(g);
-        return (
-          <AsleepBox
-            key={g.host.id}
-            host={g.host}
-            runtime={rt}
-            onOpenCockpit={() =>
-              openCockpit({
-                members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
-                runtime: rt,
-                activeHostId: g.host.id,
-              })
-            }
-          />
-        );
-      })}
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
 
       <BoxCockpit
         open={cockpit != null}

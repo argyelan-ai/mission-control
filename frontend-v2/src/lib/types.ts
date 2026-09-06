@@ -1774,7 +1774,13 @@ export type RuntimeType =
    *  at the type level while rendering fine at runtime. */
   | "omp"
   | "grok"
-  | "kimi";
+  | "kimi"
+  /** Jarvis Voice's two hosted-API arms (ADR-074, PR #339, unmerged as of
+   *  PR 6 "Schliff" — added here only so `CLOUD_TYPES` can route them
+   *  correctly once the backend/PR #339 lands; no other code path assumes
+   *  a runtime actually carries this value yet). */
+  | "voice_openai"
+  | "voice_xai";
 
 export interface Runtime {
   // On the GET /runtimes (legacy JSON) response `id` is the slug.

@@ -28,10 +28,6 @@ ENV PUBLIC_HOST=$PUBLIC_HOST
 # Brand wordmark (NEXT_PUBLIC_* is baked at build time)
 ARG NEXT_PUBLIC_BRAND=
 ENV NEXT_PUBLIC_BRAND=$NEXT_PUBLIC_BRAND
-# Runtimes-Bühne v2 (docs/specs/runtimes-buehne-v2.md §7): "v2" schaltet die neue Fleet-Ansicht ein, leer = v1.
-ARG NEXT_PUBLIC_RUNTIMES_STAGE=
-ENV NEXT_PUBLIC_RUNTIMES_STAGE=$NEXT_PUBLIC_RUNTIMES_STAGE
-
 RUN npm run build
 
 # Production runner
