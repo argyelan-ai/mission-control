@@ -92,11 +92,19 @@ COPY bridge.py            /opt/omp-bridge/bridge.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
 COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
+# render-omp-config.sh (ADR-078): schreibt models.yml + omp.env. Der Entrypoint
+# ruft es beim Start; MC ruft es im LAUFENDEN Container per
+# `docker exec <container> render-omp-config.sh`, wenn hinter der Box-URL ein
+# anderes Modell startet — das ersetzt den Container-Neustart. Deshalb liegt es
+# ZUSÄTZLICH als Symlink in PATH: `docker exec` startet keine Login-Shell und
+# löst nur absolute Pfade oder PATH-Einträge auf.
+COPY render-omp-config.sh /opt/omp-bridge/render-omp-config.sh
 COPY entrypoint.sh        /usr/local/bin/entrypoint.sh
 COPY omp-recycler.sh      /usr/local/bin/omp-recycler.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/omp-recycler.sh \
-        /opt/omp-bridge/launch-omp.sh \
-    && ln -sf /opt/omp-bridge/launch-omp.sh /usr/local/bin/launch-omp.sh
+        /opt/omp-bridge/launch-omp.sh /opt/omp-bridge/render-omp-config.sh \
+    && ln -sf /opt/omp-bridge/launch-omp.sh /usr/local/bin/launch-omp.sh \
+    && ln -sf /opt/omp-bridge/render-omp-config.sh /usr/local/bin/render-omp-config.sh
 
 USER agent
 WORKDIR /home/agent
