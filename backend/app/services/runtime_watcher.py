@@ -338,6 +338,14 @@ class RuntimeWatcher:
                     severity="warning",
                     detail=detail,
                 )
+                # Laufzeit-Anzeige (W3): dieselbe Schwelle, die den Alarm
+                # auslöst, beendet auch die "seit wann erreichbar"-Uhr — drei
+                # Fehlproben sind derselbe Vertrauensverlust, ob er als
+                # Ereignis gemeldet wird oder nur die Bühne beeinflusst.
+                if runtime.serving_since is not None:
+                    runtime.serving_since = None
+                    session.add(runtime)
+                    await session.commit()
             try:
                 await self._maybe_auto_recover(session, redis, runtime, fails)
             except Exception:  # noqa: BLE001 — an add-on must never be the
@@ -363,6 +371,15 @@ class RuntimeWatcher:
             served_context_len=served_ctx,
             consecutive_failures=0,
         )
+        # Laufzeit-Anzeige (W3): erste erfolgreiche Probe nach einem
+        # Ausfall/Start setzt die Uhr — NUR wenn sie leer ist. Ein bereits
+        # laufendes Modell behält seinen (vom Umschalter gesetzten) Wert über
+        # jede weitere ruhige Probe hinweg; erst der Übergang von "nicht
+        # erreichbar"/"unbekannt" löst ein neues "seit wann" aus.
+        if runtime.serving_since is None:
+            runtime.serving_since = datetime.now(timezone.utc)
+            session.add(runtime)
+            await session.commit()
         try:
             await self._confirm_autostart_recipe(session, runtime)
         except Exception:  # noqa: BLE001 — Buchhaltung darf die Probe nicht kosten

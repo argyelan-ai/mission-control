@@ -21,7 +21,10 @@ from app.models.host import Host
 from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
-from app.services import recipe_switcher, runtime_manager, runtime_readiness, runtime_naming, runtime_stop
+from app.services import (
+    recipe_switcher, runtime_manager, runtime_readiness, runtime_naming,
+    runtime_stop, slot_runtimes,
+)
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
@@ -637,6 +640,10 @@ async def runtimes_live_status(
         # the cockpit can show a pending change the DB does not know about yet.
         served_ctx = data.get("served_context_len")
         data["context_drift"] = bool(served_ctx) and served_ctx != rt.max_context_len
+        # Laufzeit-Anzeige der Bühne (W3, 06.09.2026): serving_since lebt in
+        # der DB-Zeile (runtime_watcher/slot_runtimes setzen es), nicht im
+        # Redis-Snapshot — hier frisch angehängt statt im Wächter dupliziert.
+        data["serving_since"] = rt.serving_since.isoformat() if rt.serving_since else None
         live[rt.slug] = data
     return {
         "live": live,
@@ -844,6 +851,19 @@ async def restart_runtime(
     result = await runtime_manager.restart_runtime(rt, host=host)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
+    # Laufzeit-Anzeige (W3, Review-Fund #443): ein ausgeloester Restart ist
+    # kein Ausfall im Sinne des Waechters (Schalt-Gnadenfrist unterdrueckt die
+    # Fehlerzaehlung) — also setzen wir serving_since hier von Hand zurueck,
+    # auf der Zeile selbst UND ihrer Slot-Zeile (falls vorhanden).
+    runtime_uuid = rt["id"] if isinstance(rt["id"], uuid.UUID) else uuid.UUID(str(rt["id"]))
+    runtime_row = await session.get(Runtime, runtime_uuid)
+    if runtime_row is not None:
+        try:
+            await slot_runtimes.reset_serving_since_for_restart(session, runtime_row)
+        except Exception:  # noqa: BLE001 — ein erfolgreicher Restart bleibt erfolgreich
+            logger.exception(
+                "serving_since-Reset nach Restart fehlgeschlagen für %s", runtime_row.slug
+            )
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result
 

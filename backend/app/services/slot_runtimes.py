@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -159,6 +160,17 @@ async def write_slot_state(
     if model and slot.model_identifier != model:
         slot.model_identifier = model
         changed = True
+        # Laufzeit-Anzeige (W3, 06.09.2026): dieser Aufruf ist der bestätigte
+        # Rezept-Start (der einzige Aufrufer ist start_recipe_on_host, direkt
+        # nach dem erfolgreichen Startbefehl). Ohne diese Zeile bliebe die
+        # Slot-Zeile — die über jeden Wechsel hinweg dieselbe DB-Zeile ist —
+        # während der Schalt-Gnadenfrist unverändert erreichbar/unerreichbar
+        # markiert (``runtime_grace`` unterdrückt die Fehler-Schwelle, die
+        # sonst auf NULL setzt), und die Bühne zeigte die Uptime des ALTEN
+        # Modells weiter, obwohl gerade ein anderes einzieht. Bewusst NICHT
+        # "nur wenn leer" wie beim Wächter — jeder bestätigte Start ist ein
+        # neuer Zeitpunkt für die neue Belegung dieser Zeile.
+        slot.serving_since = datetime.now(timezone.utc)
     if context_len and slot.max_context_len != context_len:
         slot.max_context_len = context_len
         # ``preferred`` folgt nur, wo es „nimm das ganze Fenster" ausdrückte
@@ -186,6 +198,37 @@ async def write_slot_state(
         except Exception:  # noqa: BLE001 — ein Cache darf den Start nicht kosten
             logger.debug("slot: Cache-Invalidierung für %s fehlgeschlagen", slot.slug)
     return slot
+
+
+async def reset_serving_since_for_restart(session: AsyncSession, runtime: Runtime) -> None:
+    """Laufzeit-Anzeige (W3, 06.09.2026): ein ausgeloester Restart auf NULL.
+
+    Review-Fund #443: ``POST /{id}/restart`` haengt die Zeile in dieselbe
+    Schalt-Gnadenfrist (``runtime_grace``) wie ein Rezept-Start — und genau
+    diese Gnadenfrist unterdrueckt die Fehlerzaehlung, die ``serving_since``
+    sonst bei drei Fehlproben loescht (``runtime_watcher._probe_one``). Ohne
+    diesen Aufruf zeigte die Buehne nach einem Neustart die Uptime des
+    Modells weiter, das gerade neu laedt — bis zufaellig doch drei Fehlproben
+    durchkamen, oder (Slot-Zeile) bis zum naechsten ECHTEN Modellwechsel.
+
+    Loescht die Zeile selbst UND, wenn vorhanden, die Slot-Zeile derselben Box
+    (Duo: beide teilen dieselbe "seit wann"-Anzeige auf der Karte). Der
+    Waechter setzt beim ersten erfolgreichen Probe danach neu — best effort,
+    ein Fehler hier darf einen erfolgreichen Restart nicht rueckgaengig machen.
+    """
+    changed = False
+    if runtime.serving_since is not None:
+        runtime.serving_since = None
+        session.add(runtime)
+        changed = True
+    if runtime.host_id is not None and not runtime.is_slot:
+        slot = await find_slot_runtime(session, runtime.host_id)
+        if slot is not None and slot.serving_since is not None:
+            slot.serving_since = None
+            session.add(slot)
+            changed = True
+    if changed:
+        await session.commit()
 
 
 async def refresh_slot_display_name(session: AsyncSession, slot: Runtime) -> None:
