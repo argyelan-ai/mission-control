@@ -47,6 +47,7 @@ export function AsleepBox({
       className="rounded-xl overflow-hidden"
       style={{ background: "transparent", border: `1px dashed ${C.border}`, containerType: "inline-size" }}
       data-testid="asleep-box"
+      data-host-slug={host.slug}
     >
       <div className="px-4 pt-4">
         <div className="flex items-center gap-2.5">

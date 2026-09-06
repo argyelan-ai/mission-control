@@ -86,6 +86,11 @@ export function FreeBox({
       className="rounded-xl overflow-hidden stage-card"
       style={{ background: C.bgSurface, border: `1px solid ${C.border}`, containerType: "inline-size" }}
       data-testid="free-box"
+      // Disambiguates one FreeBox from another in tests when several boxes
+      // are free at once — a text-content assertion risks matching a
+      // transient render of the WRONG box's card during data loading (Fund
+      // #442 CI-Flake, PR 6 Nachlese).
+      data-host-slug={host.slug}
     >
       <div className="px-4 pt-4">
         <div className="flex items-center gap-2.5">

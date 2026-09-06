@@ -12,7 +12,6 @@ import {
   ExternalLink,
   Loader2,
   Plus,
-  Power,
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -37,10 +36,9 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
-import { groupRuntimes, pickServing, type HostGroup } from "./grouping";
-import { SlotStage, typeLabel } from "./SlotStage";
+import { groupRuntimes, pickServing } from "./grouping";
+import { typeLabel } from "./runtimeTypeLabel";
 import { FleetStage } from "./stage/FleetStage";
-import { RUNTIMES_STAGE_V2 } from "./stage/flag";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
@@ -694,66 +692,6 @@ function KvResetScheduleToggle() {
   );
 }
 
-// ── Sleeping host line ────────────────────────────────────────────────────────
-// Power-managed hosts (e.g. PORSCHE) with no serving runtime render as a single
-// quiet row instead of a full stage — a stage implies an active GPU slot to
-// inspect, an asleep box is just one action away ("Wecken").
-
-function SleepingHostLine({ group }: { group: HostGroup }) {
-  const t = useTranslations("runtimes");
-  const tSlot = useTranslations("runtimes.slotPage");
-  const queryClient = useQueryClient();
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
-
-  const runtime = group.runtimes.find((rt) => rt.power_managed === true);
-
-  const wakeMutation = useMutation({
-    mutationFn: () => api.runtimes.wake(runtime!.id),
-    onSuccess: (data) => {
-      setActionMsg(data.message);
-      queryClient.invalidateQueries({ queryKey: ["runtimes"] });
-    },
-    onError: () => setActionMsg(t("wakeFailed")),
-  });
-
-  // Nothing to wake — a power-managed host with no bound runtime yet is
-  // reachable via Infrastructure → Hosts, not worth a row here.
-  if (!runtime) return null;
-
-  const isAsleep = runtime.container_status === "asleep";
-  const statusText = isAsleep ? t("sleeping") : t("awakeNoModel");
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div
-        className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg"
-        style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
-      >
-        <span className="text-xs" style={{ color: C.textMuted }}>
-          {tSlot("sleepingLine", { host: group.host.display_name, status: statusText })}
-        </span>
-        <button
-          onClick={() => { setActionMsg(null); wakeMutation.mutate(); }}
-          disabled={wakeMutation.isPending}
-          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shrink-0"
-          style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
-        >
-          {wakeMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
-          {t("wake")}
-        </button>
-      </div>
-      {actionMsg && (
-        <div
-          className="text-[11px] px-2.5 py-1.5 rounded-md"
-          style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
-        >
-          {actionMsg}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Unassigned quiet row ───────────────────────────────────────────────────────
 // Hostless, non-cloud runtimes (e.g. hermes) — never silently hidden, but
 // demoted to a one-line hint instead of a card.
@@ -824,7 +762,7 @@ export default function RuntimesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pageTab, setPageTab] = useState<"fleet" | "cloud" | "models" | "infra">("fleet");
 
-  // SlotStage's "+ Model" (and anyone else firing openModelsTab) must land on
+  // FreeBox/EmptyStage's "add model" actions (and anyone else firing openModelsTab) must land on
   // the Models tab — the inner ModelsSection listener only sets its sub-tab.
   useEffect(() => {
     const onModelsTab = () => setPageTab("models");
@@ -847,13 +785,6 @@ export default function RuntimesPage() {
     placeholderData: () => loadCached<Host[]>("hosts"),
   });
 
-  const { data: lmsData } = useQuery({
-    queryKey: ["lmstudio-models"],
-    queryFn: () => fetchWithCache("lms-models", () => api.lmstudio.list()),
-    placeholderData: () => loadCached<Awaited<ReturnType<typeof api.lmstudio.list>>>("lms-models"),
-    refetchInterval: 15_000,
-  });
-
   // Live status stays uncached on purpose: stale health/reachability claims
   // are exactly what this redesign eliminates. 19 ms from the watcher cache.
   const { data: liveData } = useQuery({
@@ -866,14 +797,11 @@ export default function RuntimesPage() {
   const hosts = hostsData ?? [];
   const live: Record<string, RuntimeLiveStatus> | undefined = liveData?.live;
 
-  const lmsSizeMap = new Map((lmsData?.models ?? []).map((m) => [m.id, m.size_gb]));
-  const getSizeGb = (rt: Runtime) => lmsSizeMap.get(rt.lms_identifier ?? "") ?? undefined;
-
   const groups = groupRuntimes(allRuntimes, hosts);
 
-  // Power-managed hosts render as a quiet sleeping line instead of a full
-  // stage ONLY when nothing is serving AND the group actually carries the
-  // power-managed runtime (the thing SleepingHostLine's "Wecken" button
+  // Power-managed hosts render as AsleepBox (Spec §3 "Blaupause") instead of
+  // a full stage ONLY when nothing is serving AND the group actually carries
+  // the power-managed runtime (the runtime AsleepBox's "Wake" button
   // targets) — a power-managed host whose runtimes happen to lack that flag
   // must still render as a stage, never vanish.
   const sleepingGroups = groups.hosts.filter(
@@ -885,9 +813,9 @@ export default function RuntimesPage() {
   );
   const sleepingHostIds = new Set(sleepingGroups.map((g) => g.host.id));
   // Every other enabled host gets a stage — with runtimes (serving, ready
-  // list, or both) or without (StagePlaceholder). Lifecycle-capability is a
-  // per-runtime detail SlotStage/ReadyList handle themselves; it must not
-  // decide whether the host is visible at all.
+  // list, or both) or without (FreeBox). Lifecycle-capability is a
+  // per-runtime detail FleetStage/RuntimeRegister handle themselves; it must
+  // not decide whether the host is visible at all.
   const stageGroups = groups.hosts.filter(
     (g) => g.host.enabled && !sleepingHostIds.has(g.host.id)
   );
@@ -918,48 +846,25 @@ export default function RuntimesPage() {
             >
               {t("title")}
             </h1>
-            {/* Kein Seiten-Untertitel unter v2 (Spec §2) — die Bühne selbst
-                erklärt den Zustand der Flotte, eine zusätzliche Zeile hier
-                würde das nur doppeln. */}
-            {!RUNTIMES_STAGE_V2 && (
-              <p
-                className="text-[13px] mt-0.5"
-                style={{ color: C.textSecondary }}
-              >
-                {tSlot("subtitle")}
-              </p>
-            )}
+            {/* Kein Seiten-Untertitel (Spec §2) — die Bühne selbst erklärt
+                den Zustand der Flotte, eine zusätzliche Zeile hier würde das
+                nur doppeln. */}
           </div>
 
-          {RUNTIMES_STAGE_V2 ? (
-            <button
-              onClick={() => setAddOpen(true)}
-              aria-label={t("addRuntime")}
-              title={t("addRuntime")}
-              data-testid="add-runtime-icon"
-              className="flex items-center justify-center w-9 h-9 rounded-md transition-all cursor-pointer shrink-0"
-              style={{
-                color: C.accent,
-                border: `1px solid ${C.borderAccent}`,
-                background: C.accentSubtle,
-              }}
-            >
-              <Plus size={14} />
-            </button>
-          ) : (
-            <button
-              onClick={() => setAddOpen(true)}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-              style={{
-                color: C.accent,
-                border: `1px solid ${C.borderAccent}`,
-                background: C.accentSubtle,
-              }}
-            >
-              <Plus size={11} />
-              {t("addRuntime")}
-            </button>
-          )}
+          <button
+            onClick={() => setAddOpen(true)}
+            aria-label={t("addRuntime")}
+            title={t("addRuntime")}
+            data-testid="add-runtime-icon"
+            className="flex items-center justify-center w-9 h-9 rounded-md transition-all cursor-pointer shrink-0"
+            style={{
+              color: C.accent,
+              border: `1px solid ${C.borderAccent}`,
+              background: C.accentSubtle,
+            }}
+          >
+            <Plus size={14} />
+          </button>
         </div>
 
         {isLoading && (
@@ -1040,28 +945,12 @@ export default function RuntimesPage() {
             {pageTab === "fleet" && !isEmpty && (
               <>
                 <div className="flex flex-col gap-6">
-                  {RUNTIMES_STAGE_V2 ? (
-                    <FleetStage
-                      stageGroups={stageGroups}
-                      sleepingGroups={sleepingGroups}
-                      live={live}
-                      onOpen={openPanel}
-                    />
-                  ) : (
-                    <>
-                      {stageGroups.map((g) => (
-                        <SlotStage key={g.host.id} group={g} live={live} sizeGb={getSizeGb} onOpen={openPanel} />
-                      ))}
-
-                      {sleepingGroups.length > 0 && (
-                        <div className="flex flex-col gap-2">
-                          {sleepingGroups.map((g) => (
-                            <SleepingHostLine key={g.host.id} group={g} />
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
+                  <FleetStage
+                    stageGroups={stageGroups}
+                    sleepingGroups={sleepingGroups}
+                    live={live}
+                    onOpen={openPanel}
+                  />
                 </div>
 
                 {unassignedRuntimes.length > 0 && (
