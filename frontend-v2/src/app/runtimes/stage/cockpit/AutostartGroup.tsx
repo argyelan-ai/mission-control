@@ -22,8 +22,9 @@
  * Schlüsselwort erkannt wird — kein Fliesstext, kein Log-Pfad. Lässt sich
  * kein sauberes Wort erkennen, bleibt nur die Zeit stehen.
  *
- * Wiederverwendet dieselbe Query/Mutation/No-Optimistic-Update-Regel wie
- * `HostAutostartRow.tsx` (Karten-Fusszeile) — ein Datenweg, zwei Ansichten.
+ * Wiederverwendet dieselbe Query/Mutation/No-Optimistic-Update-Regel, die vor
+ * PR 6 im inzwischen entfernten `HostAutostartRow.tsx` (v1-Kartenfusszeile)
+ * stand — derselbe Schlüssel lebt jetzt in `hostAutostartKey.ts`.
  */
 
 import { useState } from "react";
@@ -33,7 +34,7 @@ import { useTranslations } from "next-intl";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import { hostAutostartKey } from "../../HostAutostartRow";
+import { hostAutostartKey } from "../../hostAutostartKey";
 
 /** Mono, locale-unabhängig — "09/05 07:47" statt eines lokalisierten Satzes
  *  mit Komma/AM-PM (der Meldungstext, den die Spec verbietet). */

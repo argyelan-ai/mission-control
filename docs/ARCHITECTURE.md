@@ -122,7 +122,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | `/chat` | Gateway Chat, direkte Agent-Kommunikation |
 | `/memory` | 3-Layer Memory (Episodic/Semantic/Agent Tabs), Qdrant-Suche, Scope-Dropdown |
 | `/insights` | Intelligence Dashboard: KPIs, Agent-Performance, Failure Patterns, LLM Reports |
-| `/runtimes` | LM Studio / Ollama Runtime-Verwaltung |
+| `/runtimes` | Fleet-Tab „Die Bühne" (v2, ADR-079, Standard seit 06.09.2026): ein laufendes Modell = eine Karte (`FleetStage`/`Stage`), Boxen als Mitglieder statt eine Kachel je Box; freie Boxen als `FreeBox`, schlafende als `AsleepBox`, Box-Details im Zahnrad-Cockpit (`BoxCockpit`). Tabs Cloud/Models/Infrastructure unverändert |
 | `/schedule` | Cron Jobs + Runs |
 | `/workflows` | Workflow-Builder (YAML) + Execution Logs |
 | `/settings` | Profile, Autonomy, Intelligence, Secrets, Admin Users, CLI Plugins (7 Tabs) |

@@ -1,6 +1,8 @@
 # ADR-079 — Runtimes-Seite v2 „Die Bühne" (Fleet-Tab hinter Schalter)
 
-**Status:** Accepted
+**Status:** Accepted — v2 ist Standard seit 06.09.2026, v1 (`SlotStage`,
+`NEXT_PUBLIC_RUNTIMES_STAGE`-Schalter) in PR 6 „Schliff" entfernt. `FleetStage`
+ist jetzt der einzige Fleet-Tab, kein Rebuild-Flag mehr nötig.
 **Datum:** 2026-09-06
 **Scope:** Frontend/State
 

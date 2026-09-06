@@ -27,7 +27,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import type { Host, Runtime } from "@/lib/types";
-import { hostAutostartKey } from "../../HostAutostartRow";
+import { hostAutostartKey } from "../../hostAutostartKey";
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (

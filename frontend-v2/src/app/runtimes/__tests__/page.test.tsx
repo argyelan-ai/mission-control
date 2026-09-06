@@ -72,7 +72,12 @@ describe("RuntimesPage", () => {
     vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
   });
 
-  it("(a) an omp runtime on an enabled host is visible as a ready row", async () => {
+  it("(a) an omp runtime on an enabled host with nothing else running is visible via the empty stage AND the register", async () => {
+    // The only host in the fixture has nothing serving — FleetStage's
+    // isFullyEmpty branch renders EmptyStage (Spec §3 "Leer"), not a FreeBox
+    // per host. omp1 is still real inventory: EmptyStage's "Start model"
+    // targets it (no is_slot runtime to prefer), and it's reachable via the
+    // Infrastructure register regardless of stage state.
     const host = makeHost({ slug: "spark", display_name: "DGX Spark", enabled: true });
     const omp = makeRuntime({
       slug: "omp1", display_name: "OMP Runtime", runtime_type: "omp", state: "stopped",
@@ -83,18 +88,21 @@ describe("RuntimesPage", () => {
 
     renderPage();
 
-    // Die Umschalt-Zeile der Kachel zeigt nur noch Rezepte der Box (eine
-    // Quelle); andere Runtimes der Box stehen im Register auf dem
-    // Infrastruktur-Tab und öffnen von dort das Detail-Panel.
-    expect(await screen.findByTestId("recipe-dropdown-trigger")).toBeInTheDocument();
+    expect(await screen.findByTestId("empty-stage")).toBeInTheDocument();
+    expect(screen.getByText("Nothing is running")).toBeInTheDocument();
+
+    // Other runtimes of the box live in the Infrastructure register and
+    // open the detail panel from there.
     await act(async () => { screen.getByTestId("page-tab-infra").click(); });
     expect(await screen.findByTestId("runtime-register-row-omp1")).toBeInTheDocument();
   });
 
-  it("(b) a host with zero runtimes still renders a placeholder stage", async () => {
+  it("(b) a host with zero runtimes still renders as a free box, never vanishes", async () => {
     // Page-level empty state (isEmpty) fires only when there are zero
     // runtimes anywhere — give the fixture one elsewhere so this exercises
-    // the per-host placeholder, not the whole-page empty state.
+    // the per-host FreeBox, not the whole-page empty state or FleetStage's
+    // own isFullyEmpty EmptyStage (which only fires when NOTHING is serving
+    // anywhere).
     const emptyHost = makeHost({ slug: "empty-box", display_name: "Empty Box", enabled: true, ui_order: 0 });
     const otherHost = makeHost({ slug: "spark", display_name: "DGX Spark", enabled: true, ui_order: 1 });
     const elsewhere = makeRuntime({
@@ -104,26 +112,55 @@ describe("RuntimesPage", () => {
     vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [elsewhere] });
     vi.spyOn(api.hosts, "list").mockResolvedValue([emptyHost, otherHost]);
 
-    renderPage();
+    const { container } = renderPage();
 
-    expect(await screen.findByText("Empty Box")).toBeInTheDocument();
-    expect(await screen.findByText("No model set up")).toBeInTheDocument();
+    // Host-scoped selector, not text content (Fund #442 CI-Flake, PR 6
+    // Nachlese): while `hosts.list`/`runtimes.list` are still settling,
+    // BOTH hosts can transiently render as free (empty runtimes on both) —
+    // a bare `findByTestId("free-box")` + text match risks resolving on
+    // that transient state, or on the WRONG host's card, before the final
+    // paint (elsewhere serving, empty-box free) lands. `data-host-slug`
+    // (FreeBox.tsx) identifies the box unambiguously and `waitFor` keeps
+    // retrying until that exact combination exists.
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="free-box"][data-host-slug="empty-box"]')).toBeInTheDocument();
+    });
+    expect(await screen.findByTestId("stage-card")).toBeInTheDocument();
   });
 
-  it("(c) a power-managed host whose runtimes lack the power_managed flag still renders (never vanishes)", async () => {
-    const host = makeHost({ slug: "porsche", display_name: "Porsche Box", enabled: true, power_managed: true });
+  it("(c) a power-managed host whose runtimes lack the power_managed flag renders as a free box, never vanishes", async () => {
     // Bound runtime exists, but none of them carry power_managed: true — the
-    // old SleepingHostLine silently returned null for this exact case.
+    // page's sleepingGroups filter (page.tsx) requires that flag before a
+    // host is treated as AsleepBox material, so this host stays in
+    // stageGroups and (nothing serving) becomes a FreeBox — the old
+    // SleepingHostLine silently returned null for exactly this case.
+    const host = makeHost({ slug: "porsche", display_name: "Porsche Box", enabled: true, power_managed: true });
     const bound = makeRuntime({
       slug: "unsloth1", display_name: "Unsloth Porsche", runtime_type: "unsloth_porsche", state: "stopped",
       host: { id: "porsche", slug: "porsche", display_name: "Porsche Box" },
     });
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [bound] });
-    vi.spyOn(api.hosts, "list").mockResolvedValue([host]);
+    // A second, serving host keeps FleetStage out of its isFullyEmpty
+    // branch, so Porsche Box renders as its own FreeBox with its name
+    // visible (EmptyStage shows no per-host names at all).
+    const otherHost = makeHost({ slug: "spark", display_name: "DGX Spark", enabled: true, ui_order: 1 });
+    const elsewhere = makeRuntime({
+      slug: "rt-elsewhere", display_name: "Elsewhere", runtime_type: "vllm_docker", state: "ready",
+      host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [bound, elsewhere] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([host, otherHost]);
 
-    renderPage();
+    const { container } = renderPage();
 
-    expect(await screen.findByText("Porsche Box")).toBeInTheDocument();
+    // Host-scoped selector, not text content (Fund #442 CI-Flake, PR 6
+    // Nachlese) — same reasoning as test (b): "Porsche Box" as a text query
+    // risks matching a transiently-free "spark" card before `runtimes.list`
+    // settles, or nothing at all if the resolved element isn't porsche's.
+    // `data-host-slug` (FreeBox.tsx) removes the ambiguity outright.
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="free-box"][data-host-slug="porsche"]')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("asleep-box")).not.toBeInTheDocument();
   });
 
   it("(d) page tabs switch the lower area; openModelsTab lands on the Models tab", async () => {
