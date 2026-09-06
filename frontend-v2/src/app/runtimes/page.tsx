@@ -12,7 +12,6 @@ import {
   ExternalLink,
   Loader2,
   Plus,
-  Power,
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";

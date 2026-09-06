@@ -13,11 +13,18 @@ import { describe, it, expect } from "vitest";
 import en from "../../../../messages/en.json";
 import de from "../../../../messages/de.json";
 
-function flattenKeys(obj: unknown, prefix = ""): string[] {
-  if (obj == null || typeof obj !== "object") return [prefix];
+/** Leaf (path, value) pairs — recurses through every nesting level, not just
+ *  the namespace's direct children, so a nested group (e.g. a future
+ *  `runtimes.stage.someGroup.label`) is covered exactly like a flat key. */
+function flattenEntries(obj: unknown, prefix = ""): Array<[string, unknown]> {
+  if (obj == null || typeof obj !== "object") return [[prefix, obj]];
   return Object.entries(obj as Record<string, unknown>).flatMap(([k, v]) =>
-    flattenKeys(v, prefix ? `${prefix}.${k}` : k)
+    flattenEntries(v, prefix ? `${prefix}.${k}` : k)
   );
+}
+
+function flattenKeys(obj: unknown, prefix = ""): string[] {
+  return flattenEntries(obj, prefix).map(([k]) => k);
 }
 
 describe("runtimes.stage i18n — EN/DE key parity", () => {
@@ -38,9 +45,9 @@ describe("runtimes.stage i18n — EN/DE key parity", () => {
     expect(missingInEn).toEqual([]);
   });
 
-  it("no DE value is empty", () => {
-    const deValues = Object.entries(deStage?.stage as Record<string, unknown>);
-    for (const [key, value] of deValues) {
+  it("no DE value is empty, at any nesting depth", () => {
+    const deLeaves = flattenEntries(deStage?.stage);
+    for (const [key, value] of deLeaves) {
       expect(typeof value === "string" ? value.trim().length > 0 : true, `runtimes.stage.${key} is empty`).toBe(true);
     }
   });
