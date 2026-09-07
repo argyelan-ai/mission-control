@@ -41,7 +41,7 @@ async def _agent_with_task(
     session.add(board)
     raw_token, token_hash = generate_agent_token()
     agent = Agent(
-        name=f"Sparky-{uuid.uuid4().hex[:6]}",
+        name=f"Alpha-{uuid.uuid4().hex[:6]}",
         agent_runtime="cli-bridge",
         agent_token_hash=token_hash,
         board_id=board.id,

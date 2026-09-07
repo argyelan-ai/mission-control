@@ -82,7 +82,7 @@ class _Harness:
             return 0, ""
 
         self.ctrl = bridge.NativeTuiController(
-            session="sparky", signal_file=self.sig, _run=fake_run,
+            session="alpha", signal_file=self.sig, _run=fake_run,
             _pid_alive=lambda _pid: self._alive,
             _sleep=lambda _s: None,
         )
@@ -270,7 +270,7 @@ def test_heartbeat_response_without_control_changes_nothing():
 
     def fake_send(status):
         seen.append(status)
-        return {"ok": True, "agent": "sparky"}  # NO control key
+        return {"ok": True, "agent": "alpha"}  # NO control key
 
     stop = bridge.start_heartbeater(
         "http://x", "tok", interval=0.01,
