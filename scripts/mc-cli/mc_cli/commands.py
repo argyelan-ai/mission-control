@@ -10,6 +10,7 @@ import pathlib
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -1019,6 +1020,25 @@ def _cmd_msg(args, client, cfg):
     what to use when a reply must land in a thread other than the current task.
     """
     text = resolve_text_arg(args.text, verb="msg")
+    attach = getattr(args, "attach", None)
+    if attach:
+        # Datei-Anhang direkt in den Thread (Gruppenchat, DM, Task) — der
+        # Weg fuer Screenshots/Mockups. Live-Befund 07.09.2026: in Gruppen
+        # gab es keinen Datei-Kanal (kein Slack-Spiegel, References read-only).
+        # Upload zuerst, dann die Nachricht mit der `[Anhang: <pfad>]`-Zeile,
+        # die das Frontend als Bild-/Datei-Kachel zeigt (wie beim Operator).
+        if getattr(args, "vault_path", None):
+            raise UsageError("--attach und --vault-path schliessen sich aus.")
+        if not getattr(args, "thread", None):
+            raise UsageError(
+                "--attach braucht --thread <id> (die ID steht im `mc inbox`-Footer)."
+            )
+        if not os.path.isfile(attach):
+            raise UsageError(f"Anhang nicht gefunden: {attach}")
+        uploaded = client.upload(
+            f"/api/v1/agent/threads/{args.thread}/attachment", attach
+        )
+        text = f"{text}\n[Anhang: {uploaded['path']}]"
     if getattr(args, "thread", None):
         path = f"/api/v1/agent/threads/{args.thread}/messages"
     else:
@@ -1091,6 +1111,12 @@ def _add_msg_args(p):
         help="Optional: Datei anhaengen — Vault-Wrapper-Pfad aus "
              "`mc vault-search` (z.B. 'wrappers/files/x.md'). Die Datei geht "
              "in den Chat-Thread mit (Slack/Telegram).",
+    )
+    p.add_argument(
+        "--attach", dest="attach", default=None, metavar="DATEI",
+        help="Optional: Datei (Screenshot, Mockup, PDF …) direkt in den Thread "
+             "haengen — z.B. aus /workspace. Braucht --thread; im Chat erscheint "
+             "eine Bild-/Datei-Kachel. Nicht zusammen mit --vault-path.",
     )
 
 

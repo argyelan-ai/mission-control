@@ -29,6 +29,8 @@ import { Unfold } from "@/components/ui/Unfold";
 import { C } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { splitAttachments } from "@/components/chat/attachments";
+import { ChatAttachmentTile } from "@/components/chat/ChatAttachmentTile";
 import type { GroupMessage as GroupMessageData } from "@/lib/groupTypes";
 
 interface GroupMessageProps {
@@ -236,7 +238,14 @@ export function GroupMessage({
   }
 
   const clock = formatClock(message.created_at);
-  const excerpt = contributionExcerpt(message.body);
+  // Anhänge kommen als `[Anhang: <pfad>]`-Zeile im Text (`mc msg --attach`,
+  // dasselbe Format wie der Operator-Composer im 1:1-Chat). Im Raum wird
+  // daraus eine Kachel; die Pfadzeile selbst sieht niemand — auch nicht in
+  // der zugeklappten Kopfzeile. Ein Beitrag, der NUR aus einem Bild besteht,
+  // trägt den Dateinamen als Griff.
+  const parsed = splitAttachments(message.body);
+  const excerpt =
+    contributionExcerpt(parsed.text) || parsed.attachments.map((a) => a.name).join(" · ");
 
   return (
     // Sprecher-Rinne statt bündiger Kante (Operator-Befund 22.08.2026): eine
@@ -306,7 +315,14 @@ export function GroupMessage({
               // damit ein Agentenbeitrag hier nicht anders liest als dort.
               className="mt-1 max-w-[76ch] min-w-0 text-[14px] leading-[1.7] [&>*:last-child]:mb-0"
             >
-              <MarkdownContent content={message.body} />
+              {parsed.text && <MarkdownContent content={parsed.text} />}
+              {parsed.attachments.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2" data-testid="group-attachments">
+                  {parsed.attachments.map((a) => (
+                    <ChatAttachmentTile key={a.path} att={a} />
+                  ))}
+                </div>
+              )}
             </div>
           </Unfold>
         </div>
