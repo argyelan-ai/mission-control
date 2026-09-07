@@ -315,6 +315,57 @@ Note: **no row routes to `mc failed`.** Given the verified lifecycle (`FAILED �
 - **Recycler** is **forked** (§3.1.1), not copied — it tracks `bridge.py`, never the one-shot omp subprocess.
 - **Sessions live-terminal** shows the bridge.py pane with omp's teed NDJSON.
 
+## 6.1 Steuersignal — Heartbeat als Interrupt-Kanal (Fix 3, ADR-080)
+
+Ein laufender omp-Zug war von aussen nicht unterbrechbar: Zustellung
+(Stop-Knopf, `mc blocked` eines Leads, blocker/handoff-Kommentare) greift
+nur an Turn-Grenzen (`_deliver_at_boundary`), und waehrend
+`_observe_native_turn` blockt der serve_loop. Der Heartbeat (alle 30 s,
+einziger offener Kanal mitten im Zug) wird zum Steuerkanal.
+
+**Liveprobe (Schritt 0, omp v18.1.10, isolierte Test-Instanz):**
+- `Escape` mitten im Tool: sofortiges `turn_end` mit `stopReason=aborted`
+  ("Interrupted by user") + `agent_end` im HOOK-SIGNAL; omp-Prozess lebt
+  weiter. `Escape` ist damit der verifizierte Protokoll-Abbruch.
+- `C-c` mitten im Tool: WIRKUNGSLOS (3 Versuche) — erreicht nur die
+  Tool-PTY, nicht den Agent-Loop.
+- `omp --help` bietet keinen rpc/abort-Kanal (`--mode=rpc` ist nur ein
+  Ausgabeformat; `omp acp` ist ein eigener stdio-Prozess). Stufe 1 der
+  Leiter entfaellt praktisch.
+
+**Signalweg:**
+1. Backend `agent_heartbeat` liefert optional
+   `control = {"interrupt": "hard"|"soft", "reason": str}`:
+   `hard` = `run_control=="stopped"` ODER Task `blocked` durch Fremdakteur
+   (neuester blocker/handoff-Kommentar der Block-Episode nicht selbst
+   authored); `soft` = ungelesene blocker/handoff-Kommentare jenseits des
+   Comment-Cursors. Beides gleichzeitig -> `hard`. Antwort ohne `control`
+   = Legacy-Verhalten (Sabotage-Probe/Rollback).
+2. Bridge `start_heartbeater(..., _on_control=...)` parst die Antwort und
+   setzt ein thread-safe `InterruptState` (hard schlaegt soft, first-hard
+   sticks).
+3. `_observe_native_turn` prueft das State in JEDER Runde (`poll_interval`).
+4. Abbruch-Leiter (`_run_interrupt_ladder`, Grace per `OMP_INTERRUPT_GRACE`,
+   Default 20 s, KEIN Pane-Lesen — nur das HOOK-SIGNAL):
+   1. Protokoll-Abbruch: entfaellt (kein Kanal, s.o.)
+   2. `Escape` per tmux, warten auf `turn_end` (aborted/error/stop)
+   3. `C-c`, gleiche Wartezeit
+   4. bestehender Watchdog-Kill + Relaunch (`_native_watchdog_kill`)
+5. Neuer Ausgang `Kind.INTERRUPTED`: `decide_lifecycle` ->
+   `halted_interrupted` — KEIN Retry, KEINE Continue-/Blocker-Eskalation,
+   kein `mc finish`, kein "omp abort (hang)"-Kommentar. Ein `aborted`
+   turn_end, das waehrend gefeuertem Signal eintrifft, wird als Interrupt
+   gestempelt (nie die retryable error family, nie ABORT_HANG).
+6. Danach: Schleife zurueck in den Leerlauf -> Poll -> `stopped`/`blocked`
+   -> wartende Nachrichten sofort per Nudge. `hard`: Session bleibt stehen,
+   Lock frei. `soft`: Nudge-Zustellung am Turn-Boundary, Fortsetzung im
+   selben Session-Kontext (Session-ID bleibt).
+
+**Sicherheit:** Wer stoppen darf, aendert sich NICHT — das Signal beendet
+Zuege, es erteilt keine Freigaben. poll.sh-Agenten (claude-code) bleiben
+unveraendert; deren Heartbeat-Antwort enthaelt kein `control`-Feld und
+verhaelt sich byte-identisch wie heute.
+
 ---
 
 ## 7. Prototype (this workflow) vs Phase-2 deployment (gated on Mark)
