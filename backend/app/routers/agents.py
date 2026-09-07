@@ -3651,6 +3651,134 @@ async def agent_recover_task(
         "previous_status": old_status,
     }
 
+# ── Heartbeat control channel (Fix 3, omp stop-signal) ────────────────────
+# The omp-bridge's heartbeater is the ONLY open channel while a native-TUI
+# turn runs (serve_loop blocks in _observe_native_turn; poll only reacts at
+# turn boundaries), so the heartbeat response carries a `control` object:
+#   hard  — run must end NOW: operator stop (run_control == "stopped") or
+#           the task blocked by a FOREIGN actor (user / lead), i.e. NOT the
+#           agent's own `mc blocked`.
+#   soft  — unread blocker/handoff comments beyond the agent's comment
+#           cursor: end the turn, deliver the nudge, continue the session.
+# Both at once -> hard. A response WITHOUT `control` = legacy behavior
+# (sabotage probe / rollback path).
+_HEARTBEAT_CONTROL_COMMENT_TYPES = frozenset({"blocker", "handoff"})
+
+
+def _heartbeat_control(
+    active_task,
+    agent_id,
+    blocked_episode_comments: list,
+    comment_cursor_id,
+):
+    """Pure decision core of the heartbeat control channel (unit-testable).
+
+    active_task: the agent's in_progress task row (or None).
+    blocked_episode_comments: comments on the active task created at-or-after
+    blocked_at (the caller slices; keeps this function DB-free).
+    comment_cursor_id: the agent's last-seen comment id (None = nothing seen).
+    """
+    if active_task is None:
+        return None
+
+    if getattr(active_task, "run_control", None) == "stopped":
+        # A stopped run is always hard, even with foreign blocker traffic.
+        return {
+            "interrupt": "hard",
+            "reason": "run_control=stopped (Stop durch Operator)",
+        }
+
+    if getattr(active_task, "status", None) == "blocked":
+        # Foreign-actor detection: within this blocked episode the newest
+        # blocker/handoff signal must NOT be the agent's own comment. A
+        # user-authored comment of ANY type also counts (the operator talks
+        # directly to the agent, mirroring _is_deliverable_for).
+        foreign = [
+            c for c in blocked_episode_comments
+            if getattr(c, "comment_type", "") in _HEARTBEAT_CONTROL_COMMENT_TYPES
+            or getattr(c, "author_type", "") == "user"
+        ]
+        newest = foreign[-1] if foreign else None
+        self_authored = (
+            newest is not None
+            and getattr(newest, "author_type", "") == "agent"
+            and getattr(newest, "author_agent_id", None) == agent_id
+        )
+        if not self_authored:
+            return {
+                "interrupt": "hard",
+                "reason": "Task blocked durch Fremdakteur (Stop/Block von User oder Lead)",
+            }
+
+    return None
+
+
+async def _collect_heartbeat_control(session, agent, active_task):
+    """DB side of the control channel: assembles the inputs for
+    _heartbeat_control from the active task's comments + the agent's cursor,
+    plus the soft check (unread blocker/handoff beyond the cursor). Any
+    failure returns None, so the heartbeat response stays legacy-shaped."""
+    if active_task is None:
+        return None
+    try:
+        from app.models.task import TaskComment as _TC
+        from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
+        import datetime as _dt
+
+        cursor = (await session.exec(
+            select(AgentTaskCommentCursor).where(
+                AgentTaskCommentCursor.agent_id == agent.id,
+                AgentTaskCommentCursor.task_id == active_task.id,
+            )
+        )).first()
+
+        all_comments = list((await session.exec(
+            select(_TC)
+            .where(_TC.task_id == active_task.id)
+            .order_by(_TC.created_at.asc())  # type: ignore[union-attr]
+        )).all())
+
+        def _aware(ts):
+            if ts is not None and ts.tzinfo is None:
+                return ts.replace(tzinfo=_dt.timezone.utc)
+            return ts
+
+        # Blocked episode = comments at-or-after blocked_at (None -> all).
+        blocked_at = _aware(getattr(active_task, "blocked_at", None))
+        episode = [
+            c for c in all_comments
+            if blocked_at is None or _aware(c.created_at) >= blocked_at
+        ]
+
+        # Unseen slice relative to the cursor (mirrors the poll's comment
+        # cursor semantics: position of last_seen in the FULL log, then the
+        # comments after it).
+        if cursor is not None and cursor.last_seen_comment_id is not None:
+            idx = next(
+                (i for i, c in enumerate(all_comments)
+                 if c.id == cursor.last_seen_comment_id),
+                -1,
+            )
+            unseen = all_comments[idx + 1:] if idx >= 0 else all_comments
+        else:
+            unseen = all_comments
+        soft_unread = [
+            c for c in unseen
+            if c.comment_type in _HEARTBEAT_CONTROL_COMMENT_TYPES
+        ]
+
+        control = _heartbeat_control(
+            active_task, agent.id, episode,
+            cursor.last_seen_comment_id if cursor else None,
+        )
+        if control is None and soft_unread:
+            control = {
+                "interrupt": "soft",
+                "reason": "Ungelesene blocker/handoff-Nachrichten warten",
+            }
+        return control
+    except Exception:  # noqa: BLE001 — control is best-effort, never breaks the heartbeat
+        return None
 
 @router.post("/agent/me/heartbeat")
 async def agent_heartbeat(
@@ -3713,6 +3841,11 @@ async def agent_heartbeat(
         )
         active_task = _wait_res.first()
 
+    # Fix 3: capture the pre-self-heal active-task pointer — the Bug-18
+    # self-heal below clears current_task_id for blocked/stopped tasks
+    # (they don't match the in_progress lookup), but exactly those runs are
+    # the interrupt cases the control channel must see.
+    _pre_heal_task_id = agent.current_task_id
     if active_task is not None:
         # current_task_id lock self-heal: derive from the DB independent of
         # the payload. This fixes the original bug 2 (Sparky.current_task_id=
@@ -3792,4 +3925,20 @@ async def agent_heartbeat(
             board_id=agent.board_id,
         )
 
-    return {"ok": True, "agent": agent.name}
+    # Fix 3 (omp stop-signal): control channel in the heartbeat response.
+    # Computed AFTER the commit so the read sees the just-persisted state.
+    # stopped/blocked run (exactly the interrupt cases) would fall through
+    # AND the Bug-18 self-heal clears the pointer — hence the pre-heal id.
+    _control_task = active_task
+    if _control_task is None and _pre_heal_task_id is not None:
+        _control_task = (await session.exec(
+            select(_Task).where(
+                _Task.id == _pre_heal_task_id,
+                _Task.assigned_agent_id == agent.id,
+            ).limit(1)
+        )).first()
+    control = await _collect_heartbeat_control(session, agent, _control_task)
+    response = {"ok": True, "agent": agent.name}
+    if control is not None:
+        response["control"] = control
+    return response
