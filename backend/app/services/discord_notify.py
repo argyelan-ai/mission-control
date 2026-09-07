@@ -7,13 +7,17 @@ mehr — die eine Meldung, die zaehlt, geht im Rest unter.
 
 Zwei Regeln:
 
-* **Wiederholungssperre.** Dasselbe Thema geht innerhalb von
-  ``DEDUP_TTL_SECONDS`` nur einmal raus. Zahlen im Titel bilden kein neues
-  Thema: der Watchdog misst alle 30s einen anderen Millisekundenwert, und
-  ohne diese Normalisierung waere jede Messung "neu" und die Sperre wirkungslos.
-* **Dringlichkeit entscheidet den Weg.** ``error``/``critical`` gehen sofort
-  raus. Warnungen sammeln sich und kommen als EINE Nachricht, sobald das
-  Zeitfenster voll ist oder zu viele warten.
+* **Wiederholungssperre.** Pro Schluessel (Ereignisart + betroffene
+  Runtime-/Agent-ID) geht eine Meldung max. 1x pro 60 Minuten raus
+  (Redis-Key ``mc:alert:dedup:<key>``, TTL 3600). Weitere Treffer im Fenster
+  werden gezaehlt und beim naechsten erlaubten Senden als
+  "+N gleiche Meldungen in der letzten Stunde" nachgereicht. Ohne ID im
+  detail-Payload greift der normalisierte Titel-Fingerabdruck — Zahlen im
+  Titel (Millisekunden) bilden so kein neues Thema.
+* **Dringlichkeit entscheidet den Weg.** ``critical`` geht IMMER sofort raus
+  und wird NIE dedupt. ``error`` geht sofort raus, Warnungen sammeln sich
+  und kommen als EINE Nachricht, sobald das Zeitfenster voll ist oder zu
+  viele warten.
 
 Was hier NICHT passiert: das ActivityEvent unterdruecken. Die Historie in der
 UI bleibt vollstaendig — nur der Discord-Kanal wird leiser. Wer einen Vorfall
@@ -37,8 +41,10 @@ logger = logging.getLogger("mc.discord_notify")
 IMMEDIATE_SEVERITIES = ("error", "critical")
 DIGEST_SEVERITIES = ("warning",)
 
-DEDUP_KEY_PREFIX = "mc:discord:seen:"
 DIGEST_KEY = "mc:discord:digest"
+ALERT_DEDUP_KEY_PREFIX = "mc:alert:dedup:"
+ALERT_DEDUP_TTL_SECONDS = 3600
+ALERT_DEDUP_COUNT_PREFIX = "mc:alert:dedupcnt:"
 DIGEST_MAX_ITEMS = 20  # Sammlung geht frueher raus, wenn so viele warten
 
 # Beide ueber .env stellbar (DISCORD_DIGEST_WINDOW_SECONDS /
@@ -62,6 +68,36 @@ def _topic(event_type: str, title: str) -> str:
     """
     normalised = _MEASURED.sub("(#)", title)[:200]
     return hashlib.sha1(f"{event_type}|{normalised}".encode()).hexdigest()
+
+
+def _affected_key(event_type: str, detail: dict | None, title: str) -> str:
+    """Dedup-Schluessel: (Ereignisart, betroffene Runtime-/Agent-ID).
+
+    Die ID kommt aus dem detail-Payload (``slug``/``runtime_slug`` fuer
+    Runtimes, ``agent_name``/``agent_id`` fuer Agenten). Fehlt sie, greift der
+    normalisierte Titel-Thema-Fingerabdruck — besser ein grober Schluessel
+    als keine Sperre.
+    """
+    affected = ""
+    if detail:
+        affected = str(
+            detail.get("slug")
+            or detail.get("runtime_slug")
+            or detail.get("agent_name")
+            or detail.get("agent_id")
+            or detail.get("endpoint")
+            or ""
+        )
+    if not affected:
+        affected = _topic(event_type, title)
+    return f"{event_type}|{affected}"
+
+
+def _with_repeat_suffix(description: str, repeats: int) -> str:
+    """Haengt ' (+N gleiche Meldungen in der letzten Stunde)' an."""
+    if repeats <= 0:
+        return description
+    return f"{description} (+{repeats} gleiche Meldungen in der letzten Stunde)"
 
 
 async def _deliver(title: str, description: str, severity: str = "warning") -> None:
@@ -92,20 +128,48 @@ async def notify_event(
     Gibt zurueck, was damit passiert ist — ``sent``, ``queued``,
     ``suppressed`` (Wiederholung) oder ``skipped`` (nicht alarmwuerdig).
     Wirft nie: eine Benachrichtigung darf den Arbeitsfluss nicht kippen.
+
+    Wiederholungssperre: (event_type, betroffene Runtime-/Agent-ID) geht
+    max. 1x pro 60 Minuten raus (``mc:alert:dedup:<key>``, TTL 3600).
+    Unterdrueckte Wiederholungen werden gezaehhlt und beim naechsten
+    erlaubten Senden als "+N" nachgereicht. ``critical`` umgeht die Sperre
+    und geht IMMER sofort raus.
     """
     if severity not in IMMEDIATE_SEVERITIES and severity not in DIGEST_SEVERITIES:
         return "skipped"
 
     try:
         redis = await get_redis()
-        key = f"{DEDUP_KEY_PREFIX}{_topic(event_type, title)}"
-        fresh = await redis.set(key, "1", nx=True, ex=DEDUP_TTL_SECONDS)
-        if not fresh:
-            logger.debug("Discord: Wiederholung unterdrueckt — %s", title[:80])
+
+        # critical umgeht ALLE Sperren: geht immer sofort raus, wird nie
+        # gezaehlt und nie dedupt.
+        if severity == "critical":
+            await _deliver(title, f"Ereignis: {event_type}", severity)
+            return "sent"
+
+        # Schluessel-Sperre: (event_type, betroffene Runtime-/Agent-ID) geht
+        # max. 1x pro 60 Minuten raus. Der Sperr-Key ``mc:alert:dedup:<key>``
+        # (TTL 3600) ist DAS Fenster: existiert er, wurde in diesem Fenster
+        # schon zugestellt. Der Zaehler lebt daneben in
+        # ``mc:alert:dedupcnt:<key>`` (TTL 7200), damit die im Fenster
+        # unterdrueckten Wiederholungen das Fenster ueberleben und beim
+        # naechsten erlaubten Senden als "+N" nachgereicht werden koennen —
+        # ein String-Key kann nicht beides: Sperre UND ueberlebenden Zaehler.
+        # critical (oben) sieht keinen der beiden Keys.
+        dedup_key = f"{ALERT_DEDUP_KEY_PREFIX}{_affected_key(event_type, detail, title)}"
+        count_key = f"{ALERT_DEDUP_COUNT_PREFIX}{_affected_key(event_type, detail, title)}"
+        if await redis.exists(dedup_key):
+            await redis.incr(count_key)
             return "suppressed"
+        repeats = int(await redis.getdel(count_key) or 0)
+        await redis.set(dedup_key, 1, ex=ALERT_DEDUP_TTL_SECONDS)
+
+        # repeats > 0: das vorige Fenster hat Wiederholungen angesammelt —
+        # sie werden hier nachgereicht. Sonst erste Meldung, kein Anhang.
+        description = _with_repeat_suffix(f"Ereignis: {event_type}", repeats)
 
         if severity in IMMEDIATE_SEVERITIES:
-            await _deliver(title, f"Ereignis: {event_type}", severity)
+            await _deliver(title, description, severity)
             return "sent"
 
         await redis.rpush(DIGEST_KEY, json.dumps({
@@ -113,6 +177,7 @@ async def notify_event(
             "title": title,
             "event_type": event_type,
             "severity": severity,
+            "repeats": repeats,
         }))
         return "queued"
     except Exception as e:  # noqa: BLE001 — Benachrichtigung ist best-effort
