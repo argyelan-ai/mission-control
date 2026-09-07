@@ -170,6 +170,21 @@ async def lifespan(app: FastAPI):
     await _ensure_slot_runtimes()
     await _seed_github_token()
     await scheduler.start()
+    # Fix "tote Dispatch-Warteschlange": on boot, drop queue entries whose
+    # task is done/aborted/failed or deleted (the 11 legacy boss-queue
+    # entries were the motivating case). Idempotent, runs before watchdog
+    # + task_runner so the first drain tick sees a clean queue.
+    try:
+        from app.services.task_queue import purge_finished_queue_entries
+        _purged = await purge_finished_queue_entries()
+        if _purged:
+            logging.getLogger("mc.startup").info(
+                "Startup queue purge: removed %d stale dispatch-queue entries", _purged,
+            )
+    except Exception as e:
+        logging.getLogger("mc.startup").warning(
+            "Startup queue purge failed (non-fatal): %s", e,
+        )
     await watchdog.start()
     await task_runner.start()
     await loop_runner.start()  # Loops L1 (ADR-051) — Runden-Meta-Controller

@@ -723,6 +723,20 @@ async def execute_review_decision(
             from app.services.chat_rooms import handle_task_done
             await handle_task_done(session, task)
 
+        # ── Queue Drain (Fix "tote Dispatch-Warteschlange") ───────────
+        # Review-approve marked the task done — the developer agent freed
+        # up. Drain its dispatch queue immediately (FIFO), the watchdog
+        # stays as safety net.
+        try:
+            from app.services.task_queue import drain_agent_task_queue
+            from app.utils import create_tracked_task
+            if task.assigned_agent_id:
+                create_tracked_task(
+                    drain_agent_task_queue(str(task.assigned_agent_id))
+                )
+        except Exception:
+            logger.warning("Queue drain trigger failed (review-approve)", exc_info=True)
+
         # Test handoff: dispatch a tester agent for user_test (if one exists)
         if task.status == "user_test":
             try:
@@ -910,6 +924,18 @@ async def system_finalize_task_done(
         dep_result = await session.exec(
             select(TaskDependency).where(TaskDependency.depends_on_task_id == task.id)
         )
+
+        # ── Queue Drain (Fix "tote Dispatch-Warteschlange") ───────────
+        try:
+            from app.services.task_queue import drain_agent_task_queue
+            from app.utils import create_tracked_task
+            if task.assigned_agent_id:
+                create_tracked_task(
+                    drain_agent_task_queue(str(task.assigned_agent_id))
+                )
+        except Exception:
+            logger.warning("Queue drain trigger failed (system finalize)", exc_info=True)
+
         for dep in dep_result.all():
             dependent_task = await session.get(Task, dep.task_id)
             if (dependent_task
