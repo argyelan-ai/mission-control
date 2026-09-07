@@ -171,3 +171,40 @@ Das Skript ist **alles oder nichts**: findet sich für auch nur einen Agenten
 kein Ziel, bricht es ab, bevor es irgendetwas schreibt (Exit-Code 2), und eine
 Slot-Zeile wird nur gelöscht, wenn nachweislich kein Agent mehr an ihr hängt.
 Die Rezept-Zeilen selbst werden nie angefasst, es geht also nichts verloren.
+
+## Nachtrag: Vision-Weitergabe (W3, 06.09.2026)
+
+Verifizierter Befund (live, 06.09.2026): der Motor (GLM-5.3-Flash EXL3 auf der
+Head-Box, vLLM, `--limit-mm-per-prompt {"image":4,"video":1}`) beantwortet
+Bilder korrekt über die API — rotes Testbild → „Rot". omp im Container bekam
+aber eine `models.yml` OHNE `input:`-Liste (Punkt 6, der In-Container-Reload).
+Ohne sie gilt das MC-Modell für omp als text-only, und sein Auflösungspfad
+(`s.find(u => u.input.includes("image"))`, im omp-Binary `/usr/local/bin/omp`
+v18.1.10 per `grep` nachgelesen) fällt auf ein eingebautes, nie
+konfiguriertes Standard-Vision-Modell zurück — `401 Incorrect API key
+provided: sk-noauth` gegen api.openai.com statt gegen unsere eigene Box.
+
+Der Slot-Reload-Pfad, den dieses ADR eingeführt hat (Punkt 6:
+`render-omp-config.sh` im laufenden Container), ist auch der richtige Ort für
+diese Wahrheit: eine Box serviert mal ein vision-fähiges Rezept, mal nicht —
+`runtimes.supports_vision` folgt der Slot-Zeile also genauso wie Modellname
+und Kontextfenster (`slot_runtimes.write_slot_state`, Migration 0196).
+
+`build_runtime_env` (omp-Zweig) trägt das Feld als `OMP_MODEL_INPUT` (`text`
+oder `text,image`) mit — derselbe Kanal wie `OMP_CONTEXT_WINDOW`, kein
+zweiter Weg. `render-omp-config.sh` rendert daraus `input: [text, image]`
+bzw. `[text]` in models.yml UND, über `omp config set` (die config.yml selbst
+wird von omp nicht respektiert, bestätigt in-container, siehe entrypoint.sh),
+`modelRoles.vision` (nur wenn vision-fähig) bzw. `images.blockImages: true`
+(sonst). Letzteres ist die eigentliche Lehre: `modelRoles.vision` leer zu
+lassen reicht NICHT — omps eigener Auflösungspfad sucht dann quer über ALLE
+registrierten Modelle nach einem bildfähigen und trifft trotzdem den
+eingebauten Standard-Provider. `images.blockImages` ist im Binary die ERSTE
+Prüfung vor jeder Bild-Auflösung; gesetzt lehnt omp ein Bild mit einer
+eigenen, klaren Fehlermeldung ab, statt den `sk-noauth`-Schlüssel extern zu
+verschicken.
+
+Rückweg: `PATCH /runtimes/db/{slug}` mit `supports_vision: false` (oder die
+Migration 0196 zurückrollen) — die nächste Slot-Sync-Runde rendert
+`images.blockImages: true` und die Box meldet Bilder wieder ehrlich als
+nicht unterstützt.

@@ -137,6 +137,17 @@ async def build_runtime_env(
         if _ctx_window:
             tokens["OMP_CONTEXT_WINDOW"] = str(_ctx_window)
             tokens["OMP_MAX_TOKENS"] = str(min(_ctx_window // 2, 32768))
+
+        # Vision-Fähigkeit (W3, 06.09.2026): omp entscheidet PRO MODELL anhand
+        # der ``input``-Liste in models.yml, ob es bildfähig ist — fehlt sie,
+        # gilt das MC-Modell als text-only und omp fällt (im Binary
+        # ``/usr/local/bin/omp`` per grep nachgeprüft) auf ein eingebautes,
+        # nie konfiguriertes Standard-Vision-Modell zurück (401 gegen
+        # api.openai.com statt gegen unsere Box). render-omp-config.sh liest
+        # dieses Flag und rendert ``input: [text, image]`` bzw. ``[text]``
+        # plus (bei false) ``images.blockImages: true``, damit omp Bilder
+        # dann ehrlich ablehnt statt sie extern zu verschicken.
+        tokens["OMP_MODEL_INPUT"] = "text,image" if runtime.supports_vision else "text"
         return tokens
     if harness == "claude":
         # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in

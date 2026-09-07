@@ -84,7 +84,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k in ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY",
-              "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS"):
+              "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_MODEL_INPUT"):
         v = d.get(k)
         if v not in (None, ""):
             print(f"{k}={v}")
@@ -138,6 +138,25 @@ _BASE_URL="${OPENAI_BASE_URL}"
 _MODEL="${OPENAI_MODEL}"
 OMP_MODEL_SELECTOR="mc-openai/${_MODEL}"
 
+# ── Vision-Fähigkeit (W3, 06.09.2026) ────────────────────────────────────────
+# MC liefert OMP_MODEL_INPUT als Komma-Liste ("text" oder "text,image") aus
+# runtimes.supports_vision (build_runtime_env). Live am omp-Binary geprüft
+# (/usr/local/bin/omp, grep): fehlt "image" in der input-Liste des aktiven
+# Modells, sucht omp quer über ALLE registrierten Modelle nach einem
+# bildfähigen — inklusive eines eingebauten, nie konfigurierten Standard-
+# Providers, der dann mit "401 Incorrect API key provided: sk-noauth" gegen
+# api.openai.com läuft statt gegen unsere Box. Default "text" (kein Flag
+# gesetzt = alte Runtimes ohne das Feld) hält den sicheren Zustand.
+_SUPPORTS_VISION=0
+case ",${OMP_MODEL_INPUT:-text}," in
+    *,image,*) _SUPPORTS_VISION=1 ;;
+esac
+if [ "$_SUPPORTS_VISION" = "1" ]; then
+    _MODEL_INPUT_YAML="[text, image]"
+else
+    _MODEL_INPUT_YAML="[text]"
+fi
+
 # ── models.yml ───────────────────────────────────────────────────────────────
 # omp löst Modelle PROFIL-ZUERST auf: mit OMP_PROFILE=mc-agent liest es
 # $HOME/.omp/profiles/mc-agent/agent/models.yml. Der eingebaute `openai`-
@@ -165,6 +184,9 @@ ${_AUTH_LINE}
         reasoning: true
         contextWindow: ${OMP_CONTEXT_WINDOW:-262144}
         maxTokens: ${OMP_MAX_TOKENS:-32768}
+        # Vision-Fähigkeit (W3, 06.09.2026): siehe Kommentar oben bei
+        # OMP_MODEL_INPUT. [text] ist der sichere Standard.
+        input: ${_MODEL_INPUT_YAML}
 YAML
 
 # ── omp.env ──────────────────────────────────────────────────────────────────
@@ -202,6 +224,33 @@ if command -v tmux >/dev/null 2>&1; then
             "OMP_MODEL_SELECTOR=${OMP_MODEL_SELECTOR}"; do
             tmux set-environment -g "${_kv%%=*}" "${_kv#*=}" 2>/dev/null || true
         done
+    fi
+fi
+
+# ── omp-Konfiguration (config.yml über `omp config set`) ────────────────────
+# Handgeschriebene config.yml wird von omp NICHT respektiert — bestätigt
+# in-container (omp v16.2.13, siehe entrypoint.sh) —, `omp config set` ist der
+# einzige Weg, der im Profil-Speicher ankommt.
+#
+# Nicht-Vision-Fall: statt nur `modelRoles.vision` unbelegt zu lassen (omps
+# eigener Auflösungspfad sucht dann quer über ALLE registrierten Modelle nach
+# einem bildfähigen und würde trotzdem den eingebauten Standard-Provider
+# treffen — siehe Kommentar oben), wird `images.blockImages: true` gesetzt.
+# Das ist im omp-Binary die ERSTE Prüfung vor jeder Modell-Auflösung für
+# Bildfragen (`if (settings.get("images.blockImages")) throw …`) — omp lehnt
+# das Bild dann mit einer eigenen, klaren Fehlermeldung ab, statt den
+# `sk-noauth`-Schlüssel gegen api.openai.com zu verschicken.
+if command -v omp >/dev/null 2>&1; then
+    if [ "$_SUPPORTS_VISION" = "1" ]; then
+        omp config set images.blockImages false >/dev/null 2>&1 \
+            && omp config set modelRoles.vision "${OMP_MODEL_SELECTOR}" >/dev/null 2>&1 \
+            && omp config set images.questionTimeoutMs 120000 >/dev/null 2>&1 \
+            && echo "[render-omp-config] Vision aktiv: modelRoles.vision=${OMP_MODEL_SELECTOR}, images.blockImages=false" \
+            || echo "[render-omp-config] WARN: omp config set (Vision) fehlgeschlagen"
+    else
+        omp config set images.blockImages true >/dev/null 2>&1 \
+            && echo "[render-omp-config] kein Vision-Modell: images.blockImages=true (omp lehnt Bilder ab statt extern nachzufragen)" \
+            || echo "[render-omp-config] WARN: omp config set (images.blockImages) fehlgeschlagen"
     fi
 fi
 

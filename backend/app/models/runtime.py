@@ -92,6 +92,13 @@ class Runtime(SQLModel, table=True):
     supports_tools: bool = Field(default=False, sa_column=Column(Boolean, server_default=text("false"), nullable=False))
     supports_reasoning: bool = Field(default=False, sa_column=Column(Boolean, server_default=text("false"), nullable=False))
     supports_streaming: bool = Field(default=True, sa_column=Column(Boolean, server_default=text("true"), nullable=False))
+    # Vision-Fähigkeit (W3, 06.09.2026): kann der servierte Motor Bilder lesen?
+    # Getragen an omp via OMP_MODEL_INPUT (build_runtime_env → render-omp-
+    # config.sh → models.yml ``input:``/``modelRoles.vision``/
+    # ``images.blockImages``, live geprüft am omp-Binary — siehe Migration
+    # 0196). Default false: eine unbekannte/neue Runtime blockt Bilder
+    # explizit statt sie ungefragt an einen externen Anbieter zu schicken.
+    supports_vision: bool = Field(default=False, sa_column=Column(Boolean, server_default=text("false"), nullable=False))
 
     preferred_context_len: int | None = None
     max_context_len: int | None = None

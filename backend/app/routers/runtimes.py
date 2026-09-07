@@ -187,6 +187,8 @@ class RuntimeCreate(BaseModel):
     supports_tools: bool = False
     supports_reasoning: bool = False
     supports_streaming: bool = True
+    # Vision-Fähigkeit (W3, 06.09.2026) — siehe models/runtime.py.
+    supports_vision: bool = False
     preferred_context_len: int | None = None
     max_context_len: int | None = None
     gpu_profile: str | None = None
@@ -243,6 +245,8 @@ class RuntimeUpdate(BaseModel):
     supports_tools: bool | None = None
     supports_reasoning: bool | None = None
     supports_streaming: bool | None = None
+    # Vision-Fähigkeit (W3, 06.09.2026) — siehe models/runtime.py.
+    supports_vision: bool | None = None
     preferred_context_len: int | None = None
     max_context_len: int | None = None
     gpu_profile: str | None = None

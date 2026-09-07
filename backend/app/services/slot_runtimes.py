@@ -141,6 +141,7 @@ async def write_slot_state(
     *,
     model: str | None,
     context_len: int | None = None,
+    supports_vision: bool | None = None,
 ) -> Runtime | None:
     """Modell (+ Fenster) der Slot-Zeile einer Box sofort setzen.
 
@@ -157,6 +158,14 @@ async def write_slot_state(
         return None
     host = await session.get(Host, host_id)
     changed = False
+    # Vision-Fähigkeit (W3, 06.09.2026): folgt dem servierten Rezept genau wie
+    # Modellname/Fenster — sonst trüge die Slot-Zeile nach einem Wechsel auf
+    # ein anderes Rezept die Vision-Fähigkeit des VORHERIGEN Modells weiter,
+    # und omp bekäme ``input: [text, image]`` für ein Modell, das gar keine
+    # Bilder lesen kann (oder umgekehrt: bliebe fälschlich blockiert).
+    if supports_vision is not None and slot.supports_vision != supports_vision:
+        slot.supports_vision = supports_vision
+        changed = True
     if model and slot.model_identifier != model:
         slot.model_identifier = model
         changed = True
