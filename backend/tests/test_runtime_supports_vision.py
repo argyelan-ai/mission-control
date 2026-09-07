@@ -442,11 +442,19 @@ def _run_render_script(tmp_path: Path, *, model_input: str | None) -> Path:
 
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ)
+    # Never inherit runtime-shaped variables: inside an omp agent container
+    # OMP_ENV_FILE points at the agent's REAL omp.env and the script honours it
+    # over OMP_HOME (2026-09-07 incident — an omp agent rewrote its own config while
+    # running this suite). Start from a scrubbed env and pin every path.
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith(("OMP_", "OPENAI_", "PI_CODING_AGENT_DIR"))
+    }
     env.update(
         HOME=str(home),
         OMP_PROFILE="mc-agent",
         OMP_HOME=str(home / ".omp"),
+        OMP_ENV_FILE=str(home / ".omp" / "omp.env"),
         OPENAI_BASE_URL="http://192.0.2.20:8000/v1",
         OPENAI_MODEL="org/glm53-exl3",
     )
@@ -482,3 +490,20 @@ def test_render_script_writes_input_text_only_when_flag_explicitly_text(tmp_path
     models_yml = _run_render_script(tmp_path, model_input="text")
     content = models_yml.read_text()
     assert "input: [text]" in content
+
+
+def test_render_script_never_touches_inherited_omp_env_file(tmp_path, monkeypatch):
+    """Sabotage-Probe (Vorfall 07.09.2026): laeuft die Suite in einem omp-Agenten-
+    Container, steht OMP_ENV_FILE auf dessen ECHTER omp.env. Der Helfer darf
+    diesen Wert nie erben — die Datei muss unangetastet bleiben."""
+    live_env = tmp_path / "live-agent" / ".omp" / "omp.env"
+    live_env.parent.mkdir(parents=True)
+    live_env.write_text("OPENAI_MODEL=GLM-5.3-Flash-EXL3\nHOME=/home/agent\n")
+    monkeypatch.setenv("OMP_ENV_FILE", str(live_env))
+    monkeypatch.setenv("OMP_TURN_SIGNAL_FILE", str(tmp_path / "live-agent" / "turn-signal.ndjson"))
+
+    models_yml = _run_render_script(tmp_path, model_input="text")
+
+    assert models_yml.is_file()
+    assert live_env.read_text() == "OPENAI_MODEL=GLM-5.3-Flash-EXL3\nHOME=/home/agent\n"
+    assert (tmp_path / "home" / ".omp" / "omp.env").is_file()
