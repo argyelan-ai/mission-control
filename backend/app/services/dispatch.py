@@ -58,6 +58,15 @@ NON_GATEWAY_RUNTIMES = frozenset({
     "manual",
 })
 
+# Guard 3 (Live-Turn-Signal, 07.09.2026): the turn signal is
+# agent.status == "working" (set by the bridge heartbeater's task-lock, NOT
+# by liveness). last_seen_at only gates staleness: a "working" agent whose
+# last heartbeat is older than this (seconds) has a bridge that stopped
+# heartbeating — the signal is unreliable, so dispatch normally (fail-open,
+# no deadlock). The omp-bridge heartbeats every 30 s, so 90 s tolerates up
+# to two missed beats.
+TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS = 90
+
 
 # Host paths that the backend container has mounted as a volume (see
 # docker-compose.yml backend.volumes). Other host paths (e.g.
@@ -507,6 +516,54 @@ async def auto_dispatch_task(
                         )
                         return
 
+                    # Guard 3: Live-Turn-Signal (cli-bridge/omp only, 07.09.2026).
+                    # Guards 1+2 are DB-state based and blind to a turn that omp
+                    # is STILL executing after its predecessor task went done
+                    # (incident 07.09.2026: Task D hung 70 min because omp was
+                    # mid-turn and got pasted anyway).
+                    #
+                    # The TURN signal is agent.status == "working": the bridge
+                    # heartbeater (bridge.py start_heartbeater → POST
+                    # /agent/me/heartbeat, routers/agents.py:3513) derives it
+                    # from the task-lock / poll turn detection and the router
+                    # self-heals it against the task table — it is true only
+                    # while a turn actually runs, unlike last_seen_at which is
+                    # just a liveness beat every 30 s (idle agents are fresh
+                    # too, PR #452 review). last_seen_at only gates liveness:
+                    # a "working" status with a heartbeat older than
+                    # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS (90 s) means the
+                    # bridge stopped heartbeating — stale signal, fail-open
+                    # dispatch instead of a deadlock. host / claude-code
+                    # untouched (runtime gate).
+                    if (
+                        getattr(best_agent, "agent_runtime", None) == "cli-bridge"
+                        and best_agent.status == "working"
+                    ):
+                        # Fail-open default: no heartbeat at all → dispatch.
+                        _heartbeat_fresh = False
+                        _seen_age = -1.0
+                        if best_agent.last_seen_at is not None:
+                            from app.utils import ensure_aware
+
+                            _seen_age = (
+                                utcnow() - ensure_aware(best_agent.last_seen_at)
+                            ).total_seconds()
+                            _heartbeat_fresh = (
+                                _seen_age < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+                            )
+                        if _heartbeat_fresh:
+                            await enqueue_task(agent_id_str, str(task.id))
+                            logger.info(
+                                "Push-dispatch queued: '%s' -> %s (agent_in_turn, status=working, heartbeat %.0fs old)",
+                                task.title, best_agent.name, _seen_age,
+                            )
+                            await emit_event(
+                                session, "task.dispatch_queued",
+                                f"Task '{task.title}' in Queue fuer {best_agent.name} (Agent im Zug)",
+                                board_id=board_id, task_id=task.id, agent_id=best_agent.id,
+                                detail={"reason": "agent_in_turn", "heartbeat_age_seconds": round(_seen_age)},
+                            )
+                            return
                 # Status stays inbox — agent must ACK itself (PATCH status: in_progress)
                 # Runtime readiness + delivery (claude-code / cli-bridge / host /
                 # openclaw) — extracted to dispatch_delivery.py (REF-01 Step 3).
