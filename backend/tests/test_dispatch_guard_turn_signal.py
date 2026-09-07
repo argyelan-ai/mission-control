@@ -6,13 +6,15 @@ while omp was still mid-turn (reflection/memory-save after `mc done`).
 The new task's prompt got pasted into the running turn and Task D hung
 70 minutes.
 
-The live signal is the agent's heartbeat
-(bridge.py start_heartbeater → POST /agent/me/heartbeat → agents.last_seen_at)
-runs every 30 s regardless of turn state. A heartbeat fresher than
-TURN_SIGNAL_FRESH_SECONDS (60 s) = agent alive right after its last task went
-done = treat as mid-turn → enqueue_task + event `task.dispatch_queued` with
-reason `agent_in_turn`, NO paste. Stale/missing heartbeat → normal dispatch
-(fail-open, no deadlock). host/claude-code runtimes are untouched.
+The TURN signal is agent.status == "working" (PR #452 review): the bridge
+heartbeater (bridge.py start_heartbeater → POST /agent/me/heartbeat →
+routers/agents.py agent_heartbeat) derives it from the task-lock and
+self-heals it against the task table — true only while a turn actually
+runs. last_seen_at is merely a liveness beat every 30 s (idle agents have
+a fresh one too), so it only gates staleness: a "working" agent whose
+heartbeat is older than TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS (90 s) has
+a dead bridge → fail-open dispatch, no deadlock. host/claude-code
+runtimes are untouched.
 """
 import datetime as dt
 import uuid
@@ -29,7 +31,8 @@ def _ago(seconds: float) -> dt.datetime:
 
 
 async def _seed(
-    make_board, make_agent, make_task, *, agent_runtime: str, last_seen_at
+    make_board, make_agent, make_task, *, agent_runtime: str,
+    status: str, last_seen_at,
 ):
     """Board + agent + pre-assigned inbox task. No other active tasks —
     Guards 1+2 must see the agent as free so Guard 3 is what decides."""
@@ -43,6 +46,7 @@ async def _seed(
         role="developer",
         board_id=board.id,
         agent_runtime=agent_runtime,
+        status=status,
         last_seen_at=last_seen_at,
     )
     task = await make_task(
@@ -78,11 +82,13 @@ async def _activity_events(task_id: uuid.UUID) -> list:
 async def test_idle_agent_dispatches_immediately(
     make_board, make_agent, make_task, fake_redis
 ):
-    """(a) Agent idle: heartbeat 10 min old → normal dispatch, paste happens."""
+    """(a) Agent idle with a fresh heartbeat (a real idle bridge heartbeats
+    every 30 s) → normal dispatch, paste happens. last_seen_at freshness
+    alone must NEVER queue — that was the PR #452 bug."""
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         board, agent, task = await _seed(
             make_board, make_agent, make_task,
-            agent_runtime="cli-bridge", last_seen_at=_ago(600),
+            agent_runtime="cli-bridge", status="idle", last_seen_at=_ago(15),
         )
         await _run_dispatch(task.id, board.id)
 
@@ -101,12 +107,12 @@ async def test_idle_agent_dispatches_immediately(
 async def test_agent_in_turn_queues_without_paste(
     make_board, make_agent, make_task, fake_redis
 ):
-    """(b) Agent mid-turn: heartbeat < 60 s old → queued, NO paste, event
-    `task.dispatch_queued` with reason `agent_in_turn`."""
+    """(b) Agent mid-turn: status=working + heartbeat < 90 s old → queued,
+    NO paste, event `task.dispatch_queued` with reason `agent_in_turn`."""
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         board, agent, task = await _seed(
             make_board, make_agent, make_task,
-            agent_runtime="cli-bridge", last_seen_at=_ago(20),
+            agent_runtime="cli-bridge", status="working", last_seen_at=_ago(20),
         )
         await _run_dispatch(task.id, board.id)
 
@@ -129,11 +135,12 @@ async def test_agent_in_turn_queues_without_paste(
 async def test_stale_heartbeat_does_not_deadlock(
     make_board, make_agent, make_task, fake_redis
 ):
-    """(c) Heartbeat older than the threshold → normal dispatch (fail-open)."""
+    """(c) status=working but heartbeat older than the staleness gate →
+    normal dispatch (fail-open, no deadlock)."""
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         board, agent, task = await _seed(
             make_board, make_agent, make_task,
-            agent_runtime="cli-bridge", last_seen_at=_ago(61),
+            agent_runtime="cli-bridge", status="working", last_seen_at=_ago(600),
         )
         await _run_dispatch(task.id, board.id)
 
@@ -152,11 +159,12 @@ async def test_stale_heartbeat_does_not_deadlock(
 async def test_missing_heartbeat_dispatches(
     make_board, make_agent, make_task, fake_redis
 ):
-    """Fail-open: last_seen_at NULL (never heartbeated) → normal dispatch."""
+    """Fail-open: status=working but last_seen_at NULL (never heartbeated)
+    → normal dispatch."""
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         board, agent, task = await _seed(
             make_board, make_agent, make_task,
-            agent_runtime="cli-bridge", last_seen_at=None,
+            agent_runtime="cli-bridge", status="working", last_seen_at=None,
         )
         await _run_dispatch(task.id, board.id)
 
@@ -170,11 +178,12 @@ async def test_missing_heartbeat_dispatches(
 async def test_host_runtime_untouched(
     make_board, make_agent, make_task, fake_redis
 ):
-    """Guardrail: host agents keep dispatching even with a fresh heartbeat."""
+    """Guardrail: host agents keep dispatching even when working with a
+    fresh heartbeat."""
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         board, agent, task = await _seed(
             make_board, make_agent, make_task,
-            agent_runtime="host", last_seen_at=_ago(5),
+            agent_runtime="host", status="working", last_seen_at=_ago(5),
         )
         await _run_dispatch(task.id, board.id)
 

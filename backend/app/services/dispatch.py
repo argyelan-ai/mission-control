@@ -58,13 +58,14 @@ NON_GATEWAY_RUNTIMES = frozenset({
     "manual",
 })
 
-# Guard 3 (Live-Turn-Signal, 07.09.2026): a cli-bridge heartbeat fresher than
-# this (seconds) means the omp process is alive right after its last task went
-# done — odds are it is still mid-turn (reflection, memory save, hook run).
-# The omp-bridge heartbeats every 30 s, so 60 s tolerates exactly one missed
-# beat without deadlocking a genuinely idle agent (heartbeat >60s old →
-# normal dispatch).
-TURN_SIGNAL_FRESH_SECONDS = 60
+# Guard 3 (Live-Turn-Signal, 07.09.2026): the turn signal is
+# agent.status == "working" (set by the bridge heartbeater's task-lock, NOT
+# by liveness). last_seen_at only gates staleness: a "working" agent whose
+# last heartbeat is older than this (seconds) has a bridge that stopped
+# heartbeating — the signal is unreliable, so dispatch normally (fail-open,
+# no deadlock). The omp-bridge heartbeats every 30 s, so 90 s tolerates up
+# to two missed beats.
+TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS = 90
 
 
 # Host paths that the backend container has mounted as a volume (see
@@ -519,28 +520,41 @@ async def auto_dispatch_task(
                     # Guards 1+2 are DB-state based and blind to a turn that omp
                     # is STILL executing after its predecessor task went done
                     # (incident 07.09.2026: Task D hung 70 min because omp was
-                    # mid-turn and got pasted anyway). The live signal is the
-                    # agent's heartbeat: the omp-bridge heartbeater thread
-                    # (bridge.py start_heartbeater → /agent/me/heartbeat →
-                    # agents.last_seen_at, agents.py:3541) runs every 30 s
-                    # INDEPENDENT of the turn, so a fresh last_seen_at proves
-                    # the process is alive — and with the task-table busy checks
-                    # above clean, "alive + just finished a task" means mid-turn.
-                    # A stale/missing heartbeat never blocks: fail-open dispatch,
-                    # no deadlock. host / claude-code untouched (runtime gate).
+                    # mid-turn and got pasted anyway).
+                    #
+                    # The TURN signal is agent.status == "working": the bridge
+                    # heartbeater (bridge.py start_heartbeater → POST
+                    # /agent/me/heartbeat, routers/agents.py:3513) derives it
+                    # from the task-lock / poll turn detection and the router
+                    # self-heals it against the task table — it is true only
+                    # while a turn actually runs, unlike last_seen_at which is
+                    # just a liveness beat every 30 s (idle agents are fresh
+                    # too, PR #452 review). last_seen_at only gates liveness:
+                    # a "working" status with a heartbeat older than
+                    # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS (90 s) means the
+                    # bridge stopped heartbeating — stale signal, fail-open
+                    # dispatch instead of a deadlock. host / claude-code
+                    # untouched (runtime gate).
                     if (
                         getattr(best_agent, "agent_runtime", None) == "cli-bridge"
-                        and best_agent.last_seen_at is not None
+                        and best_agent.status == "working"
                     ):
-                        from app.utils import ensure_aware
+                        # Fail-open default: no heartbeat at all → dispatch.
+                        _heartbeat_fresh = False
+                        _seen_age = -1.0
+                        if best_agent.last_seen_at is not None:
+                            from app.utils import ensure_aware
 
-                        _seen_age = (
-                            utcnow() - ensure_aware(best_agent.last_seen_at)
-                        ).total_seconds()
-                        if _seen_age < TURN_SIGNAL_FRESH_SECONDS:
+                            _seen_age = (
+                                utcnow() - ensure_aware(best_agent.last_seen_at)
+                            ).total_seconds()
+                            _heartbeat_fresh = (
+                                _seen_age < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+                            )
+                        if _heartbeat_fresh:
                             await enqueue_task(agent_id_str, str(task.id))
                             logger.info(
-                                "Push-dispatch queued: '%s' -> %s (agent_in_turn, heartbeat %.0fs old)",
+                                "Push-dispatch queued: '%s' -> %s (agent_in_turn, status=working, heartbeat %.0fs old)",
                                 task.title, best_agent.name, _seen_age,
                             )
                             await emit_event(
