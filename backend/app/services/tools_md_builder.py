@@ -1317,6 +1317,11 @@ mc msg "Migrated 3/5 tables, continuing." --type status
 # posts to your current task's thread (or, with no active task, your DM
 # thread) — not necessarily where the sender is waiting.
 mc msg --thread <id> "Done — details are on the board."
+
+# Attach a file (screenshot, mockup, PDF …) to a thread message — e.g. one
+# you saved under /workspace. It shows up as an image/file tile in the chat
+# (group chats included). Needs --thread; not combined with --vault-path.
+mc msg --thread <id> "Mockup 3, hybrid nav — see screenshot." --attach /workspace/mockup-3.png
 ```
 
 `--to boss|mark|agent` (default boss), `--priority low|medium|high|critical`

@@ -420,3 +420,18 @@ def test_report_doc_topic_renders_and_telegram_topic_is_gone():
     # destination — the operator's configuration decides.
     assert "alias of `mc report`" in content
     assert "via `mc telegram`" not in content
+
+
+def test_comm_v2_agent_learns_how_to_attach_a_file_to_a_thread():
+    """Live 07.09.2026: um Screenshots gebeten, antworteten Agenten in einer
+    Gruppe „technisch nicht möglich" — weil die Doku keinen Weg nannte. Der
+    Weg ist `mc msg --thread <id> ... --attach <datei>`; er muss dort stehen,
+    wo der Agent `mc msg` lernt."""
+    tools_md = generate_tools_md(
+        name="TestAgent", emoji="🤖", raw_token="tok", board_id="board-uuid-123",
+        is_board_lead=False, comm_v2=True,
+    )
+    assert "--attach" in tools_md
+    assert "mc msg --thread <id>" in tools_md
+    # Der Screenshot-Fall ist der Auslöser — er soll als Beispiel dastehen.
+    assert "screenshot" in tools_md.lower()

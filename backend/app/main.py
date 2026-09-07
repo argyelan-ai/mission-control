@@ -58,6 +58,7 @@ from app.routers import (
     agent_comments,
     agent_scoped,
     agent_task_status,
+    agent_thread_attachments,
     agent_templates,
     agents,
     ai_providers,
@@ -937,6 +938,7 @@ app.include_router(agent_templates.router)
 app.include_router(agent_scoped.router)
 app.include_router(agent_comments.router)  # REF-02 step 3 — extracted from agent_scoped (Plan 04-08 finalizes)
 app.include_router(agent_task_status.router)  # REF-02 step 4 — extracted from agent_scoped (Plan 04-08 finalizes)
+app.include_router(agent_thread_attachments.router)  # /api/v1/agent/threads/{id}/attachment — Agenten-Anhänge (Gruppenchat, 07.09.2026)
 app.include_router(install_requests.router)
 app.include_router(x_posts.router)
 app.include_router(approvals.router)

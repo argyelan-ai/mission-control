@@ -1,8 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GroupMessage, contributionExcerpt } from "./GroupMessage";
 import type { GroupMessage as GroupMessageData } from "@/lib/groupTypes";
+
+// Die Kachel holt Bild-Bytes mit Bearer-Header; im Test gibt es keinen
+// Server — der Hook liefert direkt eine fertige Blob-URL.
+vi.mock("@/hooks/useAuthBlob", () => ({
+  useAuthBlob: (url: string | null) => ({ blobUrl: url ? "blob:test" : null, loading: false, error: false }),
+}));
 
 function mkMessage(overrides: Partial<GroupMessageData> = {}): GroupMessageData {
   return {
@@ -385,5 +391,36 @@ describe("GroupMessage — Bewegung", () => {
     expect(screen.getByTestId("group-system-chevron")).toHaveAttribute("data-open", "false");
     await user.click(screen.getByTestId("group-system-toggle"));
     expect(screen.getByTestId("group-system-body").closest("[data-testid='unfold']")).not.toBeNull();
+  });
+});
+
+describe("GroupMessage — attachments from an agent (mc msg --attach)", () => {
+  // Der Agent hängt die Datei per `[Anhang: <pfad>]`-Zeile an — dasselbe
+  // Format wie der Operator-Composer im 1:1-Chat. Im Gruppenraum muss daraus
+  // eine Kachel werden, keine sichtbare Pfadzeile (Live-Befund 07.09.2026:
+  // „Screenshots technisch nicht möglich").
+  const shot = "/Users/x/.mc/references/agent/a1/0123456789abcdef-mockup.png";
+
+  it("renders an image tile for the attachment and hides the path line", async () => {
+    renderMessage(mkMessage({ body: `Mockup 3, Hybrid.\n[Anhang: ${shot}]` }));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId("group-contribution-toggle"));
+    expect(screen.getByTestId("attachment-image")).toBeInTheDocument();
+    expect(screen.getByText("Mockup 3, Hybrid.")).toBeInTheDocument();
+    expect(screen.queryByText(/\[Anhang:/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the path line out of the collapsed excerpt", () => {
+    renderMessage(mkMessage({ body: `[Anhang: ${shot}]\nNur ein Bild.` }));
+    const toggle = screen.getByTestId("group-contribution-toggle");
+    expect(toggle).toHaveTextContent("Nur ein Bild.");
+    expect(toggle).not.toHaveTextContent("Anhang:");
+  });
+
+  it("shows the file name as excerpt when the message is only an attachment", () => {
+    renderMessage(mkMessage({ body: `[Anhang: ${shot}]` }));
+    const toggle = screen.getByTestId("group-contribution-toggle");
+    expect(toggle).toHaveTextContent("mockup.png");
+    expect(toggle).not.toHaveTextContent("Anhang:");
+    expect(toggle).not.toHaveTextContent("0123456789abcdef");
   });
 });
