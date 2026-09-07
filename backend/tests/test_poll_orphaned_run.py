@@ -1,6 +1,6 @@
 """Tests for Fix 2 — poll orphan-run detection (incident 07.09.2026).
 
-Incident: Sparky ACKed Task D from a stale session; the bridge kept polling
+Incident: Agent Alpha ACKed Task D from a stale session; the bridge kept polling
 `working` (ack_at was set), but nobody worked — 70 minutes silent, no alarm.
 
 Contract under test (`/agent/me/poll`):
