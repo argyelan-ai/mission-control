@@ -2812,6 +2812,130 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
     return out
 
 
+async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, task: Task) -> dict | None:
+    """Fix 2 (Poll-Luecke, 07.09.2026 incident): detect an ORPHANED RUN.
+
+    Poll reported `working` for any task with ack_at set — even when nobody
+    was actually working (Sparky ACKed Task D from a stale session; the
+    bridge polled `working` for 70 minutes, nobody worked, no alarm).
+
+    Liveness signals for the run (same sources as Fix 1 / PR #452 context):
+    - agent.last_task_activity_at — stamped by the bridge heartbeater's
+      working-report (routers/agents.py agent_heartbeat, poll.sh Bug-13)
+      and by agent PATCH activity (agent_task_status.py).
+    - latest ModelUsageEvent.ts for this task — the harvested transcript
+      proves the LLM turn ran.
+
+    Fresh signal  → None (caller reports `working`).
+    Stale/missing → orphan handling: ack_at cleared, fresh
+    dispatch_attempt_id (set_dispatch_attempt_id, reason poll_orphan_run),
+    Redis counter incremented (endlos-redispatch guard), event
+    task.orphaned_run_redispatched with severity=warning. The returned dict
+    is spread into the poll response as state=new_task so the bridge starts
+    a fresh run. Status deliberately stays untouched (in_progress) — the
+    delivery path below re-delivers the prompt via the ack_at=NULL branch,
+    mirroring the legacy recover flow (agents.py agent_recover_task).
+
+    `waiting` tasks never reach this helper (guardrail: waiting stays a
+    parked session, held upstream of the call site).
+    """
+    import datetime as _dt
+    from app.config import settings as _settings
+    from app.models.model_usage import ModelUsageEvent
+    from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+    from app.utils import ensure_aware
+    from sqlalchemy import func as _func
+
+    threshold = _settings.poll_orphan_run_threshold_seconds
+    now = _dt.datetime.now(tz=_dt.timezone.utc)
+
+    signals: list[_dt.datetime] = []
+    if agent.last_task_activity_at is not None:
+        signals.append(ensure_aware(agent.last_task_activity_at))
+    # ack_at itself is a liveness signal: the ACK PATCH proved the agent
+    # picked the run up. Without it a JUST-acked run (no heartbeat cycle
+    # yet) would be redispatched instantly on the very next poll.
+    if task.ack_at is not None:
+        signals.append(ensure_aware(task.ack_at))
+    _last_model_ts = (
+        await session.exec(
+            select(_func.max(ModelUsageEvent.ts)).where(  # type: ignore[arg-type]
+                ModelUsageEvent.task_id == task.id
+            )
+        )
+    ).one()
+    if _last_model_ts is not None:
+        signals.append(ensure_aware(_last_model_ts))
+
+    newest = max(signals) if signals else None
+    if newest is not None and (now - newest).total_seconds() < threshold:
+        return None  # run alive — report working
+
+    # Orphaned: rotate the run identity + clear the ACK so the poll claim
+    # path re-delivers the prompt on this same response chain.
+    task.ack_at = None
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    await set_dispatch_attempt_id(
+        session, task, str(uuid.uuid4()),
+        caller="agent_poll", reason="poll_orphan_run",
+        only_if_null=False,
+    )
+
+    redis = await get_redis()
+    count_key = RedisKeys.poll_orphan_redispatch_count(str(task.id))
+    redispatch_count = int(await redis.incr(count_key))
+    await redis.expire(count_key, 86400 * 7)
+
+    await emit_event(
+        session, "task.orphaned_run_redispatched",
+        f"{agent.emoji or '🤖'} {agent.name}: Task '{task.title}' hatte ACK, aber kein lebender Lauf — neu dispatched",
+        board_id=task.board_id, task_id=task.id, agent_id=agent.id,
+        severity="warning",
+        detail={
+            "reason": "poll_orphan_run",
+            "redispatch_count": redispatch_count,
+            "threshold_seconds": threshold,
+            "last_signal_age_seconds": (
+                round((now - newest).total_seconds()) if newest else None
+            ),
+        },
+    )
+    logger.warning(
+        "Poll orphan-run redispatch: task '%s' (agent %s) acked but no live "
+        "run signal within %ds (count=%d) — re-delivering prompt",
+        task.title, agent.name, threshold, redispatch_count,
+    )
+
+    # Re-deliver immediately on THIS poll, mirroring the recovery delivery:
+    # the prompt is built here so the bridge gets a complete new_task
+    # payload without waiting for the next cycle.
+    from app.services.dispatch import build_agent_task_prompt
+    prompt = await build_agent_task_prompt(task=task, agent=agent, session=session)
+    if agent.current_task_id != task.id:
+        agent.current_task_id = task.id
+        session.add(agent)
+        await session.commit()
+    return {
+        "state": "new_task",
+        "orphaned_run_redispatched": True,
+        "redispatch_count": redispatch_count,
+        "task": {
+            "id": str(task.id),
+            "title": task.title,
+            "status": task.status,
+            "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
+            "ack_at": task.ack_at.isoformat() if task.ack_at else None,
+            "board_id": str(task.board_id) if task.board_id else None,
+            "workspace_path": task.workspace_path,
+            "prompt": prompt,
+            "slug": getattr(task, "slug", None),
+            "dispatch_attempt_id": task.dispatch_attempt_id,
+        },
+    }
+
+
 @router.get("/agent/me/poll")
 async def agent_poll(
     agent: Agent = Depends(require_agent),
@@ -2984,12 +3108,30 @@ async def agent_poll(
                     active = None
 
         if active is not None:
-            # Task 12 (final-review A1): a `waiting` task parks the session on
-            # an answer — the agent is alive but paused. Report `working` (hold)
-            # unconditionally so poll.sh leaves the session untouched: no
-            # lock-clear, no inbox-claim, no prompt re-injection into the paused
-            # session. (A waiting task always has ack_at set — it can only reach
-            # waiting from in_progress — but we don't rely on that here.)
+            # Fix 2 (poll orphan-run): an acked WORKER in_progress task must
+            # show a live run signal before poll reports `working`. Blocked /
+            # waiting / board-lead / parent tasks park unconditionally (B1
+            # grace window + Task 12 hold own those paths). Waiting tasks
+            # always have ack_at set — they can only reach waiting from
+            # in_progress — but we don't rely on that here.
+            if (
+                active.status == "in_progress"
+                and active.ack_at is not None
+                # Orphan handling is for WORKER turns only — a Board Lead
+                # orchestrates between polls and parents legitimately wait on
+                # subtasks (same guards as task_runner._check_stuck_in_progress).
+                and not agent.is_board_lead
+                and not (
+                    await session.exec(
+                        select(Task).where(Task.parent_task_id == active.id).limit(1)
+                    )
+                ).first()
+            ):
+                orphaned = await _maybe_redispatch_orphaned_run(
+                    session, agent, active,
+                )
+                if orphaned is not None:
+                    return {**orphaned, **_poll_extra}
             if active.status == "waiting" or active.ack_at is not None:
                 return {"state": "working", "task_id": str(active.id), **_poll_extra}
             # Prompt was never delivered — fall through and deliver it.
