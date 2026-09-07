@@ -47,7 +47,7 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run tests
-        run: pytest -x --tb=short -q
+        run: pytest -x --tb=short -q -n auto
 
   frontend-v2:
     name: Frontend Checks
