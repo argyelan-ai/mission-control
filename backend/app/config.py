@@ -418,6 +418,16 @@ class Settings(BaseSettings):
     # the whole check can be disabled fleet-wide without a redeploy of config.
     lifecycle_watchdog_enabled: bool = True
 
+    # Poll orphan-run redispatch (Fix 2, 07.09.2026 incident). /agent/me/poll
+    # must only report `working` while the acked run shows a LIVE signal:
+    # a working-heartbeat (agent.last_task_activity_at) or a harvested model
+    # event (ModelUsageEvent.ts) for the task, within this many seconds. An
+    # acked in_progress task with NO fresher signal is treated as an orphaned
+    # run (bridge died after ACK): ack_at cleared + fresh dispatch_attempt_id
+    # so the next poll delivers new_task and the bridge starts a clean run.
+    # 600 s default ≫ the 30 s heartbeat cadence + harvest lag.
+    poll_orphan_run_threshold_seconds: int = 600
+
     # File Indexer — periodic walk of browsable ~/.mc roots into file_index.
     # Accelerator only (bytes always stream live). Tests override to 99999 so
     # the loop never auto-fires; they call run_once() directly.
