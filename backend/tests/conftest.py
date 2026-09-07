@@ -45,6 +45,21 @@ _TEST_VAULT_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-vault-"))
 # explicit grok_log_path=/grok_sessions_path=/hermes_state_db_path= paths.
 _TEST_HARVEST_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-harvest-"))
 
+# Third incident of the same class (2026-09-07, omp agent): tests that spawn
+# real subprocesses (render-omp-config.sh & Co.) inherited the agent
+# container's OMP_ENV_FILE=/home/agent/.omp/omp.env. The script honours that
+# variable over OMP_HOME, so a fixture run inside an omp agent's own container
+# rewrote the agent's REAL omp.env with fixture values (HOME=/tmp/pytest-...,
+# model org/glm53-exl3, endpoint 192.0.2.20) — every omp relaunch afterwards
+# hit the setup wizard + "no-model" and the task stalled for 70 minutes.
+# Scrub every runtime-shaped variable from the process env at import time so
+# no test (and no subprocess it spawns) can address the operator's or the
+# host agent's live config, whatever machine the suite runs on. HOME itself
+# stays untouched — path-validation tests compare against the real one.
+_RUNTIME_ENV_PREFIXES = ("OMP_", "OPENAI_", "PI_CODING_AGENT_DIR", "MC_AGENT_TOKEN")
+for _key in [k for k in os.environ if k.startswith(_RUNTIME_ENV_PREFIXES)]:
+    os.environ.pop(_key, None)
+
 app.config.settings = app.config.Settings(
     database_url="postgresql+asyncpg://test:test@localhost:5432/test",
     redis_url="redis://fake",
