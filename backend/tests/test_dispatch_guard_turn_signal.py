@@ -1,11 +1,12 @@
 """Guard 3: Live-Turn-Signal before the paste (cli-bridge/omp).
 
 Incident 07.09.2026: Guards 1 (current_task_id) and 2 (DB busy-check) saw
-Sparky as free — the predecessor task was already `done` — while omp was
-still mid-turn (reflection/memory-save after `mc done`). The new task's
-prompt got pasted into the running turn and Task D hung 70 minutes.
+the developer agent as free — the predecessor task was already `done` —
+while omp was still mid-turn (reflection/memory-save after `mc done`).
+The new task's prompt got pasted into the running turn and Task D hung
+70 minutes.
 
-The live signal is the agent's heartbeat: the omp-bridge heartbeater thread
+The live signal is the agent's heartbeat
 (bridge.py start_heartbeater → POST /agent/me/heartbeat → agents.last_seen_at)
 runs every 30 s regardless of turn state. A heartbeat fresher than
 TURN_SIGNAL_FRESH_SECONDS (60 s) = agent alive right after its last task went
@@ -38,7 +39,7 @@ async def _seed(
         auto_dispatch_enabled=True,
     )
     agent = await make_agent(
-        name="Sparky",
+        name="alpha",
         role="developer",
         board_id=board.id,
         agent_runtime=agent_runtime,
