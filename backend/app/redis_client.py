@@ -278,6 +278,15 @@ class RedisKeys:
     def session_health_escalated(task_id: str) -> str:
         return f"mc:session_health_escalated:{task_id}"
 
+    @staticmethod
+    def poll_orphan_redispatch_count(task_id: str) -> str:
+        """Counter: how often this task was already redispatched as an
+        orphaned run by /agent/me/poll (Fix 2, 07.09.2026). No TTL — the
+        endlos-redispatch guard: a fresh dispatch attempt that ACKs again
+        restarts the liveness window, and this counter rides along, reported
+        in the task.orphaned_run_redispatched event detail."""
+        return f"mc:poll:orphan_redispatch_count:{task_id}"
+
     # ── Scheduler ────────────────────────────────────────────────────────
     @staticmethod
     def scheduler_lock() -> str:

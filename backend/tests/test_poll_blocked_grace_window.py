@@ -120,11 +120,21 @@ async def test_blocked_task_5min_old_still_parks_agent(client: AsyncClient, asyn
 
 
 @pytest.mark.asyncio
-async def test_in_progress_task_always_parks_regardless_of_age(client: AsyncClient, async_session):
-    """in_progress tasks keep parking unconditionally — no grace window."""
+async def test_in_progress_task_with_fresh_signal_parks_regardless_of_age(client: AsyncClient, async_session):
+    """in_progress tasks keep parking unconditionally — no grace window.
+    Fix 2 (poll orphan-run): the task still needs a live run signal; seed a
+    fresh working-heartbeat (last_task_activity_at) — that is the normal
+    state of a genuinely-working agent."""
     board, agent, token = await _make_board_and_agent(async_session)
     ancient = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(hours=48)
     task = await _make_task(async_session, board=board, agent=agent, status="in_progress", updated_at=ancient)
+
+    from sqlmodel import update
+    from app.models.agent import Agent as _A
+    await async_session.exec(update(_A).where(_A.id == agent.id).values(
+        last_task_activity_at=dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=30),
+    ))
+    await async_session.commit()
 
     resp = await client.get(
         "/api/v1/agent/me/poll",
