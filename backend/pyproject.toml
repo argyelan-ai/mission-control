@@ -41,6 +41,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.5",
     "httpx>=0.28.0",
     "fakeredis[json]>=2.25.0",
