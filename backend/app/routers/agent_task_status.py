@@ -2033,6 +2033,24 @@ async def agent_update_task(
     await session.commit()
     await session.refresh(task)
 
+    # ── Queue Drain (Fix "tote Dispatch-Warteschlange") ───────────────
+    # The agent just freed up (task done / failed / aborted — any terminal
+    # transition leaves no in_progress task). Drain the agent's dispatch
+    # queue in FIFO order NOW instead of waiting for the coarse watchdog
+    # tick. Double-dispatch safe: drain → auto_dispatch_task re-runs the
+    # busy guards (Guards 1-3) and set_dispatch_attempt_id(only_if_null).
+    if updates.get("status") in ("done", "failed", "aborted") and old_status not in (
+        "done", "failed", "aborted",
+    ):
+        try:
+            from app.services.task_queue import drain_agent_task_queue
+            from app.utils import create_tracked_task
+            create_tracked_task(drain_agent_task_queue(str(agent.id)))
+        except Exception:
+            logger.warning(
+                "Queue drain trigger failed for agent %s", agent.id, exc_info=True,
+            )
+
     # Phase Approval Workflow: subtask → done triggers live-stream comment on parent
     # Guards:
     #   - old_status != "done": idempotent re-PATCH (done → done) must not post
