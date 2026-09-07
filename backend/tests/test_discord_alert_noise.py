@@ -134,7 +134,7 @@ async def test_nach_ablauf_der_sperre_meldet_es_sich_wieder(sent, _redis):
         "runtime.unreachable", "qwen-general: nicht erreichbar", "error",
     )
     # Sperrschluessel ablaufen lassen, statt echte Zeit zu vergehen
-    keys = [k async for k in _redis.scan_iter("mc:discord:seen:*")]
+    keys = [k async for k in _redis.scan_iter("mc:alert:dedup:*")]
     assert keys, "Die Sperre muss ueberhaupt einen Schluessel setzen"
     for k in keys:
         await _redis.delete(k)
@@ -212,7 +212,7 @@ async def test_sammelmeldung_zaehlt_wiederholungen_zusammen(sent, _redis):
             "runtime.unreachable", "qwen-general: nicht erreichbar", "warning",
         )
         # Sperre loeschen, damit alle drei in der Sammlung landen
-        async for k in _redis.scan_iter("mc:discord:seen:*"):
+        async for k in _redis.scan_iter("mc:alert:dedup:*"):
             await _redis.delete(k)
     for i in range(discord_notify.DIGEST_MAX_ITEMS - 3):
         await discord_notify.notify_event(
