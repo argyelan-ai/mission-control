@@ -259,3 +259,23 @@ async def test_inbox_pull_applies_same_mention_filter(
         "/api/v1/agent/me/inbox", headers={"Authorization": f"Bearer {alpha_token}"}
     )
     assert alpha_resp.json()["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_inbox_pull_marks_group_thread_messages(
+    client: AsyncClient, async_session: AsyncSession
+):
+    """`mc inbox` braucht die Thread-Art, um bei Gruppen-Nachrichten auf die
+    Raum-Regeln (`mc docs groupchat`) hinzuweisen — Marks @-Erwähnung ist
+    der einzige Weg in den Raum, der KEINEN Rundenbrief mitbringt (08.09.2026)."""
+    alpha, alpha_token = await _make_member(async_session, "Alpha", "alpha")
+    _group, thread = await _make_group(async_session, [alpha])
+    await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="@alpha kurz messen?", mentions=["alpha"],
+    )
+    resp = await client.get(
+        "/api/v1/agent/me/inbox", headers={"Authorization": f"Bearer {alpha_token}"}
+    )
+    (m,) = resp.json()["messages"]
+    assert m["thread_kind"] == "group"

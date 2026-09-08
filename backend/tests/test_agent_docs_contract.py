@@ -435,3 +435,22 @@ def test_comm_v2_agent_learns_how_to_attach_a_file_to_a_thread():
     assert "mc msg --thread <id>" in tools_md
     # Der Screenshot-Fall ist der Auslöser — er soll als Beispiel dastehen.
     assert "screenshot" in tools_md.lower()
+
+
+def test_groupchat_doc_topic_teaches_room_contract():
+    """`groupchat` (08.09.2026): Schreibregeln für Gruppenchats leben als L2-Doc,
+    nicht in der SOUL — der Rundenbrief verweist per `mc docs groupchat` darauf.
+    Das Doc muss den Upload-Weg (`mc msg --thread … --attach`), den Lead-Weg
+    (`mc group-doc`) und den Kern (kurz im Raum, Details im Dokument) lehren."""
+    docs = generate_reference_docs({"operator_name": "Mark"})
+    assert "groupchat" in docs, "DOC_TOPICS must carry the `groupchat` topic"
+    doc = docs["groupchat"]
+    assert "--attach" in doc
+    assert "mc group-doc" in doc
+    assert "mc docs groupchat" not in doc  # kein Selbstverweis
+    for word in ("bold", "table", "PASS"):
+        assert word in doc, f"docs/groupchat.md must mention {word!r}"
+    # Die SOUL bleibt sauber: kein Gruppenchat-Abschnitt dort.
+    ctx = build_agent_context(_make_agent("Worker"), agents_on_board=[])
+    soul = render_agent_file("SOUL.md.j2", ctx)
+    assert "--attach" not in soul

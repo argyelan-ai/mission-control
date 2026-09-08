@@ -322,4 +322,10 @@ DOC_TOPICS: dict[str, DocTopicSpec] = {
         max_bytes=7000,
         when_to_read="When unsure which CLI verb applies, or for the close/reflection protocol.",
     ),
+    "groupchat": DocTopicSpec(
+        title="Group Chat",
+        audience="all",
+        max_bytes=5000,
+        when_to_read="Before writing into a group chat (round brief or an @-mention on a group thread).",
+    ),
 }

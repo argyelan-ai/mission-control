@@ -1,0 +1,90 @@
+# Group Chat
+
+How to write in a group chat (several agents + {{ operator_name }} in one room). You get
+here in two ways: a **round brief** from the room engine (system message, thread
+`kind=group`), or {{ operator_name }} @-mentions you directly. Same rules either way.
+
+## The one rule
+
+**Short and friendly in the room, the details in a document.** {{ operator_name }} reads
+the room like a chat with colleagues — he is an IT person, not a developer. He
+must understand every line without opening anything. Everything that needs
+scrolling belongs in an attached document, not in the room.
+
+## Writing a contribution
+
+- **Line 1 = your key sentence in bold.** It is also the room's preview line
+  (sidebar, notifications). One sentence, no greeting, no "I looked into…".
+- Then **at most ~10 short lines**: bullets with a bold label
+  (`- **Why:** …`, `- **Risk:** …`, `- **Source:** https://…`).
+  No paragraph longer than two sentences.
+- **Numbers and comparisons as a table** (max ~6 rows) — the room renders
+  GFM markdown: bold, lists, tables, code.
+- **Simple language.** Technical terms only when needed, then explained in a
+  few words in brackets. Direct and warm, like a good colleague.
+- **One claim = one source URL.** The bare link is enough, no quote block.
+- Don't @-mention other members in a round — the engine collects every
+  contribution and hands it on. Answer {{ operator_name }} directly if he asked you.
+- In round 2+ with nothing new to add: reply exactly `PASS`. Passing is a
+  full answer; mere agreement is not a contribution.
+
+Send multi-line text via heredoc on stdin — a `"…"` argument would break on
+pipes and newlines:
+
+```bash
+mc msg --thread <thread-id> - <<'EOF'
+**DFlash2 is the faster engine — 424 tok/s at 16 streams.**
+- **Why:** measured with the standard bench, same prompt, same context.
+- **Risk:** needs the `--max-mamba-cache-size 80` flag or it crashes at start.
+- **Source:** https://…
+
+| Engine | tok/s @16 | context |
+|---|---|---|
+| DFlash2 | 424 | 262k |
+| vLLM | 198 | 1.0M |
+EOF
+```
+
+The thread id is in the brief (after `--thread`) or in the footer of the
+message you received (`[thread <id> · seq …]`).
+
+## Uploading a document (details, evidence, full results)
+
+Write the long version to a file and attach it to your contribution. The room
+shows it as a tile; `.md` and `.txt` open right inside the chat, rendered.
+
+```bash
+cat > /tmp/bench-report.md <<'EOF'
+# Bench report — DFlash2 vs vLLM
+… full method, all numbers, raw logs, open questions …
+EOF
+mc msg --thread <thread-id> --attach /tmp/bench-report.md - <<'EOF'
+**DFlash2 wins — full numbers in the attached report.**
+- **Why:** 2.1× faster at 16 streams, same quality on HumanEval.
+- **Risk:** one flag is mandatory, see report §3.
+EOF
+```
+
+- Attach whenever your evidence is longer than the ~10-line budget: measurements,
+  logs, code diffs, screenshots (`--attach shot.png`), comparisons.
+- Name the file by its content (`bench-report.md`, not `out.md`). Any file
+  type works; images show as previews.
+- One document per contribution is plenty — put several results in one file
+  with headings rather than attaching five files.
+
+## If you are the lead
+
+After each round you write the verdict — same short format, starting with
+exactly one marker: `ZIEL ERREICHT: …`, `WEITER: …` or `FRAGE AN OPERATOR: …`.
+The full synthesis (sources, dissent, open points) goes into the group's
+**result document**, not into the room:
+
+```bash
+cat > /tmp/result.md <<'EOF'
+# … living result document …
+EOF
+mc group-doc <group-id> --file /tmp/result.md
+```
+
+Keep sources AND dissent in it; don't smooth anything over. Members' attached
+reports are your raw material — link or summarise them there.
