@@ -484,6 +484,8 @@
   "sessions": {
     "groups": {
       "typingPreview": "typing …",
+      "foldAll": "Collapse all",
+      "unfoldAll": "Expand all",
       "sectionTitle": "Groups",
       "newGroup": "New group",
       "emptyList": "No groups yet — several agents, one goal.",

@@ -14,14 +14,30 @@
  * Nicht-Bilder bekommen absichtlich keine Vorschau: Ein Video oder eine
  * 20-MB-PDF im Verlauf zu laden kostet Bandbreite für etwas, das niemand
  * angefordert hat. Die Karte nennt den Namen und öffnet die Datei auf Klick.
+ *
+ * Ausnahme sind Text-Dokumente (`.md`, `.txt`): Das sind die Berichte, die
+ * Agenten im Gruppenchat „hochladen" (kurze Antwort im Raum, Details im
+ * Dokument). Die klappt die Karte auf Klick direkt im Verlauf auf und rendert
+ * sie als Markdown — erst dann wird geladen, und nur mit Bearer-Header wie
+ * die Bilder.
  */
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { FileText, ImageOff } from "lucide-react";
-import { api } from "@/lib/api";
+import { ChevronDown, ChevronRight, FileText, ImageOff } from "lucide-react";
+import { api, getToken } from "@/lib/api";
 import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C } from "@/lib/colors";
+import { MarkdownContent } from "./MarkdownContent";
 import type { ParsedAttachmentRef } from "./attachments";
+
+const READABLE_EXT = new Set(["md", "markdown", "txt"]);
+
+/** Darf der Anhang direkt im Chat aufgeklappt gelesen werden? */
+export function isReadableDocument(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  return READABLE_EXT.has(name.slice(dot + 1).toLowerCase());
+}
 
 /** Wo der Files-Endpunkt den Anhang findet.
  *
@@ -51,6 +67,63 @@ export function ChatAttachmentTile({ att }: { att: ParsedAttachmentRef }) {
   const url = ref ? api.files.contentUrl(ref.root, ref.subpath) : null;
   const { blobUrl, error } = useAuthBlob(att.isImage && url ? url : null);
   const [expanded, setExpanded] = useState(false);
+  const [docText, setDocText] = useState<string | null>(null);
+  const [docError, setDocError] = useState(false);
+
+  const readable = !att.isImage && !!url && isReadableDocument(att.name);
+
+  const toggleDoc = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (!next || docText !== null || docError) return;
+    try {
+      const res = await fetch(url!, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) {
+        setDocError(true);
+        return;
+      }
+      setDocText(await res.text());
+    } catch {
+      setDocError(true);
+    }
+  };
+
+  if (readable) {
+    const Chevron = expanded ? ChevronDown : ChevronRight;
+    return (
+      <div className="basis-full min-w-0">
+        <button
+          type="button"
+          data-testid="attachment-doc"
+          aria-expanded={expanded}
+          onClick={toggleDoc}
+          className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg max-w-full cursor-pointer"
+          style={{ backgroundColor: C.bgHover, border: `1px solid ${C.border}` }}
+        >
+          <FileText size={14} className="shrink-0" style={{ color: C.textMuted }} />
+          <span className="text-[12px] truncate min-w-0" style={{ color: C.textPrimary }}>
+            {att.name}
+          </span>
+          <Chevron size={14} className="shrink-0" style={{ color: C.textMuted }} />
+        </button>
+        {expanded && (docText !== null || docError) && (
+          <div
+            data-testid="attachment-doc-body"
+            className="mt-2 px-3 py-2 rounded-lg overflow-x-auto"
+            style={{ backgroundColor: C.bgHover, border: `1px solid ${C.border}` }}
+          >
+            {docError ? (
+              <span className="text-[12px]" style={{ color: C.textMuted }}>
+                {t("attachmentUnavailable")}
+              </span>
+            ) : (
+              <MarkdownContent content={docText ?? ""} />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (att.isImage && blobUrl) {
     return (
