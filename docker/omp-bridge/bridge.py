@@ -183,6 +183,7 @@ class Kind(str, Enum):
     ABORT_HANG = "abort_hang"                  # watchdog no-progress / wall-clock kill
     ABORT_UNKNOWN = "abort_unknown"            # any other non-stop terminal stopReason
     LAUNCH_PREFLIGHT = "launch_preflight"      # exit 1/2, no json session emitted
+    INTERRUPTED = "interrupted"                # heartbeat control-channel stop (Fix 3) — NEVER retried, NEVER escalated
 
 
 # Which kinds are safe to re-run (omp -p is one-shot + idempotent, design §3.2).
@@ -196,6 +197,11 @@ RETRYABLE_KINDS = frozenset(
         Kind.ABORT_UNKNOWN,
     }
 )
+
+# Fix 3: an INTERRUPTED run is a deliberate external stop — the serve loop
+# returns to idle, the backend poll immediately reports stopped/blocked and
+# the waiting messages arrive via the next nudge. No retry, no continue,
+# no blocker escalation, no "omp abort (hang)" comment.
 
 # Which kinds heal via a Continue-Nudge (Fix B): the model stopped mid-work or
 # just forgot the sentinel/reflection — the least harmful aborts, so instead of
@@ -296,6 +302,13 @@ class RunOutcome:
     # hidden reasoning, first token pending), None otherwise. A running tool
     # takes precedence (watchdog_tool set, phase None).
     watchdog_phase: Optional[str] = None
+
+    # Fix 3: set by _run_interrupt_ladder when the heartbeat control channel
+    # fired mid-turn. kind: "hard" (operator stop / foreign block) or "soft"
+    # (unread blocker/handoff nudge waiting). reason: human-readable.
+    interrupted: bool = False
+    interrupt_kind: Optional[str] = None
+    interrupt_reason: Optional[str] = None
 
     # Derived completion-contract signals (filled by classify()).
     sentinel_ok: bool = False
@@ -524,6 +537,21 @@ def classify(outcome: RunOutcome) -> Classification:
     #     stream state (design §3.3 "from the outside, regardless of stream state"),
     #     including a wedge before the `session` line ever lands — that is a hung
     #     omp, not a deterministic launch/preflight failure.
+    # (0) Fix 3: an external interrupt via the heartbeat control channel.
+    # Checked before the watchdog: even when the ladder had to SIGKILL
+    # (rung 4), the run is a DELIBERATE stop, never an "omp abort (hang)".
+    if o.interrupted:
+        return Classification(
+            Kind.INTERRUPTED,
+            retryable=False,
+            reason="interrupted",
+            detail=(
+                f"Turn durch Heartbeat-Steuerkanal abgebrochen "
+                f"(interrupt={o.interrupt_kind}, Grund: {o.interrupt_reason or 'n/a'}) "
+                f"— externer Stop, kein Retry, keine Blocker-Eskalation."
+            ),
+        )
+
     if o.watchdog_killed:
         return Classification(
             Kind.ABORT_HANG,
@@ -666,6 +694,14 @@ def decide_lifecycle(
             review=board_requires_review,
             classification=c,
         )
+
+    # Fix 3: an externally interrupted run is terminal-but-benign — the
+    # operator/backend owns the stop. NO retry, NO continue, NO blocker:
+    # the task is already stopped/blocked server-side and the loop returns
+    # to idle.
+    if c.kind is Kind.INTERRUPTED:
+        return LifecycleAction(action="halted_interrupted", classification=c)
+
 
     if c.kind in CONTINUEABLE_KINDS and continues_left > 0:
         return LifecycleAction(
@@ -1426,6 +1462,15 @@ def drive_live_run(
             continue
         if action.action == "finish":
             lifecycle.finish(task_id, outcome.reflection_block or "", review=action.review)
+        elif action.action == "halted_interrupted":
+            # Fix 3: externally interrupted (heartbeat control channel) —
+            # NO mc finish, NO blocker escalation, NO "omp abort (hang)"
+            # comment. The backend already owns the stopped/blocked state;
+            # the loop falls back to idle and the poll picks it up.
+            sys.stderr.write(
+                f"[drive_live_run] interrupted ({outcome.interrupt_kind}: "
+                f"{outcome.interrupt_reason}) -> halt without escalation\n"
+            )
         else:
             # Budget exhausted / no executor wired -> collapse to a terminal blocker.
             if action.action in ("retry", "continue"):
@@ -1504,6 +1549,7 @@ def start_heartbeater(
     _send: Optional[Callable[[str], None]] = None,
     _stop_event: Optional["threading.Event"] = None,
     _capture_pane: Optional[Callable[[], str]] = None,
+    _on_control: Optional[Callable[[str, str], None]] = None,
 ) -> "threading.Event":
     """Daemon-Thread: POST /me/heartbeat wie poll.sh es tut (working/idle).
 
@@ -1517,6 +1563,13 @@ def start_heartbeater(
     `_capture_pane` (CTX-01 Nachzug Teil 2): optionaler Pane-Text-Lieferant
     (z.B. `NativeTuiController.capture_pane`) fuer den best-effort
     Kontext-Prozent-Scrape, siehe `_build_heartbeat_payload`.
+
+    `_on_control` (Fix 3, omp stop-signal): optionaler Callback fuer das
+    `control`-Feld der Heartbeat-Antwort ({"interrupt": "hard"|"soft",
+    "reason": str}). Wird mit (interrupt, reason) gerufen, sobald das
+    Backend eine Steueranweisung schickt; die Bridge setzt daraus ein
+    threading.Event, das `_observe_native_turn` in jeder Runde prueft.
+    Antwort OHNE control-Feld = altes Verhalten (kein Callback-Call).
     Returns das Stop-Event (fuer Tests/Shutdown).
     """
     import threading
@@ -1527,7 +1580,9 @@ def start_heartbeater(
         os.environ.get("OMP_TASK_LOCK_FILE", "/home/agent/.task-active.lock")
     ))
 
-    def _default_send(status: str) -> None:
+    def _default_send(status: str) -> "dict | None":
+        """POST one heartbeat; returns the parsed response body (None on any
+        transport/parse problem) so the control loop can read `control`."""
         req = urllib.request.Request(
             f"{api_url}/api/v1/agent/me/heartbeat",
             data=json.dumps(_build_heartbeat_payload(status, _capture_pane)).encode(),
@@ -1537,14 +1592,27 @@ def start_heartbeater(
             },
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=10).read()
+        body = urllib.request.urlopen(req, timeout=10).read()
+        try:
+            parsed = json.loads(body.decode("utf-8", "replace"))
+            return parsed if isinstance(parsed, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     send = _send or _default_send
 
     def _loop() -> None:
         while not stop.wait(interval):
             try:
-                send("working" if task_active() else "idle")
+                resp = send("working" if task_active() else "idle")
+                if _on_control is not None and isinstance(resp, dict):
+                    control = resp.get("control")
+                    if isinstance(control, dict):
+                        interrupt = str(control.get("interrupt") or "")
+                        if interrupt in ("hard", "soft"):
+                            _on_control(
+                                interrupt, str(control.get("reason") or "")
+                            )
             except Exception:  # noqa: BLE001 — heartbeat is best-effort
                 pass
 
@@ -2162,10 +2230,24 @@ def serve_loop(
     )
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)
+    # Fix 3: the heartbeat control channel. One InterruptState per serve
+    # loop; the heartbeater's `_on_control` sets it mid-run and
+    # `_observe_native_turn` (via run_native_turn/continue) consumes it.
+    interrupt_state = InterruptState()
+
+    def _on_control(kind: str, reason: str) -> None:
+        sys.stderr.write(
+            f"[serve] heartbeat control signal: interrupt={kind} ({reason})\n"
+        )
+        interrupt_state.signal(kind, reason)
+
     if _poll_fn is None:
         # Nur im echten Betrieb (Tests injizieren poll_fn und brauchen
         # keinen Netzwerk-Thread).
-        start_heartbeater(api_url, token, _capture_pane=tui.capture_pane)
+        start_heartbeater(
+            api_url, token, _capture_pane=tui.capture_pane,
+            _on_control=_on_control,
+        )
     last_attempt_id: Optional[str] = None
     ready_printed = False
     iterations = 0
@@ -2262,10 +2344,12 @@ def serve_loop(
                 _isolate = isolation != "slash"
 
                 def run_once(_cwd=cwd, _p=prompt, _tf=task_file, _iso=_isolate) -> RunOutcome:
+                    interrupt_state.clear()  # fresh signal per turn
                     return run_native_turn(
                         tui, cwd=_cwd, prompt=_p, task_file_path=_tf, isolate=_iso,
                         ready_timeout=ready_timeout, turn_deadline=turn_deadline,
                         idle_timeout=idle_timeout,
+                        interrupt_state=interrupt_state,
                     )
 
                 # Continue-Nudge (Fix B): resume the SAME TUI session (no relaunch,
@@ -2276,11 +2360,13 @@ def serve_loop(
                 # would just re-burn context restating what the live session
                 # already carries.
                 def continue_once(nudge: str, _cwd=cwd, _tf=task_file) -> RunOutcome:
+                    interrupt_state.clear()  # fresh signal per turn
                     return run_native_continue(
                         tui, cwd=_cwd,
                         nudge_prompt=wrap_prompt(nudge, include_identity=False),
                         task_file_path=_tf,
                         turn_deadline=turn_deadline, idle_timeout=idle_timeout,
+                        interrupt_state=interrupt_state,
                     )
 
             _set_task_lock(True)
@@ -2298,6 +2384,21 @@ def serve_loop(
                     continues_left=continues,
                     continue_once=continue_once,
                 )
+                # Fix 3 post-processing: an INTERRUPTED run needs NO retry,
+                # NO blocker escalation, NO "omp abort (hang)" comment. The
+                # loop falls back to idle -> the next poll reports
+                # stopped/blocked; for a soft signal the waiting nudge is
+                # delivered right here at the turn boundary and the next
+                # dispatch continues the SAME session (continue_once path).
+                if interrupt_state.fired() and interrupt_state.kind == "soft":
+                    try:
+                        lifecycle.comment(
+                            str(task["id"]),
+                            "omp-bridge: soft interrupt — nudge folgt beim "
+                            "naechsten Turn (Session bleibt bestehen).",
+                        )
+                    except Exception:  # noqa: BLE001 — best-effort comment
+                        pass
             except Exception as e:  # noqa: BLE001 — resolve terminally, never hang
                 sys.stderr.write(f"[serve] run error: {type(e).__name__}: {e}\n")
                 try:
@@ -2737,6 +2838,122 @@ def task_deadline_from_env(env: Mapping[str, str]) -> float:
     return float(raw) if raw else DEFAULT_TASK_DEADLINE_S
 
 
+# ── Fix 3: heartbeat control channel → interrupt ladder ────────────────────
+# Default grace per ladder rung (Escape -> C-c): how long to wait on the
+# hook-signal turn_end (stopReason=aborted) before falling to the next rung.
+# Env-overridable; NO pane reading — the HOOK SIGNAL is the only oracle.
+OMP_INTERRUPT_GRACE = float(os.environ.get("OMP_INTERRUPT_GRACE", "20"))
+
+
+class InterruptState:
+    """Thread-safe one-shot interrupt flag set by the heartbeater's
+    `_on_control` callback, consumed by `_observe_native_turn`.
+
+    `hard` ends the run (Kind.INTERRUPTED, no retry, no blocker); `soft`
+    also ends the run but the serve loop delivers the waiting nudge and
+    continues the SAME session afterwards. First signal wins; a later
+    soft never downgrades an earlier hard.
+    """
+
+    def __init__(self) -> None:
+        import threading
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self.kind: Optional[str] = None    # "hard" | "soft"
+        self.reason: Optional[str] = None
+
+    def signal(self, kind: str, reason: str = "") -> None:
+        with self._lock:
+            if self.kind == "hard":
+                return  # hard schlaegt soft — first hard sticks
+            self.kind = kind
+            self.reason = reason or None
+        self._event.set()
+
+    def fired(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        return self._event.wait(timeout)
+
+    def clear(self) -> None:
+        with self._lock:
+            self.kind = None
+            self.reason = None
+        self._event.clear()
+
+
+def _run_interrupt_ladder(
+    controller: NativeTuiController,
+    outcome: RunOutcome,
+    state: InterruptState,
+    cwd: str,
+    *,
+    grace: float = OMP_INTERRUPT_GRACE,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RunOutcome:
+    """The abort ladder (Fix 3, Step-0-verified against omp v18.1.10):
+
+      1. Protocol abort — none exists in the TUI (no rpc/abort channel);
+         Escape IS the verified protocol abort, so rung 1 = Escape.
+      2. `Escape` via tmux, then wait <= grace on the hook-signal
+         turn_end (stopReason=aborted / error). NO pane reading.
+      3. `C-c` (helps when Escape landed in a popup / composer state),
+         same wait.
+      4. Existing watchdog kill + relaunch (`_native_watchdog_kill`).
+
+    Every rung consumes the SAME controller.drain() stream (the observe
+    loop is paused while the ladder runs). Outcome is flagged interrupted;
+    classify() maps it to Kind.INTERRUPTED.
+    """
+
+    def _wait_terminal(limit: float) -> bool:
+        """Drain the signal for <= limit s; True once a terminal turn_end
+        (stopReason aborted/error/stop) or agent_end shows up."""
+        deadline = now() + limit
+        while now() < deadline:
+            for rec in controller.drain():
+                kind = rec.get("kind")
+                if kind == "turn_end":
+                    sr = rec.get("stopReason")
+                    if sr in ("aborted", "error", "stop"):
+                        outcome.turns += 1
+                        outcome.final_stop_reason = sr
+                        outcome.error_message = rec.get("errorMessage") or (
+                            "omp-Turn abgebrochen (aborted)." if sr == "aborted" else None
+                        )
+                        outcome.saw_agent_end = True
+                        return True
+                elif kind == "agent_end":
+                    outcome.saw_agent_end = True
+                    return True
+            sleep(0.2)
+        return False
+
+    if _wait_terminal(grace):
+        # omp already ended on its own between signal and ladder — done.
+        pass
+    else:
+        # Rung 2: Escape (verified: immediate turn_end stopReason=aborted,
+        # process survives, "Interrupted by user").
+        controller._run(["send-keys", "-t", controller.target, "Escape"])
+        if not _wait_terminal(grace):
+            # Rung 3: C-c (Step 0: no effect on a running tool, but harmless
+            # and catches composer/other states).
+            controller._run(["send-keys", "-t", controller.target, "C-c"])
+            if not _wait_terminal(grace):
+                # Rung 4: existing watchdog kill + relaunch.
+                outcome = _native_watchdog_kill(
+                    controller, outcome, cwd, "interrupt_ladder", grace * 2,
+                )
+
+    outcome.interrupted = True
+    outcome.interrupt_kind = state.kind
+    outcome.interrupt_reason = state.reason
+    return outcome
+
+
 def _native_watchdog_kill(
     controller: NativeTuiController, outcome: RunOutcome, cwd: str,
     reason: Optional[str] = None, limit: Optional[float] = None,
@@ -2767,6 +2984,8 @@ def _observe_native_turn(
     poll_interval: float,
     now: Callable[[], float],
     sleep: Callable[[float], None],
+    interrupt_state: Optional[InterruptState] = None,
+    interrupt_grace: Optional[float] = None,
 ) -> RunOutcome:
     """Tail the hook signal for THIS turn's terminal turn_end, folding it into
     `outcome`. Shared by the initial turn (run_native_turn) and a continue-nudge
@@ -2843,6 +3062,15 @@ def _observe_native_turn(
                         "omp-Turn abgebrochen (aborted)." if sr == "aborted"
                         else "Modell/Provider-Fehler."
                     )
+                    # Fix 3: an aborted/error turn_end arriving while the
+                    # control channel has fired IS the ladder's protocol
+                    # abort (Escape -> stopReason=aborted, Step-0-verified).
+                    # Stamp the interrupt and return INTERRUPTED, never the
+                    # retryable error family.
+                    if interrupt_state is not None and interrupt_state.fired():
+                        outcome.interrupted = True
+                        outcome.interrupt_kind = interrupt_state.kind
+                        outcome.interrupt_reason = interrupt_state.reason
                     return outcome
                 # toolUse | length | anything else -> agent continues; wait on.
                 continue
@@ -2860,6 +3088,14 @@ def _observe_native_turn(
                         f"Antwort endete ohne sauberen stop (letzter stopReason={last_sr})."
                     )
                 return outcome
+
+        # --- Fix 3: heartbeat control channel — check in EVERY round.
+        if interrupt_state is not None and interrupt_state.fired():
+            return _run_interrupt_ladder(
+                controller, outcome, interrupt_state, cwd,
+                grace=interrupt_grace if interrupt_grace is not None else OMP_INTERRUPT_GRACE,
+                now=now, sleep=sleep,
+            )
 
         # --- watchdog (out of band vs the model): child-death, wall-clock, idle
         t = now()
@@ -2889,6 +3125,8 @@ def run_native_turn(
     poll_interval: float = 1.0,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    interrupt_state: Optional[InterruptState] = None,
+    interrupt_grace: Optional[float] = None,
 ) -> RunOutcome:
     """One inject→observe cycle against the native TUI → a RunOutcome.
 
@@ -2930,6 +3168,8 @@ def run_native_turn(
     return _observe_native_turn(
         controller, outcome, cwd=cwd, turn_deadline=turn_deadline,
         idle_timeout=idle_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
+        interrupt_state=interrupt_state,
+        interrupt_grace=interrupt_grace,
     )
 
 
@@ -2944,6 +3184,8 @@ def run_native_continue(
     poll_interval: float = 1.0,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    interrupt_state: Optional[InterruptState] = None,
+    interrupt_grace: Optional[float] = None,
 ) -> RunOutcome:
     """Continue-Nudge (Fix B): re-inject a follow-up prompt into the ALREADY-LIVE
     native TUI session — NO relaunch, so the model keeps its context (that is the
@@ -2972,6 +3214,8 @@ def run_native_continue(
     return _observe_native_turn(
         controller, outcome, cwd=cwd, turn_deadline=turn_deadline,
         idle_timeout=idle_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
+        interrupt_state=interrupt_state,
+        interrupt_grace=interrupt_grace,
     )
 
 

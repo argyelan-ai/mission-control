@@ -72,6 +72,12 @@ def _run(poll_states, run_factory, *, iterations, lifecycle=None):
         except StopIteration:
             return {"state": "idle"}
 
+    # Isolated context-env path: the default MC_CONTEXT_ENV_PATH is the LIVE
+    # /tmp/mc-context.env the real bridge writes for the agent's `mc` CLI —
+    # a test run must never clobber it with fixture ids (task-1/board-1).
+    import tempfile
+    ctx = os.path.join(tempfile.mkdtemp(prefix="omp-serve-ctx-"), "mc-context.env")
+
     bridge.serve_loop(
         poll_interval=0,
         max_iterations=iterations,
@@ -79,6 +85,7 @@ def _run(poll_states, run_factory, *, iterations, lifecycle=None):
         _lifecycle_factory=lambda task: lc,
         _run_factory=run_factory,
         _sleep=lambda _s: None,
+        _context_env_path=ctx,
     )
     return lc
 
