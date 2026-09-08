@@ -65,6 +65,10 @@ While the parent is `blocked` on a callback, do not poll or "check again in a
 minute" — end your turn. The dispatch cascade re-activates you automatically
 once the upstream is done.
 
+When a proof or follow-up needs a second task for the SAME worker, that card can
+only run after their current turn ends (`waiting`/`mc finish`) — never instruct a
+worker to wait in-turn for a card.
+
 ## Delegation vs. Briefing vs. Note
 
 | Scenario | Call | Effect |
