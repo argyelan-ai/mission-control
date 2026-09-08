@@ -10,6 +10,7 @@
  */
 
 import { useTranslations } from "next-intl";
+import { splitAttachments } from "@/components/chat/attachments";
 import { ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import { AvatarStack } from "@/components/groupchat/AvatarStack";
@@ -39,7 +40,10 @@ export function GroupRow({ group, selected, onSelect, variant = "rail" }: GroupR
   const last = group.last_message ?? null;
   // Ohne letzte Nachricht trägt das Ziel die zweite Zeile — eine frisch
   // angelegte Gruppe soll nie mit einer leeren Zeile dastehen.
-  const preview = last ? `${last.sender}: ${last.body}` : group.goal;
+  // Anhänge stehen als `[Anhang: <pfad>]`-Zeile im Text (`mc msg --attach`);
+  // der Raum zeigt dafür eine Kachel — die Vorschau nennt den Dateinamen
+  // statt des Ablagepfads.
+  const preview = last ? `${last.sender}: ${previewText(last.body)}` : group.goal;
 
   const chipKind = groupChipKind(group);
   const chipText =
@@ -104,4 +108,9 @@ export function GroupRow({ group, selected, onSelect, variant = "rail" }: GroupR
       )}
     </button>
   );
+}
+
+function previewText(body: string): string {
+  const parsed = splitAttachments(body);
+  return parsed.text || parsed.attachments.map((a) => a.name).join(" · ");
 }

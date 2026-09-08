@@ -52,6 +52,36 @@ describe("GroupRow", () => {
     expect(screen.getByText("Rex: DFlash2 wins on throughput")).toBeInTheDocument();
   });
 
+  it("previews an attached message without the [Anhang: …] path line", () => {
+    // Live 08.09.2026: die Rail zeigte den rohen Ablagepfad, der Raum daneben
+    // schon die Kachel. Die Vorschau spricht dieselbe Sprache wie der Raum.
+    const shot = "/Users/x/.mc/references/agent/a1/0123456789abcdef-mockup.png";
+    render(
+      <GroupRow
+        group={mkGroup({
+          last_message: { sender: "Alpha", body: `Mockup 3.\n[Anhang: ${shot}]`, created_at: null },
+        })}
+        selected={false}
+        onSelect={() => {}}
+      />
+    );
+    expect(screen.getByText("Alpha: Mockup 3.")).toBeInTheDocument();
+    expect(screen.queryByText(/Anhang:/)).not.toBeInTheDocument();
+  });
+
+  it("previews an attachment-only message by its file name", () => {
+    render(
+      <GroupRow
+        group={mkGroup({
+          last_message: { sender: "Alpha", body: "[Anhang: /Users/x/.mc/references/agent/a1/0123456789abcdef-mockup.png]", created_at: null },
+        })}
+        selected={false}
+        onSelect={() => {}}
+      />
+    );
+    expect(screen.getByText("Alpha: mockup.png")).toBeInTheDocument();
+  });
+
   it("falls back to the goal when the group has no message yet", () => {
     render(<GroupRow group={mkGroup({ last_message: null })} selected={false} onSelect={() => {}} />);
     expect(screen.getByText("Assess DFlash2 as the default")).toBeInTheDocument();
