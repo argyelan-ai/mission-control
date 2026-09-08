@@ -90,6 +90,7 @@ RUN chmod +x /home/agent/.mc-cli/mc \
 # Setup) das ausfuehrende Skriptverzeichnis findet.
 COPY bridge.py            /opt/omp-bridge/bridge.py
 COPY acp_client.py        /opt/omp-bridge/acp_client.py
+COPY acp_chat_events.py   /opt/omp-bridge/acp_chat_events.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
 COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
