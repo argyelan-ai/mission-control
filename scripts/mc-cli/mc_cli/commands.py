@@ -1204,9 +1204,16 @@ def _cmd_inbox(args, client, cfg):
             f"[thread {m.get('thread_id')} · seq {m.get('seq')} · "
             f"von {m.get('sender', '?')} · typ {m.get('message_type', '?')}]"
         )
-        blocks.append(
-            f"# Neue Nachricht (Interaction 2.0)\n\n{m.get('body') or ''}\n\n{footer}"
-        )
+        block = f"# Neue Nachricht (Interaction 2.0)\n\n{m.get('body') or ''}\n\n{footer}"
+        if m.get("thread_kind") == "group":
+            # Gruppen-Thread ohne Rundenbrief (Operator-@-Mention): die
+            # Raum-Regeln liegen im Referenz-Doc, nicht in der SOUL.
+            block += (
+                "\n\nGruppenchat — Regeln: `mc docs groupchat` (kurz und "
+                "verständlich im Raum, Details als Dokument: "
+                f"`mc msg --thread {m.get('thread_id')} --attach <datei> \"…\"`)."
+            )
+        blocks.append(block)
     print("\n\n---\n\n".join(blocks))
 
     # Ack pro Thread das hoechste gelieferte seq (Pull = Zustellung). Fehlschlag
