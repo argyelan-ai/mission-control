@@ -3402,6 +3402,33 @@ def _mc_ask_blocking(task_id: str, question: str) -> str:
     return (proc.stdout or "").strip()
 
 
+def _acp_permission_decision_transcribed(
+    params: dict,
+    *,
+    mapper: "acp_chat_events.ACPEventMapper",
+    emit: Callable[[list[str]], None],
+    policy: str,
+    task_id: str,
+    ask_fn: Optional[Callable[[str, str], str]] = None,
+) -> str:
+    """Session chat view (Subtask 3/4): record the permission request and the
+    decision on the transcript stream, then delegate to the plain decision
+    path. The request line lands BEFORE the ask (the operator may sit on the
+    mc-ask prompt for minutes — the chat must already show what is waiting),
+    the decision line after.
+    """
+    try:
+        emit(mapper.map_permission_request(params))
+    except Exception:  # noqa: BLE001 — chat view must never break the ask
+        pass
+    choice = _acp_permission_decision(params, policy=policy, task_id=task_id, ask_fn=ask_fn)
+    try:
+        emit(mapper.map_permission_outcome(params, choice))
+    except Exception:  # noqa: BLE001 — chat view must never break the ask
+        pass
+    return choice
+
+
 def run_acp_once(
     prompt: str,
     *,
@@ -3414,6 +3441,7 @@ def run_acp_once(
     cancel_poll_interval: float = 1.0,
     client_factory: Optional[Callable[[], "acp_client.ACPClient"]] = None,
     ask_fn: Optional[Callable[[str, str], str]] = None,
+    transcript_sink: Optional[Callable[[list[str]], None]] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
 
@@ -3424,8 +3452,27 @@ def run_acp_once(
       classify_acp() from the streamed agent text, same oracle as native.
     - Interrupt (Stufe 1 of the ladder): cancel_state.requested -> session/cancel,
       prompt resolves stopReason=cancelled -> Kind.INTERRUPTED (Fix 3).
+
+    Sessions chat view (Subtask 3/4): ``transcript_sink`` receives the mapped
+    omp-format JSONL lines for every ACP event, so the backend's existing
+    transcript tailer (services/omp_chat.py + ChatTailerManager) streams the
+    run into the /sessions chat exactly like a native TUI run. ``None``
+    (default) keeps the pure-driver behaviour byte-identical — the existing
+    bridge tests never exercise it.
     """
     import threading
+
+    import acp_chat_events
+
+    mapper = acp_chat_events.ACPEventMapper()
+
+    def emit_transcript(entries: list[dict]) -> None:
+        if transcript_sink is None or not entries:
+            return
+        try:
+            transcript_sink(acp_chat_events.ACPEventMapper.dump(entries))
+        except Exception:  # noqa: BLE001 — the chat view must never kill the run
+            sys.stderr.write("[acp] transcript sink write failed\n")
 
     outcome = RunOutcome()
     full_text: list[str] = []
@@ -3448,7 +3495,13 @@ def run_acp_once(
             if str((upd.get("status") or "")).lower() in ("failed", "error"):
                 tool_errors += 0
                 tool_error_flags[0] = True
+        # Sessions chat stream (Subtask 3/4): map EVERY update into the
+        # omp-format transcript regardless of the classification bookkeeping
+        # above — the two concerns are independent.
+        emit_transcript(mapper.map_update(params))
 
+    # The user turn itself, so the chat view shows what was asked.
+    emit_transcript(mapper.map_user_prompt(acp_context_prefix(cwd) + prompt))
     tool_count = [0]
     tool_error_flags = [False]
 
@@ -3463,8 +3516,9 @@ def run_acp_once(
     prompt_result = None
     try:
         client.on_event(on_event)
-        client.on_permission(lambda params: _acp_permission_decision(
-            params, policy=permission_policy, task_id=task_id, ask_fn=ask_fn,
+        client.on_permission(lambda params: _acp_permission_decision_transcribed(
+            params, mapper=mapper, emit=emit_transcript,
+            policy=permission_policy, task_id=task_id, ask_fn=ask_fn,
         ))
         client._ensure_process()
         # An injected client (tests, reuse) may carry a pre-built _proc whose
@@ -3528,6 +3582,7 @@ def run_acp_once(
         outcome.final_stop_reason = prompt_result.stopReason
         outcome.usage = prompt_result.usage
         outcome.saw_agent_end = True
+        mapper.set_prompt_usage(prompt_result.usage)
     return outcome
 
 
@@ -3638,20 +3693,39 @@ def _make_acp_run_factory(
     task_id: str,
 ) -> Callable[[str], RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable."""
+    import acp_chat_events
+
     cancel_state = ACPCancelState()
 
     def run(prompt: str) -> RunOutcome:
+        cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
+        # Sessions chat view (Subtask 3/4): one JSONL transcript per ACP
+        # session, written where the backend's omp chat adapter reads. A
+        # sink that resolves to None (no PI_CODING_AGENT_DIR — e.g. local
+        # replay) degrades to no-op inside the sink.
+        sid_holder: list[str] = ["acp-session"]
+
+        def sink(lines: list[str]) -> None:
+            directory = acp_chat_events.session_dir(cwd=cwd)
+            sink_obj = getattr(sink, "_sink", None)
+            if sink_obj is None or sink_obj.session_id != sid_holder[0]:
+                sink_obj = acp_chat_events.ChatEventSink(directory, sid_holder[0])
+                sink._sink = sink_obj  # type: ignore[attr-defined]
+            sink_obj.write(lines)
+
         return run_acp_once(
             prompt,
-            cwd=os.environ.get("OMP_ACP_CWD") or _acp_cwd_default(),
+            cwd=cwd,
             model=model,
             max_time=max_time,
             permission_policy=permission_policy,
             task_id=task_id,
             cancel_state=cancel_state,
+            transcript_sink=sink,
         )
 
     return run
+
 
 
 def _acp_cwd_default() -> str:
