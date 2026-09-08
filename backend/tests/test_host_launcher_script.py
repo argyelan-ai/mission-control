@@ -270,3 +270,24 @@ def test_launcher_does_not_bake_the_model_into_the_script(tmp_path):
     assert "ANTHROPIC_MODEL" in script and "WARN" in script, (
         "the launcher must warn when agent.env carries no ANTHROPIC_MODEL"
     )
+
+
+def test_launcher_exports_docs_dir_after_unsetting_claude_config_dir(tmp_path):
+    """The launcher unsets CLAUDE_CONFIG_DIR (claude needs the OAuth keychain
+    under ~/.claude/). `mc docs` resolves its tree from that very variable, so
+    without a replacement a host agent's `mc docs <topic>` falls through to
+    the operator's ~/.claude/docs — which doesn't exist — and every reference
+    doc (groupchat, delegation, …) is unreadable for Boss. The launcher must
+    hand `mc` the agent's own docs dir explicitly via MC_DOCS_DIR, *after*
+    the unset."""
+    workspace = tmp_path / "workspaces" / "boss"
+    workspace.mkdir(parents=True)
+    agent = _make_claude_host_agent(workspace_path=str(workspace))
+    render_host_launcher_script(agent)
+
+    from app.services import docker_agent_sync as das
+    script = (das.AGENTS_DIR / f"{_agent_slug(agent)}-host" / "start-claude.sh").read_text()
+    # CONFIG_DIR is the one source of truth in the script (asserted above to
+    # equal workspace_path/claude-config) — the docs dir must derive from it.
+    assert 'export MC_DOCS_DIR="$CONFIG_DIR/docs"' in script, script
+    assert script.index("unset CLAUDE_CONFIG_DIR") < script.index("export MC_DOCS_DIR")
