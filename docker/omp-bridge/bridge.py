@@ -64,7 +64,7 @@ REFLECTION_HEADERS = (
     "## Was wurde gemacht",
     "## Was hat funktioniert",
     "## Was war unklar",
-    "## Lesson fuer Agent-Memory",
+    "## Lesson für Agent-Memory",
 )
 MIN_REFLECTION_CHARS = 80
 
@@ -93,7 +93,7 @@ _ENGLISH_ALIASES = {
     "what was done": "Was wurde gemacht",
     "what worked": "Was hat funktioniert",
     "what was unclear": "Was war unklar",
-    "lesson for agent memory": "Lesson fuer Agent-Memory",
+    "lesson for agent memory": "Lesson für Agent-Memory",
 }
 
 _HEADER_RE = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$")
@@ -1091,7 +1091,7 @@ COMPLETION_INSTRUCTIONS = (
     "## Was wurde gemacht\n<kurz>\n"
     "## Was hat funktioniert\n<kurz>\n"
     "## Was war unklar\n<kurz>\n"
-    "## Lesson fuer Agent-Memory\n<kurz>\n"
+    "## Lesson für Agent-Memory\n<kurz>\n"
     "TASK_COMPLETE\n\n"
     "Die Zeile `TASK_COMPLETE` MUSS die allerletzte nicht-leere Zeile sein.\n"
     "Ohne diesen Block gilt die Aufgabe als NICHT abgeschlossen.\n"

@@ -56,7 +56,7 @@ def test_finish_with_sentinel_decides_finish():
     assert action.action == "finish", action
     assert action.classification.kind is Kind.FINISH
     assert action.review is True                      # MC-Dev board -> review
-    assert action.reflection and "## Lesson fuer Agent-Memory" in action.reflection
+    assert action.reflection and "## Lesson für Agent-Memory" in action.reflection
     kinds = [c[0] for c in lc.calls]
     assert "ack" in kinds and "finish" in kinds
     assert "blocker" not in kinds

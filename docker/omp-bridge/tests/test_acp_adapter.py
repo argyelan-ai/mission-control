@@ -6,7 +6,7 @@ against the fake ACP server replaying the golden fixtures, exactly like
 test_acp_replay.py drives the raw client.
 
 Covers:
-  - run_once: prompt in -> RunOutcome with stop_reason/usage/final_text
+  - run_once: prompt in -> RunOutcome with final_stop_reason/usage/final_text
   - Interrupt (Fix 3 ladder step 1): cancel -> session/cancel notification ->
     stopReason=cancelled -> Kind.INTERRUPTED
   - Classification: end_turn -> completion contract, cancelled -> INTERRUPTED,
@@ -155,7 +155,7 @@ def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = Fa
 def test_acp_run_once_normal_turn_returns_outcome():
     outcome, _ = run_adapter(FIXTURES["normal"])
     assert outcome.saw_session is True
-    assert outcome.stop_reason == "end_turn"
+    assert outcome.final_stop_reason == "end_turn"
     assert outcome.saw_agent_end is True
     assert outcome.usage and outcome.usage.get("totalTokens") == 17400
     print("PASS test_acp_run_once_normal_turn_returns_outcome")
@@ -187,14 +187,14 @@ def test_acp_run_once_prefixes_context_files(tmp_path="unused"):
 
 def test_acp_cancel_mid_turn_reports_cancelled():
     outcome, _ = run_adapter(FIXTURES["cancel"], cancel_before=True)
-    assert outcome.stop_reason == "cancelled"
+    assert outcome.final_stop_reason == "cancelled"
     print("PASS test_acp_cancel_mid_turn_reports_cancelled")
 
 
 def test_acp_cancelled_classifies_interrupted():
     o = bridge.RunOutcome()
     o.saw_session = True
-    o.stop_reason = "cancelled"
+    o.final_stop_reason = "cancelled"
     o.saw_agent_end = True
     cls = bridge.classify_acp(o)
     assert cls.kind is bridge.Kind.INTERRUPTED
@@ -232,7 +232,7 @@ def _finish_outcome() -> bridge.RunOutcome:
     o = bridge.RunOutcome()
     o.saw_session = True
     o.saw_agent_end = True
-    o.stop_reason = "end_turn"
+    o.final_stop_reason = "end_turn"
     o.final_text = (
         "## Was wurde gemacht\nx\n"
         "## Was hat funktioniert\ny\n"
@@ -260,7 +260,7 @@ def test_acp_error_stop_reason_transient():
     o = bridge.RunOutcome()
     o.saw_session = True
     o.saw_agent_end = True
-    o.stop_reason = "error"
+    o.final_stop_reason = "error"
     o.error_message = "fetch failed: connection error"
     assert bridge.classify_acp(o).kind is bridge.Kind.ABORT_TRANSIENT_API
     assert bridge.classify_acp(o).retryable is True
@@ -271,7 +271,7 @@ def test_acp_error_stop_reason_model_error():
     o = bridge.RunOutcome()
     o.saw_session = True
     o.saw_agent_end = True
-    o.stop_reason = "error"
+    o.final_stop_reason = "error"
     o.error_message = "invalid api key"
     assert bridge.classify_acp(o).kind is bridge.Kind.ABORT_ERROR
     print("PASS test_acp_error_stop_reason_model_error")
@@ -281,7 +281,7 @@ def test_acp_max_tokens_classifies_maxtime():
     o = bridge.RunOutcome()
     o.saw_session = True
     o.saw_agent_end = True
-    o.stop_reason = "max_tokens"
+    o.final_stop_reason = "max_tokens"
     assert bridge.classify_acp(o).kind is bridge.Kind.ABORT_MAXTIME
     print("PASS test_acp_max_tokens_classifies_maxtime")
 
@@ -296,7 +296,7 @@ def test_acp_no_session_classifies_launch_preflight():
 def test_acp_no_prompt_result_classifies_crash():
     o = bridge.RunOutcome()
     o.saw_session = True
-    o.stop_reason = None
+    o.final_stop_reason = None
     assert bridge.classify_acp(o).kind is bridge.Kind.ABORT_CRASH
     print("PASS test_acp_no_prompt_result_classifies_crash")
 
@@ -389,12 +389,13 @@ def test_sabotage_probe_serve_loop_native_selection_unchanged():
         # _run_factory injection seam and default to run_omp_subprocess.
         src = open(ROOT / "bridge.py", encoding="utf-8").read()
         assert "elif _acp_env_driver() == \"acp\":" in src
-        native_idx = src.index("def run_once(_p=prompt, _cwd=cwd")
+        native_idx = src.index("def run_once(_cwd=cwd, _p=prompt, _tf=task_file")
         acp_idx = src.index('elif _acp_env_driver() == "acp":')
         factory_idx = src.index("if _run_factory is not None:")
         assert factory_idx < acp_idx < native_idx, "driver branch order changed"
-        # The native wrapper body still calls run_omp_subprocess with tee=None.
-        assert "run_omp_subprocess(_p, cwd=_cwd, model=_m, max_time=_t, tee=None)" in src
+        # The native path still runs run_native_turn with interrupt_state
+        # (upstream ADR-049 native-TUI driver — marknx ran run_omp_subprocess).
+        assert "return run_native_turn(" in src
     finally:
         if old is not None:
             os.environ["OMP_DRIVER"] = old
@@ -420,11 +421,13 @@ def test_acp_interrupted_decides_blocker_not_retry():
     o = bridge.RunOutcome()
     o.saw_session = True
     o.saw_agent_end = True
-    o.stop_reason = "cancelled"
+    o.final_stop_reason = "cancelled"
     action = bridge.decide_lifecycle(bridge.classify_acp(o),
                                      board_requires_review=True, retries_left=2)
-    assert action.action == "blocker"
-    assert action.blocker_type == "technical_problem"
+    # Upstream Fix 3 (#456): an INTERRUPTED run is halted_interrupted —
+    # no retry, no blocker escalation. (marknx mapped it to blocker;
+    # argyelan-ai's ladder contract is authoritative here.)
+    assert action.action == "halted_interrupted"
     print("PASS test_acp_interrupted_decides_blocker_not_retry")
 
 
