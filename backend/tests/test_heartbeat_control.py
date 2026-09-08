@@ -266,3 +266,135 @@ async def test_heartbeat_no_task_has_no_control(client: AsyncClient):
     assert resp.status_code == 200
     assert body["ok"] is True
     assert "control" not in body
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_with_payload_task_id_sees_stopped_run(client: AsyncClient):
+    """Fix 3b case (a): stop AFTER dispatch. agent.current_task_id was
+    cleared by stop_task_run and the task is `blocked`+run_control=stopped,
+    so the in_progress lookup finds nothing — but the bridge reports its
+    live turn context (payload.task_id). The next heartbeat MUST deliver
+    control.interrupt=hard — resolved via the payload task_id."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        # Simulate stop_task_run: status blocked + run_control=stopped,
+        # agent lock released (operations.py:stop_task_run).
+        task.status = "blocked"
+        task.run_control = "stopped"
+        task.blocked_at = dt.datetime.now(tz=dt.timezone.utc)
+        s.add(task)
+        agent.current_task_id = None
+        s.add(agent)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(task.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["control"]["interrupt"] == "hard"
+    assert "reason" in body["control"]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_without_task_id_keeps_legacy_behavior(client: AsyncClient):
+    """Fix 3b case (b): an OLD bridge sends no task_id — the response must
+    stay byte-identical to the pre-Fix-3b shape (no control for a stopped
+    run whose pointer was cleared: the legacy fall-through)."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        task.status = "blocked"
+        task.run_control = "stopped"
+        task.blocked_at = dt.datetime.now(tz=dt.timezone.utc)
+        s.add(task)
+        agent.current_task_id = None
+        s.add(agent)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working"},  # NO task_id — legacy bridge
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Legacy: pre-heal pointer lookup finds nothing (pointer cleared) ->
+    # no control. AND the Bug-18 self-heal coerced status to idle.
+    assert "control" not in body
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_foreign_task_id_is_ignored(client: AsyncClient):
+    """Fix 3b case (c): a task_id of ANOTHER agent's task must NEVER steer
+    this agent's control channel (sabotage guard) — response has no control
+    and the agent does not flip on the foreign task."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, _own_task, token = await _agent_with_task(s)
+        # Foreign agent + its stopped task.
+        raw2, hash2 = generate_agent_token()
+        other = Agent(
+            name=f"Other-{uuid.uuid4().hex[:6]}",
+            agent_runtime="cli-bridge",
+            agent_token_hash=hash2,
+            board_id=agent.board_id,
+            scopes=["heartbeat"],
+        )
+        s.add(other)
+        await s.commit()
+        now = dt.datetime.now(tz=dt.timezone.utc)
+        foreign_task = Task(
+            board_id=agent.board_id,
+            assigned_agent_id=other.id,
+            title="Foreign stopped run",
+            status="blocked",
+            run_control="stopped",
+            blocked_at=now,
+        )
+        s.add(foreign_task)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(foreign_task.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "control" not in body
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_blocked_turn_signal_keeps_working_status(client: AsyncClient):
+    """Fix 3b / Guard 3 (live incident 08.09.2026 10:15): the lead sets the
+    RUNNING task to blocked; without a payload task_id the Bug-18 self-heal
+    coerced the agent to idle and the next dispatch pasted into the live
+    turn. WITH the bridge's task_id the agent stays working (Guard 3 keeps
+    queueing) AND the control channel reports hard."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        task.status = "blocked"  # lead stopped the running task
+        task.run_control = "stopped"
+        task.blocked_at = dt.datetime.now(tz=dt.timezone.utc)
+        s.add(task)
+        agent.current_task_id = None
+        s.add(agent)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(task.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["control"]["interrupt"] == "hard"
+    # Agent stays working -> Guard 3 (status == "working") still queues.
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from sqlmodel import select as _select
+        fresh = (await s.exec(
+            _select(Agent).where(Agent.id == agent.id)
+        )).one()
+        assert fresh.status == "working"
+        assert fresh.run_state == "running"

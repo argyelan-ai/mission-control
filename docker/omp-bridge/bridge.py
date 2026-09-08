@@ -36,6 +36,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -1514,6 +1515,32 @@ def drive_live_run(
         return action
 
 
+# ── Turn context for the heartbeat control channel (Fix 3b, 2026-09-08) ────
+# serve_loop sets this around every run_once/continue_once turn; the
+# heartbeater thread reads it to report WHICH task is actually running.
+# Thread-safe: the heartbeater runs on a daemon thread while serve_loop
+# mutates from the main thread. After the turn the context is cleared, so
+# the bridge stops reporting ids (legacy shape restored).
+_TURN_CONTEXT_LOCK = threading.Lock()
+_TURN_CONTEXT: Optional[dict] = None
+
+
+def _set_turn_context(task_id: Optional[str], attempt_id: Optional[str]) -> None:
+    """Set (both ids given) or clear (task_id None) the current turn context."""
+    global _TURN_CONTEXT
+    with _TURN_CONTEXT_LOCK:
+        _TURN_CONTEXT = (
+            {"task_id": str(task_id), "attempt_id": str(attempt_id or "")}
+            if task_id
+            else None
+        )
+
+
+def _get_turn_context() -> Optional[dict]:
+    with _TURN_CONTEXT_LOCK:
+        return dict(_TURN_CONTEXT) if _TURN_CONTEXT else None
+
+
 def _build_heartbeat_payload(
     status: str, capture_pane: Optional[Callable[[], str]]
 ) -> dict:
@@ -1522,14 +1549,22 @@ def _build_heartbeat_payload(
     den Heartbeat-Body. Eigene Funktion (statt inline in `_default_send`),
     damit sie OHNE Threading/urllib-Mocking direkt testbar ist.
 
-    `capture_pane` ist None solange der Aufrufer keinen Pane-Zugriff hat
-    (z.B. reine Status-Tests) — dann bleibt der Body wie vorher nur
-    `{"status": ...}`. Ein Scrape-Fehler (Pane-Capture wirft, Regex-Edge-Case)
-    darf den Heartbeat NIE reissen — geschluckt, Body faellt auf status-only
-    zurueck. `context_pct` wird WEGGELASSEN (nicht als 0 gesendet), wenn
-    scrape_context_pct() keinen Wert findet (z.B. frisch gestartete Session).
+    Fix 3b (2026-09-08): waehrend eines laufenden Turns sendet der Payload
+    zusaetzlich `task_id` + `attempt_id` (aus dem Turn-Kontext, gesetzt von
+    serve_loop via `_set_turn_context`). Das ist die Wahrheit der Bridge
+    darueber, WELCHER Task gerade laeuft — unabhaengig vom DB-Status. Der
+    Backend-Heartbeat nutzt sie fuer den Control-Kanal (gestoppte/blockierte
+    Runs sichtbar machen), GUARD: der Wert wird NUR gemeldet, wenn der
+    Task-Lock aktiv ist (`_turn_context` existiert nur innerhalb eines
+    run_once-Turns) — nach Turn-Ende sendet die Bridge KEINE ids mehr.
+    Ein Scrape/Context-Fehler darf den Heartbeat NIE reissen.
     """
     payload: dict = {"status": status}
+    turn_ctx = _get_turn_context()
+    if turn_ctx is not None:
+        payload["task_id"] = turn_ctx["task_id"]
+        if turn_ctx.get("attempt_id"):
+            payload["attempt_id"] = turn_ctx["attempt_id"]
     if capture_pane is not None:
         try:
             pct = context_detect.scrape_context_pct(capture_pane(), harness="openclaude")
@@ -2370,6 +2405,10 @@ def serve_loop(
                     )
 
             _set_task_lock(True)
+            # Fix 3b: expose the running task to the heartbeater thread so the
+            # heartbeat payload carries task_id/attempt_id WHILE the turn runs.
+            # Cleared in finally — after the turn the bridge reports no ids.
+            _set_turn_context(str(task["id"]), attempt_id)
             try:
                 # Claim the task up front: stamp ack_at before the (possibly long)
                 # omp run so the 10-min ACK-timeout re-dispatch can't fire and so
@@ -2410,6 +2449,7 @@ def serve_loop(
                 except Exception:  # pragma: no cover
                     pass
             finally:
+                _set_turn_context(None, None)
                 _set_task_lock(False)
 
         # comm_v2: post-dispatch OR no-task idle turn boundary — deliver at
