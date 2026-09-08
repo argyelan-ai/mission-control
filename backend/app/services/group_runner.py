@@ -283,35 +283,46 @@ class GroupRunnerService:
             f"## Deine Aufgabe (Runde {n}/{mx})",
             "- Recherchiere/denke selbstständig im Sinne des Ziels und antworte "
             f"mit GENAU EINEM Beitrag: `mc msg --thread {group.thread_id} \"…\"`.",
+            # Die vollständigen Raum-Regeln leben im Referenz-Doc `mc docs
+            # groupchat` (08.09.2026) — NICHT in der SOUL: die würde für jeden
+            # Task mitgeladen, obwohl nur Gruppen-Threads sie brauchen. Der
+            # Brief nennt nur den Kern und verweist auf das Doc.
+            "- **Zuerst lesen:** `mc docs groupchat` — die Schreibregeln für "
+            "diesen Raum (2 Minuten).",
             # Der grösste Hebel gegen Textwände: ohne Längenbudget schreibt ein
             # so beauftragter Agent einen Aufsatz — er tut genau, was dasteht.
-            # Zweiter Hebel (Marks Wunsch 02.09.2026): kein Fliesstext, sondern
-            # ein festes Gerüst. Der Raum klappt Beiträge zu und zeigt nur die
-            # erste Zeile — sie MUSS die Kernaussage tragen, sonst liest der
-            # Operator eine Vorschau wie "Hallo zusammen, ich habe mir …".
+            # Zweiter Hebel (Marks Wunsch 02.09. + 08.09.2026): kein Fliesstext,
+            # sondern kurz und freundlich im Raum, die Details als Dokument.
             "- **Format (Pflicht, kein Fliesstext):** Zeile 1 = deine Kernaussage "
-            "in EINEM Satz (der Raum zeigt zugeklappt nur diese Zeile). Danach "
-            "Stichpunkte statt Absätze: `- Grund: …`, `- Einwand/Risiko: …`, "
-            "`- Quelle: https://…`. Kein Absatz länger als 2 Sätze. Ausführliche "
-            "Belege gehören ins Ergebnis-Dokument, nicht in den Raum.",
+            "in EINEM Satz, **fett** (sie ist die Vorschau-Zeile des Raums). "
+            "Danach höchstens ~10 kurze Zeilen: Stichpunkte mit fettem Etikett "
+            "(`- **Grund:** …`, `- **Einwand/Risiko:** …`, `- **Quelle:** https://…`), "
+            "Zahlen als Tabelle. Einfache Sprache — der Operator ist IT-ler, "
+            "kein Entwickler. Kein Absatz länger als 2 Sätze.",
             # Der Raum rendert Markdown (GFM) — eine kompakte Tabelle ist für
             # Vergleiche das bessere Format als drei Sätze mit Zahlen.
             # Mehrzeilig NUR per Heredoc über stdin: in einem "…"-Argument
             # zerreisst die Shell die Pipes und Zeilenumbrüche.
-            "- Zahlen und Vergleiche als Tabelle (max. ~6 Zeilen), nie als Satz "
-            "mit fünf Kommas. Mehrzeilig senden per Heredoc:",
+            "- Mehrzeilig senden per Heredoc:",
             "```",
             f"mc msg --thread {group.thread_id} - <<'EOF'",
-            "Position in einem Satz.",
-            "- Grund: …",
-            "- Einwand/Risiko: …",
-            "- Quelle: https://…",
+            "**Position in einem Satz.**",
+            "- **Grund:** …",
+            "- **Einwand/Risiko:** …",
+            "- **Quelle:** https://…",
             "",
             "| Option | Wert | Quelle |",
             "|---|---|---|",
             "| A | … | https://… |",
             "EOF",
             "```",
+            # Marks Wunsch 08.09.2026: Details nicht in den Raum quetschen,
+            # sondern als Dokument hochladen — der Raum zeigt .md direkt an.
+            "- **Details als Dokument hochladen:** Alles, was länger ist als "
+            "~10 Zeilen (Messungen, Logs, Belege, Vergleiche), schreibst du in "
+            "eine Datei und hängst sie an deinen Beitrag: "
+            f"`mc msg --thread {group.thread_id} --attach /tmp/bericht.md - <<'EOF' … EOF`. "
+            "Der Raum zeigt das Dokument als Kachel, `.md` klappt direkt im Chat auf.",
             "- Quellen-Pflicht bleibt: eine Behauptung ohne Quellen-URL ist kein "
             "Beitrag — der nackte Link genügt, kein Zitat-Block.",
             "- Antworte NICHT auf andere Mitglieder per @-Mention — die Engine "
@@ -522,6 +533,8 @@ class GroupRunnerService:
             # (bis 4900 Zeichen). Die Substanz ist im Dokument nicht verloren,
             # sondern dort erst am richtigen Platz. Der Lead-Beitrag steht als
             # einziger OFFEN im Raum — er prägt den Ton: Gerüst statt Fliesstext.
+            "Die Raum-Regeln stehen in `mc docs groupchat` — kurz und verständlich "
+            "im Raum, Details ins Dokument.",
             "**Format (Pflicht, kein Fliesstext):** Zeile 1 = Marker + Kernaussage, "
             "darunter Stichpunkte `- Konsens: …`, `- Dissens: …`, `- Nächster Schritt: …` "
             "(je ein Satz, insgesamt zwei bis drei Sätze). Ein Vergleich darf als "

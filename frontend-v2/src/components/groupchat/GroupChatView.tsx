@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { CheckCircle2, ChevronLeft, FileText, Pause, Play, Square, Users } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronsDownUp, ChevronsUpDown, FileText, Pause, Play, Square, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
@@ -41,9 +41,6 @@ interface GroupChatViewProps {
    *  raeumen, sonst zeigt sie den Raum einer Gruppe, die es nicht mehr gibt. */
   onGroupGone?: () => void;
 }
-
-/** Marker des Lead-Zwangsformats — spiegelt `_VERDICT_MARKERS` im Backend. */
-const LEAD_VERDICT_RE = /^\s*(ZIEL ERREICHT|FRAGE AN OPERATOR|WEITER)\b/;
 
 export function GroupChatView({
   group,
@@ -137,15 +134,17 @@ export function GroupChatView({
     return out;
   }, [stream.messages, roundBySeq]);
 
-  // Nur das Lead-Urteil steht von sich aus offen: der Lead spricht es am
-  // Rundenende mit einem der Zwangsformat-Marker (group_runner._VERDICT_MARKERS).
-  // Ein Mitglied, das zufällig mit „WEITER" beginnt, bleibt ein normaler,
-  // zugeklappter Beitrag — es zählt Sprecher UND Marker.
-  const isLeadVerdict = (m: (typeof stream.messages)[number]) =>
-    m.sender_type === "agent" &&
-    m.sender_id != null &&
-    m.sender_id === group.lead_agent_id &&
-    LEAD_VERDICT_RE.test(m.body ?? "");
+  // Sammelbefehl „alle zuklappen/öffnen" (Marks Wunsch 08.09.2026: Beiträge
+  // stehen offen; wer bei langen Runden Ruhe will, klappt alles auf einmal zu).
+  // Die Epoche zählt hoch, damit derselbe Befehl auch nach Einzel-Klicks
+  // wieder für ALLE greift — ein reiner boolean würde beim zweiten „zu" nichts
+  // mehr auslösen.
+  const [foldAll, setFoldAll] = useState<{ open: boolean; epoch: number }>({
+    open: true,
+    epoch: 0,
+  });
+  const toggleFoldAll = () =>
+    setFoldAll((f) => ({ open: !f.open, epoch: f.epoch + 1 }));
 
   const memberById = useMemo(() => {
     const map = new Map<string, { name: string; emoji: string | null }>();
@@ -296,6 +295,19 @@ export function GroupChatView({
               <CheckCircle2 size={16} />
             </button>
           )}
+          {stream.messages.some((m) => m.sender_type === "agent") && (
+            <button
+              type="button"
+              onClick={toggleFoldAll}
+              aria-label={foldAll.open ? t("foldAll") : t("unfoldAll")}
+              title={foldAll.open ? t("foldAll") : t("unfoldAll")}
+              data-testid="group-fold-all"
+              className="flex items-center justify-center w-9 h-9 rounded-lg cursor-pointer"
+              style={{ color: C.textMuted }}
+            >
+              {foldAll.open ? <ChevronsDownUp size={16} /> : <ChevronsUpDown size={16} />}
+            </button>
+          )}
           {onOpenResult && (
             <button
               type="button"
@@ -362,7 +374,7 @@ export function GroupChatView({
                 isOwn={message.sender_type === "user"}
                 groupWithPrevious={groupWithPrevious}
                 alsoContains={alsoContains}
-                defaultOpen={isLeadVerdict(message)}
+                foldAll={foldAll}
               />
             </div>
           );
