@@ -98,6 +98,34 @@ async def test_list_carries_preview_and_avatars_for_the_sidebar(
 
 
 @pytest.mark.asyncio
+async def test_list_preview_names_attachment_instead_of_storage_path(
+    auth_client: AsyncClient, async_session
+):
+    """`mc msg --attach` hängt `[Anhang: <pfad>]` als eigene Zeile an. Die
+    Vorschau kollabiert Zeilenumbrüche (eine Zeile in der Sidebar) — danach
+    kann das Frontend die Anhang-Zeile nicht mehr erkennen. Also nimmt der
+    Server sie VOR dem Kollabieren heraus und nennt nur den Dateinamen."""
+    a = await _make_agent(async_session, "Alpha")
+    b = await _make_agent(async_session, "Beta")
+    body = await _create_group(auth_client, [a.id, b.id], lead_agent_id=str(a.id))
+    await auth_client.post(
+        f"/api/v1/groups/{body['id']}/messages",
+        json={"text": "Mockup 3 als Bild\n[Anhang: /tmp/refs/agent/x/abc-mockup-3.png]"},
+    )
+    row = (await auth_client.get("/api/v1/groups")).json()[0]
+    assert row["last_message"]["body"] == "Mockup 3 als Bild"
+
+    # Nur ein Bild, kein Text: die Vorschau nennt den Dateinamen, nie den Pfad.
+    await auth_client.post(
+        f"/api/v1/groups/{body['id']}/messages",
+        json={"text": "[Anhang: /tmp/refs/agent/x/abc-mockup-3.png]\n[Anhang: /tmp/refs/agent/x/def-notes.md]"},
+    )
+    row = (await auth_client.get("/api/v1/groups")).json()[0]
+    assert row["last_message"]["body"] == "abc-mockup-3.png · def-notes.md"
+    assert "/tmp/refs" not in row["last_message"]["body"]
+
+
+@pytest.mark.asyncio
 async def test_stream_endpoint_exists_and_404s_for_unknown_group(
     auth_client: AsyncClient, async_session
 ):

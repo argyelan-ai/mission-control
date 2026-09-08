@@ -10,8 +10,9 @@ Runden-Steuerung (start/pause/stop) kommt mit der Engine in PR B.
 """
 
 import os
+import re
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import logging
 
@@ -151,6 +152,28 @@ async def _get_group_or_404(session: AsyncSession, group_id: uuid.UUID) -> Agent
 
 # WICHTIG: statische Segmente VOR parametrisierten Routen (Router Ordering
 # Note in CLAUDE.local.md) — sonst wird "eligible-members" als UUID geparst.
+
+# `mc msg --attach` und der Composer hängen Anhänge als eigene Zeile
+# `[Anhang: <pfad>]` an (siehe frontend chat/attachments.ts). Die Sidebar-
+# Vorschau ist EINE Zeile — nach dem Kollabieren der Umbrüche könnte das
+# Frontend die Zeile nicht mehr erkennen, darum wird sie hier herausgenommen:
+# Text bleibt, ein reines Bild nennt nur den Dateinamen, nie den Ablagepfad.
+_ATTACHMENT_LINE = re.compile(r"^\[Anhang:\s*(.+?)\]$")
+
+
+def _preview_body(raw: str) -> str:
+    text: list[str] = []
+    names: list[str] = []
+    for line in raw.split("\n"):
+        m = _ATTACHMENT_LINE.match(line.strip())
+        if m:
+            names.append(PurePosixPath(m.group(1).strip()).name)
+        else:
+            text.append(line)
+    joined = " ".join(part for part in (t.strip() for t in text) if part)
+    return joined or " · ".join(names)
+
+
 @router.get("/groups/eligible-members")
 async def eligible_members(
     session: AsyncSession = Depends(get_session),
@@ -205,7 +228,7 @@ async def list_groups(
                 sender = "Operator"
             elif last.sender_id is not None:
                 sender = agent_names.get(str(last.sender_id), "Agent")
-            body = (last.body or "").strip().replace("\n", " ")
+            body = _preview_body(last.body or "")
             last_preview = {
                 "body": body[:160] + ("…" if len(body) > 160 else ""),
                 "sender": sender,
