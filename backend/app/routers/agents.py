@@ -168,6 +168,11 @@ class AgentHeartbeatPayload(BaseModel):
     # tmux statusline scrape. Range-validated 0..100 to prevent garbage writes
     # (T-06-02-01 in plan threat model). None means "not reported this cycle".
     context_pct: float | None = Field(default=None, ge=0, le=100)
+    # Fix 3b (2026-09-08): omp-bridge reports WHICH task is actually running
+    # (its turn context, only while a turn is in flight). Optional => legacy
+    # bridges (poll.sh, old omp-bridge) stay byte-compatible. The backend
+    # trusts this only after verifying the task is assigned to THIS agent.
+    attempt_id: str | None = None
 
 
 class ConfigFileUpdate(BaseModel):
@@ -3875,13 +3880,36 @@ async def agent_heartbeat(
         # Sparky 2026-05-14: status=working + current_task_id=None for
         # hours). Self-heal: force working-without-task → idle.
         if payload.status == "working":
-            logger.warning(
-                "Bug 18 self-heal: agent %s heartbeated 'working' but no "
-                "in_progress task assigned — coercing status to 'idle'",
-                agent.name,
-            )
-            agent.status = "idle"
-            agent.run_state = "idle"
+            # Fix 3b (2026-09-08): a bridge that reports payload.task_id (its
+            # live turn context) proves a turn IS running — even though the
+            # task is not in_progress in the DB (e.g. the lead just set it
+            # blocked). Coercing to idle here would break Guard 3: the next
+            # dispatch would paste into the RUNNING turn (live incident
+            # 08.09.2026 10:15). Keep status=working; only verify the task
+            # belongs to this agent — a foreign task_id must never hold the
+            # status. Legacy bridges (no task_id) keep the original self-heal.
+            _turn_task_assigned = False
+            if payload.task_id:
+                try:
+                    _turn_task = await session.get(_Task, uuid.UUID(str(payload.task_id)))
+                except (ValueError, AttributeError):
+                    _turn_task = None
+                _turn_task_assigned = (
+                    _turn_task is not None
+                    and _turn_task.assigned_agent_id == agent.id
+                )
+            if _turn_task_assigned:
+                agent.status = "working"
+                agent.run_state = "running"
+                agent.last_task_activity_at = agent.last_seen_at
+            else:
+                logger.warning(
+                    "Bug 18 self-heal: agent %s heartbeated 'working' but no "
+                    "in_progress task assigned — coercing status to 'idle'",
+                    agent.name,
+                )
+                agent.status = "idle"
+                agent.run_state = "idle"
         else:
             agent.run_state = "running" if payload.status == "working" else "idle"
             if payload.status in ("idle", "working", "online"):
@@ -3924,12 +3952,32 @@ async def agent_heartbeat(
             agent_id=agent.id,
             board_id=agent.board_id,
         )
-
     # Fix 3 (omp stop-signal): control channel in the heartbeat response.
     # Computed AFTER the commit so the read sees the just-persisted state.
     # stopped/blocked run (exactly the interrupt cases) would fall through
     # AND the Bug-18 self-heal clears the pointer — hence the pre-heal id.
-    _control_task = active_task
+    #
+    # Fix 3b (2026-09-08): the bridge's payload task_id is the TRUTH about
+    # what is actually running — it wins over current_task_id/pre-heal
+    # state, ANY status. Guardrail: it counts ONLY if that task is assigned
+    # to THIS agent (a foreign task_id must never steer this agent's
+    # control channel — sabotage guard). Old bridges send no task_id and
+    # fall through to the pre-heal lookup below, unchanged.
+    _control_task = None
+    if payload.task_id:
+        try:
+            _payload_task_id = uuid.UUID(str(payload.task_id))
+        except (ValueError, AttributeError):
+            _payload_task_id = None
+        if _payload_task_id is not None:
+            _control_task = (await session.exec(
+                select(_Task).where(
+                    _Task.id == _payload_task_id,
+                    _Task.assigned_agent_id == agent.id,
+                ).limit(1)
+            )).first()
+    if _control_task is None and active_task is not None:
+        _control_task = active_task
     if _control_task is None and _pre_heal_task_id is not None:
         _control_task = (await session.exec(
             select(_Task).where(
