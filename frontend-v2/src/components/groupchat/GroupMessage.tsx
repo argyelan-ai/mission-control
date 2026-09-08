@@ -13,16 +13,18 @@
  * Erwähnungen (`message.mentions`) werden NICHT zusätzlich gerendert: sie
  * stehen bereits im Text, und der angezeigte Text wird nie umgeschrieben.
  *
- * Agenten-Beiträge starten ZUGEKLAPPT (Marks Befund 02.09.2026: offen stehende
- * Beiträge machen den Raum laut). Sichtbar bleibt eine Kopfzeile — Avatar,
- * Name, Uhrzeit, erste Zeile — die als Griff dient: wer lesen will, macht
- * gezielt den richtigen Beitrag auf. Nur das Lead-Urteil (`defaultOpen`)
- * steht von sich aus offen, es ist das Ergebnis der Runde. Die frühere
- * 3-Zeilen-Klemme ist damit entfallen; ein offener Beitrag ist ganz offen.
+ * Agenten-Beiträge stehen OFFEN (Marks Wunsch 08.09.2026: den Raum wie einen
+ * Chat lesen, sauber gesetztes Markdown, nichts aufklappen müssen). Die
+ * Textwand-Sorge vom 02.09. (damals: alles zugeklappt, nur das Lead-Urteil
+ * offen) löst jetzt der Schreib-Vertrag im Runden-Brief: kurz im Raum,
+ * Details als Datei-Anhang. Der Chevron bleibt als Griff zum Zuklappen —
+ * zugeklappt zeigt die Kopfzeile Avatar, Name, Uhrzeit und die erste Zeile.
+ * `foldAll` ist der Sammelbefehl aus dem Raum-Kopf („alle zuklappen/öffnen"):
+ * jede neue Epoche setzt den Zustand, danach darf man wieder einzeln klicken.
  * System-Briefe behalten ihren eigenen Aufklapper (Maschinen-Auftrag, man
  * liest ihn nur auf Verdacht). Siehe ADR-075, Punkt F.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronRight } from "lucide-react";
 import { Unfold } from "@/components/ui/Unfold";
@@ -51,6 +53,9 @@ interface GroupMessageProps {
   /** Offen starten — nur für das Lead-Urteil am Rundenende. Alles andere
    *  klappt zu, damit der Raum ruhig bleibt. */
   defaultOpen?: boolean;
+  /** Sammelbefehl aus dem Raum-Kopf: bei jeder neuen `epoch` nimmt der Beitrag
+   *  `open` an. Epoche 0 ist „noch nie gedrückt" und ändert nichts. */
+  foldAll?: { open: boolean; epoch: number };
 }
 
 /** Ab dieser Länge wird eine System-Nachricht zugeklappt. Runden-Briefe und
@@ -100,16 +105,24 @@ export function GroupMessage({
   isOwn,
   groupWithPrevious = false,
   alsoContains,
-  defaultOpen = false,
+  defaultOpen = true,
+  foldAll,
 }: GroupMessageProps) {
   const t = useTranslations("sessions.groups");
   // Zugeklappt starten: der Verlauf gehört den Beiträgen, nicht den Aufträgen
   // der Engine. Wer wissen will, was genau beauftragt wurde, klappt auf.
   const [systemOpen, setSystemOpen] = useState(false);
-  // Beiträge starten zu (Marks Befund 02.09.2026) — ausser dem Lead-Urteil.
-  // Der Zustand lebt pro Nachricht (Key = message.id im Verlauf) und bleibt
-  // deshalb beim Nachladen/Scrollen erhalten.
+  // Beiträge starten offen (Marks Wunsch 08.09.2026). Der Zustand lebt pro
+  // Nachricht (Key = message.id im Verlauf) und bleibt deshalb beim
+  // Nachladen/Scrollen erhalten.
   const [open, setOpen] = useState(defaultOpen);
+  const foldEpoch = foldAll?.epoch ?? 0;
+  const foldOpen = foldAll?.open ?? true;
+  useEffect(() => {
+    if (foldEpoch > 0) setOpen(foldOpen);
+    // Nur die Epoche zählt: derselbe Befehl zweimal ist zweimal gemeint.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [foldEpoch]);
 
   const pending = message.pending === true;
   // Gedimmt statt Spinner: die Nachricht steht schon da, sie ist nur noch nicht

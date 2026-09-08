@@ -46,23 +46,22 @@ describe("GroupMessage — agent register", () => {
   it("shows the speaker's name on the contribution's header row", () => {
     renderMessage(mkMessage({ body: "Ich habe gemessen." }));
     expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Ich habe gemessen.");
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("Ich habe gemessen.");
   });
 
   it("renders the body as markdown, not as literal asterisks", async () => {
     renderMessage(mkMessage({ body: "Das ist **wichtig**." }));
-    await userEvent.setup({ delay: null }).click(screen.getByTestId("group-contribution-toggle"));
     const strong = screen.getByText("wichtig");
     expect(strong.tagName).toBe("STRONG");
     expect(screen.queryByText(/\*\*wichtig\*\*/)).not.toBeInTheDocument();
   });
 
   it("keeps the header row even after the same speaker — it is the handle to open", () => {
-    // Zugeklappt IST die Kopfzeile der Beitrag. Ohne sie gäbe es nichts zum
-    // Anklicken und der zweite Beitrag desselben Sprechers wäre unsichtbar.
+    // Die Kopfzeile ist der Griff zum Zuklappen. Ohne sie gäbe es nichts zum
+    // Anklicken und der zweite Beitrag desselben Sprechers hätte keinen Absender.
     renderMessage(mkMessage({ body: "…und weiter." }), { groupWithPrevious: true });
     expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("…und weiter.");
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("…und weiter.");
   });
 
   it("shows the send time as 24h HH:MM in the header", () => {
@@ -80,7 +79,7 @@ describe("GroupMessage — agent register", () => {
   it("omits the name when the sender could not be resolved, instead of showing an id", () => {
     renderMessage(mkMessage({ sender_id: "8f3c-uuid" }), { senderName: null });
     expect(screen.queryByText("8f3c-uuid")).not.toBeInTheDocument();
-    expect(screen.getByTestId("group-contribution-toggle")).toHaveTextContent("Ein Beitrag.");
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("Ein Beitrag.");
   });
 
   it("does not repeat mentions outside the body text", async () => {
@@ -260,43 +259,75 @@ describe("GroupMessage — lange System-Nachrichten", () => {
   });
 });
 
-describe("GroupMessage — zugeklappte Agenten-Beiträge", () => {
-  // Marks Befund 02.09.2026: offen stehende Beiträge machen den Raum laut.
-  // Zugeklappt liest man Sprecher + erste Zeile und macht gezielt auf, was
-  // man wirklich lesen will. Die frühere 3-Zeilen-Klemme entfällt damit.
-  it("starts collapsed: header row with name and first line, no body", () => {
-    renderMessage(mkMessage({ body: "Meine Position zuerst.\n\nDann viele Belege." }));
+describe("GroupMessage — offene Agenten-Beiträge", () => {
+  // Marks Wunsch 08.09.2026: Beiträge stehen von sich aus OFFEN, sauber als
+  // Markdown gesetzt — man liest den Raum wie einen Chat, nicht wie eine
+  // Inbox mit Betreffzeilen. Der Chevron bleibt als Griff zum Zuklappen; die
+  // Kopfzeile zeigt den Auszug dann NUR im zugeklappten Zustand.
+  it("starts open: name, clock and the full markdown body, no excerpt", () => {
+    renderMessage(mkMessage({ body: "Meine Position zuerst.\n\nDas ist **wichtig**." }));
+    const toggle = screen.getByTestId("group-contribution-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveTextContent("Alpha");
+    expect(toggle).not.toHaveTextContent("Meine Position zuerst.");
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("Meine Position zuerst.");
+    expect(screen.getByText("wichtig").tagName).toBe("STRONG");
+  });
+
+  it("folds on click to header + first line and opens again", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderMessage(mkMessage({ body: "Erste Zeile.\n\nDann viele Belege." }));
+    await user.click(screen.getByTestId("group-contribution-toggle"));
     const toggle = screen.getByTestId("group-contribution-toggle");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(toggle).toHaveTextContent("Meine Position zuerst.");
+    expect(toggle).toHaveTextContent("Erste Zeile.");
     expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
     expect(screen.queryByText("Dann viele Belege.")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("Dann viele Belege.");
   });
 
-  it("opens on click with the full markdown body and closes again", async () => {
-    const user = userEvent.setup({ delay: null });
-    renderMessage(mkMessage({ body: "Erste Zeile.\n\nDas ist **wichtig**." }));
-    await user.click(screen.getByTestId("group-contribution-toggle"));
+  it("follows a fold-all order from the room and keeps following later orders", () => {
+    const { rerender } = renderMessage(mkMessage({ body: "Zeile 1.\n\nRest." }), {
+      foldAll: { open: true, epoch: 0 },
+    });
     expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("wichtig").tagName).toBe("STRONG");
-
-    await user.click(screen.getByTestId("group-contribution-toggle"));
-    expect(screen.queryByTestId("group-contribution-body")).not.toBeInTheDocument();
+    rerender(
+      <GroupMessage
+        message={mkMessage({ body: "Zeile 1.\n\nRest." })}
+        senderName="Alpha"
+        senderEmoji="🤖"
+        isOwn={false}
+        foldAll={{ open: false, epoch: 1 }}
+      />,
+    );
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "false");
+    rerender(
+      <GroupMessage
+        message={mkMessage({ body: "Zeile 1.\n\nRest." })}
+        senderName="Alpha"
+        senderEmoji="🤖"
+        isOwn={false}
+        foldAll={{ open: true, epoch: 2 }}
+      />,
+    );
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("renders a GFM table inside an opened contribution", async () => {
-    const user = userEvent.setup({ delay: null });
+  it("renders a GFM table inside a contribution", () => {
     const body = "Vergleich:\n\n| Motor | t/s |\n|---|---|\n| DFlash2 | 423 |\n| vLLM | 56 |";
     renderMessage(mkMessage({ body }));
-    await user.click(screen.getByTestId("group-contribution-toggle"));
     expect(screen.getByRole("table")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Motor" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "423" })).toBeInTheDocument();
   });
 
-  it("starts open when asked to (lead synthesis) and can still be folded", async () => {
+  it("can be asked to start folded (defaultOpen=false) and opens on click", async () => {
     const user = userEvent.setup({ delay: null });
-    renderMessage(mkMessage({ body: "ZIEL ERREICHT: DFlash2 wird Standard." }), { defaultOpen: true });
+    renderMessage(mkMessage({ body: "ZIEL ERREICHT: DFlash2 wird Standard." }), { defaultOpen: false });
+    expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "false");
+    await user.click(screen.getByTestId("group-contribution-toggle"));
     expect(screen.getByTestId("group-contribution-toggle")).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByTestId("group-contribution-body")).toHaveTextContent("DFlash2 wird Standard.");
     await user.click(screen.getByTestId("group-contribution-toggle"));
@@ -360,19 +391,17 @@ describe("GroupMessage — Bewegung", () => {
   // transform/opacity, reduced-motion respektieren. Der Chevron DREHT sich
   // (ein Icon, das rotiert) statt zwischen zwei Icons zu springen; der Körper
   // faltet sich auf (Unfold) statt zu erscheinen.
-  it("uses one chevron that rotates open instead of swapping icons", async () => {
+  it("uses one chevron that rotates closed instead of swapping icons", async () => {
     const user = userEvent.setup({ delay: null });
     renderMessage(mkMessage({ body: "Erste Zeile.\n\nMehr." }));
     const chevron = screen.getByTestId("group-contribution-chevron");
-    expect(chevron).toHaveAttribute("data-open", "false");
+    expect(chevron).toHaveAttribute("data-open", "true");
     await user.click(screen.getByTestId("group-contribution-toggle"));
-    expect(screen.getByTestId("group-contribution-chevron")).toHaveAttribute("data-open", "true");
+    expect(screen.getByTestId("group-contribution-chevron")).toHaveAttribute("data-open", "false");
   });
 
-  it("wraps the opened body in an Unfold so it can fold with motion", async () => {
-    const user = userEvent.setup({ delay: null });
+  it("wraps the opened body in an Unfold so it can fold with motion", () => {
     renderMessage(mkMessage({ body: "Erste Zeile.\n\nMehr." }));
-    await user.click(screen.getByTestId("group-contribution-toggle"));
     const body = screen.getByTestId("group-contribution-body");
     expect(body.closest("[data-testid='unfold']")).not.toBeNull();
   });
@@ -403,21 +432,20 @@ describe("GroupMessage — attachments from an agent (mc msg --attach)", () => {
 
   it("renders an image tile for the attachment and hides the path line", async () => {
     renderMessage(mkMessage({ body: `Mockup 3, Hybrid.\n[Anhang: ${shot}]` }));
-    await userEvent.setup({ delay: null }).click(screen.getByTestId("group-contribution-toggle"));
     expect(screen.getByTestId("attachment-image")).toBeInTheDocument();
     expect(screen.getByText("Mockup 3, Hybrid.")).toBeInTheDocument();
     expect(screen.queryByText(/\[Anhang:/)).not.toBeInTheDocument();
   });
 
   it("keeps the path line out of the collapsed excerpt", () => {
-    renderMessage(mkMessage({ body: `[Anhang: ${shot}]\nNur ein Bild.` }));
+    renderMessage(mkMessage({ body: `[Anhang: ${shot}]\nNur ein Bild.` }), { defaultOpen: false });
     const toggle = screen.getByTestId("group-contribution-toggle");
     expect(toggle).toHaveTextContent("Nur ein Bild.");
     expect(toggle).not.toHaveTextContent("Anhang:");
   });
 
   it("shows the file name as excerpt when the message is only an attachment", () => {
-    renderMessage(mkMessage({ body: `[Anhang: ${shot}]` }));
+    renderMessage(mkMessage({ body: `[Anhang: ${shot}]` }), { defaultOpen: false });
     const toggle = screen.getByTestId("group-contribution-toggle");
     expect(toggle).toHaveTextContent("mockup.png");
     expect(toggle).not.toHaveTextContent("Anhang:");
