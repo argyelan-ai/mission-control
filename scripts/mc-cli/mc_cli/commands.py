@@ -466,6 +466,13 @@ def _cmd_park(args, client, cfg):
     Blocker-Approval beim Operator. Eine Umsortierung ("erst Fix 3b, dann
     ACP") ist keine Frage — sie hat am 08.09.2026 drei Approvals auf einmal
     erzeugt. Fuer den EIGENEN Task des Leads: `mc patch --status waiting`.
+
+    Idempotent (08.09.2026): ist der Task schon `inbox` (Queue-Drain oder
+    ein frueherer `mc park`), gibt das Backend auf den PATCH 400 "Inbox →
+    Inbox" zurueck — kein echter Fehler, das Ziel ist bereits erreicht.
+    Gleiches Muster wie `_cmd_ack`: die Notiz wird trotzdem als Kommentar
+    gepostet (das ist der eigentliche Zweck von `mc park`), der PATCH-Fehler
+    wird als Erfolg behandelt.
     """
     board_id, task_id = cfg.require_task_context()
     # The status PATCH is guarded by X-Dispatch-Attempt-Id — the header must
@@ -477,12 +484,24 @@ def _cmd_park(args, client, cfg):
         from dataclasses import replace as _replace
         client = type(client)(_replace(cfg, dispatch_attempt_id=target_attempt))
         cfg = client.cfg
+    already_inbox = isinstance(detail, dict) and detail.get("status") == "inbox"
     client.request(
         "POST",
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
         body={"content": f"Zurueckgestellt: {args.note}", "comment_type": "handoff"},
     )
-    return _patch_status(client, cfg, "inbox")
+    if already_inbox:
+        _emit({"ok": True, "status": "inbox", "note": "already parked"})
+        return 0
+    try:
+        return _patch_status(client, cfg, "inbox")
+    except Exception as e:
+        msg = str(e)
+        if "Inbox" in msg and "Inbox" in msg.replace("Inbox", "", 1):
+            # Idempotent-Success: Task war schon inbox (Race mit Queue-Drain).
+            _emit({"ok": True, "status": "inbox", "note": "already parked"})
+            return 0
+        raise
 
 
 def _add_park_args(p):
