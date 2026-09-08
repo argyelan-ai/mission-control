@@ -184,10 +184,11 @@ async def test_brief_carries_length_budget(async_session: AsyncSession):
     brief = next(m for m in msgs if m.seq == round_row.brief_seq)
 
     assert "Kein Absatz länger als 2 Sätze" in brief.body   # Längenbudget
-    assert "Ergebnis-Dokument" in brief.body           # wohin die Substanz gehört
+    assert "Details als Dokument" in brief.body        # wohin die Substanz gehört
     assert "Quellen-URL" in brief.body                 # Quellen-Pflicht bleibt
     # Der Brief selbst bleibt knapp — er ist der grösste Kostenhebel je Runde.
-    assert len(brief.body) < 1700
+    # (08.09.: +Upload-Zeile und Doc-Verweis; die Langform steht im Doc.)
+    assert len(brief.body) < 2100
 
 
 @pytest.mark.asyncio
@@ -221,12 +222,32 @@ async def test_brief_demands_structured_format(async_session: AsyncSession):
 
     assert "Kernaussage" in brief.body        # Zeile 1 = Vorschau-Zeile
     assert "Fliesstext" in brief.body         # explizit verboten
-    assert "- Grund:" in brief.body           # Bullet-Gerüst
-    assert "- Quelle:" in brief.body
-    # Das Beispiel im Brief lebt das Gerüst vor: Kernsatz, Bullets, Tabelle.
+    assert "- **Grund:**" in brief.body       # Bullet-Gerüst mit fettem Etikett
+    assert "- **Quelle:**" in brief.body
+    # Das Beispiel im Brief lebt das Gerüst vor: fetter Kernsatz, Bullets, Tabelle.
     body = brief.body
-    pos = body.index("Position in einem Satz.")
-    assert pos < body.index("- Grund:", pos) < body.index("| Option |", pos)
+    pos = body.index("**Position in einem Satz.**")
+    assert pos < body.index("- **Grund:**", pos) < body.index("| Option |", pos)
+
+
+@pytest.mark.asyncio
+async def test_brief_points_to_groupchat_doc_and_teaches_attach(async_session: AsyncSession):
+    """Marks Wunsch 08.09.2026: kompakte, freundliche Antworten im Raum — die
+    Details als hochgeladenes Dokument. Die Regeln dafür leben NICHT in der
+    SOUL (die würde das verschmutzen), sondern im Referenz-Doc
+    `mc docs groupchat`; der Brief verweist darauf und zeigt den Upload."""
+    group, *_ = await _make_running_group(async_session)
+    await _tick(async_session)
+    round_row = await _current_round(async_session, group)
+    msgs = await _thread_messages(async_session, group.thread_id)
+    brief = next(m for m in msgs if m.seq == round_row.brief_seq)
+
+    assert "mc docs groupchat" in brief.body
+    assert f"mc msg --thread {group.thread_id} --attach" in brief.body
+    # Der Raum zeigt Beiträge jetzt OFFEN — der Brief darf nicht mehr vom
+    # Zuklappen reden, sonst optimieren die Agenten für eine Ansicht, die
+    # es nicht mehr gibt.
+    assert "zugeklappt" not in brief.body
 
 
 @pytest.mark.asyncio
@@ -246,6 +267,8 @@ async def test_lead_prompt_demands_structured_verdict(async_session: AsyncSessio
     assert "Fliesstext" in lead_prompt.body
     assert "- Konsens:" in lead_prompt.body
     assert "- Dissens:" in lead_prompt.body
+    # Auch der Lead liest die Raum-Regeln aus dem Referenz-Doc.
+    assert "mc docs groupchat" in lead_prompt.body
 
 
 @pytest.mark.asyncio

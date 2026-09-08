@@ -119,3 +119,26 @@ def test_inbox_registered_and_reachable_via_argparse():
     from mc_cli.__main__ import build_parser
     ns = build_parser().parse_args(["inbox"])
     assert ns.command == "inbox"
+
+
+def test_group_thread_message_carries_room_rules_hint(capsys):
+    """Gruppen-Nachrichten (thread_kind == "group") bekommen unter dem Footer
+    einen Hinweis auf `mc docs groupchat` und den Upload per --attach; Task-
+    Threads (kein/anderer kind) bleiben unverändert."""
+    payload = {
+        "messages": [
+            {"id": "m1", "thread_id": T1, "seq": 5, "sender": "user",
+             "message_type": "message", "body": "@alpha was meinst du?",
+             "thread_kind": "group"},
+            {"id": "m2", "thread_id": T2, "seq": 2, "sender": "boss",
+             "message_type": "message", "body": "task-thread"},
+        ],
+        "threads": {T1: 5, T2: 2},
+    }
+    client = _mock_client(payload)
+    assert commands._cmd_inbox(_Args(), client, MagicMock()) == 0
+    out = capsys.readouterr().out
+    first, second = out.split("\n\n---\n\n")
+    assert "mc docs groupchat" in first
+    assert f"mc msg --thread {T1} --attach" in first
+    assert "mc docs groupchat" not in second

@@ -3472,7 +3472,10 @@ async def agent_inbox(
         ]
         if not non_own:
             continue
-        out.extend(_serialize_message(m) for m in non_own)
+        # `thread_kind` lets `mc inbox` point at the room rules (`mc docs
+        # groupchat`) for group threads — an operator @-mention is the one
+        # way into a room that carries no round brief (08.09.2026).
+        out.extend({**_serialize_message(m), "thread_kind": thread.kind} for m in non_own)
         # Ack target is the highest unacked seq in the thread (including the
         # agent's own posts that sit between deliverables) so a single ack
         # advances the cursor cleanly past everything the agent has now seen.
