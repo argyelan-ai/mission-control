@@ -19,6 +19,10 @@
 # real so the build, when run, works.
 set -eu
 
+# ACP driver path (OMP_DRIVER=acp): make `import acp_client` resolvable
+# from /opt/omp-bridge in every window (native default needs no extra path).
+export PYTHONPATH="/opt/omp-bridge${PYTHONPATH:+:$PYTHONPATH}"
+
 SESSION="${AGENT_NAME:-omp-agent}"
 BRIDGE=/opt/omp-bridge/bridge.py
 HOOK_FILE=/opt/omp-bridge/turn-end-hook.mjs

@@ -64,7 +64,7 @@ REFLECTION_HEADERS = (
     "## Was wurde gemacht",
     "## Was hat funktioniert",
     "## Was war unklar",
-    "## Lesson fuer Agent-Memory",
+    "## Lesson für Agent-Memory",
 )
 MIN_REFLECTION_CHARS = 80
 
@@ -93,7 +93,7 @@ _ENGLISH_ALIASES = {
     "what was done": "Was wurde gemacht",
     "what worked": "Was hat funktioniert",
     "what was unclear": "Was war unklar",
-    "lesson for agent memory": "Lesson fuer Agent-Memory",
+    "lesson for agent memory": "Lesson für Agent-Memory",
 }
 
 _HEADER_RE = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$")
@@ -287,6 +287,8 @@ class RunOutcome:
     tool_calls: int = 0
     parse_failures: int = 0
     session_id: Optional[str] = None
+    # ACP path: usage dict from the session/prompt result (totalTokens etc.).
+    usage: Optional[dict] = None
     watchdog_killed: bool = False         # set by the live supervisor, not the file
     # Why the watchdog fired: "deadline" (per-task wall clock ran out while the
     # model was still producing), "idle" (no progress for idle_timeout), or
@@ -1089,7 +1091,7 @@ COMPLETION_INSTRUCTIONS = (
     "## Was wurde gemacht\n<kurz>\n"
     "## Was hat funktioniert\n<kurz>\n"
     "## Was war unklar\n<kurz>\n"
-    "## Lesson fuer Agent-Memory\n<kurz>\n"
+    "## Lesson für Agent-Memory\n<kurz>\n"
     "TASK_COMPLETE\n\n"
     "Die Zeile `TASK_COMPLETE` MUSS die allerletzte nicht-leere Zeile sein.\n"
     "Ohne diesen Block gilt die Aufgabe als NICHT abgeschlossen.\n"
@@ -2270,11 +2272,18 @@ def serve_loop(
     # `_observe_native_turn` (via run_native_turn/continue) consumes it.
     interrupt_state = InterruptState()
 
+    # ACP path (OMP_DRIVER=acp) registers a sink here so the SAME control
+    # channel also flips the session/cancel flag (Abbruch-Leiter Stufe 1).
+    _acp_control_sink: list = []  # holds ACPCancelState once the ACP branch runs
+
     def _on_control(kind: str, reason: str) -> None:
         sys.stderr.write(
             f"[serve] heartbeat control signal: interrupt={kind} ({reason})\n"
         )
         interrupt_state.signal(kind, reason)
+        if kind == "hard":
+            for sink in _acp_control_sink:
+                sink.requested = True
 
     if _poll_fn is None:
         # Nur im echten Betrieb (Tests injizieren poll_fn und brauchen
@@ -2374,6 +2383,25 @@ def serve_loop(
                 if _continue_factory is not None else None
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
+            elif _acp_env_driver() == "acp":
+                # ACP path (OMP_DRIVER=acp): drive `omp acp` via acp_client.
+                # Interrupt ladder Stufe 1: the heartbeat control channel's
+                # InterruptState IS the cancel signal — a watcher thread flips
+                # it into `session/cancel` mid-turn (Fix 3, ACP flavour).
+                acp_cancel = ACPCancelState()
+                _acp_control_sink.append(acp_cancel)
+
+                def run_once(_p=prompt, _task_id=str(task["id"])) -> RunOutcome:
+                    interrupt_state.clear()  # fresh signal per turn
+                    return run_acp_once(
+                        _p,
+                        cwd=os.environ.get("OMP_ACP_CWD") or _acp_cwd_default(),
+                        model=os.environ.get("OMP_ACP_MODEL") or None,
+                        max_time=int(turn_deadline) if turn_deadline else 900,
+                        permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
+                        task_id=_task_id,
+                        cancel_state=acp_cancel,
+                    )
             else:
                 task_file = _task_file_for(str(task["id"]))
                 _isolate = isolation != "slash"
@@ -3262,6 +3290,446 @@ def run_native_continue(
 def _task_file_for(task_id: str) -> str:
     base = os.environ.get("OMP_HOME", os.path.expanduser("~/.omp"))
     return os.path.join(base, "tasks", f"task-{task_id}.md")
+
+
+# ACP driver path (OMP_DRIVER=acp) — Subtask 2/4
+# ---------------------------------------------------------------------------
+
+
+try:
+    import acp_client
+except ImportError:  # pragma: no cover — native path must run without it
+    acp_client = None  # type: ignore[assignment]
+
+
+# Default stays `native`: without OMP_DRIVER set, serve_loop runs the exact
+# pre-existing `omp -p --mode json` subprocess path (sabotage-probe guarantee).
+ACP_CONTEXT_PREFIX_FILES = ("TASK.md", "CARD.md")
+
+
+def _acp_env_driver() -> str:
+    return os.environ.get("OMP_DRIVER", "native").strip().lower()
+
+
+@dataclass
+class ACPCancelState:
+    """Shared flag between the heartbeat control channel and the ACP driver.
+
+    Stufe 1 of the interrupt ladder: when the operator aborts (heartbeat
+    `control` message / task re-open), run_acp_once answers with
+    `session/cancel` — the pending prompt() resolves with stopReason
+    `cancelled` and the session stays alive for ladder step 2+.
+    """
+
+    requested: bool = False
+
+
+def acp_context_prefix(cwd: str) -> str:
+    """Prepend the task context files exactly like the native path does.
+
+    The native path receives the already-wrapped MC dispatch prompt (task text
+    + CARD.md baked in by the backend); here we additionally inline the local
+    task/card files if present so the ACP turn sees the same context.
+    """
+    parts: list[str] = []
+    for name in ACP_CONTEXT_PREFIX_FILES:
+        p = os.path.join(cwd, name)
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    body = fh.read().strip()
+            except OSError:
+                continue
+            if body:
+                parts.append(f"--- {name} ---\n{body}")
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\n---\n\n"
+
+
+def _acp_permission_decision(
+    params: dict,
+    *,
+    policy: str,
+    task_id: str,
+    ask_fn: Optional[Callable[[str, str], str]] = None,
+) -> str:
+    """Map one `session/request_permission` to a shortcut verb.
+
+    policy `yolo`: bash/edit tool kinds are allowed always; everything else
+    falls through to the ask path. Any other policy: ask the operator via
+    `mc ask` (injected `ask_fn`, default shells out to the mc CLI) and return
+    their answer. Best-effort: if the ask fails, reject once (safe default) —
+    a broken operator channel must never hang omp.
+    """
+    tool = params.get("toolCall") or {}
+    kind = str(tool.get("kind") or "")
+    title = str(tool.get("title") or tool.get("rawInput", {}).get("command") or kind)
+    if policy == "yolo" and kind in ("execute", "edit", "write", "delete"):
+        return acp_client.ALLOW_ALWAYS
+    if ask_fn is None:
+        ask_fn = _mc_ask_blocking
+    try:
+        answer = ask_fn(task_id, f"Freigabe ({policy}): {title[:200]}")
+    except Exception as e:  # noqa: BLE001 — never hang the child on a broken ask
+        sys.stderr.write(f"[acp] mc ask failed ({type(e).__name__}: {e}); rejecting once\n")
+        return acp_client.REJECT_ONCE
+    a = (answer or "").strip().lower()
+    if a in ("allow_always", "always", "yes", "y", "allow", "ja"):
+        return acp_client.ALLOW_ALWAYS
+    if a in ("reject_always", "never"):
+        return acp_client.REJECT_ALWAYS
+    if a in ("reject", "no", "n", "nein"):
+        return acp_client.REJECT_ONCE
+    return acp_client.ALLOW_ONCE
+
+
+def _mc_ask_blocking(task_id: str, question: str) -> str:
+    """Ask the operator via the mc CLI and return the answer text.
+
+    Uses `mc ask --blocking` on the current task thread (the same env contract
+    McCliLifecycle._env injects). Returns "" on any failure — callers treat a
+    non-affirmative answer as reject/allow_once respectively.
+    """
+    import subprocess
+
+    env = dict(os.environ)
+    env.setdefault("TASK_ID", task_id)
+    proc = subprocess.run(
+        ["mc", "ask", task_id, "--blocking", "--question", question],
+        env=env, capture_output=True, text=True, timeout=600,
+    )
+    return (proc.stdout or "").strip()
+
+
+def _acp_permission_decision_transcribed(
+    params: dict,
+    *,
+    mapper: "acp_chat_events.ACPEventMapper",
+    emit: Callable[[list[str]], None],
+    policy: str,
+    task_id: str,
+    ask_fn: Optional[Callable[[str, str], str]] = None,
+) -> str:
+    """Session chat view (Subtask 3/4): record the permission request and the
+    decision on the transcript stream, then delegate to the plain decision
+    path. The request line lands BEFORE the ask (the operator may sit on the
+    mc-ask prompt for minutes — the chat must already show what is waiting),
+    the decision line after.
+    """
+    try:
+        emit(mapper.map_permission_request(params))
+    except Exception:  # noqa: BLE001 — chat view must never break the ask
+        pass
+    choice = _acp_permission_decision(params, policy=policy, task_id=task_id, ask_fn=ask_fn)
+    try:
+        emit(mapper.map_permission_outcome(params, choice))
+    except Exception:  # noqa: BLE001 — chat view must never break the ask
+        pass
+    return choice
+
+
+def run_acp_once(
+    prompt: str,
+    *,
+    cwd: str,
+    model: Optional[str] = None,
+    max_time: int = 900,
+    permission_policy: str = "ask",
+    task_id: str = "",
+    cancel_state: Optional[ACPCancelState] = None,
+    cancel_poll_interval: float = 1.0,
+    client_factory: Optional[Callable[[], "acp_client.ACPClient"]] = None,
+    ask_fn: Optional[Callable[[str, str], str]] = None,
+    transcript_sink: Optional[Callable[[list[str]], None]] = None,
+) -> RunOutcome:
+    """One task attempt over ACP: prompt in, terminal RunOutcome out.
+
+    Contract parity with the native path:
+    - Turn end = the `session/prompt` result (stopReason + usage land on the
+      RunOutcome as `stop_reason`/`usage`).
+    - The completion contract (sentinel + 4-header reflection) is evaluated by
+      classify_acp() from the streamed agent text, same oracle as native.
+    - Interrupt (Stufe 1 of the ladder): cancel_state.requested -> session/cancel,
+      prompt resolves stopReason=cancelled -> Kind.INTERRUPTED (Fix 3).
+
+    Sessions chat view (Subtask 3/4): ``transcript_sink`` receives the mapped
+    omp-format JSONL lines for every ACP event, so the backend's existing
+    transcript tailer (services/omp_chat.py + ChatTailerManager) streams the
+    run into the /sessions chat exactly like a native TUI run. ``None``
+    (default) keeps the pure-driver behaviour byte-identical — the existing
+    bridge tests never exercise it.
+    """
+    import threading
+
+    import acp_chat_events
+
+    mapper = acp_chat_events.ACPEventMapper()
+
+    def emit_transcript(entries: list[dict]) -> None:
+        if transcript_sink is None or not entries:
+            return
+        try:
+            transcript_sink(acp_chat_events.ACPEventMapper.dump(entries))
+        except Exception:  # noqa: BLE001 — the chat view must never kill the run
+            sys.stderr.write("[acp] transcript sink write failed\n")
+
+    outcome = RunOutcome()
+    full_text: list[str] = []
+    tool_calls = 0
+    tool_errors = 0
+
+    def on_event(params: dict) -> None:
+        upd = params.get("update") or {}
+        su = upd.get("sessionUpdate")
+        if su in ("agent_message_chunk", "agent_thought_chunk"):
+            c = upd.get("content") or {}
+            if c.get("type") == "text":
+                full_text.append(c.get("text") or "")
+                outcome.saw_agent_start = True
+        elif su == "tool_call":
+            outcome.tool_calls += 0  # counted below via nonlocal
+            tool_count[0] += 1
+            outcome.saw_agent_start = True
+        elif su == "tool_call_update":
+            if str((upd.get("status") or "")).lower() in ("failed", "error"):
+                tool_errors += 0
+                tool_error_flags[0] = True
+        # Sessions chat stream (Subtask 3/4): map EVERY update into the
+        # omp-format transcript regardless of the classification bookkeeping
+        # above — the two concerns are independent.
+        emit_transcript(mapper.map_update(params))
+
+    # The user turn itself, so the chat view shows what was asked.
+    emit_transcript(mapper.map_user_prompt(acp_context_prefix(cwd) + prompt))
+    tool_count = [0]
+    tool_error_flags = [False]
+
+    def make_client() -> "acp_client.ACPClient":
+        if client_factory is not None:
+            return client_factory()
+        return acp_client.ACPClient(cwd=cwd)
+
+    client = make_client()
+    cancel = cancel_state or ACPCancelState()
+    saw_session = False
+    prompt_result = None
+    try:
+        client.on_event(on_event)
+        client.on_permission(lambda params: _acp_permission_decision_transcribed(
+            params, mapper=mapper, emit=emit_transcript,
+            policy=permission_policy, task_id=task_id, ask_fn=ask_fn,
+        ))
+        client._ensure_process()
+        # An injected client (tests, reuse) may carry a pre-built _proc whose
+        # reader threads were never started — _ensure_process only starts them
+        # when it spawns the process itself. Idempotent on the real path.
+        if client._reader is None or not client._reader.is_alive():
+            import threading as _th
+            client._reader = _th.Thread(target=client._read_loop, name="acp-reader", daemon=True)
+            client._reader.start()
+
+        client.initialize()
+        sid = client.new_session(cwd)
+        outcome.session_id = sid
+        saw_session = True
+        outcome.saw_session = True
+        if model:
+            client.set_config_option(sid, "model", model)
+
+        # Ladder Stufe 1, pre-prompt: an abort already requested before the turn
+        # starts must not run the prompt at all — cancel immediately and let the
+        # pending prompt resolve as cancelled.
+        if cancel.requested:
+            try:
+                client.cancel(sid)
+            except Exception:  # noqa: BLE001 — cancel is best-effort
+                pass
+
+        # Watcher: ladder Stufe 1 — flip to session/cancel when requested.
+
+        stop_watcher = threading.Event()
+
+        def watch_cancel() -> None:
+            while not stop_watcher.wait(cancel_poll_interval):
+                if cancel.requested:
+                    try:
+                        client.cancel(sid)
+                    except Exception:  # noqa: BLE001 — cancel is best-effort
+                        pass
+                    return  # one cancel per run; further steps are the caller's
+
+        watcher = threading.Thread(target=watch_cancel, name="acp-cancel", daemon=True)
+        watcher.start()
+        try:
+            prompt_result = client.prompt(sid, acp_context_prefix(cwd) + prompt,
+                                          timeout=float(max_time) + 120.0)
+        finally:
+            stop_watcher.set()
+            watcher.join(timeout=2)
+    except acp_client.ACPError as e:
+        outcome.error_message = str(e)
+    except Exception as e:  # noqa: BLE001 — a launch failure must classify, not crash the loop
+        outcome.error_message = f"{type(e).__name__}: {e}"
+    finally:
+        client.close()
+
+    outcome.saw_session = saw_session or outcome.saw_session
+    outcome.tool_calls = tool_count[0]
+    outcome.last_turn_had_tool_error = tool_error_flags[0]
+    outcome.final_text = "".join(full_text)
+    if prompt_result is not None:
+        outcome.final_stop_reason = prompt_result.stopReason
+        outcome.usage = prompt_result.usage
+        outcome.saw_agent_end = True
+        mapper.set_prompt_usage(prompt_result.usage)
+    return outcome
+
+
+def classify_acp(outcome: RunOutcome) -> Classification:
+    """Classify an ACP-path RunOutcome — same terminal Kinds as the native path.
+
+    Key mapping from the ACP stopReason (verified against the golden fixtures):
+    - `cancelled`  -> Kind.INTERRUPTED (Fix 3: operator cancel is a decision,
+                      never an error, never silently retried).
+    - `end_turn`   -> the completion contract (sentinel + reflection), like the
+                      native stopReason=stop branch.
+    - `error`/`max_tokens`/others -> the matching abort family.
+    """
+    o = outcome
+    sr = (o.final_stop_reason or "").strip().lower()
+
+    if sr == "cancelled":
+        return Classification(
+            Kind.INTERRUPTED,
+            retryable=False,
+            reason="interrupted",
+            detail="Lauf wurde per session/cancel abgebrochen (Abbruch-Leiter Stufe 1) "
+                   "— vom Operator/Ops entschieden, kein Retry.",
+        )
+
+    if not o.saw_session:
+        return Classification(
+            Kind.LAUNCH_PREFLIGHT,
+            retryable=False,
+            reason="launch_preflight",
+            detail=f"omp acp Launch/Handshake-Fehler (keine session): "
+                   f"{(o.error_message or '').strip()[:200]}",
+        )
+
+    if not o.saw_agent_end:
+        return Classification(
+            Kind.ABORT_CRASH,
+            retryable=True,
+            reason="crash",
+            detail=f"ACP-Stream endete ohne Turn-Ergebnis (Crash/Timeout): "
+                   f"{(o.error_message or '').strip()[:200]}",
+        )
+
+    if sr == "error":
+        blob = f"{o.error_message or ''} {o.final_text or ''}"
+        if TRANSIENT_ERROR_RE.search(blob):
+            return Classification(
+                Kind.ABORT_TRANSIENT_API,
+                retryable=True,
+                reason="transient_api_error",
+                detail=f"Transienter API/Netzwerk-Fehler: {(o.error_message or '').strip()[:200]}",
+            )
+        return Classification(
+            Kind.ABORT_ERROR,
+            retryable=True,
+            reason="model_error",
+            detail=f"Modell/Provider-Fehler (stopReason=error): {(o.error_message or '').strip()[:200]}",
+        )
+
+    if sr == "max_tokens" or sr == "maxtime":
+        return Classification(
+            Kind.ABORT_MAXTIME,
+            retryable=True,
+            reason="maxtime_cutoff",
+            detail=f"Lauf an Token/Zeitlimit geschnitten (stopReason={sr!r}) — unvollstaendig.",
+        )
+
+    # end_turn (and any other settled reason) -> completion contract, §3.4.
+    o.sentinel_ok = sentinel_present(o.final_text)
+    o.reflection_block = extract_reflection(o.final_text)
+    o.reflection_valid = validate_reflection(o.reflection_block)
+    if not o.sentinel_ok:
+        return Classification(
+            Kind.SILENT_ABORT_NO_SENTINEL,
+            retryable=False,
+            reason="silent_abort_no_sentinel",
+            detail="ACP-Turn endete (stopReason=%r) ohne TASK_COMPLETE-Sentinel "
+                   "als letzte Zeile — bitte pruefen/fortsetzen." % sr,
+        )
+    if not o.reflection_valid:
+        return Classification(
+            Kind.MALFORMED_REFLECTION,
+            retryable=False,
+            reason="malformed_reflection",
+            detail="Sentinel vorhanden, aber 4-Feld-Reflexion fehlt/<80 Zeichen — "
+                   "mc finish wuerde abgelehnt.",
+        )
+    if o.last_turn_had_tool_error:
+        return Classification(
+            Kind.TRAILING_TOOL_ERROR,
+            retryable=False,
+            reason="trailing_tool_error",
+            detail="Finale Runde meldete einen Tool-Fehler trotz end_turn+Sentinel — bitte pruefen.",
+        )
+    return Classification(
+        Kind.FINISH,
+        retryable=False,
+        reason="finish",
+        detail="Genuiner Abschluss: end_turn + Sentinel + gueltige Reflexion.",
+    )
+
+
+def _make_acp_run_factory(
+    *,
+    model: Optional[str],
+    max_time: int,
+    permission_policy: str,
+    task_id: str,
+) -> Callable[[str], RunOutcome]:
+    """Bind serve_loop env config into one run_acp_once(prompt) callable."""
+    import acp_chat_events
+
+    cancel_state = ACPCancelState()
+
+    def run(prompt: str) -> RunOutcome:
+        cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
+        # Sessions chat view (Subtask 3/4): one JSONL transcript per ACP
+        # session, written where the backend's omp chat adapter reads. A
+        # sink that resolves to None (no PI_CODING_AGENT_DIR — e.g. local
+        # replay) degrades to no-op inside the sink.
+        sid_holder: list[str] = ["acp-session"]
+
+        def sink(lines: list[str]) -> None:
+            directory = acp_chat_events.session_dir(cwd=cwd)
+            sink_obj = getattr(sink, "_sink", None)
+            if sink_obj is None or sink_obj.session_id != sid_holder[0]:
+                sink_obj = acp_chat_events.ChatEventSink(directory, sid_holder[0])
+                sink._sink = sink_obj  # type: ignore[attr-defined]
+            sink_obj.write(lines)
+
+        return run_acp_once(
+            prompt,
+            cwd=cwd,
+            model=model,
+            max_time=max_time,
+            permission_policy=permission_policy,
+            task_id=task_id,
+            cancel_state=cancel_state,
+            transcript_sink=sink,
+        )
+
+    return run
+
+
+
+def _acp_cwd_default() -> str:
+    return os.getcwd()
 
 
 # ---------------------------------------------------------------------------

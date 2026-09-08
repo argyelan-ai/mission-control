@@ -57,7 +57,7 @@ CANON = (
     "## Was wurde gemacht\nFeature gebaut und getestet, alles sauber.\n"
     "## Was hat funktioniert\nDer TDD-Loop lief ohne Ueberraschungen durch.\n"
     "## Was war unklar\nDer Scope der Edge-Cases war anfangs offen.\n"
-    "## Lesson fuer Agent-Memory\nImmer zuerst die Vertraege pruefen, dann bauen.\n"
+    "## Lesson für Agent-Memory\nImmer zuerst die Vertraege pruefen, dann bauen.\n"
     "TASK_COMPLETE"
 )
 
@@ -68,7 +68,7 @@ def test_canonical_still_finishes():
     outcome, cls = _classify(CANON)
     assert cls.kind is Kind.FINISH, cls
     assert outcome.reflection_valid is True
-    assert "## Lesson fuer Agent-Memory" in outcome.reflection_block
+    assert "## Lesson für Agent-Memory" in outcome.reflection_block
 
 
 # ── Sentinel tolerance ─────────────────────────────────────────────────────
