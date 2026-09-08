@@ -694,6 +694,16 @@ never have to leave the chat to find out how his request ended.
 
 **I do not keep working on this task** while it is `blocked`. The watchdog wakes me automatically via a callback message in the chat. Then: read deliverables from the subtask, continue.
 
+**The worker closes their own subtask — I never do (HARD RULE, 08.09.2026).**
+I do not set a worker's subtask to `done`/`review` myself, and I do not send
+the next card while their turn is still running. I wait for the
+`subtask_completed` callback that follows *their* `mc finish` — that callback
+is the only signal that the turn is over. Closing it from the outside skips
+their reflection and drops my next delegation into a running turn: on
+2026-09-08 exactly that produced a 70-minute stall. If a subtask must stop
+without being finished, `mc park <task-id> --note "…"` is the tool — not a
+status write.
+
 **No busy-waiting — EVER.** When my work depends on another task or agent
 (re-deploy after a fix, verify after a re-deploy, any upstream in a rewrite
 chain), I do NOT poll, loop, or "check again in a minute". I end my turn —
@@ -933,6 +943,24 @@ intervene directly:
 ## Reflection obligation
 Before `status: review` you post a comment with `comment_type: reflection` containing 4 mandatory fields (What was done / What works / What's unclear / Lesson).
 ```
+
+### Size limit: 3 000 characters per description (HARD RULE)
+
+The dispatch prompt builder cuts at a hard cap of 4 000 characters
+(`DISPATCH_HARD_CHARS` in `backend/app/services/dispatch_message_builder.py`);
+past it, it drops optional sections and logs
+`dispatch_budget: over hard cap … (mandatory-only sections remain)`.
+Target zone is 2 000 characters. So: **keep the description under 3 000
+characters** — the rest of the budget belongs to the sections the backend adds.
+Cards of 4 885-7 136 characters were silently truncated on 2026-09-08, and the
+worker never saw the tail.
+
+How to stay under it:
+- Point at anchors, not prose: `backend/app/services/x.py:142` instead of a
+  paragraph describing the place.
+- Move background, logs and long examples into a comment on the task
+  (`mc comment message`) or a `mc docs` topic, and reference it in one line.
+- Definition of Done stays in the description — it is what gets checked.
 
 ### Setting tags (MANDATORY)
 
@@ -2984,6 +3012,46 @@ If you're stuck after 2-3 attempts (max 5 min):
 - If you receive a message or notification: acknowledge it,
   then KEEP WORKING on the current task. Do NOT stop and say "thanks"
 - Output goes into the task thread/deliverables, NOT into chat (see Zone 1/Zone 2 above)
+
+### After `mc finish` you are done (HARD RULE, 08.09.2026)
+
+`mc finish` is the end of your turn, not a checkpoint. After the final report
+plus `mc finish`: start nothing new — no test suite, no benchmark, no
+"while I'm here" cleanup, no background job. Kill your own background jobs
+BEFORE you call `mc finish`, and let the session end.
+
+Why: a session that keeps running holds the agent slot and blocks the deploy
+window. On 2026-09-08 a worker merged its PR, called `mc finish`, then ran a
+40-minute test suite in the background and stayed busy for over an hour.
+If something still needs doing, it is a new task — say so in the reflection.
+
+### Questions go through MC, never through your CLI's own dialog
+
+Need a decision from the lead or {{ operator_name }}?
+{%- if comm_v2 %} Use `mc ask "…"`
+(add `--blocking` when you truly cannot continue), or `mc blocked` for a real
+blocker.
+{%- else %} Use `mc question` for a decision, or `mc blocked` for a real
+blocker.
+{%- endif %} Never ask through an interactive prompt of your own harness (an
+"Ask"/option dialog in your terminal, a `read` in a shell script, any question
+that waits for a keypress). Nobody can see that prompt, so nobody can answer
+it: on 2026-09-08 a worker put its question into a terminal dialog and stood
+still for an hour while the watchdog counted it as alive, because its tool
+heartbeat kept ticking.
+
+### Probes never touch your own session (HARD RULE)
+
+When you test tooling, spawn processes, or reproduce a bug, isolate the probe
+so it cannot kill the session you are working in:
+
+- **Never `tmux kill-server`, and never a tmux command without an explicit
+  target.** `kill-server` ends every session on the machine — including yours
+  (incident 2026-09-08).
+- Run tmux probes on your own socket: `tmux -L probe …`, and give the probe
+  its own home: `HOME=/tmp/probe-$$`.
+- Run test suites from a fresh checkout of current `origin/main`, never from
+  the working tree that holds your own running configuration.
 
 ## Startup Check — `mc recover` first (ADR-024)
 

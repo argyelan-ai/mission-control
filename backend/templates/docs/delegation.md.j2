@@ -41,6 +41,24 @@ explicitly:
 
 Exception: `autonomous_report=true` in the brief for long-running watch tasks.
 
+## Description size — under 3 000 characters
+
+The dispatch prompt builder has a hard cap of 4 000 characters
+(`DISPATCH_HARD_CHARS`, `backend/app/services/dispatch_message_builder.py`);
+beyond it, optional sections are dropped and the log says
+`dispatch_budget: over hard cap … (mandatory-only sections remain)`. Keep the
+description under 3 000 characters — the rest of the budget is for the
+sections the backend adds. Point at anchors (`path/file.py:142`) instead of
+prose, and move background or long logs into a task comment or a `mc docs`
+topic. Definition of Done stays in the description.
+
+## The worker closes their own subtask
+
+Never set a worker's subtask to `done`/`review` yourself, and never dispatch
+the follow-up while their turn is still running. Wait for the
+`subtask_completed` callback that follows their own `mc finish`. To stop a
+subtask without finishing it, use `mc park <task-id> --note "…"`.
+
 ## No busy-waiting
 
 While the parent is `blocked` on a callback, do not poll or "check again in a
