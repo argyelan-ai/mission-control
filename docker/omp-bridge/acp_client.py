@@ -96,6 +96,7 @@ class ACPClient:
     ):
         self._command = command or ["omp", "acp"]
         self._cwd = cwd
+        self._fs_jail: Optional[str] = None  # realpath(cwd) — fs/* restricted here (Review #464 Major)
         self._env = env
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
@@ -245,13 +246,31 @@ class ACPClient:
         rid = msg["id"]
         params = msg.get("params") or {}
         method = msg.get("method", "")
+        # Review #464 Major: fs/read_text_file + fs/write_text_file are
+        # restricted to the session's realpath(cwd). A symlink or `..`
+        # escape resolves through realpath, so the check is on the FINAL
+        # path, not the textual one. No jail (no session yet) -> reject.
+        jail = self._fs_jail
+        path = params.get("path")
+        if method in ("fs/read_text_file", "fs/write_text_file"):
+            if not jail or not isinstance(path, str) or not path:
+                self._send_raw({"jsonrpc": "2.0", "id": rid,
+                                "error": {"code": -32002,
+                                          "message": "fs request before session/new (no cwd jail)"}})
+                return
+            real = os.path.realpath(path)
+            if real != jail and not real.startswith(jail + os.sep):
+                self._send_raw({"jsonrpc": "2.0", "id": rid,
+                                "error": {"code": -32002,
+                                          "message": f"path {path!r} outside session cwd {jail!r}"}})
+                return
         try:
             if method == "fs/read_text_file":
-                with open(params["path"], "r", encoding="utf-8") as f:
+                with open(real, "r", encoding="utf-8") as f:
                     self._send_raw({"jsonrpc": "2.0", "id": rid,
                                     "result": {"content": f.read()}})
             elif method == "fs/write_text_file":
-                with open(params["path"], "w", encoding="utf-8") as f:
+                with open(real, "w", encoding="utf-8") as f:
                     f.write(params.get("content", ""))
                 self._send_raw({"jsonrpc": "2.0", "id": rid, "result": {}})
             else:
@@ -336,6 +355,13 @@ class ACPClient:
         if not sid:
             raise ACPError(f"session/new returned no sessionId: {result!r}")
         self._session_id = sid
+        # Review #464 Major: fs/read_text_file + fs/write_text_file are
+        # jailed to the session's realpath(cwd) — the child must never read
+        # or write outside the working directory it was granted.
+        try:
+            self._fs_jail = os.path.realpath(cwd)
+        except OSError:
+            self._fs_jail = None
         return sid
 
     def set_config_option(self, session_id: str, key: str, value: Any,

@@ -151,6 +151,18 @@ class ACPEventMapper:
 
     One instance per bridge run (= one ACP session). Consumed by
     bridge.run_acp_once via a ChatEventSink; also usable standalone in tests.
+
+    Review #465, Mark's Option b — streaming contract:
+    - ``map_update(params, stream=True)`` maps agent text chunks into
+      PREVIEW lines (``custom_message``/``acp-preview`` carrying the growing
+      snapshot). The chat reducer treats preview as replace-me; it never
+      stacks bubbles.
+    - ``map_final_assistant_message(text)`` emits exactly ONE ``message``
+      line with the complete text + usage + model — the only assistant
+      entry that lands in the permanent transcript.
+    - ``usage`` is stamped ONLY on that final line (never 0/0 per chunk).
+    - ``set_session_id`` carries the REAL ``session/new`` id into the sink
+      (file name + session header), replacing the "acp-session" stub.
     """
 
     seq: int = 0
@@ -163,22 +175,36 @@ class ACPEventMapper:
     _usage_window: Optional[dict[str, int]] = None
     # Token usage from the session/prompt result (set via set_prompt_usage).
     _prompt_usage: Optional[dict[str, Any]] = None
+    # REAL ACP sessionId (set via set_session_id once session/new replied).
+    _session_id: Optional[str] = None
 
     # ------------------------------------------------------------------
     # mapping
     # ------------------------------------------------------------------
 
-    def map_update(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def map_update(
+        self, params: dict[str, Any], *, stream: bool = False
+    ) -> list[dict[str, Any]]:
         """One `session/update` params dict -> 0..n omp-format transcript
-        line dicts. Never raises; unknown shapes yield []."""
+        line dicts. Never raises; unknown shapes yield [].
+
+        ``stream=True`` (the live bridge path): agent text chunks become
+        PREVIEW lines instead of permanent assistant messages (Option b).
+        ``stream=False`` (legacy/tests): chunks map to assistant message
+        lines exactly as before.
+        """
         try:
             update = params.get("update") or {}
             if not isinstance(update, dict):
                 return []
             su = update.get("sessionUpdate")
             if su == "agent_message_chunk":
+                if stream:
+                    return self._preview_chunk(update, "text")
                 return self._chunk(update, self._text_by_message, "text")
             if su == "agent_thought_chunk":
+                if stream:
+                    return self._preview_chunk(update, "thinking")
                 return self._chunk(update, self._thought_by_message, "thinking")
             if su == "tool_call":
                 return self._tool_seed(update)
@@ -195,9 +221,16 @@ class ACPEventMapper:
         except Exception:  # noqa: BLE001 — a broken update must not kill the run
             return []
 
+    def set_session_id(self, session_id: Optional[str]) -> None:
+        """Carry the REAL `session/new` sessionId into the sink (Review
+        #465 low 5): file name + session header use it, so the chat view's
+        session rollover keys on the actual ACP session, not a stub."""
+        if isinstance(session_id, str) and session_id.strip():
+            self._session_id = session_id.strip()
+
     def set_prompt_usage(self, usage: Optional[dict[str, Any]]) -> None:
         """Record the session/prompt reply's usage (inputTokens/outputTokens
-        etc.) for stamping onto subsequent assistant flushes."""
+        etc.) for stamping onto the FINAL assistant line (never per chunk)."""
         if isinstance(usage, dict) and usage:
             self._prompt_usage = usage
 
@@ -321,6 +354,75 @@ class ACPEventMapper:
         message_id = update.get("messageId")
         key = message_id if isinstance(message_id, str) and message_id else "_anon"
         store[key] = store.get(key, "") + text
+        # Review #465 mid 3: NO usage on chunk lines — every chunk carried a
+        # 0/0 usage block once _prompt_usage landed, which fed the token
+        # counter (#393) garbage. Usage lives ONLY on the final message.
+        return [
+            {
+                "type": "message",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": block_type, block_type: store[key]}],
+                    "model": None,
+                },
+            }
+        ]
+
+    def _preview_chunk(
+        self,
+        update: dict[str, Any],
+        block_type: str,
+    ) -> list[dict[str, Any]]:
+        """Review #465, Mark's Option b: map one agent text chunk into a
+        PREVIEW line — the growing snapshot of the message so far, keyed by
+        the SAME customType every flush so the chat's preview slot replaces
+        (never stacks). Rendered as a ``custom_message`` teammate line whose
+        text carries the whole accumulated snapshot; the transcript only
+        ever shows the LATEST state, and the final assistant line supersedes
+        it. No usage, no fresh message identity per chunk."""
+        content = update.get("content") or {}
+        if not isinstance(content, dict) or content.get("type") != "text":
+            return []
+        text = content.get("text")
+        if not isinstance(text, str) or not text:
+            return []
+        message_id = update.get("messageId")
+        key = message_id if isinstance(message_id, str) and message_id else "_anon"
+        store = self._text_by_message if block_type == "text" else self._thought_by_message
+        store[key] = store.get(key, "") + text
+        return [
+            {
+                "type": "custom_message",
+                "customType": "acp-preview",
+                "content": store[key],
+                "display": True,
+                "attribution": "agent",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+            }
+        ]
+
+    def map_final_assistant_message(
+        self, final_text: str, *, stop_reason: str = "stop"
+    ) -> list[dict[str, Any]]:
+        """Review #465, Mark's Option b: EXACTLY ONE permanent assistant
+        line per turn — the complete text, real usage (never 0/0), and the
+        mapper's model=None. Empty text -> [] (a turn that produced no
+        visible text leaves no empty bubble).
+
+        ``stop_reason`` stamps `message.stopReason` — the backend's
+        ``omp_chat.transcript_suggests_turn_ended`` probe reads it to decide
+        working vs idle; ACP's `end_turn` maps to omp's `stop`. Only the
+        terminal reasons land here: a cancelled/error turn keeps the probe
+        conservative via the non-terminal default the caller passes.
+        """
+        text = str(final_text or "")
+        if not text.strip():
+            return []
         entry: dict[str, Any] = {
             "type": "message",
             "id": self._next_id(),
@@ -328,8 +430,9 @@ class ACPEventMapper:
             "timestamp": _now_iso(),
             "message": {
                 "role": "assistant",
-                "content": [{"type": block_type, block_type: store[key]}],
+                "content": [{"type": "text", "text": text}],
                 "model": None,
+                "stopReason": stop_reason if stop_reason == "stop" else None,
             },
         }
         usage = self._usage_block()
@@ -494,6 +597,14 @@ class ChatEventSink:
                 self._path = candidate
             except OSError:
                 self._path = None
+
+    @property
+    def session_id(self) -> str:
+        """The sink's sessionId (Review #465 Blocker 1: bridge's sink()
+        compares this against its holder to decide reuse — the class only
+        ever had `_session_id`, so every second call raised AttributeError
+        and the chat stalled after the first transcript line)."""
+        return self._session_id
 
     @property
     def path(self) -> Optional[Path]:

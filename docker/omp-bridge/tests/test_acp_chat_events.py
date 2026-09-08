@@ -284,37 +284,34 @@ def test_bridge_run_transcribes_permission_roundtrip(tmp_path):
 
 
 def test_usage_update_stamps_context_window():
-    """omp's parser resolves contextWindow from the model registry, not from
-    our line — our usage block feeds the token counts; the window lands in
-    the line's usage dict and rides along in `components`. The chat shows a
-    usage event either way."""
+    """Review #465 mid 3 (Option b): usage rides ONLY on the final assistant
+    message (never per chunk — 0/0 garbage fed the token counter #393).
+    The window from usage_update lands in that final line's usage dict."""
     mapper = acp_chat_events.ACPEventMapper()
     mapper.map_update({"update": {"sessionUpdate": "usage_update", "size": 500000, "used": 17395}})
-    lines = mapper.dump(mapper.map_update(
+    chunk_lines = mapper.dump(mapper.map_update(
         {"update": {"sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": "x"}, "messageId": "m"}}
     ))
-    events = parse_all(lines)
+    chunk_events = parse_all(chunk_lines)
+    assert not [e for e in chunk_events if e["kind"] == "usage"], \
+        "chunks must never carry usage (0/0 garbage)"
+    final_lines = mapper.dump(mapper.map_final_assistant_message("done"))
+    events = parse_all(final_lines)
     usage = [e for e in events if e["kind"] == "usage"]
-    assert usage, "usage must surface as a usage event"
-    raw = json.loads(lines[-1])
+    assert usage, "final message must surface a usage event"
+    raw = json.loads(final_lines[-1])
     assert raw["message"]["usage"]["contextWindow"] == 500000
     assert raw["message"]["usage"]["usedTokens"] == 17395
-
 
 
 # ── tests: usage ────────────────────────────────────────────────────────────
 
 
-
-
 def test_prompt_result_usage_flows_into_usage_event():
     mapper = acp_chat_events.ACPEventMapper()
     mapper.set_prompt_usage({"inputTokens": 34876, "outputTokens": 57})
-    lines = mapper.dump(mapper.map_update(
-        {"update": {"sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": "done"}, "messageId": "m"}}
-    ))
+    lines = mapper.dump(mapper.map_final_assistant_message("done"))
     usage = [e for e in parse_all(lines) if e["kind"] == "usage"]
     assert usage and usage[0]["inputTokens"] == 34876 and usage[0]["outputTokens"] == 57
 
