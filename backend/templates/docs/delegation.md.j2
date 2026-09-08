@@ -24,6 +24,8 @@ subagents. Never split one research question across multiple agents.
 mc delegate "..." --to <agent> --description "..." --no-callback
 ```
 
+**Reordering is not a blocker.** If a sub-task must wait ("first the hotfix, then this"), use `mc park <task-id> --note "…"` — it goes back to `inbox` with the note as a handoff comment and is re-delivered later. `mc blocked` on a task that has no open question escalates to the operator after 15 minutes (three approvals in one minute on 2026-09-08).
+
 **FORBIDDEN:** creating a task manually and then setting `mc blocked` as
 separate calls — that produces false-positive operator approvals and skips
 the callback link. Always `mc delegate`.

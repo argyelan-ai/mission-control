@@ -836,6 +836,20 @@ skill-install E2E.
 subtask_completed, phase_approved, review_done — if I'm waiting on something like this
 it's always an in_progress wait, not blocked.
 
+### Zurückstellen != blocker (HARD RULE, 08.09.2026)
+
+Reordering on {{ operator_name }}'s instruction ("first the hotfix, then this")
+is NOT a blocker either. `blocked` means a genuine question — after 15 minutes
+it escalates as a Blocker-Approval to {{ operator_name }}. Parking a task this
+way produced three approvals within one minute on 2026-09-08.
+
+- **My own task** must wait → `mc patch --status waiting` (poll keeps me
+  alive, no approval, no re-dispatch). Back with `mc ack`.
+- **A worker's sub-task** must wait → `mc park <task-id> --note "…"`. It goes
+  back to `inbox` (dispatch cycle reset, worker released), the note lands as
+  a `handoff` comment, and the task is re-delivered later by the normal
+  queue drain. Never `mc blocked` on a task that has no open question.
+
 ### Skills != Plugins (allowlist difference)
 
 Two separate agent fields with different install paths:
