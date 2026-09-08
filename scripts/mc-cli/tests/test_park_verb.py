@@ -6,7 +6,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
 from mc_cli.commands import REGISTRY, _cmd_park, _cmd_patch  # noqa: E402
-from mc_cli.errors import UsageError  # noqa: E402
+from mc_cli.errors import ClientError, UsageError  # noqa: E402
 
 
 from dataclasses import dataclass  # noqa: E402
@@ -90,3 +90,63 @@ def test_patch_still_rejects_unknown_status():
     except UsageError:
         return
     raise AssertionError("unknown status must raise UsageError")
+
+
+def test_park_already_inbox_skips_patch():
+    """Detail says status=inbox → post the note, skip the PATCH entirely."""
+    CALLS.clear()
+
+    class _AlreadyInbox(_Client):
+        def request(self, method, path, body=None, **kw):
+            self.calls.append((method, path, body, self.cfg.dispatch_attempt_id))
+            if path.endswith("/detail"):
+                return {"id": "t1", "status": "inbox", "dispatch_attempt_id": self.detail_attempt}
+            return {"ok": True}
+
+    rc = _cmd_park(_Args(note="schon in inbox"), _AlreadyInbox(), _Cfg())
+    assert rc == 0
+    methods = [c[0] for c in CALLS]
+    assert methods == ["GET", "POST"]
+    assert CALLS[1][2]["comment_type"] == "handoff" and "schon in inbox" in CALLS[1][2]["content"]
+
+
+def test_park_patch_inbox_to_inbox_error_is_success():
+    """PATCH raises the 400 'Inbox -> Inbox' transition error → treated as success."""
+    CALLS.clear()
+
+    class _RaceInbox(_Client):
+        def request(self, method, path, body=None, **kw):
+            self.calls.append((method, path, body, self.cfg.dispatch_attempt_id))
+            if path.endswith("/detail"):
+                return {"id": "t1", "status": "waiting", "dispatch_attempt_id": self.detail_attempt}
+            if method == "PATCH":
+                raise ClientError(
+                    "HTTP 400 PATCH /api/v1/agent/boards/b1/tasks/t1: "
+                    '{"detail":"Ungültiger Status-Übergang: Inbox -> Inbox"}'
+                )
+            return {"ok": True}
+
+    rc = _cmd_park(_Args(note="race mit queue-drain"), _RaceInbox(), _Cfg())
+    assert rc == 0
+    methods = [c[0] for c in CALLS]
+    assert methods == ["GET", "POST", "PATCH"]
+
+
+def test_park_other_patch_error_is_reraised():
+    """A PATCH error unrelated to the Inbox->Inbox transition must propagate."""
+    CALLS.clear()
+
+    class _OtherError(_Client):
+        def request(self, method, path, body=None, **kw):
+            self.calls.append((method, path, body, self.cfg.dispatch_attempt_id))
+            if path.endswith("/detail"):
+                return {"id": "t1", "status": "waiting", "dispatch_attempt_id": self.detail_attempt}
+            if method == "PATCH":
+                raise ClientError("HTTP 409 PATCH /api/v1/agent/boards/b1/tasks/t1: conflict")
+            return {"ok": True}
+
+    try:
+        _cmd_park(_Args(note="x"), _OtherError(), _Cfg())
+    except ClientError:
+        return
+    raise AssertionError("non-Inbox->Inbox PATCH errors must be re-raised")
