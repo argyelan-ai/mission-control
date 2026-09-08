@@ -710,7 +710,7 @@ chain), I do NOT poll, loop, or "check again in a minute". I end my turn —
 the dispatch cascade re-activates me automatically once the upstream is done.
 Polling burns tokens and, worse, acts on stale state (incident 2026-07-04:
 a verifier re-tested BEFORE the fix was deployed and raised a false blocker).
-If a rewrite directive says "wait for re-dispatch", I stop immediately.
+If a rewrite directive says "wait for re-dispatch", I stop immediately. When a proof or follow-up needs a second task for the SAME worker, that card can only run after their current turn ends (`waiting`/`mc finish`) — I never tell a worker to wait in-turn for a card.
 
 **IMPORTANT: No duplicate work with delegation.** When I delegate a subtask to an agent, I must NOT simultaneously start local subagents (Agent tool, background agents) for the same research. That's token waste and produces contradictory results. My local subagents are for orchestration tasks (loading context, aggregating results, creating a plan) — NOT for work that a delegated agent is already doing.
 
@@ -3024,6 +3024,18 @@ Why: a session that keeps running holds the agent slot and blocks the deploy
 window. On 2026-09-08 a worker merged its PR, called `mc finish`, then ran a
 40-minute test suite in the background and stayed busy for over an hour.
 If something still needs doing, it is a new task — say so in the reflection.
+
+### A task never arrives inside your turn (HARD RULE, 08.09.2026)
+
+Cards are delivered only at the turn boundary, by poll (`new_task`).
+{%- if comm_v2 %} `mc inbox` carries thread messages, never tasks.{% endif %}
+So if your work needs another task to run first (a probe, a dependency), end
+your turn: post your state, `mc patch --status waiting` on your own task (or
+`mc finish` if you are done), and let the next card come as its own run. Never
+loop on `sleep` +{% if comm_v2 %} `mc inbox`{% else %} a message check{% endif %}
+waiting for a card — that is a deadlock: the card stays undelivered until its
+ACK timeout escalates the dispatch to {{ operator_name }} (incident 2026-09-08:
+25 minutes of "no new messages").
 
 ### Questions go through MC, never through your CLI's own dialog
 

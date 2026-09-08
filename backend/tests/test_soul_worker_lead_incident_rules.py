@@ -183,3 +183,70 @@ def test_delegation_doc_teaches_the_same_size_rule():
     content = docs["delegation"]
     assert "DISPATCH_HARD_CHARS" in content
     assert "under 3 000" in content
+
+
+# --- 6. Eine Karte kommt nie im laufenden Zug an --------------------------
+
+IN_TURN = "### A task never arrives inside your turn"
+
+
+def test_worker_soul_says_a_card_never_arrives_in_turn():
+    soul = _soul()
+    assert IN_TURN in soul
+    idx = soul.index(IN_TURN)
+    window = soul[idx : idx + 900]
+    assert "new_task" in window
+    assert "mc inbox" in window
+    assert "mc patch --status waiting" in window
+    lowered = window.lower()
+    assert "turn boundary" in lowered
+    assert "deadlock" in lowered
+    # Das WARUM: die Karte bleibt unzugestellt, bis der Dispatch eskaliert.
+    assert "escalates the dispatch" in lowered
+
+
+def test_in_turn_rule_forbids_the_sleep_inbox_loop():
+    soul = _soul()
+    idx = soul.index(IN_TURN)
+    window = soul[idx : idx + 900]
+    assert "`sleep` + `mc inbox`" in window
+
+
+def test_in_turn_rule_survives_without_comm_v2():
+    """Ohne comm_v2 gibt es kein `mc inbox` (Doku-Kontrakt) — die Regel
+    bleibt, der Kanal wird neutral benannt."""
+    soul = _soul(comm_v2=False)
+    assert IN_TURN in soul
+    assert "mc inbox" not in soul
+    idx = soul.index(IN_TURN)
+    window = soul[idx : idx + 900]
+    assert "`sleep` + a message check" in window
+
+
+def test_in_turn_rule_is_worker_only():
+    lead = _soul(role="Orchestrator", name="Lead")
+    assert IN_TURN not in lead
+
+
+LEAD_SENTENCE = "needs a second task for the SAME worker"
+
+
+def test_lead_never_orders_an_in_turn_wait():
+    soul = _lead_soul()
+    assert LEAD_SENTENCE in soul
+    idx = soul.index(LEAD_SENTENCE)
+    window = soul[idx : idx + 300]
+    assert "mc finish" in window
+    assert "wait in-turn for a card" in window
+
+
+def test_in_turn_lead_sentence_is_not_shipped_to_workers():
+    worker = _soul(role="developer")
+    assert LEAD_SENTENCE not in worker
+
+
+def test_delegation_doc_teaches_the_in_turn_rule():
+    docs = generate_reference_docs({"operator_name": "TestOp"})
+    content = docs["delegation"]
+    assert LEAD_SENTENCE in content
+    assert "wait in-turn for a card" in content
