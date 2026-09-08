@@ -3418,13 +3418,13 @@ def _acp_permission_decision_transcribed(
     the decision line after.
     """
     try:
-        emit(mapper.dump(mapper.map_permission_request(params)))
+        emit(mapper.map_permission_request(params))
     except Exception:  # noqa: BLE001 — chat view must never break the ask
         pass
     choice = _acp_permission_decision(params, policy=policy, task_id=task_id, ask_fn=ask_fn)
     try:
-        emit(mapper.dump(mapper.map_permission_outcome(params, choice)))
-    except Exception:  # noqa: BLE001 — same
+        emit(mapper.map_permission_outcome(params, choice))
+    except Exception:  # noqa: BLE001 — chat view must never break the ask
         pass
     return choice
 
