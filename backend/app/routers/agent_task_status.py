@@ -1781,6 +1781,25 @@ async def agent_update_task(
         # Board-Lead darf entblocken; sein Unblock supersedet das Approval
         # (Lead-first-Triage, Fix A) — der Operator sieht die Aufloesung als
         # Event im Feed statt eines offenen Approvals.
+        if updates["status"] == "inbox" and task.status != "inbox":
+            # Park / Requeue (`mc park`, 08.09.2026): back to inbox = reset the
+            # dispatch cycle, exactly like the operator PATCH in tasks.py does.
+            # Without this the task kept dispatched_at/ack_at and the bridge
+            # never saw a fresh new_task; the worker's lock stayed set and the
+            # queue drain (#454) never fired.
+            task.dispatched_at = None
+            task.ack_at = None
+            task.started_at = None
+            task.run_control = None
+            from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+            await clear_dispatch_attempt_id(
+                session, task, caller="agent_patch", reason="park_requeue",
+            )
+            if task.assigned_agent_id:
+                _worker = await session.get(Agent, task.assigned_agent_id)
+                if _worker is not None and _worker.current_task_id == task.id:
+                    _worker.current_task_id = None
+                    session.add(_worker)
         new_status_check = updates["status"]
         if task.status == "blocked" and new_status_check in ("in_progress", "inbox"):
             pending_approval = (await session.exec(

@@ -233,10 +233,15 @@ def _add_done_args(p):
 def _cmd_patch(args, client, cfg):
     """mc patch --status <status> — Generischer Status-Setter (Alias für die jeweiligen Commands).
 
-    Akzeptiert alle Status-Werte: done, review, in_progress, blocked, failed.
-    Fuer blocked/failed sind die dedizierten Commands (mc blocked, mc failed) bevorzugt.
+    Akzeptiert alle Status-Werte: done, review, in_progress, blocked, failed,
+    waiting, inbox. Fuer blocked/failed sind die dedizierten Commands
+    (mc blocked, mc failed) bevorzugt; fuer inbox `mc park`.
+
+    `waiting` (08.09.2026): eigenen Task bewusst zurueckstellen — z.B. auf
+    Operator-Anweisung "erst X, dann das hier". NICHT `blocked`: blocked ist
+    eine echte Frage an den Operator und erzeugt nach 15 min ein Approval.
     """
-    valid_statuses = ("done", "review", "in_progress", "blocked", "failed")
+    valid_statuses = ("done", "review", "in_progress", "blocked", "failed", "waiting", "inbox")
     if args.status not in valid_statuses:
         raise UsageError(f"--status muss einer von: {', '.join(valid_statuses)} sein")
     return _patch_status(client, cfg, args.status)
@@ -244,7 +249,7 @@ def _cmd_patch(args, client, cfg):
 
 def _add_patch_args(p):
     _add_optional_task_id(p)
-    p.add_argument("--status", required=True, help="Neuer Status: done | review | in_progress | blocked | failed")
+    p.add_argument("--status", required=True, help="Neuer Status: done | review | in_progress | blocked | failed | waiting | inbox")
 
 
 def _cmd_task_get(args, client, cfg):
@@ -446,6 +451,43 @@ def _cmd_blocked(args, client, cfg):
         blocker_description=args.description,
         blocker_question=args.question,
     )
+
+
+def _cmd_park(args, client, cfg):
+    """mc park <task-id> --note "..." — Task zurueckstellen (Lead-Werkzeug, 08.09.2026).
+
+    Setzt den Task auf `inbox`: das Backend loescht dispatched_at/ack_at/
+    attempt-id und gibt den Worker frei; der Task wird spaeter ganz normal
+    neu zugestellt (Queue-Drain / Watchdog). Vorher wird die Notiz als
+    `handoff`-Kommentar gespeichert, damit der Worker beim naechsten Poll
+    sieht, warum er unterbrochen wurde.
+
+    Warum nicht `mc blocked`: blocked = echte Operator-Frage → nach 15 min
+    Blocker-Approval beim Operator. Eine Umsortierung ("erst Fix 3b, dann
+    ACP") ist keine Frage — sie hat am 08.09.2026 drei Approvals auf einmal
+    erzeugt. Fuer den EIGENEN Task des Leads: `mc patch --status waiting`.
+    """
+    board_id, task_id = cfg.require_task_context()
+    # The status PATCH is guarded by X-Dispatch-Attempt-Id — the header must
+    # carry the TARGET task's attempt id, not the lead's own (env). Read it
+    # from the task detail and send the requests through a client bound to it.
+    detail = client.request("GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail")
+    target_attempt = (detail or {}).get("dispatch_attempt_id") if isinstance(detail, dict) else None
+    if target_attempt and target_attempt != cfg.dispatch_attempt_id:
+        from dataclasses import replace as _replace
+        client = type(client)(_replace(cfg, dispatch_attempt_id=target_attempt))
+        cfg = client.cfg
+    client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        body={"content": f"Zurueckgestellt: {args.note}", "comment_type": "handoff"},
+    )
+    return _patch_status(client, cfg, "inbox")
+
+
+def _add_park_args(p):
+    _add_optional_task_id(p)
+    p.add_argument("--note", required=True, help="Pflicht — warum/wie lange zurueckgestellt (wird als handoff-Kommentar gespeichert)")
 
 
 def _cmd_failed(args, client, cfg):
@@ -2547,6 +2589,18 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_blocked,
         add_args=_add_blocked_args,
+    ),
+    "park": CommandSpec(
+        name="park",
+        help="Task zurueckstellen (inbox) statt blockieren — Lead-Werkzeug fuer Umsortierungen",
+        endpoints=(
+            "GET /boards/{board_id}/tasks/{task_id}/detail",
+            "PATCH /boards/{board_id}/tasks/{task_id}",
+            "POST /boards/{board_id}/tasks/{task_id}/comments",
+        ),
+        scope="tasks:write",
+        handler=_cmd_park,
+        add_args=_add_park_args,
     ),
     "failed": CommandSpec(
         name="failed",
