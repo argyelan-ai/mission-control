@@ -64,6 +64,10 @@ fi
 # Container-Boss-Env-Contamination entfernen — diese Vars routen claude
 # zu LM Studio/Ollama statt api.anthropic.com:
 unset CLAUDE_CONFIG_DIR    # damit claude OAuth-Keychain unter ~/.claude/ findet
+# `mc docs` leitet seinen Ordner sonst aus CLAUDE_CONFIG_DIR ab und landet nach
+# dem unset in ~/.claude/docs des Operators (existiert nicht) — die L2-Dokus
+# (groupchat, delegation, …) waeren fuer diesen Agenten unlesbar.
+export MC_DOCS_DIR="$CONFIG_DIR/docs"
 unset ANTHROPIC_BASE_URL
 unset OPENAI_BASE_URL
 unset OPENAI_API_KEY
