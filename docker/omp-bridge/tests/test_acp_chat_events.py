@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -436,7 +437,7 @@ def test_preview_contract_own_channel_not_transcript(tmp_path):
     pfile.parent.mkdir()
     pfile.write_text("\n".join(stream_lines) + "\n", encoding="utf-8")
     state = {"path": pfile, "offset": 0, "buffer": b""}
-    events = _read_preview_channel(state, None)
+    events = _read_preview_channel(state)
     assert events, "preview channel lines must become preview events"
     for ev in events:
         assert ev["kind"] == "preview", ev
@@ -505,6 +506,53 @@ def test_preview_emit_throttled_own_sink_last_state_always_flushed():
               if json.loads(w).get("type") == "message"
               and json.loads(w).get("message", {}).get("role") == "assistant"]
     assert len(finals) == 1, len(finals)
+
+
+def test_preview_sink_prunes_to_three_newest_files(tmp_path):
+    """Review #473 N1: previews/ must not grow without bound — a fresh
+    PreviewEventSink prunes the directory down to the 3 newest files
+    BEFORE writing its own, so a long-running omp-agent's preview dir (and
+    the tailer's per-tick glob over it) stays bounded."""
+    session_dir = tmp_path / "sess"
+    pdir = session_dir / "previews"
+    pdir.mkdir(parents=True)
+    # 5 pre-existing files, oldest to newest via mtime.
+    paths = [pdir / f"old{i}.jsonl" for i in range(5)]
+    now = time.time()
+    for i, p in enumerate(paths):
+        p.write_text("{}\n", encoding="utf-8")
+        os.utime(p, (now + i, now + i))  # paths[4] is the newest pre-existing
+
+    sink = acp_chat_events.PreviewEventSink(session_dir, "s1")
+    assert sink.path is not None
+    # The sink only computes its own path here; it appears on disk once
+    # something is actually written to it.
+    sink.write(['{"probe": true}'])
+
+    remaining = set(pdir.glob("*.jsonl"))
+    # The 3 newest pre-existing files survive, plus the sink's own new file.
+    assert remaining == {paths[2], paths[3], paths[4], sink.path}
+
+
+def test_preview_sink_prune_swallows_unlink_errors(tmp_path, monkeypatch):
+    """A delete failure (permissions, a racing reader) during prune must
+    never crash sink construction — fail-closed per Review #473 N1: an
+    unpruned file is a nuisance, a dead preview channel is not."""
+    session_dir = tmp_path / "sess"
+    pdir = session_dir / "previews"
+    pdir.mkdir(parents=True)
+    for i in range(4):
+        (pdir / f"old{i}.jsonl").write_text("{}\n", encoding="utf-8")
+
+    real_unlink = Path.unlink
+
+    def boom(self, *a, **kw):
+        raise OSError("locked")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    sink = acp_chat_events.PreviewEventSink(session_dir, "s1")
+    assert sink.path is not None  # construction survives the swallowed error
+    monkeypatch.setattr(Path, "unlink", real_unlink)
 
 
 # ── standalone runner ───────────────────────────────────────────────────────

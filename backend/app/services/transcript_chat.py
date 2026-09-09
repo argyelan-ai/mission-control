@@ -1634,7 +1634,7 @@ def _stable_prefix(a: str, b: str) -> str:
     return prefix.rstrip()
 
 
-def _read_preview_channel(state: dict[str, Any], adapter: Any) -> list[dict[str, Any]]:
+def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Ein Takt Vorschau-Kanal: neue Zeilen der ACP-Preview-Datei lesen und
     zu ``kind: "preview", source: "acp"``-Ereignissen normalisieren.
 
@@ -1914,10 +1914,12 @@ class ChatTailerManager:
 
                 # Vorschau-Kanal (ACP): jede neue Zeile der Preview-Datei ist
                 # ein eigenes volatiles Ereignis — dedup-frei (uuid None), die
-                # Datei selbst ist die Quelle der Reihenfolge. Aufloesung nur
-                # bei Rollover/Start; sie ist ein Verzeichnis-Glob pro Takt
-                # wert, wenn sich der Rollover-Schritt ohnehin veraendert.
-                if getattr(adapter, "preview_channel", None) is not None:
+                # Datei selbst ist die Quelle der Reihenfolge. Die Aufloesung
+                # (Verzeichnis-Glob) laeuft JEDEN Takt — nicht nur bei
+                # Rollover/Start —, weil der ACP-Sink pro Turn eine neue
+                # Datei anlegt (PreviewEventSink); nur Adapter ohne eigenen
+                # Kanal (``preview_channel is None``) ueberspringen sie ganz.
+                if adapter.preview_channel is not None:
                     resolved = await asyncio.to_thread(
                         adapter.preview_channel, current_path
                     )
@@ -1930,7 +1932,7 @@ class ChatTailerManager:
                         )
                     if preview_file_state is not None:
                         p_events = await asyncio.to_thread(
-                            _read_preview_channel, preview_file_state, adapter
+                            _read_preview_channel, preview_file_state
                         )
                         for p_ev in p_events:
                             await sse.broadcast(channel, "chat_event", p_ev)

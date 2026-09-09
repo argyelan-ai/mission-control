@@ -134,8 +134,11 @@ class TranscriptAdapter:
     #: NICHT in die Transkript-JSONL. Der Tailer liest sie ueber dieses
     #: Feld und broadcastet jede Zeile als volatile ``preview``-Ereignis.
     #: Claude Code schreibt Previews nicht auf die Platte (dort lebt der
-    #: Kanal im Pane-Strom), darum der ``None``-Standard.
-    preview_channel: Callable[[Path], Path | None] = lambda _p: None
+    #: Kanal im Pane-Strom), darum der ``None``-Standard — echtes ``None``,
+    #: keine Attrappen-Lambda: der Tailer gated per ``is not None`` (Review
+    #: #473 N3), eine Lambda waere immer „nicht None" und der `to_thread`-Hop
+    #: liefe bei jedem Takt fuer Adapter ohne eigenen Kanal ins Leere.
+    preview_channel: Callable[[Path], Path | None] | None = None
 
 
 def _claude_adapter(
