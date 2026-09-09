@@ -24,6 +24,7 @@ from app.redis_client import RedisKeys
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.sse import broadcast, make_sse_response
+from app.services.task_state import lock_and_set
 
 
 # Single Source of Truth — imported from task_status.py
@@ -1693,7 +1694,7 @@ async def update_task(
                 session, next_phase.id, "inbox", "in_progress",
                 changed_by="system", reason="phase_auto_advance",
             )
-            next_phase.status = "in_progress"
+            next_phase, _ = await lock_and_set(session, next_phase.id, "in_progress", actor="system")
             # F2 fix (Plan 26-03): first-set-wins on started_at.
             if next_phase.started_at is None:
                 next_phase.started_at = utcnow()
@@ -2472,7 +2473,7 @@ async def post_thread_message(
                     session, task.id, task.status, TaskStatus.IN_PROGRESS,
                     changed_by="user", reason="answer_received",
                 )
-                task.status = TaskStatus.IN_PROGRESS
+                task, _ = await lock_and_set(session, task.id, TaskStatus.IN_PROGRESS, actor="user")
 
                 # Parked/absent detection (Task 9): if the agent was released
                 # while the task waited (waiting-timeout park, or the agent
