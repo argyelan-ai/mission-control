@@ -398,3 +398,72 @@ async def test_heartbeat_blocked_turn_signal_keeps_working_status(client: AsyncC
         )).one()
         assert fresh.status == "working"
         assert fresh.run_state == "running"
+
+
+# ── Withdrawn-task guard (09.09.2026) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_heartbeat_hard_when_running_task_requeued_to_inbox(client: AsyncClient):
+    """Lead moves the card back to inbox while the bridge still reports the
+    turn (payload.task_id) → hard interrupt with a 'nicht weiterarbeiten'
+    reason. Before the fix nothing fired and the turn ran on for 48 min."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        task.status = "inbox"
+        s.add(task)
+        agent.current_task_id = None
+        s.add(agent)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(task.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["control"]["interrupt"] == "hard"
+    assert "entzogen" in body["control"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_hard_when_running_task_reassigned_to_other_agent(client: AsyncClient):
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        _, other_hash = generate_agent_token()
+        other = Agent(
+            name=f"Beta-{uuid.uuid4().hex[:6]}", agent_runtime="cli-bridge",
+            agent_token_hash=other_hash, board_id=agent.board_id, scopes=["heartbeat"],
+        )
+        s.add(other)
+        await s.commit()
+        task.assigned_agent_id = other.id
+        s.add(task)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(task.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["control"]["interrupt"] == "hard"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_own_finish_to_review_is_not_withdrawn(client: AsyncClient):
+    """The agent's own `mc finish` sets review while its turn context still
+    reports the task — that is NOT a withdrawal, no interrupt."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        task.status = "review"
+        s.add(task)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(task.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "control" not in resp.json()
