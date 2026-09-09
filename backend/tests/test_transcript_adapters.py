@@ -87,6 +87,12 @@ def test_every_adapter_offers_the_full_contract():
                 # Optionaler Terminal-Marker: nicht jede CLI braucht ihn
                 # (Claude Code schreibt den Wechsel selbst ins Transkript).
                 assert value is None or (isinstance(value, str) and value), (harness, field.name)
+            elif field.name == "preview_channel":
+                # Optionaler Vorschau-Kanal (PR #473): nur ACP-faehige Harnesses
+                # schreiben eine previews/-Datei; ``None`` heisst fuer den Tailer
+                # "kein zweiter Tailer, kein Thread-Hop" — eine Lambda-Attrappe
+                # wuerde das Gate unterlaufen.
+                assert value is None or callable(value), (harness, field.name)
             else:
                 assert callable(value), (harness, field.name)
 
@@ -140,3 +146,12 @@ def test_omp_and_claude_disagree_about_the_same_pane():
 
     assert omp_chat.parse_pane_state(PANE_WORKING_GENERIC, False)["status"] == "working"
     assert pane_state.parse_pane_state(PANE_WORKING_GENERIC, False)["status"] == "unknown"
+
+
+def test_only_omp_offers_a_preview_channel():
+    """Der Vorschau-Kanal (PR #473) gehoert zum omp-Adapter; alle anderen
+    Harnesses melden ``None``, damit der Tailer den zweiten Tailer und den
+    ``to_thread``-Hop gar nicht erst startet."""
+    assert callable(adapter_for(_Agent(harness="omp")).preview_channel)
+    for harness in ("claude", "openclaude", "kimi", None):
+        assert adapter_for(_Agent(harness=harness)).preview_channel is None, harness
