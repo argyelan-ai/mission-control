@@ -98,6 +98,26 @@ async def test_invalid_transition_raises_409_and_leaves_status_unchanged():
 
 
 @pytest.mark.asyncio
+async def test_invalid_transition_409_detail_is_machine_readable():
+    """The 409's detail must be a structured dict, not prose (incident #477:
+    the omp-bridge turned a correct 409 into a blocker because it could only
+    see rendered text). current_status/expected/allowed must be checkable
+    without parsing German sentences."""
+    task_id = await _make_task(status="done")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        with pytest.raises(HTTPException) as exc_info:
+            await transition(s, task_id, "done", actor="test", reason="noop")
+
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict), f"detail must be structured, got {type(detail)}"
+    assert detail["current_status"] == "done"
+    assert detail["expected"] == "done"
+    assert detail["allowed"] == ["in_progress"]  # VALID_TRANSITIONS[DONE]
+    assert "message" in detail and isinstance(detail["message"], str)
+
+
+@pytest.mark.asyncio
 async def test_unknown_task_raises_404():
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         with pytest.raises(HTTPException) as exc_info:

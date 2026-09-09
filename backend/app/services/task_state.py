@@ -30,7 +30,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.task import Task
 from app.services.activity import emit_event
-from app.task_status import STATUS_LABELS, is_valid_transition
+from app.task_status import STATUS_LABELS, VALID_TRANSITIONS, is_valid_transition
 
 
 async def lock_and_set(
@@ -50,6 +50,13 @@ async def lock_and_set(
     if ``to`` is not a valid transition from the task's current status.
     Callers outside a request context (e.g. the watchdog) must catch the
     409 themselves — it is a plain HTTPException, not tied to a response.
+
+    The 409's ``detail`` is a structured dict (``current_status``,
+    ``expected``, ``allowed``, plus a human-readable ``message``) — not
+    prose. A caller that only sees the rendered string (e.g. the omp-bridge,
+    incident #477) has no reliable way to tell "lost the lock_and_set() race
+    this was built to catch" (expected, retryable) apart from a genuine
+    error; the structured fields make that machine-checkable.
     """
     stmt = select(Task).where(Task.id == task_id)
     if session.bind.dialect.name == "postgresql":
@@ -62,11 +69,17 @@ async def lock_and_set(
     if not is_valid_transition(from_status, to):
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"Ungueltiger Statuswechsel: "
-                f"{STATUS_LABELS.get(from_status, from_status)} -> "
-                f"{STATUS_LABELS.get(to, to)}"
-            ),
+            detail={
+                "error": "invalid_transition",
+                "current_status": from_status,
+                "expected": to,
+                "allowed": sorted(VALID_TRANSITIONS.get(from_status, set())),
+                "message": (
+                    f"Ungueltiger Statuswechsel: "
+                    f"{STATUS_LABELS.get(from_status, from_status)} -> "
+                    f"{STATUS_LABELS.get(to, to)}"
+                ),
+            },
         )
 
     task.status = to
