@@ -405,34 +405,48 @@ def test_mapper_never_raises_on_garbage():
     assert mapper.dump([{"bad": object()}]) == []
 
 
-def test_preview_contract_snapshots_volatile_not_history(tmp_path):
-    """N3 (Review #471): stream-mode chunks ride the VOLATILE preview slot.
-    Contract end to end:
-    - live: the REAL OmpLineParser maps every acp-preview flush to a
-      uuid-less `preview` event (the reducer's replace-me slot),
-    - history: the REAL read_history DROPS them — exactly ONE final
-      assistant line carries the complete text into the transcript.
-    """
+def test_preview_contract_own_channel_not_transcript(tmp_path):
+    """Folge-PR zu #471: stream-mode chunks go to their OWN channel — the
+    sibling previews/ file — and NEVER into the transcript JSONL. Contract:
+    - mapper.map_update(stream=True) still emits acp-preview lines (the
+      established custom_message shape), but the BACKEND tailer reads them
+      from the preview file and broadcasts uuid-less `preview` events
+      (source "acp"),
+    - the transcript (read_history) holds exactly ONE final assistant line
+      and ZERO preview-shaped lines,
+    - the tailer's channel reader turns the file's lines into the volatile
+      events and advances its offset."""
     mapper = acp_chat_events.ACPEventMapper()
     stream_lines: list[str] = []
     for params in chunk("ignored", ["Hallo", " ", "Welt", "."]):
         stream_lines += mapper.dump(mapper.map_update(params, stream=True))
     final_lines = mapper.dump(mapper.map_final_assistant_message("Hallo Welt."))
 
-    # Live: each flush is a uuid-less preview event on the volatile channel.
-    parser = OmpLineParser()
-    live_events: list[dict] = []
+    # The preview lines keep the established custom_message shape (what the
+    # backend's _read_preview_channel filters on and what legacy files carry).
     for line in stream_lines:
-        live_events += parser(line)
-    assert live_events, "stream flushes must reach the parser"
-    for ev in live_events:
+        entry = json.loads(line)
+        assert entry["type"] == "custom_message"
+        assert entry["customType"] == acp_chat_events.PREVIEW_CUSTOM_TYPE
+
+    # The tailer's channel reader turns those lines into the volatile events.
+    from app.services.transcript_chat import _read_preview_channel
+
+    pfile = tmp_path / "previews" / "p1.jsonl"
+    pfile.parent.mkdir()
+    pfile.write_text("\n".join(stream_lines) + "\n", encoding="utf-8")
+    state = {"path": pfile, "offset": 0, "buffer": b""}
+    events = _read_preview_channel(state, None)
+    assert events, "preview channel lines must become preview events"
+    for ev in events:
         assert ev["kind"] == "preview", ev
         assert ev["uuid"] is None
         assert ev["source"] == "acp"
-    # The snapshot grows; the last one carries the full text so far.
-    assert [e["text"] for e in live_events][-1] == "Hallo Welt."
+    assert [e["text"] for e in events][-1] == "Hallo Welt."
+    assert state["offset"] == pfile.stat().st_size, "reader must advance its offset"
 
-    # History: snapshots dropped, ONE final assistant line kept.
+    # History: the transcript NEVER carries the snapshots — ONE final
+    # assistant line, no preview lines, no teammate duplicates.
     history = as_history(stream_lines + final_lines, tmp_path)
     messages = [e for e in history["events"] if e["kind"] == "message"]
     assert len(messages) == 1, messages
@@ -440,19 +454,18 @@ def test_preview_contract_snapshots_volatile_not_history(tmp_path):
     assert messages[0]["text"] == "Hallo Welt."
 
 
-def test_preview_emit_throttled_last_state_always_flushed(tmp_path):
-    """Dritt-Review #471 (b): run_acp_once must NOT flush one preview line
-    per chunk — 200 chunks used to mean 200 JSONL lines (~0.6 MB). The
-    throttle flushes a snapshot only on >200 chars growth OR >250 ms since
-    the last flush, and the FINAL state always reaches the sink so the
-    preview never rests on a stale snapshot. Contract end to end through
-    run_acp_once + a fake ACP server replaying 200 chunk updates."""
-    import time as _time
-
+def test_preview_emit_throttled_own_sink_last_state_always_flushed():
+    """Dritt-Review #471 (b) + Folge-PR: run_acp_once must NOT flush one
+    preview line per chunk, and the flushes go to the PREVIEW sink (own
+    channel), never the transcript sink. Throttle: >200 chars growth OR
+    >250 ms since the last flush; the FINAL state always reaches the
+    preview sink. End to end through run_acp_once + a fake ACP server
+    replaying 200 chunk updates."""
     import bridge
     from test_acp_adapter import InProcessFake
 
     writes: list[str] = []
+    preview_writes: list[str] = []
     fake = InProcessFake(RPC / "acp-many-chunks.ndjson", [])
     try:
         outcome = bridge.run_acp_once(
@@ -464,26 +477,30 @@ def test_preview_emit_throttled_last_state_always_flushed(tmp_path):
             task_id="T1",
             client_factory=lambda: fake.client,
             transcript_sink=writes.extend,
+            preview_sink=preview_writes.extend,
         )
         assert outcome.final_stop_reason == "end_turn"
     finally:
         fake.close()
 
-    previews = [json.loads(w) for w in writes
-                if json.loads(w).get("customType") == "acp-preview"]
+    # NOTHING preview-shaped may land in the transcript — the volatile
+    # snapshots left the transcript JSONL entirely.
+    for w in writes:
+        assert json.loads(w).get("customType") != acp_chat_events.PREVIEW_CUSTOM_TYPE, w
+
+    previews = [json.loads(w) for w in preview_writes]
     # Throttled: far fewer preview lines than the 200 streamed chunks.
     assert len(previews) < 50, \
         f"throttle failed: {len(previews)} preview lines for 200 chunks"
     assert len(previews) >= 2, "at least first + last snapshot must flush"
-    # Snapshots grow monotonically; the LAST one carries the complete text
-    # (final state always flushed, never a stale intermediate).
+    # Snapshots grow monotonically; the LAST one carries the complete text.
     sizes = [len(p["content"]) for p in previews]
     assert sizes == sorted(sizes), sizes
     assert previews[-1]["content"] == outcome.final_text, (
         "the final preview flush must carry the COMPLETE turn text"
     )
-    # And the turn still ends with the ONE permanent assistant line (the
-    # user prompt is also a `message` — filter by role).
+    # The turn still ends with the ONE permanent assistant line (the user
+    # prompt is also a `message` — filter by role).
     finals = [json.loads(w) for w in writes
               if json.loads(w).get("type") == "message"
               and json.loads(w).get("message", {}).get("role") == "assistant"]
@@ -521,8 +538,6 @@ if __name__ == "__main__":
         run("prompt_usage", test_prompt_result_usage_flows_into_usage_event)
         run("user_prompt", test_user_prompt_renders_as_user_message)
         run("sink_layout", test_sink_writes_session_file_in_omp_layout, tmp)
-        run("preview_contract", test_preview_contract_snapshots_volatile_not_history, tmp)
-        run("preview_throttle", test_preview_emit_throttled_last_state_always_flushed, tmp)
-        run("history_roundtrip", test_history_roundtrip_through_read_history, tmp)
-        run("garbage", test_mapper_never_raises_on_garbage)
+        run("preview_contract", test_preview_contract_own_channel_not_transcript, tmp)
+        run("preview_throttle", test_preview_emit_throttled_own_sink_last_state_always_flushed)
     sys.exit(1 if failures else 0)

@@ -3588,6 +3588,7 @@ def run_acp_once(
     heartbeat_fn: Optional[Callable[[], None]] = None,
     on_session_id: Optional[Callable[[str], None]] = None,
     transcript_sink: Optional[Callable[[list[str]], None]] = None,
+    preview_sink: Optional[Callable[[list[str]], None]] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
 
@@ -3605,11 +3606,12 @@ def run_acp_once(
     silent ACP tool run looks idle to the watchdog (#410/#411). ``None``
     keeps the pure-driver behaviour.
 
-    Sessions chat view (Review #465, Mark's Option b): chunks go ONLY to the
-    preview channel (growing snapshot lines the reducer treats as
-    replace-me previews); ONE final assistant line carries the complete
-    text (plus usage + the real sessionId) into the transcript. No
-    stacked per-chunk bubbles, no 0/0 usage per chunk, no frontend change.
+    Sessions chat view (Review #465, Mark's Option b + Folge-PR): chunks go
+    ONLY to the preview channel — a SIBLING preview file the backend tailer
+    broadcasts as volatile ``preview`` events (``preview_sink``); they never
+    touch ``transcript_sink``. ONE final assistant line carries the complete
+    text (plus usage + the real sessionId) into the transcript. No stacked
+    per-chunk bubbles, no 0/0 usage per chunk, no frontend change.
     ``None`` keeps the pure-driver behaviour byte-identical.
     """
     import threading
@@ -3625,6 +3627,14 @@ def run_acp_once(
             transcript_sink(acp_chat_events.ACPEventMapper.dump(entries))
         except Exception:  # noqa: BLE001 — the chat view must never kill the run
             sys.stderr.write("[acp] transcript sink write failed\n")
+
+    def emit_preview(entries: list[dict]) -> None:
+        if preview_sink is None or not entries:
+            return
+        try:
+            preview_sink(acp_chat_events.ACPEventMapper.dump(entries))
+        except Exception:  # noqa: BLE001 — the preview must never kill the run
+            sys.stderr.write("[acp] preview sink write failed\n")
 
     outcome = RunOutcome()
     full_text: list[str] = []
@@ -3654,15 +3664,19 @@ def run_acp_once(
                 tool_error_flags[0] = True
             _heartbeat()
         # Sessions chat stream: mapping is deliberately SEPARATE from the
-        # classification bookkeeping above. Preview flushes are THROTTLED
-        # (Dritt-Review #471 N3): one JSONL line per chunk is 0.6 MB per 200
-        # chunks / 14.5 MB per 1000 — pointless I/O for a replace-me preview
-        # slot. Flush a snapshot only on >200 chars of growth OR >250 ms
-        # since the last flush; non-preview lines (tools, permission, usage)
-        # always pass through. The FINAL state is flushed unconditionally at
-        # the end of the run so the preview never rests on a stale snapshot.
+        # classification bookkeeping above. Preview flushes go to their OWN
+        # channel (the sibling preview file via emit_preview) — never the
+        # transcript JSONL (Folge-PR zu #471: the volatile snapshots are out
+        # of the permanent transcript by construction, not filtered by every
+        # reader). They stay THROTTLED (Dritt-Review #471 N3): one line per
+        # chunk is 0.6 MB per 200 chunks — pointless I/O for a replace-me
+        # preview slot. Flush a snapshot only on >200 chars of growth OR
+        # >250 ms since the last flush; non-preview lines (tools, permission,
+        # usage) always pass through to the transcript. The FINAL state is
+        # flushed unconditionally at the end of the run so the preview never
+        # rests on a stale snapshot.
         for entry in mapper.map_update(params, stream=True):
-            if entry.get("customType") != "acp-preview":
+            if entry.get("customType") != acp_chat_events.PREVIEW_CUSTOM_TYPE:
                 emit_transcript([entry])
                 continue
             entry_text = entry.get("content") or ""
@@ -3672,7 +3686,7 @@ def run_acp_once(
                 _throttle["chars"] = len(entry_text)
                 _throttle["at"] = time.monotonic()
                 _throttle["pending"] = None
-                emit_transcript([entry])
+                emit_preview([entry])
             else:
                 _throttle["pending"] = entry
 
@@ -3773,7 +3787,7 @@ def run_acp_once(
     # Throttle tail: the LAST preview state must always reach the sink so
     # the chat's preview slot never rests on a stale snapshot (or on none).
     if _throttle["pending"] is not None:
-        emit_transcript([_throttle["pending"]])
+        emit_preview([_throttle["pending"]])
         _throttle["pending"] = None
 
     outcome.saw_session = saw_session or outcome.saw_session
@@ -3926,7 +3940,7 @@ def _make_acp_run_factory(
         # no-op inside the sink. Created lazily on first write, then REUSED
         # (one file per ACP session — recreating per batch would spawn one
         # file per event).
-        holder: dict = {"sink": None, "session_id": "acp-session"}
+        holder: dict = {"sink": None, "psink": None, "session_id": "acp-session"}
 
         def on_session_id(session_id: str) -> None:
             holder["session_id"] = session_id
@@ -3941,6 +3955,20 @@ def _make_acp_run_factory(
                 holder["sink"] = sink_obj
             sink_obj.write(lines)
 
+        def preview_sink(lines: list[str]) -> None:
+            # Vorschau-Kanal (Folge-PR zu #471): the volatile snapshots go to
+            # the SIBLING preview file — same reuse discipline as the
+            # transcript sink (one file per session, lazy creation, no-op
+            # when the directory is unavailable).
+            psink_obj = holder["psink"]
+            if psink_obj is None or psink_obj.session_id != holder["session_id"]:
+                directory = acp_chat_events.session_dir(cwd=cwd)
+                psink_obj = acp_chat_events.PreviewEventSink(
+                    directory, holder["session_id"]
+                )
+                holder["psink"] = psink_obj
+            psink_obj.write(lines)
+
         return run_acp_once(
             prompt,
             cwd=cwd,
@@ -3950,6 +3978,7 @@ def _make_acp_run_factory(
             task_id=task_id,
             cancel_state=cancel_state,
             transcript_sink=sink,
+            preview_sink=preview_sink,
             on_session_id=on_session_id,
         )
 

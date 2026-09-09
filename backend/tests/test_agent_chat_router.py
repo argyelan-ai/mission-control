@@ -1724,6 +1724,79 @@ async def test_preview_sends_the_stable_prefix_while_the_text_keeps_growing(
     )
 
 
+# ── Vorschau-Kanal (ACP, Folge-PR zu #471) ──────────────────────────────────
+
+
+async def test_tailer_broadcasts_acp_preview_file_lines_as_volatile_events(
+    manager, fake_broadcast, tmp_path
+):
+    """Der omp-bridge ACP-Treiber schreibt die fluechtigen Vorschau-Snapshots
+    in die Schwesterdatei ``previews/<...>.jsonl`` — NICHT in die Transkript-
+    JSONL. Der Tailer muss genau diese Datei mitleiten und jede Zeile als
+    uuid-loses ``preview``-Ereignis (source "acp") broadcasten, OHNE dass
+    der Pane-Strom dafuer laeuft."""
+    import dataclasses
+
+    import app.services.transcript_adapters as ta
+
+    session_file = tmp_path / "2026-09-09T06-00-00-000Z_sess.jsonl"
+    session_file.parent.joinpath("--workspace--").mkdir(exist_ok=True)
+    session_file = session_file.parent / "--workspace--" / session_file.name
+    session_file.write_text("")
+    pfile = session_file.parent / "previews" / "t1_sess.jsonl"
+    pfile.parent.mkdir()
+    pfile.write_text("")
+
+    assert ta.adapter_for(
+        _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent")
+    ).preview_channel(session_file) == pfile
+
+    await manager.acquire(
+        "agent-acp-prev", session_file,
+        _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent"),
+    )
+    try:
+        with pfile.open("a") as fh:
+            fh.write(
+                '{"type":"custom_message","customType":"acp-preview",'
+                '"content":"Ich schaue mir die Datei an","display":true,'
+                '"attribution":"agent","id":"acp0001","parentId":null,'
+                '"timestamp":"2026-09-09T06:00:01.000Z"}\n'
+            )
+        assert await _wait_until(
+            lambda: any(
+                d.get("kind") == "preview" and d.get("source") == "acp"
+                and "Datei an" in d.get("text", "")
+                for _, _, d in fake_broadcast
+            ),
+            timeout=3.0,
+        ), "die ACP-Preview-Datei wurde nicht mitgeleitet"
+    finally:
+        await manager.release("agent-acp-prev")
+
+    for ev in [d for _, _, d in fake_broadcast if d.get("kind") == "preview"]:
+        assert ev.get("uuid") is None
+        assert ev.get("source") == "acp"
+
+
+async def test_tailer_without_a_preview_file_broadcasts_nothing_extra(
+    manager, fake_broadcast, tmp_path
+):
+    """Ohne ``previews/``-Ordner (native Session, alter Stand) laeuft der
+    Kanal leer — kein Fehler, keine Ereignisse."""
+    session_file = tmp_path / "sess-noprev.jsonl"
+    session_file.write_text("")
+
+    await manager.acquire("agent-noprev", session_file)
+    try:
+        await asyncio.sleep(0.1)
+    finally:
+        await manager.release("agent-noprev")
+    assert not any(
+        d.get("source") == "acp" for _, _, d in fake_broadcast if d.get("kind") == "preview"
+    )
+
+
 # ── Frische Sitzung ohne Datei (omp ``/new``) ───────────────────────────────
 
 

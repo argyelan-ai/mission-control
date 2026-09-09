@@ -391,12 +391,13 @@ def test_make_acp_run_factory_sink_survives_multiple_events():
 
 
 def test_reducer_stream_mode_one_preview_slot_one_final_line():
-    """Durchstich (Review #465 Option b, #471 N3): map the REAL normal
-    fixture's updates in stream mode and feed every line through the REAL
-    backend OmpLineParser. Contract:
-    - every streamed text chunk becomes an acp-preview line that parses to a
-      uuid-less VOLATILE `preview` event (the reducer's replace-me slot —
-      never a permanent timeline bubble),
+    """Durchstich (Review #465 Option b, #471 N3, Folge-PR): map the REAL
+    normal fixture's updates in stream mode. Contract:
+    - every streamed text chunk becomes an acp-preview line destined for
+      the SIBLING preview file (never the transcript JSONL),
+    - the backend tailer's channel reader turns those lines into uuid-less
+      VOLATILE `preview` events (source "acp", the reducer's replace-me
+      slot — never a permanent timeline bubble),
     - exactly ONE permanent assistant message lands (the final line),
     - preview lines never carry usage, the final line does."""
     mapper = acp_chat_events.ACPEventMapper()
@@ -410,7 +411,7 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
             continue
         for entry in mapper.map_update(msg["params"], stream=True):
             encoded = json.dumps(entry, ensure_ascii=False)
-            if entry.get("customType") == "acp-preview":
+            if entry.get("customType") == acp_chat_events.PREVIEW_CUSTOM_TYPE:
                 preview_lines.append(encoded)
             else:
                 other_lines.append(encoded)
@@ -428,26 +429,34 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
     # Every preview flush is the bridge's acp-preview custom message.
     for l in preview_lines:
         e = json.loads(l)
-        assert e["type"] == "custom_message" and e["customType"] == "acp-preview"
+        assert e["type"] == "custom_message"
+        assert e["customType"] == acp_chat_events.PREVIEW_CUSTOM_TYPE
 
-    # Backend-side: what the parser makes of each line kind.
-    parser = OmpLineParser()
-    preview_events = []
-    for l in preview_lines:
-        preview_events += parser(l)
-    # N3: previews are volatile `preview` events (replace-me slot), NOT
-    # teammate timeline messages — the history never keeps a snapshot.
+    # Backend-side: the tailer's channel reader makes each line a volatile
+    # preview event (same contract the SSE stream carries).
+    from app.services.transcript_chat import _read_preview_channel
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        pfile = Path(td) / "p1.jsonl"
+        pfile.write_text("\n".join(preview_lines) + "\n", encoding="utf-8")
+        state = {"path": pfile, "offset": 0, "buffer": b""}
+        preview_events = _read_preview_channel(state, None)
+    assert preview_events, "preview channel lines must become preview events"
     assert all(ev.get("kind") == "preview" and ev.get("uuid") is None
                and ev.get("source") == "acp" for ev in preview_events), \
         preview_events
     assert not [ev for ev in preview_events if ev["kind"] == "usage"], \
         "preview lines must never carry usage (0/0 garbage)"
 
-    # The ONE final assistant line.
+    # The ONE final assistant line — through the REAL OmpLineParser, as the
+    # transcript path (history + tailer) consumes it.
     mapper2 = acp_chat_events.ACPEventMapper()
     mapper2.set_prompt_usage({"inputTokens": 10, "outputTokens": 2})
     final_lines = mapper2.dump(mapper2.map_final_assistant_message(
         "sentence one. sentence two.", stop_reason="stop"))
+    parser = OmpLineParser()
     final_events = []
     for l in final_lines:
         final_events += parser(l)
