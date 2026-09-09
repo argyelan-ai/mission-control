@@ -587,6 +587,7 @@ class TelegramBotService:
         from app.models.approval import Approval
         from app.models.task import Task, TaskComment
         from app.services.activity import emit_event
+        from app.services.task_state import lock_and_set
         from app.utils import utcnow
 
         status = "approved" if action == "approve" else "rejected"
@@ -607,7 +608,7 @@ class TelegramBotService:
                 task = await session.get(Task, approval.task_id)
                 if task and task.status == "blocked":
                     if status == "approved":
-                        task.status = "in_progress"
+                        task, _ = await lock_and_set(session, task.id, "in_progress", actor="user")
                         task.updated_at = utcnow()
                         session.add(task)
                         await session.commit()
@@ -627,7 +628,7 @@ class TelegramBotService:
                             ))
                             await session.commit()
                     elif status == "rejected":
-                        task.status = "failed"
+                        task, _ = await lock_and_set(session, task.id, "failed", actor="user")
                         task.updated_at = utcnow()
                         # Auto-unassign — a failed task in agent_poll would otherwise
                         # trigger a cancel loop. The operator explicitly cancelled
