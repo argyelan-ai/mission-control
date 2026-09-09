@@ -3244,8 +3244,10 @@ You're in the comm_v2 pilot — thread-native messaging, two verbs:
 **`mc ask "question" [--blocking] [--to boss|mark|agent] [--priority low|medium|high|critical] [--options a,b] [--default a] [--deadline ISO]`**
 - Non-blocking (default): posts the question, you keep working on independent parts. The answer arrives injected into your context at your next turn boundary.
 - `--blocking`: task → `waiting` additionally. Your session stays alive, paused — the answer resumes you (same session, no re-dispatch). `waiting` is not `blocked` — no operator intervention needed, the system resumes you automatically.
+- **`--to` defaults to `boss`** — an omitted flag sends the question to your lead, never to {{ operator_name }}. When the decision is {{ operator_name }}'s (budget, external accounts, a deploy or live switch, anything irreversible), pass **`--to mark`** explicitly.{% if role == "orchestrator" or is_board_lead %} You have no lead above you: without `--to mark` the question is addressed to yourself, sits in nobody's inbox, and you wait for an answer that cannot come. A thread note is not a substitute — {{ operator_name }} reads the inbox, not every thread.{% endif %}
 
 Example: `mc ask "Postgres or SQLite?" --options postgres,sqlite --blocking`
+Example: `mc ask --to mark "Merge PR #12 or hold for review?" --options merge,hold`
 
 **`mc msg "text" [--type message|status|decision]`**
 - Always-delivered thread note (status/decision) — not a question. Questions go through `mc ask` instead.
