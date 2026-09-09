@@ -122,6 +122,7 @@ backend/app/routers/vault.py: sparky
 backend/app/services/chat_inbound.py: freecode
 backend/app/services/chat_slack.py: freecode
 backend/app/services/cli_bridge_runner.py: freecode, sparky
+backend/app/services/compose_renderer.py: sparky
 backend/app/services/deliverable_paths.py: freecode
 backend/app/services/dispatch.py: freecode
 backend/app/services/docker_agent_sync.py: freecode, shakespeare, sparky
@@ -169,6 +170,7 @@ backend/tests/test_cli_terminal.py: freecode
 backend/tests/test_cli_tools_router.py: sparky
 backend/tests/test_comment_delivery_via_poll.py: davinci, sparky
 backend/tests/test_compose_renderer.py: davinci, sparky
+backend/tests/test_compose_renderer_acp_driver.py: sparky
 backend/tests/test_compose_renderer_excludes_host_agents.py: davinci, sparky
 backend/tests/test_compose_renderer_new_agents.py: sparky
 backend/tests/test_compose_renderer_omp_sessions.py: sparky
@@ -299,6 +301,7 @@ docs/decisions/047-docker-socket-proxy.md: sparky
 docs/decisions/049-omp-native-tui-session.md: sparky
 docs/decisions/056-harness-provider-decoupling.md: sparky
 docs/decisions/073-sessions-chat-transcript-tailing.md: sparky
+docs/decisions/081-sparky-acp-omp-driver-per-agent-env.md: sparky
 docs/decisions/README.md: sparky
 docs/lifecycle-safety-watchdog-REPORT.md: sparky
 docs/omp-runtime-REPORT.md: sparky
