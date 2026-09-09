@@ -104,7 +104,7 @@ backend/alembic/versions/0125_drop_agents_heartbeat_md.py: sparky
 backend/alembic/versions/0151_agent_use_operating_card.py: sparky
 backend/alembic/versions/0168_merge_lmstudio_rows.py: sparky
 backend/app/auth.py: davinci
-backend/app/config.py: freecode, sparky
+backend/app/config.py: freecode
 backend/app/models/agent.py: sparky
 backend/app/models/model_usage.py: sparky
 backend/app/models/storyboard.py: davinci

@@ -195,6 +195,11 @@ class Settings(BaseSettings):
     # pydantic-settings reads PUBLIC_HOST / EXTRA_CORS_ORIGINS env vars.
     public_host: str = ""
     extra_cors_origins: str = ""  # comma-separated list of additional origins
+    # Agent slugs whose compose service gets OMP_DRIVER=acp (ADR-081). The omp
+    # bridge defaults to the native TUI driver; only slugs listed here are
+    # switched to the ACP protocol path. Comma-separated list from .env —
+    # agent names deliberately live in deployment config, not in code.
+    omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
 
     # Secrets encryption (Fernet key for MC-managed secrets)
     secrets_encryption_key: str = ""
@@ -514,7 +519,7 @@ class Settings(BaseSettings):
     vault_lint_interval_hours: int = 24
 
     # Token Harvester (Phase 31)
-    # Base paths for agent JSONL transcripts (cli-bridge + sparky + hermes).
+    # Base paths for agent JSONL transcripts (all runtime types).
     # Default: ~/.mc/agents (expanduser happens in the harvester).
     # Boss path (~/.claude/projects) is separately hardcoded in the harvester and
     # gets mounted into the container as :ro via docker-compose.yml.
@@ -607,6 +612,17 @@ def node_agent_base_urls() -> list[str]:
     dann mc_base_url).
     """
     return [u.strip() for u in settings.mc_node_agent_base_url.split(",") if u.strip()]
+
+
+def omp_acp_agents(s: Settings | None = None) -> set[str]:
+    """Agent slugs whose compose service renders OMP_DRIVER=acp (ADR-081).
+
+    Comma-separated OMP_ACP_AGENT_SLUGS from .env; empty (default) → no
+    agent gets the env override and the whole fleet stays on the bridge's
+    native driver default. Deployment config, deliberately not code.
+    """
+    s = s or settings
+    return {u.strip() for u in s.omp_acp_agent_slugs.split(",") if u.strip()}
 
 
 def effective_host_ssh_user() -> str:
