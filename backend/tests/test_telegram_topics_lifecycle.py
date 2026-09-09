@@ -534,6 +534,10 @@ async def test_system_finalize_done_renames_the_topic(async_session: AsyncSessio
 
     board = await _board(async_session)
     task, thread = await _task_with_thread(async_session, board, "Recherche")
+    task.status = "review"  # matches old_status="review" below (task_state.lock_and_set validates it)
+    async_session.add(task)
+    await async_session.commit()
+    await async_session.refresh(task)
     client = FakeForumClient(next_id=161)
     await ensure_topic_for_thread(async_session, thread, client)
 
