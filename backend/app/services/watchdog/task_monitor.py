@@ -20,6 +20,7 @@ from app.models.agent import Agent
 from app.models.task import Task, TaskComment
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
 logger = logging.getLogger("mc.watchdog")
@@ -198,7 +199,7 @@ class TaskMonitorMixin:
                         "Phase complete but no Board Lead on board %s — fallback to Rex handoff",
                         parent.board_id,
                     )
-                    parent.status = "review"
+                    parent, _ = await lock_and_set(session, parent.id, "review", actor="watchdog")
                     parent.updated_at = utcnow()
                     session.add(parent)
                     await session.commit()
@@ -394,7 +395,7 @@ class TaskMonitorMixin:
                     "Auto-close stuck parent '%s' (id=%s): %d nudges ohne Reaktion",
                     (parent.title or "")[:60], parent.id, nudge_count,
                 )
-                parent.status = "review"
+                parent, _ = await lock_and_set(session, parent.id, "review", actor="watchdog")
                 parent.updated_at = utcnow()
                 session.add(parent)
                 await session.commit()
@@ -642,7 +643,7 @@ class TaskMonitorMixin:
             changed_by="watchdog", reason="auto_advance_phase",
         )
 
-        next_phase.status = "in_progress"
+        next_phase, _ = await lock_and_set(session, next_phase.id, "in_progress", actor="watchdog")
         next_phase.started_at = utcnow()
         next_phase.updated_at = utcnow()
         session.add(next_phase)
@@ -1344,8 +1345,7 @@ class TaskMonitorMixin:
                     continue
 
             # Reset task back to inbox
-            old_status = task.status
-            task.status = "inbox"
+            task, old_status = await lock_and_set(session, task.id, "inbox", actor="watchdog")
             task.updated_at = now
             session.add(task)
             recovered += 1
