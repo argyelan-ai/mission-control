@@ -270,6 +270,52 @@ def test_serve_writes_context_env_before_run():
     print("PASS test_serve_writes_context_env_before_run")
 
 
+
+def test_serve_loop_native_path_classifies_via_classify_not_acp():
+    """N1 regression (Boss-Rewrite 08.09.): WITHOUT OMP_DRIVER=acp the serve
+    loop must classify through the native `classify` — a watchdog hang is
+    retryable there. classify_acp has no watchdog branch: a hung run with
+    saw_agent_end would fall to ABORT_UNKNOWN and the fleet would lose the
+    retry for hangs/interrupts/toolUse. The call-site must therefore pass
+    classify_fn ONLY on the ACP branch."""
+    assert bridge._acp_env_driver() != "acp", "test requires the native default"
+
+    def rf(task, cwd):
+        def _once():
+            o = bridge.RunOutcome()
+            o.saw_session = True
+            o.saw_agent_start = True
+            o.saw_agent_end = True  # end_turn present — classify_acp would finish
+            o.watchdog_killed = True  # ... but the watchdog killed it: a hang
+            o.final_stop_reason = "stop"
+            return o
+        return _once
+
+    saved = os.environ.pop("OMP_DRIVER", None)
+    try:
+        lc = _run([{"state": "new_task", "task": TASK}], rf, iterations=1)
+    finally:
+        if saved is not None:
+            os.environ["OMP_DRIVER"] = saved
+    kinds = [c[0] for c in lc.calls]
+    # Native classify: hang -> retryable ABORT_HANG -> retry then blocker.
+    # classify_acp would have seen end_turn+TASK... and finished the task.
+    assert "blocker" in kinds, (kinds, "hang must retry, not finish")
+    assert "finish" not in kinds, (kinds, "a watchdog-killed run is no finish")
+    print("PASS test_serve_loop_native_path_classifies_via_classify_not_acp")
+
+
+def test_call_site_classify_fn_conditioned_on_acp_driver():
+    """N1 (verifiziert am Call-Site): classify_fn=classify_acp darf nur im
+    ACP-Zweig am drive_live_run-Aufruf stehen. Der native Pfad behaelt
+    classify() (None -> Default in drive_live_run)."""
+    import inspect
+    src = inspect.getsource(bridge)
+    call = [ln for ln in src.splitlines() if "classify_fn=classify_acp" in ln]
+    assert len(call) == 1, call
+    assert "if" in call[0] and "_acp_env_driver() == \"acp\"" in call[0], call
+    print("PASS test_call_site_classify_fn_conditioned_on_acp_driver")
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

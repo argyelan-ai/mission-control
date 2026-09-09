@@ -2506,7 +2506,7 @@ def serve_loop(
                     pre_acked=True,
                     continues_left=continues,
                     continue_once=continue_once,
-                    classify_fn=classify_acp,
+                    classify_fn=classify_acp if _acp_env_driver() == "acp" else None,
                 )
                 # Fix 3 post-processing: an INTERRUPTED run needs NO retry,
                 # NO blocker escalation, NO "omp abort (hang)" comment. The
