@@ -514,6 +514,51 @@ def _ensure_msg_delivery_mode(body_lines: list[str]) -> list[str]:
     return body
 
 
+def _AGENT_ENV_OVERRIDES() -> dict[str, dict[str, str]]:
+    """Per-agent environment overrides (ADR-081): slug → {VAR: value}.
+
+    Only slugs listed here get entries injected; every other agent's
+    environment stays untouched. The omp bridge reads OMP_DRIVER at startup
+    (docker/omp-bridge/bridge.py ``_omp_driver()``, default ``native``), so a
+    missing entry IS the native rollback — no per-service native line needed.
+    """
+    return {
+        "sparky": {"OMP_DRIVER": "acp"},
+    }
+
+
+def _ensure_agent_env_overrides(body_lines: list[str], slug: str) -> list[str]:
+    """Inject the per-agent env overrides for ``slug`` into the service body.
+
+    Idempotent per variable: an existing ``- VAR=`` entry (any value) is kept
+    as-is so a deliberate manual override survives re-rendering; only missing
+    variables are appended to the ``environment`` block (created when absent,
+    mirroring _ensure_msg_delivery_mode).
+    """
+    overrides = _AGENT_ENV_OVERRIDES().get(slug)
+    if not overrides:
+        return list(body_lines)
+    body = list(body_lines)
+    missing: list[str] = []
+    for var, value in overrides.items():
+        if any(
+            line.strip().startswith(f"- {var}=") for line in body
+        ):
+            continue
+        missing.append(f"      - {var}={value}")
+    if not missing:
+        return body
+    env_range = _find_block_range(body, "environment")
+    if env_range is not None:
+        _, end = env_range
+        for offset, entry in enumerate(missing):
+            body.insert(end + offset, entry)
+    else:
+        body.append("    environment:")
+        body.extend(missing)
+    return body
+
+
 def _strip_agents_env_file(body_lines: list[str]) -> list[str]:
     """Remove ``docker/.env.agents`` from this service body's ``env_file`` block.
 
@@ -704,6 +749,10 @@ def _rewrite_compose(
         # Fleet default nudge+pull (W2.1, ADR-071) for every agent service.
         body_lines = _ensure_msg_delivery_mode(body_lines)
 
+        # ADR-081: per-agent env overrides (currently OMP_DRIVER=acp for
+        # sparky only). All other slugs stay native — the bridge's default.
+        body_lines = _ensure_agent_env_overrides(body_lines, slug)
+
         out.extend(body_lines)
 
     rendered = "\n".join(out)
@@ -816,10 +865,16 @@ def _build_new_agent_block(
         # reads this var — omp bridges ignore it, and agents without comm_v2
         # never receive messages in the first place. Override host-wide via
         # MSG_DELIVERY_MODE=paste in the compose environment.
-        "      - MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}",
+        f"      - MSG_DELIVERY_MODE=${{MSG_DELIVERY_MODE:-nudge}}",
         f"      - AGENT_VAULT_PATH=/vault/agents/{slug}",
         "      - AGENT_VAULT_INBOX=/vault/_inbox",
         f"      - AGENT_SLUG={slug}",
+    ]
+    # ADR-081: per-agent env overrides — same gating as the rewrite loop
+    # (currently OMP_DRIVER=acp for sparky only; all others stay native).
+    for var, value in _AGENT_ENV_OVERRIDES().get(slug, {}).items():
+        lines.append(f"      - {var}={value}")
+    lines += [
         "    volumes:",
         f"      - ${{HOME}}/.mc/agents/{slug}/claude-config:/home/agent/.claude",
         "      - ${HOME}/.mc/mcp-servers:/mc-servers:ro",
