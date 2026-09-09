@@ -284,37 +284,34 @@ def test_bridge_run_transcribes_permission_roundtrip(tmp_path):
 
 
 def test_usage_update_stamps_context_window():
-    """omp's parser resolves contextWindow from the model registry, not from
-    our line — our usage block feeds the token counts; the window lands in
-    the line's usage dict and rides along in `components`. The chat shows a
-    usage event either way."""
+    """Review #465 mid 3 (Option b): usage rides ONLY on the final assistant
+    message (never per chunk — 0/0 garbage fed the token counter #393).
+    The window from usage_update lands in that final line's usage dict."""
     mapper = acp_chat_events.ACPEventMapper()
     mapper.map_update({"update": {"sessionUpdate": "usage_update", "size": 500000, "used": 17395}})
-    lines = mapper.dump(mapper.map_update(
+    chunk_lines = mapper.dump(mapper.map_update(
         {"update": {"sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": "x"}, "messageId": "m"}}
     ))
-    events = parse_all(lines)
+    chunk_events = parse_all(chunk_lines)
+    assert not [e for e in chunk_events if e["kind"] == "usage"], \
+        "chunks must never carry usage (0/0 garbage)"
+    final_lines = mapper.dump(mapper.map_final_assistant_message("done"))
+    events = parse_all(final_lines)
     usage = [e for e in events if e["kind"] == "usage"]
-    assert usage, "usage must surface as a usage event"
-    raw = json.loads(lines[-1])
+    assert usage, "final message must surface a usage event"
+    raw = json.loads(final_lines[-1])
     assert raw["message"]["usage"]["contextWindow"] == 500000
     assert raw["message"]["usage"]["usedTokens"] == 17395
-
 
 
 # ── tests: usage ────────────────────────────────────────────────────────────
 
 
-
-
 def test_prompt_result_usage_flows_into_usage_event():
     mapper = acp_chat_events.ACPEventMapper()
     mapper.set_prompt_usage({"inputTokens": 34876, "outputTokens": 57})
-    lines = mapper.dump(mapper.map_update(
-        {"update": {"sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": "done"}, "messageId": "m"}}
-    ))
+    lines = mapper.dump(mapper.map_final_assistant_message("done"))
     usage = [e for e in parse_all(lines) if e["kind"] == "usage"]
     assert usage and usage[0]["inputTokens"] == 34876 and usage[0]["outputTokens"] == 57
 
@@ -408,6 +405,91 @@ def test_mapper_never_raises_on_garbage():
     assert mapper.dump([{"bad": object()}]) == []
 
 
+def test_preview_contract_snapshots_volatile_not_history(tmp_path):
+    """N3 (Review #471): stream-mode chunks ride the VOLATILE preview slot.
+    Contract end to end:
+    - live: the REAL OmpLineParser maps every acp-preview flush to a
+      uuid-less `preview` event (the reducer's replace-me slot),
+    - history: the REAL read_history DROPS them — exactly ONE final
+      assistant line carries the complete text into the transcript.
+    """
+    mapper = acp_chat_events.ACPEventMapper()
+    stream_lines: list[str] = []
+    for params in chunk("ignored", ["Hallo", " ", "Welt", "."]):
+        stream_lines += mapper.dump(mapper.map_update(params, stream=True))
+    final_lines = mapper.dump(mapper.map_final_assistant_message("Hallo Welt."))
+
+    # Live: each flush is a uuid-less preview event on the volatile channel.
+    parser = OmpLineParser()
+    live_events: list[dict] = []
+    for line in stream_lines:
+        live_events += parser(line)
+    assert live_events, "stream flushes must reach the parser"
+    for ev in live_events:
+        assert ev["kind"] == "preview", ev
+        assert ev["uuid"] is None
+        assert ev["source"] == "acp"
+    # The snapshot grows; the last one carries the full text so far.
+    assert [e["text"] for e in live_events][-1] == "Hallo Welt."
+
+    # History: snapshots dropped, ONE final assistant line kept.
+    history = as_history(stream_lines + final_lines, tmp_path)
+    messages = [e for e in history["events"] if e["kind"] == "message"]
+    assert len(messages) == 1, messages
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["text"] == "Hallo Welt."
+
+
+def test_preview_emit_throttled_last_state_always_flushed(tmp_path):
+    """Dritt-Review #471 (b): run_acp_once must NOT flush one preview line
+    per chunk — 200 chunks used to mean 200 JSONL lines (~0.6 MB). The
+    throttle flushes a snapshot only on >200 chars growth OR >250 ms since
+    the last flush, and the FINAL state always reaches the sink so the
+    preview never rests on a stale snapshot. Contract end to end through
+    run_acp_once + a fake ACP server replaying 200 chunk updates."""
+    import time as _time
+
+    import bridge
+    from test_acp_adapter import InProcessFake
+
+    writes: list[str] = []
+    fake = InProcessFake(RPC / "acp-many-chunks.ndjson", [])
+    try:
+        outcome = bridge.run_acp_once(
+            "throttle test",
+            cwd=str(HERE),
+            model="m",
+            max_time=10,
+            permission_policy="yolo",
+            task_id="T1",
+            client_factory=lambda: fake.client,
+            transcript_sink=writes.extend,
+        )
+        assert outcome.final_stop_reason == "end_turn"
+    finally:
+        fake.close()
+
+    previews = [json.loads(w) for w in writes
+                if json.loads(w).get("customType") == "acp-preview"]
+    # Throttled: far fewer preview lines than the 200 streamed chunks.
+    assert len(previews) < 50, \
+        f"throttle failed: {len(previews)} preview lines for 200 chunks"
+    assert len(previews) >= 2, "at least first + last snapshot must flush"
+    # Snapshots grow monotonically; the LAST one carries the complete text
+    # (final state always flushed, never a stale intermediate).
+    sizes = [len(p["content"]) for p in previews]
+    assert sizes == sorted(sizes), sizes
+    assert previews[-1]["content"] == outcome.final_text, (
+        "the final preview flush must carry the COMPLETE turn text"
+    )
+    # And the turn still ends with the ONE permanent assistant line (the
+    # user prompt is also a `message` — filter by role).
+    finals = [json.loads(w) for w in writes
+              if json.loads(w).get("type") == "message"
+              and json.loads(w).get("message", {}).get("role") == "assistant"]
+    assert len(finals) == 1, len(finals)
+
+
 # ── standalone runner ───────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -439,7 +521,8 @@ if __name__ == "__main__":
         run("prompt_usage", test_prompt_result_usage_flows_into_usage_event)
         run("user_prompt", test_user_prompt_renders_as_user_message)
         run("sink_layout", test_sink_writes_session_file_in_omp_layout, tmp)
-        run("sink_noop", test_sink_degrades_to_noop_on_unwritable_dir, tmp)
+        run("preview_contract", test_preview_contract_snapshots_volatile_not_history, tmp)
+        run("preview_throttle", test_preview_emit_throttled_last_state_always_flushed, tmp)
         run("history_roundtrip", test_history_roundtrip_through_read_history, tmp)
         run("garbage", test_mapper_never_raises_on_garbage)
     sys.exit(1 if failures else 0)

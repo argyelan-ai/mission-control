@@ -147,7 +147,7 @@ export interface PreviewEvent {
   uuid: null;
   ts: string;
   text: string;
-  source: "pane";
+  source: "pane" | "acp";
 }
 
 /** Eine Hintergrund-Meldung der CLI: ein Subagent oder ein Hintergrund-Befehl

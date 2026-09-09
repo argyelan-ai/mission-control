@@ -703,6 +703,21 @@ class OmpLineParser:
         if not entry_id or not ts or not isinstance(content, str) or not content:
             return []
         custom_type = d.get("customType")
+        # Review #471 N3: ACP preview flushes (the bridge's streaming
+        # snapshots) are VOLATILE — they ride the replace-me preview slot
+        # (same channel the pane tailer broadcasts on), never the permanent
+        # timeline. Stacking them as teammate messages doubled the answer
+        # in the history and grew the transcript quadratically.
+        if custom_type == "acp-preview":
+            return [
+                {
+                    "kind": "preview",
+                    "uuid": None,
+                    "ts": ts,
+                    "text": content[:_RESULT_TRUNCATE_LEN],
+                    "source": "acp",
+                }
+            ]
         return [
             {
                 "kind": "message",
