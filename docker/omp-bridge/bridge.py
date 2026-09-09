@@ -138,6 +138,14 @@ def _is_sentinel_line(line: str) -> bool:
 # The exact shape omp+Claude produces is UNVERIFIED on disk (design §2.1); we
 # detect it as a retryable sub-class of the abort family, never assert it as the
 # only shape.
+# Auth/quota failures the provider returns as a plain message (no stopReason
+# error): 401/403 "Incorrect API key", invalid_api_key, insufficient_quota.
+PROVIDER_AUTH_ERROR_RE = re.compile(
+    r"\b40[13]\b.*(api key|apikey|unauthorized|forbidden)|invalid_api_key|"
+    r"incorrect api key|insufficient_quota|authentication_error",
+    re.IGNORECASE | re.DOTALL,
+)
+
 TRANSIENT_ERROR_RE = re.compile(
     r"fetch failed|connection error|econnreset|socket hang ?up|network|"
     r"etimedout|timed out|\b5\d\d\b|overloaded|upstream|"
@@ -2589,6 +2597,14 @@ def serve_loop(
                 _acp_control_sink.append(acp_cancel)
 
                 acp_cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
+                # Model selector parity with the native launcher (incident
+                # 09.09.2026, first ACP live probe): `omp acp` inherits the
+                # bridge env, and OPENAI_API_KEY enables omp's BUILT-IN
+                # `openai` provider — without an explicit selector every
+                # session started on `openai/gpt-5.5` with the shim key and
+                # died with a 401 before the first token. launch-omp.sh always
+                # passes `--model $OMP_MODEL_SELECTOR`; the ACP path must too.
+                acp_model = _acp_model_selector(os.environ)
 
                 # Review #464 Major 7: tool liveness for the ACP path. The
                 # native watchdog learns progress from the hook signal file;
@@ -2613,7 +2629,7 @@ def serve_loop(
                     return run_acp_once(
                         _p,
                         cwd=acp_cwd,
-                        model=os.environ.get("OMP_ACP_MODEL") or None,
+                        model=acp_model,
                         max_time=int(turn_deadline) if turn_deadline else 900,
                         permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                         task_id=_task_id,
@@ -2631,7 +2647,7 @@ def serve_loop(
                     return run_acp_once(
                         nudge,
                         cwd=acp_cwd,
-                        model=os.environ.get("OMP_ACP_MODEL") or None,
+                        model=acp_model,
                         max_time=int(turn_deadline) if turn_deadline else 900,
                         permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                         task_id=str(task["id"]),
@@ -2725,6 +2741,20 @@ def serve_loop(
         _sleep(poll_interval)
 
     return 0
+
+
+def _acp_model_selector(env: "Mapping[str, str]") -> str:
+    """The model every ACP session is pinned to — same source of truth as
+    launch-omp.sh: OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR
+    (entrypoint-rendered) > mc-openai/<OPENAI_MODEL>. Never None: a session
+    without a selector falls back to omp's built-in provider catalog."""
+    explicit = (env.get("OMP_ACP_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    rendered = (env.get("OMP_MODEL_SELECTOR") or "").strip()
+    if rendered:
+        return rendered
+    return _default_model_selector(env.get("OPENAI_MODEL"))
 
 
 def _default_model_selector(openai_model: Optional[str]) -> str:
@@ -3927,6 +3957,11 @@ def run_acp_once(
         outcome.saw_session = True
         if model:
             client.set_config_option(sid, "model", model)
+        sys.stderr.write(
+            f"[acp] session {sid[:8]} started (model={model or 'omp-default'}, "
+            f"policy={permission_policy}, cwd={cwd}, task={task_id[:8] if task_id else '-'})\n"
+        )
+        _t_prompt = time.monotonic()
 
         # Ladder Stufe 1, pre-prompt: an abort already requested before the turn
         # starts must not run the prompt at all — cancel immediately and let the
@@ -3958,7 +3993,14 @@ def run_acp_once(
         finally:
             stop_watcher.set()
             watcher.join(timeout=2)
+        sys.stderr.write(
+            f"[acp] session {sid[:8]} turn end: stopReason="
+            f"{getattr(prompt_result, 'stopReason', '?')!r} after "
+            f"{time.monotonic() - _t_prompt:.1f}s, text={len(''.join(full_text))} chars, "
+            f"tools={tool_count[0]}\n"
+        )
     except acp_client.ACPError as e:
+        sys.stderr.write(f"[acp] ACPError: {e}\n")
         outcome.error_message = str(e)
     except Exception as e:  # noqa: BLE001 — a launch failure must classify, not crash the loop
         outcome.error_message = f"{type(e).__name__}: {e}"
@@ -4056,6 +4098,18 @@ def classify_acp(outcome: RunOutcome) -> Classification:
             detail=f"Lauf an Token/Zeitlimit geschnitten (stopReason={sr!r}) — unvollstaendig.",
         )
 
+    # Provider/auth failure delivered as the assistant TEXT with a clean
+    # end_turn (verified 09.09.2026: omp acp answers a 401 from the provider
+    # with the error string as the only chunk, stopReason=end_turn). That is a
+    # model error, not a missing sentinel — nudging the same session twice
+    # only repeats the 401.
+    if PROVIDER_AUTH_ERROR_RE.search(o.final_text or "") and not sentinel_present(o.final_text):
+        return Classification(
+            Kind.ABORT_ERROR,
+            retryable=False,
+            reason="model_error",
+            detail=f"Provider/Auth-Fehler im Turn-Text: {(o.final_text or '').strip()[:200]}",
+        )
     # end_turn (and any other settled reason) -> completion contract, §3.4.
     o.sentinel_ok = sentinel_present(o.final_text)
     o.reflection_block = extract_reflection(o.final_text)

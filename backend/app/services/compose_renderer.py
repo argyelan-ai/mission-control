@@ -525,7 +525,12 @@ def _agent_env_overrides(slug: str) -> dict[str, str]:
     stays untouched. Agent names live in deployment config, not in code.
     """
     if slug in app_config.omp_acp_agents():
-        return {"OMP_DRIVER": "acp"}
+        # OMP_ACP_PERMISSIONS=yolo mirrors launch-omp.sh (`--approval-mode
+        # yolo`): the agent runs unattended, tool calls must not block on a
+        # human. The bridge still transcribes every permission decision as a
+        # chat event (ADR-081 "Freigabe als Event"). First ACP live probe
+        # 09.09.2026: the code default `ask` parked the run for 600 s.
+        return {"OMP_DRIVER": "acp", "OMP_ACP_PERMISSIONS": "yolo"}
     return {}
 
 def _ensure_agent_env_overrides(body_lines: list[str], slug: str) -> list[str]:
@@ -540,6 +545,13 @@ def _ensure_agent_env_overrides(body_lines: list[str], slug: str) -> list[str]:
     if not overrides:
         return list(body_lines)
     body = list(body_lines)
+    # Per-service rollback (ADR-081): a hand-set `OMP_DRIVER=<not acp>` means
+    # "this container stays native" — then none of the ACP companions
+    # (permission policy, ...) may be injected either.
+    for line in body:
+        st = line.strip()
+        if st.startswith("- OMP_DRIVER=") and st.split("=", 1)[1].strip() != "acp":
+            return body
     missing: list[str] = []
     for var, value in overrides.items():
         if any(
