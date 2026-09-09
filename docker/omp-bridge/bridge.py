@@ -1746,6 +1746,12 @@ MSG_ACK_DIR = os.environ.get("OMP_MSG_ACK_DIR", "/home/agent/.msg-acked")
 # comm_v2 is flipped on for the agent, so it must be correct from day one.
 MSG_DELIVERY_MODE = (os.environ.get("MSG_DELIVERY_MODE", "paste").strip() or "paste")
 NUDGE_REMIND_SECONDS = float(os.environ.get("NUDGE_REMIND_SECONDS", "600"))
+# Hard ceiling for ONE message/comment processing turn (incident 09.09.2026:
+# a nudge turn silently resumed a withdrawn task for 48 min — invisible to
+# MC because no task was in flight). A nudge is "read inbox, react": if the
+# model is still going after this long, the gate cancels the turn (Escape)
+# and re-opens. 0 disables.
+MSG_TURN_DEADLINE_SECONDS = float(os.environ.get("MSG_TURN_DEADLINE_SECONDS", "900"))
 MSG_NUDGE_STATE_FILE = os.environ.get("OMP_MSG_NUDGE_STATE_FILE", "/home/agent/.msg-nudge-state")
 MSG_NUDGE_MSG_FILE = os.environ.get("OMP_MSG_NUDGE_MSG_FILE", "/home/agent/.msg-nudge.msg")
 
@@ -2005,6 +2011,12 @@ class _MsgDelivery:
         self._holds_lock: bool = False
         # task_id → number of new comments seen since the last wake-up.
         self._pending_comments: dict = {}
+        # One-shot notice for the next wake-up: the task the model was
+        # working on has been withdrawn (hard interrupt "entzogen") — the
+        # next turn must NOT resume that work.
+        self._withdrawn_notice: Optional[str] = None
+        # Wall-clock start of the message turn we are awaiting (deadline).
+        self._awaiting_since: Optional[float] = None
         # A serve start means a fresh omp session that has never seen the
         # CARD.md identity block (task dispatches prepend it themselves, see
         # wrap_prompt). The FIRST nudge carries it once so the model knows
@@ -2064,14 +2076,39 @@ class _MsgDelivery:
         over Window 0, so the awaited offset is moot and its lock must not linger
         into the dispatch's own lock management)."""
         self._awaiting_offset = None
+        self._awaiting_since = None
         self._release_msg_lock()
+
+    def _message_turn_overdue(self) -> bool:
+        if not MSG_TURN_DEADLINE_SECONDS or self._awaiting_since is None:
+            return False
+        return (time.time() - self._awaiting_since) > MSG_TURN_DEADLINE_SECONDS
+
+    def _cancel_overdue_message_turn(self) -> None:
+        """Deadline safety net: a message turn is 'read + react', never a
+        48-minute build. Escape the TUI turn (rung 2 of the abort ladder)
+        and re-open the gate; the model's next dispatch/nudge is fresh."""
+        self.log(
+            f"message turn overdue (> {MSG_TURN_DEADLINE_SECONDS:.0f}s) — "
+            "cancelling the turn (Escape) and re-opening the gate."
+        )
+        run = getattr(self.ctrl, "_run", None)
+        target = getattr(self.ctrl, "target", None)
+        if callable(run) and target:
+            try:
+                run(["send-keys", "-t", target, "Escape"])
+            except Exception as e:  # noqa: BLE001 — best-effort
+                self.log(f"overdue cancel failed (swallowed): {type(e).__name__}: {e}")
+        self.reset_awaiting()
 
     def gate_open(self) -> bool:
         # (1) resolve a message-in-flight window FIRST so a completed (or
         #     truncated-away) processing turn releases our lock before the
         #     dispatch-in-flight check below can trip on it.
         if self._awaiting_offset is not None:
-            if self._signal_size() < self._awaiting_offset:
+            if self._message_turn_overdue():
+                self._cancel_overdue_message_turn()
+            elif self._signal_size() < self._awaiting_offset:
                 # Signal truncated underneath us (a task dispatch) — the awaited
                 # turn is gone; stop waiting instead of dead-locking forever.
                 self.reset_awaiting()
@@ -2162,6 +2199,16 @@ class _MsgDelivery:
         except Exception as e:  # noqa: BLE001
             self.log(f"comments: note error (swallowed): {type(e).__name__}: {e}")
 
+    def note_withdrawn(self, task_id: str, reason: str = "") -> None:
+        """Remember that `task_id` was withdrawn; the next wake-up carries an
+        explicit 'do not resume' line (and is sent even without comments)."""
+        self._withdrawn_notice = (
+            f"⛔ Task {task_id} wurde dir ENTZOGEN ({reason or 'umgehaengt'}) — "
+            "NICHT weiterarbeiten, keine Commits/PRs/Kommentare mehr dafuer. "
+            "Warte auf den naechsten Dispatch."
+        )
+        self._pending_comments.pop(str(task_id), None)
+
     def drop_comments(self, task_id: str) -> None:
         """A dispatch of this task carries its comments as recovery context —
         a separate wake-up would only duplicate it."""
@@ -2169,7 +2216,7 @@ class _MsgDelivery:
 
     def nudge_comments(self) -> None:
         """Inject one wake-up for all pending comments (never raises)."""
-        if not self._pending_comments:
+        if not self._pending_comments and not self._withdrawn_notice:
             return
         try:
             self._nudge_comments()
@@ -2181,6 +2228,8 @@ class _MsgDelivery:
             self.log("comments: Gate zu (omp arbeitet) — Wecker aufgeschoben.")
             return
         text = build_comment_nudge_text(self._pending_comments)
+        if self._withdrawn_notice:
+            text = self._withdrawn_notice + (("\n" + text) if self._pending_comments else "")
         try:
             parent = os.path.dirname(self.nudge_msg_file)
             if parent:
@@ -2195,7 +2244,9 @@ class _MsgDelivery:
         if self.ctrl.inject_file(self.nudge_msg_file):
             delivered = dict(self._pending_comments)
             self._pending_comments.clear()
+            self._withdrawn_notice = None
             self._awaiting_offset = offset_before
+            self._awaiting_since = time.time()
             self.log(
                 "comments: Wecker injiziert fuer "
                 + ", ".join(f"{tid[:8]}({n})" for tid, n in delivered.items())
@@ -2255,6 +2306,8 @@ class _MsgDelivery:
 
         epoch = int(now)
         text = build_nudge_text(global_max, epoch)
+        if self._withdrawn_notice:
+            text = self._withdrawn_notice + "\n" + text
         if self._card_pending:
             identity = _identity_block(self.home_dir)
             if identity:
@@ -2274,6 +2327,8 @@ class _MsgDelivery:
         if self.ctrl.inject_file(self.nudge_msg_file):
             self._card_pending = False
             _nudge_state_write(self.nudge_state_file, seqs, now)
+            self._withdrawn_notice = None
+            self._awaiting_since = time.time()
             # Hold the gate closed (and the lock held) until the turn ends —
             # same as a normal queued message: the agent's mc inbox call opens
             # a real processing turn.
@@ -2290,6 +2345,9 @@ class _MsgDelivery:
                 f"nudge: Zustellung fehlgeschlagen (Verify, bis seq {global_max}) — "
                 f"Retry beim naechsten Poll (State unveraendert)."
             )
+
+
+_LAST_ON_CONTROL: list = []  # test seam: the live serve_loop control callback
 
 
 def serve_loop(
@@ -2382,11 +2440,19 @@ def serve_loop(
     # channel also flips the session/cancel flag (Abbruch-Leiter Stufe 1).
     _acp_control_sink: list = []  # holds ACPCancelState once the ACP branch runs
 
+    withdrawn_notes: list = []  # (task_id, reason) — consumed at the next boundary
+
     def _on_control(kind: str, reason: str) -> None:
         sys.stderr.write(
             f"[serve] heartbeat control signal: interrupt={kind} ({reason})\n"
         )
         interrupt_state.signal(kind, reason)
+        # Withdrawn task (backend guard, 09.09.2026): remember it so the next
+        # wake-up tells the model NOT to resume that work.
+        if kind == "hard" and "entzogen" in (reason or ""):
+            ctx = _get_turn_context()
+            if ctx and ctx.get("task_id"):
+                withdrawn_notes.append((ctx["task_id"], reason))
         # Review #464 Major 3: BOTH kinds end the current turn — soft only
         # means "no retry, nudge follows at the next boundary", but the ACP
         # session must still be cancelled NOW or the turn keeps running to
@@ -2395,6 +2461,7 @@ def serve_loop(
         for sink in _acp_control_sink:
             sink.requested = True
 
+    _LAST_ON_CONTROL[:] = [_on_control]  # test seam
     if _poll_fn is None:
         # Nur im echten Betrieb (Tests injizieren poll_fn und brauchen
         # keinen Netzwerk-Thread).
@@ -2464,6 +2531,9 @@ def serve_loop(
                 delivery.flush()
             # Comment wake-up (gate re-checked inside; a message turn that
             # just opened above closes it → retried next boundary).
+            while withdrawn_notes:
+                _tid, _reason = withdrawn_notes.pop(0)
+                delivery.note_withdrawn(_tid, _reason)
             delivery.nudge_comments()
 
         if task and task.get("id"):

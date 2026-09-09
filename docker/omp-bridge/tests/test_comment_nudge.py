@@ -158,6 +158,118 @@ def test_finish_unexpected_failure_still_blocks():
     print("PASS test_finish_unexpected_failure_still_blocks")
 
 
+class _CancelTui(_StubTui):
+    target = "sess:0"
+
+    def __init__(self, results=None):
+        super().__init__(results)
+        self.keys = []
+
+    def _run(self, args):
+        self.keys.append(list(args))
+        return (0, "")
+
+
+def test_withdrawn_notice_is_sent_alone_and_once():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _StubTui([True, True])
+        dv = _delivery(d, tui)
+        dv.note_comments([_comment()])
+        dv.note_withdrawn(TID, "Status inbox")
+        assert dv._pending_comments == {}, "withdrawn task's comments are dropped"
+        dv.nudge_comments()
+        text = open(tui.injected[0], encoding="utf-8").read()
+        assert "ENTZOGEN" in text and TID in text and "NICHT weiterarbeiten" in text
+        assert dv._withdrawn_notice is None
+        dv.reset_awaiting()
+        dv.nudge_comments()
+        assert len(tui.injected) == 1
+    print("PASS test_withdrawn_notice_is_sent_alone_and_once")
+
+
+def test_message_turn_deadline_cancels_and_reopens_gate():
+    orig = bridge.MSG_TURN_DEADLINE_SECONDS
+    bridge.MSG_TURN_DEADLINE_SECONDS = 0.01
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            tui = _CancelTui([True])
+            dv = _delivery(d, tui)
+            open(dv.signal_file, "w").write("x" * 10)  # non-empty signal, no turn_end
+            dv.note_comments([_comment()])
+            dv.nudge_comments()
+            assert dv._awaiting_offset is not None and dv._holds_lock
+            import time as _t
+            _t.sleep(0.05)
+            assert dv.gate_open() is True
+            assert ["send-keys", "-t", "sess:0", "Escape"] in tui.keys
+            assert dv._awaiting_offset is None and not os.path.exists(dv.task_lock_path)
+    finally:
+        bridge.MSG_TURN_DEADLINE_SECONDS = orig
+    print("PASS test_message_turn_deadline_cancels_and_reopens_gate")
+
+
+def test_message_turn_within_deadline_keeps_gate_closed():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _CancelTui([True])
+        dv = _delivery(d, tui)
+        open(dv.signal_file, "w").write("x" * 10)
+        dv.note_comments([_comment()])
+        dv.nudge_comments()
+        assert dv.gate_open() is False and tui.keys == []
+    print("PASS test_message_turn_within_deadline_keeps_gate_closed")
+
+
+def test_serve_loop_withdrawn_control_reaches_next_wakeup():
+    """Hard control 'entzogen' during a run → the next idle boundary sends the
+    do-not-resume notice (through nudge_comments)."""
+    seen = []
+    orig = bridge._MsgDelivery.nudge_comments
+
+    def spy(self):
+        seen.append(self._withdrawn_notice)
+        self._withdrawn_notice = None
+        self._pending_comments.clear()
+
+    bridge._MsgDelivery.nudge_comments = spy
+    task = {"id": TID, "board_id": "b1", "dispatch_attempt_id": "att-1", "prompt": "Do it."}
+    with tempfile.TemporaryDirectory() as d:
+        payloads = iter([{"state": "new_task", "task": task}, {"state": "idle"}])
+
+        def _run_factory(t, cwd):
+            def _run():
+                # simulate the heartbeater firing the backend guard mid-run
+                bridge._set_turn_context(TID, "att-1")
+                cb = bridge._LAST_ON_CONTROL[0]
+                cb("hard", f"Task {TID} wurde dir entzogen (Status inbox) — nicht weiterarbeiten")
+                o = bridge.RunOutcome()
+                o.interrupted = True
+                o.interrupt_kind = "hard"
+                o.interrupt_reason = "entzogen"
+                o.saw_session = True
+                o.saw_agent_start = True
+                o.saw_agent_end = True
+                o.final_stop_reason = "aborted"
+                return o
+            return _run
+        try:
+            bridge.serve_loop(
+                poll_interval=0, max_iterations=2,
+                _poll_fn=lambda: next(payloads, {"state": "idle"}),
+                _lifecycle_factory=lambda t: _RecordingLifecycle(),
+                _run_factory=_run_factory,
+                _sleep=lambda _s: None,
+                _context_env_path=os.path.join(d, "ctx.env"),
+                _msg_queue_dir=os.path.join(d, "queue"), _msg_ack_dir=os.path.join(d, "ack"),
+                _task_lock_path=os.path.join(d, "task.lock"),
+                _nudge_state_file=os.path.join(d, "nudge-state"),
+                _nudge_msg_file=os.path.join(d, "nudge.msg"),
+            )
+        finally:
+            bridge._MsgDelivery.nudge_comments = orig
+    assert any(n and "ENTZOGEN" in n and TID in n for n in seen), seen
+    print("PASS test_serve_loop_withdrawn_control_reaches_next_wakeup")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
