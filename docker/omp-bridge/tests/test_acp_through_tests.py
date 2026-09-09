@@ -442,7 +442,7 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
         pfile = Path(td) / "p1.jsonl"
         pfile.write_text("\n".join(preview_lines) + "\n", encoding="utf-8")
         state = {"path": pfile, "offset": 0, "buffer": b""}
-        preview_events = _read_preview_channel(state, None)
+        preview_events = _read_preview_channel(state)
     assert preview_events, "preview channel lines must become preview events"
     assert all(ev.get("kind") == "preview" and ev.get("uuid") is None
                and ev.get("source") == "acp" for ev in preview_events), \

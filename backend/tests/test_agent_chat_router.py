@@ -1797,6 +1797,42 @@ async def test_tailer_without_a_preview_file_broadcasts_nothing_extra(
     )
 
 
+async def test_tailer_skips_preview_resolution_hop_for_adapter_without_a_channel(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Review #473 N3: der claude-code-Adapter (und jeder ohne eigenen
+    Vorschau-Kanal) hat ``preview_channel = None`` — der Takt darf dafuer
+    NIE einen ``asyncio.to_thread``-Hop auf einen Glob verschwenden. Vorher
+    war der Default eine Attrappen-Lambda (immer „nicht None"), die den Hop
+    bei jedem Takt sinnlos ausloeste."""
+    import asyncio as asyncio_mod
+
+    session_file = tmp_path / "sess-noprev2.jsonl"
+    session_file.write_text("")
+
+    calls: list = []
+    real_to_thread = asyncio_mod.to_thread
+
+    async def spying_to_thread(fn, *args, **kwargs):
+        calls.append(fn)
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio_mod, "to_thread", spying_to_thread)
+
+    await manager.acquire("agent-noprev2", session_file)
+    try:
+        await asyncio.sleep(0.1)
+    finally:
+        await manager.release("agent-noprev2")
+
+    from app.services.transcript_adapters import adapter_for
+
+    assert adapter_for(None).preview_channel is None
+    assert not any(getattr(fn, "__name__", "") == "preview_channel" for fn in calls), (
+        "adapter without a preview channel must never reach the to_thread hop"
+    )
+
+
 # ── Frische Sitzung ohne Datei (omp ``/new``) ───────────────────────────────
 
 

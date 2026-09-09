@@ -964,10 +964,12 @@ def test_preview_channel_is_fail_closed_without_a_previews_dir(tmp_path):
 
 def test_omp_adapter_carries_the_preview_channel():
     """Der omp-Adapter ist an omp_chat.preview_channel gebunden; der
-    Claude-Adapter hat den Default (gibt None zurueck, nie ein Fehler)."""
+    Claude-Adapter hat den Default (echtes ``None``, kein Aufruf noetig —
+    Review #473 N3: eine Attrappen-Lambda waere immer „nicht None" und
+    liesse den Tailer bei jedem Takt sinnlos in den Thread-Pool springen)."""
     from app.services.transcript_adapters import _claude_adapter, _omp_adapter
 
     session = Path("/nonexistent/s1.jsonl")
     assert _omp_adapter().preview_channel(session) is None
-    assert _claude_adapter().preview_channel(session) is None
+    assert _claude_adapter().preview_channel is None
     assert _omp_adapter().preview_channel is preview_channel

@@ -55,7 +55,7 @@ backend/tests/test_omp_chat.py):
 
   * ACP PREVIEW (Vorschau-Kanal, Folge-PR zu #471): agent text/thought
     chunks NEVER touch this transcript file. They stream into a SIBLING
-    file — ``previews/<ts>_<sessionId>.preview.jsonl`` in the SAME session
+    file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` in the SAME session
     directory — that the backend's tailer (transcript_chat.ChatTailerManager
     via omp_chat.preview_channel) tails as a pure volatile channel,
     broadcasting ``kind: "preview", source: "acp"`` SSE frames. Nothing
@@ -79,6 +79,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -634,8 +635,8 @@ class ChatEventSink:
 
 class PreviewEventSink:
     """The VOLATILE preview channel (Folge-PR zu #471): appends the mapper's
-    preview flushes to ``<session_dir>/previews/<ts>_<sessionId>.jsonl`` —
-    a SIBLING of the transcript file, in a subdirectory
+    preview flushes to ``<session_dir>/previews/<ts>_<sessionId>_<uniq>.jsonl``
+    — a SIBLING of the transcript file, in a subdirectory
     ``find_active_session``/``_SESSION_GLOBS`` never scan, so the backend's
     history/rollover logic cannot mistake preview lines for transcript
     entries. The tailer reads this file via omp_chat.preview_channel and
@@ -646,7 +647,24 @@ class PreviewEventSink:
 
     ``session_id`` mirrors ChatEventSink: bridge's holder compares it to
     decide reuse when the REAL ACP sessionId arrives mid-run.
+
+    Review #473 N1: one file is created per turn and NOTHING ever deleted
+    them — an omp-agent left running for days would grow ``previews/``
+    without bound, and the tailer's ``preview_channel`` globs the whole
+    directory every tick to find the newest file, so the glob itself gets
+    linearly more expensive too. On construction, before writing the new
+    file, prune the directory down to the 3 newest ``*.jsonl`` (mtime-
+    sorted) — the tailer only ever wants the newest one anyway, 3 is slack
+    for a resolve mid-rollover. A delete failure (permissions, a racing
+    reader) is swallowed: the preview channel must never crash a turn over
+    disk hygiene, an unpruned file is just a few KB.
     """
+
+    #: How many preview files survive a prune (Review #473 N1). The tailer
+    #: (``omp_chat.preview_channel``) only reads the single newest one; a
+    #: few extra are slack for a reader resolving mid-rollover, not a
+    #: retention policy.
+    _KEEP = 3
 
     def __init__(self, directory: Optional[Path], session_id: str):
         self._session_id = session_id or "acp-session"
@@ -655,10 +673,34 @@ class PreviewEventSink:
             try:
                 pdir = directory / "previews"
                 pdir.mkdir(parents=True, exist_ok=True)
+                self._prune(pdir)
                 ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
-                self._path = pdir / f"{ts}_{self._session_id}.jsonl"
+                uniq = uuid.uuid4().hex[:6]
+                self._path = pdir / f"{ts}_{self._session_id}_{uniq}.jsonl"
             except OSError:
                 self._path = None
+
+    @staticmethod
+    def _prune(pdir: Path) -> None:
+        """Keep only the newest ``_KEEP`` preview files in ``pdir``. Fail-
+        closed: any error listing/stat-ing/deleting is swallowed — a full
+        ``previews/`` dir is a nuisance, a crashed turn is not (Review #473
+        N1)."""
+        dated: list[tuple[float, Path]] = []
+        try:
+            for candidate in pdir.glob("*.jsonl"):
+                try:
+                    dated.append((candidate.stat().st_mtime, candidate))
+                except OSError:
+                    continue
+        except OSError:
+            return
+        dated.sort(key=lambda item: item[0], reverse=True)
+        for _mtime, stale in dated[PreviewEventSink._KEEP :]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     @property
     def session_id(self) -> str:
