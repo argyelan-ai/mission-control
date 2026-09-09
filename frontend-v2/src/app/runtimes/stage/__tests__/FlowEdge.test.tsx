@@ -17,8 +17,16 @@ class StubObserver {
     StubObserver.instances.push(this);
   }
   observe(el: Element) {
-    // IntersectionObserver shape
-    this.cb([{ target: el, isIntersecting: true }]);
+    // Serves both observers: IntersectionObserver shape + ResizeObserver
+    // shape (FlowEdge reads the layout size from `contentRect`, never
+    // from getBoundingClientRect — see FlowEdge.geometry.test.tsx).
+    this.cb([
+      {
+        target: el,
+        isIntersecting: true,
+        contentRect: { width: 300, height: 100, x: 0, y: 0, top: 0, left: 0, right: 300, bottom: 100 },
+      },
+    ]);
   }
   unobserve() {}
   disconnect() {}
