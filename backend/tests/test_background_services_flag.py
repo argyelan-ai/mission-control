@@ -10,8 +10,12 @@ Das strukturelle Wiring (source inspection) folgt dem Muster aus
 ``test_boot_secret_guard.py::test_lifespan_wires_the_guard``.
 """
 
+import asyncio
 import contextlib
 import inspect
+import os
+import re
+import signal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -70,9 +74,25 @@ def test_lifespan_gates_vault_watcher_and_compactor_too():
     # Streitfall aus dem PR-Text: vault_watcher/vault_compactor haengen am
     # Vault-Wiring in lifespan() selbst (nicht in start_background_services),
     # muessen aber trotzdem hinter demselben Schalter stehen.
+    #
+    # Regex statt Quelltext-Vergleich inkl. exakter Einrueckung (Rex-Review
+    # PR #479, M4): jede Umformatierung von lifespan() (schwarz/ruff, ein
+    # zusaetzlicher Kommentar) brach den alten wortwoertlichen Vergleich,
+    # ohne dass sich am Verhalten etwas aendert. \s+ toleriert beliebige
+    # Einrueckungstiefe/-art, verlangt aber weiterhin, dass der Aufruf
+    # UNMITTELBAR im if-Block steht (Praezedenzfall test_boot_secret_guard.py
+    # matcht nur einen Funktionsnamen — hier zusaetzlich die Block-Struktur,
+    # weil vault_watcher/vault_compactor sonst unbemerkt aus dem Gating
+    # rutschen koennten).
     src = inspect.getsource(main.lifespan)
-    assert "if settings.enable_background_services:\n            await vault_watcher.start()" in src
-    assert "if settings.enable_background_services:\n            try:\n                vault_compactor = VaultCompactor(" in src
+    assert re.search(
+        r"if settings\.enable_background_services:\s*\n\s*await vault_watcher\.start\(\)",
+        src,
+    ), "vault_watcher.start() muss direkt im ENABLE_BACKGROUND_SERVICES-if-Block stehen"
+    assert re.search(
+        r"if settings\.enable_background_services:\s*\n\s*try:\s*\n\s*vault_compactor = VaultCompactor\(",
+        src,
+    ), "vault_compactor = VaultCompactor(...) muss direkt im ENABLE_BACKGROUND_SERVICES-if-Block stehen"
 
 
 @contextlib.asynccontextmanager
@@ -124,6 +144,10 @@ async def test_start_background_services_starts_all_17_plus_gh_monitor(monkeypat
 
     # Aufraeumen, damit spaetere Tests keinen bereits-fertigen Task erben.
     monkeypatch.setattr(main.settings, "obsidian_export_enabled", False)
+    # m6 (Rex-Review PR #479): main.app ist das echte globale FastAPI-Objekt
+    # (kein Test-Double) — ohne diesen Reset erbt jeder spaetere Test, der
+    # app.state anfasst, den bereits-fertigen Task von hier.
+    del main.app.state.gh_monitor_task
 
 
 @pytest.mark.asyncio
@@ -150,16 +174,9 @@ async def test_stop_background_services_stops_all_17_plus_gh_monitor(monkeypatch
         mock.assert_awaited_once()
 
     monkeypatch.setattr(main.settings, "obsidian_export_enabled", False)
-
-
-def test_worker_module_shares_the_same_start_stop_functions():
-    # backend/app/worker.py MUSS denselben Startpfad wie die API-lifespan
-    # benutzen — sonst laufen zwei unterschiedliche Dienst-Listen auseinander.
-    import app.worker as worker
-
-    assert worker.start_background_services is main.start_background_services
-    assert worker.stop_background_services is main.stop_background_services
-    assert worker.app is main.app
+    # m6 (Rex-Review PR #479): stop_background_services() cancelt den Task,
+    # loescht das Attribut aber nicht — gleicher Reset wie im Start-Test.
+    del main.app.state.gh_monitor_task
 
 
 @pytest.mark.asyncio
@@ -167,9 +184,88 @@ async def test_worker_run_does_nothing_when_flag_is_false(monkeypatch):
     import app.worker as worker
 
     monkeypatch.setattr(worker.settings, "enable_background_services", False)
+    prepare_mock = AsyncMock()
     start_mock = AsyncMock()
+    monkeypatch.setattr(worker, "prepare_process", prepare_mock)
     monkeypatch.setattr(worker, "start_background_services", start_mock)
 
     await worker.run()
 
+    prepare_mock.assert_not_awaited()
     start_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_run_prepares_process_before_starting_services(monkeypatch):
+    # Rex-Review PR #479, Blocker B2: der alte Identitaets-Check
+    # (`worker.start_background_services is main.start_background_services`)
+    # konnte nicht fehlschlagen, solange der Import stand — er hat NICHT
+    # geprueft, dass worker.run() denselben Vorbereitungspfad (Boot-Secret-
+    # Guard, DB-Seeds, Channel-/AI-Provider-Overrides) durchlaeuft wie
+    # main.lifespan(), bevor die Dienste starten. Dieser Test faehrt
+    # worker.run() echt (mit gemockten Diensten) und prueft die Reihenfolge.
+    import app.worker as worker
+
+    call_order: list[str] = []
+
+    async def _fake_prepare():
+        call_order.append("prepare_process")
+
+    async def _fake_start(app):
+        call_order.append("start_background_services")
+
+    async def _fake_stop(app):
+        call_order.append("stop_background_services")
+
+    monkeypatch.setattr(worker, "prepare_process", _fake_prepare)
+    monkeypatch.setattr(worker, "start_background_services", _fake_start)
+    monkeypatch.setattr(worker, "stop_background_services", _fake_stop)
+    monkeypatch.setattr(worker.settings, "enable_background_services", True)
+
+    async def _stop_soon():
+        await asyncio.sleep(0.02)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    await asyncio.wait_for(asyncio.gather(worker.run(), _stop_soon()), timeout=5)
+
+    assert call_order == [
+        "prepare_process",
+        "start_background_services",
+        "stop_background_services",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+async def test_worker_run_shuts_down_gracefully_on_signal(monkeypatch, sig):
+    # Blocker B1 (Rex-Review PR #479): CPython wandelt SIGTERM NICHT in eine
+    # Exception um — die Default-Disposition beendet den Prozess sofort,
+    # OHNE dass ein `finally`-Block laeuft. `docker stop` schickt SIGTERM
+    # (nicht SIGINT). Vor dem Fix lief stop_background_services() bei
+    # SIGTERM nie — der Redis-Scheduler-Lock (RedisKeys.scheduler_lock(),
+    # siehe #133) blieb stehen, Slack-Socket/Telegram-Poller blieben offen.
+    #
+    # Probe (aus dem Review): "SIGTERM -> rc=-15, finally lief NICHT" vs.
+    # "SIGINT -> rc=0, finally lief". Dieser Test schickt beide Signale
+    # real an den eigenen Prozess (nicht simuliert) und prueft, dass
+    # stop_background_services() in JEDEM Fall laeuft, weil worker.run()
+    # jetzt eigene Handler fuer beide Signale registriert statt sich auf
+    # asyncio.run()s KeyboardInterrupt-Pfad zu verlassen (der nur fuer
+    # SIGINT funktioniert).
+    import app.worker as worker
+
+    monkeypatch.setattr(worker, "prepare_process", AsyncMock())
+    start_mock = AsyncMock()
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(worker, "start_background_services", start_mock)
+    monkeypatch.setattr(worker, "stop_background_services", stop_mock)
+    monkeypatch.setattr(worker.settings, "enable_background_services", True)
+
+    async def _send_signal_soon():
+        await asyncio.sleep(0.02)
+        os.kill(os.getpid(), sig)
+
+    await asyncio.wait_for(asyncio.gather(worker.run(), _send_signal_soon()), timeout=5)
+
+    start_mock.assert_awaited_once()
+    stop_mock.assert_awaited_once()

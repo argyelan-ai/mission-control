@@ -262,19 +262,34 @@ async def stop_background_services(app: FastAPI) -> None:
     await scheduler.stop()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup — check templates + seed builtin templates + start background services.
-    # Phase 29 (ADR-039): OpenClaw RPC connect removed. Backend no longer dials a Gateway.
+async def prepare_process() -> None:
+    """Shared boot preparation for the API process and the worker process.
+
+    Architektur E, Teil 1 (siehe backend/app/worker.py): muss VOR
+    ``start_background_services()`` laufen, in JEDEM Prozess der sie
+    aufruft — nicht nur einmal API-seitig (Rex-Review PR #479, Blocker B2).
+
+    - ``validate_boot_secrets()`` ist ein Fail-Fast-Check pro Prozess:
+      ein Worker mit leerem ``SECRETS_ENCRYPTION_KEY``/Platzhalter-JWT soll
+      beim Boot krachen, nicht erst beim ersten Secrets-Zugriff zur Laufzeit.
+    - ``apply_channel_overrides()``/``apply_ai_provider_overrides()`` patchen
+      den SETTINGS-SINGLETON DES AUFRUFENDEN PROZESSES aus DB/Secrets-Store.
+      API und Worker sind getrennte Python-Prozesse mit je einer eigenen
+      ``settings``-Instanz — ``telegram_bot.start()`` (laeuft im Worker)
+      liest ``settings.telegram_team_chat_enabled`` von GENAU dieser
+      Instanz. Nur weil die API ihre eigene Kopie schon gepatcht hat, ist
+      die des Workers noch nicht gepatcht.
+    - Die Seed-Schritte sind idempotent und laufen hier zusaetzlich, damit
+      der Worker nicht von der Boot-Reihenfolge zum API-Container abhaengt
+      (``_seed_scheduled_jobs`` fuettert genau den Scheduler, den
+      ``start_background_services()`` gleich startet).
+
+    Reihenfolge identisch zur vorherigen lifespan()-Reihenfolge (keine
+    zusaetzliche Verhaltensaenderung durch diese Extraktion).
+    """
     # Fail fast on placeholder secrets (default JWT key = forgeable admin
     # tokens) BEFORE anything else touches the DB or starts services.
     validate_boot_secrets()
-    # Zweiter Durchlauf: uvicorn legt `uvicorn.access` & Co. erst beim
-    # Server-Start an (eigener Handler, propagate=False) — beim Import oben
-    # existierten sie noch nicht. Ohne diesen Aufruf leaken Access-Zeilen
-    # weiter den `?token=<JWT>` (Live-Befund 26.07.2026). Idempotent.
-    install_log_redaction()
-    _verify_jinja_templates()
     await _seed_templates()
     await _seed_scheduled_jobs()
     await _seed_playbook_assets()
@@ -284,15 +299,6 @@ async def lifespan(app: FastAPI):
     # NACH _seed_hosts: die Slot-Zeilen leiten sich aus den Boxen ab.
     await _ensure_slot_runtimes()
     await _seed_github_token()
-    # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
-    # Unconditional — Files API + deliverables (HTTP, nicht nur file_indexer)
-    # haengen von MC_HOME ab, unabhaengig von ENABLE_BACKGROUND_SERVICES.
-    from app.services.fs_roots import mc_home as _mc_home
-    if not _mc_home().is_dir():
-        logging.getLogger("mc.startup").warning(
-            "MC_HOME %s is not a directory — Files API + deliverables will be empty. "
-            "Set HOME_HOST to the host's $HOME.", _mc_home()
-        )
     # MEM-04 (Phase 2): ensure Qdrant has agent_id + board_id keyword
     # indexes on all three memory layers. Idempotent — safe across restarts.
     # Existing collections created before this code do NOT have the full
@@ -328,6 +334,31 @@ async def lifespan(app: FastAPI):
             await apply_ai_provider_overrides(_ai_session)
     except Exception as e:
         logger.warning("ai provider overrides at startup failed (env defaults stay): %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup — check templates + seed builtin templates + start background services.
+    # Phase 29 (ADR-039): OpenClaw RPC connect removed. Backend no longer dials a Gateway.
+    # Zweiter Durchlauf: uvicorn legt `uvicorn.access` & Co. erst beim
+    # Server-Start an (eigener Handler, propagate=False) — beim Import oben
+    # existierten sie noch nicht. Ohne diesen Aufruf leaken Access-Zeilen
+    # weiter den `?token=<JWT>` (Live-Befund 26.07.2026). Idempotent.
+    install_log_redaction()
+    _verify_jinja_templates()
+    # validate_boot_secrets() + DB-Seeds + Channel-/AI-Provider-Overrides +
+    # Qdrant-Index-Setup: siehe prepare_process() — geteilter Boot-Vorbe-
+    # reitungspfad mit backend/app/worker.py (Rex-Review PR #479, Blocker B2).
+    await prepare_process()
+    # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
+    # Unconditional — Files API + deliverables (HTTP, nicht nur file_indexer)
+    # haengen von MC_HOME ab, unabhaengig von ENABLE_BACKGROUND_SERVICES.
+    from app.services.fs_roots import mc_home as _mc_home
+    if not _mc_home().is_dir():
+        logging.getLogger("mc.startup").warning(
+            "MC_HOME %s is not a directory — Files API + deliverables will be empty. "
+            "Set HOME_HOST to the host's $HOME.", _mc_home()
+        )
     # ENABLE_BACKGROUND_SERVICES (Architektur E, Teil 1): Default True, damit
     # sich am heutigen Verhalten nichts aendert, solange kein Worker-Container
     # existiert (Teil 2). Siehe backend/app/worker.py + Inventar-Tabelle im PR.
