@@ -272,13 +272,6 @@ export function createInitialChatState(): ChatReducerState {
  */
 function eventKey(ev: TimelineChatEvent): string {
   if (ev.kind === "tool" && ev.toolUseId) return `tool:${ev.toolUseId}`;
-  /* ACP-Preview (Review #465, Option b): jede Preview-Flush tritt eine
-     frische uuid an, aber im Chat gibt es GENAU EIN Preview-Fach — jede
-     neue Vorschau ERSETZT die vorige, sie stapelt keine Zeilen. Der
-     teammate-Absender (acp-preview) ist der stabile Schluessel. */
-  if (ev.kind === "message" && ev.role === "teammate" && ev.teammate === "acp-preview") {
-    return "message:acp-preview";
-  }
   /* Die ART gehoert in den Schluessel, nicht nur die uuid: EIN Transkript-
      Eintrag kann MEHRERE Bloecke tragen (Denken und Antwort in derselben
      Zeile), und alle erben dieselbe Eintrags-uuid. Ohne die Art galt die
@@ -301,7 +294,7 @@ function pushOrReplace(state: ChatReducerState, ev: TimelineChatEvent): ChatRedu
   const existingIndex = state.index.get(key);
 
   if (existingIndex !== undefined) {
-    if (ev.kind !== "tool" && eventKey(ev) !== "message:acp-preview") {
+    if (ev.kind !== "tool") {
       // Non-tool duplicate (Claude Code can repeat a line verbatim across a
       // resumed session) — ignored, first write wins.
       return state;

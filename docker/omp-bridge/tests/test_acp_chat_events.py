@@ -405,6 +405,41 @@ def test_mapper_never_raises_on_garbage():
     assert mapper.dump([{"bad": object()}]) == []
 
 
+def test_preview_contract_snapshots_volatile_not_history(tmp_path):
+    """N3 (Review #471): stream-mode chunks ride the VOLATILE preview slot.
+    Contract end to end:
+    - live: the REAL OmpLineParser maps every acp-preview flush to a
+      uuid-less `preview` event (the reducer's replace-me slot),
+    - history: the REAL read_history DROPS them — exactly ONE final
+      assistant line carries the complete text into the transcript.
+    """
+    mapper = acp_chat_events.ACPEventMapper()
+    stream_lines: list[str] = []
+    for params in chunk("ignored", ["Hallo", " ", "Welt", "."]):
+        stream_lines += mapper.dump(mapper.map_update(params, stream=True))
+    final_lines = mapper.dump(mapper.map_final_assistant_message("Hallo Welt."))
+
+    # Live: each flush is a uuid-less preview event on the volatile channel.
+    parser = OmpLineParser()
+    live_events: list[dict] = []
+    for line in stream_lines:
+        live_events += parser(line)
+    assert live_events, "stream flushes must reach the parser"
+    for ev in live_events:
+        assert ev["kind"] == "preview", ev
+        assert ev["uuid"] is None
+        assert ev["source"] == "acp"
+    # The snapshot grows; the last one carries the full text so far.
+    assert [e["text"] for e in live_events][-1] == "Hallo Welt."
+
+    # History: snapshots dropped, ONE final assistant line kept.
+    history = as_history(stream_lines + final_lines, tmp_path)
+    messages = [e for e in history["events"] if e["kind"] == "message"]
+    assert len(messages) == 1, messages
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["text"] == "Hallo Welt."
+
+
 # ── standalone runner ───────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -436,7 +471,7 @@ if __name__ == "__main__":
         run("prompt_usage", test_prompt_result_usage_flows_into_usage_event)
         run("user_prompt", test_user_prompt_renders_as_user_message)
         run("sink_layout", test_sink_writes_session_file_in_omp_layout, tmp)
-        run("sink_noop", test_sink_degrades_to_noop_on_unwritable_dir, tmp)
+        run("preview_contract", test_preview_contract_snapshots_volatile_not_history, tmp)
         run("history_roundtrip", test_history_roundtrip_through_read_history, tmp)
         run("garbage", test_mapper_never_raises_on_garbage)
     sys.exit(1 if failures else 0)

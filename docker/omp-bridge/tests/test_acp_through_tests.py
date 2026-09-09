@@ -233,6 +233,74 @@ def test_acp_permission_decision_fail_closed_table():
     print("PASS test_acp_permission_decision_fail_closed_table")
 
 
+def test_mc_ask_blocking_unreadable_baseline_fails_closed():
+    """N2 (Review #471): wenn die Thread-Baseline nicht lesbar ist, darf der
+    Poll KEINE beliebige aeltere Operator-Nachricht als Antwort nehmen. Ohne
+    Baseline sofort "" -> der Aufrufer mappt auf REJECT_ONCE."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(list(cmd))
+        if "ask" in cmd:
+            class P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return P()
+        # thread --json: the baseline read fails (rc!=0)
+        class P2:
+            returncode = 1
+            stdout = ""
+            stderr = "thread unavailable"
+        return P2()
+
+    import subprocess as _sub
+    orig = _sub.run
+    _sub.run = fake_run
+    try:
+        answer = bridge._mc_ask_blocking("T1", "Freigabe?", poll_interval=0.01, timeout=0.2)
+    finally:
+        _sub.run = orig
+    assert answer == "", answer
+    # Fail-closed means: NO poll loop at all — only the one baseline read,
+    # never a `--limit 10` poll that could accept an older operator message.
+    assert not any("--limit" in c and "10" in c for c in calls), calls
+    print("PASS test_mc_ask_blocking_unreadable_baseline_fails_closed")
+
+
+def test_mc_ask_blocking_older_operator_message_never_becomes_the_answer():
+    """N2 counterparts: WITH a readable baseline the poll filters everything
+    at or below the question's seq — a stale operator message is skipped, and
+    the FIRST NEWER user-side message is the answer."""
+    import json as _json
+    thread_page = {
+        "messages": [
+            {"seq": 1, "author": {"kind": "user"}, "direction": "user_to_agent",
+             "body": "ALTE Nachricht vor der Frage"},
+            {"seq": 2, "author": {"kind": "agent"}, "direction": "agent_to_user",
+             "body": "Frage: Freigabe?"},
+        ]
+    }
+
+    def fake_run(cmd, **kw):
+        class P:
+            returncode = 0
+            stderr = ""
+            stdout = _json.dumps(thread_page) if "thread" in cmd else ""
+        return P()
+
+    import subprocess as _sub
+    orig = _sub.run
+    _sub.run = fake_run
+    try:
+        # Baseline seq=2; the stale seq=1 user message must NOT answer.
+        answer = bridge._mc_ask_blocking("T1", "Freigabe?", poll_interval=0.01, timeout=0.05)
+    finally:
+        _sub.run = orig
+    assert answer == "", answer  # timeout with no NEWER message -> ""
+    print("PASS test_mc_ask_blocking_older_operator_message_never_becomes_the_answer")
+
+
 # ── 4. _make_acp_run_factory: sink survives 2+ events, real sessionId ───────
 
 
@@ -323,12 +391,12 @@ def test_make_acp_run_factory_sink_survives_multiple_events():
 
 
 def test_reducer_stream_mode_one_preview_slot_one_final_line():
-    """Durchstich (Review #465, Option b): map the REAL normal fixture's
-    updates in stream mode and feed every line through the REAL backend
-    OmpLineParser. Contract:
-    - every streamed text chunk becomes a custom_message/acp-preview line
-      (the frontend's replace-me slot — one bubble per sentence, never
-      stacking),
+    """Durchstich (Review #465 Option b, #471 N3): map the REAL normal
+    fixture's updates in stream mode and feed every line through the REAL
+    backend OmpLineParser. Contract:
+    - every streamed text chunk becomes an acp-preview line that parses to a
+      uuid-less VOLATILE `preview` event (the reducer's replace-me slot —
+      never a permanent timeline bubble),
     - exactly ONE permanent assistant message lands (the final line),
     - preview lines never carry usage, the final line does."""
     mapper = acp_chat_events.ACPEventMapper()
@@ -357,7 +425,7 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
     snapshots = [json.loads(l)["content"] for l in preview_lines]
     assert snapshots[-1] == fixture_text, snapshots
     assert len({s for s in snapshots}) >= 1
-    # Every preview is a teammate-marked replace-me line the reducer keys on.
+    # Every preview flush is the bridge's acp-preview custom message.
     for l in preview_lines:
         e = json.loads(l)
         assert e["type"] == "custom_message" and e["customType"] == "acp-preview"
@@ -367,7 +435,10 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
     preview_events = []
     for l in preview_lines:
         preview_events += parser(l)
-    assert all(ev.get("teammate") == "acp-preview" for ev in preview_events), \
+    # N3: previews are volatile `preview` events (replace-me slot), NOT
+    # teammate timeline messages — the history never keeps a snapshot.
+    assert all(ev.get("kind") == "preview" and ev.get("uuid") is None
+               and ev.get("source") == "acp" for ev in preview_events), \
         preview_events
     assert not [ev for ev in preview_events if ev["kind"] == "usage"], \
         "preview lines must never carry usage (0/0 garbage)"

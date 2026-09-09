@@ -3512,6 +3512,14 @@ def _mc_ask_blocking(
     except Exception:  # noqa: BLE001 — baseline is best-effort, poll continues
         pass
 
+    # Fail-closed (Review #471 N2): without a readable baseline the
+    # `seq <= question_seq` filter is a no-op and any OLDER operator message
+    # would be accepted as the answer — fail-open on an approval decision.
+    # No baseline -> no poll -> empty answer (mapped to REJECT_ONCE).
+    if question_seq < 0:
+        sys.stderr.write("[acp] mc ask: thread baseline unreadable; rejecting once\n")
+        return ""
+
     while _time.monotonic() < deadline:
         _time.sleep(poll_interval)
         try:

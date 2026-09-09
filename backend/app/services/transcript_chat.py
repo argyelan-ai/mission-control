@@ -1529,6 +1529,10 @@ def read_history(
                     elif ev["kind"] == "usage":
                         adapter.stamp_usage(ev, path)
 
+                    if ev["kind"] == "preview":
+                        # Review #471 N3: previews are VOLATILE — the tailer
+                        continue
+
                     events.append(ev)
 
     total = len(events)
@@ -2019,7 +2023,7 @@ class ChatTailerManager:
                                     observed_windows[ev["model"]] = ev["contextWindow"]
                                     await observe_model_window(ev["model"], ev["contextWindow"])
 
-                            if ev["kind"] == "message" and preview_state is not None:
+                            if ev["kind"] in ("message", "preview") and preview_state is not None:
                                 # Der letzte Absatz der Nachricht ist die
                                 # Marke: was auf dem Bildschirm DANACH steht,
                                 # hat das Transkript noch nicht (Live-Gate
