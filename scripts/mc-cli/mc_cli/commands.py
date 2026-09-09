@@ -812,7 +812,7 @@ def _add_finish_args(p):
         help=(
             "Reflexions-Text mit 4 Pflicht-Headers: '## Was wurde gemacht\\n...\\n"
             "## Was hat funktioniert\\n...\\n## Was war unklar\\n...\\n"
-            "## Lesson fuer Agent-Memory\\n...'"
+            "## Lesson für Agent-Memory\\n...'"
         ),
     )
     p.add_argument(
