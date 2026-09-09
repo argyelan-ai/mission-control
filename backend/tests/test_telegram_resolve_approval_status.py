@@ -62,7 +62,7 @@ async def test_resolve_approval_approve_unblocks_to_in_progress():
     task_id, approval_id = await _make_blocked_task_with_approval()
 
     resolved = await telegram_bot._resolve_approval(approval_id, "approve")
-    assert resolved is True
+    assert resolved == "resolved"
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
@@ -76,7 +76,7 @@ async def test_resolve_approval_reject_fails_the_task():
     task_id, approval_id = await _make_blocked_task_with_approval()
 
     resolved = await telegram_bot._resolve_approval(approval_id, "reject")
-    assert resolved is True
+    assert resolved == "resolved"
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
@@ -90,7 +90,42 @@ async def test_resolve_approval_already_resolved_is_noop():
     _task_id, approval_id = await _make_blocked_task_with_approval()
 
     first = await telegram_bot._resolve_approval(approval_id, "approve")
-    assert first is True
+    assert first == "resolved"
 
     second = await telegram_bot._resolve_approval(approval_id, "approve")
-    assert second is False
+    assert second == "already_resolved"
+
+
+@pytest.mark.asyncio
+async def test_resolve_approval_task_write_409_returns_task_conflict():
+    """M5 (PR #478 review): the approval already committed as 'approved'
+    when the blocker-decision task write hits lock_and_set()'s 409 (another
+    writer moved the task off 'blocked' between this function's own
+    task.status == "blocked" check and the locked re-read). Before the fix
+    that HTTPException propagated out of _resolve_approval uncaught, past
+    _handle_callback, into the poll loop's broad `except Exception` —
+    answer_callback_query/update_resolved_telegram/emit_event never ran,
+    approval resolved but task stuck. Now it must be caught, the approval
+    stays resolved, and the caller gets a distinct "task_conflict" signal
+    instead of a raised exception or the generic "resolved" state."""
+    task_id, approval_id = await _make_blocked_task_with_approval()
+
+    from fastapi import HTTPException
+
+    async def _raise_409(*args, **kwargs):
+        raise HTTPException(status_code=409, detail={"error": "invalid_transition"})
+
+    # _resolve_approval does `from app.services.task_state import
+    # lock_and_set` INSIDE the function body (same reason the _patch_engine
+    # fixture above patches app.database.engine, not a telegram_bot-local
+    # name) -- patch it at its source.
+    with patch("app.services.task_state.lock_and_set", side_effect=_raise_409):
+        resolved = await telegram_bot._resolve_approval(approval_id, "approve")
+
+    assert resolved == "task_conflict"
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        approval = await s.get(Approval, approval_id)
+        assert approval.status == "approved", "approval must stay resolved despite the task conflict"
+        task = await s.get(Task, task_id)
+        assert task.status == "blocked", "task write never happened -- status untouched"

@@ -573,15 +573,47 @@ class TelegramBotService:
 
         # Resolve approval
         resolved = await self._resolve_approval(approval_id, action)
-        if resolved:
+        if resolved == "resolved":
             status_text = "Entblockt" if action == "approve" else "Abgebrochen"
             await self.answer_callback_query(callback_id, f"{status_text}!")
             await self.update_resolved_telegram(approval_id, "approved" if action == "approve" else "rejected")
+        elif resolved == "task_conflict":
+            # Approval itself resolved fine; the task's status write lost the
+            # lock_and_set() race (PR #478 review, M5) — tell Mark explicitly
+            # instead of leaving the button spinning to timeout with no
+            # explanation (the old behavior: an uncaught 409 propagated out
+            # of _resolve_approval, was swallowed by the poll loop's broad
+            # `except Exception`, and none of answer_callback_query /
+            # update_resolved_telegram / emit_event ran).
+            await self.answer_callback_query(
+                callback_id,
+                "Approval geloest, Task-Status hat sich aber zwischenzeitlich "
+                "geaendert — bitte im Board pruefen.",
+            )
+            await self.update_resolved_telegram(
+                approval_id,
+                "approved" if action == "approve" else "rejected",
+                resolver_note=(
+                    "Task-Status hat sich zwischenzeitlich geaendert (Race) — "
+                    "bitte im Board pruefen."
+                ),
+            )
         else:
             await self.answer_callback_query(callback_id, "Bereits erledigt.")
 
-    async def _resolve_approval(self, approval_id: uuid.UUID, action: str) -> bool:
-        """Resolve approval in DB. Returns True if actually resolved."""
+    async def _resolve_approval(self, approval_id: uuid.UUID, action: str) -> str:
+        """Resolve approval in DB.
+
+        Returns "resolved" (approval + task write both succeeded),
+        "already_resolved" (approval wasn't pending — legitimate double-click
+        or already handled elsewhere), or "task_conflict" (approval WAS
+        resolved, but the blocker-decision task write lost the
+        lock_and_set() race — PR #478 review, M5: the approval commits
+        before the task write, so a 409 there must not raise past this
+        method uncaught; the caller still needs to know the task-side write
+        didn't happen).
+        """
+        from fastapi import HTTPException
         from sqlmodel.ext.asyncio.session import AsyncSession
         from app.database import engine
         from app.models.approval import Approval
@@ -595,7 +627,7 @@ class TelegramBotService:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             approval = await session.get(Approval, approval_id)
             if not approval or approval.status != "pending":
-                return False
+                return "already_resolved"
 
             approval.status = status
             approval.resolved_at = utcnow()
@@ -603,40 +635,53 @@ class TelegramBotService:
             session.add(approval)
             await session.commit()
 
+            task_conflict = False
+
             # Blocker decision: unblock/fail the task
             if approval.action_type == "blocker_decision" and approval.task_id:
                 task = await session.get(Task, approval.task_id)
                 if task and task.status == "blocked":
-                    if status == "approved":
-                        task, _ = await lock_and_set(session, task.id, "in_progress", actor="user")
-                        task.updated_at = utcnow()
-                        session.add(task)
-                        await session.commit()
-                        # Notify agent via TaskComment (runtime-agnostic delivery
-                        # channel — cli-bridge / host poll /agent/me/comments).
-                        # Phase 29 D-10: replaces the former gateway chat path.
-                        if task.assigned_agent_id:
-                            session.add(TaskComment(
-                                task_id=task.id,
-                                author_type="user",
-                                content=(
-                                    f'**UNBLOCKED:** "{task.title}"\n\n'
-                                    f"Anweisung des Operators: Via Telegram entblockt.\n\n"
-                                    f"**Aktion:** Weiterarbeiten."
-                                ),
-                                comment_type="resolution",
-                            ))
+                    try:
+                        if status == "approved":
+                            task, _ = await lock_and_set(session, task.id, "in_progress", actor="user")
+                            task.updated_at = utcnow()
+                            session.add(task)
                             await session.commit()
-                    elif status == "rejected":
-                        task, _ = await lock_and_set(session, task.id, "failed", actor="user")
-                        task.updated_at = utcnow()
-                        # Auto-unassign — a failed task in agent_poll would otherwise
-                        # trigger a cancel loop. The operator explicitly cancelled
-                        # the task via Telegram.
-                        from app.services.task_lifecycle import apply_terminal_unassign
-                        await apply_terminal_unassign(session, task, "failed")
-                        session.add(task)
-                        await session.commit()
+                            # Notify agent via TaskComment (runtime-agnostic delivery
+                            # channel — cli-bridge / host poll /agent/me/comments).
+                            # Phase 29 D-10: replaces the former gateway chat path.
+                            if task.assigned_agent_id:
+                                session.add(TaskComment(
+                                    task_id=task.id,
+                                    author_type="user",
+                                    content=(
+                                        f'**UNBLOCKED:** "{task.title}"\n\n'
+                                        f"Anweisung des Operators: Via Telegram entblockt.\n\n"
+                                        f"**Aktion:** Weiterarbeiten."
+                                    ),
+                                    comment_type="resolution",
+                                ))
+                                await session.commit()
+                        elif status == "rejected":
+                            task, _ = await lock_and_set(session, task.id, "failed", actor="user")
+                            task.updated_at = utcnow()
+                            # Auto-unassign — a failed task in agent_poll would otherwise
+                            # trigger a cancel loop. The operator explicitly cancelled
+                            # the task via Telegram.
+                            from app.services.task_lifecycle import apply_terminal_unassign
+                            await apply_terminal_unassign(session, task, "failed")
+                            session.add(task)
+                            await session.commit()
+                    except HTTPException as e:
+                        if e.status_code != 409:
+                            raise
+                        logger.warning(
+                            "Telegram approval %s resolved but task %s's "
+                            "status write lost the lock_and_set() race "
+                            "(status changed since the 'blocked' check): %s",
+                            approval_id, task.id, e.detail,
+                        )
+                        task_conflict = True
 
             await emit_event(
                 session,
@@ -644,10 +689,10 @@ class TelegramBotService:
                 f"Approval {status} via Telegram: {approval.description}",
                 board_id=approval.board_id,
                 agent_id=approval.agent_id,
-                detail={"status": status, "source": "telegram"},
+                detail={"status": status, "source": "telegram", "task_conflict": task_conflict},
             )
 
-        return True
+        return "task_conflict" if task_conflict else "resolved"
 
 
 def _escape_html(text: str) -> str:
