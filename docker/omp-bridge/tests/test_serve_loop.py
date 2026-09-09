@@ -305,6 +305,74 @@ def test_serve_loop_native_path_classifies_via_classify_not_acp():
     print("PASS test_serve_loop_native_path_classifies_via_classify_not_acp")
 
 
+def test_serve_loop_native_path_interrupted_yields_interrupted_kind():
+    """N1 (Dritt-Review #471): a natively interrupted run (heartbeat control
+    channel, outcome.interrupted) must classify to Kind.INTERRUPTED on the
+    serve_loop path WITHOUT OMP_DRIVER — classify_acp maps stopReason-based
+    and would have swallowed this into SILENT_ABORT_NO_SENTINEL."""
+    assert bridge._acp_env_driver() != "acp", "test requires the native default"
+
+    def rf(task, cwd):
+        def _once():
+            o = bridge.RunOutcome()
+            o.saw_session = True
+            o.saw_agent_start = True
+            o.saw_agent_end = True
+            o.interrupted = True
+            o.interrupt_kind = "hard"
+            o.interrupt_reason = "operator stop"
+            o.final_stop_reason = "stop"
+            return o
+        return _once
+
+    saved = os.environ.pop("OMP_DRIVER", None)
+    try:
+        lc = _run([{"state": "new_task", "task": TASK}], rf, iterations=1)
+    finally:
+        if saved is not None:
+            os.environ["OMP_DRIVER"] = saved
+    kinds = [c[0] for c in lc.calls]
+    # Fix 3: interrupted is terminal-but-benign — halted, NO retry, NO
+    # blocker, NO finish (the backend already owns the stopped state).
+    assert "finish" not in kinds, (kinds, "an interrupted run is no finish")
+    assert "blocker" not in kinds, (kinds, "an interrupted run never escalates")
+    print("PASS test_serve_loop_native_path_interrupted_yields_interrupted_kind")
+
+
+def test_serve_loop_native_path_tooluse_retries_as_maxtime():
+    """N1 (Dritt-Review #471): stopReason=toolUse on the native serve_loop
+    path (WITHOUT OMP_DRIVER) must classify to Kind.ABORT_MAXTIME —
+    retryable, retry budget then terminal blocker. classify_acp would have
+    swallowed this into SILENT_ABORT_NO_SENTINEL and lost the retry."""
+    assert bridge._acp_env_driver() != "acp", "test requires the native default"
+
+    def rf(task, cwd):
+        def _once():
+            o = bridge.RunOutcome()
+            o.saw_session = True
+            o.saw_agent_start = True
+            o.saw_agent_end = True
+            o.final_stop_reason = "toolUse"  # --max-time cut a tool mid-flight
+            return o
+        return _once
+
+    saved = os.environ.pop("OMP_DRIVER", None)
+    try:
+        lc = _run([{"state": "new_task", "task": TASK}], rf, iterations=1)
+    finally:
+        if saved is not None:
+            os.environ["OMP_DRIVER"] = saved
+    kinds = [c[0] for c in lc.calls]
+    # Native classify: toolUse -> ABORT_MAXTIME (retryable) -> retry comment,
+    # budget exhausted -> terminal blocker. classify_acp would have produced
+    # SILENT_ABORT_NO_SENTINEL: terminal, retry lost.
+    assert "comment" in kinds, (kinds, "the retry must be logged")
+    assert "blocker" in kinds, (kinds, "toolUse must exhaust the retry budget, not stop silently")
+    assert "finish" not in kinds, (kinds, "a maxtime-cut run is no finish")
+    print("PASS test_serve_loop_native_path_tooluse_retries_as_maxtime")
+
+
+
 def test_call_site_classify_fn_conditioned_on_acp_driver():
     """N1 (verifiziert am Call-Site): classify_fn=classify_acp darf nur im
     ACP-Zweig am drive_live_run-Aufruf stehen. Der native Pfad behaelt

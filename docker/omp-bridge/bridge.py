@@ -31,13 +31,12 @@ PROTOTYPE SCOPE / STUBS (see README):
 from __future__ import annotations
 
 import argparse
-import io
 import json
+import time
 import os
 import re
 import sys
 import threading
-import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping, Callable, Iterable, Iterator, Optional, TextIO
@@ -3630,6 +3629,10 @@ def run_acp_once(
     outcome = RunOutcome()
     full_text: list[str] = []
 
+    # Preview-flush throttle state (see on_event): last flushed snapshot
+    # length, last flush time, and the newest withheld snapshot.
+    _throttle = {"chars": -10**9, "at": time.monotonic(), "pending": None}
+
     def on_event(params: dict) -> None:
         upd = params.get("update") or {}
         su = upd.get("sessionUpdate")
@@ -3651,8 +3654,27 @@ def run_acp_once(
                 tool_error_flags[0] = True
             _heartbeat()
         # Sessions chat stream: mapping is deliberately SEPARATE from the
-        # classification bookkeeping above.
-        emit_transcript(mapper.map_update(params, stream=True))
+        # classification bookkeeping above. Preview flushes are THROTTLED
+        # (Dritt-Review #471 N3): one JSONL line per chunk is 0.6 MB per 200
+        # chunks / 14.5 MB per 1000 — pointless I/O for a replace-me preview
+        # slot. Flush a snapshot only on >200 chars of growth OR >250 ms
+        # since the last flush; non-preview lines (tools, permission, usage)
+        # always pass through. The FINAL state is flushed unconditionally at
+        # the end of the run so the preview never rests on a stale snapshot.
+        for entry in mapper.map_update(params, stream=True):
+            if entry.get("customType") != "acp-preview":
+                emit_transcript([entry])
+                continue
+            entry_text = entry.get("content") or ""
+            grew = len(entry_text) - _throttle["chars"] > 200
+            elapsed = time.monotonic() - _throttle["at"] >= 0.25
+            if grew or elapsed:
+                _throttle["chars"] = len(entry_text)
+                _throttle["at"] = time.monotonic()
+                _throttle["pending"] = None
+                emit_transcript([entry])
+            else:
+                _throttle["pending"] = entry
 
     tool_count = [0]
     tool_error_flags = [False]
@@ -3747,6 +3769,12 @@ def run_acp_once(
         outcome.error_message = f"{type(e).__name__}: {e}"
     finally:
         client.close()
+
+    # Throttle tail: the LAST preview state must always reach the sink so
+    # the chat's preview slot never rests on a stale snapshot (or on none).
+    if _throttle["pending"] is not None:
+        emit_transcript([_throttle["pending"]])
+        _throttle["pending"] = None
 
     outcome.saw_session = saw_session or outcome.saw_session
     outcome.tool_calls = tool_count[0]

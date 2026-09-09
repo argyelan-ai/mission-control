@@ -440,6 +440,56 @@ def test_preview_contract_snapshots_volatile_not_history(tmp_path):
     assert messages[0]["text"] == "Hallo Welt."
 
 
+def test_preview_emit_throttled_last_state_always_flushed(tmp_path):
+    """Dritt-Review #471 (b): run_acp_once must NOT flush one preview line
+    per chunk — 200 chunks used to mean 200 JSONL lines (~0.6 MB). The
+    throttle flushes a snapshot only on >200 chars growth OR >250 ms since
+    the last flush, and the FINAL state always reaches the sink so the
+    preview never rests on a stale snapshot. Contract end to end through
+    run_acp_once + a fake ACP server replaying 200 chunk updates."""
+    import time as _time
+
+    import bridge
+    from test_acp_adapter import InProcessFake
+
+    writes: list[str] = []
+    fake = InProcessFake(RPC / "acp-many-chunks.ndjson", [])
+    try:
+        outcome = bridge.run_acp_once(
+            "throttle test",
+            cwd=str(HERE),
+            model="m",
+            max_time=10,
+            permission_policy="yolo",
+            task_id="T1",
+            client_factory=lambda: fake.client,
+            transcript_sink=writes.extend,
+        )
+        assert outcome.final_stop_reason == "end_turn"
+    finally:
+        fake.close()
+
+    previews = [json.loads(w) for w in writes
+                if json.loads(w).get("customType") == "acp-preview"]
+    # Throttled: far fewer preview lines than the 200 streamed chunks.
+    assert len(previews) < 50, \
+        f"throttle failed: {len(previews)} preview lines for 200 chunks"
+    assert len(previews) >= 2, "at least first + last snapshot must flush"
+    # Snapshots grow monotonically; the LAST one carries the complete text
+    # (final state always flushed, never a stale intermediate).
+    sizes = [len(p["content"]) for p in previews]
+    assert sizes == sorted(sizes), sizes
+    assert previews[-1]["content"] == outcome.final_text, (
+        "the final preview flush must carry the COMPLETE turn text"
+    )
+    # And the turn still ends with the ONE permanent assistant line (the
+    # user prompt is also a `message` — filter by role).
+    finals = [json.loads(w) for w in writes
+              if json.loads(w).get("type") == "message"
+              and json.loads(w).get("message", {}).get("role") == "assistant"]
+    assert len(finals) == 1, len(finals)
+
+
 # ── standalone runner ───────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -472,6 +522,7 @@ if __name__ == "__main__":
         run("user_prompt", test_user_prompt_renders_as_user_message)
         run("sink_layout", test_sink_writes_session_file_in_omp_layout, tmp)
         run("preview_contract", test_preview_contract_snapshots_volatile_not_history, tmp)
+        run("preview_throttle", test_preview_emit_throttled_last_state_always_flushed, tmp)
         run("history_roundtrip", test_history_roundtrip_through_read_history, tmp)
         run("garbage", test_mapper_never_raises_on_garbage)
     sys.exit(1 if failures else 0)
