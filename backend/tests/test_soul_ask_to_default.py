@@ -1,10 +1,14 @@
-"""`mc ask --to` defaults to `boss` — the SOUL must say so.
+"""`mc ask` does not reach the operator — the SOUL must say so.
 
-An omitted `--to` addresses the agent's lead, never the operator. For a
-worker that default is right; for an orchestrator it is a dead letter —
-the question is addressed to the sender and waits forever. The rule was
-missing from the template until a real orchestrator lost two operator
-decisions to it, so this is a regression guard, not documentation polish.
+`mc ask` posts onto the task thread; its `--to` flag (default `boss`) is
+stored as message metadata and routes nothing (agent_scoped.py, POST
+/tasks/current/ask). A question meant for the operator sent that way sits
+in a thread nobody opens. The channel the operator actually sees is
+`mc question` (POST /boards/{id}/clarification -> approval).
+
+The template documented `--to boss|mark|agent` without either fact, and
+an orchestrator lost two operator decisions to it before the gap
+surfaced. These are regression guards, not documentation polish.
 
 Renders through build_agent_context() + render_agent_file() (the
 production path) because SOUL.md.j2 runs under StrictUndefined.
@@ -27,25 +31,31 @@ def _render(role: str, *, is_board_lead: bool, name: str) -> str:
     return render_agent_file("SOUL.md.j2", build_agent_context(agent, agents_on_board=[]))
 
 
-def test_worker_soul_states_the_to_default():
-    """Every comm_v2 agent must know the flag defaults to the lead."""
+def test_soul_states_that_ask_routes_nowhere():
+    """Every comm_v2 agent must know --to is metadata, not delivery."""
     rendered = _render("Developer", is_board_lead=False, name="alpha")
-    assert "`--to` defaults to `boss`" in rendered
-    assert "--to mark" in rendered
+    assert "posts to the task thread and nowhere else" in rendered
+    assert "it routes nothing" in rendered
+
+
+def test_soul_points_operator_decisions_at_mc_question():
+    rendered = _render("Developer", is_board_lead=False, name="alpha")
+    assert "goes through `mc question` instead" in rendered
+    assert "`mc question` requires an `in_progress` task" in rendered
 
 
 def test_worker_soul_omits_the_no_lead_above_you_clause():
     """A worker DOES have a lead — the dead-letter warning must not apply."""
     rendered = _render("Developer", is_board_lead=False, name="alpha")
-    assert "You have no lead above you" not in rendered
+    assert "no lead above you" not in rendered
 
 
 def test_orchestrator_soul_warns_about_the_dead_letter():
-    """Without --to mark an orchestrator asks itself; nobody ever reads it."""
+    """Without a lead, an `mc ask` is addressed to the sender itself."""
     rendered = _render("Orchestrator", is_board_lead=False, name="the lead")
-    assert "You have no lead above you" in rendered
+    assert "no lead above you" in rendered
 
 
 def test_board_lead_soul_warns_about_the_dead_letter():
     rendered = _render("Developer", is_board_lead=True, name="the lead")
-    assert "You have no lead above you" in rendered
+    assert "no lead above you" in rendered
