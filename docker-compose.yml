@@ -184,6 +184,10 @@ services:
       # phone-test deep links (ADR-040, replaces hardcoded IPs in product code).
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
+      # ADR-081: agent slugs whose compose service renders OMP_DRIVER=acp
+      # (comma-separated). Without this passthrough the .env key never
+      # reaches the backend container (same trap as STT_BASE_URL above).
+      OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
       GH_TOKEN: ${GH_TOKEN:-}
       # Kill-switch: false = legacy single-session dispatch (see ADR-002).
       # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.

@@ -37,6 +37,7 @@ import os
 import re
 from pathlib import Path
 
+from app import config as app_config
 from app.config import settings
 
 from sqlmodel import select
@@ -514,18 +515,18 @@ def _ensure_msg_delivery_mode(body_lines: list[str]) -> list[str]:
     return body
 
 
-def _AGENT_ENV_OVERRIDES() -> dict[str, dict[str, str]]:
-    """Per-agent environment overrides (ADR-081): slug → {VAR: value}.
-
-    Only slugs listed here get entries injected; every other agent's
-    environment stays untouched. The omp bridge reads OMP_DRIVER at startup
-    (docker/omp-bridge/bridge.py ``_omp_driver()``, default ``native``), so a
-    missing entry IS the native rollback — no per-service native line needed.
+def _agent_env_overrides(slug: str) -> dict[str, str]:
+    """Per-agent environment overrides (ADR-081) for ``slug``.
+    Slugs listed in app_config.omp_acp_agents() (OMP_ACP_AGENT_SLUGS, comma-
+    separated .env config) get ``OMP_DRIVER=acp`` — the omp bridge reads the
+    variable at startup (docker/omp-bridge/bridge.py ``_omp_driver()``,
+    default ``native``), so a missing entry IS the native rollback — no
+    per-service native line needed. Every unlisted agent's environment
+    stays untouched. Agent names live in deployment config, not in code.
     """
-    return {
-        "sparky": {"OMP_DRIVER": "acp"},
-    }
-
+    if slug in app_config.omp_acp_agents():
+        return {"OMP_DRIVER": "acp"}
+    return {}
 
 def _ensure_agent_env_overrides(body_lines: list[str], slug: str) -> list[str]:
     """Inject the per-agent env overrides for ``slug`` into the service body.
@@ -535,7 +536,7 @@ def _ensure_agent_env_overrides(body_lines: list[str], slug: str) -> list[str]:
     variables are appended to the ``environment`` block (created when absent,
     mirroring _ensure_msg_delivery_mode).
     """
-    overrides = _AGENT_ENV_OVERRIDES().get(slug)
+    overrides = _agent_env_overrides(slug)
     if not overrides:
         return list(body_lines)
     body = list(body_lines)
@@ -749,8 +750,8 @@ def _rewrite_compose(
         # Fleet default nudge+pull (W2.1, ADR-071) for every agent service.
         body_lines = _ensure_msg_delivery_mode(body_lines)
 
-        # ADR-081: per-agent env overrides (currently OMP_DRIVER=acp for
-        # sparky only). All other slugs stay native — the bridge's default.
+        # ADR-081: per-agent env overrides — slugs from deployment config
+        # (app_config.omp_acp_agents()); unlisted agents stay on the bridge's
         body_lines = _ensure_agent_env_overrides(body_lines, slug)
 
         out.extend(body_lines)
@@ -871,8 +872,8 @@ def _build_new_agent_block(
         f"      - AGENT_SLUG={slug}",
     ]
     # ADR-081: per-agent env overrides — same gating as the rewrite loop
-    # (currently OMP_DRIVER=acp for sparky only; all others stay native).
-    for var, value in _AGENT_ENV_OVERRIDES().get(slug, {}).items():
+    # (slugs from deployment config; all others stay native).
+    for var, value in _agent_env_overrides(slug).items():
         lines.append(f"      - {var}={value}")
     lines += [
         "    volumes:",
