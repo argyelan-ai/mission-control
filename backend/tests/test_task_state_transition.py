@@ -176,6 +176,54 @@ async def test_lock_and_set_without_caller_commit_persists_nothing():
 
 
 @pytest.mark.asyncio
+async def test_lock_and_set_rereads_within_same_session_not_stale_identity_map():
+    """B1 (Rex review, PR #478): every real call site pre-loads the task
+    into its session for a guard/auth check before calling lock_and_set()
+    -- unlike test_racing_transitions_one_wins_one_gets_409 above, which
+    uses a fresh session for the second call and can never see this bug
+    (empty identity map = an honest re-read either way).
+
+    Reproduces the production pattern: session s1 loads the task first
+    (identity map now holds "in_progress"), a concurrent writer (session
+    s2) moves the row to "done" and commits, then s1 calls lock_and_set().
+    SQLAlchemy's select() returns the identity-map object unchanged unless
+    the statement carries execution_options(populate_existing=True) -- so
+    without that option, lock_and_set() validates "in_progress" -> "review"
+    (valid!) against the stale copy, silently overwriting the concurrent
+    writer's "done". This must instead see the row's current "done" and
+    reject "review" as an invalid transition (done -> {in_progress} only).
+
+    Red before the populate_existing=True fix in task_state.py; green
+    after."""
+    task_id = await _make_task(status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s1:
+        preloaded = await s1.get(Task, task_id)
+        assert preloaded.status == "in_progress"
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s2:
+            other = await s2.get(Task, task_id)
+            other.status = "done"
+            s2.add(other)
+            await s2.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await lock_and_set(s1, task_id, "review", actor="agent-b")
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["current_status"] == "done", (
+            "lock_and_set() validated against a stale in-memory status "
+            f"instead of the concurrently-written row: {exc_info.value.detail}"
+        )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        persisted = await s.get(Task, task_id)
+        assert persisted.status == "done", (
+            "the concurrent writer's status must survive -- lock_and_set() "
+            "must not overwrite it based on a stale read"
+        )
+
+
+@pytest.mark.asyncio
 async def test_dialect_guard_only_locks_on_postgresql():
     """SQLite (this test engine) must never hit with_for_update() — SQLite
     has no FOR UPDATE support and would raise. Asserting the dialect here
