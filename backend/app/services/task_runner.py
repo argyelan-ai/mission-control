@@ -1589,11 +1589,25 @@ class TaskRunnerService:
                 continue
 
             # ── Tick 2+: BLOCK. Human-wait (blocked_by_task_id IS NULL). ──
+            # lock_and_set() runs FIRST, apply_terminal_unassign() only AFTER
+            # it succeeds (M4, PR #478 review): apply_terminal_unassign only
+            # reads task.blocked_by_task_id/assigned_agent_id/id, none of
+            # which lock_and_set() touches, so the order is free to flip and
+            # this is the safer fix of Rex's two suggested options — a
+            # session.rollback() here would expire every object already
+            # loaded by this sweep's SELECT (not just `agent`), and the next
+            # loop iteration's plain attribute access on the next candidate
+            # task then needs a synchronous lazy-reload that crashes with
+            # MissingGreenlet outside the async greenlet context (caught by
+            # test_blocks_silent_abort_409_rolls_back_agent_mutation using a
+            # second, non-racing candidate — a single-candidate test can't
+            # see this). Ordering it this way means a 409 here never touches
+            # `agent` at all, so there's nothing to undo.
+            #
             # Canonical path: apply_terminal_unassign keeps assigned_agent_id
             # (resumable) but releases agent.current_task_id + sets run_state so
             # the agent doesn't look busy forever and the poll cancel-loop can't
             # fire. Helper does NOT set status → set it explicitly.
-            await apply_terminal_unassign(session, task, "blocked")
             try:
                 task, _ = await lock_and_set(session, task.id, "blocked", actor="watchdog")
             except HTTPException as e:
@@ -1610,6 +1624,7 @@ class TaskRunnerService:
                     )
                     continue
                 raise
+            await apply_terminal_unassign(session, task, "blocked")
             task.updated_at = utcnow()
             session.add(task)
             # Ensure human-wait agent state even if run_state was 'idle' going in
