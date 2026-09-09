@@ -44,6 +44,7 @@ from app.models.approval import Approval
 from app.models.board import Board, Project
 from app.models.task import Task, TaskComment, TaskDependency
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.services.work_context import (
     enforce_board_rules_agent as _enforce_board_rules_agent,
     VALID_BLOCKER_TYPES,
@@ -729,7 +730,7 @@ async def get_next_task(
             continue
 
         # Task aktivieren
-        task.status = "in_progress"
+        task, _ = await lock_and_set(session, task.id, "in_progress", actor=agent.name)
         # F2 fix (Plan 26-03): first-set-wins on started_at — preserves
         # original "work began" timestamp on re-opens. Pull-dispatch normally
         # picks fresh inbox tasks (started_at=NULL), but re-queued tasks may
@@ -1489,7 +1490,7 @@ async def agent_create_task(
         parent = await session.get(Task, payload.parent_task_id)
         if (parent and parent.status == "inbox"
                 and parent.assigned_agent_id == agent.id):
-            parent.status = "in_progress"
+            parent, _ = await lock_and_set(session, parent.id, "in_progress", actor=agent.name)
             # F2 fix (Plan 26-03): first-set-wins on started_at.
             if parent.started_at is None:
                 parent.started_at = utcnow()
