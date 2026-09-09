@@ -2560,7 +2560,8 @@ async def agent_update_task(
         # Agent entblockt Task → assigned Agent benachrichtigen (TaskComment)
         # oder — B2 (W2-B, audit G3) — liveness-aware redispatch, wenn der
         # zugewiesene Agent inzwischen offline ist (sonst liest ihn niemand).
-        if new_status == "in_progress" and old_status == "blocked":
+        # Seit 09.09.2026 auch waiting→in_progress (Park-Ende durch den Lead).
+        if new_status == "in_progress" and old_status in ("blocked", "waiting"):
             if task.assigned_agent_id and task.assigned_agent_id != agent.id:
                 from app.services.task_lifecycle import (
                     redispatch_unblocked_task,
@@ -2588,7 +2589,8 @@ async def agent_update_task(
                     )).first()
                     hint_text = hint_cmt.content[:500] if hint_cmt else ""
                     msg = (
-                        f"UNBLOCKED: Dein Task \"{task.title}\" wurde von {agent.name} entblockt.\n\n"
+                        f"UNBLOCKED: Dein Task \"{task.title}\" wurde von {agent.name} "
+                        f"{'entblockt' if old_status == 'blocked' else 'fortgesetzt (war zurueckgestellt)'}.\n\n"
                         f"{hint_text}\n\n"
                         f"Task-ID: {task.id}\n\n"
                         f"**Aktion:** Lies deinen letzten Checkpoint-Kommentar "

@@ -1608,7 +1608,11 @@ async def update_task(
         # User/operator unblocks task → notify assigned agent (Phase 29: TaskComment)
         # oder — B2 (W2-B, audit G3) — liveness-aware redispatch, wenn der
         # zugewiesene Agent inzwischen offline ist (sonst liest ihn niemand).
-        if new_status == "in_progress" and old_status == "blocked":
+        # Gilt seit 09.09.2026 auch fuer waiting→in_progress (Park via
+        # `mc park` / Deploy-Fenster): vorher lieferte dieser Wechsel den Task
+        # an NIEMANDEN aus — der Agent stand mit leerem Prompt neben seinem
+        # in_progress-Task, bis jemand ihn neu startete (Vorfall Lead, 2 h).
+        if new_status == "in_progress" and old_status in ("blocked", "waiting"):
             if task.assigned_agent_id:
                 from app.services.task_lifecycle import (
                     redispatch_unblocked_task,
@@ -1628,8 +1632,9 @@ async def update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    _verb = "entblockt" if old_status == "blocked" else "fortgesetzt (war zurueckgestellt)"
                     msg = (
-                        f"UNBLOCKED: Dein Task \"{task.title}\" wurde entblockt.\n\n"
+                        f"UNBLOCKED: Dein Task \"{task.title}\" wurde {_verb}.\n\n"
                         f"Task-ID: {task.id}\n\n"
                         f"**Aktion:** Lies deinen letzten Checkpoint-Kommentar "
                         f"(GET /api/v1/agent/boards/{board_id}/tasks/{task.id}/comments) "
@@ -1641,6 +1646,10 @@ async def update_task(
                         content=msg,
                         comment_type="system_notify",
                     ))
+                    # Latenter Bug (gefunden 09.09.2026): der letzte Commit
+                    # dieses Handlers liegt VOR diesem Block — der Kommentar
+                    # wurde nie persistiert, der Agent nie benachrichtigt.
+                    await session.commit()
 
         # Auto-memory + feedback lessons
         trigger_auto_memory(task, new_status, old_status)
