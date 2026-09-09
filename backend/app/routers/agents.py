@@ -3721,6 +3721,45 @@ def _heartbeat_control(
     return None
 
 
+# Statuses in which a task the bridge still reports as RUNNING has been taken
+# away from the agent on purpose (requeue, cancel, abort, fail by others).
+# `done`/`review` are deliberately absent: the agent's own `mc finish` sets
+# them at the end of the very turn that is still reporting the task_id.
+# `waiting`/`blocked` are the agent's own park/ask states (handled above).
+_WITHDRAWN_TASK_STATUSES = ("inbox", "cancelled", "aborted", "failed")
+
+
+async def _withdrawn_task_reason(session, agent, task_id, *, previously_held=None) -> str | None:
+    """Return a human reason if the task the bridge reports as running is no
+    longer this agent's live work (reassigned or requeued/cancelled); None
+    otherwise. Best-effort: any DB hiccup returns None (legacy shape).
+
+    Sabotage guard (Fix 3b case c): a task that never belonged to this agent
+    must not steer its control channel — the reassignment branch therefore
+    only fires when the agent's own pre-heal pointer (`previously_held`)
+    still names that task."""
+    try:
+        from app.models.task import Task as _Task
+        task = await session.get(_Task, task_id)
+        if task is None:
+            return None
+        if task.assigned_agent_id != agent.id:
+            if previously_held != task.id:
+                return None
+            return (
+                f"Task {task.id} wurde dir entzogen (an anderen Agenten "
+                f"uebergeben) — nicht weiterarbeiten"
+            )
+        if task.status in _WITHDRAWN_TASK_STATUSES:
+            return (
+                f"Task {task.id} wurde dir entzogen (Status {task.status}) — "
+                f"nicht weiterarbeiten"
+            )
+        return None
+    except Exception:  # noqa: BLE001 — control is best-effort
+        return None
+
+
 async def _collect_heartbeat_control(session, agent, active_task):
     """DB side of the control channel: assembles the inputs for
     _heartbeat_control from the active task's comments + the agent's cursor,
@@ -3967,6 +4006,7 @@ async def agent_heartbeat(
     # control channel — sabotage guard). Old bridges send no task_id and
     # fall through to the pre-heal lookup below, unchanged.
     _control_task = None
+    _payload_task_id = None
     if payload.task_id:
         try:
             _payload_task_id = uuid.UUID(str(payload.task_id))
@@ -3989,6 +4029,20 @@ async def agent_heartbeat(
             ).limit(1)
         )).first()
     control = await _collect_heartbeat_control(session, agent, _control_task)
+    # Withdrawn-task guard (incident 09.09.2026 16:59): the bridge reports a
+    # RUNNING turn for task X, but X is no longer this agent's live work —
+    # the lead moved it back to inbox / handed it to another agent / it was
+    # cancelled. Nothing above fires (no stop button, no foreign block), so
+    # the turn kept running for 48 min on a card that already belonged to
+    # someone else — invisible to MC (agent idle, no active task). A
+    # withdrawn task is always a HARD interrupt; the bridge halts without
+    # escalation and tells the model not to resume that work.
+    if _payload_task_id is not None:
+        _withdrawn = await _withdrawn_task_reason(
+            session, agent, _payload_task_id, previously_held=_pre_heal_task_id,
+        )
+        if _withdrawn is not None:
+            control = {"interrupt": "hard", "reason": _withdrawn}
     response = {"ok": True, "agent": agent.name}
     if control is not None:
         response["control"] = control
