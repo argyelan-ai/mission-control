@@ -53,13 +53,16 @@ backend/tests/test_omp_chat.py):
     session/prompt reply — same fields omp native writes) becomes a proper
     usage block on the final assistant flush.
 
-  * session/request_permission -> a custom_message line (customType
-    "acp-permission"), which omp_chat renders as a teammate line: the
-    operator sees WHAT asked. The decision follows as its own
-    acp-permission-decision line. The interactive ApprovalCard flow stays
-    native-path-only — ACP permissions are decided by bridge policy/mc ask,
-    and inventing an interactive prompt for a decision already taken would
-    lie about who decides.
+  * ACP PREVIEW (Vorschau-Kanal, Folge-PR zu #471): agent text/thought
+    chunks NEVER touch this transcript file. They stream into a SIBLING
+    file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` in the SAME session
+    directory — that the backend's tailer (transcript_chat.ChatTailerManager
+    via omp_chat.preview_channel) tails as a pure volatile channel,
+    broadcasting ``kind: "preview", source: "acp"`` SSE frames. Nothing
+    preview-shaped is ever written here, so read_history and the permanent
+    timeline stay clean by construction (before: custom_message
+    "acp-preview" lines lived in this JSONL and every reader had to filter
+    them out).
 
 FAIL-CLOSED PRIVACY: session_dir() derives the target directory from
 PI_CODING_AGENT_DIR + the pinned OMP_ACP_CWD only; nothing from prompt,
@@ -76,6 +79,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +92,11 @@ _ID_PREFIX = "acp"
 # Result text truncation mirrors omp_chat._RESULT_TRUNCATE_LEN (same schema,
 # same reason: a 500 KB tool output must not land in the chat view whole).
 _RESULT_TRUNCATE_LEN = 4000
+
+# customType of the volatile preview flushes written to the SIBLING preview
+# file (never the transcript JSONL). Shared by bridge.run_acp_once's routing
+# and the tests.
+PREVIEW_CUSTOM_TYPE = "acp-preview"
 
 _TITLE_TRUNCATE_LEN = 200
 
@@ -376,13 +385,14 @@ class ACPEventMapper:
         update: dict[str, Any],
         block_type: str,
     ) -> list[dict[str, Any]]:
-        """Review #465, Mark's Option b: map one agent text chunk into a
-        PREVIEW line — the growing snapshot of the message so far, keyed by
-        the SAME customType every flush so the chat's preview slot replaces
-        (never stacks). Rendered as a ``custom_message`` teammate line whose
-        text carries the whole accumulated snapshot; the transcript only
-        ever shows the LATEST state, and the final assistant line supersedes
-        it. No usage, no fresh message identity per chunk."""
+        """Vorschau-Kanal (Folge-PR zu #471): one agent text chunk -> a
+        PREVIEW line for the SIBLING preview file, keyed by the SAME
+        customType every flush so the chat's preview slot replaces (never
+        stacks). These lines NEVER enter the transcript JSONL —
+        bridge.run_acp_once routes them to the preview sink — so the
+        permanent timeline holds exactly ONE final assistant line (Option
+        b) and the volatile channel holds the growing snapshot. No usage,
+        no fresh message identity per chunk."""
         content = update.get("content") or {}
         if not isinstance(content, dict) or content.get("type") != "text":
             return []
@@ -396,7 +406,7 @@ class ACPEventMapper:
         return [
             {
                 "type": "custom_message",
-                "customType": "acp-preview",
+                "customType": PREVIEW_CUSTOM_TYPE,
                 "content": store[key],
                 "display": True,
                 "attribution": "agent",
@@ -620,4 +630,93 @@ class ChatEventSink:
         except OSError:
             # Disk gone/ro — keep the run alive; the chat stays empty
             # (honest) instead of the turn dying.
+            self._path = None
+
+
+class PreviewEventSink:
+    """The VOLATILE preview channel (Folge-PR zu #471): appends the mapper's
+    preview flushes to ``<session_dir>/previews/<ts>_<sessionId>_<uniq>.jsonl``
+    — a SIBLING of the transcript file, in a subdirectory
+    ``find_active_session``/``_SESSION_GLOBS`` never scan, so the backend's
+    history/rollover logic cannot mistake preview lines for transcript
+    entries. The tailer reads this file via omp_chat.preview_channel and
+    broadcasts each line as a ``kind: "preview", source: "acp"`` SSE frame.
+
+    Same failure discipline as ChatEventSink: append-only, whole lines,
+    degrades to a no-op — a dead preview channel never kills the run.
+
+    ``session_id`` mirrors ChatEventSink: bridge's holder compares it to
+    decide reuse when the REAL ACP sessionId arrives mid-run.
+
+    Review #473 N1: one file is created per turn and NOTHING ever deleted
+    them — an omp-agent left running for days would grow ``previews/``
+    without bound, and the tailer's ``preview_channel`` globs the whole
+    directory every tick to find the newest file, so the glob itself gets
+    linearly more expensive too. On construction, before writing the new
+    file, prune the directory down to the 3 newest ``*.jsonl`` (mtime-
+    sorted) — the tailer only ever wants the newest one anyway, 3 is slack
+    for a resolve mid-rollover. A delete failure (permissions, a racing
+    reader) is swallowed: the preview channel must never crash a turn over
+    disk hygiene, an unpruned file is just a few KB.
+    """
+
+    #: How many preview files survive a prune (Review #473 N1). The tailer
+    #: (``omp_chat.preview_channel``) only reads the single newest one; a
+    #: few extra are slack for a reader resolving mid-rollover, not a
+    #: retention policy.
+    _KEEP = 3
+
+    def __init__(self, directory: Optional[Path], session_id: str):
+        self._session_id = session_id or "acp-session"
+        self._path: Optional[Path] = None
+        if directory is not None:
+            try:
+                pdir = directory / "previews"
+                pdir.mkdir(parents=True, exist_ok=True)
+                self._prune(pdir)
+                ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
+                uniq = uuid.uuid4().hex[:6]
+                self._path = pdir / f"{ts}_{self._session_id}_{uniq}.jsonl"
+            except OSError:
+                self._path = None
+
+    @staticmethod
+    def _prune(pdir: Path) -> None:
+        """Keep only the newest ``_KEEP`` preview files in ``pdir``. Fail-
+        closed: any error listing/stat-ing/deleting is swallowed — a full
+        ``previews/`` dir is a nuisance, a crashed turn is not (Review #473
+        N1)."""
+        dated: list[tuple[float, Path]] = []
+        try:
+            for candidate in pdir.glob("*.jsonl"):
+                try:
+                    dated.append((candidate.stat().st_mtime, candidate))
+                except OSError:
+                    continue
+        except OSError:
+            return
+        dated.sort(key=lambda item: item[0], reverse=True)
+        for _mtime, stale in dated[PreviewEventSink._KEEP :]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def path(self) -> Optional[Path]:
+        return self._path
+
+    def write(self, lines: list[str]) -> None:
+        if not lines or self._path is None:
+            return
+        try:
+            with open(self._path, "a", encoding="utf-8") as fh:
+                for line in lines:
+                    fh.write(line + "\n")
+        except OSError:
+            # Disk gone/ro — the preview dies quietly; the run goes on.
             self._path = None

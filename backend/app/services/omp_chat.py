@@ -107,6 +107,15 @@ FRESH_SESSION_MARKER = "New session started"
 #: 1 = die pro-cwd-Ordner. Tiefer liegen nur Anhaenge/Blobs, keine Sessions.
 _SESSION_GLOBS = ("*.jsonl", "*/*.jsonl")
 
+#: Unterverzeichnis im Sessions-Wurzelverzeichnis, in dem der omp-bridge ACP-
+#: Treiber die FLUECHTIGEN Vorschau-Snapshots ablegt (Folge-PR zu #471):
+#: ``<sessions-wurzel>/<kodiertes-cwd>/previews/<ts>_<sessionId>.jsonl``. Es
+#: liegt TIEFER als ``_SESSION_GLOBS`` sucht — die History-/Rollover-Logik
+#: kann diese Dateien also nie mit Transkripten verwechseln — und wird vom
+#: Tailer ausschliesslich ueber :func:`preview_channel` gelesen.
+_PREVIEWS_DIRNAME = "previews"
+_PREVIEW_SUFFIX = ".jsonl"
+
 
 # ── Session-Aufloesung (I/O) ────────────────────────────────────────────────
 
@@ -231,6 +240,36 @@ def transcript_allowed(agent, path: Path) -> bool:
     except OSError:
         return False
     return resolved != root and root in resolved.parents
+
+
+def preview_channel(session_path: Path) -> Path | None:
+    """Die Vorschau-Kanal-Datei zu einer ACP-Session, oder ``None``.
+
+    Der omp-bridge ACP-Treiber schreibt die fluechtigen Vorschau-Snapshots
+    (Folge-PR zu #471) NICHT mehr in die Transkript-JSONL, sondern in eine
+    Schwesterdatei unter ``previews/``. Diese Funktion leitet aus dem Pfad
+    der getailten Transkript-Session die zugehoerige Vorschau-Datei her —
+    das juengste ``*.jsonl`` im ``previews/``-Ordner desselben cwd-Ordners.
+
+    Fail-closed: fehlt der Ordner oder ist er leer (native Sitzung, alter
+    Stand), gibt es keine Vorschau ueber diesen Kanal — der Pane-Strom
+    bleibt unberuehrt.
+    """
+    pdir = session_path.parent / _PREVIEWS_DIRNAME
+    try:
+        newest: Path | None = None
+        newest_mtime = -1.0
+        for candidate in pdir.glob(f"*{_PREVIEW_SUFFIX}"):
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > newest_mtime:
+                newest_mtime = mtime
+                newest = candidate
+    except OSError:
+        return None
+    return newest
 
 
 # ── Parser (rein) ───────────────────────────────────────────────────────────

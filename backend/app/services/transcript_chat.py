@@ -1530,7 +1530,10 @@ def read_history(
                         adapter.stamp_usage(ev, path)
 
                     if ev["kind"] == "preview":
-                        # Review #471 N3: previews are VOLATILE — the tailer
+                        # Review #471 N3 + Folge-PR: previews are VOLATILE —
+                        # live write their own previews/ file; this guard
+                        # keeps LEGACY acp-preview transcript lines (files
+                        # written before the switch) out of the history too.
                         continue
 
                     events.append(ev)
@@ -1629,6 +1632,68 @@ def _stable_prefix(a: str, b: str) -> str:
         boundary = max(prefix.rfind(" "), prefix.rfind("\n"))
         prefix = prefix[: boundary + 1] if boundary >= 0 else ""
     return prefix.rstrip()
+
+
+def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Ein Takt Vorschau-Kanal: neue Zeilen der ACP-Preview-Datei lesen und
+    zu ``kind: "preview", source: "acp"``-Ereignissen normalisieren.
+
+    Der omp-bridge ACP-Treiber schreibt seine fluechtigen Snapshots (Folge-
+    PR zu #471) in eine Schwesterdatei der Session, NICHT in die Transkript-
+    JSONL — der Tailer liest genau diese Datei hier. Fehler sind nie fatal:
+    fehlt die Datei (native Sitzung, alter Stand), faellt der Takt leer aus.
+    """
+    path = state.get("path")
+    if path is None:
+        return []
+    events: list[dict[str, Any]] = []
+
+    def _read() -> None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size < state["offset"]:  # geleert/rotiert -> von vorn
+            state["offset"] = 0
+        if size == state["offset"]:
+            return
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(state["offset"])
+                chunk = handle.read()
+        except OSError:
+            return
+        state["offset"] += len(chunk)
+        state["buffer"] += chunk
+        *lines, state["buffer"] = state["buffer"].split(b"\n")
+        for raw in lines:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(d, dict) or d.get("type") != "custom_message":
+                continue
+            content = d.get("content")
+            ts = d.get("timestamp")
+            if not isinstance(content, str) or not content:
+                continue
+            events.append({
+                "kind": "preview",
+                "uuid": None,
+                "ts": ts if isinstance(ts, str) else datetime.now(timezone.utc).isoformat(),
+                "text": content[:_RESULT_TRUNCATE_LEN],
+                "source": "acp",
+            })
+
+    # Blocking file I/O off the event loop — same rule as every other disk
+    # read in the tailer loop.
+    # (asyncio.to_thread happens at the call site; this inner function is
+    # deliberately synchronous for testability.)
+    _read()
+    return events
 
 
 class ChatTailerManager:
@@ -1818,6 +1883,15 @@ class ChatTailerManager:
         marker_count: int | None = None
         stale_path: Path | None = None
 
+        # ── Vorschau-Kanal (ACP, Folge-PR zu #471) ───────────────────────
+        # Der omp-bridge ACP-Treiber schreibt seine fluechtigen Vorschau-
+        # Snapshots in eine Schwesterdatei der Session (``previews/``), nicht
+        # in die Transkript-JSONL. Der Adapter löst die Datei aus dem Pfad
+        # der aktiven Session auf; ``None`` = dieser Harness hat keinen
+        # eigenen Kanal (Claude Code), dann bleibt alles beim Pane-Strom.
+        preview_file_state: dict[str, Any] | None = None
+        preview_file_path: Path | None = None
+
         # ── Live-Vorschau aus dem Terminal-Strom ─────────────────────────
         # Das Transkript bekommt einen Assistenten-Block erst, wenn er fertig
         # ist (gemessen: sieben Sekunden Stille in der Datei, waehrend im
@@ -1837,6 +1911,31 @@ class ChatTailerManager:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
                 tick += 1
+
+                # Vorschau-Kanal (ACP): jede neue Zeile der Preview-Datei ist
+                # ein eigenes volatiles Ereignis — dedup-frei (uuid None), die
+                # Datei selbst ist die Quelle der Reihenfolge. Die Aufloesung
+                # (Verzeichnis-Glob) laeuft JEDEN Takt — nicht nur bei
+                # Rollover/Start —, weil der ACP-Sink pro Turn eine neue
+                # Datei anlegt (PreviewEventSink); nur Adapter ohne eigenen
+                # Kanal (``preview_channel is None``) ueberspringen sie ganz.
+                if adapter.preview_channel is not None:
+                    resolved = await asyncio.to_thread(
+                        adapter.preview_channel, current_path
+                    )
+                    if resolved != preview_file_path:
+                        preview_file_path = resolved
+                        preview_file_state = (
+                            {"path": resolved, "offset": 0, "buffer": b""}
+                            if resolved is not None
+                            else None
+                        )
+                    if preview_file_state is not None:
+                        p_events = await asyncio.to_thread(
+                            _read_preview_channel, preview_file_state
+                        )
+                        for p_ev in p_events:
+                            await sse.broadcast(channel, "chat_event", p_ev)
 
                 try:
                     if preview_state is not None:
@@ -1912,6 +2011,11 @@ class ChatTailerManager:
                             rejected_rollover_path = None
                             current_path = active[0]
                             stale_path = None
+                            # Vorschau-Kanal neu aufloesen (neue Session ->
+                            # neue Preview-Datei); der naechste Takt liest sie
+                            # ab Offset 0.
+                            preview_file_path = None
+                            preview_file_state = None
                             offset = 0
                             buffer = b""
                             tool_events_by_id = {}

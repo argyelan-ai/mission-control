@@ -126,6 +126,20 @@ class TranscriptAdapter:
     #: ins Transkript (Claude Code: ``/clear`` eroeffnet eine neue Datei).
     fresh_session_pane_marker: str | None = None
 
+    #: Pfad der AKTIVEN Session -> die Vorschau-Kanal-Datei dieses Harness
+    #: (``None`` = der Harness hat keinen eigenen Vorschau-Kanal).
+    #:
+    #: Der omp-bridge ACP-Treiber schreibt seine fluechtigen Vorschau-
+    #: Snapshots (Folge-PR zu #471) in eine Schwesterdatei der Session —
+    #: NICHT in die Transkript-JSONL. Der Tailer liest sie ueber dieses
+    #: Feld und broadcastet jede Zeile als volatile ``preview``-Ereignis.
+    #: Claude Code schreibt Previews nicht auf die Platte (dort lebt der
+    #: Kanal im Pane-Strom), darum der ``None``-Standard — echtes ``None``,
+    #: keine Attrappen-Lambda: der Tailer gated per ``is not None`` (Review
+    #: #473 N3), eine Lambda waere immer „nicht None" und der `to_thread`-Hop
+    #: liefe bei jedem Takt fuer Adapter ohne eigenen Kanal ins Leere.
+    preview_channel: Callable[[Path], Path | None] | None = None
+
 
 def _claude_adapter(
     name: str = CLAUDE, process_name: str = "claude"
@@ -171,6 +185,8 @@ def _omp_adapter() -> TranscriptAdapter:
         name=OMP,
         resolve_transcript_dir=omp_chat.resolve_transcript_dir,
         find_active_session=omp_chat.find_active_session,
+        fresh_session_pane_marker=omp_chat.FRESH_SESSION_MARKER,
+        preview_channel=omp_chat.preview_channel,
         session_scan_root=omp_chat.session_scan_root,
         transcript_allowed=omp_chat.transcript_allowed,
         new_parser=omp_chat.new_parser,
@@ -179,7 +195,6 @@ def _omp_adapter() -> TranscriptAdapter:
         transcript_suggests_turn_ended=omp_chat.transcript_suggests_turn_ended,
         parse_pane_state=omp_chat.parse_pane_state,
         process_name=omp_chat.PROCESS_NAME,
-        fresh_session_pane_marker=omp_chat.FRESH_SESSION_MARKER,
     )
 
 

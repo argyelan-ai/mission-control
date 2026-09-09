@@ -22,6 +22,7 @@ from app.services.omp_chat import (
     find_active_session,
     parse_pane_state,
     peek_entry_id,
+    preview_channel,
     resolve_transcript_dir,
     session_scan_root,
     transcript_allowed,
@@ -931,3 +932,44 @@ def test_several_files_claim_no_source():
 def test_custom_message_is_a_system_notice():
     (ev,) = parse(CUSTOM_MESSAGE_LINE)
     assert ev["source"] == {"kind": "system", "title": "async-result"}
+
+
+# ── Vorschau-Kanal (ACP, Folge-PR zu #471) ──────────────────────────────────
+
+
+def test_preview_channel_resolves_the_newest_preview_file(tmp_path):
+    session = tmp_path / "--workspace--" / "s1.jsonl"
+    session.parent.mkdir()
+    session.write_text("{}\n")
+    pdir = session.parent / "previews"
+    pdir.mkdir()
+    old = pdir / "t1_s1.jsonl"
+    new = pdir / "t2_s1.jsonl"
+    old.write_text("{}\n")
+    new.write_text("{}\n")
+    import os
+
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+    assert preview_channel(session) == new
+
+
+def test_preview_channel_is_fail_closed_without_a_previews_dir(tmp_path):
+    """Native Session, alter Stand, leerer Ordner — kein Kanal, kein Fehler."""
+    session = tmp_path / "--workspace--" / "s1.jsonl"
+    session.parent.mkdir()
+    session.write_text("{}\n")
+    assert preview_channel(session) is None
+
+
+def test_omp_adapter_carries_the_preview_channel():
+    """Der omp-Adapter ist an omp_chat.preview_channel gebunden; der
+    Claude-Adapter hat den Default (echtes ``None``, kein Aufruf noetig —
+    Review #473 N3: eine Attrappen-Lambda waere immer „nicht None" und
+    liesse den Tailer bei jedem Takt sinnlos in den Thread-Pool springen)."""
+    from app.services.transcript_adapters import _claude_adapter, _omp_adapter
+
+    session = Path("/nonexistent/s1.jsonl")
+    assert _omp_adapter().preview_channel(session) is None
+    assert _claude_adapter().preview_channel is None
+    assert _omp_adapter().preview_channel is preview_channel
