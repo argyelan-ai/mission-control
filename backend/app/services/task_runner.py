@@ -22,6 +22,7 @@ import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -35,6 +36,7 @@ from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
+from app.services.task_state import lock_and_set
 
 logger = logging.getLogger("mc.task_runner")
 
@@ -1294,7 +1296,22 @@ class TaskRunnerService:
                     # for comm_v2 agents — nudge them to `mc finish` instead.
                     await maybe_post_finish_nudge(session, task)
                     continue
-                task.status = "review"
+                try:
+                    task, _ = await lock_and_set(session, task.id, "review", actor="watchdog")
+                except HTTPException as e:
+                    if e.status_code == 409:
+                        # Lost race (status changed between this sweep's SELECT
+                        # and lock_and_set's re-read) — skip this task, next
+                        # tick retries. Must not abort the whole stale-check
+                        # sweep for the remaining tasks (same class of bug as
+                        # the watchdog's task_monitor.py fix).
+                        logger.info(
+                            "Stale-Check Auto-Promote lost the race for '%s' — "
+                            "skipping, next tick retries",
+                            task.title[:60],
+                        )
+                        continue
+                    raise
                 task.updated_at = utcnow()
                 session.add(task)
                 await session.commit()
@@ -1577,7 +1594,22 @@ class TaskRunnerService:
             # the agent doesn't look busy forever and the poll cancel-loop can't
             # fire. Helper does NOT set status → set it explicitly.
             await apply_terminal_unassign(session, task, "blocked")
-            task.status = "blocked"
+            try:
+                task, _ = await lock_and_set(session, task.id, "blocked", actor="watchdog")
+            except HTTPException as e:
+                if e.status_code == 409:
+                    # Lost race (status changed between this sweep's SELECT and
+                    # lock_and_set's re-read) — skip this task, next tick
+                    # retries. Must not abort the whole sweep for the
+                    # remaining tasks (same class of bug as the watchdog's
+                    # task_monitor.py fix).
+                    logger.info(
+                        "Lifecycle-Watchdog block lost the race for '%s' — "
+                        "skipping, next tick retries",
+                        task.title[:60],
+                    )
+                    continue
+                raise
             task.updated_at = utcnow()
             session.add(task)
             # Ensure human-wait agent state even if run_state was 'idle' going in
