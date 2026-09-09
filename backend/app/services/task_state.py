@@ -5,14 +5,21 @@ none of them taking a row lock first (``grep -rn with_for_update backend/app``
 only turns up routers/nodes.py and services/messaging.py). Two valid
 transitions racing on the same task both "win" in the ORM's in-memory view —
 whichever commits last silently overwrites the other, which is how a task
-gets dispatched twice. ``transition()`` is the fix: it re-reads the row
+gets dispatched twice. ``lock_and_set()`` is the fix: it re-reads the row
 under ``SELECT ... FOR UPDATE`` (Postgres only — see the dialect guard
 below, same pattern as routers/nodes.py:pair()), validates against
 ``task_status.VALID_TRANSITIONS`` using that freshly-locked status (not a
-stale in-memory copy), and emits exactly one ``task.status_changed``
-ActivityEvent. Migration 0159's Postgres trigger (``validate_task_transition``)
-stays in place as the second, always-on net — this only closes the race
-between two otherwise-valid transitions.
+stale in-memory copy), and sets ``task.status``. Migration 0159's Postgres
+trigger (``validate_task_transition``) stays in place as the second,
+always-on net — this only closes the race between two otherwise-valid
+transitions.
+
+``lock_and_set()`` does NOT commit and does NOT emit an event — callers that
+bundle the status write with other fields/rows in one atomic transaction
+call it directly and commit + emit their own event themselves.
+``transition()`` is the thin, committing wrapper for callers that only need
+to change the status: ``lock_and_set()`` + ``session.commit()`` + exactly one
+generic ``task.status_changed`` event.
 """
 
 import uuid
@@ -26,15 +33,18 @@ from app.services.activity import emit_event
 from app.task_status import STATUS_LABELS, is_valid_transition
 
 
-async def transition(
+async def lock_and_set(
     session: AsyncSession,
     task_id: uuid.UUID,
     to: str,
     *,
     actor: str,
-    reason: str | None = None,
-) -> Task:
-    """Move ``task_id`` to status ``to`` under a row lock.
+) -> tuple[Task, str]:
+    """Lock ``task_id``'s row, validate, and set ``task.status`` to ``to``.
+
+    Does NOT commit and does NOT emit an event — the caller is responsible
+    for both, together with whatever else it writes in the same
+    transaction. Returns ``(task, from_status)``.
 
     Raises HTTPException(404) if the task doesn't exist, HTTPException(409)
     if ``to`` is not a valid transition from the task's current status.
@@ -61,6 +71,27 @@ async def transition(
 
     task.status = to
     session.add(task)
+
+    return task, from_status
+
+
+async def transition(
+    session: AsyncSession,
+    task_id: uuid.UUID,
+    to: str,
+    *,
+    actor: str,
+    reason: str | None = None,
+) -> Task:
+    """Move ``task_id`` to status ``to`` under a row lock, committing.
+
+    Thin wrapper around ``lock_and_set()`` for the simple case: a status
+    change with no other fields/rows to bundle in. Commits and emits
+    exactly one ``task.status_changed`` ActivityEvent.
+
+    Raises HTTPException(404)/HTTPException(409) — see ``lock_and_set()``.
+    """
+    task, from_status = await lock_and_set(session, task_id, to, actor=actor)
     await session.commit()
     await session.refresh(task)
 

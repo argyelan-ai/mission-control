@@ -20,7 +20,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.activity import ActivityEvent
 from app.models.board import Board
 from app.models.task import Task
-from app.services.task_state import transition
+from app.services.task_state import lock_and_set, transition
 from tests.conftest import test_engine
 
 
@@ -132,6 +132,27 @@ async def test_racing_transitions_one_wins_one_gets_409():
         f"only the winning transition may fire an event, got {len(events)}"
     )
     assert events[0].detail["actor"] == "agent-a"
+
+
+@pytest.mark.asyncio
+async def test_lock_and_set_without_caller_commit_persists_nothing():
+    """lock_and_set() must not commit itself — if the caller crashes or
+    chooses not to commit, the in-memory status change never reaches the
+    DB and no event fires. This is the contract transition() relies on
+    (it commits explicitly right after calling lock_and_set())."""
+    task_id = await _make_task(status="inbox")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        task, from_status = await lock_and_set(s, task_id, "in_progress", actor="test")
+        assert task.status == "in_progress"
+        assert from_status == "inbox"
+        # No commit here — session closes without persisting the change.
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        persisted = await s.get(Task, task_id)
+        assert persisted.status == "inbox"
+
+    assert await _status_events(task_id) == []
 
 
 @pytest.mark.asyncio
