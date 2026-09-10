@@ -1529,6 +1529,15 @@ Alle ADRs in `docs/decisions/`:
   `PATCH /api/v1/runtimes/db/{slug}` + `mark_agents_for_sync`-Propagation (ADR-054/078) — kein
   neuer Code nötig, sobald der Adapter registriert ist. Kein Migrations-Bedarf (`agents.harness =
   'jarvis'` stand bereits in der DB). Ersetzt den nie gemergten ADR-074-Entwurf (PR #339).
+  **Follow-up gleicher Tag:** OpenAIs neue Live API (`v1/live/sessions`) ist ein disjunktes
+  Wire-Protokoll von Realtime (`gpt-live-*`-Modelle) — die Bindung trägt jetzt zusätzlich
+  `api: "realtime"|"live"` (`jarvis_core.voice_provider.classify_voice_api`, EINE Regel für
+  Backend + Worker). `voice_worker/main.py` bekommt eine `_API_TRANSPORTS`-Registry (heute
+  nur `realtime`); bindet der Picker Jarvis an `gpt-live-*`, refused `entrypoint()` das LAUT
+  (Log + `POST /api/v1/agent/voice/unsupported-model` → Activity-Event
+  `agent.voice_unsupported_model`) statt mit falschem Endpoint zu scheitern, und fällt auf
+  die Env-Defaults zurück. Kein Live-Transport in diesem PR — der nächste ist ein Builder +
+  ein Registry-Eintrag.
 
 - **2026-09-02** — **Ein Rezept-Modell + Rezept-Umschalter (ADR-077, #388 Backend, #389
   Frontend):** Rezept = Engine · Startbefehl (Pflicht) · Port · Topologie (Anzahl Boxen).

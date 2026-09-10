@@ -414,6 +414,32 @@ async def voice_config() -> dict[str, Any] | None:
         return None
 
 
+async def report_voice_unsupported(provider: str, model: str | None, api: str) -> None:
+    """POST /api/v1/agent/voice/unsupported-model — macht einen stillen
+    Fehlschlag laut (ADR-082 Follow-up).
+
+    Gerufen wenn die gebundene Runtime eine API nennt (z.B. "live" — OpenAIs
+    Live API, disjunkt von Realtime), die DIESES Worker-Image nicht bauen
+    kann. Der Aufrufer faellt selbst auf seine Env-Defaults zurueck (Jarvis
+    darf nie verstummen) — dieser Call sorgt nur dafuer, dass die Drift in
+    MCs Activity-Feed sichtbar wird, statt dass ein falscher Endpoint einfach
+    beim Verbindungsaufbau scheitert.
+
+    Fail-soft wie jeder andere Call hier: ein fehlschlagender Melde-Call darf
+    den Fallback nicht zusaetzlich verzoegern oder blockieren.
+    """
+    try:
+        resp = await _client.post(
+            "/api/v1/agent/voice/unsupported-model",
+            json={"provider": provider, "model": model, "api": api},
+            timeout=3.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("report_voice_unsupported failed: HTTP %s", resp.status_code)
+    except Exception as e:  # noqa: BLE001 — fail-soft, darf den Fallback nicht blockieren
+        logger.warning("report_voice_unsupported failed: %s", e)
+
+
 async def vault_briefing() -> dict[str, Any]:
     """Fetch pre-session briefing JSON from MC backend.
 

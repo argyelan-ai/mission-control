@@ -35,18 +35,41 @@ _VOICE_DEFAULT = {"openai": "marin", "xai": "ara"}
 _MODEL_DEFAULT = {"openai": "gpt-realtime-2.1", "xai": None}
 
 
+def classify_voice_api(provider: str, model: str | None) -> str:
+    """Which wire API a (provider, model) pair speaks: "realtime" | "live".
+
+    OpenAI's Live API (v1/live/sessions — WebSocket/WebRTC/SIP, voice model
+    decoupled from the backend/"Responses" model via client delegation) is a
+    DIFFERENT protocol from the Realtime API this worker's livekit plugin
+    speaks — same provider, disjoint wire format (checked live against
+    OpenAI's docs, 2026-09-10). ``gpt-live-*`` model names are the only
+    signal available for which one a bound runtime row means. Everything
+    else — including every xAI model today — speaks the realtime protocol.
+
+    Shared between backend (``voice_runtime.resolve_voice_config``, which
+    reports it in the API response) and worker (which reclassifies the
+    FINAL resolved provider/model independently, since a key-fallback can
+    change the arm after the backend's answer was already fixed) — one rule,
+    never two copies that can drift.
+    """
+    if provider == "openai" and (model or "").strip().lower().startswith("gpt-live"):
+        return "live"
+    return "realtime"
+
+
 @dataclass(frozen=True)
 class VoiceChoice:
     provider: str
     model: str | None
     voice: str
     source: str  # "mc" | "env" | "env-fallback" | "key-fallback"
+    api: str = "realtime"  # "realtime" | "live" (ADR-082 follow-up)
 
     def as_log(self) -> str:
         return (
             f"voice config: provider={self.provider} "
             f"model={self.model or '<plugin-default>'} voice={self.voice} "
-            f"source={self.source}"
+            f"api={self.api} source={self.source}"
         )
 
 
@@ -116,9 +139,16 @@ def resolve_voice_choice(mc_config: dict | None, env: dict[str, str] | None = No
     mc_voice = (mc_config.get("voice_id") or "").strip() if (mc_bound and mc_provider) else ""
     voice = mc_voice if chosen == requested and mc_voice else ""
 
+    final_model = model or env_model or _MODEL_DEFAULT[chosen]
+
     return VoiceChoice(
         provider=chosen,
-        model=model or env_model or _MODEL_DEFAULT[chosen],
+        model=final_model,
         voice=voice or (env.get(_VOICE_ENV[chosen]) or "").strip() or _VOICE_DEFAULT[chosen],
         source=source,
+        # Classified on the FINAL (chosen, final_model) pair, not on whatever
+        # MC originally named — a key-fallback can switch arms after MC's
+        # answer was fixed, and the api must describe what actually got
+        # chosen, not what was asked for.
+        api=classify_voice_api(chosen, final_model),
     )

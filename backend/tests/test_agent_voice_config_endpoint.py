@@ -84,6 +84,7 @@ async def test_bound_voice_runtime_is_reported(client: AsyncClient):
     assert body["model"] == "grok-voice-think-fast-1.0"
     assert body["runtime_slug"] == "voice-xai"
     assert body["updated_at"] is not None
+    assert body["api"] == "realtime"
 
 
 @pytest.mark.asyncio
@@ -173,3 +174,90 @@ async def test_jarvis_without_harness_set_is_also_refused(client: AsyncClient):
     resp = await client.get("/api/v1/agent/voice/config", headers=headers)
 
     assert resp.status_code == 403, resp.text
+
+
+# ── api: "realtime" | "live" (ADR-082 follow-up, OpenAI Live API) ──────────
+
+
+@pytest.mark.asyncio
+async def test_gpt_live_binding_is_classified_as_the_live_api(client: AsyncClient):
+    """gpt-live-1 speaks OpenAI's Live API, not Realtime — the response must
+    say so, so a worker that only builds Realtime can refuse it loudly
+    instead of connecting to the wrong endpoint."""
+    rt = await _runtime(
+        "voice_openai", slug="voice-openai-live", model_identifier="gpt-live-1",
+    )
+    headers = await _agent_with_runtime(rt.id)
+
+    body = (await client.get("/api/v1/agent/voice/config", headers=headers)).json()
+
+    assert body["api"] == "live"
+    assert body["model"] == "gpt-live-1"
+
+
+@pytest.mark.asyncio
+async def test_unbound_fallback_reports_the_realtime_api(client: AsyncClient):
+    headers = await _agent_with_runtime(None)
+
+    body = (await client.get("/api/v1/agent/voice/config", headers=headers)).json()
+
+    assert body["api"] == "realtime"
+
+
+# ── POST /voice/unsupported-model — the worker's loud-refusal report ───────
+
+
+@pytest.mark.asyncio
+async def test_unsupported_model_report_emits_an_activity_event(client: AsyncClient):
+    from sqlmodel import select
+
+    from app.models.activity import ActivityEvent
+
+    headers = await _agent_with_runtime(None)
+
+    resp = await client.post(
+        "/api/v1/agent/voice/unsupported-model",
+        headers=headers,
+        json={"provider": "openai", "model": "gpt-live-1", "api": "live"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"ok": True}
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        events = (
+            await s.exec(
+                select(ActivityEvent).where(
+                    ActivityEvent.event_type == "agent.voice_unsupported_model"
+                )
+            )
+        ).all()
+    assert len(events) == 1
+    assert events[0].detail["api"] == "live"
+    assert events[0].detail["model"] == "gpt-live-1"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_model_report_rejects_non_jarvis_agents(client: AsyncClient):
+    rt = await _runtime("voice_openai", slug="voice-openai-4")
+    headers = await _agent_with_runtime(
+        rt.id, name="Cody", harness="claude", agent_runtime="cli-bridge",
+    )
+
+    resp = await client.post(
+        "/api/v1/agent/voice/unsupported-model",
+        headers=headers,
+        json={"provider": "openai", "model": "gpt-live-1", "api": "live"},
+    )
+
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_unsupported_model_report_rejects_anonymous_callers(client: AsyncClient):
+    resp = await client.post(
+        "/api/v1/agent/voice/unsupported-model",
+        json={"provider": "openai", "model": "gpt-live-1", "api": "live"},
+    )
+
+    assert resp.status_code in (401, 403), resp.text

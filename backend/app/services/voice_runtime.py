@@ -23,6 +23,26 @@ from app.services.harness_compat import VOICE_RUNTIME_TYPES
 
 logger = logging.getLogger(__name__)
 
+# jarvis_core liegt im Repo-Root (Live-Mount im Backend-Image, ADR-061) — wie
+# jarvis_briefing.py/jarvis_telegram.py importiert dieses Modul es weich statt
+# das Fehlen des Mounts in einen 500 auf /voice/config zu verwandeln (der
+# Docstring oben verspricht "nie raisen"). classify_voice_api ist eine reine
+# Regel ohne Seiteneffekte; faellt der Mount, uebernimmt die lokale Kopie
+# exakt dieselbe Klassifikation — siehe jarvis_core.voice_provider fuer die
+# kanonische Version + Begruendung.
+try:
+    from jarvis_core.voice_provider import classify_voice_api
+except ImportError as _exc:  # pragma: no cover — only fires without the mount
+    logger.warning(
+        "jarvis_core not importable — using the local classify_voice_api "
+        "fallback: %s", _exc,
+    )
+
+    def classify_voice_api(provider: str, model: str | None) -> str:
+        if provider == "openai" and (model or "").strip().lower().startswith("gpt-live"):
+            return "live"
+        return "realtime"
+
 #: Voice IDs are disjunct per provider (OpenAI's "marin" means nothing to xAI's
 #: plugin, and vice versa) — a shared env var would silently break whichever
 #: arm isn't currently selected. One env var per provider keeps them isolated.
@@ -36,11 +56,20 @@ async def resolve_voice_config(agent: Agent, session: AsyncSession) -> dict:
     """The bound voice provider for ``agent``, fail-soft.
 
     Always returns ``{"provider", "model", "voice_id", "runtime_slug",
-    "updated_at"}``. When nothing usable is bound, ``provider`` falls back to
-    "openai" (the voice-worker's own default) with the rest ``None`` — the
-    caller (voice_worker) then keeps its env defaults and just skips the
-    override. A warning is logged for every fallback case so drift is visible
-    in the backend log even though the HTTP response stays a plain 200.
+    "updated_at", "api"}``. When nothing usable is bound, ``provider`` falls
+    back to "openai" (the voice-worker's own default) with the rest ``None``
+    — the caller (voice_worker) then keeps its env defaults and just skips
+    the override. A warning is logged for every fallback case so drift is
+    visible in the backend log even though the HTTP response stays a plain
+    200.
+
+    ``api`` names the wire protocol the bound model actually speaks
+    ("realtime" | "live", see ``jarvis_core.voice_provider.classify_voice_api``
+    — today only "realtime" has a transport in the worker image; "live"
+    (OpenAI's Live API, disjoint from Realtime) is classified so a caller
+    can refuse a live-only binding loudly instead of connecting to the wrong
+    endpoint. This response never decides what the worker DOES about it —
+    that call is the worker's, since it knows its own image's capabilities.
     """
     if agent.runtime_id is None:
         logger.warning(
@@ -81,13 +110,15 @@ async def resolve_voice_config(agent: Agent, session: AsyncSession) -> dict:
 
     voice_id_env = _VOICE_ID_ENV.get(provider)
     voice_id = (os.environ.get(voice_id_env, "").strip() or None) if voice_id_env else None
+    model = (runtime.model_identifier or "").strip() or None
 
     return {
         "provider": provider,
-        "model": (runtime.model_identifier or "").strip() or None,
+        "model": model,
         "voice_id": voice_id,
         "runtime_slug": runtime.slug,
         "updated_at": runtime.updated_at.isoformat() if runtime.updated_at else None,
+        "api": classify_voice_api(provider, model),
     }
 
 
@@ -98,4 +129,5 @@ def _fallback() -> dict:
         "voice_id": None,
         "runtime_slug": None,
         "updated_at": None,
+        "api": "realtime",
     }

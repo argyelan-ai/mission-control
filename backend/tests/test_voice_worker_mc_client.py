@@ -380,3 +380,49 @@ async def test_voice_config_never_raises_on_connection_error(mc):
 
     # The property under test: no exception escapes voice_config().
     assert await mc.voice_config() is None
+
+
+# ────────────────────────────────────────────────────────────────────────
+# ADR-082 follow-up: report_voice_unsupported() — the worker's loud refusal
+# when a runtime binding names an API (e.g. "live") this image cannot build.
+# Fire-and-forget from the worker's point of view: must never raise, must
+# never block the fallback it accompanies.
+# ────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_report_voice_unsupported_posts_the_right_payload(mc):
+    resp = MagicMock()
+    resp.status_code = 200
+
+    captured: dict = {}
+
+    async def _post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return resp
+
+    mc._client.post = AsyncMock(side_effect=_post)
+
+    await mc.report_voice_unsupported(provider="openai", model="gpt-live-1", api="live")
+
+    assert captured["url"] == "/api/v1/agent/voice/unsupported-model"
+    assert captured["json"] == {"provider": "openai", "model": "gpt-live-1", "api": "live"}
+
+
+@pytest.mark.asyncio
+async def test_report_voice_unsupported_never_raises_on_non_200(mc):
+    resp = MagicMock()
+    resp.status_code = 500
+    mc._client.post = AsyncMock(return_value=resp)
+
+    await mc.report_voice_unsupported(provider="openai", model="gpt-live-1", api="live")  # no raise
+
+
+@pytest.mark.asyncio
+async def test_report_voice_unsupported_never_raises_on_connection_error(mc):
+    import httpx
+
+    mc._client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    await mc.report_voice_unsupported(provider="openai", model="gpt-live-1", api="live")  # no raise

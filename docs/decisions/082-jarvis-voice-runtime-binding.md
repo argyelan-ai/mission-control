@@ -108,6 +108,33 @@ Schlüssel.
    einen chat-modell-artigen Namen ab und überschreibt den kuratierten
    "Jarvis Voice — …"-Titel beim ersten Start.
 
+10. **`api`-Feld: Realtime vs. Live (Follow-up, gleicher Tag).** OpenAI's
+    Live API (`v1/live/sessions`, WebSocket/WebRTC/SIP, Voice-Modell entkoppelt
+    vom Backend-Modell via Client-/Responses-Delegation) ist ein ANDERES
+    Wire-Protokoll als die Realtime API, die dieses Workers livekit-Plugin
+    spricht — gleicher Anbieter, disjunktes Format (live an OpenAIs Doku
+    geprüft, 2026-09-10). `gpt-live-*`-Modellnamen sind das einzige Signal,
+    welche der beiden APIs eine gebundene Zeile meint. Die Antwort trägt
+    deshalb zusätzlich `api: "realtime" | "live"`
+    (`jarvis_core.voice_provider.classify_voice_api`, EINE Regel, backend-
+    und worker-seitig geteilt — der Worker klassifiziert das FINAL gewählte
+    (Provider, Modell) unabhängig neu, weil ein Key-Fallback den Arm nach
+    MCs Antwort noch wechseln kann).
+
+    **Kein Live-Transport in diesem PR** — nur die Erkennung + eine saubere
+    Ablehnung: `voice_worker/main.py::entrypoint()` prüft `voice_choice.api`
+    gegen `_API_TRANSPORTS` (heute nur `{"realtime": ...}`) BEVOR das Modell
+    gebaut wird; fehlt ein Builder, loggt der Worker laut, meldet es via
+    neuer Route `POST /api/v1/agent/voice/unsupported-model` (Activity-Event
+    `agent.voice_unsupported_model`, damit die Drift im Feed sichtbar wird
+    statt erst beim nächsten Anruf aufzufallen) und fällt auf die reinen
+    Env-Defaults zurück (Jarvis bleibt sprechfähig — nie ein stiller
+    Fehlschlag mit falschem Endpoint). `_build_realtime_model()` selbst
+    dispatcht über dieselbe `_API_TRANSPORTS`-Registry und raist nur noch
+    defensiv (letzte Verteidigungslinie, kein normaler Pfad). Ein Live-
+    Transport ist später EIN Builder + EIN Registry-Eintrag, keine
+    Restrukturierung.
+
 ## Alternativen
 
 - **LiteLLM-Proxy als Schnittstelle (wie ADR-064 für Hermes verworfen):**
@@ -141,6 +168,10 @@ Schlüssel.
 - Die Grenze muss in jeder Erklärung mitgesagt werden: der Schalter stellt
   NUR den Sprach-Kanal um. Text-Kanal (`jarvis_core/brain.py`, Telegram) und
   `ask_frontier` bleiben fest auf ihrer eigenen Konfiguration.
+- Ein `gpt-live-*`-Bind läuft NICHT — der Picker lässt es zu (die Runtime-Zeile
+  ist gültig, `is_compatible()` prüft nur Provider/Harness, nicht die
+  API-Sub-Klassifikation), aber der Worker refused loud statt zu sprechen,
+  bis ein Live-Transport nachgerüstet ist (offener Folge-PR).
 
 ## Referenzen
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from jarvis_core.voice_provider import resolve_voice_choice
+from jarvis_core.voice_provider import classify_voice_api, resolve_voice_choice
 
 
 def _env(**overrides) -> dict[str, str]:
@@ -108,3 +108,52 @@ def test_model_defaults_to_plugin_default_when_nothing_names_one():
     choice = resolve_voice_choice(cfg, env=_env(VOICE_PROVIDER="xai"))
 
     assert choice.model is None  # xai plugin picks its own default
+
+
+# ── api classification (ADR-082 follow-up: OpenAI Live API) ────────────────
+#
+# gpt-live-1 speaks OpenAI's Live API (v1/live/sessions), NOT the Realtime
+# API this worker's livekit plugin builds. Same provider, disjoint wire
+# protocol — checked live against OpenAI's docs 2026-09-10.
+
+
+def test_classify_voice_api_realtime_default():
+    assert classify_voice_api("openai", "gpt-realtime-2.1") == "realtime"
+    assert classify_voice_api("openai", None) == "realtime"
+    assert classify_voice_api("xai", "grok-voice-think-fast-1.0") == "realtime"
+
+
+def test_classify_voice_api_live_model():
+    assert classify_voice_api("openai", "gpt-live-1") == "live"
+    assert classify_voice_api("openai", "GPT-Live-1") == "live"  # case-insensitive
+
+
+def test_classify_voice_api_live_prefix_is_openai_only():
+    """A hypothetical xai model that merely CONTAINS "live" must not trip
+    the rule — only OpenAI is known to have shipped a disjoint Live API."""
+    assert classify_voice_api("xai", "grok-live-fast") == "realtime"
+
+
+def test_resolve_voice_choice_reflects_a_live_binding():
+    cfg = {"provider": "openai", "model": "gpt-live-1", "voice_id": None, "runtime_slug": "voice-openai"}
+    choice = resolve_voice_choice(cfg, env=_env())
+
+    assert choice.api == "live"
+    assert choice.provider == "openai"
+    assert choice.model == "gpt-live-1"
+
+
+def test_resolve_voice_choice_default_api_is_realtime():
+    choice = resolve_voice_choice(None, env=_env())
+    assert choice.api == "realtime"
+
+
+def test_key_fallback_reclassifies_api_on_the_new_arm():
+    """If MC bound a (hypothetical) live-speaking xai model and the xai key is
+    missing, the fallback lands on openai's realtime default — api must
+    reflect the ARM THAT WAS ACTUALLY CHOSEN, not the original request."""
+    cfg = {"provider": "xai", "model": "grok-live-fast", "voice_id": None, "runtime_slug": "voice-xai"}
+    choice = resolve_voice_choice(cfg, env=_env(XAI_API_KEY=""))
+
+    assert choice.provider == "openai"
+    assert choice.api == "realtime"
