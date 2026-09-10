@@ -6,14 +6,14 @@ letzten Wert — die Startseite zeigte stundenlang "100 % Kontext erreicht".
 Ab jetzt setzt der Heartbeat den Wert nach drei Meldungen ohne Kontext auf
 NULL ("unbekannt"); das Frontend zeigt dann "—" statt einer alten Zahl.
 
-Revision ID: 0197
-Revises: 0196
+Revision ID: 0197_agent_context_tokens_nullable
+Revises: 0196_runtime_supports_vision
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0197"
-down_revision = "0196"
+revision = "0197_agent_context_tokens_nullable"
+down_revision = "0196_runtime_supports_vision"
 branch_labels = None
 depends_on = None
 
