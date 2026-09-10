@@ -53,7 +53,7 @@ x-backend-env: &backend-env
   # Cap fuer Dateien, die der Operator ueber Slack an MC schickt
   # (Datei-Ingest -> References). Default 25 MB.
   SLACK_FILE_INGEST_MAX_BYTES: ${SLACK_FILE_INGEST_MAX_BYTES:-26214400}
-  # Approvals-Kanal (#mc-approvals) — leer = keine Slack-Approvals,
+  # Approvals-Kanal (Slack-Channel aus .env) — leer = keine Slack-Approvals,
   # Telegram-Buttons laufen unabhaengig weiter (Fan-out).
   SLACK_APPROVALS_CHANNEL: ${SLACK_APPROVALS_CHANNEL:-}
   JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
