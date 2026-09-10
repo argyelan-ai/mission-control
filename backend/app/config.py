@@ -470,6 +470,21 @@ class Settings(BaseSettings):
     # `docker compose restart backend` to re-enable for rollback only.
     obsidian_export_enabled: bool = False
 
+    # Architektur E, Teil 1 (Vorbereitung eigener Worker-Container, kein
+    # compose-Service in diesem PR): steuert, ob DIESER Prozess die ~20
+    # Hintergrund-Dienste startet (Scheduler, Watchdog, Task-/Loop-/
+    # Group-Runner, Intelligence, File-Indexer, Embedding-Retry,
+    # Runtime-Watcher/-Pulse/-Schedule, CLI-/Model-Catalog-/Local-Registry-
+    # Checker, Telegram-/Slack-Inbound-Poller, gh-Monitor, Vault-Watcher/
+    # -Compactor — Inventar siehe backend/app/worker.py + PR-Text).
+    # Default True: ohne gesetzte Env aendert sich am heutigen Verhalten
+    # nichts, alles laeuft weiter im API-Prozess. Auf false gesetzt (erst ab
+    # Teil 2 relevant, wenn ein eigener Worker-Container existiert) bleiben
+    # request-gebundene Dinge (HTTP-Router, Terminal-/Browser-WebSockets,
+    # Outbound-Sends ueber telegram_bot/slack_client) unberuehrt — die
+    # faellt NICHT unter diesen Schalter.
+    enable_background_services: bool = True
+
     # Remote runtime host SSH (optional — e.g. a DGX box running vLLM/LM Studio).
     # Empty = feature unused. Set DGX_SSH_HOST/DGX_SSH_USER in .env and mount
     # your SSH key (see docker-compose.override.example.yml).
