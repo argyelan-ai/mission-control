@@ -2,8 +2,9 @@
 
 Contract (`app.redis_client.try_claim_heal`):
 - SET NX EX one-shot claim on ``mc:heal:{task_id}`` with HEAL_DEDUP_TTL
-  (one watchdog tick = 30s). True = caller may heal; False = another
-  watchdog healed this card this round and the caller must skip.
+  (90s = slowest participating round budget; see redis_client.py). True =
+  caller may heal; False = another healer acted on this card within the
+  TTL and the caller must skip.
 - Every healing action gates itself on the claim. Two healers racing on
   the same card in the same round -> exactly ONE healing action + ONE
   event; after the TTL expires the card can be healed again.

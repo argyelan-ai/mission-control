@@ -1350,6 +1350,20 @@ class TaskRunnerService:
                     # for comm_v2 agents — nudge them to `mc finish` instead.
                     await maybe_post_finish_nudge(session, task)
                     continue
+                # W0.1: one heal per card per round — the auto-promote IS a
+                # card mutation (in_progress -> review). It must claim
+                # mc:heal like every other healer: the concrete race is
+                # _recover_orphaned_tasks (watchdog, 30s tick) taking the
+                # claim and resetting this same card to inbox while this
+                # 60s-tick loop promotes it to review.
+                redis = await get_redis()
+                if not await try_claim_heal(redis, str(task.id)):
+                    logger.info(
+                        "Stale-Check Auto-Promote skipped for '%s' — another "
+                        "mechanism healed this task this round (mc:heal)",
+                        task.title[:60],
+                    )
+                    continue
                 task.status = "review"
                 task.updated_at = utcnow()
                 session.add(task)

@@ -390,6 +390,18 @@ class TaskMonitorMixin:
             # If we're now at count=2 and the parent is STILL stuck,
             # we auto-close (review). The operator makes the final decision (done).
             if nudge_count >= 2:
+                # W0.1: one heal per card per round -- the auto-close IS a
+                # card mutation (in_progress -> review) and must claim
+                # mc:heal like every other healer. Without the claim it can
+                # race _maybe_redispatch_orphaned_run (HTTP poll path, runs
+                # outside any tick), which re-dispatches the same card.
+                if not await try_claim_heal(redis, str(parent.id)):
+                    logger.info(
+                        "Auto-close of stuck parent '%s' skipped — another "
+                        "mechanism healed this task this round (mc:heal)",
+                        (parent.title or "")[:60],
+                    )
+                    continue
                 logger.warning(
                     "Auto-close stuck parent '%s' (id=%s): %d nudges ohne Reaktion",
                     (parent.title or "")[:60], parent.id, nudge_count,

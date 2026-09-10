@@ -53,7 +53,19 @@ async def try_claim_recovery_comment_cooldown(redis: aioredis.Redis, task_id: st
     return bool(claimed)
 
 
-HEAL_DEDUP_TTL = 30  # seconds — one watchdog tick (WatchdogService._interval, core.py)
+# Derivation (W1): the TTL must cover the SLOWEST round budget among the
+# participating healers, not the fastest tick:
+# - WatchdogService: tick 30s, self-accepted round budget = lock TTL
+#   `ex=interval * 3` = 90s (watchdog/core.py:99)
+# - TaskRunnerService: tick 60s, lock TTL `ex=interval` = 60s
+#   (task_runner.py:390); 6 of 12 gate sites live on this loop
+# - Poll-orphan redispatch: HTTP poll path, no tick at all
+# A claim of 30s (one watchdog tick) would expire mid-round whenever a
+# watchdog round runs longer than 30s (which both lock budgets explicitly
+# allow), and would never bridge a TaskRunner round (60s tick -> 30s open
+# window between rounds). 90s = the longest round budget the system itself
+# budgets, so exactly one healer acts per card per round on every loop.
+HEAL_DEDUP_TTL = 90  # seconds — see derivation above
 
 
 async def try_claim_heal(redis: aioredis.Redis, task_id: str) -> bool:
@@ -495,8 +507,9 @@ class RedisKeys:
         watchdog mechanism that wins the claim may apply its healing
         action (requeue / restart / redispatch / ...) for this task in
         the current round. All other healers that tick see the key and
-        skip. TTL = one watchdog tick (30s), so the next round can heal
-        again if the card is still sick. Separate namespace from the
+        skip. TTL covers the slowest participating round budget (90s,
+        derivation at HEAL_DEDUP_TTL), so the next round can heal again
+        if the card is still sick. Separate namespace from the
         recovery_comment_cooldown (that one dedupes comments, this one
         dedupes actions)."""
         return f"mc:heal:{task_id}"
