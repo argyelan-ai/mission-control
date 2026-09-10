@@ -112,9 +112,36 @@ jobs:
           test -n "$TOKEN"
           curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/boards >/dev/null
           echo "fresh-boot E2E OK"
+      - name: mc-worker actually runs its background services
+        # Rex-Review PR #495, Blocker B3: `docker compose ps mc-worker` ==
+        # "running" is not a life sign of the 18 services inside — mc-worker
+        # has no healthcheck (no port, see docker-compose.yml), and
+        # backend's /health (routers/system.py) never touches it. Before
+        # this step, a crash-looping or hung mc-worker was invisible to CI.
+        #
+        # Named artifact ONLY the worker process produces: worker.py's
+        # run() logs "Worker: Hintergrund-Dienste laufen" after
+        # start_background_services()+start_vault_services() both return —
+        # backend logs the opposite line ("background services stay off in
+        # this process") for the same flag. Shown with a timestamp below,
+        # not just asserted.
+        run: |
+          timeout 60 sh -c 'until docker compose logs mc-worker 2>/dev/null | grep -q "Worker: Hintergrund-Dienste laufen"; do sleep 1; done'
+          echo "--- worker start artifact (timestamped) ---"
+          docker compose logs --timestamps mc-worker | grep "Worker: Hintergrund-Dienste laufen"
+          echo "--- ENABLE_BACKGROUND_SERVICES is exactly true once, false once ---"
+          FLAG_LINES=$(docker compose config | grep "ENABLE_BACKGROUND_SERVICES")
+          echo "$FLAG_LINES"
+          test "$(echo "$FLAG_LINES" | grep -c true)" -eq 1
+          test "$(echo "$FLAG_LINES" | grep -c false)" -eq 1
+          docker compose logs backend | grep -q "background services stay off in this process"
+          echo "--- no restart-loop ---"
+          RESTARTS=$(docker inspect -f '{{.RestartCount}}' "$(docker compose ps -q mc-worker)")
+          test "$RESTARTS" -eq 0
+          echo "mc-worker OK: background services running, 0 restarts, artifact timestamped above"
       - name: Logs on failure
         if: failure()
-        run: docker compose logs backend db --tail=80
+        run: docker compose logs backend mc-worker db --tail=80
 
   docker:
     name: Docker Build Check
