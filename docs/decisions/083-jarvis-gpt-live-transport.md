@@ -223,10 +223,32 @@ nicht natuerlich." Vier weitere Fixes, alle in PR #490:
     ("Hmm.") und eine natuerliche Rueckfrage statt einer Statusreport-Formulierung — Beleg im
     PR. **Einschraenkung:** ob gpt-live-1 das auch HOERBAR umsetzt (Lachen in der Stimme, echte
     Tonhoehen-Variation), laesst sich aus dem Transkript/PCM-Bytes nicht zuverlaessig pruefen —
-    das braucht Marks Ohr am naechsten echten Anruf. Der Vergleich der 6 Stimmen auf
-    Ausdruckskraft ist NICHT gemacht (Zeitbudget/Prioritaet laut Team-Lead: Latenz +
-    Statusreport-Fix zuerst) — kann nachgezogen werden, falls Mark nach dem Test noch eine
-    andere Stimme will.
+    das braucht Marks Ohr am naechsten echten Anruf.
+
+## Nachschliff 4 (10.09.2026) — doppelter Begruessungssatz + 6-Stimmen-Vergleich
+
+11. **Begruessung war doppelt.** Team-Lead-Fund: "Hi, Mark – was steht an? Alles klar, sag mir
+    einfach, womit ich dir helfen soll." — der zweite Satz war reiner Fuellstoff, den das
+    Voice-Modell trotz der festen Begruessungszeile spontan dranhaengte (vermutlich verstaerkt
+    durch die neuen Natuerlichkeits-Instructions aus Nachschliff 3, die zu mehr Gespraechigkeit
+    ermutigen). `_build_greeting()`s Anweisung verschaerft: "WORTWOERTLICH und NICHTS SONST —
+    kein Zusatz-Satz... auch wenn dir spontan noch etwas Freundliches einfaellt". Live
+    verifiziert mit 3 unabhaengigen Ephemeral-Laeufen NACH dem Fix: alle drei Begruessungen
+    genau EIN Satz ("Hey, servus, Mark, was machst du?" / "Hallo, hey Marc, was liegt an?" /
+    "Hey, Mark. Was liegt an?" — der dritte Lauf hatte zusaetzlichen Text, aber das war eine
+    ECHTE Reaktion auf real mitgesendetes Test-Audio, das zeitlich mit der Begruessung
+    kollidierte, kein Begruessungs-Fuellstoff mehr).
+12. **6-Stimmen-Vergleich** (Protokoll-Smoke, derselbe deutsche Scherz-Prompt gegen jede der
+    sechs bekannten `GPT_LIVE_KNOWN_VOICES`): alle sechs (aster, beacon, cinder, marin, stone,
+    vesper) antworten funktional identisch — akzeptieren dasselbe Protokoll, liefern
+    vergleichbare Latenz, beginnen alle denselben Programmierer-Witz sinnvoll. **Ehrlich:**
+    Ausdruckskraft/Timbre/Prosodie lassen sich aus Transkript-Text oder rohen PCM-Bytes nicht
+    objektiv vergleichen — das ist eine Hoer-Entscheidung, keine Mess-Entscheidung, ohne
+    Audio-Analyse-Tooling (das hier nicht gebaut wurde). **Empfehlung:** `marin` als Default
+    beibehalten — es ist der Plugin-eigene Default, in allen bisherigen Tests bewaehrt, und der
+    bisherige Realtime-Default (Kontinuitaet). Will Mark eine andere Stimme hoeren, ist das ein
+    reiner `VOICE_VOICE_ID`-Env-Change, kein Code-Umbau — am besten per echtem Anruf A/B-testen,
+    nicht per Transkript-Vergleich.
 
 ## Referenzen
 

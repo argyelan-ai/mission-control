@@ -802,7 +802,10 @@ def _build_greeting(briefing: dict | None, operator_name: str | None = None) -> 
 
     if not briefing:
         line = random.choice(_GREETINGS_FALLBACK).format(vok=vok)
-        return f"Sag GENAU diesen einen kurzen Satz auf Deutsch: '{line}'"
+        return (
+            f"Sag GENAU diesen Text auf Deutsch, WORTWOERTLICH und NICHTS "
+            f"SONST — kein Zusatz-Satz, keine Einleitung: '{line}'"
+        )
 
     line = random.choice(_GREETINGS_PLAIN).format(vok=vok)
     extra = _urgent_note(briefing)
@@ -810,9 +813,12 @@ def _build_greeting(briefing: dict | None, operator_name: str | None = None) -> 
         line = f"{line} {extra}"
 
     return (
-        f"Sag GENAU diesen kurzen, natuerlichen Text auf Deutsch (Schweizer-"
-        f"Hochdeutsche Aussprache, kein englischer Akzent, klingt wie ein "
-        f"kurzer Gruss unter Kollegen, NICHT wie ein Statusreport): '{line}'"
+        f"Sag GENAU diesen Text auf Deutsch, WORTWOERTLICH und NICHTS "
+        f"SONST — kein Zusatz-Satz, keine Einleitung, keine Nachfrage "
+        f"danach, auch wenn dir spontan noch etwas Freundliches einfaellt "
+        f"(Schweizer-Hochdeutsche Aussprache, kein englischer Akzent, "
+        f"klingt wie ein kurzer Gruss unter Kollegen, NICHT wie ein "
+        f"Statusreport): '{line}'"
     )
 
 
