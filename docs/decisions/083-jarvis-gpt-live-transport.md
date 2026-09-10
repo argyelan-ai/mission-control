@@ -271,6 +271,52 @@ nicht natuerlich." Vier weitere Fixes, alle in PR #490:
     GPTLiveModel-Importcheck bestanden), beide Realtime-Pfade (OpenAI + xAI) unmocked
     konstruiert. #494 kann geschlossen werden ("in #490 aufgegangen").
 
+## Nachschliff 6 (10.09.2026) — Merge mit ADR-082 (#491), Registry-Umbau
+
+PR #491 (ADR-082, "Jarvis' Sprachmodell aus der Runtime-Bindung") wurde auf `main` gemergt und
+führte parallel dieselbe Grundidee ein wie dieser PR — Provider/Modell/Stimme aus der MC-Runtime-
+Bindung statt Env, ein `_API_TRANSPORTS`-Registry-Muster (dort mit einem bewussten Platzhalter
+für `"live"`, den ADR-082 selbst als "kommt spaeter" beschreibt) und ``jarvis_core/voice_provider.py``
+(``VoiceChoice``, ``classify_voice_api``, ``resolve_voice_choice``, ohne ``livekit``-Import — testbar
+im normalen Backend-Job). Nach dem Merge (16.):
+
+16. **Alte Env-basierte Selektion entfernt.** ``_resolve_voice_api()``, ``_build_llm_model()`` und
+    die eigenstaendige ``VOICE_API``-Env-Var sind komplett verschwunden — ``classify_voice_api()``
+    (ADR-082) leitet die api schon aus dem Modellnamen ab (MC-Bindung ODER ``VOICE_MODEL``-Env-
+    Fallback, ``gpt-live-*`` → ``live``), das war objektiv redundant mit meiner eigenen
+    ``VOICE_API``-Erkennung. ``docker-compose.yml``/``.env.example`` entsprechend bereinigt statt
+    eine tote Config-Zeile stehen zu lassen.
+17. **``_API_TRANSPORTS["live"]`` eingehaengt** (der von ADR-082 bewusst offengelassene Platz):
+    ``_build_live_transport(choice, *, briefing_ctx, frontier_enabled, operator_name)`` — jeder
+    Transport-Builder gibt jetzt ``(llm, agent_instructions)`` zurueck statt nur ``llm``, weil die
+    Top-Level-Agent-Instructions transport-abhaengig sind (Instructions-Split, Nachschliff 1).
+    ``_build_realtime_transport`` ebenso angepasst (gibt weiterhin die volle Persona zurueck).
+    Der zentrale Dispatcher heisst jetzt ``_build_transport`` (vorher zwei kollidierende
+    Funktionen namens ``_build_realtime_model`` — eine aus diesem PR ohne Argument, eine aus
+    ADR-082 mit ``VoiceChoice``-Argument; ein textueller Merge haette beide unbemerkt
+    ueberschrieben, siehe Punkt 18).
+18. **Stimmen-Validierung umgestellt:** ``_resolve_live_voice()`` (las ``VOICE_VOICE_ID`` direkt
+    aus der Env) → ``_validate_live_voice(voice: str)`` (validiert die von ``VoiceChoice.voice``
+    bereits aufgeloeste Stimme — MC-Bindung oder ``VOICE_OPENAI_VOICE_ID``-Env-Fallback, ADR-082).
+    Gleiche Logik (bekannte 6 Namen, laute Warnung + Fallback auf ``marin`` bei Unbekanntem), nur
+    an die neue Aufloesungs-Kette angeschlossen.
+19. **`git merge origin/main` statt Rebase** (weniger Konfliktflaechen bei zwei komplett
+    umgebauten Versionen derselben Datei — ein Konfliktdurchlauf statt einer pro Commit). Git
+    meldete nur 2 Textkonflikte in ``voice_worker/main.py``, aber die umliegenden "automatisch
+    gemergten" Abschnitte waren SEMANTISCH gebrochen (zwei ``_build_realtime_model``-Definitionen,
+    fehlender ``import os``, ein Aufruf ohne Pflichtargument) — das ganze Modul wurde deshalb
+    manuell aus beiden Versionen neu zusammengesetzt statt dem Text-Merge zu vertrauen.
+    Test-Dateien (``test_voice_worker_realtime_provider.py``,
+    ``test_voice_worker_gpt_live_transport.py``) entsprechend auf die neuen Funktionsnamen
+    umgeschrieben; die vorherige "live api hat keinen Transport, wirft absichtlich" (ADR-082) ist
+    jetzt "live api hat einen Transport, baut ein echtes GPTLiveModel".
+20. **Testlauf-Einschraenkung (Team-Lead-Anweisung, 10.09.2026):** waehrend Mark aktiv testet,
+    KEINE Laeufe gegen den lokalen LiveKit-Server (ein frueherer Ephemeral-Test-Room wurde vom
+    Produktions-Worker bedient, siehe Nachschliff 5, Punkt 13 — dasselbe Risiko besteht bei jedem
+    lokalen LiveKit-Kontakt, unabhaengig vom Isolation-Fix). Dieser Merge/Umbau ist daher NUR mit
+    Unit-Tests (pytest im gebauten Image) + Protokoll-Smoke (direkt gegen die OpenAI-API, kein
+    LiveKit-Kontakt) verifiziert — kein LiveKit-Ende-zu-Ende-Lauf fuer diesen Punkt.
+
 ## Referenzen
 
 - Betroffene Dateien: `voice_worker/main.py` (VOICE_API-Selector, `_build_live_model`,

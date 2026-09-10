@@ -8,7 +8,7 @@ kontrollieren.
 Seit ADR-061 ist dieser Worker ein duenner Wrapper: Persona, Tool-Handler und
 der MC-Client leben im geteilten Package ``jarvis_core`` und werden mit dem
 Telegram-Kanal geteilt. Hier bleibt nur das LiveKit-/Voice-spezifische:
-Realtime-Modell-Factory, die ``@function_tool``-Methoden (delegieren an die
+Transport-Modell-Factory, die ``@function_tool``-Methoden (delegieren an die
 geteilten Handler) und die gesprochene Begruessung.
 
 Tool-Calls gehen ueber agent-scoped MC-API mit dem Jarvis-Agent
@@ -17,25 +17,32 @@ Voice-Agent -> Jarvis (LiveKit / voice-worker Infrastruktur behalten
 den Namen "voice").
 
 Stack:
-- livekit-agents[openai,xai] ~= 1.5
-- Provider per `VOICE_PROVIDER` env var (siehe ADR-060):
-  - "openai" (default): OpenAI Realtime, Modell `VOICE_MODEL` (default
-    "gpt-realtime-2.1"), Voice "marin" (uebersteuerbar via VOICE_VOICE_ID)
-  - "xai": Fallback auf das bisherige xAI Grok Realtime, Voice "ara"
-- Sprache: Auto-detect (das Realtime-Modell antwortet in der Sprache des
-  Inputs — Deutsch ok)
+- livekit-agents[openai,xai] (Version: siehe voice_worker/requirements.txt +
+  voice_worker/Dockerfile — der Live-Pfad unten force-installt zusaetzlich
+  aus einem LiveKit-PR-SHA).
+- Provider/Modell/Stimme kommen aus Jarvis' Runtime-Bindung in MC (ADR-082,
+  ``GET /api/v1/agent/voice/config``, gepullt pro Anruf in ``entrypoint()``) —
+  umschaltbar im MC-Runtime-Picker wie bei jedem anderen Agenten. Die
+  Entscheidungslogik (MC schlaegt Env, Env schlaegt Hardcoded-Default, nie
+  verstummen) sitzt in ``jarvis_core.voice_provider.resolve_voice_choice``.
+  `VOICE_PROVIDER`/`VOICE_MODEL`/`VOICE_*_VOICE_ID` env vars bleiben der
+  Rueckfall, wenn MC nicht antwortet oder nichts gebunden ist.
+- Welches WIRE-PROTOKOLL ein Provider/Modell-Paar spricht ("realtime" vs.
+  "live") klassifiziert ``jarvis_core.voice_provider.classify_voice_api`` und
+  steht als ``VoiceChoice.api`` bereit; ``_API_TRANSPORTS`` unten mappt jeden
+  unterstuetzten Wert auf seinen Builder (ADR-082 Follow-up + ADR-083).
+- Sprache: Auto-detect (das Modell antwortet in der Sprache des Inputs —
+  Deutsch ok)
 
 ## GPT-Live-Transport (ADR-083)
 
 Seit 10.09.2026 Jarvis' PRODUKTIVER Voice-Transport (Marks Entscheid: Ersatz,
-kein Nebenlaeufer) ueber OpenAIs **Live API** (``gpt-live-1``, Full-Duplex
-Voice-Modell, getrennt vom Denk-Backend). Ausgewaehlt per ``VOICE_API`` env var
-(mit Auto-Erkennung aus ``VOICE_MODEL`` falls die Var fehlt, siehe
-``_resolve_voice_api()``):
+kein Nebenlaeufer) fuer ``api="live"`` ueber OpenAIs **Live API**
+(``gpt-live-1``, Full-Duplex Voice-Modell, getrennt vom Denk-Backend):
 
-- "realtime" (default ohne Erkennung): wie bisher, ``_build_realtime_model()``
-  (OpenAI/xAI Realtime WebSocket) — bleibt der dokumentierte Rueckweg.
-- "live": ``_build_live_model()`` — ``GPTLiveModel`` aus dem noch offenen
+- "realtime" (``_build_realtime_transport``): wie bisher, OpenAI/xAI Realtime
+  WebSocket ueber die livekit-Plugins — bleibt der dokumentierte Rueckweg.
+- "live" (``_build_live_transport``): ``GPTLiveModel`` aus dem noch offenen
   LiveKit-PR #7212 (``livekit.plugins.openai.realtime.GPTLiveModel``, Stand
   10.09.2026, SHA ``de3c5ce66058c6ab437ad41f963cbaeb39046c6d``; noch nicht auf
   PyPI). Der REGULAERE ``voice_worker/Dockerfile``-Build installiert das
@@ -44,9 +51,9 @@ Voice-Modell, getrennt vom Denk-Backend). Ausgewaehlt per ``VOICE_API`` env var
 
 Delegation: ``delegation="responses"`` — ein eigenes Backend-Responses-Modell
 (``_resolve_live_backend_model()``, Default ``gpt-5.6-luna`` — Latenz-Tuning
-nach Marks erstem Anruf, siehe ``_build_live_model()`` Docstring) ruft unsere
-``@function_tool``-Methoden exakt wie bisher; Jarvis' Denken/Tools bleiben
-unveraendert in ``jarvis_core``. "Client delegation" (PR-Beispiel
+nach Marks erstem Anruf, siehe ``_build_live_transport()`` Docstring) ruft
+unsere ``@function_tool``-Methoden exakt wie bisher; Jarvis' Denken/Tools
+bleiben unveraendert in ``jarvis_core``. "Client delegation" (PR-Beispiel
 ``client_delegation.py``) verlangt eine Agent-Instanz OHNE jegliche Tools (die
 Tools laufen dort auf einer separaten ``llm.LLM``, von der Anwendung selbst
 ueber ``delegation_created``-Events getrieben) — das haette einen kompletten
@@ -54,9 +61,10 @@ Umbau unserer ~20 Tool-Handler erfordert. Siehe
 ``docs/decisions/083-jarvis-gpt-live-transport.md``.
 
 Ist ``GPTLiveModel`` nicht importierbar (z.B. ein aelteres Image ohne den
-Vorab-Plugin-Block) und ``VOICE_API=live`` gesetzt, faellt
-``_build_llm_model()`` mit einer lauten Warnung auf ``realtime`` zurueck statt
-den Worker crashen zu lassen.
+Vorab-Plugin-Block) und die Bindung zeigt trotzdem auf ``api="live"``, faellt
+``entrypoint()`` mit einer lauten Warnung + MC-Meldung
+(``report_voice_unsupported``) auf die reinen Env-Defaults zurueck, statt den
+Worker crashen zu lassen oder mit dem falschen Endpoint zu verbinden.
 """
 
 import logging
@@ -73,6 +81,7 @@ from jarvis_core.persona import (
     build_live_delegation_instructions,
     build_live_voice_instructions,
 )
+from jarvis_core.voice_provider import VoiceChoice, resolve_voice_choice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
@@ -80,8 +89,8 @@ logger = logging.getLogger("voice_worker")
 # GPT-Live-Plugin (ADR-083) wird im regulaeren voice_worker/Dockerfile-Build
 # per PR-SHA installiert (PR #7212, noch nicht released auf PyPI). Import-
 # Fehler wird trotzdem abgefangen (z.B. ein aelteres Image ohne diesen Build-
-# Schritt), damit `VOICE_API=live` dann laut (statt mit einem nackten
-# ImportError-Traceback) auf `realtime` zurueckfaellt.
+# Schritt), damit eine Bindung auf ``api="live"`` dann laut (statt mit einem
+# nackten ImportError-Traceback) auf ``realtime`` zurueckfaellt.
 try:
     from livekit.plugins.openai.realtime import GPTLiveModel  # type: ignore[attr-defined]
     _GPT_LIVE_AVAILABLE = True
@@ -89,17 +98,16 @@ except ImportError:
     GPTLiveModel = None  # type: ignore[assignment]
     _GPT_LIVE_AVAILABLE = False
 
-# ADR-083 Nachschliff: livekit-plugins-openai>=~1.7 (incl. the 1.8.0 this
-# vorab image force-installs) tightened RealtimeModel/xai.RealtimeModel's
-# turn_detection param from "any dict" to a typed object
-# (openai.types.beta.realtime.session.TurnDetection — both plugins import the
-# SAME class). A plain dict now raises
-# "AttributeError: 'dict' object has no attribute 'create_response'" at
-# construction time (live reproduced 10.09.2026, unrelated to GPT-Live work —
-# hits the realtime FALLBACK path too, which this image needs working for
-# VOICE_API=realtime as the documented rollback). Import is wrapped the same
-# way as GPTLiveModel: older plugin releases still accept a bare dict, so
-# fall back to that shape if the typed class isn't importable.
+# ADR-083 Nachschliff: livekit-plugins-openai>=~1.7 (inkl. das 1.8.0, das der
+# Live-Build-Schritt force-installiert) verschaerfte RealtimeModel/
+# xai.RealtimeModel's turn_detection-Parameter von "beliebiges dict" auf ein
+# typisiertes Objekt (openai.types.beta.realtime.session.TurnDetection — beide
+# Plugins importieren dieselbe Klasse). Ein reines dict wirft seither beim
+# Konstruieren "AttributeError: 'dict' object has no attribute
+# 'create_response'" (live reproduziert 10.09.2026, unabhaengig vom
+# GPT-Live-Bezug — betrifft auch den Realtime-FALLBACK-Pfad, der auf diesem
+# Image funktionieren muss). Import ist genauso abgesichert wie GPTLiveModel:
+# aeltere Plugin-Releases akzeptieren weiterhin ein blosses dict.
 try:
     from openai.types.beta.realtime.session import TurnDetection as _TurnDetectionType
 except ImportError:
@@ -120,54 +128,55 @@ _TURN_DETECTION = (
 )
 
 
-def _build_realtime_model():
-    """Baut das Realtime-LLM je nach `VOICE_PROVIDER` env var.
+def _build_realtime_transport(
+    choice: VoiceChoice,
+    *,
+    briefing_ctx: str | None = None,
+    frontier_enabled: bool | None = None,
+    operator_name: str | None = None,
+):
+    """Die "realtime"-api: livekit's Realtime-Plugins (openai/xai).
 
-    Default ist "openai" (ADR-060). "xai" bleibt als Fallback erhalten, falls
-    OpenAI Realtime mal ausfaellt oder der Operator zurueckschalten will.
-    Faellt der jeweilige API-Key, wird sofort (statt erst beim ersten
-    Session-Connect) mit einer klaren Fehlermeldung abgebrochen.
+    Returnt ``(llm, agent_instructions)`` wie jeder Transport-Builder in
+    ``_API_TRANSPORTS`` (ADR-083 Instructions-Split) — realtime bekommt
+    weiterhin die volle ``build_instructions()``-Persona als Top-Level-Agent-
+    Instructions (kein Split noetig, hier ruft das EINE Modell die Tools
+    selbst auf).
     """
-    provider = os.environ.get("VOICE_PROVIDER", "openai").strip().lower()
-
-    if provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=openai but OPENAI_API_KEY is not set. "
-                "Set OPENAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=xai to fall back to XAI_API_KEY."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "marin"
-        model = os.environ.get("VOICE_MODEL", "gpt-realtime-2.1")
-        return openai.realtime.RealtimeModel(
-            model=model,
-            voice=voice,
-            turn_detection=_TURN_DETECTION,
-        )
-
-    if provider == "xai":
-        if not os.environ.get("XAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=xai but XAI_API_KEY is not set. "
-                "Set XAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=openai (default) to use OPENAI_API_KEY instead."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "ara"
-        return xai.realtime.RealtimeModel(
-            voice=voice,
-            turn_detection=_TURN_DETECTION,
-        )
-
-    raise RuntimeError(
-        f"Unknown VOICE_PROVIDER={provider!r}. Use 'openai' (default) or 'xai'."
+    instructions = build_instructions(
+        VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
+        operator_name=operator_name,
     )
+
+    if choice.provider == "openai":
+        llm = openai.realtime.RealtimeModel(
+            model=choice.model or "gpt-realtime-2.1",
+            voice=choice.voice,
+            turn_detection=_TURN_DETECTION,
+        )
+        return llm, instructions
+
+    if choice.provider == "xai":
+        # model ist absichtlich WEGGELASSEN (nicht als None uebergeben), wenn
+        # choice.model leer ist — der Plugin-eigene Default ist NOT_GIVEN, und
+        # der Type-Hint akzeptiert None fuer `model` nicht so wie fuer `voice`.
+        # Bindet MC ein Modell (z.B. grok-voice-think-fast-1.0 auf der
+        # voice-xai Seed-Zeile), MUSS es ankommen — Review-Fund (2026-09-10):
+        # dieser Zweig liess choice.model vorher stillschweigend fallen.
+        kwargs: dict = {"voice": choice.voice, "turn_detection": _TURN_DETECTION}
+        if choice.model:
+            kwargs["model"] = choice.model
+        llm = xai.realtime.RealtimeModel(**kwargs)
+        return llm, instructions
+
+    raise RuntimeError(f"Unknown voice provider {choice.provider!r} from resolve_voice_choice.")
 
 
 # GPT-Live-Stimmen: aus dem PR-Code selbst (nicht aus Doku-Vermutungen) —
 # `GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone",
 # "vesper"]` und `DEFAULT_VOICE = "marin"` in gpt_live_model.py (PR #7212,
-# SHA de3c5ce, Stand 10.09.2026). "marin" (unser bisheriger Realtime-Default)
-# ist also tatsaechlich GUELTIG fuer gpt-live-1 — keine Fehlkonfiguration.
+# SHA de3c5ce, Stand 10.09.2026). "marin" (auch OpenAI-Realtime-Default) ist
+# also tatsaechlich GUELTIG fuer gpt-live-1 — keine Fehlkonfiguration.
 # README des PR: "Other supported names and custom voice objects still pass
 # through to the API" — die Liste ist daher als bekannt-gute Namen gefuehrt,
 # nicht als hartes Schema; ein unbekannter String wird trotzdem abgelehnt
@@ -176,22 +185,21 @@ GPT_LIVE_KNOWN_VOICES = frozenset({"aster", "beacon", "cinder", "marin", "stone"
 GPT_LIVE_DEFAULT_VOICE = "marin"
 
 
-def _resolve_live_voice() -> str:
-    """Bestimmt + validiert die GPT-Live-Stimme aus ``VOICE_VOICE_ID``.
-
-    Unbekannter String (kein dict/Custom-Voice-Objekt, nicht in
-    ``GPT_LIVE_KNOWN_VOICES``) → laute Warnung + Fallback auf
-    ``GPT_LIVE_DEFAULT_VOICE`` ("marin"), statt eine vermutlich falsche
-    Stimme stillschweigend an die API durchzureichen.
+def _validate_live_voice(voice: str) -> str:
+    """Validiert eine (aus ``VoiceChoice.voice``) bereits aufgeloeste Stimme
+    gegen ``GPT_LIVE_KNOWN_VOICES`` — laute Warnung + Fallback auf
+    ``GPT_LIVE_DEFAULT_VOICE`` bei Unbekanntem, statt eine vermutlich falsche
+    Stimme (z.B. ein xAI-Realtime-Name wie "ara", der fuer diese API nicht
+    gilt) stillschweigend an die API durchzureichen.
     """
-    raw = os.environ.get("VOICE_VOICE_ID", "").strip()
+    raw = (voice or "").strip()
     if not raw:
         return GPT_LIVE_DEFAULT_VOICE
     if raw.lower() not in GPT_LIVE_KNOWN_VOICES:
         logger.warning(
-            "VOICE_VOICE_ID=%r is not a known gpt-live-1 voice (known: %s) — "
-            "falling back to default %r. If OpenAI added a new voice name, "
-            "add it to GPT_LIVE_KNOWN_VOICES in voice_worker/main.py.",
+            "voice %r is not a known gpt-live-1 voice (known: %s) — falling "
+            "back to default %r. If OpenAI added a new voice name, add it to "
+            "GPT_LIVE_KNOWN_VOICES in voice_worker/main.py.",
             raw, sorted(GPT_LIVE_KNOWN_VOICES), GPT_LIVE_DEFAULT_VOICE,
         )
         return GPT_LIVE_DEFAULT_VOICE
@@ -204,12 +212,12 @@ def _resolve_live_voice() -> str:
 # dann 16s Latenz zwischen letztem User-Item und erster Assistant-Antwort.
 # GPTLiveModel's EIGENER Default ist "gpt-5.6-luna" (siehe DEFAULT_BACKEND_MODEL
 # in gpt_live_model.py) — OpenAIs "Fast mode" fuer genau diesen
-# Full-Duplex-Anwendungsfall, kein reines Codename-Rätsel wie im Frontier-
+# Full-Duplex-Anwendungsfall, kein reines Codename-Raetsel wie im Frontier-
 # Kontext, sondern der vom PR selbst gewaehlte Live-Default. Umgestellt:
-# JARVIS_LIVE_BACKEND_MODEL (Default "gpt-5.6-luna") ist jetzt eine EIGENE
-# Env-Var, getrennt von JARVIS_FRONTIER_MODEL — die beiden Anwendungsfaelle
-# (schnelle Voice-Delegation vs. schwere ask_frontier-Analyse) brauchen
-# unterschiedliche Modelle, keine gemeinsame Config mehr.
+# JARVIS_LIVE_BACKEND_MODEL (Default "gpt-5.6-luna") ist eine EIGENE Env-Var,
+# getrennt von JARVIS_FRONTIER_MODEL — die beiden Anwendungsfaelle (schnelle
+# Voice-Delegation vs. schwere ask_frontier-Analyse) brauchen unterschiedliche
+# Modelle, keine gemeinsame Config.
 LIVE_BACKEND_DEFAULT_MODEL = "gpt-5.6-luna"
 
 
@@ -217,16 +225,17 @@ def _resolve_live_backend_model() -> str:
     return os.environ.get("JARVIS_LIVE_BACKEND_MODEL", "").strip() or LIVE_BACKEND_DEFAULT_MODEL
 
 
-def _build_live_model(
+def _build_live_transport(
+    choice: VoiceChoice,
     *,
     briefing_ctx: str | None = None,
     frontier_enabled: bool | None = None,
     operator_name: str | None = None,
 ):
-    """Baut das GPT-Live-Duplex-Modell (ADR-083, vorab ueber LiveKit-PR #7212).
+    """Die "live"-api: ``GPTLiveModel`` (ADR-083, vorab ueber LiveKit-PR #7212).
 
     ``delegation="responses"``: ein Backend-Responses-Modell fuehrt Reasoning +
-    Tool-Calls, exakt wie bei ``_build_realtime_model()`` — unsere
+    Tool-Calls, exakt wie bei ``_build_realtime_transport()`` — unsere
     ``@function_tool``-Methoden funktionieren unveraendert.
 
     Latenz-Tuning (ADR-083 Nachschliff nach Marks erstem Anruf, 16s
@@ -236,29 +245,31 @@ def _build_live_model(
     ``service_tier="priority"``, ``max_output_tokens=400`` — Full-Duplex
     verlangt zuegige Antworten, nicht erschoepfende.
 
-    Instructions-Split (ADR-083, Review-Fund): die Voice-Layer-Instructions
-    (Stil/Tempo/Sprach-Switch, KEINE Tool-Regeln) gehen als Agent-Top-Level-
-    ``instructions`` mit (siehe ``_build_llm_model()``/``VoiceAssistant``) —
-    NICHT hier. Hier bekommt nur das Backend-Responses-Modell seine eigenen,
+    Instructions-Split (ADR-083, Review-Fund): returnt ``(llm,
+    agent_instructions)`` wie jeder Transport-Builder — die
+    ``agent_instructions`` sind hier die KURZE Voice-Layer-Persona
+    (``build_live_voice_instructions()``, Stil/Tempo/Sprach-Switch, KEINE
+    Tool-Regeln). Das Backend-Responses-Modell bekommt separat seine eigenen,
     vollen Verfahrens-/Tool-/Honesty-Instructions
     (``build_live_delegation_instructions()``), weil DORT die Tools
     tatsaechlich aufgerufen werden.
     """
     if not _GPT_LIVE_AVAILABLE:
         raise RuntimeError(
-            "VOICE_API=live but GPTLiveModel is not importable — this image "
-            "does not have the vorab-installed LiveKit PR #7212 plugin. Use "
-            "the vorab-installed LiveKit PR #7212 plugin block in voice_worker/Dockerfile. Rebuild the image, or set VOICE_API=realtime."
+            "voice api 'live' but GPTLiveModel is not importable — this "
+            "image does not have the vorab-installed LiveKit PR #7212 "
+            "plugin block in voice_worker/Dockerfile. Rebuild the image, or "
+            "rebind the runtime to a 'realtime' api."
         )
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError(
-            "VOICE_API=live but OPENAI_API_KEY is not set. GPT-Live needs an "
-            "OpenAI key (same as VOICE_PROVIDER=openai)."
+            "voice api 'live' but OPENAI_API_KEY is not set. GPT-Live needs "
+            "an OpenAI key (same as the 'openai' realtime provider)."
         )
-    voice = _resolve_live_voice()
-    model = os.environ.get("VOICE_MODEL", "gpt-live-1")
+    voice = _validate_live_voice(choice.voice)
+    model = choice.model or "gpt-live-1"
     backend_model = _resolve_live_backend_model()
-    return GPTLiveModel(
+    llm = GPTLiveModel(
         model=model,
         voice=voice,
         delegation="responses",
@@ -275,83 +286,56 @@ def _build_live_model(
             "max_output_tokens": 400,
         },
     )
+    instructions = build_live_voice_instructions(operator_name)
+    return llm, instructions
 
 
-def _resolve_voice_api() -> str:
-    """Bestimmt den Voice-Transport: explizites ``VOICE_API`` gewinnt immer.
-
-    Fehlt ``VOICE_API`` UND ``VOICE_MODEL`` sieht wie ein GPT-Live-Modell aus
-    (Praefix ``gpt-live``) → automatisch ``live`` (mit Log), statt still im
-    Realtime-Pfad zu landen und ``gpt-live-1`` als ungueltiges Realtime-Modell
-    an die falsche API zu schicken. Das ist live so passiert (10.09.2026:
-    Compose-Service reichte nur ``VOICE_MODEL`` durch, ``VOICE_API`` fehlte im
-    Container) — dieser Fallback verhindert die Wiederholung.
-    """
-    explicit = os.environ.get("VOICE_API", "").strip().lower()
-    if explicit:
-        return explicit
-    model = os.environ.get("VOICE_MODEL", "").strip().lower()
-    if model.startswith("gpt-live"):
-        logger.info(
-            "VOICE_API is not set but VOICE_MODEL=%r looks like a GPT-Live "
-            "model — auto-selecting VOICE_API=live. Set VOICE_API explicitly "
-            "to silence this.",
-            model,
-        )
-        return "live"
-    return "realtime"
+#: Which ``VoiceChoice.api`` values this worker image can actually build a
+#: transport for. Each builder takes ``(choice, *, briefing_ctx,
+#: frontier_enabled, operator_name)`` and returns ``(llm,
+#: agent_instructions)`` — both transport-dependent (ADR-083 Instructions-
+#: Split). A value ``classify_voice_api`` can produce but that has no entry
+#: here (future apis) is entrypoint()'s job to catch BEFORE reaching
+#: ``_build_transport`` — see the guard there.
+_API_TRANSPORTS = {
+    "realtime": _build_realtime_transport,
+    "live": _build_live_transport,
+}
 
 
-def _build_llm_model(
+def _build_transport(
+    choice: VoiceChoice,
     *,
     briefing_ctx: str | None = None,
     frontier_enabled: bool | None = None,
     operator_name: str | None = None,
 ):
-    """Waehlt den Voice-Transport (``_resolve_voice_api()``) + baut das passende LLM.
+    """Baut Transport-LLM + Agent-Instructions aus einer bereits entschiedenen
+    ``VoiceChoice``.
 
-    Returnt ``(llm, agent_instructions)``: das Modell-Objekt UND die
-    top-level Agent-``instructions``, weil beide transport-abhaengig sind
-    (ADR-083 Instructions-Split) — realtime bekommt die volle
-    ``build_instructions()``-Persona wie bisher, live bekommt die kurze
-    Voice-Layer-Persona (``build_live_voice_instructions()``); die vollen
-    Verfahrensregeln gehen bei live stattdessen ins Backend-Responses-Modell
-    (siehe ``_build_live_model()``).
+    Die Entscheidung WELCHER Anbieter/Modell/Stimme/Api selbst liegt in
+    ``jarvis_core.voice_provider.resolve_voice_choice`` (ADR-082, MC-Runtime-
+    Bindung schlaegt Env) — hier bleibt nur der livekit-/GPTLive-Plugin-
+    Aufbau, den dieses Modul bewusst als einzigen livekit-Import traegt
+    (siehe voice_provider-Docstring: Trennung wegen der stumm uebersprungenen
+    Worker-Tests, Memory 2026-08-21).
 
-    'live' faellt bei fehlendem Plugin (Produktions-Image ohne PR #7212) mit
-    einer lauten Warnung + Fallback auf 'realtime' zurueck, statt den Worker
-    mit einem nackten ImportError sterben zu lassen — siehe Modul-Docstring
-    "GPT-Live-Transport".
+    Erwartet ein bereits api-geprueftes ``choice`` (entrypoint() faellt auf
+    einen unterstuetzten Wert zurueck, BEVOR dieses hier gerufen wird) — der
+    RuntimeError unten ist die letzte Verteidigungslinie, kein normaler Pfad.
     """
-    api = _resolve_voice_api()
-    if api == "realtime":
-        llm = _build_realtime_model()
-        instructions = build_instructions(
-            VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
-            operator_name=operator_name,
+    logger.info(choice.as_log())
+
+    builder = _API_TRANSPORTS.get(choice.api)
+    if builder is None:
+        raise RuntimeError(
+            f"No transport for voice api {choice.api!r} — entrypoint() should "
+            f"have fallen back before reaching this point."
         )
-        return llm, instructions
-    if api == "live":
-        if not _GPT_LIVE_AVAILABLE:
-            logger.warning(
-                "VOICE_API=live requested but GPTLiveModel is not available "
-                "on this image (missing LiveKit PR #7212 plugin) — falling "
-                "back to VOICE_API=realtime. Use "
-                "the vorab-installed LiveKit PR #7212 plugin block in voice_worker/Dockerfile for the gpt-live-1 transport."
-            )
-            llm = _build_realtime_model()
-            instructions = build_instructions(
-                VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
-                operator_name=operator_name,
-            )
-            return llm, instructions
-        llm = _build_live_model(
-            briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
-            operator_name=operator_name,
-        )
-        instructions = build_live_voice_instructions(operator_name)
-        return llm, instructions
-    raise RuntimeError(f"Unknown VOICE_API={api!r}. Use 'realtime' (default) or 'live'.")
+    return builder(
+        choice, briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
+        operator_name=operator_name,
+    )
 
 
 class VoiceAssistant(Agent):
@@ -364,22 +348,24 @@ class VoiceAssistant(Agent):
     """
 
     def __init__(
-        self, briefing: dict | None = None, operator_name: str | None = None
+        self,
+        voice_choice: VoiceChoice,
+        briefing: dict | None = None,
+        operator_name: str | None = None,
     ) -> None:
         # Low-latency turn-detection: kurze Silence-Window damit der Operator schneller
         # Antworten bekommt (default ist ~700ms, wir gehen auf 400ms).
         # OpenAI + xAI Realtime akzeptieren beide dieselbe TurnDetection-Struktur
-        # via dict (_TURN_DETECTION oben, provider-agnostisch).
+        # (_TURN_DETECTION oben, provider-agnostisch).
         briefing_ctx = self._format_briefing_as_context(briefing) if briefing else None
         frontier_on = frontier.is_tool_enabled()
-        # _build_llm_model() returns (llm, agent_instructions): the top-level
-        # Agent instructions are transport-dependent (ADR-083 Instructions-
-        # Split — realtime gets the full persona, live gets the short
-        # voice-layer persona while the full procedure/tool rules go to the
-        # GPT-Live backend model instead).
-        llm, agent_instructions = _build_llm_model(
-            briefing_ctx=briefing_ctx,
-            frontier_enabled=frontier_on,
+        # _build_transport() returns (llm, agent_instructions): die Top-Level-
+        # Agent-Instructions sind transport-abhaengig (ADR-083 Instructions-
+        # Split — realtime bekommt die volle Persona, live bekommt die kurze
+        # Voice-Layer-Persona, waehrend die vollen Verfahrensregeln bei live
+        # stattdessen ins Backend-Responses-Modell gehen).
+        llm, agent_instructions = _build_transport(
+            voice_choice, briefing_ctx=briefing_ctx, frontier_enabled=frontier_on,
             operator_name=operator_name,
         )
         super().__init__(instructions=agent_instructions, llm=llm)
@@ -646,6 +632,32 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info("Jarvis session starting, room=%s", ctx.room.name)
     await ctx.connect()
 
+    # Pull die MC-Runtime-Bindung VOR dem Modellaufbau (ADR-082) — LiveKit gibt
+    # pro Anruf einen frischen Raum, ein Wechsel im Runtime-Picker wirkt also
+    # ohne Container-Neustart ab dem naechsten Anruf. Fail-soft: mc_config
+    # bleibt None bei Backend-Ausfall, resolve_voice_choice faellt dann auf die
+    # Env-Defaults zurueck (raist nur, wenn wirklich kein API-Key existiert).
+    mc_config = await mc_client.voice_config()
+    voice_choice = resolve_voice_choice(mc_config)
+
+    # Saubere Ablehnung statt stillem Fehlschlag (ADR-082 Follow-up): die
+    # Bindung kann (auf einem Image ohne den Live-Build-Schritt) auf eine API
+    # zeigen, die dieses Image nicht bauen kann. Ohne diesen Guard wuerde
+    # _build_transport entweder mit dem FALSCHEN Endpoint verbinden (still
+    # falsches Verhalten) oder crashen (kein Jarvis). Stattdessen: laut
+    # loggen, MC melden (damit es im Activity-Feed sichtbar ist), auf die
+    # reinen Env-Defaults zurueckfallen.
+    if voice_choice.api not in _API_TRANSPORTS:
+        logger.error(
+            "voice api %r (provider=%s, model=%s) not supported by this "
+            "worker image — falling back to env config",
+            voice_choice.api, voice_choice.provider, voice_choice.model,
+        )
+        await mc_client.report_voice_unsupported(
+            provider=voice_choice.provider, model=voice_choice.model, api=voice_choice.api,
+        )
+        voice_choice = resolve_voice_choice(None)
+
     # Pre-fetch briefing so the realtime model has fresh context before the
     # operator's first utterance. Fail-soft: if MC backend is down we still start
     # the session — the operator just won't get the adaptive greeting.
@@ -671,7 +683,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession()
     _attach_latency_logging(session)
     await session.start(
-        agent=VoiceAssistant(briefing=briefing, operator_name=operator_name),
+        agent=VoiceAssistant(voice_choice, briefing=briefing, operator_name=operator_name),
         room=ctx.room,
     )
 
