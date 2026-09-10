@@ -18,16 +18,18 @@ den Namen "voice").
 
 Stack:
 - livekit-agents[openai,xai] ~= 1.5
-- Provider per `VOICE_PROVIDER` env var (siehe ADR-060):
-  - "openai" (default): OpenAI Realtime, Modell `VOICE_MODEL` (default
-    "gpt-realtime-2.1"), Voice "marin" (uebersteuerbar via VOICE_VOICE_ID)
-  - "xai": Fallback auf das bisherige xAI Grok Realtime, Voice "ara"
+- Provider/Modell/Stimme kommen aus Jarvis' Runtime-Bindung in MC (ADR-082,
+  ``GET /api/v1/agent/voice/config``, gepullt pro Anruf in ``entrypoint()``) —
+  umschaltbar im MC-Runtime-Picker wie bei jedem anderen Agenten. Die
+  Entscheidungslogik (MC schlaegt Env, Env schlaegt Hardcoded-Default, nie
+  verstummen) sitzt in ``jarvis_core.voice_provider.resolve_voice_choice``.
+  `VOICE_PROVIDER`/`VOICE_MODEL`/`VOICE_*_VOICE_ID` env vars bleiben der
+  Rueckfall, wenn MC nicht antwortet oder nichts gebunden ist.
 - Sprache: Auto-detect (das Realtime-Modell antwortet in der Sprache des
   Inputs — Deutsch ok)
 """
 
 import logging
-import os
 import random
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
@@ -36,6 +38,7 @@ from livekit.plugins import openai, xai
 from jarvis_core import frontier, mc_client, tools as jtools
 from jarvis_core.channels import VOICE
 from jarvis_core.persona import build_instructions
+from jarvis_core.voice_provider import VoiceChoice, resolve_voice_choice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
@@ -50,47 +53,32 @@ _TURN_DETECTION = {
 }
 
 
-def _build_realtime_model():
-    """Baut das Realtime-LLM je nach `VOICE_PROVIDER` env var.
+def _build_realtime_model(choice: VoiceChoice):
+    """Baut das Realtime-LLM aus einer bereits entschiedenen ``VoiceChoice``.
 
-    Default ist "openai" (ADR-060). "xai" bleibt als Fallback erhalten, falls
-    OpenAI Realtime mal ausfaellt oder der Operator zurueckschalten will.
-    Faellt der jeweilige API-Key, wird sofort (statt erst beim ersten
-    Session-Connect) mit einer klaren Fehlermeldung abgebrochen.
+    Die Entscheidung WELCHER Anbieter/Modell/Stimme selbst liegt in
+    ``jarvis_core.voice_provider.resolve_voice_choice`` (ADR-082, MC-Runtime-
+    Bindung schlaegt Env) — hier bleibt nur der livekit-Plugin-Aufbau, den
+    dieses Modul bewusst als einzigen livekit-Import traegt (siehe
+    voice_provider-Docstring: Trennung wegen der stumm uebersprungenen
+    Worker-Tests, Memory 2026-08-21).
     """
-    provider = os.environ.get("VOICE_PROVIDER", "openai").strip().lower()
+    logger.info(choice.as_log())
 
-    if provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=openai but OPENAI_API_KEY is not set. "
-                "Set OPENAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=xai to fall back to XAI_API_KEY."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "marin"
-        model = os.environ.get("VOICE_MODEL", "gpt-realtime-2.1")
+    if choice.provider == "openai":
         return openai.realtime.RealtimeModel(
-            model=model,
-            voice=voice,
+            model=choice.model or "gpt-realtime-2.1",
+            voice=choice.voice,
             turn_detection=_TURN_DETECTION,
         )
 
-    if provider == "xai":
-        if not os.environ.get("XAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=xai but XAI_API_KEY is not set. "
-                "Set XAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=openai (default) to use OPENAI_API_KEY instead."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "ara"
+    if choice.provider == "xai":
         return xai.realtime.RealtimeModel(
-            voice=voice,
+            voice=choice.voice,
             turn_detection=_TURN_DETECTION,
         )
 
-    raise RuntimeError(
-        f"Unknown VOICE_PROVIDER={provider!r}. Use 'openai' (default) or 'xai'."
-    )
+    raise RuntimeError(f"Unknown voice provider {choice.provider!r} from resolve_voice_choice.")
 
 
 class VoiceAssistant(Agent):
@@ -103,7 +91,10 @@ class VoiceAssistant(Agent):
     """
 
     def __init__(
-        self, briefing: dict | None = None, operator_name: str | None = None
+        self,
+        voice_choice: VoiceChoice,
+        briefing: dict | None = None,
+        operator_name: str | None = None,
     ) -> None:
         # Low-latency turn-detection: kurze Silence-Window damit der Operator schneller
         # Antworten bekommt (default ist ~700ms, wir gehen auf 400ms).
@@ -118,7 +109,7 @@ class VoiceAssistant(Agent):
                 frontier_enabled=frontier_on,
                 operator_name=operator_name,
             ),
-            llm=_build_realtime_model(),
+            llm=_build_realtime_model(voice_choice),
         )
         # ask_frontier ist per JARVIS_FRONTIER_ENABLED gated (Default off, ADR-062):
         # ist es aus, das Tool aus dem LiveKit-Schema entfernen, sodass das
@@ -383,6 +374,14 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info("Jarvis session starting, room=%s", ctx.room.name)
     await ctx.connect()
 
+    # Pull die MC-Runtime-Bindung VOR dem Modellaufbau (ADR-082) — LiveKit gibt
+    # pro Anruf einen frischen Raum, ein Wechsel im Runtime-Picker wirkt also
+    # ohne Container-Neustart ab dem naechsten Anruf. Fail-soft: mc_config
+    # bleibt None bei Backend-Ausfall, resolve_voice_choice faellt dann auf die
+    # Env-Defaults zurueck (raist nur, wenn wirklich kein API-Key existiert).
+    mc_config = await mc_client.voice_config()
+    voice_choice = resolve_voice_choice(mc_config)
+
     # Pre-fetch briefing so the realtime model has fresh context before the
     # operator's first utterance. Fail-soft: if MC backend is down we still start
     # the session — the operator just won't get the adaptive greeting.
@@ -407,7 +406,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = AgentSession()
     await session.start(
-        agent=VoiceAssistant(briefing=briefing, operator_name=operator_name),
+        agent=VoiceAssistant(voice_choice, briefing=briefing, operator_name=operator_name),
         room=ctx.room,
     )
 

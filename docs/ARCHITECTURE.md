@@ -2,7 +2,7 @@
 
 > **Lebende Dokumentation.** Bei jeder Architektur-Änderung (neue Services, Runtime-Wechsel, Dispatch-Flow, Schema-Migration) muss dieses Dokument angepasst werden. Bei Design-Entscheidungen zusätzlich neues ADR in `docs/decisions/` anlegen.
 
-**Letztes Update:** 2026-08-16
+**Letztes Update:** 2026-09-10
 **Stand:** v0.9+ Sessions-Chat-View (ADR-073); Benchmark Studio Vertical + Kern-Bausteine (ADR-070); OpenClaw Gateway Sunset complete (Phases 28-31, ADR-039 Accepted)
 
 ---
@@ -1512,6 +1512,23 @@ Alle ADRs in `docs/decisions/`:
 ---
 
 ## Änderungshistorie (high-level)
+
+- **2026-09-10** — **Jarvis' Sprachmodell wird Runtime-Bindung (ADR-082):** `JarvisVoiceAdapter`
+  in `HOST_ADAPTERS` (ADR-064-Muster) macht Jarvis im MC-Runtime-Picker umschaltbar wie jeden
+  anderen Agenten — bisher las `voice_worker/main.py` den Provider nur aus der Container-Env
+  (`VOICE_PROVIDER`/`VOICE_MODEL`, ADR-060). Neues Wire-Protokoll `"voice"` in
+  `harness_compat.py` (`VOICE_RUNTIME_TYPES`, klassifiziert VOR `_OPENAI_TYPES` — sonst würde
+  `voice_openai` als generischer OpenAI-Provider durchrutschen und jeder openai-sprechende
+  CLI-Harness erschiene kompatibel). Neue Route `GET /api/v1/agent/voice/config` (nur Harness
+  `jarvis`, sonst 403; nie Schlüsselmaterial, fail-soft `{provider:"openai", model:null, …}`
+  ohne Bindung). `voice_worker/main.py::entrypoint()` pullt die Bindung vor jedem Anruf (LiveKit
+  gibt pro Anruf einen frischen Room → Wechsel wirkt ohne Container-Neustart). Entscheidungslogik
+  (`jarvis_core/voice_provider.py::resolve_voice_choice`) bewusst ohne `livekit`-Import, damit sie
+  im normalen Backend-Testlauf läuft (Lehre 2026-08-21: zehn Worker-Tests skippten vorher still,
+  weil `livekit` in der Backend-venv fehlt). Modellwechsel läuft über die bereits vorhandene
+  `PATCH /api/v1/runtimes/db/{slug}` + `mark_agents_for_sync`-Propagation (ADR-054/078) — kein
+  neuer Code nötig, sobald der Adapter registriert ist. Kein Migrations-Bedarf (`agents.harness =
+  'jarvis'` stand bereits in der DB). Ersetzt den nie gemergten ADR-074-Entwurf (PR #339).
 
 - **2026-09-02** — **Ein Rezept-Modell + Rezept-Umschalter (ADR-077, #388 Backend, #389
   Frontend):** Rezept = Engine · Startbefehl (Pflicht) · Port · Topologie (Anzahl Boxen).

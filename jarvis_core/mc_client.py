@@ -392,6 +392,28 @@ async def get_operator() -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+async def voice_config() -> dict[str, Any] | None:
+    """GET /api/v1/agent/voice/config — welcher Sprach-Anbieter gebunden ist (ADR-082).
+
+    Wird pro Anruf VOR dem Aufbau des Realtime-Modells gerufen (siehe
+    voice_worker/main.py::entrypoint) — nur so wirkt ein Runtime-Wechsel in MC
+    ohne Container-Neustart. Fail-soft: liefert None statt zu raisen, damit
+    ``jarvis_core.voice_provider.resolve_voice_choice`` auf die Env-Defaults
+    zurueckfaellt und Jarvis auch bei Backend-Ausfall sprechfaehig bleibt.
+    Kurzer Timeout (3s) — ein haengender Call darf den Session-Start nicht
+    verzoegern.
+    """
+    try:
+        resp = await _client.get("/api/v1/agent/voice/config", timeout=3.0)
+        if resp.status_code != 200:
+            logger.warning("voice_config fetch failed: HTTP %s", resp.status_code)
+            return None
+        return resp.json()
+    except Exception as e:  # noqa: BLE001 — fail-soft, Jarvis darf nicht verstummen
+        logger.warning("voice_config fetch failed: %s", e)
+        return None
+
+
 async def vault_briefing() -> dict[str, Any]:
     """Fetch pre-session briefing JSON from MC backend.
 
