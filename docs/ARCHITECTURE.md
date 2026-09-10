@@ -1539,6 +1539,26 @@ Alle ADRs in `docs/decisions/`:
   die Env-Defaults zurück. Kein Live-Transport in diesem PR — der nächste ist ein Builder +
   ein Registry-Eintrag.
 
+- **2026-09-10** — **GPT-Live-Transport, `_API_TRANSPORTS["live"]` implementiert (ADR-083):**
+  füllt den von ADR-082 bewusst offengelassenen Platz — `_build_live_transport()` baut
+  `GPTLiveModel` (OpenAI Live API, LiveKit-PR #7212, vorab per PR-SHA im konsolidierten
+  `voice_worker/Dockerfile` installiert, kein separates Test-Image). `delegation="responses"`:
+  ein Backend-Modell (Default `gpt-5.6-luna`, eigene Env `JARVIS_LIVE_BACKEND_MODEL`, getrennt
+  von `JARVIS_FRONTIER_MODEL`) ruft die `@function_tool`-Methoden wie gehabt — kein Umbau der
+  ~20 Tool-Handler. Instructions-Split: kurze Voice-Layer-Persona (Stil/Tempo/Lachen/
+  Tonlagen-Regie, kein Selbstvorstellungs-Verbot) als Top-Level-Agent-`instructions`, volle
+  Verfahrens-/Honesty-/`CONFIRMATION ECHO`-Regeln im Backend-`responses_options.instructions`.
+  Situative Begrüssung (`jarvis_core/voice_greeting.py`, livekit-frei) statt Zahlen-Report,
+  echte Tageszeit-Wortwahl. Latenz-Tuning nach Marks erstem Anruf: 16s → ~3s
+  (`reasoning=low`/`text-verbosity=low`/`service_tier=priority`/`max_output_tokens=400`,
+  `delegation_latency_s`-Log). Typisierte `openai.types.beta.realtime.session.TurnDetection`
+  behebt einen unabhängigen Regressions-Fund im Realtime-Fallback
+  (livekit-plugins-openai≥~1.7 lehnt ein dict ab). **Review-Fix (rev-490):** neue Seed-Runtime
+  `voice-openai-live` (`gpt-live-1`) in `backend/config/runtimes.json` — ohne manuelle Bindung
+  im Runtime-Picker bleibt Jarvis auf Realtime, auch mit diesem PR gemergt.
+  `entrypoint()`s Guard erzwingt jetzt einen Realtime-Fallback (nicht nur ein Env-Re-Resolve)
+  wenn `api="live"` gebunden ist aber `GPTLiveModel` auf dem Image fehlt.
+
 - **2026-09-02** — **Ein Rezept-Modell + Rezept-Umschalter (ADR-077, #388 Backend, #389
   Frontend):** Rezept = Engine · Startbefehl (Pflicht) · Port · Topologie (Anzahl Boxen).
   `local_recipes.topology` `{"nodes":1|2}` + `port` (Migration 0191, additiv). sparkrun ist
