@@ -1,3 +1,24 @@
-livekit-agents[openai,xai]~=1.5
+# livekit-agents[openai,xai]~=1.5 (PEP 440 "compatible release") resolves to
+# ANY 1.x >= 1.5, INCLUDING 1.8.0 — not just patch releases of 1.5. A plain
+# rebuild on 10.09.2026 resolved 1.8.0 and broke _build_realtime_model() in
+# voice_worker/main.py: livekit-plugins-openai's RealtimeModel started
+# rejecting the plain dict _TURN_DETECTION shape
+# ("AttributeError: 'dict' object has no attribute 'create_response'"),
+# reproduced with the unmodified Dockerfile against a fresh `pip install` of
+# this exact line — completely unrelated to any GPT-Live work (see
+# docs/decisions/083-jarvis-gpt-live-transport.md, "Nebenfund" section).
+# The live production worker was unaffected only because its image had been
+# built earlier and frozen at 1.6.7 — the NEXT normal rebuild would have hit
+# the same crash.
+#
+# This is NOT limited to the 1.8.0 jump: 1.6.10 (still inside a "~=1.6.7"
+# compatible-release range!) ALSO breaks with the exact same error — verified
+# live, 10.09.2026. So a loose range is not safe here; pinned to the EXACT
+# version that is proven to work (matches what was actually running in
+# production). Bumping this requires re-verifying _build_realtime_model()
+# against a fresh, non-cached `pip install` of the candidate version before
+# merging — a cached/frozen image passing tells you nothing about what the
+# NEXT rebuild will resolve.
+livekit-agents[openai,xai]==1.6.7
 httpx>=0.27
 python-dotenv>=1.0
