@@ -2642,6 +2642,7 @@ def serve_loop(
                     task_id=str(task["id"]),
                     cancel_state=acp_cancel,
                     heartbeat_fn=_acp_tool_heartbeat,
+                    interrupt_state=interrupt_state,
                 )
 
                 def run_once(_p=prompt) -> RunOutcome:
@@ -4156,6 +4157,7 @@ def _make_acp_run_factory(
     task_id: str,
     cancel_state: Optional[ACPCancelState] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
+    interrupt_state: Optional[InterruptState] = None,
 ) -> Callable[[str], RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable.
 
@@ -4176,6 +4178,14 @@ def _make_acp_run_factory(
     now passes ITS cancel state (ladder Stufe 1: Stop-Knopf) and its tool
     heartbeat (Review #464 Major 7) through here; ``None`` keeps the old
     private-state behaviour (tests, replay).
+
+    ``interrupt_state`` (PR #492 interplay): forwarded to run_acp_once so a
+    cancelled turn carries WHAT interrupted it (kind/reason stamp). WITHOUT
+    this the merge of #492 would silently drop the stamp for the ACP path —
+    both PRs green in isolation, the combination loses the stamp. The
+    keyword is forwarded only when the parameter exists on this base
+    (#492 not merged yet) so the factory stays importable before the merge;
+    after #492 lands the pass-through is unconditional.
     """
     import acp_chat_events
 
@@ -4221,14 +4231,16 @@ def _make_acp_run_factory(
         return run_acp_once(
             prompt,
             cwd=cwd,
-            model=model,
-            max_time=max_time,
-            permission_policy=permission_policy,
             cancel_state=cancel_state,
             heartbeat_fn=heartbeat_fn,
             transcript_sink=sink,
             preview_sink=preview_sink,
             on_session_id=on_session_id,
+            **(
+                {"interrupt_state": interrupt_state}
+                if interrupt_state is not None
+                else {}
+            ),
         )
 
     return run
