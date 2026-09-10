@@ -83,9 +83,7 @@ async def lock_task(session: AsyncSession, task_id: uuid.UUID) -> Task | None:
     Returns ``None`` if the task doesn't exist (caller raises its own 404 —
     this helper doesn't know the caller's error format).
     """
-    stmt = select(Task).where(Task.id == task_id).execution_options(
-        populate_existing=True
-    )
+    stmt = select(Task).where(Task.id == task_id)
     if session.bind.dialect.name == "postgresql":
         stmt = stmt.with_for_update()
     return (await session.exec(stmt)).first()
