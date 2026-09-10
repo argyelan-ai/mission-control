@@ -148,28 +148,20 @@ from app.routers import vault as vault_router_module
 logger = logging.getLogger("mc.startup")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup — check templates + seed builtin templates + start background services.
-    # Phase 29 (ADR-039): OpenClaw RPC connect removed. Backend no longer dials a Gateway.
-    # Fail fast on placeholder secrets (default JWT key = forgeable admin
-    # tokens) BEFORE anything else touches the DB or starts services.
-    validate_boot_secrets()
-    # Zweiter Durchlauf: uvicorn legt `uvicorn.access` & Co. erst beim
-    # Server-Start an (eigener Handler, propagate=False) — beim Import oben
-    # existierten sie noch nicht. Ohne diesen Aufruf leaken Access-Zeilen
-    # weiter den `?token=<JWT>` (Live-Befund 26.07.2026). Idempotent.
-    install_log_redaction()
-    _verify_jinja_templates()
-    await _seed_templates()
-    await _seed_scheduled_jobs()
-    await _seed_playbook_assets()
-    await _seed_runtimes()
-    await _seed_local_recipes()
-    await _seed_hosts()
-    # NACH _seed_hosts: die Slot-Zeilen leiten sich aus den Boxen ab.
-    await _ensure_slot_runtimes()
-    await _seed_github_token()
+async def start_background_services(app: FastAPI) -> None:
+    """Start the ENABLE_BACKGROUND_SERVICES-gated singleton services.
+
+    Architektur E, Teil 1 (Vorbereitung Worker-Container — siehe
+    backend/app/worker.py): extrahiert, damit die API-lifespan und der
+    eigenstaendige Worker-Einstiegspunkt genau denselben Startpfad teilen.
+    Request-gebundene Dinge (HTTP-Router, Terminal-/Browser-WebSockets)
+    sind bewusst NICHT enthalten — die bleiben immer in der API.
+
+    vault_watcher/vault_compactor sind NICHT hier drin — sie haengen am
+    Vault-Wiring in lifespan() (brauchen vault_index/_activity/_git/
+    _embeddings aus demselben Scope) und werden dort separat gegated.
+    Siehe Inventar-Tabelle im PR-Text (Streitfall).
+    """
     await scheduler.start()
     # Fix "tote Dispatch-Warteschlange": on boot, drop queue entries whose
     # task is done/aborted/failed or deleted (the 11 legacy boss-queue
@@ -191,13 +183,6 @@ async def lifespan(app: FastAPI):
     await loop_runner.start()  # Loops L1 (ADR-051) — Runden-Meta-Controller
     await group_runner.start()  # Gruppenchat (ADR-075) — Runden-Engine
     await intelligence.start()
-    # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
-    from app.services.fs_roots import mc_home as _mc_home
-    if not _mc_home().is_dir():
-        logging.getLogger("mc.startup").warning(
-            "MC_HOME %s is not a directory — Files API + deliverables will be empty. "
-            "Set HOME_HOST to the host's $HOME.", _mc_home()
-        )
     await file_indexer.start()
     # Phase 5 MSY-04: drain mc:embeddings:retry on a 60s tick when the
     # embedding service returns. Singleton mirror of intelligence; tests
@@ -217,6 +202,103 @@ async def lifespan(app: FastAPI):
     else:
         app.state.obsidian_export_started = False
         logger.info("Phase 7 (obsidian_export) DISABLED — Vault is now Source of Truth (M.2)")
+    await runtime_schedule_service.start()
+    await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
+    await runtime_pulse.start()  # Runtimes-Buehne v2 PR 1 — tok/s heat strip poller
+    await cli_update_checker.start()  # CLI Tool Updates — periodic version check
+    # Provider Model Catalog — hourly probe + "model.new_available" notification
+    # so a newly shipped provider model no longer waits for someone to open the
+    # /runtimes page.
+    await model_catalog_checker.start()
+    # Local Model Registry — refresh the curated local-model catalogue from the
+    # configured registries. Inert unless settings.local_registry_sources is set.
+    await local_registry_checker.start()
+    await telegram_bot.start()
+    # Slack inbound (ADR-072). MC has no public URL, so Slack cannot call us —
+    # this opens the Socket Mode websocket outbound. Silently inert unless the
+    # Slack channel is switched on; one Redis lock keeps multi-worker setups
+    # from reading every message twice.
+    await slack_socket.start()
+    # Defense-in-depth: agents that call `gh repo create` without --private
+    # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
+    import asyncio as _asyncio
+    from app.services.github_visibility_monitor import run_forever as _gh_monitor
+    app.state.gh_monitor_task = _asyncio.create_task(_gh_monitor(), name="github_visibility_monitor")
+
+
+async def stop_background_services(app: FastAPI) -> None:
+    """Mirror shutdown for start_background_services().
+
+    Safe to call even when the services were never started — every
+    .stop() implementation in this codebase no-ops on a None/absent task
+    (verified across all 17 services below during the ADR-E audit).
+    """
+    import asyncio as _asyncio
+
+    _gh_monitor_task = getattr(app.state, "gh_monitor_task", None)
+    if _gh_monitor_task is not None:
+        _gh_monitor_task.cancel()
+        try:
+            await _gh_monitor_task
+        except (_asyncio.CancelledError, Exception):
+            pass
+    await slack_socket.stop()
+    await telegram_bot.stop()
+    await intelligence.stop()
+    await file_indexer.stop()
+    await embedding_retry.stop()
+    if getattr(app.state, "obsidian_export_started", False):
+        await obsidian_export.stop()
+    await runtime_watcher.stop()
+    await runtime_pulse.stop()
+    await cli_update_checker.stop()
+    await model_catalog_checker.stop()
+    await local_registry_checker.stop()
+    await runtime_schedule_service.stop()
+    await group_runner.stop()
+    await loop_runner.stop()
+    await task_runner.stop()
+    await watchdog.stop()
+    await scheduler.stop()
+
+
+async def prepare_process() -> None:
+    """Shared boot preparation for the API process and the worker process.
+
+    Architektur E, Teil 1 (siehe backend/app/worker.py): muss VOR
+    ``start_background_services()`` laufen, in JEDEM Prozess der sie
+    aufruft — nicht nur einmal API-seitig (Rex-Review PR #479, Blocker B2).
+
+    - ``validate_boot_secrets()`` ist ein Fail-Fast-Check pro Prozess:
+      ein Worker mit leerem ``SECRETS_ENCRYPTION_KEY``/Platzhalter-JWT soll
+      beim Boot krachen, nicht erst beim ersten Secrets-Zugriff zur Laufzeit.
+    - ``apply_channel_overrides()``/``apply_ai_provider_overrides()`` patchen
+      den SETTINGS-SINGLETON DES AUFRUFENDEN PROZESSES aus DB/Secrets-Store.
+      API und Worker sind getrennte Python-Prozesse mit je einer eigenen
+      ``settings``-Instanz — ``telegram_bot.start()`` (laeuft im Worker)
+      liest ``settings.telegram_team_chat_enabled`` von GENAU dieser
+      Instanz. Nur weil die API ihre eigene Kopie schon gepatcht hat, ist
+      die des Workers noch nicht gepatcht.
+    - Die Seed-Schritte sind idempotent und laufen hier zusaetzlich, damit
+      der Worker nicht von der Boot-Reihenfolge zum API-Container abhaengt
+      (``_seed_scheduled_jobs`` fuettert genau den Scheduler, den
+      ``start_background_services()`` gleich startet).
+
+    Reihenfolge identisch zur vorherigen lifespan()-Reihenfolge (keine
+    zusaetzliche Verhaltensaenderung durch diese Extraktion).
+    """
+    # Fail fast on placeholder secrets (default JWT key = forgeable admin
+    # tokens) BEFORE anything else touches the DB or starts services.
+    validate_boot_secrets()
+    await _seed_templates()
+    await _seed_scheduled_jobs()
+    await _seed_playbook_assets()
+    await _seed_runtimes()
+    await _seed_local_recipes()
+    await _seed_hosts()
+    # NACH _seed_hosts: die Slot-Zeilen leiten sich aus den Boxen ab.
+    await _ensure_slot_runtimes()
+    await _seed_github_token()
     # MEM-04 (Phase 2): ensure Qdrant has agent_id + board_id keyword
     # indexes on all three memory layers. Idempotent — safe across restarts.
     # Existing collections created before this code do NOT have the full
@@ -228,17 +310,11 @@ async def lifespan(app: FastAPI):
         await qdrant_service.ensure_payload_indexes()
     except Exception as e:
         logger.warning("Qdrant payload index setup failed (non-fatal): %s", e)
-    await runtime_schedule_service.start()
-    await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
-    await runtime_pulse.start()  # Runtimes-Buehne v2 PR 1 — tok/s heat strip poller
-    await cli_update_checker.start()  # CLI Tool Updates — periodic version check
-    # Provider Model Catalog — hourly probe + "model.new_available" notification
-    # so a newly shipped provider model no longer waits for someone to open the
-    # /runtimes page.
-    await model_catalog_checker.start()
     # Channels settings (DB overrides + secrets-stored Telegram tokens) MUST
     # be applied before the chat loops start — telegram_bot.start() decides
-    # "configured?" from the settings singleton this call patches.
+    # "configured?" from the settings singleton this call patches. Applied
+    # unconditionally: routers send via diese Singletons unabhaengig von
+    # ENABLE_BACKGROUND_SERVICES (nur die Inbound-Poll-Loops sind gegated).
     try:
         from app.database import async_session_maker
         from app.services.channel_config import apply_channel_overrides
@@ -258,20 +334,40 @@ async def lifespan(app: FastAPI):
             await apply_ai_provider_overrides(_ai_session)
     except Exception as e:
         logger.warning("ai provider overrides at startup failed (env defaults stay): %s", e)
-    # Local Model Registry — refresh the curated local-model catalogue from the
-    # configured registries. Inert unless settings.local_registry_sources is set.
-    await local_registry_checker.start()
-    await telegram_bot.start()
-    # Slack inbound (ADR-072). MC has no public URL, so Slack cannot call us —
-    # this opens the Socket Mode websocket outbound. Silently inert unless the
-    # Slack channel is switched on; one Redis lock keeps multi-worker setups
-    # from reading every message twice.
-    await slack_socket.start()
-    # Defense-in-depth: agents that call `gh repo create` without --private
-    # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
-    import asyncio as _asyncio
-    from app.services.github_visibility_monitor import run_forever as _gh_monitor
-    _gh_monitor_task = _asyncio.create_task(_gh_monitor(), name="github_visibility_monitor")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup — check templates + seed builtin templates + start background services.
+    # Phase 29 (ADR-039): OpenClaw RPC connect removed. Backend no longer dials a Gateway.
+    # Zweiter Durchlauf: uvicorn legt `uvicorn.access` & Co. erst beim
+    # Server-Start an (eigener Handler, propagate=False) — beim Import oben
+    # existierten sie noch nicht. Ohne diesen Aufruf leaken Access-Zeilen
+    # weiter den `?token=<JWT>` (Live-Befund 26.07.2026). Idempotent.
+    install_log_redaction()
+    _verify_jinja_templates()
+    # validate_boot_secrets() + DB-Seeds + Channel-/AI-Provider-Overrides +
+    # Qdrant-Index-Setup: siehe prepare_process() — geteilter Boot-Vorbe-
+    # reitungspfad mit backend/app/worker.py (Rex-Review PR #479, Blocker B2).
+    await prepare_process()
+    # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
+    # Unconditional — Files API + deliverables (HTTP, nicht nur file_indexer)
+    # haengen von MC_HOME ab, unabhaengig von ENABLE_BACKGROUND_SERVICES.
+    from app.services.fs_roots import mc_home as _mc_home
+    if not _mc_home().is_dir():
+        logging.getLogger("mc.startup").warning(
+            "MC_HOME %s is not a directory — Files API + deliverables will be empty. "
+            "Set HOME_HOST to the host's $HOME.", _mc_home()
+        )
+    # ENABLE_BACKGROUND_SERVICES (Architektur E, Teil 1): Default True, damit
+    # sich am heutigen Verhalten nichts aendert, solange kein Worker-Container
+    # existiert (Teil 2). Siehe backend/app/worker.py + Inventar-Tabelle im PR.
+    if settings.enable_background_services:
+        await start_background_services(app)
+    else:
+        logger.info(
+            "ENABLE_BACKGROUND_SERVICES=false — background services stay off in this process"
+        )
     # ── Vault Memory (M.1 Read Foundation) ────────────────────────────────
     # Init: VaultIndex (FTS5 SQLite) + Activity + Git (stub) + Embeddings
     # (M.1 no-op stub) + Watcher. Phase 7 ``obsidian_export`` continues
@@ -280,6 +376,12 @@ async def lifespan(app: FastAPI):
     # Failure here is non-fatal: backend boots even when the vault dir is
     # unwritable or watchdog can't bind. Vault routes will 500 in that case,
     # but the rest of MC keeps working.
+    #
+    # vault_index/_activity/_git/_embeddings bleiben IMMER unconditional —
+    # Vault-Read-Routen (Suche etc.) brauchen sie unabhaengig vom Schalter.
+    # Nur vault_watcher.start() + der VaultCompactor (Beobachtung/Kompaktierung,
+    # kein Read-Pfad) haengen an ENABLE_BACKGROUND_SERVICES — Streitfall, siehe
+    # Inventar-Tabelle im PR-Text.
     app.state.vault_index = None
     app.state.vault_activity = None
     app.state.vault_git = None
@@ -337,27 +439,33 @@ async def lifespan(app: FastAPI):
             git=vault_git,
             redis=_redis_for_vault,
         )
-        await vault_watcher.start()
+        if settings.enable_background_services:
+            await vault_watcher.start()
 
         app.state.vault_index = vault_index
         app.state.vault_activity = vault_activity
         app.state.vault_git = vault_git
         app.state.vault_embeddings = vault_embeddings
         app.state.vault_watcher = vault_watcher
-        logger.info("Vault services wired (path=%s, watcher running)", vault_path)
+        logger.info(
+            "Vault services wired (path=%s, watcher %s)",
+            vault_path,
+            "running" if settings.enable_background_services else "NOT started (ENABLE_BACKGROUND_SERVICES=false)",
+        )
 
         # ── VaultCompactor (M.2: inbox-pattern for cross-agent writes) ────
         # Runs after the watcher so compaction events dispatch into a
         # live watcher pipeline. Fault-tolerant: a compactor failure does
         # not block boot or affect the rest of the vault stack.
-        try:
-            vault_compactor = VaultCompactor(vault_path=vault_path, redis=_redis_for_vault)
-            await vault_compactor.start()
-            app.state.vault_compactor = vault_compactor
-            logger.info("VaultCompactor started")
-        except Exception as e:
-            logger.error("VaultCompactor failed to start: %s", e, exc_info=True)
-            app.state.vault_compactor = None
+        if settings.enable_background_services:
+            try:
+                vault_compactor = VaultCompactor(vault_path=vault_path, redis=_redis_for_vault)
+                await vault_compactor.start()
+                app.state.vault_compactor = vault_compactor
+                logger.info("VaultCompactor started")
+            except Exception as e:
+                logger.error("VaultCompactor failed to start: %s", e, exc_info=True)
+                app.state.vault_compactor = None
 
         # ── Vault Lint Cron (M.3 T4) ──────────────────────────────────────
         # 24h asyncio loop that runs structural lint (orphans, invalid
@@ -367,6 +475,10 @@ async def lifespan(app: FastAPI):
         # iteration logs + waits for the next tick. Configurable interval
         # via VAULT_LINT_INTERVAL_HOURS. Tests set this to 99999 so the
         # loop never fires (conftest Pitfall 4 mirror).
+        #
+        # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars (nach dem
+        # Boss-Audit auf f57e2a9 hinzugekommen) — laeuft bewusst unconditional
+        # weiter, bis Teil 2 klaert, ob er zu den 20 dazugehoert.
         try:
             app.state.vault_lint_task = _create_background_task(
                 _vault_lint_loop(vault_path),
@@ -385,6 +497,8 @@ async def lifespan(app: FastAPI):
     # Weekly asyncio loop: soft-decay unread notes (90d->confidence drop,
     # 180d+low->archive). Grace period: no decay fires for 90 days after
     # migration 0126 (earliest Aug 2026). Configurable via settings.
+    # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars (siehe vault_lint
+    # oben) — laeuft unconditional weiter.
     _vault_decay_task = None
     try:
         _vault_decay_task = _create_background_task(
@@ -398,6 +512,7 @@ async def lifespan(app: FastAPI):
     # ── Jarvis Morning Briefing (ADR-062) ─────────────────────────────
     # Daily LLM-generated briefing as a vault note. Feature-gated: the loop
     # returns immediately unless JARVIS_BRIEFING_ENABLED + OPENAI_API_KEY are set.
+    # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars — laeuft unconditional.
     app.state.jarvis_briefing_task = None
     try:
         from app.services.jarvis_briefing import jarvis_briefing_loop
@@ -413,6 +528,7 @@ async def lifespan(app: FastAPI):
     # erledigt sind (Task-Threads mit closed_at, abgeschlossene Projekte).
     # Feature-gated ueber TELEGRAM_TEAM_CHAT_ENABLED — der Tick kehrt sonst
     # sofort zurueck. Das Allgemein-Thema wird nie angefasst.
+    # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars — laeuft unconditional.
     app.state.telegram_topic_purge_task = None
     try:
         app.state.telegram_topic_purge_task = _create_background_task(
@@ -424,11 +540,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
-    _gh_monitor_task.cancel()
-    try:
-        await _gh_monitor_task
-    except (_asyncio.CancelledError, Exception):
-        pass
+    import asyncio as _asyncio
     _jarvis_briefing_task = getattr(app.state, "jarvis_briefing_task", None)
     if _jarvis_briefing_task is not None:
         _jarvis_briefing_task.cancel()
@@ -478,24 +590,8 @@ async def lifespan(app: FastAPI):
             await _topic_purge_task
         except (_asyncio.CancelledError, Exception):
             pass
-    await slack_socket.stop()
-    await telegram_bot.stop()
-    await intelligence.stop()
-    await file_indexer.stop()
-    await embedding_retry.stop()
-    if getattr(app.state, "obsidian_export_started", False):
-        await obsidian_export.stop()
-    await runtime_watcher.stop()
-    await runtime_pulse.stop()
-    await cli_update_checker.stop()
-    await model_catalog_checker.stop()
-    await local_registry_checker.stop()
-    await runtime_schedule_service.stop()
-    await group_runner.stop()
-    await loop_runner.stop()
-    await task_runner.stop()
-    await watchdog.stop()
-    await scheduler.stop()
+    if settings.enable_background_services:
+        await stop_background_services(app)
     # Memory subsystem cleanup (Phase 3)
     try:
         from app.services.embedding_service import embedding_service
