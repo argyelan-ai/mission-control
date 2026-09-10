@@ -25,9 +25,9 @@ Stack:
 - Sprache: Auto-detect (das Realtime-Modell antwortet in der Sprache des
   Inputs — Deutsch ok)
 
-## GPT-Live-Transport (ADR-082, vorab)
+## GPT-Live-Transport (ADR-083, vorab)
 
-Zusaetzlich zum Realtime-Transport (obig) gibt es seit ADR-082 einen zweiten
+Zusaetzlich zum Realtime-Transport (obig) gibt es seit ADR-083 einen zweiten
 Transport ueber OpenAIs **Live API** (``gpt-live-1``, Full-Duplex Voice-Modell,
 getrennt vom Denk-Backend). Ausgewaehlt per ``VOICE_API`` env var:
 
@@ -48,7 +48,7 @@ unveraendert in ``jarvis_core``. "Client delegation" (PR-Beispiel
 Tools laufen dort auf einer separaten ``llm.LLM``, von der Anwendung selbst
 ueber ``delegation_created``-Events getrieben) — das haette einen kompletten
 Umbau unserer ~20 Tool-Handler erfordert und war fuer diese Vorab-Integration
-zu unfertig/zu riskant. Siehe ``docs/decisions/082-jarvis-gpt-live-transport.md``.
+zu unfertig/zu riskant. Siehe ``docs/decisions/083-jarvis-gpt-live-transport.md``.
 
 Ist ``GPTLiveModel`` nicht importierbar (Produktions-Image, altes Plugin) und
 ``VOICE_API=live`` gesetzt, faellt ``_build_llm_model()`` mit einer lauten
@@ -64,12 +64,16 @@ from livekit.plugins import openai, xai
 
 from jarvis_core import frontier, mc_client, tools as jtools
 from jarvis_core.channels import VOICE
-from jarvis_core.persona import build_instructions
+from jarvis_core.persona import (
+    build_instructions,
+    build_live_delegation_instructions,
+    build_live_voice_instructions,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
 
-# GPT-Live-Plugin (ADR-082) ist NUR im Test-Image installiert (PR #7212, noch
+# GPT-Live-Plugin (ADR-083) ist NUR im Test-Image installiert (PR #7212, noch
 # nicht released) — im Produktions-Image fehlt das Modul. Import-Fehler wird
 # hier einmalig abgefangen, damit `VOICE_API=live` auf einem alten Image laut
 # (statt mit einem nackten ImportError-Traceback) auf `realtime` zurueckfaellt.
@@ -133,8 +137,48 @@ def _build_realtime_model():
     )
 
 
-def _build_live_model():
-    """Baut das GPT-Live-Duplex-Modell (ADR-082, vorab ueber LiveKit-PR #7212).
+# GPT-Live-Stimmen: aus dem PR-Code selbst (nicht aus Doku-Vermutungen) —
+# `GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone",
+# "vesper"]` und `DEFAULT_VOICE = "marin"` in gpt_live_model.py (PR #7212,
+# SHA de3c5ce, Stand 10.09.2026). "marin" (unser bisheriger Realtime-Default)
+# ist also tatsaechlich GUELTIG fuer gpt-live-1 — keine Fehlkonfiguration.
+# README des PR: "Other supported names and custom voice objects still pass
+# through to the API" — die Liste ist daher als bekannt-gute Namen gefuehrt,
+# nicht als hartes Schema; ein unbekannter String wird trotzdem abgelehnt
+# (laut + Fallback), weil ein Tippfehler sonst erst beim ersten Anruf auffaellt.
+GPT_LIVE_KNOWN_VOICES = frozenset({"aster", "beacon", "cinder", "marin", "stone", "vesper"})
+GPT_LIVE_DEFAULT_VOICE = "marin"
+
+
+def _resolve_live_voice() -> str:
+    """Bestimmt + validiert die GPT-Live-Stimme aus ``VOICE_VOICE_ID``.
+
+    Unbekannter String (kein dict/Custom-Voice-Objekt, nicht in
+    ``GPT_LIVE_KNOWN_VOICES``) → laute Warnung + Fallback auf
+    ``GPT_LIVE_DEFAULT_VOICE`` ("marin"), statt eine vermutlich falsche
+    Stimme stillschweigend an die API durchzureichen.
+    """
+    raw = os.environ.get("VOICE_VOICE_ID", "").strip()
+    if not raw:
+        return GPT_LIVE_DEFAULT_VOICE
+    if raw.lower() not in GPT_LIVE_KNOWN_VOICES:
+        logger.warning(
+            "VOICE_VOICE_ID=%r is not a known gpt-live-1 voice (known: %s) — "
+            "falling back to default %r. If OpenAI added a new voice name, "
+            "add it to GPT_LIVE_KNOWN_VOICES in voice_worker/main.py.",
+            raw, sorted(GPT_LIVE_KNOWN_VOICES), GPT_LIVE_DEFAULT_VOICE,
+        )
+        return GPT_LIVE_DEFAULT_VOICE
+    return raw.lower()
+
+
+def _build_live_model(
+    *,
+    briefing_ctx: str | None = None,
+    frontier_enabled: bool | None = None,
+    operator_name: str | None = None,
+):
+    """Baut das GPT-Live-Duplex-Modell (ADR-083, vorab ueber LiveKit-PR #7212).
 
     ``delegation="responses"``: ein Backend-Responses-Modell fuehrt Reasoning +
     Tool-Calls, exakt wie bei ``_build_realtime_model()`` — unsere
@@ -142,11 +186,15 @@ def _build_live_model():
     bewusst dasselbe wie ``jarvis_core.frontier.resolve_model()`` (der heutige
     Frontier-Default, momentan ``gpt-5.5``) statt des GPTLiveModel-eigenen
     Defaults ``gpt-5.6-luna`` — ein Codename-Snapshot ohne dokumentierte
-    Allgemein-Verfuegbarkeit (siehe frontier.py Docstring). Die
-    Persona/System-Instructions (``build_instructions``) gehen wie gewohnt als
-    Agent-``instructions`` mit (= die "voice persona", top-level, unveraenderlich
-    nach Session-Start) — das Backend-Modell bekommt zusaetzlich eigene,
-    kuerzere Instructions fuer sein Reasoning.
+    Allgemein-Verfuegbarkeit (siehe frontier.py Docstring).
+
+    Instructions-Split (ADR-083, Review-Fund): die Voice-Layer-Instructions
+    (Stil/Tempo/Sprach-Switch, KEINE Tool-Regeln) gehen als Agent-Top-Level-
+    ``instructions`` mit (siehe ``_build_llm_model()``/``VoiceAssistant``) —
+    NICHT hier. Hier bekommt nur das Backend-Responses-Modell seine eigenen,
+    vollen Verfahrens-/Tool-/Honesty-Instructions
+    (``build_live_delegation_instructions()``), weil DORT die Tools
+    tatsaechlich aufgerufen werden.
     """
     if not _GPT_LIVE_AVAILABLE:
         raise RuntimeError(
@@ -159,7 +207,7 @@ def _build_live_model():
             "VOICE_API=live but OPENAI_API_KEY is not set. GPT-Live needs an "
             "OpenAI key (same as VOICE_PROVIDER=openai)."
         )
-    voice = os.environ.get("VOICE_VOICE_ID") or "marin"
+    voice = _resolve_live_voice()
     model = os.environ.get("VOICE_MODEL", "gpt-live-1")
     backend_model = frontier.resolve_model()
     return GPTLiveModel(
@@ -168,28 +216,69 @@ def _build_live_model():
         delegation="responses",
         responses_options={
             "model": backend_model,
-            "instructions": (
-                "Du bist das Denk-Backend hinter Jarvis, dem Voice-Concierge "
-                "des Operators in Mission Control. Nutze die angebotenen "
-                "Tools fuer alles, was echte Daten braucht (Tasks, Agent-"
-                "Status, Memory, Notizen) statt zu raten. Antworte knapp — "
-                "Jarvis spricht deine Antwort dem Operator vor."
+            "instructions": build_live_delegation_instructions(
+                briefing_ctx=briefing_ctx,
+                frontier_enabled=frontier_enabled,
+                operator_name=operator_name,
             ),
         },
     )
 
 
-def _build_llm_model():
-    """Waehlt den Voice-Transport per ``VOICE_API`` env var (Default 'realtime').
+def _resolve_voice_api() -> str:
+    """Bestimmt den Voice-Transport: explizites ``VOICE_API`` gewinnt immer.
 
-    'live' -> GPT-Live-Duplex-Transport (ADR-082, vorab). Faellt bei fehlendem
-    Plugin (Produktions-Image) mit einer lauten Warnung + Fallback auf
-    'realtime' zurueck, statt den Worker mit einem nackten ImportError sterben
-    zu lassen — siehe Modul-Docstring "GPT-Live-Transport".
+    Fehlt ``VOICE_API`` UND ``VOICE_MODEL`` sieht wie ein GPT-Live-Modell aus
+    (Praefix ``gpt-live``) → automatisch ``live`` (mit Log), statt still im
+    Realtime-Pfad zu landen und ``gpt-live-1`` als ungueltiges Realtime-Modell
+    an die falsche API zu schicken. Das ist live so passiert (10.09.2026:
+    Compose-Service reichte nur ``VOICE_MODEL`` durch, ``VOICE_API`` fehlte im
+    Container) — dieser Fallback verhindert die Wiederholung.
     """
-    api = os.environ.get("VOICE_API", "realtime").strip().lower()
+    explicit = os.environ.get("VOICE_API", "").strip().lower()
+    if explicit:
+        return explicit
+    model = os.environ.get("VOICE_MODEL", "").strip().lower()
+    if model.startswith("gpt-live"):
+        logger.info(
+            "VOICE_API is not set but VOICE_MODEL=%r looks like a GPT-Live "
+            "model — auto-selecting VOICE_API=live. Set VOICE_API explicitly "
+            "to silence this.",
+            model,
+        )
+        return "live"
+    return "realtime"
+
+
+def _build_llm_model(
+    *,
+    briefing_ctx: str | None = None,
+    frontier_enabled: bool | None = None,
+    operator_name: str | None = None,
+):
+    """Waehlt den Voice-Transport (``_resolve_voice_api()``) + baut das passende LLM.
+
+    Returnt ``(llm, agent_instructions)``: das Modell-Objekt UND die
+    top-level Agent-``instructions``, weil beide transport-abhaengig sind
+    (ADR-083 Instructions-Split) — realtime bekommt die volle
+    ``build_instructions()``-Persona wie bisher, live bekommt die kurze
+    Voice-Layer-Persona (``build_live_voice_instructions()``); die vollen
+    Verfahrensregeln gehen bei live stattdessen ins Backend-Responses-Modell
+    (siehe ``_build_live_model()``).
+
+    'live' faellt bei fehlendem Plugin (Produktions-Image ohne PR #7212) mit
+    einer lauten Warnung + Fallback auf 'realtime' zurueck, statt den Worker
+    mit einem nackten ImportError sterben zu lassen — siehe Modul-Docstring
+    "GPT-Live-Transport".
+    """
+    api = _resolve_voice_api()
     if api == "realtime":
-        return _build_realtime_model()
+        llm = _build_realtime_model()
+        instructions = build_instructions(
+            VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
+            operator_name=operator_name,
+        )
+        return llm, instructions
     if api == "live":
         if not _GPT_LIVE_AVAILABLE:
             logger.warning(
@@ -198,8 +287,18 @@ def _build_llm_model():
                 "back to VOICE_API=realtime. Use "
                 "voice_worker/Dockerfile.gpt-live for the gpt-live-1 transport."
             )
-            return _build_realtime_model()
-        return _build_live_model()
+            llm = _build_realtime_model()
+            instructions = build_instructions(
+                VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
+                operator_name=operator_name,
+            )
+            return llm, instructions
+        llm = _build_live_model(
+            briefing_ctx=briefing_ctx, frontier_enabled=frontier_enabled,
+            operator_name=operator_name,
+        )
+        instructions = build_live_voice_instructions(operator_name)
+        return llm, instructions
     raise RuntimeError(f"Unknown VOICE_API={api!r}. Use 'realtime' (default) or 'live'.")
 
 
@@ -221,15 +320,17 @@ class VoiceAssistant(Agent):
         # via dict (_TURN_DETECTION oben, provider-agnostisch).
         briefing_ctx = self._format_briefing_as_context(briefing) if briefing else None
         frontier_on = frontier.is_tool_enabled()
-        super().__init__(
-            instructions=build_instructions(
-                VOICE,
-                briefing_ctx=briefing_ctx,
-                frontier_enabled=frontier_on,
-                operator_name=operator_name,
-            ),
-            llm=_build_llm_model(),
+        # _build_llm_model() returns (llm, agent_instructions): the top-level
+        # Agent instructions are transport-dependent (ADR-083 Instructions-
+        # Split — realtime gets the full persona, live gets the short
+        # voice-layer persona while the full procedure/tool rules go to the
+        # GPT-Live backend model instead).
+        llm, agent_instructions = _build_llm_model(
+            briefing_ctx=briefing_ctx,
+            frontier_enabled=frontier_on,
+            operator_name=operator_name,
         )
+        super().__init__(instructions=agent_instructions, llm=llm)
         # ask_frontier ist per JARVIS_FRONTIER_ENABLED gated (Default off, ADR-062):
         # ist es aus, das Tool aus dem LiveKit-Schema entfernen, sodass das
         # Realtime-Modell es gar nicht erst anbieten/aufrufen kann (Persona-Passage
@@ -604,6 +705,6 @@ if __name__ == "__main__":
     # (RoomConfiguration.agents=[{agent_name: ...}] oder CreateDispatch API)
     # erreicht diesen Worker — so kann ein Test-Worker NEBEN dem
     # Produktions-Worker laufen, ohne ihm Anrufe wegzuschnappen (siehe
-    # docs/decisions/082-jarvis-gpt-live-transport.md).
+    # docs/decisions/083-jarvis-gpt-live-transport.md).
     agent_name = os.environ.get("AGENT_NAME", "").strip()
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name=agent_name))

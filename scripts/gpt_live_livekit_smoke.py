@@ -1,4 +1,4 @@
-"""LiveKit-level smoke test for the GPT-Live test worker — ADR-082.
+"""LiveKit-level smoke test for the GPT-Live test worker — ADR-083.
 
 Proves the full path: LiveKit room -> explicit agent dispatch to the
 isolated test worker (agent_name, does NOT touch the production worker's

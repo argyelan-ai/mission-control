@@ -1,6 +1,6 @@
 """Headless protocol smoke test — OpenAI Live API (gpt-live-1), no LiveKit.
 
-ADR-082. Connects directly to wss://api.openai.com/v1/live/sessions with the
+ADR-083. Connects directly to wss://api.openai.com/v1/live/sessions with the
 exact wire shape GPTLiveModel (LiveKit PR #7212) uses, sends a short German
 PCM16/24kHz test utterance, and prints session.started + any output audio /
 transcript events it gets back. Proves: key works, model name is accepted,
@@ -52,7 +52,7 @@ async def main() -> int:
     errors: list[dict] = []
 
     headers = {
-        "User-Agent": "MC-gpt-live-smoke/1.0 (ADR-082)",
+        "User-Agent": "MC-gpt-live-smoke/1.0 (ADR-083)",
         "Authorization": f"Bearer {api_key}",
     }
 

@@ -476,6 +476,15 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
+      # ADR-083 (vorab): "realtime" (default) or "live" (OpenAI gpt-live-1
+      # full-duplex Live API, needs the vorab-installed LiveKit PR #7212
+      # plugin). This var was missing here until 10.09.2026 — a plain
+      # VOICE_MODEL=gpt-live-1 without it silently fell through to the
+      # realtime path with an invalid model name (voice_worker/main.py's
+      # _resolve_voice_api() auto-detects that specific case now too, this
+      # line is the fix for the actual cause: the compose service never
+      # passed the var into the container at all).
+      VOICE_API: ${VOICE_API:-realtime}
       # Jarvis Intelligence (ADR-062): frontier model + gate for the ask_frontier
       # tool (off by default → not offered in the voice tool schema).
       JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}

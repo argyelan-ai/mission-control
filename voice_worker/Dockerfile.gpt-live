@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY voice_worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- ADR-082: GPT-Live transport, vorab ueber den offenen LiveKit-PR #7212 ---
+# --- ADR-083: GPT-Live transport, vorab ueber den offenen LiveKit-PR #7212 ---
 # "feat: add openai gpt-live duplex support" (livekit/agents), aufgesetzt auf
 # PR #6677 (Duplex-Adapter-Core). GPTLiveModel ist NICHT auf PyPI (livekit-agents
 # stable ist 1.5.x/1.8-vor-release; das PR bumpt livekit-agents core auf 1.8.0
@@ -41,7 +41,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # urspruenglichen Installation haengen. VOICE_PROVIDER=xai wurde in DIESEM
 # Test-Image NICHT verifiziert — nur der Live-Pfad (VOICE_API=live) und
 # VOICE_PROVIDER=openai/realtime (Regressions-Check). Siehe
-# docs/decisions/082-jarvis-gpt-live-transport.md.
+# docs/decisions/083-jarvis-gpt-live-transport.md.
 ARG GPT_LIVE_PR_SHA=de3c5ce66058c6ab437ad41f963cbaeb39046c6d
 RUN pip install --no-cache-dir --force-reinstall --no-deps \
     "git+https://github.com/livekit/agents@${GPT_LIVE_PR_SHA}#subdirectory=livekit-agents" \

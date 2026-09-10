@@ -1,8 +1,27 @@
-# ADR-082 — Jarvis GPT-Live-Transport (vorab, LiveKit-PR #7212)
+# ADR-083 — Jarvis GPT-Live-Transport (vorab, LiveKit-PR #7212)
 
-**Status:** Accepted (vorab, experimentell — Test-Image, nicht produktiv)
+**Status:** Accepted — PRODUKTIV seit 10.09.2026 (Marks Entscheid: GPT-Live ersetzt Realtime
+für Jarvis, kein Nebenläufer/Test-Worker). `mission-control-voice-worker-1` läuft mit
+`VOICE_API=live`/`VOICE_MODEL=gpt-live-1` auf dem Image, das dieses ADR beschreibt. Weiterhin
+"vorab", weil LiveKit-PR #7212 noch offen ist (siehe Aufräumen unten).
 **Datum:** 2026-09-10
 **Scope:** Infra/Runtime (voice_worker) | Backend/Voice
+
+## Rückweg (falls gpt-live-1/das Vorab-Plugin Probleme macht)
+
+1. `.env` (Symlink `~/.mc/secrets/mission-control/.env`, gemountet über
+   `.claude/worktrees/deploy-main`): `VOICE_API` entfernen oder auf `realtime` setzen,
+   `VOICE_MODEL` zurück auf `gpt-realtime-2.1`, `VOICE_PROVIDER=openai` (unverändert).
+   Vor-Änderungs-Stand live geprüft am 10.09.2026, bevor irgendetwas geändert wurde:
+   `VOICE_PROVIDER=openai`, `VOICE_MODEL=gpt-realtime-2.1`, `VOICE_API` war noch nicht
+   vorhanden (Feature existierte nicht).
+2. Image zurück auf `mission-control-voice-worker:realtime-backup-20260910` (getaggter
+   Snapshot des vorherigen, unveränderten `voice_worker/Dockerfile`-Builds, livekit-agents
+   `1.6.7`).
+3. `docker compose -p mission-control --env-file .env up -d --force-recreate voice-worker`
+   aus `.claude/worktrees/deploy-main`.
+4. Wirk-Beweis wie beim Rollout: Worker-Log zeigt sauberen Start ohne GPTLiveModel, ein Anruf
+   funktioniert wieder über OpenAI Realtime.
 
 ## Kontext
 
@@ -103,8 +122,41 @@ Delegations-Modi an:
   diese Vorab-Integration) — **das ist ein eigenes, dringendes Ticket** (z.B. Pin auf
   `livekit-agents[openai,xai]~=1.6.7` oder Fix im Code fuer die neue `turn_detection`-API), das der
   Team-Lead separat einplanen sollte, bevor der Produktions-Worker das naechste Mal neu gebaut wird.
-- Test-Worker + Test-Image bleiben nach dieser Aufgabe fuer Marks Anruf-Test aktiv (siehe PR-Beschreibung)
-  — muessen manuell gestoppt werden, sobald der Test abgeschlossen ist.
+
+## Nachschliff (10.09.2026, nach Marks Cutover-Entscheid)
+
+Mark hat noch waehrend der ersten Beweisrunde entschieden: GPT-Live ist der **Ersatz** fuer
+Jarvis' Voice-Transport, kein Nebenlaeufer. Der Produktions-Worker wurde direkt umgestellt
+(kein dauerhafter Test-Container mehr — alle weiteren Beweise laufen seither ueber
+kurzlebige `docker run --rm`-Container mit eigenem `agent_name`, die nach dem Test wieder
+verschwinden). Aus dem Review dieses Cutovers (Team-Lead + zweiter Agent) kamen vier
+Nachschaerfungen, alle in diesem PR:
+
+1. **Instructions-Split** (Fund: die volle Persona inkl. Tool-Trigger-Tabelle ging
+   unveraendert als `session.instructions` (Voice-Layer) raus, das Backend-Responses-Modell
+   bekam nur 4 generische Saetze — dort werden die Tools aber tatsaechlich aufgerufen).
+   Jetzt: `jarvis_core/persona.py::build_live_voice_instructions()` (kurz, nur Sprechstil,
+   ~150 Woerter, KEINE Tool-Regeln) fuer die Top-Level-Agent-`instructions`, und
+   `build_live_delegation_instructions()` (volle Tool-/Honesty-/Team-Regeln) fuer
+   `delegation.responses.instructions`. Beide bleiben im selben Modul, gespeist aus denselben
+   Parametern wie `build_instructions()` (ADR-061 bleibt gueltig, kein Fork).
+2. **Stimmen-Pruefung**: `marin` (bisheriger Default) ist tatsaechlich eine GUELTIGE
+   gpt-live-1-Stimme — `GPTLiveVoices`-Literal + `DEFAULT_VOICE = "marin"` direkt im
+   PR-Code (`gpt_live_model.py`), nicht bloss Doku-Vermutung. `_resolve_live_voice()`
+   validiert `VOICE_VOICE_ID` gegen die sechs bekannten Namen (aster, beacon, cinder, marin,
+   stone, vesper) und faellt bei Unbekanntem laut auf `marin` zurueck statt eine vermutlich
+   falsche Stimme durchzureichen.
+3. **Compose-Fix + Auto-Erkennung**: `docker-compose.yml` reichte `VOICE_API` NIE an den
+   Container durch (nur `VOICE_MODEL`/`VOICE_PROVIDER` standen in der `environment:`-Liste)
+   — genau das ist beim Cutover passiert: Container hatte `VOICE_MODEL=gpt-live-1` aber kein
+   `VOICE_API`. Jetzt behoben (`VOICE_API: ${VOICE_API:-realtime}` ergaenzt) UND als
+   Sicherheitsnetz im Code: `_resolve_voice_api()` erkennt `VOICE_MODEL`-Praefix `gpt-live`
+   automatisch, falls `VOICE_API` trotzdem mal fehlt (mit Log), statt still `gpt-live-1` als
+   ungueltiges Realtime-Modell an die falsche API zu schicken.
+4. **ADR-Nummer**: dieses Dokument hiess zunaechst 082, wurde aber von PR #491 (Runtime-
+   Bindung, w-voice-runtime) belegt (auf main gemergt als #476/082). Umbenannt auf **083**.
+   Nach Merge von #491 folgt ein Rebase auf `VoiceChoice`/das dortige `api`-Feld aus der
+   Runtime-Bindung statt der reinen Env-Variable — Env bleibt dann nur noch Fallback.
 
 ## Referenzen
 
