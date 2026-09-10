@@ -4231,6 +4231,10 @@ def _make_acp_run_factory(
         return run_acp_once(
             prompt,
             cwd=cwd,
+            model=model,
+            max_time=max_time,
+            permission_policy=permission_policy,
+            task_id=task_id,
             cancel_state=cancel_state,
             heartbeat_fn=heartbeat_fn,
             transcript_sink=sink,

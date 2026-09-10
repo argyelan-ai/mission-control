@@ -560,6 +560,14 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
         fake = InProcessFake(FIXTURES["normal"], [])
         fakes.append(fake)
         kw["client_factory"] = lambda: fake.client
+        # The real run_acp_once on THIS branch may not know newer kwargs
+        # yet (e.g. interrupt_state arrives with PR #492) — drop anything
+        # the base signature rejects so the harness stays merge-compatible.
+        import inspect
+        known = set(inspect.signature(orig_run).parameters)
+        extra = {k: v for k, v in kw.items() if k not in known}
+        for k in extra:
+            kw.pop(k)
         return orig_run(prompt, **kw)
 
     bridge.run_acp_once = spy_run
@@ -667,7 +675,8 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
     shape), the same full serve_loop dispatch writes NEITHER transcript NOR
     preview. Proves the assertions above can actually fail."""
     def bare_factory(*, model, max_time, permission_policy, task_id,
-                     cancel_state=None, heartbeat_fn=None):
+                     cancel_state=None, heartbeat_fn=None,
+                     interrupt_state=None):
         def run(prompt):
             cwd = os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
             return bridge.run_acp_once(
