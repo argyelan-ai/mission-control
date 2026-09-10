@@ -71,4 +71,29 @@ FIXTURES: list[tuple[str, str | None, str, int | None]] = [
         "ctx: 12  (unrelated 99%/300 noise)",
         12,
     ),
+    (
+        "claude real 10.09.2026: bar statusline `ctx:███░░░░░░░ 35%` (host lead)",
+        "claude",
+        "  mission-control:main  |  ctx:███░░░░░░░ 35%  |  in:0.0k out:0.9k cr:351.8k …",
+        35,
+    ),
+    (
+        "claude real: `ctx:---` (fresh session, no value) stays None",
+        "claude",
+        "  mission-control:main  |  ctx:---                                         /rc",
+        None,
+    ),
+    (
+        "omp real 10.09.2026: native TUI bar `▶────10%────┃─────500K─` with chat noise `CI 5/5` above",
+        "openclaude",
+        " - CI 5/5 gruen (Run 34462682070): Backend Tests, Docker Build, Fresh-boot E2E,\n"
+        " π  > ◒ MC model > 📁 /workspace ▶────10%────────────────────────────┃─────500K─",
+        10,
+    ),
+    (
+        "synthetic: bare `5/5` in chat text is NOT a context fraction (was 100%)",
+        None,
+        "alle 5/5 Checks gruen, weiter so",
+        None,
+    ),
 ]

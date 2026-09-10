@@ -40,7 +40,21 @@
 
 # _ctx_claude TEXT — `ctx: NN` / `ctx NN`, optional gefolgt von `%`.
 _ctx_claude() {
+    # claude-cli >= 2.1.2xx: `ctx:███░░░░░░░ 35%` (Balken vor der Zahl);
+    # alte Form `ctx: 35` bleibt. `ctx:---` (kein Wert) matcht nicht.
+    local bar
+    bar=$(echo "$1" | grep -oE 'ctx[: ]*[^0-9|]*[0-9]+%' | grep -oE '[0-9]+%' | tr -d '%' | tail -1)
+    if [ -n "$bar" ]; then
+        echo "$bar"
+        return 0
+    fi
     echo "$1" | grep -oE 'ctx[: ]*[0-9]+' | grep -oE '[0-9]+' | tail -1
+}
+
+_ctx_omp_bar() {
+    # omp native TUI 18.x: `▶────10%────┃─────500K─` — Prozent im Balken
+    # hinter dem ▶-Marker, kein Schraegstrich.
+    echo "$1" | grep -oE '▶[^0-9%]*[0-9]+%' | grep -oE '[0-9]+%' | tr -d '%' | tail -1
 }
 
 # _ctx_kimi TEXT — `context: NN%` (kimi-code Statuszeile).
@@ -67,7 +81,9 @@ _ctx_hermes_bar() {
 # ein Wert ohne Suffix bleibt roh. Division durch 0 (Total=0) → kein Treffer.
 _ctx_fraction() {
     local frac
-    frac=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?[KkMm]?/[0-9]+(\.[0-9]+)?[KkMm]?' | head -1)
+    # TOTAL muss ein K/M-Suffix tragen — ein nacktes `5/5` im Chat-Text
+    # ("CI 5/5 gruen") ist kein Kontext-Bruch und scrapte als 100% (10.09.2026).
+    frac=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?[KkMm]?/[0-9]+(\.[0-9]+)?[KkMm]' | head -1)
     [ -n "$frac" ] || return 0
     echo "$frac" | awk -F'/' '
         function resolve(v,   suf, num) {
@@ -119,6 +135,9 @@ scrape_context_pct() {
     fi
     if [ -z "$pct" ]; then
         pct=$(_ctx_openclaude "$text")
+    fi
+    if [ -z "$pct" ]; then
+        pct=$(_ctx_omp_bar "$text")
     fi
     if [ -z "$pct" ]; then
         pct=$(_ctx_hermes_bar "$text")
