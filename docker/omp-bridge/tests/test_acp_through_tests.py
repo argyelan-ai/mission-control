@@ -468,6 +468,232 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
     print("PASS test_reducer_stream_mode_one_preview_slot_one_final_line")
 
 
+
+
+# ── 6. PRODUCTION Durchstich: serve_loop → transcript + preview files ──────
+
+_SERVE_ENV_KEYS = (
+    "PI_CODING_AGENT_DIR", "OMP_DRIVER", "OMP_ACP_CWD", "OMP_ACP_PERMISSIONS",
+    "OMP_TASK_DEADLINE", "MSG_DELIVERY_MODE", "OMP_HOME", "OMP_TURN_SIGNAL_FILE",
+    "OMP_TASK_LOCK_FILE", "OMP_MSG_QUEUE_DIR", "OMP_MSG_ACK_DIR",
+    "OMP_MSG_NUDGE_STATE_FILE", "OMP_MSG_NUDGE_MSG_FILE",
+    "OMP_MAX_RETRIES", "OMP_MAX_CONTINUES",
+)
+
+_SERVE_REFLECTION = (
+    "\n\n## Was wurde gemacht\nDer Durchstich-Test fuhr den echten Produktionspfad "
+    "und schrieb Transkript und Vorschau.\n"
+    "## Was hat funktioniert\nVerdrahtung und Sinks arbeiten in serve_loop.\n"
+    "## Was war unklar\nNichts Wesentliches, die Aufgabe war eindeutig.\n"
+    "## Lesson fuer Agent-Memory\nDen Produktionspfad testen, nicht die Factory.\n"
+    "TASK_COMPLETE"
+)
+
+_SERVE_TASK = {"id": "task-1", "board_id": "board-1", "dispatch_attempt_id": "att-1",
+               "workspace_path": "/workspace", "prompt": "Do the thing."}
+
+
+class _ServeRecordingLifecycle(bridge.MCLifecycle):
+    def __init__(self):
+        self.calls = []
+
+    def ack(self, task_id):
+        self.calls.append(("ack", task_id))
+
+    def finish(self, task_id, reflection, *, review):
+        self.calls.append(("finish", task_id, reflection, review))
+
+    def set_blocker(self, task_id, *, blocker_type, question):
+        self.calls.append(("blocker", task_id, blocker_type))
+
+    def comment(self, task_id, text):
+        self.calls.append(("comment", task_id))
+
+    def task_is_active(self, task_id):
+        return None
+
+
+def _enrich_final_chunk(self, params):
+    """Client-level event enrichment: give the fixture's single chunk a real
+    completion contract so the run classifies FINISH and the FULL lifecycle
+    (drive_live_run -> mc finish) is exercised, not just the I/O."""
+    upd = (params or {}).get("update") or {}
+    if upd.get("sessionUpdate") == "agent_message_chunk":
+        c = upd.get("content") or {}
+        if c.get("type") == "text" and c.get("text") == "hello golden fixture":
+            c["text"] = c["text"] + _SERVE_REFLECTION
+    return _orig_fire_event_cbs(self, params)
+
+
+_orig_fire_event_cbs = acp_client.ACPClient._fire_event_cbs
+
+
+def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
+    """One REAL serve_loop dispatch on the ACP branch (OMP_DRIVER=acp, no
+    _run_factory injection) against the in-process fake server. Returns
+    (lifecycle calls, captured run_acp_once kwargs, written jsonl paths)."""
+    tmp = agent_dir.parent
+    os.environ.update({
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "OMP_DRIVER": "acp",
+        "OMP_ACP_CWD": str(HERE),
+        "OMP_ACP_PERMISSIONS": "yolo",
+        "MSG_DELIVERY_MODE": "nudge",
+        "OMP_HOME": str(tmp / "home"),
+        "OMP_TURN_SIGNAL_FILE": str(tmp / "turn-signal.ndjson"),
+        "OMP_TASK_LOCK_FILE": str(tmp / "task.lock"),
+        "OMP_MSG_QUEUE_DIR": str(tmp / "msg-q"),
+        "OMP_MSG_ACK_DIR": str(tmp / "msg-ack"),
+        "OMP_MSG_NUDGE_STATE_FILE": str(tmp / "nudge-state"),
+        "OMP_MSG_NUDGE_MSG_FILE": str(tmp / "nudge-msg"),
+        "OMP_MAX_RETRIES": "0",
+        "OMP_MAX_CONTINUES": "0",
+    })
+    os.environ.pop("OMP_TASK_DEADLINE", None)
+
+    fakes: list = []
+    captured: dict = {}
+    orig_run = bridge.run_acp_once
+
+    def spy_run(prompt, **kw):
+        captured.update(kw)
+        fake = InProcessFake(FIXTURES["normal"], [])
+        fakes.append(fake)
+        kw["client_factory"] = lambda: fake.client
+        return orig_run(prompt, **kw)
+
+    bridge.run_acp_once = spy_run
+    lc = _ServeRecordingLifecycle()
+    poll_states = iter([{"state": "new_task", "task": dict(_SERVE_TASK)}])
+
+    def poll():
+        try:
+            return next(poll_states)
+        except StopIteration:
+            return {"state": "idle"}
+
+    try:
+        bridge.serve_loop(
+            poll_interval=0, max_iterations=1, _poll_fn=poll,
+            _lifecycle_factory=lambda task: lc, _run_factory=None,
+            _sleep=lambda _s: None,
+            _context_env_path=str(tmp / "mc-context.env"),
+        )
+    finally:
+        bridge.run_acp_once = orig_run
+        for fake in fakes:
+            try:
+                fake.close()
+            except Exception:
+                pass
+    written = sorted(agent_dir.rglob("*.jsonl"))
+    return lc.calls, captured, written
+
+
+def _with_serve_env(fn):
+    """Save/restore the serve-relevant env around `fn` (both tests mutate the
+    process env; without restore they would poison sibling tests)."""
+    def wrapper():
+        saved = {k: os.environ.get(k) for k in _SERVE_ENV_KEYS}
+        try:
+            fn()
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
+@_with_serve_env
+def test_serve_loop_acp_writes_transcript_and_preview():
+    """Durchstich aus dem PRODUKTIONSPFAD (task 8095e88a): a full serve_loop
+    dispatch on the ACP branch (OMP_DRIVER=acp, no _run_factory injection —
+    exactly the code path production takes) must leave BOTH the transcript
+    file and the sibling preview file on disk, with content and the REAL ACP
+    sessionId in the transcript header. The pre-fix code (bare run_acp_once,
+    sinks only inside the never-called factory) wrote NOTHING — proven red by
+    the sabotage test below."""
+    acp_client.ACPClient._fire_event_cbs = _enrich_final_chunk
+    try:
+        with tempfile.TemporaryDirectory(prefix="acp-serve-") as td:
+            agent_dir = Path(td) / "agent"
+            agent_dir.mkdir()
+            calls, captured, written = _drive_serve_loop_acp(agent_dir)
+
+            # The production path carried the control wiring (Stop-Knopf,
+            # tool heartbeat) AND both chat sinks — the core regression.
+            assert captured.get("cancel_state") is not None, \
+                "serve_loop ACP path must pass its shared cancel_state"
+            assert captured.get("heartbeat_fn") is not None, \
+                "serve_loop ACP path must pass the tool heartbeat"
+            assert captured.get("transcript_sink") is not None, \
+                "serve_loop ACP path must pass a transcript_sink"
+            assert captured.get("preview_sink") is not None, \
+                "serve_loop ACP path must pass a preview_sink"
+
+            # The turn genuinely finished through drive_live_run/classify_acp.
+            finishes = [c for c in calls if c[0] == "finish"]
+            assert finishes, calls
+
+            # Both channels on disk, in the backend-readable sessions tree.
+            transcripts = [f for f in written if "previews" not in f.parts]
+            previews = [f for f in written if "previews" in f.parts]
+            assert transcripts and previews, [str(f) for f in written]
+            header = json.loads(transcripts[0].read_text().splitlines()[0])
+            assert header["type"] == "session" and header["bridge"] == "acp"
+            assert header["id"] and header["id"] != "acp-session", header
+            events = [json.loads(l)
+                      for l in transcripts[0].read_text().splitlines()[1:]]
+            assert any(e.get("type") == "message" for e in events), events
+            preview_lines = [json.loads(l)
+                             for l in previews[0].read_text().splitlines() if l.strip()]
+            assert preview_lines, "preview file must have content"
+            assert all(e.get("customType") ==
+                       acp_chat_events.PREVIEW_CUSTOM_TYPE for e in preview_lines), \
+                preview_lines
+    finally:
+        acp_client.ACPClient._fire_event_cbs = _orig_fire_event_cbs
+    print("PASS test_serve_loop_acp_writes_transcript_and_preview")
+
+
+@_with_serve_env
+def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
+    """Sabotage-Probe (red BEFORE the fix — verified manually on the pre-fix
+    tree, 2026-09-10): with serve_loop's callsite reverted to the bare
+    run_acp_once wiring (cancel + heartbeat, NO sinks — the exact pre-fix
+    shape), the same full serve_loop dispatch writes NEITHER transcript NOR
+    preview. Proves the assertions above can actually fail."""
+    def bare_factory(*, model, max_time, permission_policy, task_id,
+                     cancel_state=None, heartbeat_fn=None):
+        def run(prompt):
+            cwd = os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
+            return bridge.run_acp_once(
+                prompt, cwd=cwd, model=model, max_time=max_time,
+                permission_policy=permission_policy, task_id=task_id,
+                cancel_state=cancel_state, heartbeat_fn=heartbeat_fn,
+            )
+        return run
+
+    orig_factory = bridge._make_acp_run_factory
+    bridge._make_acp_run_factory = bare_factory
+    acp_client.ACPClient._fire_event_cbs = _enrich_final_chunk
+    try:
+        with tempfile.TemporaryDirectory(prefix="acp-serve-sab-") as td:
+            agent_dir = Path(td) / "agent"
+            agent_dir.mkdir()
+            calls, captured, written = _drive_serve_loop_acp(agent_dir)
+            assert captured.get("transcript_sink") is None, list(captured)
+            assert captured.get("preview_sink") is None, list(captured)
+            assert not written, [str(f) for f in written]
+    finally:
+        bridge._make_acp_run_factory = orig_factory
+        acp_client.ACPClient._fire_event_cbs = _orig_fire_event_cbs
+    print("PASS test_serve_loop_acp_sabotage_bare_callsite_writes_nothing")
+
+
 if __name__ == "__main__":
     import contextlib
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
