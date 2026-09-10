@@ -15,6 +15,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import generate_agent_token
@@ -23,6 +24,7 @@ from app.models.board import Board
 from app.models.task import Task
 from app.services.messaging import ensure_task_thread, post_message
 from app.services.thread_scope import message_threads_for_agent, thread_agent_may_write_to
+from tests.conftest import test_engine
 
 
 async def _setup(s: AsyncSession):
@@ -31,7 +33,7 @@ async def _setup(s: AsyncSession):
     await s.commit()
     lead_raw, lead_hash = generate_agent_token()
     lead = Agent(name="the lead", agent_runtime="host", agent_token_hash=lead_hash,
-                 board_id=board.id, is_board_lead=True, scopes=["heartbeat", "tasks:read"], comm_v2=True)
+                 board_id=board.id, is_board_lead=True, scopes=["heartbeat", "tasks:read", "chat:write"], comm_v2=True)
     w_raw, w_hash = generate_agent_token()
     worker = Agent(name="the worker", agent_runtime="cli-bridge", agent_token_hash=w_hash,
                    board_id=board.id, scopes=["heartbeat", "tasks:read"], comm_v2=True)
@@ -87,11 +89,57 @@ async def test_question_without_boss_target_is_not_routed(async_session):
 
 
 @pytest.mark.asyncio
-async def test_answered_question_drops_the_thread_again(async_session):
-    lead, _, worker, sub, thread = await _setup(async_session)
-    await _ask(async_session, thread.id, worker, awaiting=False)
-    pairs = await message_threads_for_agent(lead, async_session)
-    assert thread.id not in {t.id for t, _ in pairs}
+async def test_lead_reply_via_endpoint_answers_and_drops_the_thread(client: AsyncClient, async_session):
+    """Review #496 B2: the ONLY way the lead answers in the field is
+    `mc msg --thread` = POST /agent/threads/{id}/messages without reply_to.
+    That must count as the answer to the oldest open question — afterwards
+    the thread leaves the lead's scope again."""
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    q = await _ask(async_session, thread.id, worker)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread.id}/messages",
+        json={"body": "Nimm 1200/250/250."},
+        headers={"Authorization": f"Bearer {lead_raw}"},
+    )
+    assert resp.status_code == 201, resp.text
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.thread import Message
+        fresh = (await s.exec(select(Message).where(Message.id == q.id))).one()
+        assert fresh.question_meta["awaiting"] is False, "lead's reply must close the question"
+        lead_row = await s.get(Agent, lead.id)
+        pairs = await message_threads_for_agent(lead_row, s)
+        assert thread.id not in {t.id for t, _ in pairs}
+
+
+@pytest.mark.asyncio
+async def test_open_question_on_finished_task_is_still_delivered(client: AsyncClient, async_session):
+    """Review #496 B1 = the incident's end state: worker asks, gets nothing,
+    finishes alone (task done). The lead's FIRST poll must still deliver the
+    question — no fast-forward past it."""
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    q = await _ask(async_session, thread.id, worker)
+    sub.status = "done"
+    async_session.add(sub)
+    await async_session.commit()
+    body = (await client.get("/api/v1/agent/me/poll",
+                             headers={"Authorization": f"Bearer {lead_raw}"})).json()
+    assert str(q.id) in [m["id"] for m in (body.get("new_messages") or [])]
+
+
+@pytest.mark.asyncio
+async def test_first_sight_delivers_question_not_card_history(client: AsyncClient, async_session):
+    """Review #496 W1: six progress messages before the question must NOT be
+    replayed into the lead's context — delivery starts at the question."""
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    for i in range(6):
+        await post_message(async_session, thread_id=thread.id, sender_type="agent",
+                           sender_id=worker.id, message_type="message", body=f"Zwischenstand {i}")
+    await async_session.commit()
+    q = await _ask(async_session, thread.id, worker)
+    body = (await client.get("/api/v1/agent/me/poll",
+                             headers={"Authorization": f"Bearer {lead_raw}"})).json()
+    delivered = [m["id"] for m in (body.get("new_messages") or [])]
+    assert delivered == [str(q.id)], f"expected only the question, got {len(delivered)} messages"
 
 
 @pytest.mark.asyncio
