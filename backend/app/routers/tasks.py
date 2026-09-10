@@ -2458,86 +2458,8 @@ async def post_thread_message(
         # no open blocking question remains, transition back to in_progress
         # explicitly (VALID_TRANSITIONS + event) — open non-blocking questions
         # never gate the resume. Parking via dispatch-death is Task 9's concern.
-        if task.status == TaskStatus.WAITING:
-            remaining = await open_questions(session, thread_id=thread.id)
-            blocking_open = [q for q in remaining if (q.question_meta or {}).get("blocking")]
-            if not blocking_open and is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
-                agent = None
-                agent_name = "Agent"
-                if task.assigned_agent_id:
-                    agent = await session.get(Agent, task.assigned_agent_id)
-                    if agent:
-                        agent_name = agent.name
-                await record_task_event(
-                    session, task.id, task.status, TaskStatus.IN_PROGRESS,
-                    changed_by="user", reason="answer_received",
-                )
-                task.status = TaskStatus.IN_PROGRESS
-
-                # Parked/absent detection (Task 9): if the agent was released
-                # while the task waited (waiting-timeout park, or the agent
-                # simply moved on), its current_task_id no longer points here.
-                # Then the live poll can't carry the answer — re-deliver via the
-                # dispatch path with a BOUNDED resume recap instead of assuming
-                # a live session.
-                parked = agent is None or agent.current_task_id != task.id
-
-                if parked:
-                    from app.services.task_context_builder import build_waiting_resume_recap
-                    from app.models.task import TaskComment
-                    from app.utils import create_tracked_task
-
-                    task.dispatched_at = None
-                    task.ack_at = None
-                    session.add(task)
-                    await session.commit()
-                    await session.refresh(task)
-
-                    recap = await build_waiting_resume_recap(session, task)
-                    # Durable in the timeline. comment_type="recovery_recap" is
-                    # NOT one of the types build_recovery_context truncates+surfaces,
-                    # so it won't produce a mangled duplicate — the FULL recap
-                    # reaches the prompt via extra_recovery_context below.
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        comment_type="recovery_recap",
-                        content=recap,
-                    ))
-                    await session.commit()
-
-                    await post_message(
-                        session,
-                        thread_id=thread.id,
-                        sender_type="system",
-                        message_type="system",
-                        body=f"▶ Antwort erhalten — {agent_name} wird neu eingelastet",
-                    )
-                    # Clear the park suppression so a later re-park is possible.
-                    try:
-                        from app.redis_client import get_redis
-                        _redis = await get_redis()
-                        await _redis.delete(f"mc:task:{task.id}:waiting_parked")
-                    except Exception:
-                        pass
-                    create_tracked_task(
-                        auto_dispatch_task(
-                            task.id, task.board_id, extra_recovery_context=recap,
-                        )
-                    )
-                else:
-                    session.add(task)
-                    await session.commit()
-                    await session.refresh(task)
-
-                    await post_message(
-                        session,
-                        thread_id=thread.id,
-                        sender_type="system",
-                        message_type="system",
-                        body=f"▶ Antwort erhalten — {agent_name} macht weiter",
-                    )
-
+        from app.services.messaging import resume_task_after_answer
+        await resume_task_after_answer(session, task, thread, changed_by="user")
     return {
         "message_id": str(message.id),
         "thread_id": str(thread.id),

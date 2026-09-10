@@ -389,3 +389,74 @@ async def maybe_post_finish_nudge(session: AsyncSession, task: Task) -> None:
         message_type="system",
         body=FINISH_NUDGE_BODY,
     )
+
+
+async def resume_task_after_answer(session: AsyncSession, task, thread, *, changed_by: str) -> bool:
+    """A blocking question on `thread` was just answered: if the task is parked
+    in `waiting` and no blocking question remains open, move it back to
+    in_progress — re-dispatch with a recap when the agent was released,
+    otherwise just a "▶ Antwort erhalten" line (the session is still live).
+
+    Extracted from the operator answer endpoint (tasks.py) so the LEAD answer
+    path (agent_scoped, review #496 B4) behaves identically — before, a lead
+    answer cleared the awaiting flag but left the worker stuck in `waiting`
+    (PATCH review → 400 "Waiting → Done"). Returns True when resumed."""
+    from app.models.agent import Agent
+    from app.models.task import TaskComment
+    from app.services.task_lifecycle import record_task_event
+    from app.task_status import TaskStatus, is_valid_transition
+
+    if task.status != TaskStatus.WAITING:
+        return False
+    remaining = await open_questions(session, thread_id=thread.id)
+    if any((q.question_meta or {}).get("blocking") for q in remaining):
+        return False
+    if not is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
+        return False
+    agent = None
+    agent_name = "Agent"
+    if task.assigned_agent_id:
+        agent = await session.get(Agent, task.assigned_agent_id)
+        if agent:
+            agent_name = agent.name
+    await record_task_event(
+        session, task.id, task.status, TaskStatus.IN_PROGRESS,
+        changed_by=changed_by, reason="answer_received",
+    )
+    task.status = TaskStatus.IN_PROGRESS
+    parked = agent is None or agent.current_task_id != task.id
+    if parked:
+        from app.services.dispatch import auto_dispatch_task
+        from app.services.task_context_builder import build_waiting_resume_recap
+        from app.utils import create_tracked_task
+        task.dispatched_at = None
+        task.ack_at = None
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        recap = await build_waiting_resume_recap(session, task)
+        session.add(TaskComment(
+            task_id=task.id, author_type="system",
+            comment_type="recovery_recap", content=recap,
+        ))
+        await session.commit()
+        await post_message(
+            session, thread_id=thread.id, sender_type="system", message_type="system",
+            body=f"▶ Antwort erhalten — {agent_name} wird neu eingelastet",
+        )
+        try:
+            from app.redis_client import get_redis
+            _redis = await get_redis()
+            await _redis.delete(f"mc:task:{task.id}:waiting_parked")
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            pass
+        create_tracked_task(auto_dispatch_task(task.id, task.board_id, extra_recovery_context=recap))
+    else:
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        await post_message(
+            session, thread_id=thread.id, sender_type="system", message_type="system",
+            body=f"▶ Antwort erhalten — {agent_name} macht weiter",
+        )
+    return True

@@ -2625,8 +2625,14 @@ async def _get_or_create_thread_cursor(
     thread_id: uuid.UUID,
     *,
     fast_forward: bool = False,
+    start_after_seq: int | None = None,
 ):
     """Fetch the (agent, thread) cursor, creating one on first sight.
+
+    start_after_seq (review #496 W1): initialize a NEWLY created cursor at
+    this seq (delivery starts at seq+1) — used for lead-question threads so
+    the lead gets the question, not the card's whole history. Ignored for
+    existing cursors; wins over fast_forward.
 
     fast_forward=True initializes a NEWLY created cursor at the thread's
     current max seq instead of 0 (live pilot finding 2026-07-20, Befund C):
@@ -2651,7 +2657,9 @@ async def _get_or_create_thread_cursor(
     cursor = res.first()
     if cursor is None:
         start_seq = 0
-        if fast_forward:
+        if start_after_seq is not None:
+            start_seq = max(0, int(start_after_seq))
+        elif fast_forward:
             max_res = await session.exec(
                 select(func.coalesce(func.max(Message.seq), 0)).where(
                     Message.thread_id == thread_id
@@ -2742,10 +2750,16 @@ async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agen
     """
     resolved = []
     created_any = False
+    # Lead-question threads (review #496 W1): a fresh cursor starts right
+    # before the oldest open question, so the lead sees the question (and
+    # what follows), not the card's whole history.
+    _lead_starts = await thread_scope.lead_question_start_seqs(agent, session)
     for thread, thread_task in await _message_threads_for_agent(agent, session):
+        _start_after = _lead_starts.get(thread.id)
         cursor, created = await _get_or_create_thread_cursor(
             session, agent.id, thread.id,
             fast_forward=bool(thread_task) and thread_task.status in ("done", "failed"),
+            start_after_seq=(_start_after - 1) if _start_after else None,
         )
         created_any = created_any or created
         resolved.append((thread, cursor))
