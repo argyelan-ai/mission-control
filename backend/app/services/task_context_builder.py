@@ -820,19 +820,33 @@ WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 
 
 # W0.3: bounds for the Operator-/Lead-Anweisungen block in build_recovery_context.
 OPERATOR_LEAD_COMMENT_LIMIT = 3
-# Nacharbeit PR #489 (Rex-Review): 1500 war ein Block-Cap, der bei genau einem
-# uebrig gebliebenen Kommentar nie griff (die alte Schleife brach ab statt zu
-# kuerzen) -> ein einzelner 20000-Zeichen-Kommentar ergab 20423 Zeichen
-# Recovery-Kontext in einem mandatory, nicht droppable Abschnitt. Ersetzt durch
-# einen Pro-Kommentar-Cap (siehe OPERATOR_LEAD_PER_ITEM_MAX_CHARS) plus einen
-# niedrigeren Gesamt-Cap als reines Sicherheitsnetz.
-OPERATOR_LEAD_MAX_CHARS = 900
+# Nacharbeit-2 PR #489 (Operator-Review, 2026-09-10): 250/900 waren zu knapp
+# bemessen — der Vorfall, der W0.3 ausgeloest hat, war eine sechsteilige
+# Nacharbeits-Anweisung von rund 2000 Zeichen; bei 250 Zeichen pro Kommentar
+# kam davon nur Schritt 1 und die Haelfte von Schritt 2 an. Der Cap loeste das
+# Problem "Anweisung kommt nicht an" also nicht, er verschob es nur. Der Platz
+# dafuer kommt aus PROGRESS_COMMENT_LIMIT (5 -> 3) und CHECKLIST_OPEN_ITEM_LIMIT
+# (unbegrenzt -> max 10 offene Items) — siehe Messung in `docs/` bzw. PR-Text.
+OPERATOR_LEAD_MAX_CHARS = 1800
 # Pro-Kommentar-Cap: harte Obergrenze ist COMMENT_LIMIT * PER_ITEM_MAX_CHARS,
 # damit kein einzelner ueberlanger Kommentar den ganzen Block sprengt — und
 # damit auch keiner mehr komplett verschwindet (das alte Verhalten war
 # Alles-oder-nichts: ganze Kommentare wurden fallengelassen, um unter den
-# Gesamt-Cap zu kommen).
-OPERATOR_LEAD_PER_ITEM_MAX_CHARS = 250
+# Gesamt-Cap zu kommen). 800 Zeichen ueberlebt eine typische mehrteilige
+# Anweisung vollstaendig; ein hineinkopierter Stacktrace wird weiterhin
+# gekappt.
+OPERATOR_LEAD_PER_ITEM_MAX_CHARS = 800
+
+# Nacharbeit-2 PR #489: Fortschritts-Block von 5 auf 3 Kommentare, um Platz
+# fuer den hoeheren Anweisungs-Cap oben freizumachen.
+PROGRESS_COMMENT_LIMIT = 3
+
+# Nacharbeit-2 PR #489: die Checkliste war im Recovery-Kontext unbegrenzt —
+# bei 40 Eintraegen (erledigte eingeschlossen) sprengte sie den Kontext, ohne
+# dass ein Cap das je gebremst haette. Erledigte Eintraege gehoeren nicht in
+# einen Recovery-Prompt (der Agent soll nicht neu anfangen, nicht die
+# Historie lesen); nur offene Items zaehlen, davon maximal so viele.
+CHECKLIST_OPEN_ITEM_LIMIT = 10
 
 
 async def build_waiting_resume_recap(session: AsyncSession, task: Task) -> str:
@@ -902,7 +916,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     from app.models.agent import Agent
     from app.models.checklist import TaskChecklistItem
 
-    # Comments — last 5 relevant lifecycle entries, chronological.
+    # Comments — last PROGRESS_COMMENT_LIMIT relevant lifecycle entries, chronological.
     relevant_types = ("progress", "blocker", "feedback", "resolution")
     result = await session.exec(
         select(TaskComment)
@@ -911,7 +925,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             TaskComment.comment_type.in_(relevant_types),  # type: ignore[union-attr]
         )
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
-        .limit(5)
+        .limit(PROGRESS_COMMENT_LIMIT)
     )
     comments = list(result.all())
     comments.sort(key=lambda c: c.created_at)
@@ -986,15 +1000,22 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     shown_count = len(comments) + len(rendered_operator_comments)
     unread_count = max(0, total_relevant_count - shown_count)
 
-    # Checklist items — ordered, flagged for first-pending.
+    # Checklist items — ordered, nur offene (Nacharbeit-2 PR #489: erledigte
+    # Eintraege gehoeren nicht in einen Recovery-Prompt, der Rest war
+    # unbegrenzt und sprengte bei grossen Checklisten den Kontext). Die erste
+    # offene Position bekommt weiterhin den HIER-WEITERMACHEN-Marker — da nur
+    # offene Items uebrig bleiben, ist das automatisch die erste der Liste.
     items_result = await session.exec(
         select(TaskChecklistItem)
         .where(TaskChecklistItem.task_id == task.id)
         .order_by(TaskChecklistItem.sort_order)  # type: ignore[union-attr]
     )
-    items = list(items_result.all())
+    all_items = list(items_result.all())
+    open_items = [i for i in all_items if i.status in ("pending", "in_progress")]
+    shown_items = open_items[:CHECKLIST_OPEN_ITEM_LIMIT]
+    hidden_open_count = len(open_items) - len(shown_items)
 
-    if not comments and not items and not operator_comments:
+    if not comments and not open_items and not operator_comments:
         return None
 
     parts: list[str] = [
@@ -1018,32 +1039,8 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             f"`mc task-get {task.id}`"
         )
 
-    if items:
-        parts.append("\n### Deine Checkliste")
-        _found_first_pending = False
-        for item in items:
-            mark = "[x]" if item.status == "done" else "[ ]"
-            hint = ""
-            if item.status in ("pending", "in_progress") and not _found_first_pending:
-                hint = " ← **HIER WEITERMACHEN**"
-                _found_first_pending = True
-            parts.append(f"- {mark} {item.title}{hint}")
-
-    if comments:
-        parts.append("\n### Letzter Fortschritt")
-        for c in comments:
-            ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
-            label = {
-                "feedback": "REVIEWER-FEEDBACK",
-                "blocker": "BLOCKER",
-                "resolution": "resolution",
-                "progress": "progress",
-            }.get(c.comment_type, c.comment_type)
-            # Truncate long comments in the recap — agent can fetch full via
-            # `mc comment list` if needed.
-            snippet = c.content.strip().splitlines()[0][:180]
-            parts.append(f"[{label} @ {ts}] {snippet}")
-
+    # Nacharbeit-2 PR #489: Anweisungen zuerst — was der Agent tun soll, steht
+    # oben, nicht hinter Checkliste und Fortschritt begraben.
     if rendered_operator_comments:
         # B1-Fix (Nacharbeit PR #489): kein Kommentar wird mehr komplett
         # fallengelassen (das alte Alles-oder-nichts liess bei genau einem
@@ -1077,6 +1074,29 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         header += " (gekuerzt bei Bedarf)" if any_truncated else " (ungekuerzt)"
         parts.append(header)
         parts.append(block_text)
+
+    if shown_items:
+        parts.append("\n### Deine Checkliste")
+        for i, item in enumerate(shown_items):
+            hint = " ← **HIER WEITERMACHEN**" if i == 0 else ""
+            parts.append(f"- [ ] {item.title}{hint}")
+        if hidden_open_count > 0:
+            parts.append(f"- ... und {hidden_open_count} weitere (`mc task-get {task.id}`)")
+
+    if comments:
+        parts.append("\n### Letzter Fortschritt")
+        for c in comments:
+            ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
+            label = {
+                "feedback": "REVIEWER-FEEDBACK",
+                "blocker": "BLOCKER",
+                "resolution": "resolution",
+                "progress": "progress",
+            }.get(c.comment_type, c.comment_type)
+            # Truncate long comments in the recap — agent can fetch full via
+            # `mc comment list` if needed.
+            snippet = c.content.strip().splitlines()[0][:180]
+            parts.append(f"[{label} @ {ts}] {snippet}")
 
     # Workspace hint — Task.workspace_path is authoritative (Bundle 4),
     # agent workspace is fallback for tasks without their own worktree.
