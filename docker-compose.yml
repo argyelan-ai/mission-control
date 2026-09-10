@@ -354,6 +354,29 @@ services:
   # (kein /deliverables:ro FileResponse-Pfad, kein /shared-mcp, kein
   # scripts/node-agent — die haengen an HTTP-Routern, die im Worker nie
   # laufen).
+  #
+  # Neustart-/Rueckweg-Reihenfolge (Warnung W2, Rex-Review PR #495): wer
+  # ENABLE_BACKGROUND_SERVICES zwischen backend und mc-worker umschaltet —
+  # egal in welche Richtung — macht das IMMER als EIN einzelner Aufruf:
+  #
+  #   docker compose up -d backend mc-worker
+  #
+  # Nie zwei getrennte Aufrufe (erst den einen stoppen/starten, dann den
+  # anderen). Grund: die meisten der 18 Hintergrund-Dienste haben ein
+  # Redis-Lock, aber telegram_bot (_poll_loop() -> getUpdates) nicht — zwei
+  # Consumer auf demselben Bot-Token gleichzeitig ergeben 409-Conflicts und
+  # verlorene/doppelte Inbound-Nachrichten. Ein einzelner Compose-Aufruf mit
+  # beiden Service-Namen wendet die neue Zuweisung fuer beide Prozesse in
+  # einem Zug an, ohne Zwischenzustand mit zwei aktiven "true"-Prozessen.
+  #
+  # Rueckweg: erst die Datei aendern (backend ENABLE_BACKGROUND_SERVICES ->
+  # "true", mc-worker -> "false"), dann derselbe eine
+  # `docker compose up -d backend mc-worker`-Aufruf. NICHT
+  # `docker compose stop mc-worker` — das ueberlebt keinen spaeteren
+  # `up -d`-Lauf (der Dienst kaeme mit ENABLE_BACKGROUND_SERVICES weiterhin
+  # "true" in der Datei still zurueck, waehrend backend laengst wieder
+  # "true" haette: Doppelstart, Tage spaeter, ohne Zuschauer) — und das
+  # laeuft bei jedem `install.sh` und `scripts/start-all.sh`.
   mc-worker:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
