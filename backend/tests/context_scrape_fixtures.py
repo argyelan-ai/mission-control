@@ -71,4 +71,65 @@ FIXTURES: list[tuple[str, str | None, str, int | None]] = [
         "ctx: 12  (unrelated 99%/300 noise)",
         12,
     ),
+    (
+        "claude real 10.09.2026: bar statusline `ctx:███░░░░░░░ 35%` (host lead)",
+        "claude",
+        "  mission-control:main  |  ctx:███░░░░░░░ 35%  |  in:0.0k out:0.9k cr:351.8k …",
+        35,
+    ),
+    (
+        "claude real: `ctx:---` (fresh session, no value) stays None",
+        "claude",
+        "  mission-control:main  |  ctx:---                                         /rc",
+        None,
+    ),
+    (
+        "omp real 10.09.2026: native TUI bar `▶────10%────┃─────500K─` with chat noise `CI 5/5` above",
+        "openclaude",
+        " - CI 5/5 gruen (Run 34462682070): Backend Tests, Docker Build, Fresh-boot E2E,\n"
+        " π  > ◒ MC model > 📁 /workspace ▶────10%────────────────────────────┃─────500K─",
+        10,
+    ),
+    (
+        "synthetic: bare `5/5` in chat text is NOT a context fraction (was 100%)",
+        None,
+        "alle 5/5 Checks gruen, weiter so",
+        None,
+    ),
+    (
+        "review #487: `ctx:---` followed by prose with a percent must NOT scrape",
+        "claude",
+        "  mc:main   ctx:---   disk 0% used",
+        None,
+    ),
+    (
+        "review #487: `│ ctx:--- │ cpu 87% │` (U+2502 separators) must NOT scrape",
+        "claude",
+        " mc:main │ ctx:--- │ cpu 87% │",
+        None,
+    ),
+    (
+        "review #487: prose below the omp bar must not beat the statusline (last-match)",
+        "openclaude",
+        "📁 /workspace ▶────10%──────┃─────500K─\nKollege: das ctx-Muster ist zu 99% fertig",
+        10,
+    ),
+    (
+        "review #487 r2: U+2212 MINUS SIGN after ctx: must NOT scrape (BusyBox byte-class trap)",
+        "claude",
+        "mc:main ctx:−−− 0%",
+        None,
+    ),
+    (
+        "review #487 r2: U+2014 EM DASH after ▶ must NOT scrape",
+        "openclaude",
+        "▶ — 99% des Wegs geschafft",
+        None,
+    ),
+    (
+        "review #487 r2: percent on the NEXT line after `ctx` must NOT scrape (no \\s across lines)",
+        "openclaude",
+        "▶────10%──┃──500K─\nKollege: schau dir nochmal an den ctx\n42% der Faelle laufen falsch",
+        10,
+    ),
 ]
