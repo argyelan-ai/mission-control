@@ -45,6 +45,7 @@ SKIP_CLI: dict[str, str] = {
     # NOTE: POST /boards/{board_id}/tasks/{task_id}/review is now CLI-mapped
     # via `mc approve` / `mc reject` (B3) — no longer a SKIP entry.
     "PATCH /boards/{board_id}/tasks/{task_id}/report-back": "Board-Lead-only report-back contract",
+    "DELETE /boards/{board_id}/tasks/{task_id}/checklist/{item_id}": "Board-Lead-only cleanup; workers use `mc checklist done/skip`",
     "POST /boards/{board_id}/tasks/{task_id}/checkpoint": "deprecated in A4 — use `mc checklist` + `mc comment progress`",
     # Board-level writes handled via other channels.
     "POST /boards/{board_id}/approvals": "approvals go via `mc question` (clarification) or API directly",
