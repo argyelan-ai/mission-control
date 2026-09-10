@@ -81,7 +81,11 @@ from jarvis_core.persona import (
     build_live_delegation_instructions,
     build_live_voice_instructions,
 )
-from jarvis_core.voice_provider import VoiceChoice, resolve_voice_choice
+from jarvis_core.voice_provider import (
+    VoiceChoice,
+    resolve_live_backend_model,
+    resolve_voice_choice,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
@@ -213,16 +217,16 @@ def _validate_live_voice(voice: str) -> str:
 # GPTLiveModel's EIGENER Default ist "gpt-5.6-luna" (siehe DEFAULT_BACKEND_MODEL
 # in gpt_live_model.py) — OpenAIs "Fast mode" fuer genau diesen
 # Full-Duplex-Anwendungsfall, kein reines Codename-Raetsel wie im Frontier-
-# Kontext, sondern der vom PR selbst gewaehlte Live-Default. Umgestellt:
-# JARVIS_LIVE_BACKEND_MODEL (Default "gpt-5.6-luna") ist eine EIGENE Env-Var,
-# getrennt von JARVIS_FRONTIER_MODEL — die beiden Anwendungsfaelle (schnelle
-# Voice-Delegation vs. schwere ask_frontier-Analyse) brauchen unterschiedliche
-# Modelle, keine gemeinsame Config.
-LIVE_BACKEND_DEFAULT_MODEL = "gpt-5.6-luna"
-
-
-def _resolve_live_backend_model() -> str:
-    return os.environ.get("JARVIS_LIVE_BACKEND_MODEL", "").strip() or LIVE_BACKEND_DEFAULT_MODEL
+# Kontext, sondern der vom PR selbst gewaehlte Live-Default. JARVIS_LIVE_BACKEND_MODEL
+# (Default "gpt-5.6-luna") ist eine EIGENE Env-Var, getrennt von
+# JARVIS_FRONTIER_MODEL — die beiden Anwendungsfaelle (schnelle Voice-
+# Delegation vs. schwere ask_frontier-Analyse) brauchen unterschiedliche
+# Modelle, keine gemeinsame Config. Konstante + Resolver leben in
+# jarvis_core.voice_provider (nicht hier) — geteilt mit
+# scripts/gpt_live_protocol_smoke.py, damit dort keine zweite, driftende
+# "gpt-5.5"/"gpt-5.6-luna"-Kopie entsteht (genau das brach CI: 10.09.2026,
+# backend/tests/test_no_hardcoded_models.py).
+_resolve_live_backend_model = resolve_live_backend_model
 
 
 def _build_live_transport(

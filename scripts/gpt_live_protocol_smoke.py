@@ -23,8 +23,18 @@ import os
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import aiohttp
+
+# jarvis_core is a sibling of scripts/ at the repo root, and also copied to
+# /app in the voice-worker image (Dockerfile) — try both so this script runs
+# the same way from a repo checkout and inside the built image.
+for _candidate in (Path(__file__).resolve().parent.parent, Path("/app")):
+    if (_candidate / "jarvis_core").is_dir() and str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
+
+from jarvis_core.voice_provider import resolve_live_backend_model  # noqa: E402
 
 LIVE_URL = "wss://api.openai.com/v1/live/sessions"
 MODEL = os.environ.get("VOICE_MODEL", "gpt-live-1")
@@ -97,7 +107,14 @@ async def main() -> int:
                     "delegation": {
                         "type": "responses",
                         "responses": {
-                            "model": os.environ.get("JARVIS_FRONTIER_MODEL", "gpt-5.5"),
+                            # Same JARVIS_LIVE_BACKEND_MODEL + default as the
+                            # real worker (jarvis_core.voice_provider,
+                            # shared — no second hardcoded model literal
+                            # here to drift out of sync). This script never
+                            # overrides runtime.model_identifier — it's a
+                            # standalone smoke test hitting OpenAI's API
+                            # directly, not a runtime/provisioning path.
+                            "model": resolve_live_backend_model(),  # model-catalog: allow
                             "instructions": "Antworte in einem kurzen Satz auf Deutsch.",
                         },
                     },
