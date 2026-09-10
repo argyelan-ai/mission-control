@@ -52,6 +52,27 @@ services: {}
 #       - /path/to/free-code-local/claude-config:/home/mcuser/.claude:rw
 #       - /path/to/FreeCode/projects:/home/mcuser/free-code-projects:rw
 #
+#   # ── mc-worker mirror of the SSH + host-agent mounts above (Architektur E,
+#   # Teil 2) ──────────────────────────────────────────────────────────────
+#   # Since this PR, the SSH- and token-harvester consumers of the four
+#   # mounts above run in mc-worker, not backend: runtime_manager._ssh_run()
+#   # (called by runtime_watcher) needs ~/.ssh, and token_harvester.run_
+#   # harvest() (called by watchdog) needs ~/.claude, ~/.grok and
+#   # ~/.hermes/state.db. `services:` blocks in an override do NOT
+#   # auto-copy between services — if you already have a
+#   # docker-compose.override.yml with the backend block above, add this
+#   # mc-worker block too BEFORE your next restart, or token attribution
+#   # and SSH-based runtime recovery silently stop working (no exception —
+#   # the harvester just finds no files, see watchdog/core.py:190). The
+#   # free-code sandbox mounts stay backend-only — nothing in mc-worker
+#   # uses them.
+#   mc-worker:
+#     volumes:
+#       - ~/.ssh:/home/mcuser/.ssh:ro
+#       - ~/.claude:${HOME}/.claude:ro
+#       - ~/.grok:${HOME}/.grok:ro
+#       - ~/.hermes/state.db:${HOME}/.hermes/state.db:ro
+#
 #   # ── HTTPS via your own certs (optional) ──────────────────────────────
 #   # The shipped Caddyfile serves plain HTTP on :80 (fine for localhost).
 #   # For TLS (e.g. Tailscale or LAN certs): copy caddy/Caddyfile.tls.example

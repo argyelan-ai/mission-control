@@ -18,21 +18,21 @@ Importgraph liegt im Worker-Prozess. Fuer Teil 1 vertretbar; Teil 2 muss die
 Dienste aus ``main.py`` herausziehen statt ``main`` zu importieren, wenn
 Architektur E echte Prozesstrennung erreichen soll.
 
-Teil 1 bindet dieses Modul NOCH NICHT in docker-compose ein — es gibt noch
-keinen ``mc-worker``-Service. Ausfuehren (gleiches Image wie die API):
+Teil 2 (siehe docker-compose.yml, Service ``mc-worker``) bindet dieses Modul
+als eigenen Dienst ein, mit ``ENABLE_BACKGROUND_SERVICES=true`` (die API hat
+dort ``false`` — genau ein Prozess startet Scheduler/Watchdog/etc., siehe
+Scheduler-Redis-Lock, der das zusaetzlich absichert). Ausfuehren (gleiches
+Image wie die API):
 
     python -m app.worker
 
-``ENABLE_BACKGROUND_SERVICES`` muss dafuer auf einem der beiden Prozesse auf
-``false`` stehen (sonst starten Scheduler/Watchdog/etc. doppelt — siehe
-Scheduler-Redis-Lock, der genau das absichert, aber unnoetig waere). Solange
-kein Worker-Container existiert, bleibt der Default ``true`` in der API
-unveraendert, und dieses Modul ist reine Vorbereitung.
-
-Vault-Watcher/-Compactor sind NICHT Teil dieses Moduls (siehe PR-Text,
-"Streitfall") — sie haengen am Vault-Wiring in ``app.main.lifespan`` und
-werden dort separat gegated. Das in eine von hier aufrufbare Funktion zu
-ziehen ist Teil 2.
+Vault-Watcher/-Compactor (Rex-Review PR #495, Blocker B1): ``app.main.
+start_vault_services()``/``stop_vault_services()`` sind der gemeinsame
+Vault-Startpfad, den dieses Modul jetzt genauso aufruft wie ``app.main.
+lifespan()`` — vorher haengten beide am Vault-Wiring in ``lifespan()``
+selbst, das dieses Modul nie ausfuehrte. Mit ``ENABLE_BACKGROUND_SERVICES=
+false`` auf der API (der Normalfall seit Teil 2) liefen sie dadurch in
+KEINEM Prozess. Siehe die Docstrings der beiden Funktionen in ``app.main``.
 """
 
 import asyncio
@@ -40,7 +40,14 @@ import logging
 import signal
 
 from app.config import settings
-from app.main import app, prepare_process, start_background_services, stop_background_services
+from app.main import (
+    app,
+    prepare_process,
+    start_background_services,
+    start_vault_services,
+    stop_background_services,
+    stop_vault_services,
+)
 
 logger = logging.getLogger("mc.worker")
 
@@ -56,6 +63,7 @@ async def run() -> None:
 
     logger.info("Worker startet Hintergrund-Dienste (kein HTTP-Router, kein Port offen)")
     await start_background_services(app)
+    await start_vault_services(app)
     logger.info("Worker: Hintergrund-Dienste laufen")
 
     # CPython wandelt SIGTERM NICHT in eine Exception um — die Default-
@@ -75,6 +83,9 @@ async def run() -> None:
         for sig in registered:
             loop.remove_signal_handler(sig)
         logger.info("Worker faehrt Hintergrund-Dienste herunter")
+        # Vault-Stop vor stop_background_services(), spiegelbildlich zur
+        # Startreihenfolge oben und zu lifespan()'s Shutdown-Reihenfolge.
+        await stop_vault_services(app)
         await stop_background_services(app)
 
 

@@ -262,6 +262,143 @@ async def stop_background_services(app: FastAPI) -> None:
     await scheduler.stop()
 
 
+async def start_vault_services(app: FastAPI) -> None:
+    """Wire the vault subsystem and start vault_watcher/VaultCompactor.
+
+    Architektur E, Teil 2 (Rex-Review PR #495, Blocker B1): extracted so the
+    API lifespan AND backend/app/worker.py share the same vault startup
+    path — the counterpart to start_/stop_background_services() above for
+    exactly the two vault services that were deliberately left out of that
+    pair (see the docstring there). Before this extraction, this code lived
+    inline in lifespan() and worker.py never called it: with
+    ENABLE_BACKGROUND_SERVICES=false on the API (Architektur E, Teil 2's
+    default), vault_watcher and VaultCompactor ran in NO process at all —
+    a silent failure (vault writes kept answering ``{"ok": true}`` while
+    piling up uncanonicalized, vault search froze on the last boot rebuild).
+
+    vault_index/_activity/_git/_embeddings are wired here UNCONDITIONALLY —
+    the API process' vault read routes (search etc.) need them regardless
+    of ENABLE_BACKGROUND_SERVICES. Only vault_watcher.start() and
+    VaultCompactor (observation/compaction, not a read path) are gated on
+    the flag, same as the 17 services in start_background_services().
+
+    Failure here is non-fatal: startup continues even when the vault dir is
+    unwritable or the watcher can't bind. Vault routes will 500 in that
+    case (API process only), but the rest of MC keeps working.
+    """
+    app.state.vault_index = None
+    app.state.vault_activity = None
+    app.state.vault_git = None
+    app.state.vault_embeddings = None
+    app.state.vault_watcher = None
+    app.state.vault_compactor = None
+    try:
+        vault_path = settings.vault_path
+        vault_path.mkdir(parents=True, exist_ok=True)
+        # Attachments tree for deliverable files (Phase 0 vault-as-brain).
+        # Hardlinks from ~/.mc/deliverables land here, plus voice memos
+        # later. Idempotent — exist_ok=True makes restart storms harmless.
+        for _kind in ("files", "images", "audio"):
+            (vault_path / "attachments" / _kind).mkdir(parents=True, exist_ok=True)
+        index_db = vault_path / ".mc_index.db"
+        first_boot = not index_db.exists()
+
+        vault_index = VaultIndex(db_path=index_db, vault_path=vault_path)
+        if first_boot or settings.vault_index_rebuild_on_boot:
+            stats = vault_index.rebuild_from_vault()
+            logger.info(
+                "Vault index rebuild (%s): scanned=%d indexed=%d skipped=%d errors=%d",
+                "first boot" if first_boot else "forced",
+                stats["scanned"], stats["indexed"], stats["skipped"], stats["errors"],
+            )
+
+        from app.redis_client import get_redis
+        _redis_for_vault = await get_redis()
+        vault_activity = VaultActivity(redis=_redis_for_vault)
+        vault_git = VaultGit(vault_path=vault_path, stub_mode=True)
+
+        # M.2 (2026-05-14): real Spark DGX → Qdrant wiring (replaces the
+        # M.1 no-op stub). VaultEmbeddings.upsert() now embeds vault file
+        # content via ``embedding_service`` (Spark LM Studio,
+        # text-embedding-nomic-embed-text-v1.5, 768-dim) and upserts into
+        # the ``memory_vault`` Qdrant collection (auto-created on first use).
+        # Fail-soft semantics preserved: DGX or Qdrant outages return a
+        # structured ``{"ok": False, "error": ..., "kind": ...}`` instead
+        # of bubbling — the watcher pipeline keeps running.
+        from app.services.embedding_service import embedding_service as _embedding_service
+        from app.services.qdrant_service import qdrant_service as _qdrant_service
+        _qdrant_raw_client = await _qdrant_service._get_client()
+        vault_embeddings = VaultEmbeddings(
+            dgx_client=_embedding_service,
+            qdrant_client=_qdrant_raw_client,
+            collection="memory_vault",
+        )
+
+        vault_watcher = VaultWatcher(
+            vault_path=vault_path,
+            index=vault_index,
+            activity=vault_activity,
+            embeddings=vault_embeddings,
+            git=vault_git,
+            redis=_redis_for_vault,
+        )
+        if settings.enable_background_services:
+            await vault_watcher.start()
+
+        app.state.vault_index = vault_index
+        app.state.vault_activity = vault_activity
+        app.state.vault_git = vault_git
+        app.state.vault_embeddings = vault_embeddings
+        app.state.vault_watcher = vault_watcher
+        logger.info(
+            "Vault services wired (path=%s, watcher %s)",
+            vault_path,
+            "running" if settings.enable_background_services else "NOT started (ENABLE_BACKGROUND_SERVICES=false)",
+        )
+
+        # ── VaultCompactor (M.2: inbox-pattern for cross-agent writes) ────
+        # Runs after the watcher so compaction events dispatch into a
+        # live watcher pipeline. Fault-tolerant: a compactor failure does
+        # not block boot or affect the rest of the vault stack.
+        if settings.enable_background_services:
+            try:
+                vault_compactor = VaultCompactor(vault_path=vault_path, redis=_redis_for_vault)
+                await vault_compactor.start()
+                app.state.vault_compactor = vault_compactor
+                logger.info("VaultCompactor started")
+            except Exception as e:
+                logger.error("VaultCompactor failed to start: %s", e, exc_info=True)
+                app.state.vault_compactor = None
+    except Exception as e:
+        logger.warning("Vault wiring failed (non-fatal, vault routes will 500): %s", e)
+
+
+async def stop_vault_services(app: FastAPI) -> None:
+    """Mirror shutdown for start_vault_services().
+
+    Order matters: drain the compactor's final compaction into the still-
+    running watcher pipeline first, then stop the watcher (drains its
+    observer thread), then close the SQLite index connection. Safe to call
+    even when start_vault_services() failed or was never called — every
+    branch here guards on the app.state default (None).
+    """
+    try:
+        if getattr(app.state, "vault_compactor", None) is not None:
+            await app.state.vault_compactor.stop()
+    except Exception as e:
+        logger.warning("Vault compactor stop failed (non-fatal): %s", e)
+    try:
+        if getattr(app.state, "vault_watcher", None) is not None:
+            await app.state.vault_watcher.stop()
+    except Exception as e:
+        logger.warning("Vault watcher stop failed (non-fatal): %s", e)
+    try:
+        if getattr(app.state, "vault_index", None) is not None:
+            app.state.vault_index.close()
+    except Exception as e:
+        logger.warning("Vault index close failed (non-fatal): %s", e)
+
+
 async def prepare_process() -> None:
     """Shared boot preparation for the API process and the worker process.
 
@@ -370,129 +507,44 @@ async def lifespan(app: FastAPI):
         )
     # ── Vault Memory (M.1 Read Foundation) ────────────────────────────────
     # Init: VaultIndex (FTS5 SQLite) + Activity + Git (stub) + Embeddings
-    # (M.1 no-op stub) + Watcher. Phase 7 ``obsidian_export`` continues
-    # running in parallel — it stops in M.2.
+    # (M.1 no-op stub) + Watcher, plus VaultCompactor. Phase 7
+    # ``obsidian_export`` continues running in parallel — it stops in M.2.
     #
-    # Failure here is non-fatal: backend boots even when the vault dir is
-    # unwritable or watchdog can't bind. Vault routes will 500 in that case,
-    # but the rest of MC keeps working.
+    # Extracted into start_vault_services() (Rex-Review PR #495, Blocker
+    # B1) — worker.py calls the same function, which is what makes
+    # vault_watcher/VaultCompactor actually start in whichever process has
+    # ENABLE_BACKGROUND_SERVICES=true. See that function's docstring.
+    await start_vault_services(app)
+    # ── Vault Lint Cron (M.3 T4) ──────────────────────────────────────
+    # 24h asyncio loop that runs structural lint (orphans, invalid
+    # frontmatter, duplicate IDs) and writes the report as a vault note
+    # under `_lint/YYYY-MM-DD.md`. Sleeps first, then runs — so backend
+    # restart-storms do not trigger repeat scans. Non-fatal: a failed
+    # iteration logs + waits for the next tick. Configurable interval
+    # via VAULT_LINT_INTERVAL_HOURS. Tests set this to 99999 so the
+    # loop never fires (conftest Pitfall 4 mirror).
     #
-    # vault_index/_activity/_git/_embeddings bleiben IMMER unconditional —
-    # Vault-Read-Routen (Suche etc.) brauchen sie unabhaengig vom Schalter.
-    # Nur vault_watcher.start() + der VaultCompactor (Beobachtung/Kompaktierung,
-    # kein Read-Pfad) haengen an ENABLE_BACKGROUND_SERVICES — Streitfall, siehe
-    # Inventar-Tabelle im PR-Text.
-    app.state.vault_index = None
-    app.state.vault_activity = None
-    app.state.vault_git = None
-    app.state.vault_embeddings = None
-    app.state.vault_watcher = None
-    app.state.vault_compactor = None
-    app.state.vault_lint_task = None  # M.3 T4: 24h vault-lint cron
+    # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars (nach dem
+    # Boss-Audit auf f57e2a9 hinzugekommen) — laeuft bewusst unconditional
+    # weiter, bis geklaert ist, ob er zu den 20 dazugehoert. Eigener
+    # try/except seit Rex-Review PR #495 (Blocker B1): das Vault-Wiring
+    # lebt jetzt in start_vault_services() mit eigenem try dort — ein
+    # fehlgeschlagenes Wiring soll den Lint-Cron nicht mehr mitreissen.
+    app.state.vault_lint_task = None
     try:
         vault_path = settings.vault_path
         vault_path.mkdir(parents=True, exist_ok=True)
-        # Attachments tree for deliverable files (Phase 0 vault-as-brain).
-        # Hardlinks from ~/.mc/deliverables land here, plus voice memos
-        # later. Idempotent — exist_ok=True makes restart storms harmless.
-        for _kind in ("files", "images", "audio"):
-            (vault_path / "attachments" / _kind).mkdir(parents=True, exist_ok=True)
-        index_db = vault_path / ".mc_index.db"
-        first_boot = not index_db.exists()
-
-        vault_index = VaultIndex(db_path=index_db, vault_path=vault_path)
-        if first_boot or settings.vault_index_rebuild_on_boot:
-            stats = vault_index.rebuild_from_vault()
-            logger.info(
-                "Vault index rebuild (%s): scanned=%d indexed=%d skipped=%d errors=%d",
-                "first boot" if first_boot else "forced",
-                stats["scanned"], stats["indexed"], stats["skipped"], stats["errors"],
-            )
-
-        from app.redis_client import get_redis
-        _redis_for_vault = await get_redis()
-        vault_activity = VaultActivity(redis=_redis_for_vault)
-        vault_git = VaultGit(vault_path=vault_path, stub_mode=True)
-
-        # M.2 (2026-05-14): real Spark DGX → Qdrant wiring (replaces the
-        # M.1 no-op stub). VaultEmbeddings.upsert() now embeds vault file
-        # content via ``embedding_service`` (Spark LM Studio,
-        # text-embedding-nomic-embed-text-v1.5, 768-dim) and upserts into
-        # the ``memory_vault`` Qdrant collection (auto-created on first use).
-        # Fail-soft semantics preserved: DGX or Qdrant outages return a
-        # structured ``{"ok": False, "error": ..., "kind": ...}`` instead
-        # of bubbling — the watcher pipeline keeps running.
-        from app.services.embedding_service import embedding_service as _embedding_service
-        from app.services.qdrant_service import qdrant_service as _qdrant_service
-        _qdrant_raw_client = await _qdrant_service._get_client()
-        vault_embeddings = VaultEmbeddings(
-            dgx_client=_embedding_service,
-            qdrant_client=_qdrant_raw_client,
-            collection="memory_vault",
+        app.state.vault_lint_task = _create_background_task(
+            _vault_lint_loop(vault_path),
+            name="vault_lint_loop",
         )
-
-        vault_watcher = VaultWatcher(
-            vault_path=vault_path,
-            index=vault_index,
-            activity=vault_activity,
-            embeddings=vault_embeddings,
-            git=vault_git,
-            redis=_redis_for_vault,
-        )
-        if settings.enable_background_services:
-            await vault_watcher.start()
-
-        app.state.vault_index = vault_index
-        app.state.vault_activity = vault_activity
-        app.state.vault_git = vault_git
-        app.state.vault_embeddings = vault_embeddings
-        app.state.vault_watcher = vault_watcher
         logger.info(
-            "Vault services wired (path=%s, watcher %s)",
-            vault_path,
-            "running" if settings.enable_background_services else "NOT started (ENABLE_BACKGROUND_SERVICES=false)",
+            "Vault lint cron scheduled (interval=%dh)",
+            settings.vault_lint_interval_hours,
         )
-
-        # ── VaultCompactor (M.2: inbox-pattern for cross-agent writes) ────
-        # Runs after the watcher so compaction events dispatch into a
-        # live watcher pipeline. Fault-tolerant: a compactor failure does
-        # not block boot or affect the rest of the vault stack.
-        if settings.enable_background_services:
-            try:
-                vault_compactor = VaultCompactor(vault_path=vault_path, redis=_redis_for_vault)
-                await vault_compactor.start()
-                app.state.vault_compactor = vault_compactor
-                logger.info("VaultCompactor started")
-            except Exception as e:
-                logger.error("VaultCompactor failed to start: %s", e, exc_info=True)
-                app.state.vault_compactor = None
-
-        # ── Vault Lint Cron (M.3 T4) ──────────────────────────────────────
-        # 24h asyncio loop that runs structural lint (orphans, invalid
-        # frontmatter, duplicate IDs) and writes the report as a vault note
-        # under `_lint/YYYY-MM-DD.md`. Sleeps first, then runs — so backend
-        # restart-storms do not trigger repeat scans. Non-fatal: a failed
-        # iteration logs + waits for the next tick. Configurable interval
-        # via VAULT_LINT_INTERVAL_HOURS. Tests set this to 99999 so the
-        # loop never fires (conftest Pitfall 4 mirror).
-        #
-        # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars (nach dem
-        # Boss-Audit auf f57e2a9 hinzugekommen) — laeuft bewusst unconditional
-        # weiter, bis Teil 2 klaert, ob er zu den 20 dazugehoert.
-        try:
-            app.state.vault_lint_task = _create_background_task(
-                _vault_lint_loop(vault_path),
-                name="vault_lint_loop",
-            )
-            logger.info(
-                "Vault lint cron scheduled (interval=%dh)",
-                settings.vault_lint_interval_hours,
-            )
-        except Exception as e:
-            logger.error("Vault lint loop failed to schedule: %s", e, exc_info=True)
-            app.state.vault_lint_task = None
     except Exception as e:
-        logger.warning("Vault wiring failed (non-fatal, vault routes will 500): %s", e)
+        logger.error("Vault lint loop failed to schedule: %s", e, exc_info=True)
+        app.state.vault_lint_task = None
     # ── Vault Decay Cron (Phase 3 Intelligence) ───────────────────────
     # Weekly asyncio loop: soft-decay unread notes (90d->confidence drop,
     # 180d+low->archive). Grace period: no decay fires for 90 days after
@@ -562,21 +614,10 @@ async def lifespan(app: FastAPI):
                 pass
     except Exception as e:
         logger.warning("Vault lint cron stop failed (non-fatal): %s", e)
-    try:
-        if getattr(app.state, "vault_compactor", None) is not None:
-            await app.state.vault_compactor.stop()
-    except Exception as e:
-        logger.warning("Vault compactor stop failed (non-fatal): %s", e)
-    try:
-        if app.state.vault_watcher is not None:
-            await app.state.vault_watcher.stop()
-    except Exception as e:
-        logger.warning("Vault watcher stop failed (non-fatal): %s", e)
-    try:
-        if app.state.vault_index is not None:
-            app.state.vault_index.close()
-    except Exception as e:
-        logger.warning("Vault index close failed (non-fatal): %s", e)
+    # Compactor -> watcher -> index close: see stop_vault_services()
+    # docstring for why this order (Rex-Review PR #495, Blocker B1 —
+    # shared with backend/app/worker.py's shutdown path).
+    await stop_vault_services(app)
     if _vault_decay_task and not _vault_decay_task.done():
         _vault_decay_task.cancel()
         try:

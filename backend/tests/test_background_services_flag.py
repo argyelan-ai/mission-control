@@ -1,4 +1,4 @@
-"""ENABLE_BACKGROUND_SERVICES (Architektur E, Teil 1 — Vorbereitung Worker-Container).
+"""ENABLE_BACKGROUND_SERVICES (Architektur E, Teil 1+2 — Worker-Container).
 
 ``start_background_services()``/``stop_background_services()`` in
 ``app.main`` sind der gemeinsame Startpfad fuer die API-lifespan UND
@@ -8,6 +8,12 @@ jeder Dienst-``.start()`` haengt an genau diesen beiden — deshalb sind diese
 Tests bewusst vollstaendig gemockt statt die echte lifespan() auszufuehren.
 Das strukturelle Wiring (source inspection) folgt dem Muster aus
 ``test_boot_secret_guard.py::test_lifespan_wires_the_guard``.
+
+``start_vault_services()``/``stop_vault_services()`` sind seit Rex-Review
+PR #495 (Blocker B1) das Gegenstueck fuer vault_watcher/VaultCompactor —
+vorher haengten beide am Vault-Wiring in ``lifespan()`` selbst, das
+``worker.py`` nie ausfuehrte; mit ``ENABLE_BACKGROUND_SERVICES=false`` auf
+der API (Teil 2's Normalfall) liefen sie dadurch in KEINEM Prozess.
 """
 
 import asyncio
@@ -70,21 +76,28 @@ def test_lifespan_gates_background_services_on_the_flag():
     assert "await stop_background_services(app)" in src
 
 
-def test_lifespan_gates_vault_watcher_and_compactor_too():
-    # Streitfall aus dem PR-Text: vault_watcher/vault_compactor haengen am
-    # Vault-Wiring in lifespan() selbst (nicht in start_background_services),
-    # muessen aber trotzdem hinter demselben Schalter stehen.
+def test_start_vault_services_gates_watcher_and_compactor():
+    # Streitfall aus dem PR-Text, geloest in Rex-Review PR #495 (Blocker
+    # B1): vault_watcher/vault_compactor haengen am Vault-Wiring in
+    # start_vault_services() (nicht in start_background_services()), muessen
+    # aber trotzdem hinter demselben Schalter stehen. Vor B1 stand dieser
+    # Code inline in main.lifespan() und wurde nur von dort geprueft —
+    # jetzt lebt er in einer eigenen, von main.lifespan() UND
+    # backend/app/worker.py aufrufbaren Funktion (siehe
+    # test_worker_run_prepares_process_before_starting_services unten fuer
+    # den Worker-Teil — dort ist start_vault_services() jetzt Teil der
+    # erwarteten Aufrufreihenfolge).
     #
     # Regex statt Quelltext-Vergleich inkl. exakter Einrueckung (Rex-Review
-    # PR #479, M4): jede Umformatierung von lifespan() (schwarz/ruff, ein
-    # zusaetzlicher Kommentar) brach den alten wortwoertlichen Vergleich,
-    # ohne dass sich am Verhalten etwas aendert. \s+ toleriert beliebige
-    # Einrueckungstiefe/-art, verlangt aber weiterhin, dass der Aufruf
-    # UNMITTELBAR im if-Block steht (Praezedenzfall test_boot_secret_guard.py
-    # matcht nur einen Funktionsnamen — hier zusaetzlich die Block-Struktur,
-    # weil vault_watcher/vault_compactor sonst unbemerkt aus dem Gating
-    # rutschen koennten).
-    src = inspect.getsource(main.lifespan)
+    # PR #479, M4): jede Umformatierung von start_vault_services() (schwarz/
+    # ruff, ein zusaetzlicher Kommentar) brach den alten wortwoertlichen
+    # Vergleich, ohne dass sich am Verhalten etwas aendert. \s+ toleriert
+    # beliebige Einrueckungstiefe/-art, verlangt aber weiterhin, dass der
+    # Aufruf UNMITTELBAR im if-Block steht (Praezedenzfall
+    # test_boot_secret_guard.py matcht nur einen Funktionsnamen — hier
+    # zusaetzlich die Block-Struktur, weil vault_watcher/vault_compactor
+    # sonst unbemerkt aus dem Gating rutschen koennten).
+    src = inspect.getsource(main.start_vault_services)
     assert re.search(
         r"if settings\.enable_background_services:\s*\n\s*await vault_watcher\.start\(\)",
         src,
@@ -93,6 +106,17 @@ def test_lifespan_gates_vault_watcher_and_compactor_too():
         r"if settings\.enable_background_services:\s*\n\s*try:\s*\n\s*vault_compactor = VaultCompactor\(",
         src,
     ), "vault_compactor = VaultCompactor(...) muss direkt im ENABLE_BACKGROUND_SERVICES-if-Block stehen"
+
+
+def test_lifespan_calls_start_and_stop_vault_services():
+    # Gegenstueck zu test_lifespan_gates_background_services_on_the_flag
+    # oben, nur unconditional (siehe start_vault_services()-Docstring: die
+    # Funktion gated intern, lifespan() ruft sie immer auf, damit
+    # vault_index/_activity/_git/_embeddings fuer die Read-Routen auch bei
+    # ENABLE_BACKGROUND_SERVICES=false entstehen).
+    src = inspect.getsource(main.lifespan)
+    assert "await start_vault_services(app)" in src
+    assert "await stop_vault_services(app)" in src
 
 
 @contextlib.asynccontextmanager
@@ -186,13 +210,20 @@ async def test_worker_run_does_nothing_when_flag_is_false(monkeypatch):
     monkeypatch.setattr(worker.settings, "enable_background_services", False)
     prepare_mock = AsyncMock()
     start_mock = AsyncMock()
+    start_vault_mock = AsyncMock()
     monkeypatch.setattr(worker, "prepare_process", prepare_mock)
     monkeypatch.setattr(worker, "start_background_services", start_mock)
+    monkeypatch.setattr(worker, "start_vault_services", start_vault_mock)
 
     await worker.run()
 
     prepare_mock.assert_not_awaited()
     start_mock.assert_not_awaited()
+    # Rex-Review PR #495, Blocker B1: dieser Test muss auch den neuen
+    # Vault-Aufruf abdecken — sonst waere ein zukuenftiger Refactor, der
+    # start_vault_services() VOR den Flag-Check zieht, hier weiterhin
+    # gruen, obwohl er B1 wieder aufreisst.
+    start_vault_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -214,12 +245,20 @@ async def test_worker_run_prepares_process_before_starting_services(monkeypatch)
     async def _fake_start(app):
         call_order.append("start_background_services")
 
+    async def _fake_start_vault(app):
+        call_order.append("start_vault_services")
+
     async def _fake_stop(app):
         call_order.append("stop_background_services")
 
+    async def _fake_stop_vault(app):
+        call_order.append("stop_vault_services")
+
     monkeypatch.setattr(worker, "prepare_process", _fake_prepare)
     monkeypatch.setattr(worker, "start_background_services", _fake_start)
+    monkeypatch.setattr(worker, "start_vault_services", _fake_start_vault)
     monkeypatch.setattr(worker, "stop_background_services", _fake_stop)
+    monkeypatch.setattr(worker, "stop_vault_services", _fake_stop_vault)
     monkeypatch.setattr(worker.settings, "enable_background_services", True)
 
     async def _stop_soon():
@@ -228,9 +267,16 @@ async def test_worker_run_prepares_process_before_starting_services(monkeypatch)
 
     await asyncio.wait_for(asyncio.gather(worker.run(), _stop_soon()), timeout=5)
 
+    # Rex-Review PR #495, Blocker B1: start_vault_services()/
+    # stop_vault_services() muessen im selben Prozess laufen wie die 17
+    # Singleton-Dienste — sonst laeuft vault_watcher/VaultCompactor in
+    # KEINEM Prozess, sobald die API ENABLE_BACKGROUND_SERVICES=false hat
+    # (Architektur E, Teil 2's Normalfall).
     assert call_order == [
         "prepare_process",
         "start_background_services",
+        "start_vault_services",
+        "stop_vault_services",
         "stop_background_services",
     ]
 
@@ -256,9 +302,13 @@ async def test_worker_run_shuts_down_gracefully_on_signal(monkeypatch, sig):
 
     monkeypatch.setattr(worker, "prepare_process", AsyncMock())
     start_mock = AsyncMock()
+    start_vault_mock = AsyncMock()
     stop_mock = AsyncMock()
+    stop_vault_mock = AsyncMock()
     monkeypatch.setattr(worker, "start_background_services", start_mock)
+    monkeypatch.setattr(worker, "start_vault_services", start_vault_mock)
     monkeypatch.setattr(worker, "stop_background_services", stop_mock)
+    monkeypatch.setattr(worker, "stop_vault_services", stop_vault_mock)
     monkeypatch.setattr(worker.settings, "enable_background_services", True)
 
     async def _send_signal_soon():
@@ -268,4 +318,6 @@ async def test_worker_run_shuts_down_gracefully_on_signal(monkeypatch, sig):
     await asyncio.wait_for(asyncio.gather(worker.run(), _send_signal_soon()), timeout=5)
 
     start_mock.assert_awaited_once()
+    start_vault_mock.assert_awaited_once()
     stop_mock.assert_awaited_once()
+    stop_vault_mock.assert_awaited_once()
