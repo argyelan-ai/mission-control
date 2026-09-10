@@ -92,4 +92,16 @@ check "value >100 rejected" "ctx: 150" "claude" ""
 check "claude harness ignores stray percent-before-slash" \
     "ctx: 12  (unrelated 99%/300 noise)" "claude" "12"
 
+check "claude bar statusline 35% (10.09.2026)" \
+    "  mission-control:main  |  ctx:███░░░░░░░ 35%  |  in:0.0k out:0.9k" claude 35
+check "claude ctx:--- must stay empty" \
+    "  mission-control:main  |  ctx:---   /rc" claude ""
+check "claude ctx:--- followed by prose percent must stay empty (review #487)" \
+    "  mc:main   ctx:---   disk 0% used" claude ""
+check "omp TUI bar 10% with 5/5 chat noise above" \
+    " - CI 5/5 gruen (Run 1): Backend Tests
+ π  > ◒ MC model > 📁 /workspace ▶────10%────────┃─────500K─" openclaude 10
+check "bare 5/5 in chat text is not a fraction" \
+    "alle 5/5 Checks gruen, weiter so" "" ""
+
 echo "PASS: all scrape_context_pct cases"

@@ -96,4 +96,22 @@ FIXTURES: list[tuple[str, str | None, str, int | None]] = [
         "alle 5/5 Checks gruen, weiter so",
         None,
     ),
+    (
+        "review #487: `ctx:---` followed by prose with a percent must NOT scrape",
+        "claude",
+        "  mc:main   ctx:---   disk 0% used",
+        None,
+    ),
+    (
+        "review #487: `│ ctx:--- │ cpu 87% │` (U+2502 separators) must NOT scrape",
+        "claude",
+        " mc:main │ ctx:--- │ cpu 87% │",
+        None,
+    ),
+    (
+        "review #487: prose below the omp bar must not beat the statusline (last-match)",
+        "openclaude",
+        "📁 /workspace ▶────10%──────┃─────500K─\nKollege: das ctx-Muster ist zu 99% fertig",
+        10,
+    ),
 ]

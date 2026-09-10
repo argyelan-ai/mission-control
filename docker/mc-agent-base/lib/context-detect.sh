@@ -24,8 +24,10 @@
 # Statuszeile (`ctx --`) faelschlich als "0% Kontext benutzt" gemeldet.
 #
 # Unterstuetzte Formate (mit Beispiel-Statuszeile):
-#   claude:      `ctx: NN` / `ctx NN`
-#                ✻ ctx 12%                                    (pane_title/Tail)
+#   claude:      `ctx: NN` / `ctx NN` / `ctx:███░░░ NN%` (Balken, claude-cli >= 2.1.2xx)
+#                ✻ ctx 12%   |   ctx:███░░░░░░░ 35%           (pane_title/Tail)
+#   omp TUI:     `▶────NN%────┃─────500K─` (native TUI 18.x, Prozent im Balken)
+#                π  > ◒ MC model > 📁 /workspace ▶────10%────┃─────500K─
 #   kimi:        `context: NN%`
 #                context: 8% (21.3K/262.1K)                    (Tail, siehe ui-detect.sh)
 #   openclaude:  Prozent DIREKT vor einem `/` (Bruch-Anzeige ohne Leerzeichen)
@@ -34,6 +36,11 @@
 #                [█░░░░░░░░░] 8%                                (Hermes-Statuszeile)
 #   fraction:    `21.3K/262.1K` ohne eigene %-Anzeige → Prozent BERECHNET
 #                21.3K/262.1K                                   (Hermes-Fallback)
+#                Nenner MUSS K/M-Suffix tragen — nacktes `5/5` ist Chat-Text.
+#
+# Alle Aufrufer scrapen `tmux capture-pane -p` OHNE `-e`: ANSI-Sequenzen
+# enthalten Ziffern und wuerden jedes Balken-Muster brechen — ein `-e` an
+# einer Aufrufstelle schaltet den Kontextwert flottenweit still ab.
 #
 # `ctx --` / `[░░░░░░░░░░] --` (kein Wert, z.B. frisch gestartete Session)
 # matcht ABSICHTLICH kein Muster — kein Treffer heisst "kein Wert", nicht "0".
@@ -43,7 +50,10 @@ _ctx_claude() {
     # claude-cli >= 2.1.2xx: `ctx:███░░░░░░░ 35%` (Balken vor der Zahl);
     # alte Form `ctx: 35` bleibt. `ctx:---` (kein Wert) matcht nicht.
     local bar
-    bar=$(echo "$1" | grep -oE 'ctx[: ]*[^0-9|]*[0-9]+%' | grep -oE '[0-9]+%' | tr -d '%' | tail -1)
+    # Luecke NUR Balken-Glyphen + Leerraum (Review #487: 'alles ausser Ziffern'
+    # liess Prosa gewinnen: ctx:---   disk 0% -> 0). LC_ALL=C: Multibyte-Glyphen
+    # byteweise in der Klasse, deterministisch auf GNU- und BSD-grep.
+    bar=$(echo "$1" | LC_ALL=C grep -oE 'ctx[: ]*[█▓▒░■□[:space:]]*[0-9]+%' | LC_ALL=C grep -oE '[0-9]+%' | tr -d '%' | tail -1)
     if [ -n "$bar" ]; then
         echo "$bar"
         return 0
@@ -54,7 +64,7 @@ _ctx_claude() {
 _ctx_omp_bar() {
     # omp native TUI 18.x: `▶────10%────┃─────500K─` — Prozent im Balken
     # hinter dem ▶-Marker, kein Schraegstrich.
-    echo "$1" | grep -oE '▶[^0-9%]*[0-9]+%' | grep -oE '[0-9]+%' | tr -d '%' | tail -1
+    echo "$1" | LC_ALL=C grep -oE '▶[─━┄┈[:space:]]*[0-9]+%' | LC_ALL=C grep -oE '[0-9]+%' | tr -d '%' | tail -1
 }
 
 # _ctx_kimi TEXT — `context: NN%` (kimi-code Statuszeile).
