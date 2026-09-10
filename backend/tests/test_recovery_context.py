@@ -271,9 +271,13 @@ async def test_recovery_context_single_overlong_operator_comment_gets_truncated_
     Fix: Per-Kommentar-Cap mit sichtbarem `[...gekuerzt]`-Marker (Idiom aus
     `_load_feedback()`). Der Kommentar darf nicht mehr vollstaendig
     durchschlagen, aber auch nicht spurlos verschwinden.
+
+    Nacharbeit-3 PR #489: bei genau einem Kommentar ist dieser automatisch
+    der juengste -> Cap ist jetzt OPERATOR_LEAD_LATEST_MAX_CHARS (1200), nicht
+    mehr der alte einheitliche Per-Item-Cap (800).
     """
     from app.services.dispatch import build_recovery_context
-    from app.services.task_context_builder import OPERATOR_LEAD_PER_ITEM_MAX_CHARS
+    from app.services.task_context_builder import OPERATOR_LEAD_LATEST_MAX_CHARS
 
     task = await _setup_board_and_task(session)
 
@@ -287,9 +291,10 @@ async def test_recovery_context_single_overlong_operator_comment_gets_truncated_
     assert huge not in result
     assert len(result) < 2000
     # ... aber der Anfang schon (Kommentar verschwindet nicht komplett) plus
-    # sichtbarer Kuerzungsmarker.
-    assert "X" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
+    # sichtbarer Kuerzungsmarker und Verweis, wo der Rest steht.
+    assert "X" * OPERATOR_LEAD_LATEST_MAX_CHARS in result
     assert "[...gekuerzt]" in result
+    assert f"mc task-get {task.id}" in result
 
 
 @pytest.mark.asyncio
@@ -304,16 +309,18 @@ async def test_recovery_context_operator_block_caps_each_comment_not_whole_block
     gezeigten Kommentare auseinanderliefen.
 
     Nacharbeit-2 PR #489: bei COMMENT_LIMIT=3 und PER_ITEM_MAX_CHARS=800
-    sprengen 3 gleichzeitig ueberlange Kommentare rechnerisch immer den
+    sprengten 3 gleichzeitig ueberlange Kommentare rechnerisch immer den
     Gesamt-Cap (3 * 814 Zeichen (Cap + Kuerzungsmarker) + Header > 1800) —
-    das ist der zweite Befund aus der Rueckfrage an den Operator. Dieser Test
-    bleibt bei 2 ueberlangen + 1 kurzem Kommentar, damit er den Kern-Fix
-    (kein Komplett-Drop) unabhaengig von der noch offenen Gesamt-Cap-Zahl
-    verifiziert; das reine Gesamt-Cap-Verhalten bei 3 vollen Kommentaren
-    deckt der separate `..._2000_char..`-Test ab.
+    das war der zweite Befund aus der Rueckfrage an den Operator.
+
+    Nacharbeit-3 PR #489: der Operator hat entschieden, dass die Verteilung
+    falsch war, nicht die Obergrenze — juengster Kommentar bis 1200, aeltere
+    je 250. Dieser Test verifiziert jetzt genau das: die beiden aelteren
+    Kommentare (oldest, middle) werden auf OPERATOR_LEAD_OLDER_MAX_CHARS
+    gekuerzt, der juengste bleibt unangetastet (er ist ohnehin kurz).
     """
     from app.services.dispatch import build_recovery_context
-    from app.services.task_context_builder import OPERATOR_LEAD_PER_ITEM_MAX_CHARS
+    from app.services.task_context_builder import OPERATOR_LEAD_OLDER_MAX_CHARS
 
     task = await _setup_board_and_task(session)
 
@@ -330,13 +337,14 @@ async def test_recovery_context_operator_block_caps_each_comment_not_whole_block
     assert result is not None
     # Alle 3 sind vertreten (per-Kommentar-Anfang), keiner ist spurlos weg —
     # das war genau der Bug, den B1/M2 beheben.
-    assert "A" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
-    assert "B" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
+    assert "A" * OPERATOR_LEAD_OLDER_MAX_CHARS in result
+    assert "B" * OPERATOR_LEAD_OLDER_MAX_CHARS in result
     assert newest in result
-    # Aber die ueberlangen nicht ungekuerzt (jeder ist laenger als der Per-Item-Cap).
+    # Aber die ueberlangen nicht ungekuerzt (jeder ist laenger als der aeltere Cap).
     assert oldest not in result
     assert middle not in result
     assert result.count("[...gekuerzt]") == 2
+    assert f"mc task-get {task.id}" in result
     # Es gibt keinen Postfach-Hinweis mehr — alle 3 Operator-Kommentare
     # (== Gesamtzahl passend zum Filter) sind tatsaechlich im Prompt, nur
     # gekuerzt, nicht weggelassen.
@@ -477,9 +485,12 @@ async def test_recovery_context_typical_multipart_instruction_survives_complete(
     session: AsyncSession,
 ):
     """Nacharbeit-2 PR #489: eine typische mehrteilige Anweisung (6 kurze
-    nummerierte Schritte, hier ~740 Zeichen — unter dem neuen Per-Item-Cap
-    von 800) kommt jetzt vollstaendig an, nicht nur Schritt 1 + Haelfte von
-    Schritt 2 wie beim alten 180/250-Zeichen-Cap."""
+    nummerierte Schritte, hier ~740 Zeichen) kommt vollstaendig an, nicht nur
+    Schritt 1 + Haelfte von Schritt 2 wie beim alten 180/250-Zeichen-Cap.
+
+    Nacharbeit-3 PR #489: als einziger (= juengster) Kommentar liegt sie
+    unter OPERATOR_LEAD_LATEST_MAX_CHARS (1200) statt dem frueheren
+    einheitlichen Per-Item-Cap (800) — bleibt also weiterhin unangetastet."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -498,20 +509,20 @@ async def test_recovery_context_typical_multipart_instruction_survives_complete(
 
 
 @pytest.mark.asyncio
-async def test_recovery_context_overlong_2000_char_instruction_still_capped_at_800(
+async def test_recovery_context_overlong_2000_char_instruction_capped_at_1200_with_pointer(
     session: AsyncSession,
 ):
-    """Grenzfall zur Karte: DoD-Wortlaut verlangt, dass eine 2000-Zeichen-
-    Anweisung 'vollstaendig ankommt' — das ist mit dem in Scope-Punkt 3 fest
-    vorgegebenen OPERATOR_LEAD_PER_ITEM_MAX_CHARS=800 fuer EINEN einzelnen
-    Kommentar rechnerisch unmoeglich (800 < 2000). Rueckfrage an den Operator
-    gestellt (`mc ask`); bis zur Antwort implementiert nach den expliziten
-    Zahlen aus der Karte. Dieser Test dokumentiert die tatsaechlich
-    erreichte, verifizierbare Verbesserung: statt der alten 250 Zeichen
-    kommen jetzt 800 Zeichen an, sichtbar gekuerzt statt stillschweigend
-    abgeschnitten oder komplett gedroppt."""
+    """DoD (Nacharbeit-3 PR #489, korrigiert gegenueber der urspruenglichen
+    Karte): der Punkt 'eine 2000-Zeichen-Anweisung kommt vollstaendig an' war
+    mathematisch unmoeglich, sobald ein Per-Item-Cap existiert. Der korrigierte
+    Wortlaut: eine 2000-Zeichen-Anweisung mit sechs nummerierten Schritten
+    kommt mit ihren ersten 1200 Zeichen an (sie ist als einziger Kommentar
+    automatisch die juengste -> OPERATOR_LEAD_LATEST_MAX_CHARS), gefolgt vom
+    `[...gekuerzt]`-Marker UND einem ausdruecklichen Verweis, wo der Rest
+    steht (`mc task-get <id>`). Gekuerzt ist in Ordnung, stillschweigend
+    gekuerzt nicht."""
     from app.services.dispatch import build_recovery_context
-    from app.services.task_context_builder import OPERATOR_LEAD_PER_ITEM_MAX_CHARS
+    from app.services.task_context_builder import OPERATOR_LEAD_LATEST_MAX_CHARS
 
     task = await _setup_board_and_task(session)
 
@@ -523,7 +534,9 @@ async def test_recovery_context_overlong_2000_char_instruction_still_capped_at_8
 
     assert result is not None
     assert six_steps not in result
-    assert six_steps[:OPERATOR_LEAD_PER_ITEM_MAX_CHARS] in result
+    assert six_steps[:OPERATOR_LEAD_LATEST_MAX_CHARS] in result
+    assert "[...gekuerzt]" in result
+    assert f"mc task-get {task.id}" in result
 
 
 @pytest.mark.asyncio
@@ -533,25 +546,20 @@ async def test_recovery_context_heavy_scenario_measured_for_pr_text(session: Asy
     Fortschritts-Kommentare (nur die neuesten 3 werden gerendert), 3
     Operator-/Lead-Anweisungen am Per-Item-Cap.
 
-    WICHTIG zum <= 2500-Ziel aus Scope-Punkt 5: das DoD listet den
-    2500-Zeichen-Test separat und ausdruecklich nur fuer "40
-    Checklist-Eintraege" (siehe test_recovery_context_checklist_caps_open_
-    items_at_10) — nicht fuer dieses volle Szenario mit zusaetzlich 3
-    Anweisungen am Cap. Und das ist auch der einzig erreichbare Lesart:
-    3 Kommentare, die jeweils den Per-Item-Cap (800) ausschoepfen, sind roh
-    bereits >= 2400 Zeichen allein an Inhalt — der Anweisungsblock-Gesamt-Cap
-    (1800) greift bei 3 vollen Kommentaren also *immer*, nicht nur als
-    seltenes Sicherheitsnetz, und der Block landet trotzdem bei ~1860-1870
-    Zeichen. Zusammen mit Intro/Postfach/Checkliste/Fortschritt/Naechster-
-    Schritt (~1030 Zeichen) ergibt das immer ~2900 Zeichen, unabhaengig davon,
-    wie der Per-Item-Cap gewaehlt wird, solange der Gesamt-Cap bei 1800
-    bleibt. Rueckfrage dazu an den Operator gestellt (`mc ask`, Thread
-    8a913a45-4446-4e34-b676-c92663372703), unbeantwortet zum Zeitpunkt dieses
-    Commits — implementiert nach den expliziten Zahlen aus der Karte (800/
-    1800). Dieser Test dokumentiert den tatsaechlich gemessenen Wert als
-    Regressions-Absicherung (deutlich unter dem alten, ungedeckelten
-    Verhalten das >20000 Zeichen erreichen konnte) statt ein unerreichbares
-    Ziel vorzutaeuschen."""
+    Nacharbeit-3 PR #489 (Aufloesung der Rueckfrage aus Thread 8a913a45):
+    der gleiche 800er-Cap fuer alle drei Kommentare war der Fehler — 3 x 800
+    = 2400 Rohzeichen gegen den 1800er Gesamt-Cap konnte nie aufgehen, der
+    Gesamt-Cap griff dadurch strukturell immer statt als Notnetz. Der
+    Operator hat entschieden: nicht die Obergrenze war falsch, sondern die
+    Verteilung — juengster Kommentar bis OPERATOR_LEAD_LATEST_MAX_CHARS
+    (1200), die beiden aelteren je OPERATOR_LEAD_OLDER_MAX_CHARS (250). In
+    diesem Fixture sind die beiden aelteren Anweisungen (~840 Zeichen roh)
+    deutlich laenger als ihr 250er-Cap und werden gekuerzt, die juengste
+    (~840 Zeichen) bleibt unter ihrem 1200er-Cap vollstaendig erhalten.
+    Gemessener Wert nach dem Fix: 2678 Zeichen (vorher, mit dem gleichen
+    800er-Cap fuer alle drei: ~2900 Zeichen) — deutlich unter dem alten,
+    ungedeckelten Verhalten, das bei einem einzelnen ueberlangen Kommentar
+    allein >20000 Zeichen erreichen konnte."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -583,12 +591,14 @@ async def test_recovery_context_heavy_scenario_measured_for_pr_text(session: Asy
     assert result is not None
     # Regressions-Absicherung: deutlich unter dem alten ungedeckelten
     # Verhalten (ein einzelner ueberlanger Kommentar allein konnte vorher
-    # >20000 Zeichen ergeben). Der genaue Messwert (siehe PR-Text) liegt bei
-    # diesem Szenario bei ~2900 Zeichen.
-    assert len(result) < 3200, f"Heavy-scenario context zu gross: {len(result)} Zeichen"
+    # >20000 Zeichen ergeben). Gemessener Wert nach der ungleichen Verteilung
+    # (Nacharbeit-3 PR #489, siehe PR-Text): 2678 Zeichen — Grenze mit etwas
+    # Puffer statt exakt am Messwert, damit der Test nicht bei jeder
+    # Nachkomma-Abweichung flackert.
+    assert len(result) < 2900, f"Heavy-scenario context zu gross: {len(result)} Zeichen"
     assert "[...gekuerzt]" in result
     # Messwert fuer den PR-Text protokollieren.
-    print(f"\n[Nacharbeit-2 PR #489] Heavy-scenario Recovery-Kontext: {len(result)} Zeichen")
+    print(f"\n[Nacharbeit-3 PR #489] Heavy-scenario Recovery-Kontext: {len(result)} Zeichen")
 
 
 @pytest.mark.asyncio

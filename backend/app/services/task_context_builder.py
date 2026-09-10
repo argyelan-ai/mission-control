@@ -828,14 +828,20 @@ OPERATOR_LEAD_COMMENT_LIMIT = 3
 # dafuer kommt aus PROGRESS_COMMENT_LIMIT (5 -> 3) und CHECKLIST_OPEN_ITEM_LIMIT
 # (unbegrenzt -> max 10 offene Items) — siehe Messung in `docs/` bzw. PR-Text.
 OPERATOR_LEAD_MAX_CHARS = 1800
-# Pro-Kommentar-Cap: harte Obergrenze ist COMMENT_LIMIT * PER_ITEM_MAX_CHARS,
-# damit kein einzelner ueberlanger Kommentar den ganzen Block sprengt — und
-# damit auch keiner mehr komplett verschwindet (das alte Verhalten war
-# Alles-oder-nichts: ganze Kommentare wurden fallengelassen, um unter den
-# Gesamt-Cap zu kommen). 800 Zeichen ueberlebt eine typische mehrteilige
-# Anweisung vollstaendig; ein hineinkopierter Stacktrace wird weiterhin
-# gekappt.
-OPERATOR_LEAD_PER_ITEM_MAX_CHARS = 800
+# Nacharbeit-3 PR #489 (Operator-Review, 2026-09-10): der gleiche Pro-Kommentar-
+# Cap fuer alle drei Kommentare war der eigentliche Fehler, nicht der
+# Gesamt-Cap. 3 x 800 = 2400 Rohzeichen gegen 1800 Gesamt-Cap kann rechnerisch
+# nie aufgehen — der Gesamt-Cap griff dadurch strukturell immer statt als
+# Notnetz (siehe der jetzt veraltete Messwert in
+# test_recovery_context_heavy_scenario_measured_for_pr_text). Die drei
+# Anweisungen sind aber nicht gleich wichtig: die juengste ist fast immer die,
+# auf die es ankommt, die beiden aelteren sind nur Kontext. Deshalb ungleiche
+# Verteilung statt eines gleichen Caps:
+OPERATOR_LEAD_LATEST_MAX_CHARS = 1200  # juengster Operator-/Lead-Kommentar
+OPERATOR_LEAD_OLDER_MAX_CHARS = 250  # die beiden aelteren Kommentare
+# 1200 + 250 + 250 = 1700 Rohtext + Kopfzeilen bleibt unter dem 1800er
+# Gesamt-Cap — der Block traegt damit den Fall, fuer den er gebaut wurde,
+# ohne dass der Gesamt-Cap den Cap-Loop ueberschreibt.
 
 # Nacharbeit-2 PR #489: Fortschritts-Block von 5 auf 3 Kommentare, um Platz
 # fuer den hoeheren Anweisungs-Cap oben freizumachen.
@@ -1046,19 +1052,37 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         # fallengelassen (das alte Alles-oder-nichts liess bei genau einem
         # uebrigen Kommentar den Gesamt-Cap gaenzlich ins Leere laufen — ein
         # einzelner 20000-Zeichen-Kommentar ergab 20423 Zeichen Kontext).
-        # Stattdessen: jeder Kommentar wird einzeln auf
-        # OPERATOR_LEAD_PER_ITEM_MAX_CHARS gekuerzt, mit sichtbarem Marker
-        # (gleiches Idiom wie _load_feedback() oben). Der Block ist damit hart
-        # durch OPERATOR_LEAD_COMMENT_LIMIT * OPERATOR_LEAD_PER_ITEM_MAX_CHARS
+        # Stattdessen: jeder Kommentar wird einzeln gekuerzt, mit sichtbarem
+        # Marker (gleiches Idiom wie _load_feedback() oben).
+        #
+        # Nacharbeit-3 PR #489: der Cap ist nicht mehr fuer alle Kommentare
+        # gleich. `rendered_operator_comments` ist aufsteigend nach
+        # created_at sortiert (oldest -> newest), der letzte Eintrag ist also
+        # immer der juengste — der bekommt OPERATOR_LEAD_LATEST_MAX_CHARS
+        # (1200), die aelteren nur OPERATOR_LEAD_OLDER_MAX_CHARS (250). Der
+        # Block ist damit hart durch OPERATOR_LEAD_LATEST_MAX_CHARS +
+        # (OPERATOR_LEAD_COMMENT_LIMIT - 1) * OPERATOR_LEAD_OLDER_MAX_CHARS
         # begrenzt.
+        #
+        # Gekuerzt ist in Ordnung, stillschweigend gekuerzt nicht (Korrektur
+        # der DoD) — der Marker traegt deshalb zusaetzlich zum sichtbaren
+        # `[...gekuerzt]` einen ausdruecklichen Verweis, wo der Rest steht.
         block_lines = []
         any_truncated = False
-        for c in rendered_operator_comments:
+        last_idx = len(rendered_operator_comments) - 1
+        for idx, c in enumerate(rendered_operator_comments):
             ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
             who = "Operator" if c.author_type == "user" else "Lead"
             content = c.content.strip()
-            if len(content) > OPERATOR_LEAD_PER_ITEM_MAX_CHARS:
-                content = content[:OPERATOR_LEAD_PER_ITEM_MAX_CHARS] + "\n[...gekuerzt]"
+            per_item_cap = (
+                OPERATOR_LEAD_LATEST_MAX_CHARS if idx == last_idx
+                else OPERATOR_LEAD_OLDER_MAX_CHARS
+            )
+            if len(content) > per_item_cap:
+                content = (
+                    content[:per_item_cap]
+                    + f"\n[...gekuerzt] (Rest: `mc task-get {task.id}`)"
+                )
                 any_truncated = True
             block_lines.append(f"[{who}/{c.comment_type} @ {ts}]\n{content}")
         block_text = "\n\n".join(block_lines)
@@ -1067,7 +1091,10 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         # wird: haerter Gesamt-Cap, kuerzt aber nur das Blockende, droppt
         # keinen einzelnen Kommentar.
         if len(block_text) > OPERATOR_LEAD_MAX_CHARS:
-            block_text = block_text[:OPERATOR_LEAD_MAX_CHARS] + "\n[...gekuerzt]"
+            block_text = (
+                block_text[:OPERATOR_LEAD_MAX_CHARS]
+                + f"\n[...gekuerzt] (Rest: `mc task-get {task.id}`)"
+            )
             any_truncated = True
 
         header = "\n### Operator-/Lead-Anweisungen"
