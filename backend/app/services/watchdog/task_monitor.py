@@ -1249,6 +1249,16 @@ class TaskMonitorMixin:
                     dispatched_agents.add(agent.id)
                     continue
 
+                # W0.1: one heal per card per round.
+                redis = await get_redis()
+                if not await try_claim_heal(redis, str(task.id)):
+                    logger.info(
+                        "Undispatched recovery (CLI bridge) skipped for '%s' — "
+                        "another watchdog healed this task this round",
+                        task.title,
+                    )
+                    continue
+
                 try:
                     message = await _build_dispatch_message(task, agent, session)
                     from app.services.cli_bridge_runner import dispatch_to_cli_bridge
@@ -1280,6 +1290,16 @@ class TaskMonitorMixin:
                 )
             )
             if busy_result.first():
+                continue
+
+            # W0.1: one heal per card per round.
+            _redis = await get_redis()
+            if not await try_claim_heal(_redis, str(task.id)):
+                logger.info(
+                    "Undispatched recovery skipped for '%s' — another "
+                    "watchdog healed this task this round",
+                    task.title,
+                )
                 continue
 
             try:
@@ -1342,6 +1362,17 @@ class TaskMonitorMixin:
                 # Agent sent a heartbeat in the last 30 minutes → skip
                 if (now - last_seen).total_seconds() < 1800:
                     continue
+
+            # W0.1: one heal per card per round — orphan recovery is the
+            # first watchdog that touches this task this tick, or nobody is.
+            redis = await get_redis()
+            if not await try_claim_heal(redis, str(task.id)):
+                logger.info(
+                    "Orphan recovery skipped for '%s' — another watchdog "
+                    "healed this task this round (mc:heal claim held)",
+                    task.title,
+                )
+                continue
 
             # Reset task back to inbox
             old_status = task.status
