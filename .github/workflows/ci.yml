@@ -127,3 +127,16 @@ jobs:
 
       - name: Build frontend-v2 image
         run: docker build -t mc-frontend-v2-test ./frontend-v2
+
+      # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
+      # The fixtures in test_context_detect.sh catch most regressions on any
+      # grep; this step exists for the NARROW class of divergences that only
+      # show up on BusyBox/musl and that the host lane structurally cannot see
+      # (review #487: e.g. `[:blank:]` semantics; measured against the fleet
+      # binary BusyBox 1.36.1 / musl 1.2.5 extracted from node:22.11.0-alpine).
+      - name: Bash lib smoke test on the BusyBox/musl runtime
+        run: |
+          docker run --rm \
+            -v "$PWD/docker/mc-agent-base/lib/context-detect.sh:/lib.sh:ro" \
+            -v "$PWD/backend/tests/test_context_detect.sh:/t.sh:ro" \
+            alpine:3.20 sh -c 'apk add --no-cache bash >/dev/null && bash /t.sh /lib.sh'
