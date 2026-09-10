@@ -129,8 +129,11 @@ jobs:
         run: docker build -t mc-frontend-v2-test ./frontend-v2
 
       # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
-      # Every bash lib fix must be proven on that runtime, not on the CI host
-      # (review #487: LC_ALL=C matched U+2212/U+2014 byte-wise in BusyBox only).
+      # The fixtures in test_context_detect.sh catch most regressions on any
+      # grep; this step exists for the NARROW class of divergences that only
+      # show up on BusyBox/musl and that the host lane structurally cannot see
+      # (review #487: e.g. `[:blank:]` semantics; measured against the fleet
+      # binary BusyBox 1.36.1 / musl 1.2.5 extracted from node:22.11.0-alpine).
       - name: Bash lib smoke test on the BusyBox/musl runtime
         run: |
           docker run --rm \
