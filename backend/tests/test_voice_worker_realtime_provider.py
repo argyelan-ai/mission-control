@@ -66,7 +66,13 @@ def test_openai_arm_reaches_the_openai_plugin():
     }
 
 
-def test_xai_arm_reaches_the_xai_plugin():
+def test_xai_arm_reaches_the_xai_plugin_and_passes_the_bound_model():
+    """Bug found in review (2026-09-10): the xai branch built its kwargs
+    without ever reading choice.model, so a real MC binding (e.g.
+    grok-voice-think-fast-1.0 on the voice-xai seed row) never reached the
+    plugin — MC would show the model as bound while the worker spoke
+    whichever model the plugin defaults to. model MUST be in the kwargs when
+    choice.model is set."""
     voice = _import_main()
     choice = _choice(voice, provider="xai", model="grok-voice-fast-1.0", voice="ara")
 
@@ -76,9 +82,24 @@ def test_xai_arm_reaches_the_xai_plugin():
 
     openai_ctor.assert_not_called()
     assert xai_ctor.call_args.kwargs == {
+        "model": "grok-voice-fast-1.0",
         "voice": "ara",
         "turn_detection": voice._TURN_DETECTION,
     }
+
+
+def test_xai_arm_omits_model_when_choice_has_none():
+    """The plugin's own default is NOT_GIVEN, not None — its type hint does
+    not accept None for `model` the way it does for `voice`. When nothing
+    names a model (xai's own _MODEL_DEFAULT in voice_provider.py is None),
+    the kwarg must be left out entirely rather than passed as None."""
+    voice = _import_main()
+    choice = _choice(voice, provider="xai", model=None, voice="ara")
+
+    with patch.object(voice.xai.realtime, "RealtimeModel") as xai_ctor:
+        voice._build_realtime_model(choice)
+
+    assert "model" not in xai_ctor.call_args.kwargs
 
 
 def test_openai_arm_defaults_the_model_when_choice_has_none():

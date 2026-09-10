@@ -71,10 +71,17 @@ def _build_realtime_transport(choice: VoiceChoice):
         )
 
     if choice.provider == "xai":
-        return xai.realtime.RealtimeModel(
-            voice=choice.voice,
-            turn_detection=_TURN_DETECTION,
-        )
+        # model is intentionally OMITTED (not passed as None) when choice.model
+        # is empty — the plugin's own default is NOT_GIVEN, and its type hint
+        # does not accept None for `model` the way it does for `voice`. When MC
+        # DOES bind a model (e.g. grok-voice-think-fast-1.0 on the voice-xai
+        # seed row), it must reach the plugin — a bug found in review
+        # (2026-09-10): this branch silently dropped choice.model, so MC could
+        # show a model as bound while the worker spoke the plugin's default.
+        kwargs: dict = {"voice": choice.voice, "turn_detection": _TURN_DETECTION}
+        if choice.model:
+            kwargs["model"] = choice.model
+        return xai.realtime.RealtimeModel(**kwargs)
 
     raise RuntimeError(f"Unknown voice provider {choice.provider!r} from resolve_voice_choice.")
 
