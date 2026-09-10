@@ -223,3 +223,24 @@ async def test_first_sight_includes_three_context_lines_before_question(client: 
                              headers={"Authorization": f"Bearer {lead_raw}"})).json()
     delivered = [m["body"] for m in (body.get("new_messages") or [])]
     assert delivered[-1].startswith("Widerspruch") and delivered[:-1] == ["Zwischenstand 3", "Zwischenstand 4", "Zwischenstand 5"], delivered
+
+
+@pytest.mark.asyncio
+async def test_answer_does_not_resume_a_task_that_is_not_waiting(client: AsyncClient, async_session):
+    """Review #496 W2: the `waiting` guard in resume_task_after_answer is the
+    only thing keeping an answer from ripping a card out of review / done /
+    blocked. Rex removed it and nothing went red — this pins it."""
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    await post_message(async_session, thread_id=thread.id, sender_type="agent", sender_id=worker.id,
+                       message_type="question", body="Noch offen?",
+                       question_meta={"awaiting": True, "blocking": True, "to": "boss"})
+    for status in ("review", "blocked", "done"):
+        sub.status = status
+        async_session.add(sub)
+        await async_session.commit()
+        r = await client.post(f"/api/v1/agent/threads/{thread.id}/messages",
+                              json={"body": f"Antwort bei {status}"},
+                              headers={"Authorization": f"Bearer {lead_raw}"})
+        assert r.status_code == 201, r.text
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            assert (await s.get(Task, sub.id)).status == status, f"{status} must not be resumed by an answer"
