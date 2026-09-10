@@ -73,7 +73,12 @@ class GitService:
             f.write(f"https://x-access-token:{token}@github.com\n")
         os.chmod(cred_path, 0o600)
         await self._run_cmd("git", "config", "--global", "credential.helper", "store")
-        await self._run_cmd("git", "config", "--global", "--add", "safe.directory", "*")
+        # --replace-all instead of --add: writes exactly one line, and unlike a
+        # plain set (no flag) it doesn't error out if the file already holds
+        # duplicate entries from earlier runs.
+        await self._run_cmd(
+            "git", "config", "--global", "--replace-all", "safe.directory", "*"
+        )
         await self._run_cmd("git", "config", "--global", "user.name", "Mission Control")
         await self._run_cmd("git", "config", "--global", "user.email", "mc@mc.local")
         await self._run_cmd("git", "config", "--global", "init.defaultBranch", "main")
