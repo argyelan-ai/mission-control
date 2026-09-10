@@ -104,4 +104,9 @@ check "omp TUI bar 10% with 5/5 chat noise above" \
 check "bare 5/5 in chat text is not a fraction" \
     "alle 5/5 Checks gruen, weiter so" "" ""
 
+check "review #487 r2: U+2212 MINUS SIGN after ctx: must stay empty (BusyBox LC_ALL=C trap)" \
+    "mc:main ctx:−−− 0%" claude ""
+check "review #487 r2: U+2014 EM DASH after ▶ must stay empty" \
+    "▶ — 99% des Wegs geschafft" "" ""
+
 echo "PASS: all scrape_context_pct cases"

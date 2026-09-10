@@ -50,14 +50,16 @@ from typing import Optional
 # `ctx:███░░░░░░░ 35%`. The gap is limited to BAR GLYPHS + whitespace (review
 # #487: an "anything but digits" gap let prose win — `ctx:---   disk 0%`
 # scraped as 0, `│ ctx:--- │ cpu 87%` as 87). `ctx:---` never matches:
-# `-` is not a bar glyph. The old `ctx: 35` form stays supported.
-_CLAUDE_BAR_RE = re.compile(r"ctx[: ]*[█▓▒░■□\s]*([0-9]+)%")
+# `-` is not a bar glyph. The old `ctx: 35` form stays supported. Gap is
+# `[ \t]`, never `\s`: `\s` includes `\n` and lets a percent on the NEXT
+# line win (review #487 round 2, 160 fuzz cases) — bash greps line by line.
+_CLAUDE_BAR_RE = re.compile(r"ctx[: ]*[█▓▒░■□ \t]*([0-9]+)%")
 _CLAUDE_RE = re.compile(r"ctx[: ]*([0-9]+)")
 _KIMI_RE = re.compile(r"context: ([0-9]+)%")
 _OPENCLAUDE_RE = re.compile(r"([0-9]+)(?:\.[0-9]+)?%/")
 # omp native TUI statusline (18.x): `▶────10%────┃─────500K─` — percent
 # inside the bar after the ▶ marker, no slash anywhere.
-_OMP_BAR_RE = re.compile(r"▶[─━┄┈\s]*([0-9]+)%")
+_OMP_BAR_RE = re.compile(r"▶[─━┄┈ \t]*([0-9]+)%")
 _HERMES_BAR_RE = re.compile(r"\]\s*([0-9]+)(?:\.[0-9]+)?%")
 # USED/TOTAL fraction — the TOTAL must carry a K/M suffix (`21.3K/262.1K`,
 # `8.3%/262K`): a bare `5/5` in chat text ("CI 5/5 gruen") is NOT a context

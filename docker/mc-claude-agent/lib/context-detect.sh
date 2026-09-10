@@ -51,9 +51,11 @@ _ctx_claude() {
     # alte Form `ctx: 35` bleibt. `ctx:---` (kein Wert) matcht nicht.
     local bar
     # Luecke NUR Balken-Glyphen + Leerraum (Review #487: 'alles ausser Ziffern'
-    # liess Prosa gewinnen: ctx:---   disk 0% -> 0). LC_ALL=C: Multibyte-Glyphen
-    # byteweise in der Klasse, deterministisch auf GNU- und BSD-grep.
-    bar=$(echo "$1" | LC_ALL=C grep -oE 'ctx[: ]*[█▓▒░■□[:space:]]*[0-9]+%' | LC_ALL=C grep -oE '[0-9]+%' | tr -d '%' | tail -1)
+    # liess Prosa gewinnen: ctx:---   disk 0% -> 0). LC_ALL=C.UTF-8, NICHT C:
+    # unter C zerlegt BusyBox/musl (Runtime = node:alpine, kein GNU grep) die
+    # Multibyte-Glyphen in Bytes und matcht dann JEDES Zeichen aus derselben
+    # Byte-Menge (U+2212 MINUS, U+2014 EM DASH …) — Review #487, BMP-Sweep.
+    bar=$(echo "$1" | LC_ALL=C.UTF-8 grep -oE 'ctx[: ]*[█▓▒░■□[:space:]]*[0-9]+%' | LC_ALL=C.UTF-8 grep -oE '[0-9]+%' | tr -d '%' | tail -1)
     if [ -n "$bar" ]; then
         echo "$bar"
         return 0
@@ -64,7 +66,7 @@ _ctx_claude() {
 _ctx_omp_bar() {
     # omp native TUI 18.x: `▶────10%────┃─────500K─` — Prozent im Balken
     # hinter dem ▶-Marker, kein Schraegstrich.
-    echo "$1" | LC_ALL=C grep -oE '▶[─━┄┈[:space:]]*[0-9]+%' | LC_ALL=C grep -oE '[0-9]+%' | tr -d '%' | tail -1
+    echo "$1" | LC_ALL=C.UTF-8 grep -oE '▶[─━┄┈[:space:]]*[0-9]+%' | LC_ALL=C.UTF-8 grep -oE '[0-9]+%' | tr -d '%' | tail -1
 }
 
 # _ctx_kimi TEXT — `context: NN%` (kimi-code Statuszeile).

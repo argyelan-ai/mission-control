@@ -114,4 +114,22 @@ FIXTURES: list[tuple[str, str | None, str, int | None]] = [
         "📁 /workspace ▶────10%──────┃─────500K─\nKollege: das ctx-Muster ist zu 99% fertig",
         10,
     ),
+    (
+        "review #487 r2: U+2212 MINUS SIGN after ctx: must NOT scrape (BusyBox byte-class trap)",
+        "claude",
+        "mc:main ctx:−−− 0%",
+        None,
+    ),
+    (
+        "review #487 r2: U+2014 EM DASH after ▶ must NOT scrape",
+        "openclaude",
+        "▶ — 99% des Wegs geschafft",
+        None,
+    ),
+    (
+        "review #487 r2: percent on the NEXT line after `ctx` must NOT scrape (no \\s across lines)",
+        "openclaude",
+        "▶────10%──┃──500K─\nKollege: schau dir nochmal an den ctx\n42% der Faelle laufen falsch",
+        10,
+    ),
 ]
