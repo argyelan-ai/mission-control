@@ -72,9 +72,12 @@ def test_development_with_defaults_boots():
 
 
 def test_lifespan_wires_the_guard():
-    # The guard only protects users if startup actually calls it.
+    # The guard only protects users if startup actually calls it — directly,
+    # or via the shared prepare_process() boot path that app.main.lifespan
+    # AND app.worker.run() both call (Architektur E, Rex-Review PR #479 B2).
     import inspect
 
     import app.main as main
 
-    assert "validate_boot_secrets" in inspect.getsource(main.lifespan)
+    assert "validate_boot_secrets" in inspect.getsource(main.prepare_process)
+    assert "prepare_process" in inspect.getsource(main.lifespan)
