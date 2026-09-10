@@ -7,6 +7,172 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Geteilter Environment-Block fuer backend + mc-worker (Architektur E, Teil 2).
+# Beide Prozesse teilen sich Config/Secrets/Feature-Flags 1:1 — nur
+# ENABLE_BACKGROUND_SERVICES weicht pro Dienst ab (siehe unten). Ohne
+# diesen Anker driftet eine Kopie garantiert auseinander (der Block hat
+# ~160 Zeilen und waechst laufend). Merge-Key-Pattern wie x-logging oben.
+x-backend-env: &backend-env
+  CDP_BROWSER_URL: http://172.30.99.10:9223
+  DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
+  REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  AUTH_MODE: local
+  LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+  # User session lifetime; override in .env (e.g. 43200 = 30 days on a Tailscale-only install)
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+  SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+  DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
+  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+  DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+  DISCORD_CATEGORY_ID: ${DISCORD_CATEGORY_ID:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+  TELEGRAM_REPORTS_BOT_TOKEN: ${TELEGRAM_REPORTS_BOT_TOKEN:-}
+  TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
+  # Jarvis Telegram-Inbound (ADR-061): mobiler Jarvis via Telegram Text/Voice.
+  # Default aus → Verhalten unveraendert (nur Approval-URL-Buttons).
+  # Team-Chat: Telegram-Themen <-> MC-Threads (P2.2-P2.4). Ohne diese
+  # Zeile erreicht das Flag den Container nie — die .env allein reicht
+  # nicht, weil hier jede Telegram-Variable einzeln durchgereicht wird.
+  TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
+  # Kanal-Schalter des Team-Chats (ADR-072): Komma-Liste der aktiven
+  # Kanaele, z.B. "telegram", "slack" oder "telegram,slack". Leer =
+  # keine explizite Auswahl → jeder registrierte Kanal darf laufen,
+  # sofern sein eigener Schalter an ist (heutiges Verhalten).
+  CHAT_CHANNELS: ${CHAT_CHANNELS:-}
+  # Slack-Team-Chat (ADR-072). Wie bei Telegram muss JEDE Variable hier
+  # einzeln stehen — die .env allein erreicht den Container nicht. Die
+  # beiden Slack-TOKEN gehoeren bewusst NICHT hierher: sie liegen
+  # verschluesselt in der secrets-Tabelle (ADR-033).
+  SLACK_TEAM_CHAT_ENABLED: ${SLACK_TEAM_CHAT_ENABLED:-false}
+  SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
+  # Reports-Kanal (#mc-reports) fuer den OperatorReports-Adapter — leer =
+  # Slack-Reports aus, Telegram-Bot bleibt alleiniger Report-Weg.
+  SLACK_REPORTS_CHANNEL: ${SLACK_REPORTS_CHANNEL:-}
+  # Cap fuer Dateien, die der Operator ueber Slack an MC schickt
+  # (Datei-Ingest -> References). Default 25 MB.
+  SLACK_FILE_INGEST_MAX_BYTES: ${SLACK_FILE_INGEST_MAX_BYTES:-26214400}
+  # Approvals-Kanal (#mc-approvals) — leer = keine Slack-Approvals,
+  # Telegram-Buttons laufen unabhaengig weiter (Fan-out).
+  SLACK_APPROVALS_CHANNEL: ${SLACK_APPROVALS_CHANNEL:-}
+  JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
+  JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
+  # Local/self-hosted STT endpoint (scripts/stt-server). Every backend env
+  # var must be mapped HERE explicitly — the setting existed in config.py
+  # first and silently never reached the container (found live 2026-07-30:
+  # printenv came back empty while the unit tests were all green).
+  STT_BASE_URL: ${STT_BASE_URL:-}
+  STT_MODEL: ${STT_MODEL:-}
+  # Agent bootstrap auth (PR #404 Rex review, HIGH): agents fetch their
+  # tokens at startup via Bearer INTERNAL_BOOTSTRAP_SECRET
+  # (docker/.env.shared via start-all.sh, written by setup.sh into .env).
+  # Like every backend var, it must be mapped HERE explicitly — the .env
+  # alone never reaches the container (same trap as STT_BASE_URL above,
+  # found live 2026-07-30). Empty in a dev .env = endpoint stays open,
+  # exactly like local dev; production (ENVIRONMENT=production) refuses
+  # to boot without it (config.py::validate_boot_secrets).
+  INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:-}
+  # Jarvis Intelligence (ADR-062): frontier delegation (ask_frontier) + the
+  # daily morning briefing job. Empty model → jarvis_core default (gpt-5.5).
+  # ask_frontier is off by default (per-request cost); the briefing job has
+  # its own gate below and is unaffected.
+  JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+  JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
+  JARVIS_BRIEFING_ENABLED: ${JARVIS_BRIEFING_ENABLED:-false}
+  JARVIS_BRIEFING_HOUR: ${JARVIS_BRIEFING_HOUR:-06:30}
+  # Jarvis-Agent-Token: der Brain fuehrt Tool-Calls ueber den agent-scoped
+  # API-Pfad aus (kein Auth-Bypass), derselbe Token wie der voice_worker.
+  JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+  # Wer "der Operator" ist: liefert den Anzeigenamen fuer die Anrede
+  # (users.preferred_name) und ist der zweite, vom Scope unabhaengige
+  # Schalter fuer die Operator-Proxy-Endpoints. Leer => Jarvis bleibt bei
+  # der neutralen Anrede, Proxy-Endpoints antworten 503.
+  JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
+  # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
+  MC_BACKEND_URL: http://localhost:8000
+  MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
+  # Adresse(n) fuer den node-agent-Install-Einzeiler (Geraete -> "Geraet
+  # hinzufuegen"); kommagetrennt = eine Zeile je Netz (Tailscale + LAN).
+  # Ohne Passthrough las das Backend die Variable nie (Live-Fund 03.09.2026).
+  MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
+  # Operator identity + newsletter branding (see .env.example)
+  OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
+  NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
+  HOST_SSH_USER: ${HOST_SSH_USER:-}
+  # Externally reachable host (Tailscale IP / LAN / DNS) — CORS allowlist +
+  # phone-test deep links (ADR-040, replaces hardcoded IPs in product code).
+  PUBLIC_HOST: ${PUBLIC_HOST:-}
+  EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
+  # ADR-081: agent slugs whose compose service renders OMP_DRIVER=acp
+  # (comma-separated). Without this passthrough the .env key never
+  # reaches the backend container (same trap as STT_BASE_URL above).
+  OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+  GH_TOKEN: ${GH_TOKEN:-}
+  # Kill-switch: false = legacy single-session dispatch (see ADR-002).
+  # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.
+  USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
+  # GitHub owner (user/org) for the agent git workflow (repos, PRs).
+  GITHUB_OWNER: ${GITHUB_OWNER:-}
+  # Repo-name prefixes the visibility monitor keeps private.
+  MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
+  # Optional: news-site export repo (news deploy endpoint).
+  NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
+  # Voice-Agent: LiveKit-Token-Signing braucht api_key + secret separat.
+  # PUBLIC_URL = was der Browser-Client erreicht (vs internal ws://livekit:7880).
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+  # LIVEKIT_PUBLIC_URL leer = dynamic derivation aus Request-Origin
+  # (siehe routers/voice.py:_derive_ws_url). Caddy proxiert /livekit-signal.
+  LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
+  # ADR-023 ultrareview / ADR-006 SSoT: nur `.env`-Vars mit Defaults,
+  # keine Hardcodes in compose. `.env.example` dokumentiert die Keys.
+  SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-}
+  SPARK_EMBEDDING_MODEL: ${SPARK_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+  # MC's own AI functions (docs/setup/ai-providers.md) — without this
+  # passthrough the documented AI_* .env block never reaches the container.
+  AI_EMBEDDINGS_PROVIDER: ${AI_EMBEDDINGS_PROVIDER:-spark}
+  AI_EMBEDDINGS_URL: ${AI_EMBEDDINGS_URL:-}
+  AI_EMBEDDINGS_MODEL: ${AI_EMBEDDINGS_MODEL:-}
+  AI_EMBEDDINGS_CLOUD_URL: ${AI_EMBEDDINGS_CLOUD_URL:-}
+  AI_EMBEDDINGS_CLOUD_MODEL: ${AI_EMBEDDINGS_CLOUD_MODEL:-}
+  AI_INSIGHTS_PROVIDER: ${AI_INSIGHTS_PROVIDER:-spark}
+  AI_INSIGHTS_MODEL: ${AI_INSIGHTS_MODEL:-}
+  SPARK_LLM_URL: ${SPARK_LLM_URL:-http://192.0.2.10:8000/v1}
+  DGX_SSH_HOST: ${DGX_SSH_HOST:-}
+  DGX_SSH_USER: ${DGX_SSH_USER:-}
+  DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
+  ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+  STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
+  ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
+  ENVIRONMENT: production
+  # Docker-Zugriff ausschliesslich ueber den gefilterten Socket-Proxy
+  # (Service oben). Der docker-CLI + compose respektieren DOCKER_HOST;
+  # alle Backend-Subprozesse erben os.environ.
+  DOCKER_HOST: tcp://docker-socket-proxy:2375
+  HOME_HOST: ${HOME}
+  # Absolute host path of this repo checkout — the Python side
+  # (settings.mc_repo_path: force-recreate, runtime-switch, compose
+  # renderer) needs it INSIDE the container; the volume interpolation
+  # below only resolves it on the host.
+  MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+  # Agent image naming for the compose renderer (see .env.example).
+  # Default = published GHCR images (since v0.2.0); "" = bare local names.
+  MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
+  MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
+  # Host UID — used by cli_terminal._user_default_tmux_socket() to build the
+  # tmux socket path (/tmp/tmux-<uid>/default) that the host-pty-bridge will
+  # attach to. Without this, getuid() returns 1000 (the in-container user)
+  # and the bridge fails with "no such file or directory" on the host.
+  HOST_UID: ${HOST_UID:-502}
+  # ADR-022: MC-Home unter ~/.mc/. Stage-2-Entkopplung (2026-06-01): aller
+  # Backend-Code referenziert jetzt direkt ~/.mc/...; der Legacy ~/.openclaw
+  # Mount wurde entfernt (Host-Symlinks bleiben bis Stage 3 bestehen).
+  MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
+  MC_AGENTS_ROOT: ${HOME}/.mc/agents
+
 services:
   db:
     image: postgres:16-alpine
@@ -91,165 +257,13 @@ services:
       docker-socket-proxy:
         condition: service_started
     environment:
-      CDP_BROWSER_URL: http://172.30.99.10:9223
-      DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      AUTH_MODE: local
-      LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
-      # User session lifetime; override in .env (e.g. 43200 = 30 days on a Tailscale-only install)
-      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
-      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
-      DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
-      DISCORD_CATEGORY_ID: ${DISCORD_CATEGORY_ID:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
-      TELEGRAM_REPORTS_BOT_TOKEN: ${TELEGRAM_REPORTS_BOT_TOKEN:-}
-      TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
-      # Jarvis Telegram-Inbound (ADR-061): mobiler Jarvis via Telegram Text/Voice.
-      # Default aus → Verhalten unveraendert (nur Approval-URL-Buttons).
-      # Team-Chat: Telegram-Themen <-> MC-Threads (P2.2-P2.4). Ohne diese
-      # Zeile erreicht das Flag den Container nie — die .env allein reicht
-      # nicht, weil hier jede Telegram-Variable einzeln durchgereicht wird.
-      TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
-      # Kanal-Schalter des Team-Chats (ADR-072): Komma-Liste der aktiven
-      # Kanaele, z.B. "telegram", "slack" oder "telegram,slack". Leer =
-      # keine explizite Auswahl → jeder registrierte Kanal darf laufen,
-      # sofern sein eigener Schalter an ist (heutiges Verhalten).
-      CHAT_CHANNELS: ${CHAT_CHANNELS:-}
-      # Slack-Team-Chat (ADR-072). Wie bei Telegram muss JEDE Variable hier
-      # einzeln stehen — die .env allein erreicht den Container nicht. Die
-      # beiden Slack-TOKEN gehoeren bewusst NICHT hierher: sie liegen
-      # verschluesselt in der secrets-Tabelle (ADR-033).
-      SLACK_TEAM_CHAT_ENABLED: ${SLACK_TEAM_CHAT_ENABLED:-false}
-      SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
-      # Reports-Kanal (#mc-reports) fuer den OperatorReports-Adapter — leer =
-      # Slack-Reports aus, Telegram-Bot bleibt alleiniger Report-Weg.
-      SLACK_REPORTS_CHANNEL: ${SLACK_REPORTS_CHANNEL:-}
-      # Cap fuer Dateien, die der Operator ueber Slack an MC schickt
-      # (Datei-Ingest -> References). Default 25 MB.
-      SLACK_FILE_INGEST_MAX_BYTES: ${SLACK_FILE_INGEST_MAX_BYTES:-26214400}
-      # Approvals-Kanal (#mc-approvals) — leer = keine Slack-Approvals,
-      # Telegram-Buttons laufen unabhaengig weiter (Fan-out).
-      SLACK_APPROVALS_CHANNEL: ${SLACK_APPROVALS_CHANNEL:-}
-      JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
-      JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
-      # Local/self-hosted STT endpoint (scripts/stt-server). Every backend env
-      # var must be mapped HERE explicitly — the setting existed in config.py
-      # first and silently never reached the container (found live 2026-07-30:
-      # printenv came back empty while the unit tests were all green).
-      STT_BASE_URL: ${STT_BASE_URL:-}
-      STT_MODEL: ${STT_MODEL:-}
-      # Agent bootstrap auth (PR #404 Rex review, HIGH): agents fetch their
-      # tokens at startup via Bearer INTERNAL_BOOTSTRAP_SECRET
-      # (docker/.env.shared via start-all.sh, written by setup.sh into .env).
-      # Like every backend var, it must be mapped HERE explicitly — the .env
-      # alone never reaches the container (same trap as STT_BASE_URL above,
-      # found live 2026-07-30). Empty in a dev .env = endpoint stays open,
-      # exactly like local dev; production (ENVIRONMENT=production) refuses
-      # to boot without it (config.py::validate_boot_secrets).
-      INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:-}
-      # Jarvis Intelligence (ADR-062): frontier delegation (ask_frontier) + the
-      # daily morning briefing job. Empty model → jarvis_core default (gpt-5.5).
-      # ask_frontier is off by default (per-request cost); the briefing job has
-      # its own gate below and is unaffected.
-      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
-      JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
-      JARVIS_BRIEFING_ENABLED: ${JARVIS_BRIEFING_ENABLED:-false}
-      JARVIS_BRIEFING_HOUR: ${JARVIS_BRIEFING_HOUR:-06:30}
-      # Jarvis-Agent-Token: der Brain fuehrt Tool-Calls ueber den agent-scoped
-      # API-Pfad aus (kein Auth-Bypass), derselbe Token wie der voice_worker.
-      JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
-      # Wer "der Operator" ist: liefert den Anzeigenamen fuer die Anrede
-      # (users.preferred_name) und ist der zweite, vom Scope unabhaengige
-      # Schalter fuer die Operator-Proxy-Endpoints. Leer => Jarvis bleibt bei
-      # der neutralen Anrede, Proxy-Endpoints antworten 503.
-      JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
-      # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
-      MC_BACKEND_URL: http://localhost:8000
-      MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
-      # Adresse(n) fuer den node-agent-Install-Einzeiler (Geraete -> "Geraet
-      # hinzufuegen"); kommagetrennt = eine Zeile je Netz (Tailscale + LAN).
-      # Ohne Passthrough las das Backend die Variable nie (Live-Fund 03.09.2026).
-      MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
-      # Operator identity + newsletter branding (see .env.example)
-      OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
-      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
-      HOST_SSH_USER: ${HOST_SSH_USER:-}
-      # Externally reachable host (Tailscale IP / LAN / DNS) — CORS allowlist +
-      # phone-test deep links (ADR-040, replaces hardcoded IPs in product code).
-      PUBLIC_HOST: ${PUBLIC_HOST:-}
-      EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
-      # ADR-081: agent slugs whose compose service renders OMP_DRIVER=acp
-      # (comma-separated). Without this passthrough the .env key never
-      # reaches the backend container (same trap as STT_BASE_URL above).
-      OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
-      GH_TOKEN: ${GH_TOKEN:-}
-      # Kill-switch: false = legacy single-session dispatch (see ADR-002).
-      # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.
-      USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
-      # GitHub owner (user/org) for the agent git workflow (repos, PRs).
-      GITHUB_OWNER: ${GITHUB_OWNER:-}
-      # Repo-name prefixes the visibility monitor keeps private.
-      MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
-      # Optional: news-site export repo (news deploy endpoint).
-      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
-      # Voice-Agent: LiveKit-Token-Signing braucht api_key + secret separat.
-      # PUBLIC_URL = was der Browser-Client erreicht (vs internal ws://livekit:7880).
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
-      # LIVEKIT_PUBLIC_URL leer = dynamic derivation aus Request-Origin
-      # (siehe routers/voice.py:_derive_ws_url). Caddy proxiert /livekit-signal.
-      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
-      # ADR-023 ultrareview / ADR-006 SSoT: nur `.env`-Vars mit Defaults,
-      # keine Hardcodes in compose. `.env.example` dokumentiert die Keys.
-      SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-}
-      SPARK_EMBEDDING_MODEL: ${SPARK_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
-      # MC's own AI functions (docs/setup/ai-providers.md) — without this
-      # passthrough the documented AI_* .env block never reaches the container.
-      AI_EMBEDDINGS_PROVIDER: ${AI_EMBEDDINGS_PROVIDER:-spark}
-      AI_EMBEDDINGS_URL: ${AI_EMBEDDINGS_URL:-}
-      AI_EMBEDDINGS_MODEL: ${AI_EMBEDDINGS_MODEL:-}
-      AI_EMBEDDINGS_CLOUD_URL: ${AI_EMBEDDINGS_CLOUD_URL:-}
-      AI_EMBEDDINGS_CLOUD_MODEL: ${AI_EMBEDDINGS_CLOUD_MODEL:-}
-      AI_INSIGHTS_PROVIDER: ${AI_INSIGHTS_PROVIDER:-spark}
-      AI_INSIGHTS_MODEL: ${AI_INSIGHTS_MODEL:-}
-      SPARK_LLM_URL: ${SPARK_LLM_URL:-http://192.0.2.10:8000/v1}
-      DGX_SSH_HOST: ${DGX_SSH_HOST:-}
-      DGX_SSH_USER: ${DGX_SSH_USER:-}
-      DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
-      ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
-      STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
-      ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
-      ENVIRONMENT: production
-      # Docker-Zugriff ausschliesslich ueber den gefilterten Socket-Proxy
-      # (Service oben). Der docker-CLI + compose respektieren DOCKER_HOST;
-      # alle Backend-Subprozesse erben os.environ.
-      DOCKER_HOST: tcp://docker-socket-proxy:2375
-      HOME_HOST: ${HOME}
-      # Absolute host path of this repo checkout — the Python side
-      # (settings.mc_repo_path: force-recreate, runtime-switch, compose
-      # renderer) needs it INSIDE the container; the volume interpolation
-      # below only resolves it on the host.
-      MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
-      # Agent image naming for the compose renderer (see .env.example).
-      # Default = published GHCR images (since v0.2.0); "" = bare local names.
-      MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
-      MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
-      # Host UID — used by cli_terminal._user_default_tmux_socket() to build the
-      # tmux socket path (/tmp/tmux-<uid>/default) that the host-pty-bridge will
-      # attach to. Without this, getuid() returns 1000 (the in-container user)
-      # and the bridge fails with "no such file or directory" on the host.
-      HOST_UID: ${HOST_UID:-502}
-      # ADR-022: MC-Home unter ~/.mc/. Stage-2-Entkopplung (2026-06-01): aller
-      # Backend-Code referenziert jetzt direkt ~/.mc/...; der Legacy ~/.openclaw
-      # Mount wurde entfernt (Host-Symlinks bleiben bis Stage 3 bestehen).
-      MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
-      MC_AGENTS_ROOT: ${HOME}/.mc/agents
+      <<: *backend-env
+      # Architektur E, Teil 2: Hintergrund-Dienste laufen im mc-worker-
+      # Service (unten), nicht mehr in der API. false ist bewusst NICHT
+      # der geteilte Default aus x-backend-env — jeder Dienst setzt ihn
+      # hier explizit, damit die Zuweisung im Diff sichtbar bleibt statt
+      # sich aus der Abwesenheit einer Zeile zu ergeben.
+      ENABLE_BACKGROUND_SERVICES: "false"
     volumes:
       - ${HOME}/.mc:${HOME}/.mc
       # Host-specific extras (SSH keys for remote runtimes, free-code sandbox
@@ -317,6 +331,69 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+
+  # Architektur E, Teil 2 (siehe backend/app/worker.py): faehrt GENAU denselben
+  # Boot-Pfad wie backend.lifespan (prepare_process() + start_background_
+  # services()), aber ohne Uvicorn/Port — kein Request-Traffic. Gleiches
+  # Image wie backend, damit worker.py + main.py nie aus dem Tritt geraten
+  # (kein separates Build, kein Versions-Drift zwischen den beiden Prozessen).
+  # ENABLE_BACKGROUND_SERVICES ist hier "true" (backend hat "false" — siehe
+  # dort) — genau ein Prozess startet Scheduler/Watchdog/etc.
+  #
+  # Volumes: nur was die 18 in start_background_services()/lifespan()
+  # gestarteten Dienste tatsaechlich anfassen (siehe PR-Text fuer die
+  # Herleitung je Mount) — NICHT die Request-gebundenen Mounts von backend
+  # (kein /deliverables:ro FileResponse-Pfad, kein /shared-mcp, kein
+  # scripts/node-agent — die haengen an HTTP-Routern, die im Worker nie
+  # laufen).
+  mc-worker:
+    image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
+    build: ./backend
+    command: python -m app.worker
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      ENABLE_BACKGROUND_SERVICES: "true"
+    volumes:
+      # file_indexer + obsidian_export + der claude-config-Teil von
+      # docker_agent_sync (ueber runtime_watcher -> runtime_propagation ->
+      # docker_agent_sync, siehe agent_lifecycle-Kette) schreiben/lesen
+      # ausschliesslich unter ${HOME}/.mc/... — derselbe 1:1-Mount wie backend.
+      - ${HOME}/.mc:${HOME}/.mc
+      # file_indexer walkt browsable_roots() (fs_roots.py) — "shared-deliverables"
+      # ist darin der einzige Root mit container_override (Docker-Named-Volume
+      # statt ${HOME}/.mc-Unterpfad), sonst faellt dieser Root aus dem Index.
+      - mc_shared_deliverables:/shared-deliverables
+      # template_renderer.py (TEMPLATES_DIR = /app/templates) wird von
+      # docker_agent_sync.sync_docker_agent_files() gebraucht, das ueber
+      # runtime_watcher (Architektur-E-Dienst) laufen kann (Agent-Config-Sync
+      # bei Runtime-Switches). Live-Mount wie bei backend.
+      - ./backend/templates:/app/templates:ro
+      # compose_renderer.py schreibt docker/docker-compose.agents.yml beim
+      # Cross-Image Runtime-Switch — derselbe Pfad, den runtime_watcher via
+      # runtime_propagation.recreate_pending_agents() ansteuert.
+      - ./docker:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker:rw
+      # docker_agent_sync.py liest docker-compose.yml direkt (repo_root /
+      # "docker-compose.yml") fuer den `docker compose -f ... up -d
+      # --force-recreate`-Aufruf bei Runtime-Switches.
+      - ./docker-compose.yml:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker-compose.yml:ro
+      - ./.env:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/.env:ro
+      # telegram_bot.start() (Architektur-E-Dienst) importiert jarvis_core
+      # lazy+feature-gated fuer den Jarvis-Telegram-Inbound-Pfad — ohne den
+      # Mount bleibt das Feature aus (kein Crash), wie bei backend dokumentiert.
+      - ./jarvis_core:/app/jarvis_core:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Bewusst KEIN ports:-Eintrag — kein Uvicorn, kein HTTP-Traffic in diesem
+    # Prozess (siehe backend/app/worker.py Docstring).
 
   frontend:
     # Prebuilt-Image nutzt die Default-Brand ("Mission.Control"); eigene
