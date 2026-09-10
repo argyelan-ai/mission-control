@@ -158,13 +158,33 @@ else:
 
 # ── Database fixtures ─────────────────────────────────────────────────────
 
+async def _empty_all_tables(conn) -> None:
+    from sqlalchemy import text as _text
+    for table in reversed(SQLModel.metadata.sorted_tables):
+        await conn.execute(_text(f'DELETE FROM "{table.name}"'))
+
+
 @pytest.fixture(autouse=True)
 async def setup_db():
-    """Before each test: create tables. Afterward: drop everything.
+    """Give every test an empty database — without rebuilding the schema.
+
+    Until 10.09.2026 this fixture ran create_all + drop_all around EVERY test:
+    78 CREATE TABLEs plus 78 DROPs per test, each crossing aiosqlite's thread
+    boundary — measured at ~78 ms per test (PR #316), i.e. most of the
+    22-minute CI job spent building a schema that never changes. Now the
+    schema is created once per engine (lazily, on the first test of each
+    xdist worker) and every test starts by deleting the rows (~8 ms). The
+    isolation is unchanged: empty tables at start, cleanup happens BEFORE the
+    test so a crashed predecessor cannot poison its successor.
+
+    Self-healing on purpose: the migration tests replay real Alembic steps
+    against this engine and genuinely DROP tables — that is what they test.
+    The old per-test create_all silently repaired that; now the repair is
+    explicit and only paid when a table actually went missing.
 
     Postgres lane: the schema comes from Alembic (triggers included) and is
-    never dropped; isolation is a TRUNCATE of every model table before the
-    test (cheap, keeps triggers/functions intact)."""
+    never dropped; isolation is a TRUNCATE of every model table."""
+    from sqlalchemy.exc import OperationalError
     if POSTGRES_LANE:
         from sqlalchemy import text as _text
         names = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
@@ -172,11 +192,16 @@ async def setup_db():
             await conn.execute(_text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
         yield
         return
-    async with test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+    try:
+        async with test_engine.begin() as conn:
+            await _empty_all_tables(conn)
+    except OperationalError:
+        # first test on this engine, or a migration test dropped tables
+        async with test_engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
+        async with test_engine.begin() as conn:
+            await _empty_all_tables(conn)
     yield
-    async with test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
 
 
 def pytest_collection_modifyitems(config, items):
