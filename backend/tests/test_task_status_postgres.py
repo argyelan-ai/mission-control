@@ -28,7 +28,6 @@ from app.models.task import Task
 from app.task_status import TaskStatus, VALID_TRANSITIONS
 from tests.conftest import test_engine
 
-pytestmark = pytest.mark.postgres
 
 ALL_STATUSES = [s.value if hasattr(s, "value") else str(s) for s in VALID_TRANSITIONS] + [
     "user_test", "failed", "done", "aborted",
@@ -58,6 +57,17 @@ async def _force_status(task_id: uuid.UUID, status: str) -> None:
         )
 
 
+def test_lane_refuses_non_test_database_name():
+    """Review #486 W1: the lane must never TRUNCATE a production-looking DB.
+    Pure-Python guard, runs on both lanes."""
+    from tests.conftest import _assert_test_database
+    _assert_test_database("postgresql+asyncpg://u:p@localhost:5432/test")
+    _assert_test_database("postgresql+asyncpg://u:p@localhost:5432/mc_test_lane")
+    with pytest.raises(RuntimeError):
+        _assert_test_database("postgresql+asyncpg://mc:pw@localhost:5432/mission_control")
+
+
+@pytest.mark.postgres
 async def test_trigger_exists():
     async with test_engine.connect() as conn:
         n = (await conn.execute(text(
@@ -66,6 +76,7 @@ async def test_trigger_exists():
     assert n and n >= 1, "migration 0159 trigger missing — did `alembic upgrade head` run?"
 
 
+@pytest.mark.postgres
 async def test_trigger_rejects_waiting_to_done(session: AsyncSession):
     """The incident path of 10.09.: an operator PATCH waiting→done must be
     refused by the DATABASE, not only by the Python table."""
@@ -79,6 +90,7 @@ async def test_trigger_rejects_waiting_to_done(session: AsyncSession):
     assert "Invalid task transition" in str(exc.value)
 
 
+@pytest.mark.postgres
 async def test_trigger_mirrors_python_transition_table(session: AsyncSession):
     """Full matrix: every (from, to) the Python table allows must pass the
     trigger, every pair it forbids must be rejected. A drift in either
@@ -105,6 +117,7 @@ async def test_trigger_mirrors_python_transition_table(session: AsyncSession):
     assert not mismatches, "trigger/table drift:\n" + "\n".join(mismatches)
 
 
+@pytest.mark.postgres
 async def test_with_for_update_does_not_refresh_identity_map(session: AsyncSession):
     """Rex B1 (PR #478): the lost-update trap. Session A already holds the
     task; a concurrent writer moves it to `done`; A's locked re-read still

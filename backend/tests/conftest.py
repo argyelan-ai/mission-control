@@ -63,12 +63,36 @@ for _key in [k for k in os.environ if k.startswith(_RUNTIME_ENV_PREFIXES)]:
 # ── Postgres test lane (W0.2, 10.09.2026) ────────────────────────────────
 # MC_TEST_DATABASE_URL=postgresql+asyncpg://... switches the suite from the
 # SQLite in-memory engine to a real Postgres whose schema was applied by
-# `alembic upgrade head` — the ONLY way the plpgsql trigger
-# `validate_task_transition` (migration 0159) and row locks (SELECT ... FOR
-# UPDATE) are exercised. Tests that need those guarantees carry
-# `@pytest.mark.postgres` and are skipped on the SQLite lane.
+# `alembic upgrade head`. What the lane adds (review #486, measured): drift
+# on the DATABASE side — a missing or outdated plpgsql trigger
+# `validate_task_transition` (migration 0159) and real row locks / two real
+# transactions — which the SQLite lane structurally cannot see and passes
+# green. Drift on the Python side is caught by both lanes. Tests that need
+# the Postgres guarantees carry `@pytest.mark.postgres` and are skipped on
+# the SQLite lane. The lane TRUNCATEs all tables → the DB name must contain
+# "test" (guard below).
 _PG_TEST_URL = os.environ.get("MC_TEST_DATABASE_URL", "").strip()
 POSTGRES_LANE = _PG_TEST_URL.startswith("postgresql")
+
+
+def _assert_test_database(url: str) -> None:
+    """Refuse to run the Postgres lane against anything that is not clearly a
+    TEST database. The lane TRUNCATEs every model table before each test
+    (review #486 W1: one passed test emptied a filled `boards` table) — a
+    developer who points MC_TEST_DATABASE_URL at their DATABASE_URL would
+    wipe `mission_control`. Rule: the database NAME (last path segment) must
+    contain "test". CI uses `.../test`."""
+    from urllib.parse import urlparse
+    name = (urlparse(url).path or "").rsplit("/", 1)[-1].lower()
+    if "test" not in name:
+        raise RuntimeError(
+            f"MC_TEST_DATABASE_URL points at database {name!r} — the Postgres lane "
+            "TRUNCATEs every table; the database name must contain 'test'."
+        )
+
+
+if POSTGRES_LANE:
+    _assert_test_database(_PG_TEST_URL)
 
 app.config.settings = app.config.Settings(
     database_url=_PG_TEST_URL or "postgresql+asyncpg://test:test@localhost:5432/test",
