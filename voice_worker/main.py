@@ -18,16 +18,18 @@ den Namen "voice").
 
 Stack:
 - livekit-agents[openai,xai] ~= 1.5
-- Provider per `VOICE_PROVIDER` env var (siehe ADR-060):
-  - "openai" (default): OpenAI Realtime, Modell `VOICE_MODEL` (default
-    "gpt-realtime-2.1"), Voice "marin" (uebersteuerbar via VOICE_VOICE_ID)
-  - "xai": Fallback auf das bisherige xAI Grok Realtime, Voice "ara"
+- Provider/Modell/Stimme kommen aus Jarvis' Runtime-Bindung in MC (ADR-082,
+  ``GET /api/v1/agent/voice/config``, gepullt pro Anruf in ``entrypoint()``) —
+  umschaltbar im MC-Runtime-Picker wie bei jedem anderen Agenten. Die
+  Entscheidungslogik (MC schlaegt Env, Env schlaegt Hardcoded-Default, nie
+  verstummen) sitzt in ``jarvis_core.voice_provider.resolve_voice_choice``.
+  `VOICE_PROVIDER`/`VOICE_MODEL`/`VOICE_*_VOICE_ID` env vars bleiben der
+  Rueckfall, wenn MC nicht antwortet oder nichts gebunden ist.
 - Sprache: Auto-detect (das Realtime-Modell antwortet in der Sprache des
   Inputs — Deutsch ok)
 """
 
 import logging
-import os
 import random
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
@@ -36,6 +38,7 @@ from livekit.plugins import openai, xai
 from jarvis_core import frontier, mc_client, tools as jtools
 from jarvis_core.channels import VOICE
 from jarvis_core.persona import build_instructions
+from jarvis_core.voice_provider import VoiceChoice, resolve_voice_choice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
@@ -50,47 +53,72 @@ _TURN_DETECTION = {
 }
 
 
-def _build_realtime_model():
-    """Baut das Realtime-LLM je nach `VOICE_PROVIDER` env var.
+def _build_realtime_transport(choice: VoiceChoice):
+    """The "realtime" api builder — livekit's Realtime plugins (openai/xai).
 
-    Default ist "openai" (ADR-060). "xai" bleibt als Fallback erhalten, falls
-    OpenAI Realtime mal ausfaellt oder der Operator zurueckschalten will.
-    Faellt der jeweilige API-Key, wird sofort (statt erst beim ersten
-    Session-Connect) mit einer klaren Fehlermeldung abgebrochen.
+    Split out from ``_build_realtime_model`` so a second api gets its own
+    function rather than a growing if/elif (ADR-082 follow-up: OpenAI's Live
+    API — v1/live/sessions, WebSocket/WebRTC/SIP, a genuinely different wire
+    protocol from Realtime — will need a ``_build_live_transport`` here and
+    one new entry in ``_API_TRANSPORTS`` below; nothing else in this module
+    changes).
     """
-    provider = os.environ.get("VOICE_PROVIDER", "openai").strip().lower()
-
-    if provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=openai but OPENAI_API_KEY is not set. "
-                "Set OPENAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=xai to fall back to XAI_API_KEY."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "marin"
-        model = os.environ.get("VOICE_MODEL", "gpt-realtime-2.1")
+    if choice.provider == "openai":
         return openai.realtime.RealtimeModel(
-            model=model,
-            voice=voice,
+            model=choice.model or "gpt-realtime-2.1",
+            voice=choice.voice,
             turn_detection=_TURN_DETECTION,
         )
 
-    if provider == "xai":
-        if not os.environ.get("XAI_API_KEY"):
-            raise RuntimeError(
-                "VOICE_PROVIDER=xai but XAI_API_KEY is not set. "
-                "Set XAI_API_KEY in the environment, or set "
-                "VOICE_PROVIDER=openai (default) to use OPENAI_API_KEY instead."
-            )
-        voice = os.environ.get("VOICE_VOICE_ID") or "ara"
-        return xai.realtime.RealtimeModel(
-            voice=voice,
-            turn_detection=_TURN_DETECTION,
-        )
+    if choice.provider == "xai":
+        # model is intentionally OMITTED (not passed as None) when choice.model
+        # is empty — the plugin's own default is NOT_GIVEN, and its type hint
+        # does not accept None for `model` the way it does for `voice`. When MC
+        # DOES bind a model (e.g. grok-voice-think-fast-1.0 on the voice-xai
+        # seed row), it must reach the plugin — a bug found in review
+        # (2026-09-10): this branch silently dropped choice.model, so MC could
+        # show a model as bound while the worker spoke the plugin's default.
+        kwargs: dict = {"voice": choice.voice, "turn_detection": _TURN_DETECTION}
+        if choice.model:
+            kwargs["model"] = choice.model
+        return xai.realtime.RealtimeModel(**kwargs)
 
-    raise RuntimeError(
-        f"Unknown VOICE_PROVIDER={provider!r}. Use 'openai' (default) or 'xai'."
-    )
+    raise RuntimeError(f"Unknown voice provider {choice.provider!r} from resolve_voice_choice.")
+
+
+#: Which ``VoiceChoice.api`` values this worker image can actually build a
+#: transport for. "live" (OpenAI's Live API) is a recognized value from
+#: ``classify_voice_api`` but has no builder here yet — deliberately: this PR
+#: only wires the runtime binding + a loud, logged refusal (see entrypoint()),
+#: not the Live transport itself. Adding it later is one function + one entry.
+_API_TRANSPORTS = {
+    "realtime": _build_realtime_transport,
+}
+
+
+def _build_realtime_model(choice: VoiceChoice):
+    """Baut das Realtime-LLM aus einer bereits entschiedenen ``VoiceChoice``.
+
+    Die Entscheidung WELCHER Anbieter/Modell/Stimme selbst liegt in
+    ``jarvis_core.voice_provider.resolve_voice_choice`` (ADR-082, MC-Runtime-
+    Bindung schlaegt Env) — hier bleibt nur der livekit-Plugin-Aufbau, den
+    dieses Modul bewusst als einzigen livekit-Import traegt (siehe
+    voice_provider-Docstring: Trennung wegen der stumm uebersprungenen
+    Worker-Tests, Memory 2026-08-21).
+
+    Erwartet ein bereits api-geprueftes ``choice`` (entrypoint() faellt auf
+    einen unterstuetzten Wert zurueck, BEVOR dieses hier gerufen wird) — der
+    RuntimeError unten ist die letzte Verteidigungslinie, kein normaler Pfad.
+    """
+    logger.info(choice.as_log())
+
+    builder = _API_TRANSPORTS.get(choice.api)
+    if builder is None:
+        raise RuntimeError(
+            f"No transport for voice api {choice.api!r} — entrypoint() should "
+            f"have fallen back before reaching this point."
+        )
+    return builder(choice)
 
 
 class VoiceAssistant(Agent):
@@ -103,7 +131,10 @@ class VoiceAssistant(Agent):
     """
 
     def __init__(
-        self, briefing: dict | None = None, operator_name: str | None = None
+        self,
+        voice_choice: VoiceChoice,
+        briefing: dict | None = None,
+        operator_name: str | None = None,
     ) -> None:
         # Low-latency turn-detection: kurze Silence-Window damit der Operator schneller
         # Antworten bekommt (default ist ~700ms, wir gehen auf 400ms).
@@ -118,7 +149,7 @@ class VoiceAssistant(Agent):
                 frontier_enabled=frontier_on,
                 operator_name=operator_name,
             ),
-            llm=_build_realtime_model(),
+            llm=_build_realtime_model(voice_choice),
         )
         # ask_frontier ist per JARVIS_FRONTIER_ENABLED gated (Default off, ADR-062):
         # ist es aus, das Tool aus dem LiveKit-Schema entfernen, sodass das
@@ -383,6 +414,34 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info("Jarvis session starting, room=%s", ctx.room.name)
     await ctx.connect()
 
+    # Pull die MC-Runtime-Bindung VOR dem Modellaufbau (ADR-082) — LiveKit gibt
+    # pro Anruf einen frischen Raum, ein Wechsel im Runtime-Picker wirkt also
+    # ohne Container-Neustart ab dem naechsten Anruf. Fail-soft: mc_config
+    # bleibt None bei Backend-Ausfall, resolve_voice_choice faellt dann auf die
+    # Env-Defaults zurueck (raist nur, wenn wirklich kein API-Key existiert).
+    mc_config = await mc_client.voice_config()
+    voice_choice = resolve_voice_choice(mc_config)
+
+    # Saubere Ablehnung statt stillem Fehlschlag (ADR-082 Follow-up): die
+    # Bindung kann auf eine API zeigen, die dieses Image (noch) nicht bauen
+    # kann — z.B. ein "gpt-live-*"-Modell (OpenAIs Live API, v1/live/sessions,
+    # disjunkt von Realtime). Ohne diesen Guard wuerde _build_realtime_model
+    # entweder mit dem FALSCHEN Endpoint verbinden (still falsches Verhalten)
+    # oder crashen (kein Jarvis). Stattdessen: laut loggen, MC melden (damit
+    # es im Activity-Feed sichtbar ist), auf die reinen Env-Defaults
+    # zurueckfallen — die sind heute immer "realtime", ausser jemand setzt
+    # VOICE_MODEL selbst auf einen gpt-live-*-Namen.
+    if voice_choice.api not in _API_TRANSPORTS:
+        logger.error(
+            "voice api %r (provider=%s, model=%s) not supported by this "
+            "worker image — falling back to env config",
+            voice_choice.api, voice_choice.provider, voice_choice.model,
+        )
+        await mc_client.report_voice_unsupported(
+            provider=voice_choice.provider, model=voice_choice.model, api=voice_choice.api,
+        )
+        voice_choice = resolve_voice_choice(None)
+
     # Pre-fetch briefing so the realtime model has fresh context before the
     # operator's first utterance. Fail-soft: if MC backend is down we still start
     # the session — the operator just won't get the adaptive greeting.
@@ -407,7 +466,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = AgentSession()
     await session.start(
-        agent=VoiceAssistant(briefing=briefing, operator_name=operator_name),
+        agent=VoiceAssistant(voice_choice, briefing=briefing, operator_name=operator_name),
         room=ctx.room,
     )
 
