@@ -272,7 +272,12 @@ async def test_redispatch_counter_increments_across_orphans():
 
     # Re-orphan: the redispatched run again shows no liveness (fresh ack_at
     # from the redispatch is a grace signal — age it past the threshold).
+    # W0.1: also expire the one-heal-per-round claim (mc:heal, TTL = one
+    # watchdog tick) — a SECOND heal within the same round is now skipped
+    # by design, so this test's second poll models the NEXT round.
+    from app.redis_client import RedisKeys
     await _set_ack(task_id, _past(1200))
+    await shared.delete(RedisKeys.task_heal_claim(str(task_id)))
     with patch("app.services.dispatch.build_agent_task_prompt", return_value="P"):
         second, _ = await _poll(token, redis=shared)
     assert second["redispatch_count"] == 2

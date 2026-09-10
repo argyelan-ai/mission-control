@@ -15,7 +15,7 @@ from app.auth import require_agent, require_control_plane, require_user, require
 from app.database import get_session
 from app.models.agent import Agent, AgentMetrics
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
-from app.redis_client import RedisKeys, get_redis
+from app.models.task import Task
 from app.services.activity import emit_event
 from app.services import thread_scope
 from app.services.sse import make_sse_response

@@ -18,7 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.task import Task, TaskComment
-from app.redis_client import RedisKeys, get_redis
+from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.services.activity import emit_event
 from app.utils import utcnow
 
@@ -1363,8 +1363,6 @@ class TaskMonitorMixin:
                 if (now - last_seen).total_seconds() < 1800:
                     continue
 
-            # W0.1: one heal per card per round — orphan recovery is the
-            # first watchdog that touches this task this tick, or nobody is.
             redis = await get_redis()
             if not await try_claim_heal(redis, str(task.id)):
                 logger.info(
