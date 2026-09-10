@@ -57,6 +57,11 @@ SKIP_CLI: dict[str, str] = {
     "POST /discord/send": "bot bridge, not part of task lifecycle",
     # Streaming / heartbeat — handled by poll.sh, not agent-triggered.
     "POST /heartbeat": "poll.sh sends this, not the agent",
+    # Voice (ADR-082/follow-up) — Jarvis-only, called by voice_worker's
+    # jarvis_core.mc_client, not a worker agent driving `mc` in a task loop.
+    # No mc-CLI verb makes sense for a single-agent voice-binding refusal
+    # report.
+    "POST /voice/unsupported-model": "Jarvis-only voice-worker self-report, no mc-CLI verb",
     # Config self-edit — handled by the operator via UI; Henry uses dedicated path.
     "PUT /config/soul_md": "config edits go via provisioning, not agent",
     "GET /config/soul_md": "debug-only, not part of worker lifecycle",
