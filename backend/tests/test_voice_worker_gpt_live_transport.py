@@ -412,7 +412,10 @@ def test_live_voice_instructions_short_and_style_only():
     text = build_live_voice_instructions(operator_name="Mark")
     assert "WORAUF DU REAGIERST" not in text
     assert "create_task" not in text
-    assert len(text.split()) < 200  # short voice-layer budget (ADR-083: ~150 words)
+    # Budget widened from ~150 to ~300 words when the naturalness/tone rules
+    # (laughter, backchannels, pitch/pace variation) were added — still a
+    # short voice-layer prompt, no tool-procedure content (asserted above).
+    assert len(text.split()) < 300
 
 
 def test_live_delegation_instructions_has_full_procedure():
@@ -638,3 +641,18 @@ def test_attach_latency_logging_survives_bad_event(caplog):
     voice._attach_latency_logging(session)
 
     session.emit("conversation_item_added", object())  # no .item / .created_at at all
+
+
+def test_live_voice_instructions_naturalness_cues():
+    """Mark: 'soll auch lachen, natürlich wirken wie ChatGPT' — laughter,
+    backchannels, and pitch/pace variation must be explicit in the prompt
+    (no dedicated GPT-Live protocol field for this exists — checked the PR's
+    gpt_live_types.py/gpt_live_model.py: only `voice` name/id, no
+    emotion/expressiveness/speed session field — so instructions text is the
+    only lever)."""
+    from jarvis_core.persona import build_live_voice_instructions
+
+    text = build_live_voice_instructions()
+    assert "laugh" in text.lower()
+    assert "pitch" in text.lower() and "pace" in text.lower()
+    assert "hm" in text.lower() or "backchannel" in text.lower()

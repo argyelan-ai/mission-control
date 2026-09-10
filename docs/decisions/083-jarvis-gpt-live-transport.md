@@ -209,6 +209,25 @@ nicht natuerlich." Vier weitere Fixes, alle in PR #490:
    verifiziert: "Hi, Mark – was steht an? Alles klar, sag mir einfach, womit ich dir helfen
    soll." — keine Zahl, keine Selbstvorstellung.
 
+## Nachschliff 3 (10.09.2026, Mark: "soll auch lachen, natürlich wirken wie ChatGPT")
+
+10. **Natuerlichkeit/Ausdruck.** Geprueft im PR-Code (`gpt_live_types.py`/`gpt_live_model.py`):
+    es gibt KEIN dediziertes Protokoll-/Session-Feld fuer Emotion/Ausdruckskraft/Tempo —
+    `AudioOutput`/`AudioConfig` kennen nur `voice` (Name oder Custom-Voice-Objekt). Der einzige
+    Hebel ist Prompt-Text, wie bei OpenAIs bisheriger Realtime-API auch. `LIVE_VOICE_INSTRUCTIONS`
+    entsprechend erweitert: explizite Anweisung zu Lachen/"haha" bei etwas Lustigem,
+    Zwischenlauten ("hm", "ah okay"), kurzem Zoegern, Tonhoehen-/Tempo-Variation je nach Inhalt
+    (schneller/leichter bei Small Talk, langsamer/ruhiger bei Zahlen/Warnungen) — "talk like a
+    colleague on a call, not like an assistant reading a screen". Live-Testdialog (Scherz-Prompt,
+    ephemeral Worker): Antwort enthielt das angewiesene Backchannel-Token woertlich
+    ("Hmm.") und eine natuerliche Rueckfrage statt einer Statusreport-Formulierung — Beleg im
+    PR. **Einschraenkung:** ob gpt-live-1 das auch HOERBAR umsetzt (Lachen in der Stimme, echte
+    Tonhoehen-Variation), laesst sich aus dem Transkript/PCM-Bytes nicht zuverlaessig pruefen —
+    das braucht Marks Ohr am naechsten echten Anruf. Der Vergleich der 6 Stimmen auf
+    Ausdruckskraft ist NICHT gemacht (Zeitbudget/Prioritaet laut Team-Lead: Latenz +
+    Statusreport-Fix zuerst) — kann nachgezogen werden, falls Mark nach dem Test noch eine
+    andere Stimme will.
+
 ## Referenzen
 
 - Betroffene Dateien: `voice_worker/main.py` (VOICE_API-Selector, `_build_live_model`,
