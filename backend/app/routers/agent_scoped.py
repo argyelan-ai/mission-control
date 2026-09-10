@@ -1924,7 +1924,7 @@ async def agent_post_thread_message(
     # does not stay "waiting" forever once it has been answered. (The task
     # endpoint does not do this — the operator path in routers/tasks does. Here
     # the agent may be answering in a thread nobody else will touch.)
-    if payload.reply_to is not None:
+    if effective_reply_to is not None:
         await answer_clears_awaiting(session, message)
         await session.commit()
 
