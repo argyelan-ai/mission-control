@@ -60,8 +60,42 @@ _RUNTIME_ENV_PREFIXES = ("OMP_", "OPENAI_", "PI_CODING_AGENT_DIR", "MC_AGENT_TOK
 for _key in [k for k in os.environ if k.startswith(_RUNTIME_ENV_PREFIXES)]:
     os.environ.pop(_key, None)
 
+# ── Postgres test lane (W0.2, 10.09.2026) ────────────────────────────────
+# MC_TEST_DATABASE_URL=postgresql+asyncpg://... switches the suite from the
+# SQLite in-memory engine to a real Postgres whose schema was applied by
+# `alembic upgrade head`. What the lane adds (review #486, measured): drift
+# on the DATABASE side — a missing or outdated plpgsql trigger
+# `validate_task_transition` (migration 0159) and real row locks / two real
+# transactions — which the SQLite lane structurally cannot see and passes
+# green. Drift on the Python side is caught by both lanes. Tests that need
+# the Postgres guarantees carry `@pytest.mark.postgres` and are skipped on
+# the SQLite lane. The lane TRUNCATEs all tables → the DB name must contain
+# "test" (guard below).
+_PG_TEST_URL = os.environ.get("MC_TEST_DATABASE_URL", "").strip()
+POSTGRES_LANE = _PG_TEST_URL.startswith("postgresql")
+
+
+def _assert_test_database(url: str) -> None:
+    """Refuse to run the Postgres lane against anything that is not clearly a
+    TEST database. The lane TRUNCATEs every model table before each test
+    (review #486 W1: one passed test emptied a filled `boards` table) — a
+    developer who points MC_TEST_DATABASE_URL at their DATABASE_URL would
+    wipe `mission_control`. Rule: the database NAME (last path segment) must
+    contain "test". CI uses `.../test`."""
+    from urllib.parse import urlparse
+    name = (urlparse(url).path or "").rsplit("/", 1)[-1].lower()
+    if "test" not in name:
+        raise RuntimeError(
+            f"MC_TEST_DATABASE_URL points at database {name!r} — the Postgres lane "
+            "TRUNCATEs every table; the database name must contain 'test'."
+        )
+
+
+if POSTGRES_LANE:
+    _assert_test_database(_PG_TEST_URL)
+
 app.config.settings = app.config.Settings(
-    database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+    database_url=_PG_TEST_URL or "postgresql+asyncpg://test:test@localhost:5432/test",
     redis_url="redis://fake",
     jwt_secret_key="test-secret-key-for-testing",
     local_auth_token="",
@@ -102,12 +136,19 @@ import app.models.agent_task_comment_cursor  # noqa: F401
 
 # ── Test engine (SQLite in-memory, StaticPool = all connections share one DB) ──
 
-test_engine = create_async_engine(
-    "sqlite+aiosqlite://",
-    echo=False,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+if POSTGRES_LANE:
+    # NullPool: every AsyncSession gets its OWN connection, so two sessions in
+    # one test really are two transactions (row locks + identity-map traps
+    # only show up that way — a shared pool makes them look harmless).
+    from sqlalchemy.pool import NullPool
+    test_engine = create_async_engine(_PG_TEST_URL, echo=False, poolclass=NullPool)
+else:
+    test_engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        echo=False,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
 
 # SQLite: do NOT enable foreign keys.
 # Reason: SQLAlchemy ORM only orders INSERTs via relationship() definitions,
@@ -119,12 +160,34 @@ test_engine = create_async_engine(
 
 @pytest.fixture(autouse=True)
 async def setup_db():
-    """Before each test: create tables. Afterward: drop everything."""
+    """Before each test: create tables. Afterward: drop everything.
+
+    Postgres lane: the schema comes from Alembic (triggers included) and is
+    never dropped; isolation is a TRUNCATE of every model table before the
+    test (cheap, keeps triggers/functions intact)."""
+    if POSTGRES_LANE:
+        from sqlalchemy import text as _text
+        names = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
+        async with test_engine.begin() as conn:
+            await conn.execute(_text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
+        yield
+        return
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+
+
+def pytest_collection_modifyitems(config, items):
+    """`postgres`-marked tests only run on the Postgres lane; everything else
+    runs on both (the SQLite lane stays byte-identical when the env is unset)."""
+    if POSTGRES_LANE:
+        return
+    skip = pytest.mark.skip(reason="needs the Postgres test lane (MC_TEST_DATABASE_URL)")
+    for item in items:
+        if "postgres" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)
