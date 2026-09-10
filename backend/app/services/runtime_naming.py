@@ -124,8 +124,17 @@ PROVIDERS: tuple[ProviderNaming, ...] = (
 
 #: Runtime types whose display name is curated by a human and must not be
 #: overwritten by the rule (case 2 in the module docstring).
+#:
+#: voice_openai/voice_xai (ADR-082): both endpoints (api.openai.com, api.x.ai)
+#: ARE known provider hosts, so without this the rule would derive something
+#: like "GPT Realtime 2.1 (OpenAI)" from model_identifier and silently replace
+#: the curated "Jarvis Voice — …" label on a fresh install's seed — the exact
+#: failure mode this set exists to prevent for every other display-anchor row.
 CURATED_RUNTIME_TYPES: frozenset[str] = frozenset(
-    {"vllm_docker", "llamacpp_docker", "lmstudio", "unsloth", "unsloth_porsche", "omp", "hermes"}
+    {
+        "vllm_docker", "llamacpp_docker", "lmstudio", "unsloth", "unsloth_porsche",
+        "omp", "hermes", "voice_openai", "voice_xai",
+    }
 )
 
 
