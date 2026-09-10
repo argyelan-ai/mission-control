@@ -158,12 +158,67 @@ Nachschaerfungen, alle in diesem PR:
    Nach Merge von #491 folgt ein Rebase auf `VoiceChoice`/das dortige `api`-Feld aus der
    Runtime-Bindung statt der reinen Env-Variable — Env bleibt dann nur noch Fallback.
 
+## Nachschliff 2 (10.09.2026, nach Marks erstem echten Anruf)
+
+Marks erster Anruf lief nachweislich ueber GPT-Live (Duplex-Session, gpt-live-Events), zeigte
+aber zwei echte Probleme: **16s** zwischen letztem User-Item und erster Assistant-Antwort,
+und die Antwort klang "AI-like wie vorher" inkl. unerwuenschter Selbstvorstellung ("ich bin
+Jarvis"). Ausserdem: "Er berichtet direkt beim Einstieg (10 Tasks offen, Mark…), das ist
+nicht natuerlich." Vier weitere Fixes, alle in PR #490:
+
+5. **Dockerfile konsolidiert.** `voice_worker/Dockerfile.gpt-live` existiert nicht mehr —
+   der PR-SHA-Install-Block ist jetzt Teil des regulaeren `voice_worker/Dockerfile`
+   (Marks Cutover-Entscheid: kein Nebenlaeufer, also auch kein separates Image mehr). Der
+   Build-Time-Import-Check (`RUN python -c "from livekit.plugins.openai.realtime import
+   GPTLiveModel..."`) bleibt als harter Fail — ein Build ohne das Plugin geht nie durch.
+6. **`_build_realtime_model()`-Fix (unabhaengiger Fund, w-voice bestaetigt real/unmocked
+   reproduziert):** das durch die PR-SHA-Installation gebumpte `livekit-plugins-openai`
+   (1.8.0) verlangt fuer `turn_detection` jetzt ein typisiertes Objekt
+   (`openai.types.beta.realtime.session.TurnDetection`) statt eines rohen dicts — sonst
+   `AttributeError: 'dict' object has no attribute 'create_response'`. Betraf sowohl OpenAI-
+   als auch xAI-Realtime (beide importieren dieselbe Klasse). Behoben mit Import-Fallback
+   (typisiert wenn verfuegbar, sonst dict fuer aeltere Plugin-Versionen) — damit funktioniert
+   der dokumentierte Rueckweg `VOICE_API=realtime` jetzt auch auf DIESEM (konsolidierten)
+   Image, nicht nur auf dem alten `1.6.7`-Backup-Image. Live verifiziert: unmocked
+   `RealtimeModel(...)`-Konstruktion fuer OpenAI UND xAI erfolgreich auf dem
+   konsolidierten Image, danach ein voller LiveKit-Ende-zu-Ende-Lauf ueber
+   `VOICE_API=realtime` (Antwort: "Ja, startklar. Ich bin bereit...", keine Fehler).
+7. **Latenz-Tuning:** Backend-Modell fuer die Responses-Delegation ist jetzt
+   `_resolve_live_backend_model()` (Env `JARVIS_LIVE_BACKEND_MODEL`, Default
+   **`gpt-5.6-luna`** — GPTLiveModel's EIGENER "Fast mode"-Default, nicht mehr
+   `jarvis_core.frontier.resolve_model()`/`gpt-5.5`, ein Reasoning-Modell ohne
+   Effort-Limit). Zusaetzlich `reasoning={"effort":"low"}`, `text={"verbosity":"low"}`,
+   `service_tier="priority"`, `max_output_tokens=400`. `JARVIS_LIVE_BACKEND_MODEL` ist eine
+   EIGENE Env-Var, getrennt von `JARVIS_FRONTIER_MODEL` (ask_frontier) — Full-Duplex
+   braucht Tempo, `ask_frontier` darf langsam gruendlich sein. Latenz-Log
+   (`delegation_latency_s=…`, transport-unabhaengig via
+   `session.on("conversation_item_added")`) live gemessen:
+   **16s → 3.32s** (GPT-Live) bzw. 5.68s (Realtime-Rollback) im selben Testlauf.
+8. **Instructions weiter geschaerft** (`jarvis_core/persona.py`): Voice-Layer bekommt jetzt
+   explizit "never introduce yourself", "stop talking immediately on interruption", und
+   versteht Schweizerdeutsch-Input explizit (Antwort bleibt Schweizer-Hochdeutsch).
+   Backend-Layer bekommt eine neue "CONFIRMATION ECHO"-Regel: vor jeder
+   stop/deploy/delete-artigen Aktion wird zuerst in einem Satz zurueckgemeldet, was passiert,
+   bevor das Tool aufgerufen wird.
+9. **Begruessung neu entworfen** (situatives Oeffnen, Variante b aus drei erwogenen
+   Alternativen — siehe PR-Beschreibung fuer alle drei): Gruss + Vokativ, tageszeit-
+   unabhaengig aber KEINE Zahlen mehr. Nur bei echtem Anlass (Approval offen ODER ein Task
+   mit `status="blocked"` — "failed" Tasks stehen nicht in der Briefing-API) EIN kurzer
+   Zusatz-Satz. Verworfen: (a) Briefing nie erwaehnen (Approvals wuerden untergehen), (c)
+   Jarvis wartet erst 1-2s auf Mark (wirkt wie eine tote Leitung bei GPT-Live). Live
+   verifiziert: "Hi, Mark – was steht an? Alles klar, sag mir einfach, womit ich dir helfen
+   soll." — keine Zahl, keine Selbstvorstellung.
+
 ## Referenzen
 
 - Betroffene Dateien: `voice_worker/main.py` (VOICE_API-Selector, `_build_live_model`,
-  `_build_llm_model`, `AGENT_NAME`), `voice_worker/Dockerfile.gpt-live` (neu),
-  `backend/tests/test_voice_worker_gpt_live_transport.py` (neu), `scripts/gpt_live_protocol_smoke.py`
-  (neu), `scripts/gpt_live_livekit_smoke.py` (neu)
+  `_build_llm_model`, `_resolve_live_backend_model`, `_attach_latency_logging`,
+  `_build_greeting`/`_urgent_note`, typisierte `TurnDetection`, `AGENT_NAME`),
+  `voice_worker/Dockerfile` (PR-SHA-Install jetzt der reguläre Build-Pfad —
+  `Dockerfile.gpt-live` geloescht), `jarvis_core/persona.py`
+  (`build_live_voice_instructions`, `build_live_delegation_instructions`),
+  `backend/tests/test_voice_worker_gpt_live_transport.py`, `scripts/gpt_live_protocol_smoke.py`,
+  `scripts/gpt_live_livekit_smoke.py`
 - Externe Quellen:
   - https://developers.openai.com/api/docs/guides/live
   - https://developers.openai.com/api/docs/guides/voice-websockets?api=live

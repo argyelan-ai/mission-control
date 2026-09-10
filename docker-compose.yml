@@ -485,6 +485,12 @@ services:
       # line is the fix for the actual cause: the compose service never
       # passed the var into the container at all).
       VOICE_API: ${VOICE_API:-realtime}
+      # Backend Responses model for GPT-Live delegation (VOICE_API=live only),
+      # separate from JARVIS_FRONTIER_MODEL below — Full-Duplex needs fast
+      # answers, ask_frontier is allowed to think slowly. Default (unset)
+      # falls back to gpt-5.6-luna (OpenAI's own GPT-Live "Fast mode"
+      # default) — see voice_worker/main.py::_resolve_live_backend_model().
+      JARVIS_LIVE_BACKEND_MODEL: ${JARVIS_LIVE_BACKEND_MODEL:-}
       # Jarvis Intelligence (ADR-062): frontier model + gate for the ask_frontier
       # tool (off by default → not offered in the voice tool schema).
       JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}

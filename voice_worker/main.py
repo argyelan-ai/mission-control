@@ -25,34 +25,38 @@ Stack:
 - Sprache: Auto-detect (das Realtime-Modell antwortet in der Sprache des
   Inputs — Deutsch ok)
 
-## GPT-Live-Transport (ADR-083, vorab)
+## GPT-Live-Transport (ADR-083)
 
-Zusaetzlich zum Realtime-Transport (obig) gibt es seit ADR-083 einen zweiten
-Transport ueber OpenAIs **Live API** (``gpt-live-1``, Full-Duplex Voice-Modell,
-getrennt vom Denk-Backend). Ausgewaehlt per ``VOICE_API`` env var:
+Seit 10.09.2026 Jarvis' PRODUKTIVER Voice-Transport (Marks Entscheid: Ersatz,
+kein Nebenlaeufer) ueber OpenAIs **Live API** (``gpt-live-1``, Full-Duplex
+Voice-Modell, getrennt vom Denk-Backend). Ausgewaehlt per ``VOICE_API`` env var
+(mit Auto-Erkennung aus ``VOICE_MODEL`` falls die Var fehlt, siehe
+``_resolve_voice_api()``):
 
-- "realtime" (default): wie bisher, ``_build_realtime_model()`` (OpenAI/xAI
-  Realtime WebSocket).
+- "realtime" (default ohne Erkennung): wie bisher, ``_build_realtime_model()``
+  (OpenAI/xAI Realtime WebSocket) — bleibt der dokumentierte Rueckweg.
 - "live": ``_build_live_model()`` — ``GPTLiveModel`` aus dem noch offenen
   LiveKit-PR #7212 (``livekit.plugins.openai.realtime.GPTLiveModel``, Stand
   10.09.2026, SHA ``de3c5ce66058c6ab437ad41f963cbaeb39046c6d``; noch nicht auf
-  PyPI). Nur im separaten Test-Image ``voice_worker/Dockerfile.gpt-live``
-  installiert — im normalen Produktions-Image (``voice_worker/Dockerfile``)
-  ist ``GPTLiveModel`` NICHT vorhanden.
+  PyPI). Der REGULAERE ``voice_worker/Dockerfile``-Build installiert das
+  Vorab-Plugin per PR-SHA (siehe Dockerfile-Kommentar) — kein separates
+  Test-Image mehr.
 
-Delegation: ``delegation="responses"`` — ein Backend-Responses-Modell (dasselbe
-Frontier-Modell wie ``jarvis_core.frontier.resolve_model()``) ruft unsere
+Delegation: ``delegation="responses"`` — ein eigenes Backend-Responses-Modell
+(``_resolve_live_backend_model()``, Default ``gpt-5.6-luna`` — Latenz-Tuning
+nach Marks erstem Anruf, siehe ``_build_live_model()`` Docstring) ruft unsere
 ``@function_tool``-Methoden exakt wie bisher; Jarvis' Denken/Tools bleiben
 unveraendert in ``jarvis_core``. "Client delegation" (PR-Beispiel
 ``client_delegation.py``) verlangt eine Agent-Instanz OHNE jegliche Tools (die
 Tools laufen dort auf einer separaten ``llm.LLM``, von der Anwendung selbst
 ueber ``delegation_created``-Events getrieben) — das haette einen kompletten
-Umbau unserer ~20 Tool-Handler erfordert und war fuer diese Vorab-Integration
-zu unfertig/zu riskant. Siehe ``docs/decisions/083-jarvis-gpt-live-transport.md``.
+Umbau unserer ~20 Tool-Handler erfordert. Siehe
+``docs/decisions/083-jarvis-gpt-live-transport.md``.
 
-Ist ``GPTLiveModel`` nicht importierbar (Produktions-Image, altes Plugin) und
-``VOICE_API=live`` gesetzt, faellt ``_build_llm_model()`` mit einer lauten
-Warnung auf ``realtime`` zurueck statt den Worker crashen zu lassen.
+Ist ``GPTLiveModel`` nicht importierbar (z.B. ein aelteres Image ohne den
+Vorab-Plugin-Block) und ``VOICE_API=live`` gesetzt, faellt
+``_build_llm_model()`` mit einer lauten Warnung auf ``realtime`` zurueck statt
+den Worker crashen zu lassen.
 """
 
 import logging
@@ -73,10 +77,11 @@ from jarvis_core.persona import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
 
-# GPT-Live-Plugin (ADR-083) ist NUR im Test-Image installiert (PR #7212, noch
-# nicht released) — im Produktions-Image fehlt das Modul. Import-Fehler wird
-# hier einmalig abgefangen, damit `VOICE_API=live` auf einem alten Image laut
-# (statt mit einem nackten ImportError-Traceback) auf `realtime` zurueckfaellt.
+# GPT-Live-Plugin (ADR-083) wird im regulaeren voice_worker/Dockerfile-Build
+# per PR-SHA installiert (PR #7212, noch nicht released auf PyPI). Import-
+# Fehler wird trotzdem abgefangen (z.B. ein aelteres Image ohne diesen Build-
+# Schritt), damit `VOICE_API=live` dann laut (statt mit einem nackten
+# ImportError-Traceback) auf `realtime` zurueckfaellt.
 try:
     from livekit.plugins.openai.realtime import GPTLiveModel  # type: ignore[attr-defined]
     _GPT_LIVE_AVAILABLE = True
@@ -84,14 +89,35 @@ except ImportError:
     GPTLiveModel = None  # type: ignore[assignment]
     _GPT_LIVE_AVAILABLE = False
 
+# ADR-083 Nachschliff: livekit-plugins-openai>=~1.7 (incl. the 1.8.0 this
+# vorab image force-installs) tightened RealtimeModel/xai.RealtimeModel's
+# turn_detection param from "any dict" to a typed object
+# (openai.types.beta.realtime.session.TurnDetection — both plugins import the
+# SAME class). A plain dict now raises
+# "AttributeError: 'dict' object has no attribute 'create_response'" at
+# construction time (live reproduced 10.09.2026, unrelated to GPT-Live work —
+# hits the realtime FALLBACK path too, which this image needs working for
+# VOICE_API=realtime as the documented rollback). Import is wrapped the same
+# way as GPTLiveModel: older plugin releases still accept a bare dict, so
+# fall back to that shape if the typed class isn't importable.
+try:
+    from openai.types.beta.realtime.session import TurnDetection as _TurnDetectionType
+except ImportError:
+    _TurnDetectionType = None  # type: ignore[assignment]
+
 # Turn-detection ist provider-uebergreifend identisch: xAI's Realtime + OpenAI's
-# Realtime sind beide server-VAD-kompatibel und akzeptieren dieselbe dict-Struktur.
-_TURN_DETECTION = {
+# Realtime sind beide server-VAD-kompatibel und akzeptieren dieselbe Struktur.
+_TURN_DETECTION_KWARGS = {
     "type": "server_vad",
     "threshold": 0.6,
     "prefix_padding_ms": 200,
     "silence_duration_ms": 400,
 }
+_TURN_DETECTION = (
+    _TurnDetectionType(**_TURN_DETECTION_KWARGS)
+    if _TurnDetectionType is not None
+    else dict(_TURN_DETECTION_KWARGS)
+)
 
 
 def _build_realtime_model():
@@ -172,6 +198,25 @@ def _resolve_live_voice() -> str:
     return raw.lower()
 
 
+# Backend-Modell fuer die GPT-Live-Responses-Delegation. ADR-083 waehlte
+# urspruenglich jarvis_core.frontier.resolve_model() (gpt-5.5, ein
+# Reasoning-Modell ohne Effort-Limit) — Marks erster echter Anruf zeigte
+# dann 16s Latenz zwischen letztem User-Item und erster Assistant-Antwort.
+# GPTLiveModel's EIGENER Default ist "gpt-5.6-luna" (siehe DEFAULT_BACKEND_MODEL
+# in gpt_live_model.py) — OpenAIs "Fast mode" fuer genau diesen
+# Full-Duplex-Anwendungsfall, kein reines Codename-Rätsel wie im Frontier-
+# Kontext, sondern der vom PR selbst gewaehlte Live-Default. Umgestellt:
+# JARVIS_LIVE_BACKEND_MODEL (Default "gpt-5.6-luna") ist jetzt eine EIGENE
+# Env-Var, getrennt von JARVIS_FRONTIER_MODEL — die beiden Anwendungsfaelle
+# (schnelle Voice-Delegation vs. schwere ask_frontier-Analyse) brauchen
+# unterschiedliche Modelle, keine gemeinsame Config mehr.
+LIVE_BACKEND_DEFAULT_MODEL = "gpt-5.6-luna"
+
+
+def _resolve_live_backend_model() -> str:
+    return os.environ.get("JARVIS_LIVE_BACKEND_MODEL", "").strip() or LIVE_BACKEND_DEFAULT_MODEL
+
+
 def _build_live_model(
     *,
     briefing_ctx: str | None = None,
@@ -182,11 +227,14 @@ def _build_live_model(
 
     ``delegation="responses"``: ein Backend-Responses-Modell fuehrt Reasoning +
     Tool-Calls, exakt wie bei ``_build_realtime_model()`` — unsere
-    ``@function_tool``-Methoden funktionieren unveraendert. Backend-Modell ist
-    bewusst dasselbe wie ``jarvis_core.frontier.resolve_model()`` (der heutige
-    Frontier-Default, momentan ``gpt-5.5``) statt des GPTLiveModel-eigenen
-    Defaults ``gpt-5.6-luna`` — ein Codename-Snapshot ohne dokumentierte
-    Allgemein-Verfuegbarkeit (siehe frontier.py Docstring).
+    ``@function_tool``-Methoden funktionieren unveraendert.
+
+    Latenz-Tuning (ADR-083 Nachschliff nach Marks erstem Anruf, 16s
+    Antwortzeit): Backend-Modell auf ``_resolve_live_backend_model()``
+    (Fast-Mode-Default ``gpt-5.6-luna`` statt des Reasoning-Modells
+    ``gpt-5.5``), ``reasoning={"effort":"low"}``, ``text={"verbosity":"low"}``,
+    ``service_tier="priority"``, ``max_output_tokens=400`` — Full-Duplex
+    verlangt zuegige Antworten, nicht erschoepfende.
 
     Instructions-Split (ADR-083, Review-Fund): die Voice-Layer-Instructions
     (Stil/Tempo/Sprach-Switch, KEINE Tool-Regeln) gehen als Agent-Top-Level-
@@ -200,7 +248,7 @@ def _build_live_model(
         raise RuntimeError(
             "VOICE_API=live but GPTLiveModel is not importable — this image "
             "does not have the vorab-installed LiveKit PR #7212 plugin. Use "
-            "voice_worker/Dockerfile.gpt-live, or set VOICE_API=realtime."
+            "the vorab-installed LiveKit PR #7212 plugin block in voice_worker/Dockerfile. Rebuild the image, or set VOICE_API=realtime."
         )
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError(
@@ -209,7 +257,7 @@ def _build_live_model(
         )
     voice = _resolve_live_voice()
     model = os.environ.get("VOICE_MODEL", "gpt-live-1")
-    backend_model = frontier.resolve_model()
+    backend_model = _resolve_live_backend_model()
     return GPTLiveModel(
         model=model,
         voice=voice,
@@ -221,6 +269,10 @@ def _build_live_model(
                 frontier_enabled=frontier_enabled,
                 operator_name=operator_name,
             ),
+            "reasoning": {"effort": "low"},
+            "text": {"verbosity": "low"},
+            "service_tier": "priority",
+            "max_output_tokens": 400,
         },
     )
 
@@ -285,7 +337,7 @@ def _build_llm_model(
                 "VOICE_API=live requested but GPTLiveModel is not available "
                 "on this image (missing LiveKit PR #7212 plugin) — falling "
                 "back to VOICE_API=realtime. Use "
-                "voice_worker/Dockerfile.gpt-live for the gpt-live-1 transport."
+                "the vorab-installed LiveKit PR #7212 plugin block in voice_worker/Dockerfile for the gpt-live-1 transport."
             )
             llm = _build_realtime_model()
             instructions = build_instructions(
@@ -617,6 +669,7 @@ async def entrypoint(ctx: JobContext) -> None:
     operator_name = operator.get("name") if operator.get("ok") else None
 
     session = AgentSession()
+    _attach_latency_logging(session)
     await session.start(
         agent=VoiceAssistant(briefing=briefing, operator_name=operator_name),
         room=ctx.room,
@@ -626,50 +679,121 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.generate_reply(instructions=_build_greeting(briefing, operator_name))
 
 
-# ── Greeting Pool ─────────────────────────────────────────────────────
-# Eintoenige Begruessungen waren ein Beschwerde-Punkt — jeder Anruf fing mit
-# "Guten Tag/Abend Operator, X Tasks offen" an. Der Pool unten variiert Anrede,
-# Zahlen-Einkleidung und die abschliessende Frage. Jeder Eintrag ist ein
-# Template; {tasks} = Tasks-Count, {appr} = Approvals-Count, {vok} = Vokativ
-# (", Mark"). Ohne konfigurierten Namen ist {vok} LEER — dann faellt die Anrede
-# ganz weg, statt jemanden generisch "Operator" zu nennen. Deshalb sitzt {vok}
-# in jedem Template an einer Stelle, die auch leer noch sauber klingt.
-_GREETINGS_NO_APPROVALS = [
-    "{tasks} Tasks im Board{vok}. Womit fangen wir an?",
-    "Hey{vok} — {tasks} offen, welche zuerst?",
-    "Servus{vok}, {tasks} Aufgaben warten. Was machst du als erstes?",
-    "Da liegen {tasks} Tasks{vok}. Sollen wir die durchgehen?",
-    "Bereit{vok}. {tasks} Tasks offen — wie willst du anfangen?",
-    "Hi{vok} — {tasks} im Board. Was steht heute an?",
-    "{tasks} Tasks offen{vok}. Brauchst du nen Ueberblick oder hast du was Konkretes?",
-    "Hallo{vok}. {tasks} offen — soll ich was rauspicken?",
-]
-_GREETINGS_WITH_APPROVALS = [
-    "{tasks} Tasks offen plus {appr} Approvals{vok} — die Approvals zuerst?",
-    "Hey{vok} — {appr} Approvals und {tasks} Tasks. Womit machst du weiter?",
-    "Servus{vok}, da haengen {appr} Approvals. Soll ich die durchgehen, oder erst die {tasks} Tasks?",
-    "{appr} Approvals brauchen dich{vok}, {tasks} Tasks offen. Was zuerst?",
-    "Bereit{vok}. {appr} Approvals, {tasks} Tasks — wie willst du starten?",
-    "Hallo{vok} — {appr} Approvals haengen, {tasks} Tasks im Board. Approvals durchklicken?",
-]
-_GREETINGS_EMPTY = [
-    "Hey{vok} — alles aufgeraeumt, Board ist leer. Was machst du?",
-    "Kein offener Task{vok}. Soll ich was suchen oder neu anlegen?",
-    "Bereit{vok}. Board ist sauber — was hast du im Kopf?",
-    "Servus{vok}, nichts offen gerade. Was treibst du?",
+def _attach_latency_logging(session: AgentSession) -> None:
+    """Misst + loggt die Verzoegerung zwischen dem letzten User-Item und der
+    ersten Assistant-Antwort pro Gespraechsrunde (ADR-083 Nachschliff).
+
+    Konkreter Anlass: Marks erster GPT-Live-Anruf zeigte 16s zwischen "Erzähl
+    ein bitz" und Jarvis' Antwort — mit dieser Zahl allein im Transkript war
+    unklar, ob das die Backend-Delegation war oder etwas anderes. Ab jetzt
+    steht ``delegation_latency_s=…`` pro Runde im Log, egal ob Realtime oder
+    GPT-Live (``session.on("conversation_item_added")`` ist transport-
+    unabhaengig — kein GPT-Live-spezifischer Hook noetig).
+
+    Fail-soft: ein Fehler hier darf die Session nie stoppen.
+    """
+    state: dict[str, float | None] = {"last_user_at": None}
+
+    def _on_item(event) -> None:  # ConversationItemAddedEvent, lazy-typed to
+        try:                       # avoid importing voice-internal event types
+            role = getattr(event.item, "role", None)
+            ts = float(getattr(event, "created_at", 0.0) or 0.0)
+            if role == "user":
+                state["last_user_at"] = ts
+            elif role == "assistant" and state["last_user_at"]:
+                latency = ts - state["last_user_at"]
+                logger.info("delegation_latency_s=%.2f", latency)
+                state["last_user_at"] = None
+        except Exception as e:  # noqa: BLE001 — logging must never break the call
+            logger.debug("latency logging hook failed (non-fatal): %s", e)
+
+    session.on("conversation_item_added", _on_item)
+
+
+# ── Greeting — situational opening (ADR-083 Nachschliff, Marks Feedback) ──
+#
+# Vorherige Version: JEDE Begruessung rechnete Tasks/Approvals-Zahlen in den
+# ersten Satz ("10 Tasks im Board, Mark. Womit fangen wir an?") — genau das
+# war der Fund aus Marks erstem GPT-Live-Anruf: "das ist nicht natuerlich,
+# er berichtet direkt beim Einstieg". Ersetzt durch ein SITUATIVES Oeffnen
+# (Variante b aus der Review-Diskussion):
+#
+#   - Gruss + Vokativ, tageszeit-abhaengig, KEINE Zahlen.
+#   - NUR wenn es einen echten Anlass gibt (Approval wartet, oder ein Task
+#     haengt in "blocked" fest) — EIN kurzer, natuerlicher Zusatz-Satz.
+#     Sonst bleibt es bei Gruss + offener Frage, wie bei einem Kollegen.
+#
+# (Zwei verworfene Alternativen, siehe PR/ADR: (a) Jarvis erwaehnt das
+# Briefing GAR NICHT beim Einstieg, nur auf Nachfrage — verworfen, weil ein
+# echtes Approval/blocked-Task dann untergeht, bis Mark zufaellig danach
+# fragt; (c) Jarvis wartet 1-2s und laesst Mark zuerst reden — verworfen,
+# ein GPT-Live-Call OHNE jede erste Aeusserung wirkt wie eine tote Leitung.)
+_GREETINGS_PLAIN = [
+    "Hey{vok}. Was liegt an?",
+    "Servus{vok}, was machst du?",
+    "Hi{vok} — was steht an?",
+    "Bereit{vok}. Sag an.",
+    "Hallo{vok}. Was brauchst du?",
+    "Abend{vok}. Was treibst du?",
 ]
 _GREETINGS_FALLBACK = [
     "Hi{vok}, bin da. Was machst du?",
     "Ich hoere{vok} — was brauchst du?",
     "Bereit{vok}. Sag an.",
 ]
+# Zusatz-Satz NUR bei echtem Anlass, angehaengt an eine Plain-Greeting.
+_URGENT_APPROVAL_SINGLE = [
+    "Ein Approval wartet auf dich.",
+    "Da haengt ein Approval, wenn du magst.",
+]
+_URGENT_APPROVAL_MULTI = [
+    "{appr} Approvals warten auf dich.",
+    "Es haengen {appr} Approvals, falls du Zeit hast.",
+]
+_URGENT_BLOCKED_NAMED = [
+    "Uebrigens, '{title}' haengt fest — magst du kurz reinschauen?",
+    "Ach, '{title}' ist blockiert, falls du das noch siehst.",
+]
+_URGENT_BLOCKED_GENERIC = [
+    "Uebrigens, ein Task haengt gerade fest.",
+    "Ach, da ist was blockiert, falls du kurz Zeit hast.",
+]
+
+
+def _urgent_note(briefing: dict) -> str | None:
+    """Genau EIN kurzer Zusatz-Satz, NUR bei echtem Anlass — sonst None.
+
+    "Echter Anlass" = ein offenes Approval (braucht Mark explizit) ODER ein
+    Task mit status="blocked" (das einzige "etwas ist schiefgelaufen"-Signal,
+    das die Briefing-API liefert — "failed" Tasks stehen NICHT in
+    open_tasks, siehe backend/app/routers/vault.py). Reine Anzahl offener
+    Tasks (inbox/in_progress/review) ist explizit KEIN Anlass mehr — das war
+    genau der als unnatuerlich kritisierte Status-Report-Ton.
+    """
+    n_appr = briefing.get("open_approvals_count", 0) or 0
+    if n_appr == 1:
+        return random.choice(_URGENT_APPROVAL_SINGLE)
+    if n_appr > 1:
+        return random.choice(_URGENT_APPROVAL_MULTI).format(appr=n_appr)
+
+    blocked = [t for t in (briefing.get("open_tasks") or []) if t.get("status") == "blocked"]
+    if blocked:
+        title = (blocked[0].get("title") or "").strip()
+        # Kurz genug fuer einen gesprochenen Nebensatz; ein langer/generischer
+        # Titel klingt vorgelesen statt erzaehlt — dann lieber generisch.
+        if title and len(title) <= 40:
+            return random.choice(_URGENT_BLOCKED_NAMED).format(title=title)
+        return random.choice(_URGENT_BLOCKED_GENERIC)
+
+    return None
 
 
 def _build_greeting(briefing: dict | None, operator_name: str | None = None) -> str:
-    """Pick a randomized greeting template + render with briefing numbers.
+    """Situative Begruessung: Gruss + Vokativ, plus EIN Zusatz-Satz nur bei
+    echtem Anlass (siehe ``_urgent_note()``) — nie ein Zahlen-Status-Report.
 
-    Falls kein Briefing da ist (Backend nicht erreichbar beim Session-Start),
-    nutzen wir den Fallback-Pool — Jarvis erwaehnt dann keine Zahlen.
+    Faellt kein Briefing an (Backend nicht erreichbar beim Session-Start),
+    nutzt den Fallback-Pool — Jarvis erwaehnt dann nichts Inhaltliches.
 
     ``operator_name`` ist der Anzeigename aus ``mc_client.get_operator``. Ohne
     Namen bleibt der Vokativ leer und die Begruessung kommt ganz ohne Anrede.
@@ -680,21 +804,15 @@ def _build_greeting(briefing: dict | None, operator_name: str | None = None) -> 
         line = random.choice(_GREETINGS_FALLBACK).format(vok=vok)
         return f"Sag GENAU diesen einen kurzen Satz auf Deutsch: '{line}'"
 
-    n_tasks = len(briefing.get("open_tasks", []) or [])
-    n_appr = briefing.get("open_approvals_count", 0)
-
-    if n_tasks == 0 and n_appr == 0:
-        line = random.choice(_GREETINGS_EMPTY).format(vok=vok)
-    elif n_appr > 0:
-        template = random.choice(_GREETINGS_WITH_APPROVALS)
-        line = template.format(tasks=n_tasks, appr=n_appr, vok=vok)
-    else:
-        template = random.choice(_GREETINGS_NO_APPROVALS)
-        line = template.format(tasks=n_tasks, vok=vok)
+    line = random.choice(_GREETINGS_PLAIN).format(vok=vok)
+    extra = _urgent_note(briefing)
+    if extra:
+        line = f"{line} {extra}"
 
     return (
-        f"Sag GENAU diesen einen kurzen Satz auf Deutsch (Schweizer-Hochdeutsche "
-        f"Aussprache, kein englischer Akzent): '{line}'"
+        f"Sag GENAU diesen kurzen, natuerlichen Text auf Deutsch (Schweizer-"
+        f"Hochdeutsche Aussprache, kein englischer Akzent, klingt wie ein "
+        f"kurzer Gruss unter Kollegen, NICHT wie ein Statusreport): '{line}'"
     )
 
 

@@ -358,7 +358,7 @@ sessions); host-level fleet extras need the manual install above.
 | Discord notifications + per-agent channels | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
 | Telegram approvals / reports / team chat | `TELEGRAM_*` tokens + chat IDs, step-by-step: [docs/setup/telegram.md](docs/setup/telegram.md) |
 | MC's own AI: embeddings, insights, HuggingFace | `AI_*` provider routing + keys, step-by-step: [docs/setup/ai-providers.md](docs/setup/ai-providers.md) |
-| Voice agent (LiveKit + realtime speech) | `LIVEKIT_*`, `XAI_API_KEY`, `JARVIS_AGENT_TOKEN`, `VOICE_API` (ADR-083, vorab `gpt-live-1` transport — see `voice_worker/Dockerfile.gpt-live`) |
+| Voice agent (LiveKit + realtime speech) | `LIVEKIT_*`, `XAI_API_KEY`, `JARVIS_AGENT_TOKEN`, `VOICE_API`, `JARVIS_LIVE_BACKEND_MODEL` (ADR-083, `gpt-live-1` full-duplex transport, Jarvis default since 10.09.2026) |
 | Remote LLM runtime host via SSH | `DGX_SSH_HOST`, `DGX_SSH_USER` + SSH-key mount |
 | Reachability from other devices | `PUBLIC_HOST`, `LIVEKIT_NODE_IP`, TLS via `caddy/Caddyfile.tls.example` |
 
