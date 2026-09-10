@@ -31,11 +31,33 @@ MODEL = os.environ.get("VOICE_MODEL", "gpt-live-1")
 VOICE = os.environ.get("VOICE_VOICE_ID", "marin")
 
 
+def _write_wav(path: str, pcm: bytes, sample_rate: int = 24000) -> None:
+    """Wrap raw PCM16 mono bytes in a minimal WAV header (no deps)."""
+    import struct
+
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    with open(path, "wb") as f:
+        f.write(b"RIFF")
+        f.write(struct.pack("<I", 36 + len(pcm)))
+        f.write(b"WAVEfmt ")
+        f.write(struct.pack("<IHHIIHH", 16, 1, num_channels, sample_rate, byte_rate, block_align, bits_per_sample))
+        f.write(b"data")
+        f.write(struct.pack("<I", len(pcm)))
+        f.write(pcm)
+
+
 async def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: gpt_live_protocol_smoke.py <pcm16_24k_mono_file>", file=sys.stderr)
+        print(
+            "usage: gpt_live_protocol_smoke.py <pcm16_24k_mono_file> [out.wav]",
+            file=sys.stderr,
+        )
         return 2
     pcm_path = sys.argv[1]
+    out_wav_path = sys.argv[2] if len(sys.argv) > 2 else None
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         print("OPENAI_API_KEY not set", file=sys.stderr)
@@ -47,6 +69,7 @@ async def main() -> int:
     session_id = None
     audio_deltas = 0
     audio_bytes = 0
+    reply_pcm = bytearray()
     transcript_parts: list[str] = []
     closed_reason = None
     errors: list[dict] = []
@@ -133,7 +156,10 @@ async def main() -> int:
                 if etype == "session.output_audio.delta":
                     delta = event.get("delta", "")
                     audio_deltas += 1
-                    audio_bytes += len(base64.b64decode(delta)) if delta else 0
+                    decoded = base64.b64decode(delta) if delta else b""
+                    audio_bytes += len(decoded)
+                    if out_wav_path:
+                        reply_pcm.extend(decoded)
                 elif "transcript" in etype and "delta" in event:
                     transcript_parts.append(event.get("delta", ""))
                 elif etype == "session.usage.updated":
@@ -156,6 +182,10 @@ async def main() -> int:
                 )
             except Exception:
                 pass
+
+    if out_wav_path and reply_pcm:
+        _write_wav(out_wav_path, bytes(reply_pcm))
+        print(f"-> wrote {len(reply_pcm)} bytes of reply audio to {out_wav_path}", file=sys.stderr)
 
     result = {
         "ok": audio_deltas > 0 and not errors,
