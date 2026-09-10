@@ -820,7 +820,19 @@ WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 
 
 # W0.3: bounds for the Operator-/Lead-Anweisungen block in build_recovery_context.
 OPERATOR_LEAD_COMMENT_LIMIT = 3
-OPERATOR_LEAD_MAX_CHARS = 1500
+# Nacharbeit PR #489 (Rex-Review): 1500 war ein Block-Cap, der bei genau einem
+# uebrig gebliebenen Kommentar nie griff (die alte Schleife brach ab statt zu
+# kuerzen) -> ein einzelner 20000-Zeichen-Kommentar ergab 20423 Zeichen
+# Recovery-Kontext in einem mandatory, nicht droppable Abschnitt. Ersetzt durch
+# einen Pro-Kommentar-Cap (siehe OPERATOR_LEAD_PER_ITEM_MAX_CHARS) plus einen
+# niedrigeren Gesamt-Cap als reines Sicherheitsnetz.
+OPERATOR_LEAD_MAX_CHARS = 900
+# Pro-Kommentar-Cap: harte Obergrenze ist COMMENT_LIMIT * PER_ITEM_MAX_CHARS,
+# damit kein einzelner ueberlanger Kommentar den ganzen Block sprengt — und
+# damit auch keiner mehr komplett verschwindet (das alte Verhalten war
+# Alles-oder-nichts: ganze Kommentare wurden fallengelassen, um unter den
+# Gesamt-Cap zu kommen).
+OPERATOR_LEAD_PER_ITEM_MAX_CHARS = 250
 
 
 async def build_waiting_resume_recap(session: AsyncSession, task: Task) -> str:
@@ -942,6 +954,21 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     operator_comments = list(ol_result.all())
     operator_comments.sort(key=lambda c: c.created_at)
 
+    # Operator-/Lead-Block vorab zusammenbauen (Per-Kommentar-Cap, siehe unten)
+    # — `rendered_operator_comments` ist die Menge, die tatsaechlich im Prompt
+    # landet. Anders als die alte Alles-oder-nichts-Schleife wird hier kein
+    # Kommentar mehr komplett fallengelassen (nur der Text pro Kommentar
+    # gekuerzt), deshalb bleibt das immer == operator_comments. Trotzdem wird
+    # shown_count explizit aus dieser Menge gebildet statt aus der Rohliste —
+    # M2 (Nacharbeit PR #489): der alte Code zaehlte `operator_comments` VOR
+    # dem Cap-Loop, der Loop selbst droppte danach noch welche -> Postfach-
+    # Zeile und tatsaechlich gezeigte Kommentare liefen auseinander (6
+    # Kommentare -> 2 gezeigt, aber "3 weitere" gemeldet, einer verschwand
+    # spurlos). Damit das nicht wieder passieren kann, falls hier jemals
+    # wieder eine Drop-Logik einzieht, ist die Zaehlung strikt an das
+    # gebunden, was tatsaechlich gerendert wird.
+    rendered_operator_comments = operator_comments
+
     # Postfach-Hinweis: wie viele relevante Kommentare (beide Buckets
     # zusammen) es insgesamt gibt vs. was hier tatsaechlich gezeigt wird —
     # der Agent soll wissen, dass es mehr gibt, auch wenn es nicht ungekuerzt
@@ -956,7 +983,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         )
     )
     total_relevant_count = count_result.one()
-    shown_count = len(comments) + len(operator_comments)
+    shown_count = len(comments) + len(rendered_operator_comments)
     unread_count = max(0, total_relevant_count - shown_count)
 
     # Checklist items — ordered, flagged for first-pending.
@@ -978,9 +1005,17 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     ]
 
     if unread_count > 0:
+        # M3 (Nacharbeit PR #489): der Text versprach "N weitere Kommentare",
+        # gezaehlt wird aber nur relevant_types + operator_lead_filter — bei
+        # Kommentaren wie `reflection`/`report_back`/`escalate_to_operator`/
+        # `checkpoint` bleibt unread_count 0, obwohl welche existieren, und es
+        # erscheint gar keine Zeile. Die Zaehlung ist bewusst so (siehe oben),
+        # nur der Wortlaut hat mehr versprochen als er hielt — praezisiert auf
+        # genau das, was gezaehlt wird.
         parts.append(
-            f"\n**Postfach:** {unread_count} weitere Kommentare nicht in "
-            f"diesem Kontext -> `mc task-get {task.id}`"
+            f"\n**Postfach:** {unread_count} weitere Anweisungen/"
+            f"Fortschrittseintraege nicht in diesem Kontext -> "
+            f"`mc task-get {task.id}`"
         )
 
     if items:
@@ -1009,30 +1044,37 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             snippet = c.content.strip().splitlines()[0][:180]
             parts.append(f"[{label} @ {ts}] {snippet}")
 
-    if operator_comments:
-        # Ungekuerzt (kein splitlines()[0][:180] wie oben) — genau das war
-        # der Bug: eine mehrzeilige Anweisung wurde zur Ueberschrift ohne
-        # Inhalt. Cap gilt fuer den GESAMTEN Block, nicht pro Kommentar —
-        # bei Ueberschreitung fliegt die aelteste Anweisung zuerst raus.
-        remaining = operator_comments
-        dropped = 0
-        while True:
-            block_lines = []
-            for c in remaining:
-                ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
-                who = "Operator" if c.author_type == "user" else "Lead"
-                block_lines.append(f"[{who}/{c.comment_type} @ {ts}]\n{c.content.strip()}")
-            block_text = "\n\n".join(block_lines)
-            if len(block_text) <= OPERATOR_LEAD_MAX_CHARS or len(remaining) <= 1:
-                break
-            remaining = remaining[1:]
-            dropped += 1
+    if rendered_operator_comments:
+        # B1-Fix (Nacharbeit PR #489): kein Kommentar wird mehr komplett
+        # fallengelassen (das alte Alles-oder-nichts liess bei genau einem
+        # uebrigen Kommentar den Gesamt-Cap gaenzlich ins Leere laufen — ein
+        # einzelner 20000-Zeichen-Kommentar ergab 20423 Zeichen Kontext).
+        # Stattdessen: jeder Kommentar wird einzeln auf
+        # OPERATOR_LEAD_PER_ITEM_MAX_CHARS gekuerzt, mit sichtbarem Marker
+        # (gleiches Idiom wie _load_feedback() oben). Der Block ist damit hart
+        # durch OPERATOR_LEAD_COMMENT_LIMIT * OPERATOR_LEAD_PER_ITEM_MAX_CHARS
+        # begrenzt.
+        block_lines = []
+        any_truncated = False
+        for c in rendered_operator_comments:
+            ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
+            who = "Operator" if c.author_type == "user" else "Lead"
+            content = c.content.strip()
+            if len(content) > OPERATOR_LEAD_PER_ITEM_MAX_CHARS:
+                content = content[:OPERATOR_LEAD_PER_ITEM_MAX_CHARS] + "\n[...gekuerzt]"
+                any_truncated = True
+            block_lines.append(f"[{who}/{c.comment_type} @ {ts}]\n{content}")
+        block_text = "\n\n".join(block_lines)
 
-        header = "\n### Operator-/Lead-Anweisungen (ungekuerzt)"
-        if dropped:
-            header += (
-                f" — {dropped} aeltere wegen {OPERATOR_LEAD_MAX_CHARS}-Zeichen-Cap weggelassen"
-            )
+        # Sicherheitsnetz falls OPERATOR_LEAD_COMMENT_LIMIT jemals erhoeht
+        # wird: haerter Gesamt-Cap, kuerzt aber nur das Blockende, droppt
+        # keinen einzelnen Kommentar.
+        if len(block_text) > OPERATOR_LEAD_MAX_CHARS:
+            block_text = block_text[:OPERATOR_LEAD_MAX_CHARS] + "\n[...gekuerzt]"
+            any_truncated = True
+
+        header = "\n### Operator-/Lead-Anweisungen"
+        header += " (gekuerzt bei Bedarf)" if any_truncated else " (ungekuerzt)"
         parts.append(header)
         parts.append(block_text)
 

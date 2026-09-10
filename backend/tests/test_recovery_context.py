@@ -230,10 +230,13 @@ async def test_recovery_context_includes_sixth_operator_comment(session: AsyncSe
 
     assert result is not None
     assert "Anweisung 6: mach X statt Y" in result
-    # Postfach-Hinweis: 6 Operator-Kommentare insgesamt, nur 3 gezeigt -> 3 fehlen.
-    assert "3" in result
-    assert "mc task-get" in result
-    assert str(task.id) in result
+    # W4 (Nacharbeit PR #489): `assert "3" in result` war zahnlos — die "3"
+    # steckt auch in Zeitstempeln und der Task-UUID, ein falscher Zaehlwert
+    # (z.B. wegen M2) waere hier nicht aufgefallen. Voller erwarteter Satz.
+    assert (
+        f"**Postfach:** 3 weitere Anweisungen/Fortschrittseintraege nicht in "
+        f"diesem Kontext -> `mc task-get {task.id}`"
+    ) in result
 
 
 @pytest.mark.asyncio
@@ -257,9 +260,50 @@ async def test_recovery_context_operator_comment_full_multiline_content(session:
 
 
 @pytest.mark.asyncio
-async def test_recovery_context_operator_block_cap_drops_oldest(session: AsyncSession):
-    """Operator-Block > 1500 Zeichen -> die aelteste Anweisung fliegt raus, mit Hinweis."""
+async def test_recovery_context_single_overlong_operator_comment_gets_truncated_not_dropped(
+    session: AsyncSession,
+):
+    """B1 (Nacharbeit PR #489): der alte Gesamt-Cap griff bei genau einem
+    uebrig gebliebenen Kommentar gar nicht — die Schleife brach ab statt zu
+    kuerzen (`len(remaining) <= 1`). Rex hat gemessen: ein einzelner
+    20000-Zeichen-Operator-Kommentar ergab 20423 Zeichen Recovery-Kontext.
+    Fix: Per-Kommentar-Cap mit sichtbarem `[...gekuerzt]`-Marker (Idiom aus
+    `_load_feedback()`). Der Kommentar darf nicht mehr vollstaendig
+    durchschlagen, aber auch nicht spurlos verschwinden.
+    """
     from app.services.dispatch import build_recovery_context
+    from app.services.task_context_builder import OPERATOR_LEAD_PER_ITEM_MAX_CHARS
+
+    task = await _setup_board_and_task(session)
+
+    huge = "X" * 20_000
+    await _create_comment(session, task.id, "message", huge, author_type="user")
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    # Nicht der volle 20000-Zeichen-Kommentar landet im Kontext ...
+    assert huge not in result
+    assert len(result) < 2000
+    # ... aber der Anfang schon (Kommentar verschwindet nicht komplett) plus
+    # sichtbarer Kuerzungsmarker.
+    assert "X" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
+    assert "[...gekuerzt]" in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_operator_block_caps_each_comment_not_whole_block(
+    session: AsyncSession,
+):
+    """M2 (Nacharbeit PR #489): 3 ueberlange Kommentare -> alle 3 muessen im
+    Prompt auftauchen (gekuerzt), keiner darf komplett fallen. Das alte
+    Alles-oder-nichts liess bei Ueberschreitung des Gesamt-Caps die aelteste
+    Anweisung komplett verschwinden; `shown_count` zaehlte trotzdem die
+    ungekuerzte Rohliste, wodurch die Postfach-Zeile und die tatsaechlich
+    gezeigten Kommentare auseinanderliefen.
+    """
+    from app.services.dispatch import build_recovery_context
+    from app.services.task_context_builder import OPERATOR_LEAD_PER_ITEM_MAX_CHARS
 
     task = await _setup_board_and_task(session)
 
@@ -274,11 +318,20 @@ async def test_recovery_context_operator_block_cap_drops_oldest(session: AsyncSe
     result = await build_recovery_context(session, task)
 
     assert result is not None
+    # Alle 3 sind vertreten (per-Kommentar-Anfang), keiner ist spurlos weg —
+    # das war genau der Bug, den B1/M2 beheben.
+    assert "A" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
+    assert "B" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
+    assert "C" * OPERATOR_LEAD_PER_ITEM_MAX_CHARS in result
+    # Aber keiner davon ungekuerzt (jeder ist laenger als der Per-Item-Cap).
     assert oldest not in result
-    assert middle in result
-    assert newest in result
-    # Hinweis, dass wegen des Caps etwas weggelassen wurde.
-    assert "weggelassen" in result or "Cap" in result
+    assert middle not in result
+    assert newest not in result
+    assert result.count("[...gekuerzt]") == 3
+    # Es gibt keinen Postfach-Hinweis mehr — alle 3 Operator-Kommentare
+    # (== Gesamtzahl passend zum Filter) sind tatsaechlich im Prompt, nur
+    # gekuerzt, nicht weggelassen.
+    assert "**Postfach:**" not in result
 
 
 @pytest.mark.asyncio
