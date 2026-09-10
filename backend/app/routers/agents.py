@@ -161,6 +161,12 @@ class TriggerPayload(BaseModel):
     message: str = "Please continue with your current task."
 
 
+# Nach so vielen Herzschlaegen ohne context_pct gilt der Kontextwert als
+# unbekannt (NULL). 3 = ein Scrape-Aussetzer wird toleriert, ein Formatwechsel
+# der Statuszeile nicht mehr verschleiert.
+CONTEXT_UNKNOWN_AFTER_MISSES = 3
+
+
 class AgentHeartbeatPayload(BaseModel):
     status: str = "idle"  # idle | working
     task_id: str | None = None
@@ -3965,6 +3971,24 @@ async def agent_heartbeat(
     # display formula at line 166 so frontend bars stay accurate.
     if payload.context_pct is not None and agent.context_max:
         agent.context_tokens = round(payload.context_pct / 100 * agent.context_max)
+        try:
+            await (await get_redis()).delete(f"mc:ctx:miss:{agent.id}")
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            pass
+    elif payload.context_pct is None and agent.context_tokens is not None:
+        # "Kein Wert" statt "alter Wert" (10.09.2026): meldet ein Agent drei
+        # Herzschlaege in Folge keinen Kontextwert (Statuszeile nicht erkannt,
+        # frische Session), wird der gespeicherte Wert zu NULL = unbekannt.
+        # Sonst zeigt die Startseite einen Stunden alten Prozentwert als
+        # aktuell — und warnt bei "100 %", waehrend der Agent bei 10 % steht.
+        try:
+            _r = await get_redis()
+            _miss = await _r.incr(f"mc:ctx:miss:{agent.id}")
+            await _r.expire(f"mc:ctx:miss:{agent.id}", 3600)
+            if _miss >= CONTEXT_UNKNOWN_AFTER_MISSES:
+                agent.context_tokens = None
+        except Exception:  # noqa: BLE001 — never break the heartbeat
+            pass
 
     # Host agents: flip provision_status "provisioning" -> "provisioned" on
     # the first heartbeat that ever arrives (2026-07-10 E2E Lauf 3). The

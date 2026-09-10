@@ -234,7 +234,10 @@ class Agent(SQLModel, table=True):
     language: str = Field(default="en", max_length=16)
 
     # Analytics snapshots
-    context_tokens: int = 0
+    # None = unbekannt: der Agent hat seit >= 3 Herzschlaegen keinen Kontextwert
+    # gemeldet (Scrape fehlgeschlagen). Ein stehengebliebener alter Wert luegt
+    # ueberzeugender als ein fehlender (Vorfall 10.09.2026: 100 % fuer Stunden).
+    context_tokens: int | None = 0
     context_max: int = 150_000
     session_message_count: int = 0
     total_tasks_completed: int = 0

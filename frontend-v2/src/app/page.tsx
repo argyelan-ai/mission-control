@@ -73,9 +73,9 @@ function HomePage() {
   const displayName = currentUser?.name?.split(" ")[0] || "Operator";
 
   const alerts = (agents ?? [])
-    .filter((a) => a.context_max && a.context_tokens / a.context_max >= 0.9)
+    .filter((a) => a.context_max && a.context_tokens !== null && a.context_tokens / a.context_max >= 0.9)
     .map((a) => ({
-      label: t("contextAlert", { name: a.name, pct: Math.round((a.context_tokens / a.context_max) * 100) }),
+      label: t("contextAlert", { name: a.name, pct: Math.round(((a.context_tokens ?? 0) / a.context_max) * 100) }),
       color: C.error,
       href: `/agents/${a.id}`,
     }));

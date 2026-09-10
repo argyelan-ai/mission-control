@@ -353,7 +353,7 @@ async def agent_heartbeat(
         )
 
     # Warn at 70%+ context
-    if agent.context_max and agent.context_tokens >= agent.context_max * 0.9:
+    if agent.context_max and agent.context_tokens is not None and agent.context_tokens >= agent.context_max * 0.9:
         await emit_event(
             session,
             "agent.context_warning",
@@ -362,7 +362,7 @@ async def agent_heartbeat(
             agent_id=agent.id,
             board_id=agent.board_id,
         )
-    elif agent.context_max and agent.context_tokens >= agent.context_max * 0.7:
+    elif agent.context_max and agent.context_tokens is not None and agent.context_tokens >= agent.context_max * 0.7:
         await emit_event(
             session,
             "agent.context_warning",
