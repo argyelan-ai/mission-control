@@ -451,3 +451,42 @@ if __name__ == "__main__":
             print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
     raise SystemExit(1 if failed else 0)
+
+
+# ---------------------------------------------------------------------------
+# 09.09.2026 first live probe: model selector parity + provider 401 as text
+# ---------------------------------------------------------------------------
+
+def test_acp_model_selector_prefers_explicit_then_rendered_then_openai_model():
+    assert bridge._acp_model_selector({"OMP_ACP_MODEL": "x/y", "OMP_MODEL_SELECTOR": "mc-openai/A"}) == "x/y"
+    assert bridge._acp_model_selector({"OMP_MODEL_SELECTOR": "mc-openai/A", "OPENAI_MODEL": "B"}) == "mc-openai/A"
+    assert bridge._acp_model_selector({"OPENAI_MODEL": "B"}) == "mc-openai/B"
+
+
+def test_acp_model_selector_never_silently_none():
+    import pytest
+    with pytest.raises(RuntimeError):
+        bridge._acp_model_selector({})
+
+
+def test_acp_provider_401_text_classifies_model_error_not_silent_abort():
+    o = bridge.RunOutcome()
+    o.saw_session = True
+    o.saw_agent_start = True
+    o.saw_agent_end = True
+    o.final_stop_reason = "end_turn"
+    o.final_text = ("401 Incorrect API key provided: sk-noauth. You can find your API key at "
+                    "https://platform.openai.com/account/api-keys. (type=invalid_request_error param=invalid_api_key)")
+    cls = bridge.classify_acp(o)
+    assert cls.kind is bridge.Kind.ABORT_ERROR
+    assert cls.retryable is False
+
+
+def test_acp_normal_end_turn_without_sentinel_still_silent_abort():
+    o = bridge.RunOutcome()
+    o.saw_session = True
+    o.saw_agent_start = True
+    o.saw_agent_end = True
+    o.final_stop_reason = "end_turn"
+    o.final_text = "Ich habe die Datei geschrieben, aber vergessen zu finishen."
+    assert bridge.classify_acp(o).kind is bridge.Kind.SILENT_ABORT_NO_SENTINEL
