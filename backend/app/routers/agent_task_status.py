@@ -1678,13 +1678,22 @@ async def agent_update_task(
     # write path (the one behind `mc ack`/`mc review`/`mc done`/`mc finish`).
     # Does not cover the whole request: see task_state.py's module docstring
     # for the intermediate-commit caveat (blocker-approval resolution,
-    # report-back auto-draft) further down in this function.
+    # report-back auto-draft, and — further down in this function — the
+    # reassignment block's own commit via clear_dispatch_attempt_id(), which
+    # releases Postgres's FOR UPDATE at COMMIT just like the others).
     #
-    # Must run BEFORE the reassignment block below: lock_task()'s
-    # populate_existing=True re-read overwrites the identity-mapped `task`
-    # object's attributes from the DB, which would wipe any in-memory
-    # reassignment mutations (dispatched_at/ack_at reset, assigned_agent_id)
-    # made first if the order were reversed.
+    # Must run BEFORE the reassignment block below: `_old_assigned` there
+    # (:1721) reads `task.assigned_agent_id` off this same object, and that
+    # read drives the "did the assignee actually change?" branch. Read from
+    # the pre-lock identity-map copy instead of the freshly-locked row, it
+    # can be stale because the DB row has simply moved since `task` was
+    # loaded:
+    #   DB=B, this object still says A, PATCH targets B: B != A (stale) ->
+    #     full dispatch-cycle reset applied to a task already delivered to
+    #     B — kills that running dispatch
+    #   DB=B, this object still says A, PATCH targets A: A == A (stale) ->
+    #     treated as a no-op, updates.pop()s the field -> silent 200 with no
+    #     effect, the bug class #482 closed
     if "status" in updates:
         from app.services.task_state import lock_task
         locked_task = await lock_task(session, task_id)
