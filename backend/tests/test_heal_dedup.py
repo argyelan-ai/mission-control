@@ -243,12 +243,22 @@ async def test_sabotage_without_claim_gate_both_healers_act(fake_redis):
     await _reseed_staleness(task_id, agent_id)
 
     # Sabotage: the claim gate is disabled (helper "removed") -- every
-    # healer's try_claim_heal reports success, so BOTH act.
+    # healer's try_claim_heal reports success, so BOTH act. Patched on the
+    # task_monitor namespace: task_monitor.py binds the name at import time
+    # (from app.redis_client import try_claim_heal), so patching the source
+    # module would not reach the gate. Healer 2 runs on the SHARED
+    # fake_redis (patch.object(task_monitor, "get_redis", ...)), otherwise it
+    # lands on the autouse-isolated singleton and never sees healer 1's
+    # mc:heal key.
     async def _sabotaged_claim(redis, task_id):
         return True
 
-    with patch("app.redis_client.try_claim_heal", _sabotaged_claim):
-        from app.services.watchdog.task_monitor import TaskMonitorMixin
+    import app.services.watchdog.task_monitor as task_monitor
+    from app.services.watchdog.task_monitor import TaskMonitorMixin
+    with (
+        patch.object(task_monitor, "try_claim_heal", _sabotaged_claim),
+        patch.object(task_monitor, "get_redis", return_value=fake_redis),
+    ):
         monitor = TaskMonitorMixin()
         async with _session() as s:
             recovered = await monitor._recover_orphaned_tasks(s)
