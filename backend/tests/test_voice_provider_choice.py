@@ -134,6 +134,15 @@ def test_classify_voice_api_live_prefix_is_openai_only():
     assert classify_voice_api("xai", "grok-live-fast") == "realtime"
 
 
+def test_classify_voice_api_unknown_model_defaults_to_realtime():
+    """A model name the rule has never heard of (typo, brand-new release,
+    future SKU) must default to "realtime" — the api this worker already
+    knows how to build — rather than an unrecognized value that would make
+    every future model silently unusable until this function is updated."""
+    assert classify_voice_api("openai", "gpt-9000-turbo-ultra") == "realtime"
+    assert classify_voice_api("openai", "some-random-model-xyz") == "realtime"
+
+
 def test_resolve_voice_choice_reflects_a_live_binding():
     cfg = {"provider": "openai", "model": "gpt-live-1", "voice_id": None, "runtime_slug": "voice-openai"}
     choice = resolve_voice_choice(cfg, env=_env())
