@@ -1845,7 +1845,11 @@ async def agent_post_thread_message(
     # reachable trigger. A board lead posting into a task thread that holds
     # an open question addressed to "boss" answers the OLDEST such question.
     effective_reply_to = payload.reply_to
-    if effective_reply_to is None and agent.is_board_lead and thread.task_id is not None:
+    # Only a plain `message` counts as the implicit answer (review #496 B3):
+    # a `status`/`decision` line ("moment, schaue ich mir an") must not close
+    # the question.
+    if (effective_reply_to is None and agent.is_board_lead and thread.task_id is not None
+            and payload.message_type == "message"):
         from app.services.messaging import open_questions
         pending = await open_questions(session, thread_id=thread.id, to="boss")
         if pending:
@@ -1927,6 +1931,11 @@ async def agent_post_thread_message(
     if effective_reply_to is not None:
         await answer_clears_awaiting(session, message)
         await session.commit()
+        # Review #496 B4: an answered `--blocking` question must release the
+        # worker (waiting → in_progress), exactly like the operator path.
+        if task is not None and agent.is_board_lead:
+            from app.services.messaging import resume_task_after_answer
+            await resume_task_after_answer(session, task, thread, changed_by="agent")
 
     logger.info(
         "Message: %s posts on thread %s (kind=%s, type=%s)",

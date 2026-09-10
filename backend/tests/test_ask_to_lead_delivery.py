@@ -139,7 +139,7 @@ async def test_first_sight_delivers_question_not_card_history(client: AsyncClien
     body = (await client.get("/api/v1/agent/me/poll",
                              headers={"Authorization": f"Bearer {lead_raw}"})).json()
     delivered = [m["id"] for m in (body.get("new_messages") or [])]
-    assert delivered == [str(q.id)], f"expected only the question, got {len(delivered)} messages"
+    assert delivered[-1] == str(q.id) and len(delivered) <= 4, f"expected the question + <=3 context lines, got {len(delivered)}"
 
 
 @pytest.mark.asyncio
@@ -156,3 +156,70 @@ async def test_other_boards_lead_does_not_see_it(async_session):
     await async_session.commit()
     pairs = await message_threads_for_agent(other_lead, async_session)
     assert thread.id not in {t.id for t, _ in pairs}
+
+
+# ── Review #496 round 3: B3 (no self-lockout), B4 (blocking ask resumes), context lines ──
+
+@pytest.mark.asyncio
+async def test_lead_status_post_does_not_close_question_and_real_answer_still_lands(client: AsyncClient, async_session):
+    """B3 dead-end: a `status` line must not count as the answer, and the lead
+    must keep the write right on the thread until the real answer is posted."""
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    q = await _ask(async_session, thread.id, worker)
+    h = {"Authorization": f"Bearer {lead_raw}"}
+    r1 = await client.post(f"/api/v1/agent/threads/{thread.id}/messages",
+                           json={"body": "moment, schaue ich mir an", "message_type": "status"}, headers=h)
+    assert r1.status_code == 201, r1.text
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.thread import Message
+        still_open = (await s.exec(select(Message).where(Message.id == q.id))).one()
+        assert still_open.question_meta["awaiting"] is True, "a status line is not an answer"
+    r2 = await client.post(f"/api/v1/agent/threads/{thread.id}/messages",
+                           json={"body": "Nimm 1200/250/250."}, headers=h)
+    assert r2.status_code == 201, "the real answer must still be postable (no self-lockout)"
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.thread import Message
+        closed = (await s.exec(select(Message).where(Message.id == q.id))).one()
+        assert closed.question_meta["awaiting"] is False
+    # and the lead keeps the write right on the board's task thread afterwards
+    r3 = await client.post(f"/api/v1/agent/threads/{thread.id}/messages",
+                           json={"body": "Nachtrag", "message_type": "status"}, headers=h)
+    assert r3.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_lead_answer_to_blocking_question_resumes_waiting_worker(client: AsyncClient, async_session):
+    """B4: the worker parked itself with `mc ask --blocking` (task waiting);
+    the lead's answer must release it back to in_progress."""
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    from unittest.mock import AsyncMock, patch
+    await post_message(async_session, thread_id=thread.id, sender_type="agent", sender_id=worker.id,
+                       message_type="question", body="Darf ich X?",
+                       question_meta={"awaiting": True, "blocking": True, "to": "boss"})
+    sub.status = "waiting"
+    async_session.add(sub)
+    await async_session.commit()
+    with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock), \
+         patch("app.utils.create_tracked_task") as tracked:
+        tracked.side_effect = lambda coro, name=None: coro.close()
+        r = await client.post(f"/api/v1/agent/threads/{thread.id}/messages",
+                              json={"body": "Ja, mach X."},
+                              headers={"Authorization": f"Bearer {lead_raw}"})
+    assert r.status_code == 201, r.text
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        fresh = await s.get(Task, sub.id)
+        assert fresh.status == "in_progress", "answered blocking ask must release the worker"
+
+
+@pytest.mark.asyncio
+async def test_first_sight_includes_three_context_lines_before_question(client: AsyncClient, async_session):
+    lead, lead_raw, worker, sub, thread = await _setup(async_session)
+    for i in range(6):
+        await post_message(async_session, thread_id=thread.id, sender_type="agent",
+                           sender_id=worker.id, message_type="message", body=f"Zwischenstand {i}")
+    await async_session.commit()
+    q = await _ask(async_session, thread.id, worker)
+    body = (await client.get("/api/v1/agent/me/poll",
+                             headers={"Authorization": f"Bearer {lead_raw}"})).json()
+    delivered = [m["body"] for m in (body.get("new_messages") or [])]
+    assert delivered[-1].startswith("Widerspruch") and delivered[:-1] == ["Zwischenstand 3", "Zwischenstand 4", "Zwischenstand 5"], delivered

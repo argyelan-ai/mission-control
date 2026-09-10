@@ -118,6 +118,10 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
     )
 
 
+# How many messages before an open question the lead gets as context.
+LEAD_QUESTION_CONTEXT_LINES = 3
+
+
 async def lead_question_start_seqs(agent: Agent, session: AsyncSession) -> dict:
     """``{thread_id: seq}`` — for a board lead, every task thread of its board
     that carries a still-open question addressed to "boss", mapped to the seq
@@ -145,7 +149,10 @@ async def lead_question_start_seqs(agent: Agent, session: AsyncSession) -> dict:
         )
     )
     on_board = {t.thread_id for t in board_tasks.all()}
-    return {tid: seq for tid, seq in by_thread.items() if tid in on_board}
+    # Delivery starts a few lines BEFORE the question so the lead sees what
+    # the worker was doing (review #496 nit): 3 lines of context, never the
+    # whole card history (W1).
+    return {tid: max(1, seq - LEAD_QUESTION_CONTEXT_LINES) for tid, seq in by_thread.items() if tid in on_board}
 
 
 async def thread_agent_may_write_to(
@@ -160,4 +167,15 @@ async def thread_agent_may_write_to(
     for thread, _task in await message_threads_for_agent(agent, session):
         if thread.id == thread_id:
             return thread
+    # Board lead (review #496 B3): the WRITE right must not hang on an open
+    # question — the lead's first "moment, schaue ich" post closed the question
+    # implicitly and thereby removed the thread from its own scope; the real
+    # answer then got 404. A lead may write into any task thread of its board;
+    # delivery (poll/inbox) stays coupled to open questions.
+    if agent.is_board_lead and agent.board_id is not None:
+        thread = await session.get(Thread, thread_id)
+        if thread is not None and thread.task_id is not None and thread.closed_at is None:
+            task = await session.get(Task, thread.task_id)
+            if task is not None and task.board_id == agent.board_id:
+                return thread
     return None
