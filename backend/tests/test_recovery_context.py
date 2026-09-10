@@ -460,6 +460,113 @@ async def test_recovery_context_checklist_caps_open_items_at_10(session: AsyncSe
 
 
 @pytest.mark.asyncio
+async def test_recovery_context_checklist_hint_names_done_count_too(session: AsyncSession):
+    """B6 (Nacharbeit-4 PR #489): 28 erledigte / 12 offene -> die Hinweiszeile
+    nennt beide Zahlen, nicht nur die verdeckten offenen. Vorher stand ueber
+    die 28 erledigten kein Wort, obwohl sie komplett aus `open_items`
+    herausgefiltert wurden, bevor irgendeine Zaehlung ansetzt."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    order = 0
+    for i in range(40):
+        status = "done" if i % 10 < 7 else "pending"
+        await _create_checklist_item(session, task.id, f"Item {i:02d}", status, order)
+        order += 1
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "- ... und 2 weitere offene, 28 erledigte" in result
+    assert f"mc task-get {task.id}" in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_checklist_hint_shows_done_even_without_hidden_open(
+    session: AsyncSession,
+):
+    """B6: alle offenen Items passen ins Limit (keine verdeckten offenen),
+    aber es gibt erledigte Items — die Hinweiszeile muss trotzdem erscheinen,
+    sonst verschwinden die Erledigten weiterhin spurlos."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+    await _create_checklist_item(session, task.id, "Erledigt A", "done", 0)
+    await _create_checklist_item(session, task.id, "Erledigt B", "done", 1)
+    await _create_checklist_item(session, task.id, "Offen C", "pending", 2)
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "Offen C" in result
+    assert "- ... und 2 erledigte" in result
+    assert "weitere offene" not in result  # keine verdeckten offenen Items
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_progress_snippet_marks_truncation_over_180_chars(
+    session: AsyncSession,
+):
+    """B7 (Nacharbeit-4 PR #489): der Fortschritts-Block kuerzte bisher auf
+    Zeile 1 + 180 Zeichen, ohne Marker — wortwoertlich derselbe Bug wie im
+    Anweisungs-Block, nur eine Zeile tiefer. Jetzt bekommt ein gekuerzter
+    Eintrag denselben sichtbaren Marker plus Verweis."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    long_line = "Y" * 250
+    await _create_comment(session, task.id, "progress", long_line)
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "Y" * 180 in result
+    assert long_line not in result
+    assert "[...gekuerzt]" in result
+    assert f"mc task-get {task.id}" in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_progress_snippet_marks_truncation_on_multiline(
+    session: AsyncSession,
+):
+    """B7: auch das stille Abschneiden nachfolgender Zeilen (Zeile 1 ist kurz,
+    aber es gibt eine Zeile 2+) ist Kuerzung und muss sichtbar sein."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    multiline = "Kurze erste Zeile.\nZweite Zeile mit weiterem Kontext."
+    await _create_comment(session, task.id, "progress", multiline)
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "Kurze erste Zeile." in result
+    assert "Zweite Zeile mit weiterem Kontext." not in result
+    assert "[...gekuerzt]" in result
+    assert f"mc task-get {task.id}" in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_progress_snippet_no_marker_when_short(session: AsyncSession):
+    """B7 Gegenprobe: ein kurzer einzeiliger Fortschritts-Kommentar bleibt wie
+    er ist — kein Marker, wenn nichts gekuerzt wurde."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+    await _create_comment(session, task.id, "progress", "Kurzer Status.")
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "Kurzer Status." in result
+    assert "[...gekuerzt]" not in result
+
+
+@pytest.mark.asyncio
 async def test_recovery_context_block_order_instructions_checklist_progress(session: AsyncSession):
     """Nacharbeit-2 PR #489, Scope-Punkt 4: Reihenfolge im Recovery-Kontext
     ist Anweisungen -> Checkliste -> Fortschritt. Was der Agent tun soll,

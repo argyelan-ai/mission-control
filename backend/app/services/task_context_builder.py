@@ -842,6 +842,15 @@ OPERATOR_LEAD_OLDER_MAX_CHARS = 250  # die beiden aelteren Kommentare
 # 1200 + 250 + 250 = 1700 Rohtext + Kopfzeilen bleibt unter dem 1800er
 # Gesamt-Cap — der Block traegt damit den Fall, fuer den er gebaut wurde,
 # ohne dass der Gesamt-Cap den Cap-Loop ueberschreibt.
+#
+# Bekannte Grenze (Nacharbeit-4 PR #489, Nit): "juengster" heisst hier strikt
+# `created_at`, nicht Wichtigkeit. Schreibt der Operator erst eine lange
+# Anweisung und danach ein kurzes "danke", wird das "danke" zur juengsten
+# und die lange Anweisung faellt auf den 250er-Cap. Realer Ablauf, kein
+# Kunstfall. Keine Aenderung hier — jede Alternative braeuchte Semantik
+# (Wichtigkeit, Anweisung vs. Bestaetigung), die dieser Kontext-Bauer nicht
+# hat. Bewusst als bekannte Grenze dokumentiert, damit sie nicht neu entdeckt
+# werden muss.
 
 # Nacharbeit-2 PR #489: Fortschritts-Block von 5 auf 3 Kommentare, um Platz
 # fuer den hoeheren Anweisungs-Cap oben freizumachen.
@@ -1020,6 +1029,13 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     open_items = [i for i in all_items if i.status in ("pending", "in_progress")]
     shown_items = open_items[:CHECKLIST_OPEN_ITEM_LIMIT]
     hidden_open_count = len(open_items) - len(shown_items)
+    # B6 (Nacharbeit-4 PR #489): erledigte (bzw. blocked/skipped) Items werden
+    # oben komplett aus `open_items` herausgefiltert und tauchten bisher in
+    # keiner Zaehlung mehr auf — bei 28 erledigten/12 offenen stand ueber die
+    # 28 kein Wort. `done_count` erfasst alles, was nicht offen ist, und wird
+    # unten in der Hinweiszeile genannt, damit der Agent weiss, dass es sie
+    # gibt, auch wenn sie hier nicht einzeln aufgelistet werden.
+    done_count = len(all_items) - len(open_items)
 
     if not comments and not open_items and not operator_comments:
         return None
@@ -1107,8 +1123,18 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         for i, item in enumerate(shown_items):
             hint = " ← **HIER WEITERMACHEN**" if i == 0 else ""
             parts.append(f"- [ ] {item.title}{hint}")
-        if hidden_open_count > 0:
-            parts.append(f"- ... und {hidden_open_count} weitere (`mc task-get {task.id}`)")
+        if hidden_open_count > 0 or done_count > 0:
+            # B6 (Nacharbeit-4 PR #489): vorher nur "N weitere" fuer verdeckte
+            # OFFENE Items — erledigte kamen in keiner Zaehlung vor. Jetzt
+            # werden beide genannt, auch wenn nur eine der beiden Zahlen > 0
+            # ist (z.B. alle offenen Items passen rein, aber es gibt
+            # erledigte, die trotzdem sichtbar bleiben muessen).
+            note_parts = []
+            if hidden_open_count > 0:
+                note_parts.append(f"{hidden_open_count} weitere offene")
+            if done_count > 0:
+                note_parts.append(f"{done_count} erledigte")
+            parts.append(f"- ... und {', '.join(note_parts)} (`mc task-get {task.id}`)")
 
     if comments:
         parts.append("\n### Letzter Fortschritt")
@@ -1122,7 +1148,19 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             }.get(c.comment_type, c.comment_type)
             # Truncate long comments in the recap — agent can fetch full via
             # `mc comment list` if needed.
-            snippet = c.content.strip().splitlines()[0][:180]
+            #
+            # B7 (Nacharbeit-4 PR #489): genau der Ursprungsbug dieses PRs
+            # (erste Zeile, 180 Zeichen, ohne Marker) — nur hier im
+            # Fortschritts- statt im Anweisungs-Block. 180 Zeichen sind fuer
+            # einen Statuseintrag in Ordnung, aber gekuerzt muss sichtbar
+            # sein — gleicher Marker/Verweis wie im Anweisungs-Block oben.
+            full_content = c.content.strip()
+            content_lines = full_content.splitlines()
+            first_line = content_lines[0] if content_lines else ""
+            snippet = first_line[:180]
+            truncated = len(content_lines) > 1 or len(first_line) > 180
+            if truncated:
+                snippet += f" [...gekuerzt] (Rest: `mc task-get {task.id}`)"
             parts.append(f"[{label} @ {ts}] {snippet}")
 
     # Workspace hint — Task.workspace_path is authoritative (Bundle 4),
