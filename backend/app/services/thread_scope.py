@@ -85,8 +85,33 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
         )
     )
     group_pairs = [(th, None) for th in group_res.all()]
+    # Offene Fragen AN den Lead (`mc ask --to boss`, Vorfall 10.09.2026): ein
+    # Worker fragt auf dem Thread SEINER Karte; der Lead haelt nur den
+    # Eltern-Task und sah den Thread nie — die Frage verschwand lautlos, der
+    # Worker wartete eine Runde und entschied dann allein. Ein Board-Lead
+    # nimmt deshalb zusaetzlich an jedem Task-Thread seines Boards teil, auf
+    # dem eine noch offene Frage mit to="boss" liegt (Teilnahme = Zustellung
+    # per Poll/Inbox UND Antwortrecht via thread_agent_may_write_to).
+    lead_pairs: list = []
+    if agent.is_board_lead and agent.board_id is not None:
+        from app.services.messaging import open_questions
+        pending = await open_questions(session, to="boss")
+        ask_thread_ids = {q.thread_id for q in pending} - set(tasks_by_thread.keys())
+        if ask_thread_ids:
+            ask_tasks = await session.exec(
+                select(Task).where(
+                    Task.thread_id.in_(ask_thread_ids),  # type: ignore[union-attr]
+                    Task.board_id == agent.board_id,
+                )
+            )
+            lead_tasks_by_thread = {t.thread_id: t for t in ask_tasks.all()}
+            if lead_tasks_by_thread:
+                lead_threads = await session.exec(
+                    select(Thread).where(Thread.id.in_(lead_tasks_by_thread.keys()))  # type: ignore[union-attr]
+                )
+                lead_pairs = [(th, lead_tasks_by_thread[th.id]) for th in lead_threads.all()]
     if not tasks_by_thread:
-        return dm_pairs + group_pairs
+        return dm_pairs + group_pairs + lead_pairs
     threads_res = await session.exec(
         select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
     )
@@ -94,6 +119,7 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
         [(th, tasks_by_thread[th.id]) for th in threads_res.all()]
         + dm_pairs
         + group_pairs
+        + lead_pairs
     )
 
 
