@@ -2623,19 +2623,31 @@ def serve_loop(
                     except OSError:
                         pass
 
-                def run_once(_p=prompt, _task_id=str(task["id"])) -> RunOutcome:
+                # Production-Verdrahtung (2026-09-10): the sinks used to live
+                # ONLY inside _make_acp_run_factory, which no production code
+                # called — serve_loop drove run_acp_once bare, so sessions
+                # chat got neither transcript nor preview. Now the factory is
+                # the ONE place that owns sink creation (Review #465 Blocker
+                # 1 discipline: one sink object per session, lazy, reused on
+                # session_id change) and serve_loop feeds it ITS control
+                # wiring: the shared acp_cancel (Stop-Knopf, ladder Stufe 1 —
+                # the heartbeater's _on_control flips THIS object via
+                # _acp_control_sink) and the tool heartbeat. Per-turn resets
+                # (cancel flag, interrupt stamp) stay HERE, on the closures
+                # the driver calls.
+                acp_run = _make_acp_run_factory(
+                    model=acp_model,
+                    max_time=int(turn_deadline) if turn_deadline else 900,
+                    permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
+                    task_id=str(task["id"]),
+                    cancel_state=acp_cancel,
+                    heartbeat_fn=_acp_tool_heartbeat,
+                )
+
+                def run_once(_p=prompt) -> RunOutcome:
                     acp_cancel.requested = False  # fresh cancel per turn (Major 4)
                     interrupt_state.clear()  # fresh signal per turn
-                    return run_acp_once(
-                        _p,
-                        cwd=acp_cwd,
-                        model=acp_model,
-                        max_time=int(turn_deadline) if turn_deadline else 900,
-                        permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
-                        task_id=_task_id,
-                        cancel_state=acp_cancel,
-                        heartbeat_fn=_acp_tool_heartbeat,
-                    )
+                    return acp_run(_p)
 
                 # Continue-Nudge (Fix B, ACP flavour — Review #464 Major 3):
                 # the ACP session survives a turn end, so a continueable abort
@@ -2644,16 +2656,7 @@ def serve_loop(
                 def continue_once(nudge: str) -> RunOutcome:
                     acp_cancel.requested = False
                     interrupt_state.clear()
-                    return run_acp_once(
-                        nudge,
-                        cwd=acp_cwd,
-                        model=acp_model,
-                        max_time=int(turn_deadline) if turn_deadline else 900,
-                        permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
-                        task_id=str(task["id"]),
-                        cancel_state=acp_cancel,
-                        heartbeat_fn=_acp_tool_heartbeat,
-                    )
+                    return acp_run(nudge)
             else:
                 task_file = _task_file_for(str(task["id"]))
                 _isolate = isolation != "slash"
@@ -4151,6 +4154,8 @@ def _make_acp_run_factory(
     max_time: int,
     permission_policy: str,
     task_id: str,
+    cancel_state: Optional[ACPCancelState] = None,
+    heartbeat_fn: Optional[Callable[[], None]] = None,
 ) -> Callable[[str], RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable.
 
@@ -4162,10 +4167,19 @@ def _make_acp_run_factory(
     created ONCE per run and reused; its file name carries the REAL ACP
     sessionId via ``mapper.set_session_id`` (flowing through
     ``run_acp_once``'s on-session hook), not the "acp-session" stub.
+
+    ``cancel_state``/``heartbeat_fn`` (2026-09-10, Production-Verdrahtung):
+    the factory previously created its OWN ACPCancelState, so serve_loop's
+    heartbeat control channel (``_acp_control_sink``) could never flip the
+    cancel flag and tool heartbeats went nowhere — the factory was called
+    only from a test while serve_loop called run_acp_once bare. serve_loop
+    now passes ITS cancel state (ladder Stufe 1: Stop-Knopf) and its tool
+    heartbeat (Review #464 Major 7) through here; ``None`` keeps the old
+    private-state behaviour (tests, replay).
     """
     import acp_chat_events
 
-    cancel_state = ACPCancelState()
+    cancel_state = cancel_state or ACPCancelState()
 
     def run(prompt: str) -> RunOutcome:
         cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
@@ -4210,8 +4224,8 @@ def _make_acp_run_factory(
             model=model,
             max_time=max_time,
             permission_policy=permission_policy,
-            task_id=task_id,
             cancel_state=cancel_state,
+            heartbeat_fn=heartbeat_fn,
             transcript_sink=sink,
             preview_sink=preview_sink,
             on_session_id=on_session_id,
