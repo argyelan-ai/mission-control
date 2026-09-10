@@ -1,0 +1,61 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System deps fuer livekit-agents (audio processing)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build context is the repo root (ADR-061), same as voice_worker/Dockerfile.
+# Install the normal pinned deps first (stable livekit-agents 1.5.x + xai
+# plugin + httpx/dotenv) for layer caching and so VOICE_PROVIDER=xai keeps
+# working as a comparison baseline in this test image.
+COPY voice_worker/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# --- ADR-082: GPT-Live transport, vorab ueber den offenen LiveKit-PR #7212 ---
+# "feat: add openai gpt-live duplex support" (livekit/agents), aufgesetzt auf
+# PR #6677 (Duplex-Adapter-Core). GPTLiveModel ist NICHT auf PyPI (livekit-agents
+# stable ist 1.5.x/1.8-vor-release; das PR bumpt livekit-agents core auf 1.8.0
+# und livekit-plugins-openai auf 1.8.0). Deshalb force-reinstall genau dieser
+# zwei Packages aus dem PR-Head-Commit, ueber die normalen requirements.txt
+# hinaus.
+#
+# HEAD SHA geprueft am 10.09.2026 via:
+#   gh pr view 7212 -R livekit/agents --json headRefOid
+#   -> de3c5ce66058c6ab437ad41f963cbaeb39046c6d
+#
+# --force-reinstall --no-deps ist PFLICHT hier: PyPI hat bereits ein
+# livekit-plugins-openai==1.8.0 (ohne GPTLiveModel — anderer Inhalt, gleiche
+# Versionsnummer), das requirements.txt oben schon zieht. Ohne
+# --force-reinstall haelt pip die Version fuer "already satisfied" und
+# installiert die PR-Variante NIE — GPTLiveModel bleibt dann unauffindbar
+# (live verifiziert 10.09.2026: genau dieser Fehlschlag reproduziert).
+# --no-deps: die Kern-Dependencies kommen schon aus requirements.txt oben;
+# ein voller Resolve wuerde libkit-plugins-xai (PyPI, >=1.5-Range) neu
+# aufloesen wollen und mit dem git-Core (1.8.0) kollidieren.
+#
+# Bekannte Luecke: livekit-plugins-xai bleibt dadurch bei seiner
+# urspruenglichen Installation haengen. VOICE_PROVIDER=xai wurde in DIESEM
+# Test-Image NICHT verifiziert — nur der Live-Pfad (VOICE_API=live) und
+# VOICE_PROVIDER=openai/realtime (Regressions-Check). Siehe
+# docs/decisions/082-jarvis-gpt-live-transport.md.
+ARG GPT_LIVE_PR_SHA=de3c5ce66058c6ab437ad41f963cbaeb39046c6d
+RUN pip install --no-cache-dir --force-reinstall --no-deps \
+    "git+https://github.com/livekit/agents@${GPT_LIVE_PR_SHA}#subdirectory=livekit-agents" \
+    "git+https://github.com/livekit/agents@${GPT_LIVE_PR_SHA}#subdirectory=livekit-plugins/livekit-plugins-openai"
+
+# Build-time proof that the vorab plugin actually imports on this image.
+RUN python -c "from livekit.plugins.openai.realtime import GPTLiveModel; print('GPTLiveModel import OK')"
+
+# Shared Jarvis package (persona, tools, mc_client) — imported as top-level
+# `jarvis_core`. Copied in from the repo root so voice + telegram share one
+# source of truth.
+COPY jarvis_core/ ./jarvis_core/
+
+# Voice-worker code (main.py etc.).
+COPY voice_worker/ ./
+
+CMD ["python", "main.py", "dev"]
