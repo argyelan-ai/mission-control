@@ -2850,6 +2850,48 @@ async def mark_thread_read(
     await session.commit()
 
 
+
+# ── Checklist item delete (Bug 2026-09-09) ──────────────────────────────────
+# Until now checklist items could only be marked done/skipped — a parked
+# (inbox) task with open items could never be closed honestly, and marking
+# foreign items done falsifies the history. DELETE removes the item and
+# recomputes the denormalized counters.
+
+@router.delete("/boards/{board_id}/tasks/{task_id}/checklist/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_checklist_item(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    item_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """User deletes a single checklist item (UI: clean up a replaced task)."""
+    from app.models.checklist import TaskChecklistItem
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+
+    item = await session.get(TaskChecklistItem, item_id)
+    if not item or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Checklist-Item nicht gefunden")
+
+    await session.delete(item)
+    await session.flush()
+
+    # Recalculate counters from DB (post-flush, so the delete is visible)
+    result = await session.exec(
+        select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
+    )
+    all_items = result.all()
+    task.checklist_total = len(all_items)
+    task.checklist_done = sum(1 for i in all_items if i.status == "done")
+    session.add(task)
+
+    await session.commit()
+    return None
+
+
 # ── Comments ─────────────────────────────────────────────────────────────────
 
 @router.post("/boards/{board_id}/tasks/{task_id}/comments", status_code=status.HTTP_201_CREATED)

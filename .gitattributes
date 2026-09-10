@@ -1,0 +1,39 @@
+# Normalize all text files to LF in the repository, regardless of
+# core.autocrlf settings in agent containers or host checkouts.
+# Prevents phantom merge/rebase conflicts in files a change never touched.
+* text=auto eol=lf
+
+# Explicitly treated as text (would otherwise be left alone by text=auto
+# heuristics or misdetected on some platforms)
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+
+# Windows-only scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never normalized, never diffed as text
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.mp3 binary
+*.mp4 binary
+*.webm binary
+*.webp binary
+*.avif binary
+
+# Terminal stream fixtures contain ANSI/CR control bytes that must be
+# preserved byte-for-byte (tests compare against them)
+*.raw binary

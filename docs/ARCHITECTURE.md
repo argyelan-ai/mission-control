@@ -2,7 +2,7 @@
 
 > **Lebende Dokumentation.** Bei jeder Architektur-Änderung (neue Services, Runtime-Wechsel, Dispatch-Flow, Schema-Migration) muss dieses Dokument angepasst werden. Bei Design-Entscheidungen zusätzlich neues ADR in `docs/decisions/` anlegen.
 
-**Letztes Update:** 2026-08-16
+**Letztes Update:** 2026-09-10
 **Stand:** v0.9+ Sessions-Chat-View (ADR-073); Benchmark Studio Vertical + Kern-Bausteine (ADR-070); OpenClaw Gateway Sunset complete (Phases 28-31, ADR-039 Accepted)
 
 ---
@@ -1512,6 +1512,52 @@ Alle ADRs in `docs/decisions/`:
 ---
 
 ## Änderungshistorie (high-level)
+
+- **2026-09-10** — **Jarvis' Sprachmodell wird Runtime-Bindung (ADR-082):** `JarvisVoiceAdapter`
+  in `HOST_ADAPTERS` (ADR-064-Muster) macht Jarvis im MC-Runtime-Picker umschaltbar wie jeden
+  anderen Agenten — bisher las `voice_worker/main.py` den Provider nur aus der Container-Env
+  (`VOICE_PROVIDER`/`VOICE_MODEL`, ADR-060). Neues Wire-Protokoll `"voice"` in
+  `harness_compat.py` (`VOICE_RUNTIME_TYPES`, klassifiziert VOR `_OPENAI_TYPES` — sonst würde
+  `voice_openai` als generischer OpenAI-Provider durchrutschen und jeder openai-sprechende
+  CLI-Harness erschiene kompatibel). Neue Route `GET /api/v1/agent/voice/config` (nur Harness
+  `jarvis`, sonst 403; nie Schlüsselmaterial, fail-soft `{provider:"openai", model:null, …}`
+  ohne Bindung). `voice_worker/main.py::entrypoint()` pullt die Bindung vor jedem Anruf (LiveKit
+  gibt pro Anruf einen frischen Room → Wechsel wirkt ohne Container-Neustart). Entscheidungslogik
+  (`jarvis_core/voice_provider.py::resolve_voice_choice`) bewusst ohne `livekit`-Import, damit sie
+  im normalen Backend-Testlauf läuft (Lehre 2026-08-21: zehn Worker-Tests skippten vorher still,
+  weil `livekit` in der Backend-venv fehlt). Modellwechsel läuft über die bereits vorhandene
+  `PATCH /api/v1/runtimes/db/{slug}` + `mark_agents_for_sync`-Propagation (ADR-054/078) — kein
+  neuer Code nötig, sobald der Adapter registriert ist. Kein Migrations-Bedarf (`agents.harness =
+  'jarvis'` stand bereits in der DB). Ersetzt den nie gemergten ADR-074-Entwurf (PR #339).
+  **Follow-up gleicher Tag:** OpenAIs neue Live API (`v1/live/sessions`) ist ein disjunktes
+  Wire-Protokoll von Realtime (`gpt-live-*`-Modelle) — die Bindung trägt jetzt zusätzlich
+  `api: "realtime"|"live"` (`jarvis_core.voice_provider.classify_voice_api`, EINE Regel für
+  Backend + Worker). `voice_worker/main.py` bekommt eine `_API_TRANSPORTS`-Registry (heute
+  nur `realtime`); bindet der Picker Jarvis an `gpt-live-*`, refused `entrypoint()` das LAUT
+  (Log + `POST /api/v1/agent/voice/unsupported-model` → Activity-Event
+  `agent.voice_unsupported_model`) statt mit falschem Endpoint zu scheitern, und fällt auf
+  die Env-Defaults zurück. Kein Live-Transport in diesem PR — der nächste ist ein Builder +
+  ein Registry-Eintrag.
+
+- **2026-09-10** — **GPT-Live-Transport, `_API_TRANSPORTS["live"]` implementiert (ADR-083):**
+  füllt den von ADR-082 bewusst offengelassenen Platz — `_build_live_transport()` baut
+  `GPTLiveModel` (OpenAI Live API, LiveKit-PR #7212, vorab per PR-SHA im konsolidierten
+  `voice_worker/Dockerfile` installiert, kein separates Test-Image). `delegation="responses"`:
+  ein Backend-Modell (Default `gpt-5.6-luna`, eigene Env `JARVIS_LIVE_BACKEND_MODEL`, getrennt
+  von `JARVIS_FRONTIER_MODEL`) ruft die `@function_tool`-Methoden wie gehabt — kein Umbau der
+  ~20 Tool-Handler. Instructions-Split: kurze Voice-Layer-Persona (Stil/Tempo/Lachen/
+  Tonlagen-Regie, kein Selbstvorstellungs-Verbot) als Top-Level-Agent-`instructions`, volle
+  Verfahrens-/Honesty-/`CONFIRMATION ECHO`-Regeln im Backend-`responses_options.instructions`.
+  Situative Begrüssung (`jarvis_core/voice_greeting.py`, livekit-frei) statt Zahlen-Report,
+  echte Tageszeit-Wortwahl. Latenz-Tuning nach Marks erstem Anruf: 16s → ~3s
+  (`reasoning=low`/`text-verbosity=low`/`service_tier=priority`/`max_output_tokens=400`,
+  `delegation_latency_s`-Log). Typisierte `openai.types.beta.realtime.session.TurnDetection`
+  behebt einen unabhängigen Regressions-Fund im Realtime-Fallback
+  (livekit-plugins-openai≥~1.7 lehnt ein dict ab). **Review-Fix (rev-490):** neue Seed-Runtime
+  `voice-openai-live` (`gpt-live-1`) in `backend/config/runtimes.json` — ohne manuelle Bindung
+  im Runtime-Picker bleibt Jarvis auf Realtime, auch mit diesem PR gemergt.
+  `entrypoint()`s Guard erzwingt jetzt einen Realtime-Fallback (nicht nur ein Env-Re-Resolve)
+  wenn `api="live"` gebunden ist aber `GPTLiveModel` auf dem Image fehlt.
 
 - **2026-09-02** — **Ein Rezept-Modell + Rezept-Umschalter (ADR-077, #388 Backend, #389
   Frontend):** Rezept = Engine · Startbefehl (Pflicht) · Port · Topologie (Anzahl Boxen).

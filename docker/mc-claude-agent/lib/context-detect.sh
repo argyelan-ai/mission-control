@@ -24,8 +24,10 @@
 # Statuszeile (`ctx --`) faelschlich als "0% Kontext benutzt" gemeldet.
 #
 # Unterstuetzte Formate (mit Beispiel-Statuszeile):
-#   claude:      `ctx: NN` / `ctx NN`
-#                ✻ ctx 12%                                    (pane_title/Tail)
+#   claude:      `ctx: NN` / `ctx NN` / `ctx:███░░░ NN%` (Balken, claude-cli >= 2.1.2xx)
+#                ✻ ctx 12%   |   ctx:███░░░░░░░ 35%           (pane_title/Tail)
+#   omp TUI:     `▶────NN%────┃─────500K─` (native TUI 18.x, Prozent im Balken)
+#                π  > ◒ MC model > 📁 /workspace ▶────10%────┃─────500K─
 #   kimi:        `context: NN%`
 #                context: 8% (21.3K/262.1K)                    (Tail, siehe ui-detect.sh)
 #   openclaude:  Prozent DIREKT vor einem `/` (Bruch-Anzeige ohne Leerzeichen)
@@ -34,13 +36,37 @@
 #                [█░░░░░░░░░] 8%                                (Hermes-Statuszeile)
 #   fraction:    `21.3K/262.1K` ohne eigene %-Anzeige → Prozent BERECHNET
 #                21.3K/262.1K                                   (Hermes-Fallback)
+#                Nenner MUSS K/M-Suffix tragen — nacktes `5/5` ist Chat-Text.
+#
+# Alle Aufrufer scrapen `tmux capture-pane -p` OHNE `-e`: ANSI-Sequenzen
+# enthalten Ziffern und wuerden jedes Balken-Muster brechen — ein `-e` an
+# einer Aufrufstelle schaltet den Kontextwert flottenweit still ab.
 #
 # `ctx --` / `[░░░░░░░░░░] --` (kein Wert, z.B. frisch gestartete Session)
 # matcht ABSICHTLICH kein Muster — kein Treffer heisst "kein Wert", nicht "0".
 
 # _ctx_claude TEXT — `ctx: NN` / `ctx NN`, optional gefolgt von `%`.
 _ctx_claude() {
+    # claude-cli >= 2.1.2xx: `ctx:███░░░░░░░ 35%` (Balken vor der Zahl);
+    # alte Form `ctx: 35` bleibt. `ctx:---` (kein Wert) matcht nicht.
+    local bar
+    # Luecke NUR Balken-Glyphen + Leerraum (Review #487: 'alles ausser Ziffern'
+    # liess Prosa gewinnen: ctx:---   disk 0% -> 0). LC_ALL=C.UTF-8, NICHT C:
+    # unter C zerlegt BusyBox/musl (Runtime = node:alpine, kein GNU grep) die
+    # Multibyte-Glyphen in Bytes und matcht dann JEDES Zeichen aus derselben
+    # Byte-Menge (U+2212 MINUS, U+2014 EM DASH …) — Review #487, BMP-Sweep.
+    bar=$(echo "$1" | LC_ALL=C.UTF-8 grep -oE 'ctx[: ]*[█▓▒░■□[:space:]]*[0-9]+%' | LC_ALL=C.UTF-8 grep -oE '[0-9]+%' | tr -d '%' | tail -1)
+    if [ -n "$bar" ]; then
+        echo "$bar"
+        return 0
+    fi
     echo "$1" | grep -oE 'ctx[: ]*[0-9]+' | grep -oE '[0-9]+' | tail -1
+}
+
+_ctx_omp_bar() {
+    # omp native TUI 18.x: `▶────10%────┃─────500K─` — Prozent im Balken
+    # hinter dem ▶-Marker, kein Schraegstrich.
+    echo "$1" | LC_ALL=C.UTF-8 grep -oE '▶[─━┄┈[:space:]]*[0-9]+%' | LC_ALL=C.UTF-8 grep -oE '[0-9]+%' | tr -d '%' | tail -1
 }
 
 # _ctx_kimi TEXT — `context: NN%` (kimi-code Statuszeile).
@@ -67,7 +93,9 @@ _ctx_hermes_bar() {
 # ein Wert ohne Suffix bleibt roh. Division durch 0 (Total=0) → kein Treffer.
 _ctx_fraction() {
     local frac
-    frac=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?[KkMm]?/[0-9]+(\.[0-9]+)?[KkMm]?' | head -1)
+    # TOTAL muss ein K/M-Suffix tragen — ein nacktes `5/5` im Chat-Text
+    # ("CI 5/5 gruen") ist kein Kontext-Bruch und scrapte als 100% (10.09.2026).
+    frac=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?[KkMm]?/[0-9]+(\.[0-9]+)?[KkMm]' | head -1)
     [ -n "$frac" ] || return 0
     echo "$frac" | awk -F'/' '
         function resolve(v,   suf, num) {
@@ -119,6 +147,9 @@ scrape_context_pct() {
     fi
     if [ -z "$pct" ]; then
         pct=$(_ctx_openclaude "$text")
+    fi
+    if [ -z "$pct" ]; then
+        pct=$(_ctx_omp_bar "$text")
     fi
     if [ -z "$pct" ]; then
         pct=$(_ctx_hermes_bar "$text")

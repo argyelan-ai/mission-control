@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select, or_, and_
 
@@ -586,11 +586,22 @@ class AgentTaskCreate(BaseModel):
 
 
 class AgentTaskUpdate(BaseModel):
+    # fail-closed (matches nodes.py / vault.py policy): an unknown key in the
+    # PATCH body is a typo or injection attempt, never a harmless extra —
+    # 422 instead of a silent 200 that changes nothing (bug 2026-09-09 class).
+    model_config = ConfigDict(extra="forbid")
     title: str | None = None
     description: str | None = None
     status: str | None = None
     priority: str | None = None
     project_id: uuid.UUID | None = None
+    # Bug 2026-09-09: assigned_agent_id used to be silently discarded here —
+    # Pydantic dropped the unknown field, the PATCH answered 200 and the
+    # reassignment never happened (same class as Bug 4, 13.05.2026: missing
+    # comment_type in CommentCreate). Declared so the field reaches the
+    # handler; application + permission check live in agent_update_task.
+    # Mirrors TaskUpdate in routers/tasks.py (the Board-Lead endpoint).
+    assigned_agent_id: uuid.UUID | None = None
     # Structured blocker (optional — only relevant for status: blocked)
     blocker_type: str | None = None       # missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
     blocker_description: str | None = None  # What is the problem?
@@ -1668,6 +1679,12 @@ async def agent_update_task(
     # Does not cover the whole request: see task_state.py's module docstring
     # for the intermediate-commit caveat (blocker-approval resolution,
     # report-back auto-draft) further down in this function.
+    #
+    # Must run BEFORE the reassignment block below: lock_task()'s
+    # populate_existing=True re-read overwrites the identity-mapped `task`
+    # object's attributes from the DB, which would wipe any in-memory
+    # reassignment mutations (dispatched_at/ack_at reset, assigned_agent_id)
+    # made first if the order were reversed.
     if "status" in updates:
         from app.services.task_state import lock_task
         locked_task = await lock_task(session, task_id)
@@ -1676,6 +1693,59 @@ async def agent_update_task(
         task = locked_task
 
     old_status = task.status
+
+    # ── Reassignment (assigned_agent_id) — permission + application ──
+    # Bug 2026-09-09: the field used to be silently discarded by the schema
+    # (200 without effect). Now: only Board Leads may reassign — a worker
+    # reassigning foreign/own tasks around the operator is not a thing the
+    # dispatch model wants (mirrors the ownership philosophy above; the
+    # Board-Lead endpoint routers/tasks.py:TaskUpdate has no extra guard
+    # because user auth is already the operator).
+    if "assigned_agent_id" in updates:
+        if not agent.is_board_lead:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "assigned_agent_id aendern duerfen nur Board-Leads. "
+                    "Wende dich an den Operator / Board-Lead."
+                ),
+            )
+        _new_assignee = updates["assigned_agent_id"]
+        if _new_assignee is not None:
+            _assignee = await session.get(Agent, _new_assignee)
+            if _assignee is None or _assignee.board_id != board_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="assigned_agent_id: Agent existiert nicht oder gehoert nicht zu diesem Board.",
+                )
+        _old_assigned = task.assigned_agent_id
+        if _new_assignee != _old_assigned:
+            # Same reset semantics as the Board-Lead PATCH (routers/tasks.py):
+            # new agent = new dispatch cycle.
+            task.dispatched_at = None
+            task.ack_at = None
+            task.dispatch_intent = "manual_redispatch"
+            from app.services.task_lifecycle import clear_spawn_tracking
+            clear_spawn_tracking(task)
+            from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+            await clear_dispatch_attempt_id(
+                session, task,
+                caller="agent_patch_reassign", reason="manual_reassign",
+            )
+            task.assigned_agent_id = _new_assignee
+            updates.pop("assigned_agent_id", None)  # applied; skip generic setattr
+            await emit_event(
+                session, "task.reassigned",
+                f"Task '{task.title}' neu zugewiesen durch Lead {agent.name}",
+                severity="info",
+                board_id=board_id, task_id=task.id, agent_id=agent.id,
+                detail={"old_agent_id": str(_old_assigned) if _old_assigned else None,
+                        "new_agent_id": str(_new_assignee) if _new_assignee else None},
+            )
+        else:
+            # Same value — nothing to reset, but still skip generic setattr so
+            # the dispatched-cycle fields above are not bypassed for a no-op.
+            updates.pop("assigned_agent_id", None)
 
     # ── Review safeguard: detect contradiction ──────────────────────────
     # If the reviewer sets "in_progress" but its last comment says "Approved"

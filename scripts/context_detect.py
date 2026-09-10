@@ -30,18 +30,42 @@ scrape_context_pct(text, harness=None) -> Optional[int]
     Erkennung scheitert (z.B. `ctx --` = frisch gestartete Session ohne
     Wert) — None heisst fuer den Aufrufer "context_pct-Feld weglassen",
     genau wie bei der Bash-Variante.
+
+Unterstuetzte Formate (Spiegel der Bash-Lib, Stand 10.09.2026):
+    claude  `ctx: NN` / `ctx NN` / `ctx:███░░░ NN%` (Balken, claude-cli >= 2.1.2xx)
+    kimi    `context: NN%`
+    omp     `◫ 8.3%/262K` (openclaude, Prozent vor `/`) oder `▶────NN%────┃──500K─` (TUI 18.x)
+    hermes  `[█░░░░░░░░░] NN%`
+    fraction `21.3K/262.1K` — Nenner MUSS K/M-Suffix tragen (nacktes `5/5` ist Chat-Text)
+Alle Aufrufer scrapen `tmux capture-pane -p` OHNE `-e`: ANSI-Sequenzen
+enthalten Ziffern und wuerden jedes Balken-Muster brechen — ein `-e` an einer
+Aufrufstelle schaltet den Kontextwert flottenweit still ab.
 """
 from __future__ import annotations
 
 import re
 from typing import Optional
 
+# claude-cli >= 2.1.2xx renders a bar between label and number:
+# `ctx:███░░░░░░░ 35%`. The gap is limited to BAR GLYPHS + whitespace (review
+# #487: an "anything but digits" gap let prose win — `ctx:---   disk 0%`
+# scraped as 0, `│ ctx:--- │ cpu 87%` as 87). `ctx:---` never matches:
+# `-` is not a bar glyph. The old `ctx: 35` form stays supported. Gap is
+# `[ \t]`, never `\s`: `\s` includes `\n` and lets a percent on the NEXT
+# line win (review #487 round 2, 160 fuzz cases) — bash greps line by line.
+_CLAUDE_BAR_RE = re.compile(r"ctx[: ]*[█▓▒░■□ \t]*([0-9]+)%")
 _CLAUDE_RE = re.compile(r"ctx[: ]*([0-9]+)")
 _KIMI_RE = re.compile(r"context: ([0-9]+)%")
 _OPENCLAUDE_RE = re.compile(r"([0-9]+)(?:\.[0-9]+)?%/")
+# omp native TUI statusline (18.x): `▶────10%────┃─────500K─` — percent
+# inside the bar after the ▶ marker, no slash anywhere.
+_OMP_BAR_RE = re.compile(r"▶[─━┄┈ \t]*([0-9]+)%")
 _HERMES_BAR_RE = re.compile(r"\]\s*([0-9]+)(?:\.[0-9]+)?%")
+# USED/TOTAL fraction — the TOTAL must carry a K/M suffix (`21.3K/262.1K`,
+# `8.3%/262K`): a bare `5/5` in chat text ("CI 5/5 gruen") is NOT a context
+# fraction and used to scrape as 100% (live incident 10.09.2026).
 _FRACTION_RE = re.compile(
-    r"([0-9]+(?:\.[0-9]+)?[KkMm]?)/([0-9]+(?:\.[0-9]+)?[KkMm]?)"
+    r"([0-9]+(?:\.[0-9]+)?[KkMm]?)/([0-9]+(?:\.[0-9]+)?[KkMm])"
 )
 
 
@@ -56,8 +80,18 @@ def _resolve_suffix(value: str) -> float:
 
 
 def _ctx_claude(text: str) -> Optional[str]:
-    """`ctx: NN` / `ctx NN` — letztes Vorkommen (mirrors bash `tail -1`)."""
+    """`ctx:███░ NN%` (Balken, claude-cli >= 2.1.2xx) oder `ctx: NN` / `ctx NN`
+    — letztes Vorkommen (mirrors bash `tail -1`)."""
+    matches = _CLAUDE_BAR_RE.findall(text)
+    if matches:
+        return matches[-1]
     matches = _CLAUDE_RE.findall(text)
+    return matches[-1] if matches else None
+
+
+def _ctx_omp_bar(text: str) -> Optional[str]:
+    """`▶────NN%────` (omp native TUI 18.x) — letztes Vorkommen."""
+    matches = _OMP_BAR_RE.findall(text)
     return matches[-1] if matches else None
 
 
@@ -117,6 +151,8 @@ def scrape_context_pct(text: Optional[str], harness: Optional[str] = None) -> Op
         pct = _ctx_kimi(text)
     if pct is None:
         pct = _ctx_openclaude(text)
+    if pct is None:
+        pct = _ctx_omp_bar(text)
     if pct is None:
         pct = _ctx_hermes_bar(text)
     if pct is None:

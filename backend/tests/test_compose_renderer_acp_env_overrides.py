@@ -88,6 +88,8 @@ def test_configured_slug_service_gets_omp_driver_acp(monkeypatch):
     result = _rewrite_compose(_COMPOSE, image_overrides={})
     block = _extract_service_block(result, ACP_SLUG)
     assert "- OMP_DRIVER=acp" in block
+    # parity with launch-omp.sh --approval-mode yolo (first ACP live probe)
+    assert "- OMP_ACP_PERMISSIONS=yolo" in block
 
 
 def test_other_omp_agent_stays_without_omp_driver(monkeypatch):
@@ -98,6 +100,7 @@ def test_other_omp_agent_stays_without_omp_driver(monkeypatch):
     result = _rewrite_compose(_COMPOSE, image_overrides={})
     block = _extract_service_block(result, OTHER_OMP_SLUG)
     assert "OMP_DRIVER" not in block
+    assert "OMP_ACP_PERMISSIONS" not in block
 
 
 def test_non_omp_agent_gets_no_omp_driver(monkeypatch):
@@ -218,7 +221,15 @@ class TestEnsureAgentEnvOverrides:
     def test_idempotent_keeps_existing_value(self, monkeypatch):
         _configure_acp(monkeypatch)
         body = ["    environment:", "      - OMP_DRIVER=native"]
+        # native rollback: no companion vars either
         assert _ensure_agent_env_overrides(body, ACP_SLUG) == body
+
+    def test_existing_acp_driver_gets_permission_policy_once(self, monkeypatch):
+        _configure_acp(monkeypatch)
+        body = ["    environment:", "      - OMP_DRIVER=acp"]
+        once = _ensure_agent_env_overrides(body, ACP_SLUG)
+        assert once.count("      - OMP_ACP_PERMISSIONS=yolo") == 1
+        assert _ensure_agent_env_overrides(once, ACP_SLUG) == once
 
     def test_unlisted_slug_is_noop(self, monkeypatch):
         _configure_acp(monkeypatch)
