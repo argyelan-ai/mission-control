@@ -484,6 +484,24 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
+      # ADR-083: which wire api a (provider, model) pair speaks — "realtime"
+      # or "live" (OpenAI gpt-live-1 full-duplex, needs the vorab-installed
+      # LiveKit PR #7212 plugin) — is NOT a separate env var. It is derived
+      # from the model name by jarvis_core.voice_provider.classify_voice_api
+      # (one rule, shared with the backend's GET /api/v1/agent/voice/config
+      # response), whether the model comes from the MC runtime binding
+      # (ADR-082, normal case) or from VOICE_MODEL above (env fallback when
+      # MC delivers nothing). An earlier version of this PR had a separate
+      # VOICE_API var here — dropped as redundant with classify_voice_api,
+      # which already covers the "VOICE_MODEL=gpt-live-1 but nothing marks
+      # it as live" case that var existed for.
+      #
+      # Backend Responses model for GPT-Live delegation (api=live only),
+      # separate from JARVIS_FRONTIER_MODEL below — Full-Duplex needs fast
+      # answers, ask_frontier is allowed to think slowly. Default (unset)
+      # falls back to gpt-5.6-luna (OpenAI's own GPT-Live "Fast mode"
+      # default) — see voice_worker/main.py::_resolve_live_backend_model().
+      JARVIS_LIVE_BACKEND_MODEL: ${JARVIS_LIVE_BACKEND_MODEL:-}
       # Jarvis Intelligence (ADR-062): frontier model + gate for the ask_frontier
       # tool (off by default → not offered in the voice tool schema).
       JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}

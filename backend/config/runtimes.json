@@ -152,6 +152,28 @@
     "single_instance": true
   },
   {
+    "id": "voice-openai-live",
+    "display_name": "Jarvis Voice — OpenAI Live (gpt-live-1)",
+    "runtime_type": "voice_openai",
+    "provider": "openai",
+    "endpoint": "https://api.openai.com",
+    "healthcheck_path": null,
+    "container_name": null,
+    "model_identifier": "gpt-live-1",
+    "role_tags": ["voice"],
+    "supports_tools": false,
+    "supports_reasoning": false,
+    "supports_streaming": true,
+    "preferred_context_len": null,
+    "max_context_len": null,
+    "gpu_profile": null,
+    "memory_notes": "ADR-083: Display-Anker fuer Jarvis' GPT-Live-Arm (Full-Duplex OpenAI Live API, v1/live/sessions, disjunktes Wire-Protokoll von Realtime — classify_voice_api leitet api='live' aus model_identifier 'gpt-live-1' ab, ADR-082). Gleicher runtime_type wie 'voice-openai' (beide Protokoll 'voice', Provider 'openai' — classify_voice_api unterscheidet nach Modellname, nicht runtime_type). Separate Zeile statt model_identifier auf 'voice-openai' zu aendern, damit Realtime jederzeit ohne Datenverlust im Runtime-Picker waehlbar bleibt. MC injiziert kein OPENAI_API_KEY, der bleibt in der Container-Env. Braucht das vorab-installierte LiveKit-PR-#7212-Plugin im Image (voice_worker/Dockerfile) — ohne das faellt der Worker laut auf Realtime zurueck (siehe entrypoint()-Guard).",
+    "startup_notes": "Kein MC-Lifecycle — OpenAI betreibt den Endpoint. Wechsel wirkt ab dem naechsten Anruf, kein Container-Neustart. Nach dem Seed im Runtime-Picker manuell an Jarvis binden (Seed bindet nichts automatisch).",
+    "ui_order": 15,
+    "enabled": true,
+    "single_instance": true
+  },
+  {
     "id": "anthropic-claude-opus",
     "display_name": "Claude Opus 4.8 (Anthropic Pro/Max)",
     "runtime_type": "cloud",

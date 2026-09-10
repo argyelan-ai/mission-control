@@ -152,3 +152,27 @@ def resolve_voice_choice(mc_config: dict | None, env: dict[str, str] | None = No
         # chosen, not what was asked for.
         api=classify_voice_api(chosen, final_model),
     )
+
+
+# ── GPT-Live backend (Responses-Delegation) model default (ADR-083) ────────
+#
+# gpt-live-1's delegation="responses" backend model — SEPARATE from
+# jarvis_core.frontier's DEFAULT_FRONTIER_MODEL (ask_frontier tool): Full-
+# Duplex voice delegation needs to answer fast, ask_frontier is allowed to
+# think slowly. "gpt-5.6-luna" is GPTLiveModel's OWN "Fast mode" default
+# (DEFAULT_BACKEND_MODEL in the LiveKit PR #7212's gpt_live_model.py) — Marks
+# first real call showed 16s round trips with a reasoning model (gpt-5.5,
+# no effort limit) here instead.
+#
+# Lives here (not in voice_worker/main.py) so voice_worker/main.py AND
+# scripts/gpt_live_protocol_smoke.py (the headless protocol smoke test) share
+# ONE constant instead of two copies that can drift — a second hardcoded
+# "gpt-5.5" in the smoke script was exactly that drift, caught by
+# backend/tests/test_no_hardcoded_models.py (10.09.2026).
+LIVE_BACKEND_DEFAULT_MODEL = "gpt-5.6-luna"
+
+
+def resolve_live_backend_model(env: dict[str, str] | None = None) -> str:
+    """``JARVIS_LIVE_BACKEND_MODEL`` env override, else ``LIVE_BACKEND_DEFAULT_MODEL``."""
+    env = os.environ if env is None else env
+    return (env.get("JARVIS_LIVE_BACKEND_MODEL") or "").strip() or LIVE_BACKEND_DEFAULT_MODEL

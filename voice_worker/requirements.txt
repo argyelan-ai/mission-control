@@ -1,3 +1,9 @@
-livekit-agents[openai,xai]~=1.5
+# Pinned to what the production build actually resolves today (verified via
+# `docker exec mission-control-voice-worker-1 pip freeze | grep -i livekit`,
+# 10.09.2026). voice_worker/Dockerfile force-reinstalls livekit-agents +
+# livekit-plugins-openai from the LiveKit PR #7212 SHA afterwards (GPT-Live,
+# ADR-083) — this line only has to give a consistent base for that override
+# and for livekit-plugins-xai, which is NOT overridden.
+livekit-agents[openai,xai]==1.8.0
 httpx>=0.27
 python-dotenv>=1.0
