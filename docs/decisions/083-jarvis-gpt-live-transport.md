@@ -112,16 +112,12 @@ Delegations-Modi an:
   ein typisiertes Objekt (`AttributeError: 'dict' object has no attribute 'create_response'`) — betrifft
   NUR das GPT-Live-Test-Image (`VOICE_API=realtime`/`VOICE_PROVIDER=xai` sind dort ungetestet/kaputt),
   NICHT das Produktions-Image (dort weiterhin `~=1.5` gepinnt, live laeuft `1.6.7`).
-- ⚠️ **Separater, wichtigerer Fund (ausserhalb dieses ADRs' Scope):** `voice_worker/requirements.txt`
-  pinnt `livekit-agents[openai,xai]~=1.5` — das erlaubt laut PEP 440 (`~=1.5` ≙ `>=1.5,<2`) JEDEN
-  1.x-Release, aktuell bereits `1.8.0`. Ein stinknormaler Rebuild des PRODUKTIONS-Workers (ohne jeden
-  GPT-Live-Bezug, z.B. naechster `docker compose build voice-worker` nach Cache-Bust) wuerde denselben
-  `turn_detection`-Crash live ausloesen und Jarvis' Sprachfunktion komplett brechen — reproduziert mit
-  dem UNVERAENDERTEN `voice_worker/Dockerfile` (Tag `mission-control-voice-worker:prod-code-check`,
-  10.09.2026). Dieses ADR/PR aendert `requirements.txt` bewusst NICHT (ausserhalb des Mandats fuer
-  diese Vorab-Integration) — **das ist ein eigenes, dringendes Ticket** (z.B. Pin auf
-  `livekit-agents[openai,xai]~=1.6.7` oder Fix im Code fuer die neue `turn_detection`-API), das der
-  Team-Lead separat einplanen sollte, bevor der Produktions-Worker das naechste Mal neu gebaut wird.
+- ✅ **Requirements-Pin behoben (Stand Nachschliff 5, siehe unten):** `voice_worker/requirements.txt`
+  pinnt jetzt `livekit-agents[openai,xai]==1.8.0` — exakt was der Produktions-Build heute tatsaechlich
+  installiert (`pip freeze` gegen `mission-control-voice-worker-1`). Der urspruengliche separate
+  Mini-PR #494 (`~=1.6.7`) wurde NICHT gemergt — er haette mit dem konsolidierten Dockerfile
+  (Basis-Install → force-reinstall aus PR-SHA fuer agents+openai, unveraendert fuer xai) eine
+  ungetestete Versions-Mischung ergeben. Aufgeloest direkt in diesem PR/ADR (Nachschliff 5).
 
 ## Nachschliff (10.09.2026, nach Marks Cutover-Entscheid)
 
@@ -249,6 +245,31 @@ nicht natuerlich." Vier weitere Fixes, alle in PR #490:
     bisherige Realtime-Default (Kontinuitaet). Will Mark eine andere Stimme hoeren, ist das ein
     reiner `VOICE_VOICE_ID`-Env-Change, kein Code-Umbau — am besten per echtem Anruf A/B-testen,
     nicht per Transkript-Vergleich.
+
+## Nachschliff 5 (10.09.2026) — Test-Isolation, hörbare Stimmproben, Pin-Aufräumen
+
+13. **Test-Skript hat den Prod-Worker doch erreicht.** Team-Lead-Fund: ein Ephemeral-Test-Room
+    wurde vom Produktions-Worker bedient (`agent_name=""`, automatisches Dispatch), obwohl
+    `scripts/gpt_live_livekit_smoke.py` `CreateAgentDispatchRequest` fuer einen eigenen
+    `agent_name` nutzte. Ursache: das FUEGT einen Dispatch-Job hinzu, verhindert aber NICHT, dass
+    LiveKits automatisches Dispatch zusaetzlich jeden Worker mit leerem `agent_name` in denselben
+    Room schickt. Fix: der Room wird jetzt VORHER explizit mit
+    `room.create_room(CreateRoomRequest(agents=[RoomAgentDispatch(...)]))` angelegt — das ersetzt
+    automatisches Dispatch fuer den Room komplett. Live verifiziert: ohne registrierten Test-Worker
+    kommt jetzt `"agent_never_joined"` (der Prod-Worker joint nicht mehr automatisch); mit
+    registriertem Test-Worker joint genau EIN Teilnehmer (vorher immer zwei).
+14. **Hörbare Stimmproben statt nur Transkript.** `gpt_live_protocol_smoke.py` kann jetzt optional
+    eine WAV-Datei schreiben (zweites CLI-Argument). Alle sechs `GPT_LIVE_KNOWN_VOICES` mit
+    demselben Scherz-Prompt aufgenommen, `scratchpad/voices/<name>.wav` (nicht im Repo — lokale
+    Datei fuer Mark zum Reinhoeren), alle valide (5,2s, nicht-stille Amplituden 8k-17k von 32k
+    ueberprueft). Ausdruckskraft/Emotion bleibt eine Hoer-Entscheidung, siehe Punkt 12.
+15. **Requirements-Pin final geloest** (Team-Lead-Fund: #494s `==1.6.7` haette mit dem
+    konsolidierten Dockerfile eine ungetestete Versions-Mischung ergeben — agents/openai werden
+    per PR-SHA ueberschrieben, xai nicht). `voice_worker/requirements.txt` jetzt
+    `livekit-agents[openai,xai]==1.8.0` — exakt das, was `pip freeze` im laufenden
+    Produktions-Container zeigt. Frischer, ungecachter Build verifiziert (Dockerfile-eigener
+    GPTLiveModel-Importcheck bestanden), beide Realtime-Pfade (OpenAI + xAI) unmocked
+    konstruiert. #494 kann geschlossen werden ("in #490 aufgegangen").
 
 ## Referenzen
 
