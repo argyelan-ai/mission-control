@@ -1,23 +1,32 @@
-"""Tests for GPT-Live-specific behavior — ADR-083.
+"""Tests for GPT-Live-specific behavior that genuinely needs livekit — ADR-083.
 
 Provider/model/voice/api SELECTION (VoiceChoice, classify_voice_api) is
 covered by test_voice_provider_choice.py (ADR-082). Plugin-construction
 dispatch through _API_TRANSPORTS/_build_transport (including the typed
 TurnDetection fix and a GPT-Live smoke build) is covered by
-test_voice_worker_realtime_provider.py. This file covers what's specific to
-the "live" api once it's chosen: the backend Responses model + latency
-tuning in _build_live_transport(), GPT-Live voice-name validation, the
-situational greeting (no task-count dump — Mark's review feedback), the
-delegation-latency log hook, and the two split persona instruction blocks
-in jarvis_core/persona.py.
+test_voice_worker_realtime_provider.py. Greeting, urgent-note, GPT-Live
+voice-name validation, and delegation-latency tracking are livekit-free pure
+logic and live in jarvis_core/voice_greeting.py — covered (unconditionally,
+no skip) by test_jarvis_voice_greeting.py, which runs in the ordinary
+backend test job. Moving that logic there is itself a fix for a review
+finding (10.09.2026): every test that needed voice_worker/main.py's
+module-level livekit import skipped silently in CI, and two of three
+sabotage-planted regressions (a greeting task-count regression, a broken
+voice-validation passthrough) went uncaught as a result.
+
+What's left here: `_build_live_transport()`'s latency-tuning kwargs
+(responses_options — reasoning/text/service_tier/max_output_tokens/model),
+which genuinely needs `GPTLiveModel`, and the two split persona instruction
+blocks in jarvis_core/persona.py (livekit-free already, but grouped here
+since they're GPT-Live-specific).
 
 These mock the plugin constructor(s) where noted — no real API calls, no
 network/key needed. Same skip-if-deps-missing pattern as
 test_voice_worker_realtime_provider.py: the backend pytest venv has no
-livekit installed, so this suite skips there. Run it for real inside an
-image built from the regular voice_worker/Dockerfile (see
+livekit installed, so the _build_live_transport tests skip there. Run them
+for real inside an image built from the regular voice_worker/Dockerfile (see
 docs/decisions/083), which has both livekit-agents core and the vorab
-GPTLiveModel plugin installed — that is the authoritative run for this file.
+GPTLiveModel plugin installed — that is the authoritative run for those.
 """
 from __future__ import annotations
 
@@ -79,7 +88,7 @@ def test_build_live_transport_defaults(monkeypatch):
     assert kwargs["model"] == "gpt-live-1"
     # "marin" is a code-verified valid gpt-live-1 voice (GPTLiveVoices Literal
     # + DEFAULT_VOICE in the PR's gpt_live_model.py) — not a leftover Realtime
-    # name, see GPT_LIVE_KNOWN_VOICES comment.
+    # name, see jarvis_core/voice_greeting.py's GPT_LIVE_KNOWN_VOICES comment.
     assert kwargs["voice"] == "marin"
     assert kwargs["delegation"] == "responses"
     # Backend model = GPTLiveModel's own "Fast mode" default (gpt-5.6-luna),
@@ -150,18 +159,6 @@ def test_build_live_transport_uses_jarvis_live_backend_model_override(monkeypatc
     assert ctor.call_args.kwargs["responses_options"]["model"] == "gpt-5.4"
 
 
-def test_resolve_live_backend_model_default(monkeypatch):
-    voice = _import_main()
-    monkeypatch.delenv("JARVIS_LIVE_BACKEND_MODEL", raising=False)
-    assert voice._resolve_live_backend_model() == "gpt-5.6-luna"
-
-
-def test_resolve_live_backend_model_override(monkeypatch):
-    voice = _import_main()
-    monkeypatch.setenv("JARVIS_LIVE_BACKEND_MODEL", "gpt-5.4-pro")
-    assert voice._resolve_live_backend_model() == "gpt-5.4-pro"
-
-
 def test_build_live_transport_briefing_reaches_backend_instructions(monkeypatch):
     voice = _import_main()
     _require_gpt_live(voice)
@@ -199,52 +196,33 @@ def test_build_live_transport_raises_when_plugin_unavailable(monkeypatch):
 
 
 # ────────────────────────────────────────────────────────────────────────
-# _validate_live_voice() — voice-name validation (ADR-083 review fix)
+# entrypoint() forced-realtime-fallback guard (ADR-083 Review Finding 2) —
+# only the pure decision logic can be unit-tested without a real LiveKit
+# JobContext; verifies the FORCED choice (not a plain env re-resolve, which
+# would reproduce the bug when VOICE_MODEL=gpt-live-1 is set) is what the
+# guard constructs when GPTLiveModel is unavailable.
 # ────────────────────────────────────────────────────────────────────────
 
 
-def test_validate_live_voice_empty_uses_default():
+def test_forced_realtime_fallback_ignores_model_name_signal(monkeypatch):
+    """The exact bug the review caught: a plain resolve_voice_choice(None)
+    would classify api='live' again if VOICE_MODEL=gpt-live-1 is set (as it
+    is in production) — so the guard must construct an explicit realtime
+    VoiceChoice instead of re-resolving from env."""
     voice = _import_main()
-    assert voice._validate_live_voice("") == "marin"
-    assert voice._validate_live_voice(None) == "marin"
+    monkeypatch.setenv("VOICE_MODEL", "gpt-live-1")  # prod .env shape
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
+    original = voice.resolve_voice_choice(None)
+    assert original.api == "live"  # confirms the env alone would reproduce the bug
 
-def test_validate_live_voice_known_passthrough():
-    voice = _import_main()
-    assert voice._validate_live_voice("vesper") == "vesper"
-
-
-def test_validate_live_voice_known_case_insensitive():
-    voice = _import_main()
-    assert voice._validate_live_voice("Stone") == "stone"
-
-
-def test_validate_live_voice_unknown_falls_back_with_warning(caplog):
-    voice = _import_main()
-    with caplog.at_level("WARNING"):
-        result = voice._validate_live_voice("ara")  # xAI Realtime voice name, invalid here
-
-    assert result == "marin"
-    assert any("not a known gpt-live-1 voice" in r.message for r in caplog.records)
-
-
-def test_all_known_voices_accepted():
-    voice = _import_main()
-    for name in voice.GPT_LIVE_KNOWN_VOICES:
-        assert voice._validate_live_voice(name) == name
-
-
-# ────────────────────────────────────────────────────────────────────────
-# AGENT_NAME / WorkerOptions isolation (test worker must not steal calls
-# from the production worker — explicit agent_name required).
-# ────────────────────────────────────────────────────────────────────────
-
-
-def test_agent_name_env_defaults_empty(monkeypatch):
-    """No AGENT_NAME -> WorkerOptions gets '' (automatic dispatch, prod default)."""
-    monkeypatch.delenv("AGENT_NAME", raising=False)
-    import os
-    assert os.environ.get("AGENT_NAME", "").strip() == ""
+    forced = voice.VoiceChoice(
+        provider="openai", model="gpt-realtime-2.1", voice="marin",
+        source="live-unavailable-fallback", api="realtime",
+    )
+    assert forced.api == "realtime"
+    assert forced.provider == "openai"
+    assert forced.model == "gpt-realtime-2.1"
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -293,6 +271,16 @@ def test_live_voice_instructions_naturalness_cues():
     assert "hm" in text.lower() or "backchannel" in text.lower()
 
 
+def test_live_voice_instructions_honesty_rule():
+    """Review Finding 6: the voice block had no explicit honesty rule of its
+    own — only an implicit "delegate, don't guess" nudge. Explicit rule added:
+    never state task/agent facts itself, only what the backend delivered."""
+    from jarvis_core.persona import build_live_voice_instructions
+
+    text = build_live_voice_instructions().lower()
+    assert "never state" in text or "don't invent" in text or "nichts erfinden" in text
+
+
 def test_live_delegation_instructions_has_full_procedure():
     from jarvis_core.persona import build_live_delegation_instructions
 
@@ -322,143 +310,3 @@ def test_live_delegation_instructions_confirmation_echo():
 
     text = build_live_delegation_instructions()
     assert "CONFIRMATION ECHO" in text
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Greeting — situational opening (no number dump), ADR-083 Nachschliff
-# after Mark's "berichtet direkt beim Einstieg" feedback.
-# ────────────────────────────────────────────────────────────────────────
-
-
-def test_urgent_note_none_for_plain_open_tasks():
-    voice = _import_main()
-    briefing = {"open_tasks": [{"status": "inbox"}, {"status": "in_progress"}], "open_approvals_count": 0}
-    assert voice._urgent_note(briefing) is None
-
-
-def test_urgent_note_none_when_empty():
-    voice = _import_main()
-    assert voice._urgent_note({"open_tasks": [], "open_approvals_count": 0}) is None
-
-
-def test_urgent_note_single_approval():
-    voice = _import_main()
-    note = voice._urgent_note({"open_tasks": [], "open_approvals_count": 1})
-    assert note is not None
-    assert "Approval" in note
-
-
-def test_urgent_note_multi_approvals_mentions_count():
-    voice = _import_main()
-    note = voice._urgent_note({"open_tasks": [], "open_approvals_count": 3})
-    assert "3" in note
-
-
-def test_urgent_note_blocked_task_named():
-    voice = _import_main()
-    briefing = {
-        "open_tasks": [{"status": "blocked", "title": "Fix deploy pipeline"}],
-        "open_approvals_count": 0,
-    }
-    note = voice._urgent_note(briefing)
-    assert note is not None
-    assert "Fix deploy pipeline" in note
-
-
-def test_urgent_note_blocked_task_long_title_generic():
-    voice = _import_main()
-    briefing = {
-        "open_tasks": [{
-            "status": "blocked",
-            "title": "This is a very long task title that exceeds forty characters easily",
-        }],
-        "open_approvals_count": 0,
-    }
-    note = voice._urgent_note(briefing)
-    assert note is not None
-    assert "This is a very long" not in note  # generic phrasing, not the raw title
-
-
-def test_build_greeting_never_mentions_task_counts(monkeypatch):
-    """The core regression: no version of the greeting may read like a status
-    report ('10 Tasks offen') — Mark's explicit feedback after the first call."""
-    voice = _import_main()
-    briefing = {
-        "open_tasks": [{"status": "inbox"}] * 10,
-        "open_approvals_count": 0,
-    }
-    for _ in range(20):  # random.choice — sample the whole pool
-        text = voice._build_greeting(briefing, operator_name="Mark")
-        assert "10" not in text
-
-
-def test_build_greeting_mentions_urgent_approval(monkeypatch):
-    voice = _import_main()
-    briefing = {"open_tasks": [], "open_approvals_count": 1}
-    text = voice._build_greeting(briefing, operator_name="Mark")
-    assert "Approval" in text
-
-
-def test_build_greeting_fallback_without_briefing():
-    voice = _import_main()
-    text = voice._build_greeting(None, operator_name="Mark")
-    assert "Mark" in text
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Latency logging (ADR-083 Nachschliff — delegation_latency_s)
-# ────────────────────────────────────────────────────────────────────────
-
-
-def test_attach_latency_logging_logs_delay_between_user_and_assistant(caplog):
-    voice = _import_main()
-
-    class FakeSession:
-        def __init__(self):
-            self._handlers = {}
-
-        def on(self, event, handler):
-            self._handlers[event] = handler
-
-        def emit(self, event, payload):
-            self._handlers[event](payload)
-
-    class FakeItem:
-        def __init__(self, role):
-            self.role = role
-
-    class FakeEvent:
-        def __init__(self, role, created_at):
-            self.item = FakeItem(role)
-            self.created_at = created_at
-
-    session = FakeSession()
-    voice._attach_latency_logging(session)
-
-    with caplog.at_level("INFO"):
-        session.emit("conversation_item_added", FakeEvent("user", 100.0))
-        session.emit("conversation_item_added", FakeEvent("assistant", 116.3))
-
-    matches = [r for r in caplog.records if "delegation_latency_s=" in r.message]
-    assert len(matches) == 1
-    assert "16.3" in matches[0].message
-
-
-def test_attach_latency_logging_survives_bad_event(caplog):
-    """A malformed event must never raise / break the session — fail-soft."""
-    voice = _import_main()
-
-    class FakeSession:
-        def __init__(self):
-            self._handlers = {}
-
-        def on(self, event, handler):
-            self._handlers[event] = handler
-
-        def emit(self, event, payload):
-            self._handlers[event](payload)
-
-    session = FakeSession()
-    voice._attach_latency_logging(session)
-
-    session.emit("conversation_item_added", object())  # no .item / .created_at at all

@@ -60,27 +60,32 @@ ueber ``delegation_created``-Events getrieben) — das haette einen kompletten
 Umbau unserer ~20 Tool-Handler erfordert. Siehe
 ``docs/decisions/083-jarvis-gpt-live-transport.md``.
 
-Ist ``GPTLiveModel`` nicht importierbar (z.B. ein aelteres Image ohne den
-Vorab-Plugin-Block) und die Bindung zeigt trotzdem auf ``api="live"``, faellt
+Ist ``GPTLiveModel`` nicht importierbar (z.B. das dokumentierte Rueckweg-Image
+``realtime-backup-20260910`` ohne den Vorab-Plugin-Block) und die Bindung
+(MC ODER die ``VOICE_MODEL``-Env) zeigt trotzdem auf ``api="live"``, faellt
 ``entrypoint()`` mit einer lauten Warnung + MC-Meldung
-(``report_voice_unsupported``) auf die reinen Env-Defaults zurueck, statt den
-Worker crashen zu lassen oder mit dem falschen Endpoint zu verbinden.
+(``report_voice_unsupported``) auf einen ERZWUNGENEN Realtime-Choice zurueck
+(fest ``openai``/``gpt-realtime-2.1``, nicht nur ein erneuter
+``resolve_voice_choice(None)``-Aufruf — der wuerde bei gesetztem
+``VOICE_MODEL=gpt-live-1`` denselben Fehler reproduzieren) — statt den Worker
+crashen zu lassen oder mit dem falschen Endpoint zu verbinden.
 """
 
 import logging
 import os
-import random
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
 from livekit.plugins import openai, xai
 
 from jarvis_core import frontier, mc_client, tools as jtools
+from jarvis_core import voice_greeting as _voice_greeting
 from jarvis_core.channels import VOICE
 from jarvis_core.persona import (
     build_instructions,
     build_live_delegation_instructions,
     build_live_voice_instructions,
 )
+from jarvis_core.voice_greeting import build_greeting, track_latency
 from jarvis_core.voice_provider import (
     VoiceChoice,
     resolve_live_backend_model,
@@ -167,6 +172,21 @@ def _build_realtime_transport(
         # Bindet MC ein Modell (z.B. grok-voice-think-fast-1.0 auf der
         # voice-xai Seed-Zeile), MUSS es ankommen — Review-Fund (2026-09-10):
         # dieser Zweig liess choice.model vorher stillschweigend fallen.
+        if (choice.model or "").strip().lower().startswith("gpt-live"):
+            # classify_voice_api() gibt fuer Provider "xai" IMMER "realtime"
+            # zurueck (nur OpenAI spricht Live). Bindet jemand trotzdem ein
+            # gpt-live-*-Modell an die voice-xai-Zeile, landet der Name hier
+            # unveraendert im xAI-Realtime-Plugin und wuerde erst beim Connect
+            # abgelehnt (stumme Leitung bis dahin) — Review-Fund (2026-09-10).
+            # Kein harter Stop (das Modell KOENNTE in Zukunft bei xAI
+            # existieren), aber laut warnen statt schweigend zu verbinden.
+            logger.warning(
+                "voice-xai bound to %r, which looks like an OpenAI Live model "
+                "name — xAI's Realtime plugin will very likely reject this at "
+                "connect time. classify_voice_api() only recognizes gpt-live-* "
+                "as 'live' for provider=openai.",
+                choice.model,
+            )
         kwargs: dict = {"voice": choice.voice, "turn_detection": _TURN_DETECTION}
         if choice.model:
             kwargs["model"] = choice.model
@@ -176,38 +196,14 @@ def _build_realtime_transport(
     raise RuntimeError(f"Unknown voice provider {choice.provider!r} from resolve_voice_choice.")
 
 
-# GPT-Live-Stimmen: aus dem PR-Code selbst (nicht aus Doku-Vermutungen) —
-# `GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone",
-# "vesper"]` und `DEFAULT_VOICE = "marin"` in gpt_live_model.py (PR #7212,
-# SHA de3c5ce, Stand 10.09.2026). "marin" (auch OpenAI-Realtime-Default) ist
-# also tatsaechlich GUELTIG fuer gpt-live-1 — keine Fehlkonfiguration.
-# README des PR: "Other supported names and custom voice objects still pass
-# through to the API" — die Liste ist daher als bekannt-gute Namen gefuehrt,
-# nicht als hartes Schema; ein unbekannter String wird trotzdem abgelehnt
-# (laut + Fallback), weil ein Tippfehler sonst erst beim ersten Anruf auffaellt.
-GPT_LIVE_KNOWN_VOICES = frozenset({"aster", "beacon", "cinder", "marin", "stone", "vesper"})
-GPT_LIVE_DEFAULT_VOICE = "marin"
-
-
-def _validate_live_voice(voice: str) -> str:
-    """Validiert eine (aus ``VoiceChoice.voice``) bereits aufgeloeste Stimme
-    gegen ``GPT_LIVE_KNOWN_VOICES`` — laute Warnung + Fallback auf
-    ``GPT_LIVE_DEFAULT_VOICE`` bei Unbekanntem, statt eine vermutlich falsche
-    Stimme (z.B. ein xAI-Realtime-Name wie "ara", der fuer diese API nicht
-    gilt) stillschweigend an die API durchzureichen.
-    """
-    raw = (voice or "").strip()
-    if not raw:
-        return GPT_LIVE_DEFAULT_VOICE
-    if raw.lower() not in GPT_LIVE_KNOWN_VOICES:
-        logger.warning(
-            "voice %r is not a known gpt-live-1 voice (known: %s) — falling "
-            "back to default %r. If OpenAI added a new voice name, add it to "
-            "GPT_LIVE_KNOWN_VOICES in voice_worker/main.py.",
-            raw, sorted(GPT_LIVE_KNOWN_VOICES), GPT_LIVE_DEFAULT_VOICE,
-        )
-        return GPT_LIVE_DEFAULT_VOICE
-    return raw.lower()
+# GPT-Live-Stimmen-Validierung: lebt in jarvis_core.voice_greeting (kein
+# livekit-Import dort, ADR-083 Review-Fund 10.09.2026 — dieses Modul
+# importiert livekit auf Modulebene, also skippte JEDER Test dafuer still in
+# CI). GPT_LIVE_KNOWN_VOICES/GPT_LIVE_DEFAULT_VOICE bleiben hier als Re-Export
+# fuer bestehenden Code/Doku-Verweise.
+GPT_LIVE_KNOWN_VOICES = _voice_greeting.GPT_LIVE_KNOWN_VOICES
+GPT_LIVE_DEFAULT_VOICE = _voice_greeting.GPT_LIVE_DEFAULT_VOICE
+_validate_live_voice = _voice_greeting.validate_live_voice
 
 
 # Backend-Modell fuer die GPT-Live-Responses-Delegation. ADR-083 waehlte
@@ -644,23 +640,47 @@ async def entrypoint(ctx: JobContext) -> None:
     mc_config = await mc_client.voice_config()
     voice_choice = resolve_voice_choice(mc_config)
 
-    # Saubere Ablehnung statt stillem Fehlschlag (ADR-082 Follow-up): die
-    # Bindung kann (auf einem Image ohne den Live-Build-Schritt) auf eine API
-    # zeigen, die dieses Image nicht bauen kann. Ohne diesen Guard wuerde
-    # _build_transport entweder mit dem FALSCHEN Endpoint verbinden (still
-    # falsches Verhalten) oder crashen (kein Jarvis). Stattdessen: laut
-    # loggen, MC melden (damit es im Activity-Feed sichtbar ist), auf die
-    # reinen Env-Defaults zurueckfallen.
-    if voice_choice.api not in _API_TRANSPORTS:
+    # Saubere Ablehnung statt stillem Fehlschlag (ADR-082 Follow-up, ADR-083
+    # Review-Fund 10.09.2026). Zwei Faelle, beide muessen abgefangen werden
+    # BEVOR _build_transport laeuft:
+    #
+    # (a) Die Bindung zeigt auf eine api, fuer die _API_TRANSPORTS gar keinen
+    #     Builder hat (zukuenftiger api-Wert, den classify_voice_api schon
+    #     kennt, dieses Image aber noch nicht baut). Aktuell unerreichbar
+    #     (beide heutigen Werte "realtime"/"live" sind registriert), bleibt
+    #     als Verteidigungslinie fuer einen kuenftigen dritten Wert.
+    #
+    # (b) api == "live", aber GPTLiveModel ist auf DIESEM Image nicht
+    #     importierbar (kein Vorab-Plugin-Build-Schritt, z.B. das
+    #     dokumentierte Rueckweg-Image realtime-backup-20260910). Vorher
+    #     ENDETE das hier in _build_live_transport()s RuntimeError, weil
+    #     "live" laengst in _API_TRANSPORTS registriert ist — der alte Guard
+    #     (nur "api not in _API_TRANSPORTS") kann diesen Fall NIE mehr fangen.
+    #     resolve_voice_choice(None) allein reicht als Fix NICHT: die Prod-.env
+    #     hat VOICE_MODEL=gpt-live-1 gesetzt, also klassifiziert der reine
+    #     Env-Fallback erneut api="live" — derselbe Fehler waere sofort
+    #     zurueck. Deshalb hier ein ERZWUNGENER Realtime-Choice, der jedes
+    #     Modellnamen-Signal (MC UND Env) ignoriert.
+    if voice_choice.api not in _API_TRANSPORTS or (
+        voice_choice.api == "live" and not _GPT_LIVE_AVAILABLE
+    ):
         logger.error(
             "voice api %r (provider=%s, model=%s) not supported by this "
-            "worker image — falling back to env config",
+            "worker image — forcing a realtime fallback so Jarvis never "
+            "goes silent (a plain env re-resolve is not enough here, see "
+            "code comment)",
             voice_choice.api, voice_choice.provider, voice_choice.model,
         )
         await mc_client.report_voice_unsupported(
             provider=voice_choice.provider, model=voice_choice.model, api=voice_choice.api,
         )
-        voice_choice = resolve_voice_choice(None)
+        voice_choice = VoiceChoice(
+            provider="openai",
+            model="gpt-realtime-2.1",
+            voice=(voice_choice.voice or "marin"),
+            source="live-unavailable-fallback",
+            api="realtime",
+        )
 
     # Pre-fetch briefing so the realtime model has fresh context before the
     # operator's first utterance. Fail-soft: if MC backend is down we still start
@@ -706,6 +726,11 @@ def _attach_latency_logging(session: AgentSession) -> None:
     GPT-Live (``session.on("conversation_item_added")`` ist transport-
     unabhaengig — kein GPT-Live-spezifischer Hook noetig).
 
+    Die eigentliche Latenz-Arithmetik ist ``jarvis_core.voice_greeting.
+    track_latency()`` (pure, livekit-frei, ADR-083 Review-Fund — laeuft jetzt
+    im gewoehnlichen Backend-Testjob statt still zu skippen). Hier bleibt nur
+    das livekit-spezifische Event-Handling + Logging.
+
     Fail-soft: ein Fehler hier darf die Session nie stoppen.
     """
     state: dict[str, float | None] = {"last_user_at": None}
@@ -714,128 +739,21 @@ def _attach_latency_logging(session: AgentSession) -> None:
         try:                       # avoid importing voice-internal event types
             role = getattr(event.item, "role", None)
             ts = float(getattr(event, "created_at", 0.0) or 0.0)
-            if role == "user":
-                state["last_user_at"] = ts
-            elif role == "assistant" and state["last_user_at"]:
-                latency = ts - state["last_user_at"]
+            state["last_user_at"], latency = track_latency(state["last_user_at"], role, ts)
+            if latency is not None:
                 logger.info("delegation_latency_s=%.2f", latency)
-                state["last_user_at"] = None
         except Exception as e:  # noqa: BLE001 — logging must never break the call
             logger.debug("latency logging hook failed (non-fatal): %s", e)
 
     session.on("conversation_item_added", _on_item)
 
 
-# ── Greeting — situational opening (ADR-083 Nachschliff, Marks Feedback) ──
-#
-# Vorherige Version: JEDE Begruessung rechnete Tasks/Approvals-Zahlen in den
-# ersten Satz ("10 Tasks im Board, Mark. Womit fangen wir an?") — genau das
-# war der Fund aus Marks erstem GPT-Live-Anruf: "das ist nicht natuerlich,
-# er berichtet direkt beim Einstieg". Ersetzt durch ein SITUATIVES Oeffnen
-# (Variante b aus der Review-Diskussion):
-#
-#   - Gruss + Vokativ, tageszeit-abhaengig, KEINE Zahlen.
-#   - NUR wenn es einen echten Anlass gibt (Approval wartet, oder ein Task
-#     haengt in "blocked" fest) — EIN kurzer, natuerlicher Zusatz-Satz.
-#     Sonst bleibt es bei Gruss + offener Frage, wie bei einem Kollegen.
-#
-# (Zwei verworfene Alternativen, siehe PR/ADR: (a) Jarvis erwaehnt das
-# Briefing GAR NICHT beim Einstieg, nur auf Nachfrage — verworfen, weil ein
-# echtes Approval/blocked-Task dann untergeht, bis Mark zufaellig danach
-# fragt; (c) Jarvis wartet 1-2s und laesst Mark zuerst reden — verworfen,
-# ein GPT-Live-Call OHNE jede erste Aeusserung wirkt wie eine tote Leitung.)
-_GREETINGS_PLAIN = [
-    "Hey{vok}. Was liegt an?",
-    "Servus{vok}, was machst du?",
-    "Hi{vok} — was steht an?",
-    "Bereit{vok}. Sag an.",
-    "Hallo{vok}. Was brauchst du?",
-    "Abend{vok}. Was treibst du?",
-]
-_GREETINGS_FALLBACK = [
-    "Hi{vok}, bin da. Was machst du?",
-    "Ich hoere{vok} — was brauchst du?",
-    "Bereit{vok}. Sag an.",
-]
-# Zusatz-Satz NUR bei echtem Anlass, angehaengt an eine Plain-Greeting.
-_URGENT_APPROVAL_SINGLE = [
-    "Ein Approval wartet auf dich.",
-    "Da haengt ein Approval, wenn du magst.",
-]
-_URGENT_APPROVAL_MULTI = [
-    "{appr} Approvals warten auf dich.",
-    "Es haengen {appr} Approvals, falls du Zeit hast.",
-]
-_URGENT_BLOCKED_NAMED = [
-    "Uebrigens, '{title}' haengt fest — magst du kurz reinschauen?",
-    "Ach, '{title}' ist blockiert, falls du das noch siehst.",
-]
-_URGENT_BLOCKED_GENERIC = [
-    "Uebrigens, ein Task haengt gerade fest.",
-    "Ach, da ist was blockiert, falls du kurz Zeit hast.",
-]
-
-
-def _urgent_note(briefing: dict) -> str | None:
-    """Genau EIN kurzer Zusatz-Satz, NUR bei echtem Anlass — sonst None.
-
-    "Echter Anlass" = ein offenes Approval (braucht Mark explizit) ODER ein
-    Task mit status="blocked" (das einzige "etwas ist schiefgelaufen"-Signal,
-    das die Briefing-API liefert — "failed" Tasks stehen NICHT in
-    open_tasks, siehe backend/app/routers/vault.py). Reine Anzahl offener
-    Tasks (inbox/in_progress/review) ist explizit KEIN Anlass mehr — das war
-    genau der als unnatuerlich kritisierte Status-Report-Ton.
-    """
-    n_appr = briefing.get("open_approvals_count", 0) or 0
-    if n_appr == 1:
-        return random.choice(_URGENT_APPROVAL_SINGLE)
-    if n_appr > 1:
-        return random.choice(_URGENT_APPROVAL_MULTI).format(appr=n_appr)
-
-    blocked = [t for t in (briefing.get("open_tasks") or []) if t.get("status") == "blocked"]
-    if blocked:
-        title = (blocked[0].get("title") or "").strip()
-        # Kurz genug fuer einen gesprochenen Nebensatz; ein langer/generischer
-        # Titel klingt vorgelesen statt erzaehlt — dann lieber generisch.
-        if title and len(title) <= 40:
-            return random.choice(_URGENT_BLOCKED_NAMED).format(title=title)
-        return random.choice(_URGENT_BLOCKED_GENERIC)
-
-    return None
-
-
-def _build_greeting(briefing: dict | None, operator_name: str | None = None) -> str:
-    """Situative Begruessung: Gruss + Vokativ, plus EIN Zusatz-Satz nur bei
-    echtem Anlass (siehe ``_urgent_note()``) — nie ein Zahlen-Status-Report.
-
-    Faellt kein Briefing an (Backend nicht erreichbar beim Session-Start),
-    nutzt den Fallback-Pool — Jarvis erwaehnt dann nichts Inhaltliches.
-
-    ``operator_name`` ist der Anzeigename aus ``mc_client.get_operator``. Ohne
-    Namen bleibt der Vokativ leer und die Begruessung kommt ganz ohne Anrede.
-    """
-    vok = f", {operator_name.strip()}" if (operator_name or "").strip() else ""
-
-    if not briefing:
-        line = random.choice(_GREETINGS_FALLBACK).format(vok=vok)
-        return (
-            f"Sag GENAU diesen Text auf Deutsch, WORTWOERTLICH und NICHTS "
-            f"SONST — kein Zusatz-Satz, keine Einleitung: '{line}'"
-        )
-
-    line = random.choice(_GREETINGS_PLAIN).format(vok=vok)
-    extra = _urgent_note(briefing)
-    if extra:
-        line = f"{line} {extra}"
-
-    return (
-        f"Sag GENAU diesen Text auf Deutsch, WORTWOERTLICH und NICHTS "
-        f"SONST — kein Zusatz-Satz, keine Einleitung, keine Nachfrage "
-        f"danach, auch wenn dir spontan noch etwas Freundliches einfaellt "
-        f"(Schweizer-Hochdeutsche Aussprache, kein englischer Akzent, "
-        f"klingt wie ein kurzer Gruss unter Kollegen, NICHT wie ein "
-        f"Statusreport): '{line}'"
-    )
+# Begruessung: lebt in jarvis_core.voice_greeting (kein livekit-Import dort,
+# ADR-083 Review-Fund 10.09.2026) — build_greeting/urgent_note laufen jetzt
+# im gewoehnlichen Backend-Testjob statt still zu skippen. _urgent_note bleibt
+# hier als Re-Export fuer bestehende Doku-Verweise.
+_urgent_note = _voice_greeting.urgent_note
+_build_greeting = build_greeting
 
 
 if __name__ == "__main__":

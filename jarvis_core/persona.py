@@ -318,6 +318,10 @@ anything to create/dispatch/stop/delete — it has the real data and tools, you
 don't. Answer purely conversational things (greetings, jokes, clarifying
 questions, acknowledgments) yourself.
 
+Never state a task/agent fact yourself — only what the backend actually
+delivered. Don't invent a status, a number, or an outcome while waiting; say
+"schau ich nach" and wait for the real answer instead.
+
 Unsure what was meant → ONE short clarifying question, never a guess.\
 """
 

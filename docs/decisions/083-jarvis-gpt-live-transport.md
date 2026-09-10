@@ -1,26 +1,37 @@
 # ADR-083 — Jarvis GPT-Live-Transport (vorab, LiveKit-PR #7212)
 
-**Status:** Accepted — PRODUKTIV seit 10.09.2026 (Marks Entscheid: GPT-Live ersetzt Realtime
-für Jarvis, kein Nebenläufer/Test-Worker). `mission-control-voice-worker-1` läuft mit
-`VOICE_API=live`/`VOICE_MODEL=gpt-live-1` auf dem Image, das dieses ADR beschreibt. Weiterhin
-"vorab", weil LiveKit-PR #7212 noch offen ist (siehe Aufräumen unten).
+**Status:** Accepted. `_API_TRANSPORTS["live"]` ist seit diesem PR implementiert und im
+konsolidierten `voice_worker/Dockerfile` gebaut. Seit dem Merge mit ADR-082 (#491, "Jarvis'
+Sprachmodell wird Runtime-Bindung") entscheidet NICHT mehr eine `VOICE_API`-Env-Var, welchen
+Transport Jarvis spricht, sondern `classify_voice_api()` anhand des gebundenen/konfigurierten
+Modellnamens (`gpt-live-*` → live) — siehe Nachschliff 6. **Deploy-Schritt PFLICHT:** Jarvis muss
+im MC-Runtime-Picker explizit auf die Seed-Zeile `voice-openai-live` (`gpt-live-1`) gebunden
+werden — ohne diese Bindung bleibt Jarvis auf Realtime, auch mit diesem PR gemergt (Review-Fund,
+siehe Nachschliff 7). Weiterhin "vorab", weil LiveKit-PR #7212 noch offen ist (siehe Aufräumen
+unten).
 **Datum:** 2026-09-10
 **Scope:** Infra/Runtime (voice_worker) | Backend/Voice
 
 ## Rückweg (falls gpt-live-1/das Vorab-Plugin Probleme macht)
 
-1. `.env` (Symlink `~/.mc/secrets/mission-control/.env`, gemountet über
-   `.claude/worktrees/deploy-main`): `VOICE_API` entfernen oder auf `realtime` setzen,
-   `VOICE_MODEL` zurück auf `gpt-realtime-2.1`, `VOICE_PROVIDER=openai` (unverändert).
-   Vor-Änderungs-Stand live geprüft am 10.09.2026, bevor irgendetwas geändert wurde:
-   `VOICE_PROVIDER=openai`, `VOICE_MODEL=gpt-realtime-2.1`, `VOICE_API` war noch nicht
-   vorhanden (Feature existierte nicht).
-2. Image zurück auf `mission-control-voice-worker:realtime-backup-20260910` (getaggter
-   Snapshot des vorherigen, unveränderten `voice_worker/Dockerfile`-Builds, livekit-agents
-   `1.6.7`).
-3. `docker compose -p mission-control --env-file .env up -d --force-recreate voice-worker`
-   aus `.claude/worktrees/deploy-main`.
-4. Wirk-Beweis wie beim Rollout: Worker-Log zeigt sauberen Start ohne GPTLiveModel, ein Anruf
+1. **Runtime-Bindung zurücksetzen (der eigentliche Schalter seit ADR-082):** Jarvis im
+   MC-Runtime-Picker zurück auf `voice-openai` (`gpt-realtime-2.1`) binden. Wirkt ab dem
+   nächsten Anruf, kein Container-Neustart nötig (die Bindung wird pro Anruf frisch gezogen,
+   `voice_worker/main.py::entrypoint()`).
+2. Falls MC selbst nicht erreichbar ist (Bindung kann nicht gelesen werden): `.env` (Symlink
+   `~/.mc/secrets/mission-control/.env`) — `VOICE_MODEL` auf `gpt-realtime-2.1` setzen (NICHT
+   `gpt-live-1, sonst klassifiziert der Env-Fallback erneut `api="live"`),
+   `VOICE_PROVIDER=openai` (unverändert). Es gibt seit Nachschliff 6 keine `VOICE_API`-Var mehr
+   zu setzen/entfernen.
+3. Bei einem Image-Rollback zusätzlich: `entrypoint()`s Guard (Nachschliff 7, Review Finding 2)
+   fängt genau diesen Fall selbstständig ab — läuft ein älteres Image ohne den Vorab-Plugin-Block
+   und die Bindung zeigt trotzdem auf `api="live"`, erzwingt der Guard einen Realtime-Fallback,
+   unabhängig davon was `VOICE_MODEL`/MC sagen. Trotzdem sauberer: Image zurück auf
+   `mission-control-voice-worker:realtime-backup-20260910` (getaggter Snapshot des vorherigen,
+   unveränderten `voice_worker/Dockerfile`-Builds, livekit-agents `1.6.7`),
+   `docker compose -p mission-control --env-file .env up -d --force-recreate voice-worker` aus
+   `.claude/worktrees/deploy-main`.
+4. Wirk-Beweis wie beim Rollout: Worker-Log zeigt `voice config: ... api=realtime`, ein Anruf
    funktioniert wieder über OpenAI Realtime.
 
 ## Kontext
@@ -316,6 +327,64 @@ im normalen Backend-Job). Nach dem Merge (16.):
     lokalen LiveKit-Kontakt, unabhaengig vom Isolation-Fix). Dieser Merge/Umbau ist daher NUR mit
     Unit-Tests (pytest im gebauten Image) + Protokoll-Smoke (direkt gegen die OpenAI-API, kein
     LiveKit-Kontakt) verifiziert — kein LiveKit-Ende-zu-Ende-Lauf fuer diesen Punkt.
+
+## Nachschliff 7 (10.09.2026) — Adversariales Review (rev-490), 7 Punkte
+
+Review-Verdikt: MERGEBAR NACH FIX, 🟡 gelb, mit einem 🔴-Vorbehalt (Befund 1). Live verifiziert per
+DB-Query + Code-Lesen + zwei pytest-Laeufen (Backend-venv vs. mit livekit-Stub) + drei
+Sabotage-Proben. Volle Fundliste in `scratchpad/review-490.md`; hier nur die Fixes:
+
+21. **🔴 Befund 1 — GPT-Live war nach Deploy AUS.** Seit #491 schlaegt die MC-Bindung die Env; die
+    Live-DB hatte (und hat ohne diesen Fix weiterhin) KEINE `gpt-live-*`-Runtime-Zeile, Jarvis war
+    an `voice-openai`/`gpt-realtime-2.1` gebunden. Genau invertiert zur Absicht: MC gebunden →
+    Realtime, MC down → GPT-Live (Env-Fallback). Fix: neue Seed-Zeile `voice-openai-live`
+    (`backend/config/runtimes.json`, `provider=openai`, `model_identifier=gpt-live-1`,
+    idempotent per Slug ueber `runtime_seeder.py` — wird beim naechsten Backend-Start eingefuegt,
+    bindet aber NICHTS automatisch). **Deploy-Schritt PFLICHT** (siehe Status oben): Jarvis manuell
+    im Runtime-Picker auf diese Zeile binden, danach Log-Beweis `api=live source=mc` (aus
+    `VoiceChoice.as_log()`) beim naechsten Anruf. Das Binden macht der Team-Lead beim Deploy.
+22. **🟡 Befund 2 — Rueckweg-Image war eine tote Leitung.** `entrypoint()`s alter Guard
+    (`api not in _API_TRANSPORTS`) kann nie mehr feuern, weil `"live"` jetzt registriert ist — der
+    Fall, fuer den er gebaut wurde (Image ohne Vorab-Plugin), landete stattdessen in
+    `_build_live_transport()`s `RuntimeError` → Session bricht ab. Guard erweitert um
+    `choice.api == "live" and not _GPT_LIVE_AVAILABLE` → `report_voice_unsupported` + ein
+    ERZWUNGENER Realtime-`VoiceChoice` (fest `openai`/`gpt-realtime-2.1`), NICHT ein blosser
+    `resolve_voice_choice(None)`-Aufruf — der haette bei `VOICE_MODEL=gpt-live-1` (Prod-.env)
+    denselben Fehler reproduziert. Modul-Docstring korrigiert.
+23. **🟡 Befund 3 — 36 von 45 Tests uebersprangen in CI.** `voice_worker/main.py` importiert
+    `livekit` auf Modulebene; jeder Test ueber `_import_main()` skippte still im Backend-venv (=
+    CI). Sabotage-Probe des Reviewers fing nur 1 von 3 gebrochenen Asserts. Fix: Begruessung,
+    `urgent_note`, GPT-Live-Stimmen-Validierung und die Latenz-Arithmetik sind nach
+    `jarvis_core/voice_greeting.py` gewandert (kein `livekit`-Import, genau die Trennung, die
+    `voice_provider.py` schon vormacht) — neue `backend/tests/test_jarvis_voice_greeting.py` deckt
+    sie OHNE Skip-Bedingung im gewoehnlichen Backend-Testjob ab. `voice_worker/main.py` re-exportet
+    die alten Namen (`_build_greeting`, `_urgent_note`, `_validate_live_voice`,
+    `GPT_LIVE_KNOWN_VOICES`) fuer Rueckwaertskompatibilitaet.
+24. **🟡 Befund 4 — xai + gpt-live-Modellname war eine stille Leitung.** `classify_voice_api`
+    liefert fuer Provider `xai` immer `"realtime"`; ein an `voice-xai` gebundenes
+    `gpt-live-*`-Modell ging unveraendert ans xAI-Plugin und wurde erst beim Connect abgelehnt.
+    Kein harter Stop (das Modell koennte theoretisch existieren), aber ein lauter Log-Warn im
+    xai-Zweig von `_build_realtime_transport`, wenn `choice.model` mit `gpt-live` beginnt.
+25. **🟢 Befund 5 — Begruessung sagte "Abend" auch morgens.** Der Kommentar behauptete
+    "tageszeit-abhaengig", war es aber nur kosmetisch (reiner `random.choice` ueber alle
+    Varianten). `build_greeting()` nutzt jetzt echt `briefing["current_time_of_day_de"]`
+    (`backend/app/routers/vault.py::_time_of_day_de`, Buckets morgens/mittags/nachmittags/
+    abends/nachts) — zeitpassende Gruss-Varianten werden nur bei passender Tageszeit in den
+    Auswahl-Pool gemischt, "Abend" kann nicht mehr morgens fallen. Test dafuer in
+    `test_jarvis_voice_greeting.py` (positiv UND negativ pro Tageszeit).
+26. **🟢 Befund 6 — Voice-Block hatte keine eigene Ehrlichkeits-Regel.** Ergaenzt in
+    `LIVE_VOICE_INSTRUCTIONS`: "Never state a task/agent fact yourself — only what the backend
+    actually delivered. Don't invent a status, a number, or an outcome while waiting; say 'schau
+    ich nach' and wait for the real answer instead."
+27. **🟢 Befund 9 — Doku nannte die geloeschte `VOICE_API`-Variable.** `README.md:361` (Zeile
+    gestrichen, `JARVIS_LIVE_BACKEND_MODEL` bleibt), ADR-Kopf/Rueckweg oben umgeschrieben auf die
+    Runtime-Bindung als eigentlichen Schalter, `voice_worker/Dockerfile`-Kommentar korrigiert,
+    ADR-083-Eintrag in `docs/ARCHITECTURE.md` nachgetragen. `xai`-Preload-Check
+    (`python -c "from livekit.plugins import openai, xai"`) im Dockerfile wieder ergaenzt — war im
+    konsolidierten Build ersatzlos weggefallen, der neue Check prueft nur `openai`/`GPTLiveModel`.
+    Befund 7 (Dockerfile-Vorbehalte) und Befund 10 (Test ohne Aussagekraft, `AGENT_NAME`) sind
+    bewusst dokumentierte Restrisiken bzw. wurden beim Test-Umzug (Befund 3) entfernt statt
+    "gefixt" — Befund 8 (Secrets/Privacy) war schon gruen.
 
 ## Referenzen
 

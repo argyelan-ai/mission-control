@@ -44,9 +44,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 #
 # Bekannte Luecke: livekit-plugins-xai bleibt bei seiner urspruenglichen
 # Installation haengen (PyPI-Version, kompatibel zu >=1.8.0 laut deren
-# pyproject). VOICE_PROVIDER=xai/VOICE_API=realtime laufen auf demselben
-# gebumpten livekit-plugins-openai==1.8.0 wie GPT-Live — siehe
-# _build_realtime_model() in main.py fuer die dafuer noetige typisierte
+# pyproject). Der xai-Realtime-Pfad (Provider "xai" — der dokumentierte
+# Rueckweg fuer diesen Arm) laeuft auf demselben gebumpten
+# livekit-plugins-openai==1.8.0 wie GPT-Live — siehe
+# _build_realtime_transport() in main.py fuer die dafuer noetige typisierte
 # TurnDetection (ADR-083 Nachschliff). Siehe
 # docs/decisions/083-jarvis-gpt-live-transport.md.
 ARG GPT_LIVE_PR_SHA=de3c5ce66058c6ab437ad41f963cbaeb39046c6d
@@ -54,9 +55,14 @@ RUN pip install --no-cache-dir --force-reinstall --no-deps \
     "git+https://github.com/livekit/agents@${GPT_LIVE_PR_SHA}#subdirectory=livekit-agents" \
     "git+https://github.com/livekit/agents@${GPT_LIVE_PR_SHA}#subdirectory=livekit-plugins/livekit-plugins-openai"
 
-# Build-time proof that GPTLiveModel actually imports on this image — fails
-# the build loud (not a `|| true` swallow) so a build can never silently ship
-# without the GPT-Live plugin again.
+# Build-time proof both plugins actually import on this image — fails the
+# build loud (not a `|| true` swallow) so a build can never silently ship
+# without the GPT-Live plugin (or a broken xai/openai Realtime import) again.
+# Review-Fund (10.09.2026): the old preload check
+# (`from livekit.plugins import openai, xai`) from before the Dockerfile
+# consolidation was dropped, not carried over — restored below alongside the
+# GPTLiveModel check.
+RUN python -c "from livekit.plugins import openai, xai; print('openai + xai plugins OK')"
 RUN python -c "from livekit.plugins.openai.realtime import GPTLiveModel; print('GPTLiveModel import OK')"
 
 # Shared Jarvis package (persona, tools, mc_client) — imported as top-level
