@@ -1,18 +1,27 @@
 """LiveKit-level smoke test for the GPT-Live test worker — ADR-083.
 
-Proves the full path: LiveKit room -> explicit agent dispatch to the
-isolated test worker (agent_name, does NOT touch the production worker's
-automatic dispatch) -> AgentSession(llm=GPTLiveModel(...)) -> Jarvis persona
-+ tools -> spoken reply back to a joining "caller" participant.
+Proves the full path: LiveKit room (created with an EXPLICIT agents list,
+so automatic dispatch never fires for it) -> our isolated ephemeral worker
+-> AgentSession(llm=GPTLiveModel(...)) -> Jarvis persona + tools -> spoken
+reply back to a joining "caller" participant.
+
+ISOLATION WARNING (live incident, 10.09.2026): an earlier version of this
+script only called `CreateAgentDispatchRequest` after the room already
+existed with default config — that ADDS a dispatch job but does NOT stop
+LiveKit's automatic dispatch from ALSO sending the job to every worker with
+`agent_name=""` (that's the production Jarvis worker). The production
+worker really did serve one of our test rooms this way. Fixed: the room is
+now created up front via `room.create_room(CreateRoomRequest(agents=[...]))`
+— an explicit `agents` list at room-creation time replaces automatic
+dispatch for that room entirely, so the production worker is never even
+considered for it.
 
 Steps:
-1. Create (or reuse) a LiveKit room.
-2. Explicit dispatch: send a job to `agent_name` for that room (does NOT
-   rely on automatic dispatch, so the production voice-worker is never
-   involved).
-3. Join the room as a normal participant ("smoke-caller"), publish a PCM16
+1. Create the room with `agents=[RoomAgentDispatch(agent_name=...)]` set —
+   this is what actually provides isolation, not a later dispatch call.
+2. Join the room as a normal participant ("smoke-caller"), publish a PCM16
    24kHz mono test utterance on a mic-source audio track.
-4. Record whatever audio comes back from the remote (agent) participant for
+3. Record whatever audio comes back from the remote (agent) participant for
    N seconds, and print a summary.
 
 Usage (inside a container that can reach the LiveKit server, e.g. on the
@@ -58,12 +67,23 @@ async def main() -> int:
     http_url = url.replace("ws://", "http://").replace("wss://", "https://")
     lk_api = api.LiveKitAPI(url=http_url, api_key=api_key, api_secret=api_secret)
 
-    # 1) explicit dispatch to our isolated test agent_name — this does NOT touch
-    # automatic dispatch, so the production jarvis worker never sees this room.
-    dispatch = await lk_api.agent_dispatch.create_dispatch(
-        api.CreateAgentDispatchRequest(agent_name=args.agent_name, room=args.room)
+    # 1) PRE-CREATE the room with an explicit `agents` list. This is the part
+    # that actually matters for isolation (found live, 10.09.2026): a bare
+    # CreateAgentDispatchRequest call ADDS an explicit dispatch job, but does
+    # NOT stop LiveKit's automatic dispatch from ALSO firing for the room
+    # once the first participant creates it — a worker with agent_name=""
+    # (the production Jarvis worker) still gets auto-dispatched into it.
+    # Team-lead confirmed the production worker served one of our earlier
+    # ephemeral test rooms this way. Creating the room up front with
+    # `agents=[RoomAgentDispatch(agent_name=...)]` set replaces automatic
+    # dispatch for that room entirely — only the named agent gets a job.
+    await lk_api.room.create_room(
+        api.CreateRoomRequest(
+            name=args.room,
+            agents=[api.RoomAgentDispatch(agent_name=args.agent_name)],
+        )
     )
-    print(f"-> explicit dispatch created: {dispatch}", file=sys.stderr)
+    print(f"-> room created with explicit agents=[{args.agent_name!r}] (no automatic dispatch)", file=sys.stderr)
     await lk_api.aclose()
 
     # 2) join as a normal participant ("caller")
