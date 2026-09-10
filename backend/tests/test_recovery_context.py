@@ -24,12 +24,13 @@ async def _create_comment(
     comment_type: str = "progress",
     content: str = "Test comment",
     created_at: datetime | None = None,
+    author_type: str = "agent",
 ) -> TaskComment:
     """Create a TaskComment in the DB and return it."""
     comment = TaskComment(
         id=uuid.uuid4(),
         task_id=task_id,
-        author_type="agent",
+        author_type=author_type,
         comment_type=comment_type,
         content=content,
         created_at=created_at or datetime.utcnow(),
@@ -198,6 +199,118 @@ async def test_recovery_context_ignores_message_type(session: AsyncSession):
 
     # Only message comments → no recovery context
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_includes_sixth_operator_comment(session: AsyncSession):
+    """W0.3: 6 Operator-Kommentare vor einem Requeue -> der 6. (neueste) steht im Prompt.
+
+    Vorher rot gegen die alte Funktion verifiziert (relevant_types kannte weder
+    `message` noch `handoff` -> alle 6 fielen komplett raus, `result is None`).
+    Prueft nebenbei auch die Postfach-Hinweiszeile (DoD-Punkt 1): von 6
+    Operator-Kommentaren werden nur die letzten 3 ungekuerzt gezeigt, die
+    Hinweiszeile muss die echte Zahl der uebrigen 3 nennen.
+    """
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    now = datetime.utcnow()
+    for i in range(1, 7):
+        await _create_comment(
+            session,
+            task.id,
+            "message",
+            f"Anweisung {i}: mach X statt Y",
+            now - timedelta(minutes=60 - i),
+            author_type="user",
+        )
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "Anweisung 6: mach X statt Y" in result
+    # Postfach-Hinweis: 6 Operator-Kommentare insgesamt, nur 3 gezeigt -> 3 fehlen.
+    assert "3" in result
+    assert "mc task-get" in result
+    assert str(task.id) in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_operator_comment_full_multiline_content(session: AsyncSession):
+    """Ein mehrzeiliger Operator-Kommentar kommt vollstaendig an, nicht nur Zeile 1."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    multiline = (
+        "Bitte zuerst die Migration pruefen.\n"
+        "Danach den Endpunkt gegen den neuen Vertrag testen.\n"
+        "Erst wenn beides gruen ist: PR aufmachen."
+    )
+    await _create_comment(session, task.id, "message", multiline, author_type="user")
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert multiline in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_operator_block_cap_drops_oldest(session: AsyncSession):
+    """Operator-Block > 1500 Zeichen -> die aelteste Anweisung fliegt raus, mit Hinweis."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    now = datetime.utcnow()
+    oldest = "A" * 600
+    middle = "B" * 600
+    newest = "C" * 600
+    await _create_comment(session, task.id, "message", oldest, now - timedelta(minutes=30), author_type="user")
+    await _create_comment(session, task.id, "handoff", middle, now - timedelta(minutes=20), author_type="agent")
+    await _create_comment(session, task.id, "message", newest, now - timedelta(minutes=10), author_type="user")
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert oldest not in result
+    assert middle in result
+    assert newest in result
+    # Hinweis, dass wegen des Caps etwas weggelassen wurde.
+    assert "weggelassen" in result or "Cap" in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_excludes_system_generated_message_and_handoff(session: AsyncSession):
+    """Automatisch erzeugte system-Kommentare (author_type='system') sind keine
+    Anweisungen und duerfen nicht im Operator-/Lead-Block auftauchen — selbst
+    wenn ihr comment_type zufaellig 'message' oder 'handoff' ist (z.B. der
+    System-Handoff beim Human-Review-Uebergang, oder der System-Message-
+    Callback bei Subtask-Abschluss)."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+
+    await _create_comment(
+        session, task.id, "handoff",
+        "Human-Review angefordert fuer 'X' — wartet auf Mark (kein Agent-Reviewer dispatcht).",
+        author_type="system",
+    )
+    await _create_comment(
+        session, task.id, "message",
+        "Callback: Root-Task abgeschlossen (done).",
+        author_type="system",
+    )
+    # Ein echter Operator-Kommentar muss trotzdem durchkommen.
+    await _create_comment(session, task.id, "message", "Echte Anweisung vom Operator", author_type="user")
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "Human-Review angefordert" not in result
+    assert "Callback: Root-Task abgeschlossen" not in result
+    assert "Echte Anweisung vom Operator" in result
 
 
 @pytest.mark.asyncio

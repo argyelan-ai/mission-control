@@ -16,6 +16,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 
+from sqlalchemy import and_, func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -817,6 +818,10 @@ async def _load_dispatch_context(
 
 WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 9)
 
+# W0.3: bounds for the Operator-/Lead-Anweisungen block in build_recovery_context.
+OPERATOR_LEAD_COMMENT_LIMIT = 3
+OPERATOR_LEAD_MAX_CHARS = 1500
+
 
 async def build_waiting_resume_recap(session: AsyncSession, task: Task) -> str:
     """Bounded recap for resuming a task that was parked while `waiting`.
@@ -899,6 +904,61 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     comments = list(result.all())
     comments.sort(key=lambda c: c.created_at)
 
+    # W0.3: Operator-/Lead-Anweisungen — eigener Bucket, andere Semantik als
+    # relevant_types oben (das sind Worker-Fortschrittsmeldungen). `message`
+    # ist der Kanal, den der Operator fuer freien Text benutzt; `handoff` ist
+    # der Wake-Kanal, den ein Lead nutzt, um einem bereits zugewiesenen
+    # Worker eine Anweisung zu geben (comment_types.py:33). Beide fielen
+    # bisher komplett aus dem Recovery-Kontext, weil relevant_types sie nicht
+    # kannte — Incident 2026-09-09: eine Nacharbeits-Anweisung erreichte einen
+    # Kollegen deswegen dreimal nicht.
+    #
+    # author_type=="system" ist bewusst ausgeschlossen: das sind keine von
+    # Mensch oder Lead geschriebenen Anweisungen, sondern automatische Notizen
+    # die zufaellig denselben comment_type tragen — z.B. der System-`handoff`
+    # beim Human-Review-Uebergang (task_lifecycle.py, request_human_review)
+    # oder der System-`message`-Callback bei Subtask-Abschluss
+    # (agent_task_status.py). `message` ist zusaetzlich auf author_type=="user"
+    # eingeschraenkt (nicht nur "!= system"), weil Worker-Agents "message" als
+    # formlosen Peer-Kommentar benutzen koennen, der keine Anweisung ist;
+    # `handoff` dagegen ist per Definition immer ein Wake-Signal von Operator
+    # oder Lead, deshalb reicht dort "!= system".
+    operator_lead_filter = or_(
+        and_(
+            TaskComment.comment_type == "message",  # type: ignore[union-attr]
+            TaskComment.author_type == "user",  # type: ignore[union-attr]
+        ),
+        and_(
+            TaskComment.comment_type == "handoff",  # type: ignore[union-attr]
+            TaskComment.author_type != "system",  # type: ignore[union-attr]
+        ),
+    )
+    ol_result = await session.exec(
+        select(TaskComment)
+        .where(TaskComment.task_id == task.id, operator_lead_filter)
+        .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        .limit(OPERATOR_LEAD_COMMENT_LIMIT)
+    )
+    operator_comments = list(ol_result.all())
+    operator_comments.sort(key=lambda c: c.created_at)
+
+    # Postfach-Hinweis: wie viele relevante Kommentare (beide Buckets
+    # zusammen) es insgesamt gibt vs. was hier tatsaechlich gezeigt wird —
+    # der Agent soll wissen, dass es mehr gibt, auch wenn es nicht ungekuerzt
+    # in den Prompt passt.
+    count_result = await session.exec(
+        select(func.count()).where(  # type: ignore[arg-type]
+            TaskComment.task_id == task.id,
+            or_(
+                TaskComment.comment_type.in_(relevant_types),  # type: ignore[union-attr]
+                operator_lead_filter,
+            ),
+        )
+    )
+    total_relevant_count = count_result.one()
+    shown_count = len(comments) + len(operator_comments)
+    unread_count = max(0, total_relevant_count - shown_count)
+
     # Checklist items — ordered, flagged for first-pending.
     items_result = await session.exec(
         select(TaskChecklistItem)
@@ -907,7 +967,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     )
     items = list(items_result.all())
 
-    if not comments and not items:
+    if not comments and not items and not operator_comments:
         return None
 
     parts: list[str] = [
@@ -916,6 +976,12 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         "**WICHTIG:** Faengst NICHT neu an. Setze bei `← HIER WEITERMACHEN` "
         "fort oder beim letzten `progress`-Eintrag. Kein Re-Doing.",
     ]
+
+    if unread_count > 0:
+        parts.append(
+            f"\n**Postfach:** {unread_count} weitere Kommentare nicht in "
+            f"diesem Kontext -> `mc task-get {task.id}`"
+        )
 
     if items:
         parts.append("\n### Deine Checkliste")
@@ -942,6 +1008,33 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             # `mc comment list` if needed.
             snippet = c.content.strip().splitlines()[0][:180]
             parts.append(f"[{label} @ {ts}] {snippet}")
+
+    if operator_comments:
+        # Ungekuerzt (kein splitlines()[0][:180] wie oben) — genau das war
+        # der Bug: eine mehrzeilige Anweisung wurde zur Ueberschrift ohne
+        # Inhalt. Cap gilt fuer den GESAMTEN Block, nicht pro Kommentar —
+        # bei Ueberschreitung fliegt die aelteste Anweisung zuerst raus.
+        remaining = operator_comments
+        dropped = 0
+        while True:
+            block_lines = []
+            for c in remaining:
+                ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
+                who = "Operator" if c.author_type == "user" else "Lead"
+                block_lines.append(f"[{who}/{c.comment_type} @ {ts}]\n{c.content.strip()}")
+            block_text = "\n\n".join(block_lines)
+            if len(block_text) <= OPERATOR_LEAD_MAX_CHARS or len(remaining) <= 1:
+                break
+            remaining = remaining[1:]
+            dropped += 1
+
+        header = "\n### Operator-/Lead-Anweisungen (ungekuerzt)"
+        if dropped:
+            header += (
+                f" — {dropped} aeltere wegen {OPERATOR_LEAD_MAX_CHARS}-Zeichen-Cap weggelassen"
+            )
+        parts.append(header)
+        parts.append(block_text)
 
     # Workspace hint — Task.workspace_path is authoritative (Bundle 4),
     # agent workspace is fallback for tasks without their own worktree.
