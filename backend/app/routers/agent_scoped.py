@@ -4582,3 +4582,79 @@ async def agent_get_operator(
         "name": (user.preferred_name or user.name or "").strip(),
         "timezone": user.timezone or "Europe/Berlin",
     }
+
+
+@router.get("/voice/config")
+async def agent_get_voice_config(
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Welchen Sprach-Anbieter der Operator gebunden hat (ADR-082).
+
+    Der voice-worker ruft das zu Beginn JEDES Anrufs auf — nur so wirkt ein
+    Wechsel in MC ohne Container-Neustart. Nur der Jarvis-Agent selbst darf
+    das abfragen; jeder andere Agent bekommt 403 (die Bindung ist Jarvis'
+    Privatsache, kein generisches Runtime-Introspektions-Endpoint).
+
+    Enthaelt bewusst KEIN Schluesselmaterial. Die API-Keys liegen
+    ausschliesslich in der Env des voice-worker-Containers; MC speichert sie
+    nicht und reicht sie nicht durch (ADR-056 Finding 5).
+    """
+    if agent.harness != "jarvis":
+        raise HTTPException(
+            status_code=403,
+            detail="Nur der Jarvis-Agent darf seine Voice-Bindung abfragen.",
+        )
+
+    from app.services.voice_runtime import resolve_voice_config
+
+    return await resolve_voice_config(agent, session)
+
+
+class VoiceUnsupportedModelReport(BaseModel):
+    provider: str
+    model: str | None = None
+    api: str
+
+
+@router.post("/voice/unsupported-model")
+async def agent_report_voice_unsupported_model(
+    payload: VoiceUnsupportedModelReport,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Der Worker meldet: die gebundene Runtime spricht eine API, die diese
+    Worker-Version nicht kann (ADR-082 Follow-up, z.B. OpenAI Live API statt
+    Realtime).
+
+    Macht den stillen Fehlschlag laut: der Worker faellt selbst auf seine
+    Env-Defaults zurueck (sonst bliebe Jarvis stumm) — dieser Call ist NUR
+    dafuer da, dass die Drift in MCs Activity-Feed sichtbar wird, statt dass
+    Mark erst beim naechsten Anruf merkt, dass 'gpt-live-1' nie ankam.
+
+    Nur Jarvis selbst darf das melden (gleiches Gate wie /voice/config).
+    Immer 200 — ein fehlschlagender Melde-Call darf den Worker nicht
+    zusaetzlich stoeren.
+    """
+    if agent.harness != "jarvis":
+        raise HTTPException(
+            status_code=403,
+            detail="Nur der Jarvis-Agent darf eine Voice-API-Inkompatibilitaet melden.",
+        )
+
+    logger.warning(
+        "voice worker refused unsupported api %r for agent %s (provider=%s, model=%s) "
+        "— fell back to env defaults",
+        payload.api, agent.slug or agent.name, payload.provider, payload.model,
+    )
+    await emit_event(
+        session,
+        "agent.voice_unsupported_model",
+        f"{agent.name}: gebundenes Modell '{payload.model or payload.provider}' "
+        f"spricht '{payload.api}' — dieser voice-worker kennt nur 'realtime', "
+        f"faehrt auf Env-Defaults weiter",
+        severity="warning",
+        agent_id=agent.id,
+        detail={"provider": payload.provider, "model": payload.model, "api": payload.api},
+    )
+    return {"ok": True}
