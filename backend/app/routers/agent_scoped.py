@@ -163,12 +163,24 @@ class DelegateCreate(BaseModel):
     # Subtask die Herkunft des Parent-Tasks — der Konsolidierungs-Report des
     # Orchestrators landet damit im richtigen Chat-Thread.
     origin_thread_id: uuid.UUID | None = None
+    # Explizite Parent-Wahl (W5-F, live incident 2026-09-11: Boss hat per
+    # `mc delegate` zwei elternlose Karten erzeugt, b7d29be3 + 70d6b417 —
+    # `your_status: no_task`, kein Fehler, kein Hinweis). Ohne agent.current_task_id
+    # (kein aktiver Task) blieb die einzige Option bisher stillschweigende
+    # Waisen-Anlage. --parent gibt dem Aufrufer einen bewussten, expliziten Weg,
+    # einen Parent zu setzen, statt sich auf die implizite current_task_id-Aufloesung
+    # zu verlassen. Ueberschreibt current_task_id, wenn gesetzt.
+    parent_task_id: uuid.UUID | None = None
 
 
 class DelegateResponse(BaseModel):
     subtask_id: uuid.UUID
     assigned_to: str
     your_status: str  # "blocked" if callback=True, otherwise "in_progress"
+    parent_task_id: uuid.UUID | None = None
+    # Nur gesetzt, wenn die Karte wirklich elternlos ist (kein current_task,
+    # kein --parent) — macht den stillen Fallback laut statt lautlos.
+    warning: str | None = None
 
 
 class ClarificationCreate(BaseModel):
@@ -1049,13 +1061,43 @@ async def agent_delegate_task(
 
     current_task_id = agent.current_task_id
     current_task: Task | None = None
-    if current_task_id:
+    # Explicit override (W5-F): --parent bypasses the implicit
+    # agent.current_task_id resolution entirely — the caller names the
+    # parent instead of relying on a lock the backend can silently get
+    # wrong (stale field, no active task, wrong task). It is NOT subject
+    # to the in_progress guard below: that guard exists to stop a SILENT
+    # fallback, and an explicit --parent is the opposite of silent.
+    explicit_parent: Task | None = None
+    if payload.parent_task_id is not None:
+        explicit_parent = await session.get(Task, payload.parent_task_id)
+        if not explicit_parent:
+            raise HTTPException(
+                status_code=404,
+                detail=f"--parent Task {payload.parent_task_id} nicht gefunden.",
+            )
+        if explicit_parent.board_id != board_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="--parent Task gehoert nicht zu diesem Board.",
+            )
+    elif current_task_id:
         current_task = await session.get(Task, current_task_id)
         if not current_task or current_task.status != "in_progress":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Aktiver Task ist nicht in_progress — Delegation blockiert.",
-            )
+            if current_task is None:
+                detail = (
+                    f"Aktiver Task {current_task_id} existiert nicht mehr — "
+                    f"Delegation blockiert, keine stillschweigende Waisenkarte. "
+                    f"Nutze --parent <task-id>, um bewusst einen Parent zu setzen."
+                )
+            else:
+                detail = (
+                    f"Aktiver Task {current_task.id} hat Status '{current_task.status}' "
+                    f"(erwartet 'in_progress') — Delegation blockiert, keine "
+                    f"stillschweigende Waisenkarte. Nutze --parent <task-id>, um "
+                    f"bewusst einen anderen Parent zu setzen, oder reaktiviere den "
+                    f"aktiven Task zuerst."
+                )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
         if current_task.board_id != board_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1064,7 +1106,10 @@ async def agent_delegate_task(
     elif not agent.is_board_lead:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — Delegation nur aus aktiver Arbeit heraus moeglich.",
+            detail=(
+                "Kein aktiver Task — Delegation nur aus aktiver Arbeit heraus "
+                "moeglich (oder --parent <task-id> explizit setzen)."
+            ),
         )
     else:
         # Root delegation (live incident 2026-08-06): a Board Lead handling a
@@ -1122,6 +1167,8 @@ async def agent_delegate_task(
             )
     elif current_task is not None:
         origin_thread_id = current_task.origin_thread_id
+    elif explicit_parent is not None:
+        origin_thread_id = explicit_parent.origin_thread_id
 
     # Root mode: no parent to inherit from — board default project and explicit
     # priority or medium.
@@ -1135,28 +1182,38 @@ async def agent_delegate_task(
     # (agent_task_status's completion hook and _deliver_root_callback both key
     # off exactly that field). So the resume half stays off for root, the
     # notify half follows the caller's request.
+    #
+    # explicit_parent (W5-F) gets the same treatment as root for the
+    # block/resume half: we did NOT verify the delegating agent actually owns
+    # or is working on that task, so blocking it and later auto-resuming it
+    # would be reaching into a task this agent has no confirmed claim on.
+    # notify_requester still follows the caller's request either way.
+    parent_for_subtask = current_task if current_task is not None else explicit_parent
     notify_requester = payload.callback
-    if current_task is None:
+    if current_task is not None:
+        project_id = current_task.project_id
+        with_callback = payload.callback
+    elif explicit_parent is not None:
+        project_id = explicit_parent.project_id
+        with_callback = False
+    else:
         project_id = None
         board_row = await session.get(Board, board_id)
         if board_row is not None:
             project_id = board_row.default_project_id
         with_callback = False
-    else:
-        project_id = current_task.project_id
-        with_callback = payload.callback
 
     # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
         board_id=board_id,
         project_id=project_id,
-        parent_task_id=current_task.id if current_task else None,
+        parent_task_id=parent_for_subtask.id if parent_for_subtask else None,
         title=payload.title,
         description=payload.description,
         status="inbox",
         priority=payload.priority
-        or (current_task.priority if current_task else "medium"),
+        or (parent_for_subtask.priority if parent_for_subtask else "medium"),
         task_type="story",
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
@@ -1165,8 +1222,18 @@ async def agent_delegate_task(
         # for a root delegation too, so the completion actually reaches them.
         callback_agent_id=agent.id if notify_requester else None,
         is_auto_created=True,
-        auto_reason=f"delegation from {agent.name}"
-        + ("" if current_task else " (root, no active task)"),
+        auto_reason=(
+            f"delegation from {agent.name}"
+            + (
+                ""
+                if current_task
+                else (
+                    " (explicit --parent, no active task)"
+                    if explicit_parent
+                    else " (root, no active task)"
+                )
+            )
+        ),
     )
 
     # Dispatch guard BEFORE commit — no zombie subtask if the system/agent isn't dispatchable right now
@@ -1203,11 +1270,12 @@ async def agent_delegate_task(
         session.add(current_task)
 
     # Progress comment with delegation context — on the parent, when there is
-    # one. A root delegation logs via the activity event only.
-    if current_task is not None:
+    # one (own active task or an explicit --parent). A truly rootless
+    # delegation logs via the activity event only.
+    if parent_for_subtask is not None:
         comment = TaskComment(
             id=uuid.uuid4(),
-            task_id=current_task.id,
+            task_id=parent_for_subtask.id,
             author_type="agent",
             author_agent_id=agent.id,
             content=(
@@ -1227,14 +1295,15 @@ async def agent_delegate_task(
         title=f"{agent.name} delegiert an {target_agent.name}: {payload.title}",
         severity="info",
         board_id=board_id,
-        task_id=current_task.id if current_task else subtask.id,
+        task_id=parent_for_subtask.id if parent_for_subtask else subtask.id,
         agent_id=agent.id,
         detail={
             "subtask_id": str(subtask.id),
             "target_agent": target_agent.name,
             "callback": with_callback,
             "notify_requester": notify_requester,
-            "root_delegation": current_task is None,
+            "root_delegation": parent_for_subtask is None,
+            "explicit_parent": explicit_parent is not None,
         },
     )
 
@@ -1248,17 +1317,32 @@ async def agent_delegate_task(
     logger.info(
         "Delegate: %s → %s (subtask %s, parent %s %s)",
         agent.name, target_agent.name, subtask.id,
-        current_task.id if current_task else "-",
-        "blocked" if with_callback else ("root" if current_task is None else "in_progress"),
+        parent_for_subtask.id if parent_for_subtask else "-",
+        "blocked" if with_callback else ("root" if parent_for_subtask is None else "in_progress"),
     )
+
+    # Loud instead of silent (W5-F): a truly rootless card — no owned
+    # current_task, no explicit --parent — is still allowed (Board Leads
+    # legitimately open root cards from a chat order), but the response now
+    # says so in plain text instead of the bare, easy-to-miss "no_task"
+    # status that shipped the two orphans b7d29be3/70d6b417 on 2026-09-11.
+    warning = None
+    if parent_for_subtask is None:
+        warning = (
+            "Kein Parent, kein Callback — diese Karte haengt an nichts und "
+            "niemand wird bei Fertigstellung automatisch benachrichtigt. "
+            "Falls das nicht gewollt war: naechstes Mal --parent <task-id> setzen."
+        )
 
     return DelegateResponse(
         subtask_id=subtask.id,
         assigned_to=target_agent.name,
         your_status=(
             "blocked" if with_callback
-            else ("no_task" if current_task is None else "in_progress")
+            else ("no_task" if parent_for_subtask is None else "in_progress")
         ),
+        parent_task_id=parent_for_subtask.id if parent_for_subtask else None,
+        warning=warning,
     )
 
 
