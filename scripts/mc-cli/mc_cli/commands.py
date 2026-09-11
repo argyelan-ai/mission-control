@@ -2179,6 +2179,20 @@ def _cmd_recover(args, client, cfg):
     Schreibt auch /tmp/mc-context.env mit TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID
     damit nachfolgende `mc ack`/`mc done`-Calls den korrekten Header senden.
 
+    Fallunterscheidung heilen/ablehnen (W5-E-Nacharbeit, 11.09.2026,
+    Spiegel zu _cmd_ack): recover schreibt die aktuelle Attempt-ID der
+    aktiven Karte ins Context-File — ein ZOMBIE-Run kann sich damit OHNE
+    jeden anderen Call neu scharf machen. Halte ich DIESE Karte bereits
+    mit einem eigenen Header (cfg.context_task_id == task['id']) und sie
+    wurde unter mir neu dispatcht (Attempt-ID differiert, z.B.
+    poll_orphan_run), wird die neue ID NICHT uebernommen — UsageError
+    mit beiden IDs. Anderer Task (context_task_id != task['id']): mein
+    Header sagt nichts ueber die Karte, Fortschreibung ist die Heilung.
+
+    `mc park` ist hier bewusst NICHT angepasst: dort ist der Rebind auf
+    die Ziel-Attempt-ID semantisch berechtigt (Lead-Werkzeug, das fremde
+    Karten zurueckstellt — der Lead WILL auf der Ziel-Karte handeln).
+
     Nutzen:
     - Nach Container/Session-Restart: `mc recover` zeigt dir wo du warst
     - Wenn du unsicher bist welcher Task gerade laeuft
@@ -2189,6 +2203,20 @@ def _cmd_recover(args, client, cfg):
         print("Kein aktiver Task — du bist frei.", file=sys.stderr)
         return 0
     task = resp["task"]
+    if (
+        cfg.context_task_id
+        and cfg.context_task_id == task.get("id")
+        and cfg.dispatch_attempt_id
+        and task.get("dispatch_attempt_id")
+        and task.get("dispatch_attempt_id") != cfg.dispatch_attempt_id
+    ):
+        raise UsageError(
+            f"Task {task.get('id')} wurde neu dispatcht, seit du ihn "
+            f"haeltst: deine Attempt-ID ist {cfg.dispatch_attempt_id!r}, "
+            f"aktuell ist {task.get('dispatch_attempt_id')!r}. Dein Run ist "
+            "veraltet — arbeite nicht auf dieser Karte weiter; starte einen "
+            "frischen Run oder melde dich beim Operator (`mc blocked`)."
+        )
     # Context-File so schreiben dass nachfolgende mc-Calls den Header setzen
     # koennen. poll.sh schreibt diese Datei normalerweise bei new_task —
     # beim manuellen `mc recover` ausserhalb von poll.sh muss der CLI das
@@ -2199,7 +2227,11 @@ def _cmd_recover(args, client, cfg):
             f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
     except OSError as e:
-        print(f"Warn: /tmp/mc-context.env nicht schreibbar: {e}", file=sys.stderr)
+        raise UsageError(
+            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
+            "erst Schreibrechte fixen, dann weiterarbeiten."
+        ) from e
     # Prompt auf stdout (agent liest das) — kein JSON-Wrapping
     print(f"# Recovery-Prompt fuer Task {task['id']}")
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
