@@ -505,6 +505,51 @@ async def test_recovery_context_checklist_hint_shows_done_even_without_hidden_op
 
 
 @pytest.mark.asyncio
+async def test_recovery_context_checklist_hint_shows_with_zero_open_items(
+    session: AsyncSession,
+):
+    """B6-Rest (Nacharbeit-5 PR #489): 12 erledigte / 0 offene Items + ein
+    progress-Kommentar. `shown_items` ist leer (keine offenen Items), also
+    hing die Hinweiszeile bisher komplett im toten `if shown_items:`-Zweig
+    und erschien nie, obwohl `done_count` == 12 ist. Die Zeile muss auch bei
+    null offenen Items erscheinen."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+    for i in range(12):
+        await _create_checklist_item(session, task.id, f"Erledigt {i:02d}", "done", i)
+    await _create_comment(session, task.id, "progress", "Alles erledigt")
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "erledigte" in result
+    assert f"mc task-get {task.id}" in result
+
+
+@pytest.mark.asyncio
+async def test_recovery_context_only_done_items_no_comments_not_none(
+    session: AsyncSession,
+):
+    """B6-Rest (Nacharbeit-5 PR #489): 8 erledigte / 0 offene Items, keine
+    Kommentare. Die alte Fruehruecklkehr (`if not comments and not open_items
+    and not operator_comments: return None`) kennt `done_count` nicht und
+    lieferte hier `None` — kompletter Recovery-Kontext-Verlust fuer eine
+    Karte, die ausschliesslich erledigte Items hat."""
+    from app.services.dispatch import build_recovery_context
+
+    task = await _setup_board_and_task(session)
+    for i in range(8):
+        await _create_checklist_item(session, task.id, f"Erledigt {i:02d}", "done", i)
+
+    result = await build_recovery_context(session, task)
+
+    assert result is not None
+    assert "erledigte" in result
+    assert f"mc task-get {task.id}" in result
+
+
+@pytest.mark.asyncio
 async def test_recovery_context_progress_snippet_marks_truncation_over_180_chars(
     session: AsyncSession,
 ):

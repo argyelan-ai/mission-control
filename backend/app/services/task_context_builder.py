@@ -1037,7 +1037,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     # gibt, auch wenn sie hier nicht einzeln aufgelistet werden.
     done_count = len(all_items) - len(open_items)
 
-    if not comments and not open_items and not operator_comments:
+    if not comments and not open_items and not operator_comments and not done_count:
         return None
 
     parts: list[str] = [
@@ -1118,7 +1118,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         parts.append(header)
         parts.append(block_text)
 
-    if shown_items:
+    if shown_items or done_count > 0:
         parts.append("\n### Deine Checkliste")
         for i, item in enumerate(shown_items):
             hint = " ← **HIER WEITERMACHEN**" if i == 0 else ""
