@@ -11,6 +11,7 @@
  * the terminal, the one place that can't lie.
  */
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
@@ -28,6 +29,11 @@ interface StatusLineProps {
    *  yet. Local knowledge, and honest about being exactly that: it says the
    *  message left, not that the agent received or started it. */
   sending?: boolean;
+  /** What the agent is doing RIGHT NOW, from a structured event (the tool
+   *  call whose result has not arrived yet). Replaces the rotating verb with
+   *  the tool's own title ("Read poll.sh", "$ git diff"). Only honoured while
+   *  the probe says working — a stale activity never outranks the state. */
+  activity?: { title: string } | null;
 }
 
 interface StatusDisplay {
@@ -46,24 +52,12 @@ interface StatusDisplay {
  * wuesste nur er selbst), sondern nur DASS er laeuft. Der pulsierende Punkt
  * bleibt das eigentliche Signal.
  */
-export const WORKING_WORDS = [
-  "Arbeitet",
-  "Denkt nach",
-  "Gruebelt",
-  "Bruetet",
-  "Werkelt",
-  "Tueftelt",
-  "Rechnet",
-  "Sinniert",
-  "Knobelt",
-  "Feilt",
-  "Sortiert",
-  "Kombiniert",
-  "Verdichtet",
-  "Spuert nach",
-  "Waelzt Ideen",
-  "Zieht Faeden",
-] as const;
+/** Die Liste steht im Katalog (`sessions.status.workingWords`, EN/DE), mit `|`
+ *  getrennt — next-intl liefert keine Arrays. */
+function useWorkingWords(): readonly string[] {
+  const t = useTranslations("sessions.status");
+  return t("workingWords").split("|");
+}
 
 /** Wie lange ein Wort stehen bleibt. Kurz genug, dass es lebendig wirkt, lang
  *  genug, dass man es zu Ende lesen kann, bevor es wechselt. */
@@ -74,6 +68,7 @@ export const WORKING_WORD_INTERVAL_MS = 4000;
  *  nicht jeder Zug mit demselben Wort beginnt; steht der Agent still, laeuft
  *  kein Timer (kein Rendern im Ruhezustand). */
 function useWorkingWord(active: boolean): string {
+  const WORKING_WORDS = useWorkingWords();
   const [tick, setTick] = useState(0);
   const [seed, setSeed] = useState(0);
 
@@ -99,34 +94,36 @@ function useWorkingWord(active: boolean): string {
   return WORKING_WORDS[(seed + tick) % WORKING_WORDS.length];
 }
 
-const UNKNOWN_DISPLAY: StatusDisplay = {
+type Labels = (key: string) => string;
+
+const unknownDisplay = (t: Labels): StatusDisplay => ({
   dotColor: C.warning,
   textColor: STATUS_TEXT.warning,
-  label: "Status unklar — Terminal prüfen",
+  label: t("unknown"),
   pulse: false,
-};
+});
 
 // A finished session is a normal end state, not a fault: neutral tones, no
 // pulse, and it says what happens next instead of leaving the operator to
 // wonder whether typing is even possible. Amber stays reserved for the case
 // that genuinely needs attention — the session is live but we cannot read it.
-const ENDED_DISPLAY: StatusDisplay = {
+const endedDisplay = (t: Labels): StatusDisplay => ({
   dotColor: C.textDim,
   textColor: C.textMuted,
-  label: "Session beendet — neue Nachricht startet die nächste Session",
+  label: t("ended"),
   pulse: false,
-};
+});
 
 // Local, and scoped to exactly what we know: the request left the browser.
 // It deliberately does NOT claim the agent got it or started working — that
 // only becomes true when a real state/tool/message frame arrives, which is
 // what clears this.
-const SENDING_DISPLAY: StatusDisplay = {
+const sendingDisplay = (t: Labels): StatusDisplay => ({
   dotColor: STATUS.busy,
   textColor: STATUS_TEXT.info,
-  label: "Gesendet…",
+  label: t("sent"),
   pulse: true,
-};
+});
 
 function resolveDisplay(
   state: StateEvent | null,
@@ -134,29 +131,36 @@ function resolveDisplay(
   aliveness: ChatAliveness,
   sending: boolean,
   workingWord: string,
+  activity: { title: string } | null,
+  t: Labels,
 ): StatusDisplay {
   // Outranks the pane probe on purpose: right after a send the probe still
   // reports the PREVIOUS state (idle), and showing "Bereit" one frame after the
   // operator hit send is exactly the unresponsive feeling this round is about.
   if (sending) {
-    return SENDING_DISPLAY;
+    return sendingDisplay(t);
   }
   if (aliveness === "ended") {
-    return ENDED_DISPLAY;
+    return endedDisplay(t);
   }
   if (!connected || !state || state.status === "unknown") {
-    return UNKNOWN_DISPLAY;
+    return unknownDisplay(t);
   }
 
   switch (state.status) {
     case "working":
+      // Ein laufendes Werkzeug ist konkreter als jedes Verb: es stammt aus
+      // dem Transkript, nicht aus geratenem Bildschirmtext (Befund 10.09.2026).
+      if (activity) {
+        return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: activity.title, pulse: true };
+      }
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: `${workingWord}…`, pulse: true };
     case "waiting_input":
-      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: "Wartet auf dich", pulse: false };
+      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("waitingForYou"), pulse: false };
     case "permission_prompt":
-      return { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: "Wartet auf Genehmigung", pulse: false };
+      return { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: t("waitingApproval"), pulse: false };
     case "idle":
-      return { dotColor: C.textDim, textColor: C.textMuted, label: "Bereit", pulse: false };
+      return { dotColor: C.textDim, textColor: C.textMuted, label: t("ready"), pulse: false };
   }
 }
 
@@ -194,12 +198,17 @@ export function StatusLine({
   connected,
   aliveness = "active",
   sending = false,
+  activity = null,
 }: StatusLineProps) {
+  const t = useTranslations("sessions.status");
   // Der Hook muss VOR jedem fruehen Return laufen (Regeln der Hooks); er ist nur
   // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
-  const display = resolveDisplay(state, connected, aliveness, sending, workingWord);
+  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t);
   const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
+  // Buchstaben-Lauf nur fuer das Verb; ein Werkzeug-Titel steht ruhig da
+  // (Monospace, eine Zeile, abgeschnitten — nichts springt).
+  const showVerb = working && !activity;
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status
@@ -218,8 +227,12 @@ export function StatusLine({
         className="status-dot relative inline-flex h-1.5 w-1.5 shrink-0 rounded-full"
         style={{ backgroundColor: display.dotColor, ["--status-dot" as string]: display.dotColor }}
       />
-      <span data-testid="status-label">
-        {working ? <LetterWord word={workingWord} /> : display.label}
+      <span
+        data-testid="status-label"
+        className={activity && working ? "font-mono truncate" : undefined}
+        title={activity && working ? activity.title : undefined}
+      >
+        {showVerb ? <LetterWord word={workingWord} /> : display.label}
       </span>
     </div>
   );

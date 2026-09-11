@@ -460,7 +460,7 @@ export function ChatView({
     // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
     // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-  }, [stream.events, stream.preview, stickToBottom, renderAll]);
+  }, [stream.events, stream.preview, stickToBottom, renderAll, effectiveView]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
   // which is the whole point.
@@ -497,7 +497,10 @@ export function ChatView({
     observer.observe(el);
     if (timelineRef.current) observer.observe(timelineRef.current);
     return () => observer.disconnect();
-  }, [stickToBottom]);
+    // `effectiveView`: the scroll container only exists in chat view. Started
+    // in the terminal (or forced there by a transcript 404 that clears later),
+    // the first run finds no element — and nothing else re-runs this effect.
+  }, [stickToBottom, effectiveView]);
 
   // Das Mitlaufen wird NUR durch eine echte Geste beendet — nie durch ein
   // Scroll-Ereignis allein (Operator-Befund 20.08.2026: "beginnt ganz am
@@ -679,6 +682,18 @@ export function ChatView({
     stickToBottom || itemsAtUnstickRef.current == null
       ? 0
       : Math.max(0, items.length - itemsAtUnstickRef.current);
+
+  // Was der Agent GERADE tut, aus dem Transkript statt vom Bildschirm
+  // (Befund 10.09.2026): der Tailer sendet ein Werkzeug-Ereignis sofort beim
+  // Aufruf (result null) und noch einmal, sobald das Ergebnis da ist. Ist das
+  // letzte Ereignis ein Werkzeug ohne Ergebnis, laeuft es jetzt.
+  const activity = useMemo(() => {
+    const last = stream.events[stream.events.length - 1];
+    if (last && last.kind === "tool" && last.result == null && !last.sidechain) {
+      return { title: last.title };
+    }
+    return null;
+  }, [stream.events]);
 
   function jumpToBottom() {
     const el = scrollRef.current;
@@ -1089,8 +1104,13 @@ export function ChatView({
 
             {/* Die Live-Vorschau kommt zuletzt: sie ist die Antwort, die
                 gerade entsteht — nach allem Bestaetigten und nach dem eigenen
-                Echo, auf das sie antwortet. */}
-            {stream.preview && <PreviewRow preview={stream.preview} />}
+                Echo, auf das sie antwortet. NUR aus ACP-Text-Deltas: der
+                tmux-Bildschirmabgriff ("pane") zeigte Bruchstuecke, Werkzeug-
+                Rahmen und den Dispatch-Prompt und ist seit 10.09.2026 nicht
+                mehr Teil des Chats — die Statuszeile sagt, was laeuft. */}
+            {stream.preview && stream.preview.source === "acp" && (
+              <PreviewRow preview={stream.preview} />
+            )}
           </div>
           </div>
 
@@ -1132,6 +1152,7 @@ export function ChatView({
           <StatusLine
             state={stream.state}
             connected={stream.connected}
+            activity={activity}
             aliveness={aliveness}
             sending={stream.awaitingResponse}
           />
