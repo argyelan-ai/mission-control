@@ -24,14 +24,32 @@ Rollensystem-Umbau, der laut Task explizit out of scope ist.
 Ausfuehrung (braucht DB-Zugriff, den ein Agent-Token nicht hat — Aendern
 fremder Agent-Rollen ist eine Operator-Aktion, siehe Team Charter Punkt 6):
 
-    docker compose exec backend python -m scripts.fix_legacy_agent_roles --dry-run
-    docker compose exec backend python -m scripts.fix_legacy_agent_roles
+    docker compose exec backend python -m scripts.fix_legacy_agent_roles --board-id <id> --dry-run
+    docker compose exec backend python -m scripts.fix_legacy_agent_roles --board-id <id>
 
 Idempotent: ein Agent, dessen role-Spalte bereits den Ziel-Enum-Wert
 traegt, wird uebersprungen (kein no-op Write, kein doppeltes Logging).
 Matched ausschliesslich per Agent-NAME (nicht per aktuellem role-Freitext,
 der sich jederzeit aendern kann) — bewusst eine feste, auditierbare Liste
 statt Heuristik.
+
+Was passiert mit dem heutigen Freitext (Boss-Review, task 94fda9f9,
+seq 3)? Er wird bewusst NICHT in eine andere Spalte verschoben — es gibt
+keine passende: `identity_md` ist bereits ein vollstaendiges, pro Rolle
+templatiertes Dokument (IDENTITY.md), `soul_persona_md` ist ein fest
+seedetes 80-120-Token-Charakter-Snippet fuer einen anderen, spezifischen
+9-Agenten-Satz, `dispatch_config` ist behaviorales JSON, kein Label-Feld
+— jedes davon fuer einen 1-zeiligen Rollentitel zweckentfremdet und mit
+bestehendem Inhalt kollidierend. Der Freitext wird stattdessen bewusst
+verworfen, aber vollstaendig auditierbar: jeder alte Wert erscheint
+unveraendert in der Vorher-Spalte dieses Skripts (--dry-run wie live)
+UND wird vor der Ausfuehrung als Kommentar auf der Vorfall-Karte
+archiviert.
+
+Das --dry-run (und das normale) Board-Reporting zeigt IMMER ALLE Agenten
+des Boards, nicht nur die vier Ziel-Agenten (Boss-Review, task 94fda9f9,
+seq 3: "Ich will vorher sehen, wen es sonst noch trifft") — nur die vier
+namentlich gelisteten werden geschrieben, der Rest ist reine Sichtbarkeit.
 """
 from __future__ import annotations
 
@@ -39,6 +57,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import uuid
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -60,21 +79,30 @@ TARGET_ROLES: dict[str, AgentRole] = {
 }
 
 
-async def _run(dry_run: bool) -> int:
+async def _run(board_id: uuid.UUID, dry_run: bool) -> int:
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        result = await session.exec(select(Agent).where(Agent.name.in_(TARGET_ROLES.keys())))
-        agents = {a.name: a for a in result.all()}
+        result = await session.exec(
+            select(Agent).where(Agent.board_id == board_id).order_by(Agent.name)
+        )
+        board_agents = list(result.all())
+        by_name = {a.name: a for a in board_agents}
 
-        print("## Vorher")
-        for name in TARGET_ROLES:
-            a = agents.get(name)
-            print(f"- {name}: {a.role!r}" if a else f"- {name}: NICHT GEFUNDEN")
+        # Full board report FIRST — Boss-Review (task 94fda9f9, seq 3):
+        # "Ich will vorher sehen, wen es sonst noch trifft", not just the
+        # four target agents. Only the four named ones ever get written.
+        print(f"## Vorher — alle {len(board_agents)} Agenten auf Board {board_id}")
+        for a in board_agents:
+            marker = " <- wird geschrieben" if a.name in TARGET_ROLES else ""
+            print(f"- {a.name}: {a.role!r}{marker}")
+
+        missing = [name for name in TARGET_ROLES if name not in by_name]
+        for name in missing:
+            logger.warning("Ziel-Agent %r nicht auf Board %s gefunden — uebersprungen", name, board_id)
 
         changed = 0
         for name, target in TARGET_ROLES.items():
-            agent = agents.get(name)
+            agent = by_name.get(name)
             if not agent:
-                logger.warning("Agent %r nicht auf dem Board gefunden — uebersprungen", name)
                 continue
             if agent.role == target.value:
                 logger.info("%s: role bereits %r — idempotent, kein Write", name, target.value)
@@ -85,35 +113,39 @@ async def _run(dry_run: bool) -> int:
                 agent.updated_at = utcnow()
                 session.add(agent)
             logger.info(
-                "%s: role %r -> %r%s", name, old_role, target.value,
+                "%s: role %r -> %r%s (alter Freitext bewusst verworfen, siehe Docstring)",
+                name, old_role, target.value,
                 " (dry-run, nicht geschrieben)" if dry_run else "",
             )
             changed += 1
 
         if not dry_run and changed:
             await session.commit()
-            for a in agents.values():
+            for a in board_agents:
                 await session.refresh(a)
 
-        print("\n## Nachher" + (" (dry-run — Werte oben zeigen was geschrieben WUERDE)" if dry_run else ""))
-        for name in TARGET_ROLES:
-            a = agents.get(name)
-            if not a:
-                print(f"- {name}: NICHT GEFUNDEN")
-            elif dry_run:
-                print(f"- {name}: {a.role!r} (unveraendert, dry-run)")
+        print(
+            "\n## Nachher — alle Agenten"
+            + (" (dry-run — Werte zeigen den HEUTIGEN Stand, nichts wurde geschrieben)" if dry_run else "")
+        )
+        for a in board_agents:
+            if a.name in TARGET_ROLES and dry_run:
+                target = TARGET_ROLES[a.name].value
+                would = target if a.role != target else a.role
+                print(f"- {a.name}: {a.role!r} (waere: {would!r})")
             else:
-                print(f"- {name}: {a.role!r}")
+                print(f"- {a.name}: {a.role!r}")
 
-        print(f"\n{changed} Agent(en) {'wuerden geaendert' if dry_run else 'geaendert'}.")
+        print(f"\n{changed} Agent(en) {'wuerden geaendert' if dry_run else 'geaendert'} (von {len(TARGET_ROLES)} Ziel-Agenten).")
         return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--board-id", required=True, type=uuid.UUID, help="Board-UUID (z.B. 7bd0be90-c45a-4a15-9037-ebb72f15ba09)")
     parser.add_argument("--dry-run", action="store_true", help="Nur anzeigen, nichts schreiben")
     args = parser.parse_args()
-    return asyncio.run(_run(dry_run=args.dry_run))
+    return asyncio.run(_run(board_id=args.board_id, dry_run=args.dry_run))
 
 
 if __name__ == "__main__":
