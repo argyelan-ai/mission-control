@@ -48,6 +48,18 @@ LOCK_TTL_SECONDS = 120
 LOCK_REFRESH_INTERVAL_SECONDS = 60
 LOCK_ACQUIRE_MAX_ATTEMPTS = 10
 LOCK_ACQUIRE_RETRY_DELAY_SECONDS = 15
+# W4 (11.09.2026 — Restposten aus #506, live-gemessen: Absturzfall brauchte
+# 18s statt der geforderten 10s). LOCK_ACQUIRE_RETRY_DELAY_SECONDS gilt fuer
+# JEDEN Versuch — im Absturzfall wartet Versuch 1 dadurch die vollen 15s,
+# obwohl der Heartbeat (TTL 15s) meist laengst vorher verfaellt und Versuch 2
+# sofort steht. Nur der ERSTE Retry nutzt diese kuerzere Wartezeit; ab dem
+# zweiten Versuch gilt wieder LOCK_ACQUIRE_RETRY_DELAY_SECONDS — ein legitim
+# lebender Halter (Heartbeat bleibt bestehen) wird also nicht haeufiger
+# gepollt als vorher. Kein hartes Worst-Case-Limit: bei einem Absturz direkt
+# NACH einem Heartbeat-Refresh kann die Restlaufzeit des Heartbeats bis zu
+# LOCK_HEARTBEAT_TTL_SECONDS betragen — die Heartbeat-TTL selbst bleibt
+# bewusst unangetastet (Ticket-Vorgabe), das ist weiterhin die Obergrenze.
+LOCK_ACQUIRE_RETRY_DELAY_FIRST_SECONDS = 3
 LOCK_HEARTBEAT_TTL_SECONDS = 15
 LOCK_HEARTBEAT_INTERVAL_SECONDS = 5
 
@@ -102,13 +114,18 @@ class SchedulerService:
                     attempt,
                 )
                 return True
+            delay = (
+                LOCK_ACQUIRE_RETRY_DELAY_FIRST_SECONDS
+                if attempt == 1
+                else LOCK_ACQUIRE_RETRY_DELAY_SECONDS
+            )
             logger.info(
                 "Scheduler lock held by another worker — retry %d/%d in %ds",
                 attempt,
                 LOCK_ACQUIRE_MAX_ATTEMPTS,
-                LOCK_ACQUIRE_RETRY_DELAY_SECONDS,
+                delay,
             )
-            await asyncio.sleep(LOCK_ACQUIRE_RETRY_DELAY_SECONDS)
+            await asyncio.sleep(delay)
         return False
 
     async def _steal_stale_lock(self, redis) -> bool:

@@ -340,3 +340,83 @@ async def test_worker_run_shuts_down_gracefully_on_signal(monkeypatch, sig):
 
     start_mock.assert_awaited_once()
     stop_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch):
+    """W4 (11.09.2026, Karte 70d6b417 — Restposten aus #506, Punkt 2):
+    live gemessen haengte ein `docker stop` direkt nach einem
+    Worker-Recreate die vollen 30s, waehrend der Worker noch im
+    Vault-Reindex war -> SIGKILL (der Lock blieb liegen, wurde vom neuen
+    Worker aber korrekt auf Versuch 1 gestohlen -- der #506-Fix hielt).
+
+    Ursache (gemessen, nicht vermutet -- siehe
+    tools/repro_sigterm.py-artiges Setup unten): ``VaultIndex(...)`` und
+    ``rebuild_from_vault()`` liefen in ``start_vault_services()`` synchron
+    (kein await, kein Yield-Punkt). asyncio liefert einen per
+    ``add_signal_handler`` registrierten Callback nur aus, wenn der
+    Event-Loop pollt -- ein rein synchroner Call haelt den Loop komplett
+    an, also auch jede Signalverarbeitung, fuer seine gesamte Laufzeit.
+    Ein waehrend des Reindex eintreffendes SIGTERM (echtes ``docker
+    stop``) konnte dadurch erst verarbeitet werden, NACHDEM der Rebuild
+    fertig war -- bei einem hinreichend grossen Vault laenger als
+    Dockers Stop-Timeout, daher SIGKILL statt eines sauberen Shutdowns.
+
+    Reproduziert das Signal real (``os.kill`` auf den eigenen Prozess,
+    gleiches Muster wie ``test_worker_run_shuts_down_gracefully_on_signal``
+    oben) waehrend eines kuenstlich verlangsamten Rebuilds -- misst also
+    tatsaechlich, ob der Event-Loop responsive bleibt, statt es zu
+    behaupten.
+    """
+    import os
+    import signal
+    import threading
+    import time
+
+    import app.background as bg
+
+    # first_boot ist in der session-weiten Test-Vault meist schon False
+    # (siehe conftest._TEST_VAULT_ROOT) -- das Flag erzwingt den Rebuild-Pfad
+    # unabhaengig davon.
+    monkeypatch.setattr(bg.settings, "vault_index_rebuild_on_boot", True)
+    monkeypatch.setattr(bg.VaultWatcher, "start", AsyncMock())
+
+    REINDEX_SECONDS = 2.0
+
+    def _slow_rebuild(self):
+        time.sleep(REINDEX_SECONDS)  # Stellvertreter fuer einen echten Vault-Scan
+        return {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
+
+    monkeypatch.setattr(bg.VaultIndex, "rebuild_from_vault", _slow_rebuild)
+
+    loop = asyncio.get_running_loop()
+    signal_received_at: dict[str, float] = {}
+
+    def _on_term():
+        signal_received_at["t"] = time.monotonic()
+
+    loop.add_signal_handler(signal.SIGTERM, _on_term)
+    try:
+        sent_at = time.monotonic()
+
+        def _sender():
+            time.sleep(0.3)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=_sender, daemon=True).start()
+
+        await bg.start_vault_services(SimpleNamespace(state=SimpleNamespace()))
+
+        # Dem Loop einen Moment geben, den bereits gequeuten Callback
+        # auszuliefern, falls er nicht schon gefeuert hat.
+        await asyncio.sleep(0.1)
+
+        assert "t" in signal_received_at, "SIGTERM-Handler ist nie gefeuert"
+        delay = signal_received_at["t"] - sent_at
+        assert delay < 1.0, (
+            f"SIGTERM wurde erst nach {delay:.2f}s verarbeitet -- der "
+            f"Vault-Reindex ({REINDEX_SECONDS}s) hat den Event-Loop "
+            "blockiert statt in einem eigenen Thread zu laufen"
+        )
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)

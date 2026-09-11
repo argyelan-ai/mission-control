@@ -425,6 +425,73 @@ class TestSchedulerLockLifecycle:
         assert await fake_redis.get(RedisKeys.scheduler_lock()) == "alive-owner"
 
     @pytest.mark.asyncio
+    async def test_acquire_lock_crash_takeover_under_ten_seconds(self, fake_redis):
+        """Reproduces the live-measured Absturzfall from 11.09.2026 (Karte
+        70d6b417, Restposten aus #506): old owner SIGKILLed, lock entry
+        still there, heartbeat still there for the retry's first check (as
+        measured live: attempt 1 logged "held by another", only attempt 2
+        found the heartbeat gone). DoD b7d29be3 demanded a takeover in under
+        10s — the pre-fix flat 15s retry delay made this 15s+ on its own,
+        measured live at 18s end-to-end.
+
+        Asserts on the SUM of the seconds actually passed to asyncio.sleep()
+        (not wall-clock — sleep is mocked, like every other test in this
+        class) so the test stays fast and deterministic.
+        """
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        await fake_redis.set(RedisKeys.scheduler_lock(), "dead-owner", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "dead-owner", ex=15)
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "new-owner"
+
+        total_delay = 0.0
+
+        async def fake_sleep(seconds):
+            nonlocal total_delay
+            total_delay += seconds
+            # The heartbeat's own Redis TTL runs out during this wait —
+            # simulates it naturally expiring shortly after attempt 1,
+            # exactly like the live incident (attempt 1: still there;
+            # attempt 2: gone).
+            await fake_redis.delete(RedisKeys.scheduler_lock_heartbeat())
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            result = await svc._acquire_lock()
+
+        assert result is True
+        assert total_delay < 10, (
+            f"crash takeover took {total_delay}s of retry delay — DoD is under 10s"
+        )
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "new-owner"
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_clean_case_unchanged_by_backoff(self, fake_redis):
+        """Regression guard for the backoff change above: the clean-stop
+        case (old owner's stop() ran, lock+heartbeat both gone immediately)
+        must still take over on the very first attempt with zero retry
+        delay — the new first-retry constant must never apply when there's
+        nothing to retry."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        # Nothing in Redis at all — mirrors a clean stop() that already
+        # deleted both keys before the new worker's first attempt.
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "new-owner"
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+            result = await svc._acquire_lock()
+
+        assert result is True
+        assert mock_sleep.call_count == 0
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "new-owner"
+
+    @pytest.mark.asyncio
     async def test_start_skips_when_lock_unavailable(self):
         """If _acquire_lock is False → start() returns without starting APScheduler."""
         from app.services.scheduler import SchedulerService

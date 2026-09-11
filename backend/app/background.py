@@ -27,6 +27,7 @@ NICHT hier — die bleiben immer im API-Prozess.
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from app.config import settings
@@ -511,12 +512,31 @@ async def start_vault_services(app) -> dict:
         index_db = vault_path / ".mc_index.db"
         first_boot = not index_db.exists()
 
-        vault_index = VaultIndex(db_path=index_db, vault_path=vault_path)
+        # W4 (11.09.2026 — Restposten aus #506): VaultIndex(...) und
+        # rebuild_from_vault() sind plain-sync (kein await, kein Yield-Punkt).
+        # Aufgerufen inline haetten sie den Event-Loop fuer ihre gesamte
+        # Laufzeit blockiert — und damit auch jedes SIGTERM, das waehrend
+        # eines laufenden Reindex ankommt: asyncio.add_signal_handler()
+        # liefert den Callback ueber den Loop selbst aus, und der Loop
+        # pollt nur zwischen await-Punkten. Ein `docker stop` waehrend des
+        # Reindex haengt dadurch bis zum Ende des Rebuilds (gemessen:
+        # volle 30s Stop-Timeout -> SIGKILL, siehe Repro in
+        # backend/tests/test_background_services_flag.py::
+        # test_vault_reindex_does_not_block_sigterm_handling). Beide Aufrufe
+        # laufen jetzt in einem Worker-Thread (asyncio.to_thread) — der Loop
+        # bleibt frei, SIGTERM wird sofort verarbeitet, egal wie lange der
+        # Rebuild noch braucht. VaultIndex ist dafuer bereits ausgelegt
+        # (check_same_thread=False + eigener threading.Lock, siehe
+        # vault_index.py) — kein Rewrite noetig.
+        vault_index = await asyncio.to_thread(VaultIndex, db_path=index_db, vault_path=vault_path)
         if first_boot or settings.vault_index_rebuild_on_boot:
-            stats = vault_index.rebuild_from_vault()
+            _rebuild_started = time.monotonic()
+            stats = await asyncio.to_thread(vault_index.rebuild_from_vault)
+            _rebuild_elapsed = time.monotonic() - _rebuild_started
             logger.info(
-                "Vault index rebuild (%s): scanned=%d indexed=%d skipped=%d errors=%d",
+                "Vault index rebuild (%s, %.2fs): scanned=%d indexed=%d skipped=%d errors=%d",
                 "first boot" if first_boot else "forced",
+                _rebuild_elapsed,
                 stats["scanned"], stats["indexed"], stats["skipped"], stats["errors"],
             )
 
