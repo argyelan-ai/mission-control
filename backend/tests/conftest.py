@@ -158,13 +158,73 @@ else:
 
 # ── Database fixtures ─────────────────────────────────────────────────────
 
+async def _empty_all_tables(conn) -> None:
+    from sqlalchemy import text as _text
+    for table in reversed(SQLModel.metadata.sorted_tables):
+        await conn.execute(_text(f'DELETE FROM "{table.name}"'))
+
+
+# Schema fingerprint of the SQLite engine right after create_all — one row
+# per table with its CREATE statement, so COLUMNS count, not just table
+# presence. Review #488 B1: a migration test seeds `ALTER TABLE … ADD COLUMN`
+# and aborts on purpose; `DELETE` names no columns, so the OperationalError
+# rescue never fired and the next test saw the drifted schema ("duplicate
+# column name"). The fingerprint is compared before EVERY test (one cheap
+# query) and any drift — dropped table, added/removed column, changed
+# constraint — triggers a full drop_all + create_all.
+_PRISTINE_FINGERPRINT: dict = {"value": None}
+
+
+async def _schema_fingerprint(conn) -> tuple:
+    from sqlalchemy import text as _text
+    rows = await conn.execute(_text(
+        "SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ))
+    return tuple((r[0], r[1]) for r in rows)
+
+
+async def _rebuild_schema(conn) -> None:
+    await conn.run_sync(SQLModel.metadata.drop_all)
+    await conn.run_sync(SQLModel.metadata.create_all)
+    _PRISTINE_FINGERPRINT["value"] = await _schema_fingerprint(conn)
+
+
+async def _ensure_pristine_schema(conn) -> bool:
+    """Rebuild the schema if it drifted from the pristine fingerprint.
+    Returns True when a rebuild happened (tests use this as the oracle)."""
+    if _PRISTINE_FINGERPRINT["value"] is None:
+        await _rebuild_schema(conn)
+        return True
+    if await _schema_fingerprint(conn) != _PRISTINE_FINGERPRINT["value"]:
+        await _rebuild_schema(conn)
+        return True
+    return False
+
+
 @pytest.fixture(autouse=True)
 async def setup_db():
-    """Before each test: create tables. Afterward: drop everything.
+    """Give every test an empty database — without rebuilding the schema.
+
+    Until 10.09.2026 this fixture ran create_all + drop_all around EVERY test:
+    78 CREATE TABLEs plus 78 DROPs per test, each crossing aiosqlite's thread
+    boundary — measured at ~78 ms per test (PR #316), i.e. most of the
+    22-minute CI job spent building a schema that never changes. Now the
+    schema is created once per engine (lazily, on the first test of each
+    xdist worker) and every test starts by deleting the rows (~8 ms). The
+    isolation is unchanged: empty tables at start, cleanup happens BEFORE the
+    test so a crashed predecessor cannot poison its successor.
+
+    Isolation of the SCHEMA (review #488 B1): the migration tests replay real
+    Alembic steps against this engine — they drop tables and ADD COLUMNs and
+    some abort on purpose mid-way. Before every test a schema fingerprint
+    (sqlite_master: tables + indexes + their CREATE sql) is compared with the
+    pristine one; any drift triggers drop_all + create_all. Only paid when
+    something actually changed.
 
     Postgres lane: the schema comes from Alembic (triggers included) and is
-    never dropped; isolation is a TRUNCATE of every model table before the
-    test (cheap, keeps triggers/functions intact)."""
+    never dropped; isolation is a TRUNCATE of every model table."""
+    from sqlalchemy.exc import OperationalError
     if POSTGRES_LANE:
         from sqlalchemy import text as _text
         names = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
@@ -173,10 +233,14 @@ async def setup_db():
         yield
         return
     async with test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await _ensure_pristine_schema(conn)
+        try:
+            await _empty_all_tables(conn)
+        except OperationalError:
+            # belt and braces: a table vanished between fingerprint and DELETE
+            await _rebuild_schema(conn)
+            await _empty_all_tables(conn)
     yield
-    async with test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
 
 
 def pytest_collection_modifyitems(config, items):
