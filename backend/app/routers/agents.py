@@ -14,8 +14,8 @@ from sqlmodel import select
 from app.auth import require_agent, require_control_plane, require_user, require_user_or_control_plane
 from app.database import get_session
 from app.models.agent import Agent, AgentMetrics
+from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.models.task import Task
-from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services import thread_scope
 from app.services.sse import make_sse_response
@@ -2893,6 +2893,19 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
 
     # Orphaned: rotate the run identity + clear the ACK so the poll claim
     # path re-delivers the prompt on this same response chain.
+    #
+    # W0.1: one heal per card per round — the redispatch re-delivers the
+    # prompt, so it competes with every other healer (watchdog orphans,
+    # tiered recovery) acting on this card in the same round.
+    redis = await get_redis()
+    if not await try_claim_heal(redis, str(task.id)):
+        logger.info(
+            "Poll-orphan redispatch skipped for task %s — another watchdog "
+            "healed this task this round",
+            task.id,
+        )
+        return None
+
     task.ack_at = None
     session.add(task)
     await session.commit()
@@ -2903,7 +2916,6 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
         only_if_null=False,
     )
 
-    redis = await get_redis()
     count_key = RedisKeys.poll_orphan_redispatch_count(str(task.id))
     redispatch_count = int(await redis.incr(count_key))
     await redis.expire(count_key, 86400 * 7)
