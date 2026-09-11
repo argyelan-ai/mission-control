@@ -397,14 +397,16 @@ async def test_done_passes_with_tolerant_header_variants(
 
 
 @pytest.mark.asyncio
-async def test_reflection_creates_lesson_in_board_memory(
+async def test_reflection_alone_creates_no_lesson(
     client, fake_redis, make_board, make_task,
 ):
-    """POST reflection comment → BoardMemory(memory_type='lesson', auto_generated=True) row exists.
+    """Reflexions-Triage (2026-09-11): a bare reflection comment creates NO
+    BoardMemory(lesson) anymore.
 
-    Pitfall F: index_memory MUST be mocked — production wraps it in try/except
-    so a Qdrant outage doesn't break comment POST. We mock to avoid hitting
-    the real indexer in tests.
+    Vorher (Phase B, 2026-04-11) landete jede Reflexion ungefiltert im Vault —
+    81 Lessons in 2 Tagen, unbelegt/doppelt (Mark, 11.09.2026). Jetzt braucht
+    es zwingend ein Lead-Urteil (`reflection_verdict`, siehe
+    test_reflection_verdict_uebernehmen_creates_lesson_with_quelle unten).
     """
     board = await make_board()
     cody, cody_token = await _make_agent_with_token(
@@ -416,7 +418,7 @@ async def test_reflection_creates_lesson_in_board_memory(
 
     with patch(
         "app.services.memory_indexing.index_memory", new_callable=AsyncMock,
-    ) as _mock_idx, patch(
+    ), patch(
         "app.services.activity.broadcast", new_callable=AsyncMock,
     ):
         response = await client.post(
@@ -429,7 +431,6 @@ async def test_reflection_creates_lesson_in_board_memory(
         )
     assert response.status_code == 201, response.text[:300]
 
-    # Verify BoardMemory row created via the reflection pipeline (Plan 04-06)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(
             select(BoardMemory).where(
@@ -438,11 +439,186 @@ async def test_reflection_creates_lesson_in_board_memory(
             )
         )
         lessons = result.all()
-    assert len(lessons) == 1, f"Expected 1 lesson, got {len(lessons)}"
-    assert lessons[0].auto_generated is True
-    assert "reflection" in (lessons[0].tags or []), (
-        f"'reflection' tag missing. tags={lessons[0].tags}"
+    assert len(lessons) == 0, (
+        f"Ein reiner reflection-Kommentar darf KEIN BoardMemory(lesson) mehr "
+        f"anlegen — Mutationsprobe fuer die Reflexions-Triage. Got {len(lessons)}."
     )
+
+
+@pytest.mark.asyncio
+async def test_reflection_verdict_uebernehmen_creates_lesson_with_quelle(
+    client, fake_redis, make_board, make_task,
+):
+    """Lead-Urteil 'uebernehmen' (mit Quelle) → genau ein BoardMemory(lesson)
+    entsteht, die Quelle steht im Inhalt, source ist der triagierende Lead,
+    auto_generated ist False (mensch-ausgeloest, nicht blind-automatisch)."""
+    board = await make_board()
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    lead, lead_token = await _make_agent_with_token(
+        name="Boss", board_id=board.id, is_board_lead=True,
+    )
+    task = await make_task(
+        board_id=board.id, status="in_progress", assigned_agent_id=cody.id,
+    )
+
+    with patch(
+        "app.services.memory_indexing.index_memory", new_callable=AsyncMock,
+    ), patch(
+        "app.services.activity.broadcast", new_callable=AsyncMock,
+    ):
+        refl_resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={
+                "comment_type": "reflection",
+                "content": make_full_reflection_content(),
+            },
+            headers=_agent_headers(cody_token),
+        )
+        assert refl_resp.status_code == 201, refl_resp.text[:300]
+
+        verdict_resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={
+                "comment_type": "reflection_verdict",
+                "content": (
+                    "Urteil: uebernehmen\n"
+                    f"Quelle: Karte {task.id}"
+                ),
+            },
+            headers=_agent_headers(lead_token),
+        )
+    assert verdict_resp.status_code == 201, verdict_resp.text[:300]
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        result = await s.exec(
+            select(BoardMemory).where(BoardMemory.memory_type == "lesson")
+        )
+        lessons = result.all()
+    assert len(lessons) == 1, f"Expected exactly 1 lesson, got {len(lessons)}"
+    lesson = lessons[0]
+    assert lesson.agent_id == cody.id, "Lesson bleibt agent-scoped auf den Reflektierenden"
+    assert lesson.source == "Boss", "source ist der triagierende Lead"
+    assert f"Karte {task.id}" in lesson.content, "Quelle muss im Inhalt stehen"
+    assert lesson.auto_generated is False, (
+        "Ein Lead-Urteil ist keine blinde Automatik — auto_generated=False"
+    )
+    assert "triaged" in (lesson.tags or []) and "uebernehmen" in (lesson.tags or [])
+
+
+@pytest.mark.asyncio
+async def test_reflection_verdict_ablehnen_creates_no_lesson(
+    client, fake_redis, make_board, make_task,
+):
+    """Lead-Urteil 'ablehnen' (mit Begruendung) → KEIN BoardMemory-Eintrag,
+    aber der Urteils-Kommentar selbst bleibt sichtbar (Audit-Trail)."""
+    board = await make_board()
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    lead, lead_token = await _make_agent_with_token(
+        name="Boss", board_id=board.id, is_board_lead=True,
+    )
+    task = await make_task(
+        board_id=board.id, status="in_progress", assigned_agent_id=cody.id,
+    )
+
+    with patch(
+        "app.services.memory_indexing.index_memory", new_callable=AsyncMock,
+    ), patch(
+        "app.services.activity.broadcast", new_callable=AsyncMock,
+    ):
+        await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={
+                "comment_type": "reflection",
+                "content": make_full_reflection_content(),
+            },
+            headers=_agent_headers(cody_token),
+        )
+        verdict_resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={
+                "comment_type": "reflection_verdict",
+                "content": (
+                    "Urteil: ablehnen\n"
+                    "Begruendung: der 409 hat den echten Fehler sichtbar gemacht, "
+                    "ein nachgiebiger Endpoint haette ihn zugedeckt."
+                ),
+            },
+            headers=_agent_headers(lead_token),
+        )
+    assert verdict_resp.status_code == 201, verdict_resp.text[:300]
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        result = await s.exec(
+            select(BoardMemory).where(BoardMemory.memory_type == "lesson")
+        )
+        lessons = result.all()
+    assert len(lessons) == 0, "ablehnen darf keine Lesson anlegen"
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import TaskComment
+        result = await s.exec(
+            select(TaskComment).where(
+                TaskComment.task_id == task.id,
+                TaskComment.comment_type == "reflection_verdict",
+            )
+        )
+        verdict_comments = result.all()
+    assert len(verdict_comments) == 1, "Der Ablehn-Kommentar muss sichtbar erhalten bleiben"
+    assert "Begruendung" in verdict_comments[0].content
+
+
+@pytest.mark.asyncio
+async def test_reflection_verdict_uebernehmen_without_quelle_rejected(
+    client, fake_redis, make_board, make_task,
+):
+    """'uebernehmen' ohne 'Quelle:'-Zeile → 400, nichts wird geschrieben."""
+    board = await make_board()
+    lead, lead_token = await _make_agent_with_token(
+        name="Boss", board_id=board.id, is_board_lead=True,
+    )
+    task = await make_task(board_id=board.id, status="in_progress")
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        response = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={"comment_type": "reflection_verdict", "content": "Urteil: uebernehmen"},
+            headers=_agent_headers(lead_token),
+        )
+    assert response.status_code == 400, response.text[:300]
+    assert "Quelle" in response.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_reflection_verdict_requires_lead(
+    client, fake_redis, make_board, make_task,
+):
+    """Nur der Board Lead darf triagieren — ein normaler Worker bekommt 403."""
+    board = await make_board()
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    task = await make_task(board_id=board.id, status="in_progress", assigned_agent_id=cody.id)
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        response = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={
+                "comment_type": "reflection_verdict",
+                "content": f"Urteil: uebernehmen\nQuelle: Karte {task.id}",
+            },
+            headers=_agent_headers(cody_token),
+        )
+    assert response.status_code == 403, response.text[:300]
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        result = await s.exec(
+            select(BoardMemory).where(BoardMemory.memory_type == "lesson")
+        )
+        assert len(result.all()) == 0
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from app.models.agent import Agent
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
+from app.services.blocker_triage import is_lead_agent
 from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
@@ -278,6 +279,24 @@ async def agent_add_comment(
             ),
         )
 
+    # ── Reflexions-Triage (2026-09-11): Urteil validieren, BEVOR irgendetwas
+    # geschrieben wird. Drei Urteile, siehe _parse_reflection_verdict. Nur
+    # der Lead darf triagieren — sonst waere die Triage selbst umgehbar.
+    reflection_verdict: dict | None = None
+    if payload.comment_type == "reflection_verdict":
+        if not is_lead_agent(agent):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Nur der Board Lead darf Reflexionen triagieren "
+                    "(uebernehmen/ablehnen/spaeter)."
+                ),
+            )
+        try:
+            reflection_verdict = _parse_reflection_verdict(payload.content or "")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
     # Shared handshake (§3.3) — same implementation as the Message channel.
     from app.services.task_lifecycle import apply_ack_handshake
@@ -406,7 +425,7 @@ async def agent_add_comment(
         payload.comment_type == "escalate_to_operator"
         and task.status == "blocked"
     ):
-        from app.services.blocker_triage import escalate_blocker_to_operator, is_lead_agent
+        from app.services.blocker_triage import escalate_blocker_to_operator
         if not is_lead_agent(agent):
             logger.info(
                 "escalate_to_operator ignoriert: %s ist kein Lead", agent.name,
@@ -445,40 +464,19 @@ async def agent_add_comment(
     # agent's cli-bridge poll.sh picks it up on the next tick via
     # GET /agent/me/comments. This makes delivery runtime-agnostic.
 
-    # ── Reflection → Agent-Memory Pipeline (Phase B, 2026-04-11) ─────────
-    # When an agent posts a reflection comment → automatically store the
-    # lesson part as BoardMemory(type=lesson, agent_id=self) and index it
-    # in Qdrant. Closes the learning loop: reflections automatically land
-    # in the agent-memory layer and are retrievable via vector search on
-    # the next dispatch.
-    if payload.comment_type == "reflection":
-        try:
-            lesson_text = _extract_reflection_lesson(payload.content or "")
-            if lesson_text and len(lesson_text) >= 20:
-                lesson_memory = BoardMemory(
-                    board_id=task.board_id,
-                    agent_id=agent.id,  # agent-scoped → agent layer in Qdrant
-                    title=f"Lesson: {task.title[:60]}",
-                    content=lesson_text,
-                    memory_type="lesson",
-                    source=agent.name,
-                    tags=["auto", "reflection", "task_done"],
-                    auto_generated=True,
-                )
-                session.add(lesson_memory)
-                await session.commit()
-                await session.refresh(lesson_memory)
-                try:
-                    from app.services.memory_indexing import index_memory
-                    await index_memory(lesson_memory)
-                except Exception as _e:
-                    logger.warning("Reflection memory index failed: %s", _e)
-                logger.info(
-                    "Reflection → Agent-Memory: lesson gespeichert fuer %s (task %s)",
-                    agent.name, task.id,
-                )
-        except Exception as e:
-            logger.warning("Reflection pipeline failed for task %s: %s", task.id, e)
+    # ── Reflexions-Triage (2026-09-11) — ersetzt die alte automatische
+    # Reflection → Agent-Memory Pipeline (Phase B, 2026-04-11).
+    #
+    # VORHER: jeder `reflection`-Kommentar landete UNGEFILTERT als
+    # BoardMemory(memory_type='lesson') im Vault — 81 Lessons in 2 Tagen,
+    # unbelegt und dopplt (Mark, 11.09.2026). JETZT: ein `reflection`-Kommentar
+    # legt fuer sich genommen KEINE Memory mehr an. Nur wenn der Lead
+    # anschliessend explizit mit `reflection_verdict`/Urteil=uebernehmen
+    # antwortet, entsteht ein BoardMemory-Eintrag — mit Quelle. `ablehnen`
+    # und `spaeter` bleiben als sichtbarer Kommentar stehen, schreiben aber
+    # nichts in board_memory/Vault. Siehe _handle_reflection_verdict.
+    if payload.comment_type == "reflection_verdict" and reflection_verdict is not None:
+        await _handle_reflection_verdict(session, task, agent, reflection_verdict)
 
     # Bug 9 (2026-05-13): when an agent posts a default `message` comment on
     # a task assigned to someone else (e.g. Boss writes a briefing to
@@ -540,3 +538,151 @@ def _extract_reflection_lesson(content: str) -> str:
     cut = int(len(content) * 0.6)
     tail = content[cut:].strip()
     return tail if len(tail) >= 20 else ""
+
+
+# ── Reflexions-Triage (2026-09-11) ───────────────────────────────────────────
+#
+# Ersetzt die vorherige "jede Reflexion wird automatisch Lesson"-Pipeline.
+# Entscheid Mark, 11.09.2026: 81 Lessons in 2 Tagen — unbelegt, doppelt,
+# unbewertet verwaessern den Speicher genau dann, wenn er im naechsten
+# Dispatch als Treffer zurueckkommt. Ab jetzt bewertet der Lead JEDE
+# Reflexion mit GENAU EINEM von drei Urteilen — nur "uebernehmen" darf eine
+# BoardMemory(memory_type='lesson') anlegen; "ablehnen" (mit Begruendung)
+# und "spaeter" (mit Ausloeser) bleiben als sichtbarer Kommentar stehen und
+# schreiben nichts in board_memory/Vault.
+
+_VERDICT_ALIASES: dict[str, str] = {
+    "uebernehmen": "uebernehmen",
+    "übernehmen": "uebernehmen",
+    "ablehnen": "ablehnen",
+    "spaeter": "spaeter",
+    "später": "spaeter",
+}
+
+
+def _parse_reflection_verdict(content: str) -> dict:
+    """Parses a `reflection_verdict` comment body into a structured verdict.
+
+    Expected format (one line per field, order doesn't matter)::
+
+        Urteil: uebernehmen|ablehnen|spaeter
+        Quelle: <Karte/Kommentar/Datei>   (required for uebernehmen)
+        Begruendung: <Text>               (required for ablehnen)
+        Ausloeser: <Text>                 (required for spaeter)
+
+    Raises ValueError with a German, actionable message when the verdict is
+    missing/unknown or its companion field is missing — the router turns
+    this into a 400 so a sloppy triage is never stored (D-01/D-02 of this
+    task: no verdict → no memory entry, no exceptions).
+    """
+    import re as _re
+
+    if not content or not content.strip():
+        raise ValueError(
+            "reflection_verdict ist leer. Format: 'Urteil: uebernehmen|ablehnen|spaeter' "
+            "plus Quelle/Begruendung/Ausloeser."
+        )
+
+    m = _re.search(r"(?im)^\s*urteil\s*:\s*(\S+)", content)
+    raw_verdict = m.group(1).strip(".,;:").lower() if m else ""
+    if raw_verdict not in _VERDICT_ALIASES:
+        raise ValueError(
+            "reflection_verdict braucht eine Zeile 'Urteil: uebernehmen|ablehnen|spaeter'. "
+            f"Erkannt: {m.group(1) if m else '(keine)'}"
+        )
+    verdict = _VERDICT_ALIASES[raw_verdict]
+
+    def _field(name_pattern: str) -> str:
+        fm = _re.search(rf"(?im)^\s*(?:{name_pattern})\s*:\s*(.+)$", content)
+        return fm.group(1).strip() if fm else ""
+
+    quelle = _field("quelle")
+    begruendung = _field("begruendung|begründung")
+    ausloeser = _field("ausloeser|auslöser")
+
+    if verdict == "uebernehmen" and not quelle:
+        raise ValueError(
+            "Urteil 'uebernehmen' braucht eine Zeile 'Quelle: <Karte/Kommentar/Datei>' "
+            "— sonst landet die Lesson ohne Beleg im Vault."
+        )
+    if verdict == "ablehnen" and not begruendung:
+        raise ValueError(
+            "Urteil 'ablehnen' braucht eine Zeile 'Begruendung: <Text>' — sonst kommt "
+            "derselbe Vorschlag beim naechsten Mal wieder."
+        )
+    if verdict == "spaeter" and not ausloeser:
+        raise ValueError(
+            "Urteil 'spaeter' braucht eine Zeile 'Ausloeser: <wenn X eintritt>' — sonst "
+            "verschwindet der Vorschlag im Nichts."
+        )
+
+    return {
+        "verdict": verdict,
+        "quelle": quelle,
+        "begruendung": begruendung,
+        "ausloeser": ausloeser,
+    }
+
+
+async def _handle_reflection_verdict(
+    session: AsyncSession, task: Task, agent: Agent, verdict: dict,
+) -> None:
+    """Applies a Lead's reflection verdict.
+
+    This is the ONLY code path left that may write a
+    BoardMemory(memory_type='lesson') from a reflection. 'ablehnen' and
+    'spaeter' are audit-only by design — the reflection_verdict comment
+    itself (already persisted by the caller before this runs) IS the
+    record: a rejection stays visible so the same suggestion isn't
+    re-proposed, and 'spaeter' stays visible with its named trigger. Only
+    a real memory-layer would need more than that, and that's explicitly
+    out of scope here.
+    """
+    if verdict["verdict"] != "uebernehmen":
+        logger.info(
+            "Reflexions-Triage: Urteil '%s' fuer Task '%s' — kein BoardMemory-Eintrag.",
+            verdict["verdict"], task.title[:60],
+        )
+        return
+
+    result = await session.exec(
+        select(TaskComment)
+        .where(TaskComment.task_id == task.id)
+        .where(TaskComment.comment_type == "reflection")
+        .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+    )
+    reflection = result.first()
+    if not reflection or not (reflection.content or "").strip():
+        logger.warning(
+            "Reflexions-Triage: Urteil 'uebernehmen' fuer Task '%s' ohne "
+            "Reflexions-Kommentar — kein BoardMemory-Eintrag.",
+            task.title[:60],
+        )
+        return
+
+    lesson_text = _extract_reflection_lesson(reflection.content)
+    if not lesson_text or len(lesson_text) < 20:
+        lesson_text = reflection.content[:500]
+
+    lesson_memory = BoardMemory(
+        board_id=task.board_id,
+        agent_id=reflection.author_agent_id,  # agent-scoped → agent layer in Qdrant
+        title=f"Lesson: {task.title[:60]}",
+        content=f"{lesson_text}\n\n**Quelle:** {verdict['quelle']}",
+        memory_type="lesson",
+        source=agent.name,  # der triagierende Lead, nicht der Reflektierende
+        tags=["triaged", "uebernehmen"],
+        auto_generated=False,  # von einem Menschen(-Agenten)-Urteil ausgeloest, nicht blind-automatisch
+    )
+    session.add(lesson_memory)
+    await session.commit()
+    await session.refresh(lesson_memory)
+    try:
+        from app.services.memory_indexing import index_memory
+        await index_memory(lesson_memory)
+    except Exception as e:
+        logger.warning("Reflexions-Triage: index_memory failed: %s", e)
+    logger.info(
+        "Reflexions-Triage: Lead %s hat Reflexion fuer '%s' uebernommen (Quelle: %s)",
+        agent.name, task.title[:60], verdict["quelle"],
+    )
