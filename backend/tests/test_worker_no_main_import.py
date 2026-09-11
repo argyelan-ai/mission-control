@@ -108,6 +108,22 @@ def test_worker_boot_path_leaves_app_main_out_of_sys_modules():
         "    'prepare_process() zog Router-Module in den Worker: '\n"
         "    + str(loaded)\n"
         ")\n"
+        # N1 (Rex-Review PR #500): Positiv-Sentinel. Bei einem kuenftigen
+        # Fruehabbruch von prepare_process() (z. B. neuer Validation-Guard
+        # vor allen Imports) bliebe `loaded` leer und der Router-Waechter
+        # stille gruen — der Test bewiese dann nur Abwesenheit. Der Sentinel
+        # muss ein Modul sein, das ERST IM BOOT-PFAD geladen wird:
+        # app.seeds wird lazy in prepare_process importiert (background.py:266)
+        # und ist nach `import app.worker` noch NICHT in sys.modules
+        # (gemessen). obsidian_export taugt NICHT — das zieht app.worker
+        # schon beim Modul-Import an. Faellt der Sentinel, ist
+        # prepare_process frueher abgebrochen als der Waechter annimmt und
+        # der Router-Waechter hat nichts bewiesen.
+        "assert 'app.seeds' in sys.modules, (\n"
+        "    'prepare_process() brach FRUEHER ab als erwartet — der '\n"
+        "    'Router-Waechter oben hat nichts bewiesen (Sentinel-Import '\n"
+        "    'app.seeds fehlt in sys.modules)'\n"
+        ")\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],

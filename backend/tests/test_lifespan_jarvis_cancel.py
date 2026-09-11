@@ -41,8 +41,13 @@ async def _run_lifespan_shutdown(monkeypatch) -> asyncio.Task:
     """Run lifespan() startup + shutdown with external effects stubbed."""
     monkeypatch.setattr(main, "prepare_process", AsyncMock())
     monkeypatch.setattr("app.services.fs_roots.mc_home", lambda: Path("/tmp"))
-    monkeypatch.setattr(bg_mod, "start_vault_services", AsyncMock(return_value={}))
-    monkeypatch.setattr(bg_mod, "stop_vault_services", AsyncMock())
+    # W2 (Rex-Review PR #500): auf bg_mod patchen greift NICHT — app.main
+    # haelt eigene Bindungen (from app.background import start_/stop_…,
+    # main.py:116-127), und lifespan() loest die Namen in seinem eigenen
+    # Modul-Namespace auf. Gemessen: 'start/stop_vault_services mock
+    # called: False' bei bg_mod-Patch. Deshalb: auf app.main patchen.
+    monkeypatch.setattr(main, "start_vault_services", AsyncMock(return_value={}))
+    monkeypatch.setattr(main, "stop_vault_services", AsyncMock())
 
     # The 17 singleton services: not the subject, keep them inert on both sides.
     start_mocks = {name: AsyncMock() for name in _THE_17}
