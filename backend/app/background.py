@@ -198,34 +198,54 @@ async def stop_background_services(app: Any) -> None:
     Safe to call even when the services were never started — every
     .stop() implementation in this codebase no-ops on a None/absent task
     (verified across all 17 services below during the ADR-E audit).
+
+    Every step is timed and logged (W4, 11.09.2026 — incident: Deploy #504,
+    the old worker's SchedulerService.stop() never ran because the process
+    was SIGKILLed before this sequential chain reached it; the scheduler's
+    Redis lock then only healed via its 120s TTL). Without per-service
+    timing there was no way to tell WHICH of the 17 services ate the
+    shutdown grace period — this logs each one so the next incident has
+    that answer immediately instead of requiring a repro.
     """
     import asyncio as _asyncio
+    import time as _time
+
+    async def _timed_stop(name: str, coro) -> None:
+        started = _time.monotonic()
+        try:
+            await coro
+        finally:
+            elapsed = _time.monotonic() - started
+            log = logger.warning if elapsed > 1.0 else logger.info
+            log("Shutdown: %s stopped in %.2fs", name, elapsed)
 
     _gh_monitor_task = getattr(app.state, "gh_monitor_task", None)
     if _gh_monitor_task is not None:
-        _gh_monitor_task.cancel()
-        try:
-            await _gh_monitor_task
-        except (_asyncio.CancelledError, Exception):
-            pass
-    await slack_socket.stop()
-    await telegram_bot.stop()
-    await intelligence.stop()
-    await file_indexer.stop()
-    await embedding_retry.stop()
+        async def _cancel_gh_monitor() -> None:
+            _gh_monitor_task.cancel()
+            try:
+                await _gh_monitor_task
+            except (_asyncio.CancelledError, Exception):
+                pass
+        await _timed_stop("github_visibility_monitor", _cancel_gh_monitor())
+    await _timed_stop("slack_socket", slack_socket.stop())
+    await _timed_stop("telegram_bot", telegram_bot.stop())
+    await _timed_stop("intelligence", intelligence.stop())
+    await _timed_stop("file_indexer", file_indexer.stop())
+    await _timed_stop("embedding_retry", embedding_retry.stop())
     if getattr(app.state, "obsidian_export_started", False):
-        await obsidian_export.stop()
-    await runtime_watcher.stop()
-    await runtime_pulse.stop()
-    await cli_update_checker.stop()
-    await model_catalog_checker.stop()
-    await local_registry_checker.stop()
-    await runtime_schedule_service.stop()
-    await group_runner.stop()
-    await loop_runner.stop()
-    await task_runner.stop()
-    await watchdog.stop()
-    await scheduler.stop()
+        await _timed_stop("obsidian_export", obsidian_export.stop())
+    await _timed_stop("runtime_watcher", runtime_watcher.stop())
+    await _timed_stop("runtime_pulse", runtime_pulse.stop())
+    await _timed_stop("cli_update_checker", cli_update_checker.stop())
+    await _timed_stop("model_catalog_checker", model_catalog_checker.stop())
+    await _timed_stop("local_registry_checker", local_registry_checker.stop())
+    await _timed_stop("runtime_schedule_service", runtime_schedule_service.stop())
+    await _timed_stop("group_runner", group_runner.stop())
+    await _timed_stop("loop_runner", loop_runner.stop())
+    await _timed_stop("task_runner", task_runner.stop())
+    await _timed_stop("watchdog", watchdog.stop())
+    await _timed_stop("scheduler", scheduler.stop())
 
 
 async def prepare_process() -> None:

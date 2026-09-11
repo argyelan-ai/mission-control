@@ -342,6 +342,16 @@ class RedisKeys:
     def scheduler_lock() -> str:
         return "mc:scheduler:lock"
 
+    @staticmethod
+    def scheduler_lock_heartbeat() -> str:
+        """Short-TTL companion key to scheduler_lock() (W4, 11.09.2026).
+
+        Refreshed far more often than the lock's own 120s TTL so a worker
+        that died without running stop() (SIGKILL, OOM) is detectable as
+        gone within LOCK_HEARTBEAT_TTL_SECONDS instead of forcing a new
+        worker to wait out the full lock TTL."""
+        return "mc:scheduler:lock:heartbeat"
+
     # ── Task Runner ──────────────────────────────────────────────────────
     @staticmethod
     def task_runner_lock() -> str:
