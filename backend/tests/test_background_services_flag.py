@@ -16,6 +16,7 @@ import inspect
 import os
 import re
 import signal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -128,6 +129,61 @@ async def _patched_service_stops(mocks: dict[str, AsyncMock]):
 
 async def _noop_gh_monitor() -> None:
     return
+
+
+@pytest.mark.asyncio
+async def test_start_vault_services_lint_task_is_none_when_flag_false(monkeypatch):
+    # Rex-Review PR #500, Blocker B3: start_vault_services() laeuft in BEIDEN
+    # Prozessen (API-lifespan + worker.run()). Erzeugte der Lint-Cron seinen
+    # asyncio-Task unconditional, lief _vault_lint_loop doppelt — zwei
+    # Schreiber auf _lint/YYYY-MM-DD.md, zwei Operator-Pings. Der Cron ist
+    # Teil des ENABLE_BACKGROUND_SERVICES-Inventars; bei flag=False darf
+    # lint_task None bleiben (watcher/compactor-Objekt darf trotzdem
+    # existieren — nur .start() ist gegatet).
+    import app.background as bg
+
+    monkeypatch.setattr(bg.settings, "enable_background_services", False)
+    # Vault-Wiring von der Disk/Redis entkoppeln: nur das Gating interessiert.
+    monkeypatch.setattr(bg.VaultIndex, "rebuild_from_vault", lambda self: {
+        "scanned": 0, "indexed": 0, "skipped": 0, "errors": 0,
+    })
+    monkeypatch.setattr(
+        bg.VaultWatcher, "start", AsyncMock(),
+    )
+
+    runtime = await bg.start_vault_services(SimpleNamespace(state=SimpleNamespace()))
+
+    assert runtime["vault_lint_task"] is None, (
+        "vault_lint_task muss bei ENABLE_BACKGROUND_SERVICES=False None sein "
+        "(B3: sonst laeuft der Lint-Cron in beiden Prozessen)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_vault_services_lint_task_scheduled_when_flag_true(monkeypatch):
+    # Gegenstueck: mit flag=True ist der Cron ein laufender Task (und wird
+    # beim Shutdown von stop_vault_services gecancelt).
+    import app.background as bg
+
+    monkeypatch.setattr(bg.settings, "enable_background_services", True)
+    monkeypatch.setattr(bg.settings, "vault_lint_interval_hours", 99999)
+    monkeypatch.setattr(bg.VaultIndex, "rebuild_from_vault", lambda self: {
+        "scanned": 0, "indexed": 0, "skipped": 0, "errors": 0,
+    })
+    monkeypatch.setattr(
+        bg.VaultWatcher, "start", AsyncMock(),
+    )
+
+    runtime = await bg.start_vault_services(SimpleNamespace(state=SimpleNamespace()))
+    try:
+        assert runtime["vault_lint_task"] is not None
+    finally:
+        if runtime["vault_lint_task"] is not None:
+            runtime["vault_lint_task"].cancel()
+            try:
+                await runtime["vault_lint_task"]
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 @pytest.mark.asyncio

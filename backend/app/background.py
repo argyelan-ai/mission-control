@@ -561,21 +561,25 @@ async def start_vault_services(app) -> dict:
         # via VAULT_LINT_INTERVAL_HOURS. Tests set this to 99999 so the
         # loop never fires (conftest Pitfall 4 mirror).
         #
-        # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars (nach dem
-        # Boss-Audit auf f57e2a9 hinzugekommen) — laeuft bewusst unconditional
-        # weiter, bis Teil 2 klaert, ob er zu den 20 dazugehoert.
-        try:
-            runtime["vault_lint_task"] = _create_background_task(
-                _vault_lint_loop(vault_path),
-                name="vault_lint_loop",
-            )
-            logger.info(
-                "Vault lint cron scheduled (interval=%dh)",
-                settings.vault_lint_interval_hours,
-            )
-        except Exception as e:
-            logger.error("Vault lint loop failed to schedule: %s", e, exc_info=True)
-            runtime["vault_lint_task"] = None
+        # Teil 2 (Architektur E) geklaert: der Cron GEHOERT zum
+        # ENABLE_BACKGROUND_SERVICES-Inventar. start_vault_services() laeuft
+        # jetzt in BEIDEN Prozessen (API-lifespan + worker.run()) —
+        # unconditional hiesse zwei Schreiber auf _lint/YYYY-MM-DD.md und
+        # zwei Operator-Pings (Rex-Review PR #500, Blocker B3). Analog zum
+        # vault_compactor direkt darueber gegatet.
+        if settings.enable_background_services:
+            try:
+                runtime["vault_lint_task"] = _create_background_task(
+                    _vault_lint_loop(vault_path),
+                    name="vault_lint_loop",
+                )
+                logger.info(
+                    "Vault lint cron scheduled (interval=%dh)",
+                    settings.vault_lint_interval_hours,
+                )
+            except Exception as e:
+                logger.error("Vault lint loop failed to schedule: %s", e, exc_info=True)
+                runtime["vault_lint_task"] = None
     except Exception as e:
         logger.warning("Vault wiring failed (non-fatal, vault routes will 500): %s", e)
     return runtime
