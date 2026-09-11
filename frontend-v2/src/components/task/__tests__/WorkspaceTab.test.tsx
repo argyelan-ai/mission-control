@@ -296,7 +296,9 @@ describe("TaskDetailBody — Workspace tab visibility", () => {
       />
     );
 
-    expect(await screen.findByRole("tab", { name: "Workspace" })).toBeInTheDocument();
+    // Cockpit (09/2026): Workspace is a collapsed group inside the Technical tab.
+    fireEvent.click(await screen.findByRole("tab", { name: /Technical/ }));
+    expect(await screen.findByRole("button", { name: /Workspace/ })).toBeInTheDocument();
   });
 
   it("hides the Workspace tab when task.workspace_path is null", async () => {
@@ -309,7 +311,8 @@ describe("TaskDetailBody — Workspace tab visibility", () => {
       />
     );
 
-    await screen.findByRole("tab", { name: "Comments" });
-    expect(screen.queryByRole("tab", { name: "Workspace" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: /Technical/ }));
+    await screen.findByRole("button", { name: /Properties/ });
+    expect(screen.queryByRole("button", { name: /Workspace/ })).not.toBeInTheDocument();
   });
 });

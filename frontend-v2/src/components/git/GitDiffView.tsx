@@ -80,7 +80,7 @@ function LangBadge({ ext }: { ext: string }) {
 
 const MAX_LINES = 500;
 
-function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultOpen?: boolean }) {
+export function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const ext = getFileExt(file.filename);
   const allLines = file.hunks.flatMap((h) => h.lines);
