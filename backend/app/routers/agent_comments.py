@@ -645,10 +645,16 @@ async def _handle_reflection_verdict(
         )
         return
 
+    # author_type != "system" excludes auto_memory.record_task_completion's
+    # own comment_type="reflection" telemetry comment (auto_memory.py), which
+    # lands AFTER the agent's reflection at task-completion time — exactly
+    # when this triage runs. Without the filter, "desc().first()" picks the
+    # telemetry text over the agent's actual reflection (PR #513 review).
     result = await session.exec(
         select(TaskComment)
         .where(TaskComment.task_id == task.id)
         .where(TaskComment.comment_type == "reflection")
+        .where(TaskComment.author_type != "system")
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
     )
     reflection = result.first()

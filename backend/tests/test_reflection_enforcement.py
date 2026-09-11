@@ -508,6 +508,97 @@ async def test_reflection_verdict_uebernehmen_creates_lesson_with_quelle(
 
 
 @pytest.mark.asyncio
+async def test_reflection_verdict_ignores_system_telemetry_comment(
+    client, fake_redis, make_board, make_task,
+):
+    """PR #513 review blocker: auto_memory.record_task_completion posts its
+    own comment_type='reflection' TaskComment (author_type='system') on every
+    task completion, AFTER the agent's own reflection — exactly at the point
+    the Lead triages. `_handle_reflection_verdict` picked
+    'order_by(created_at.desc()).first()' with no author_type filter, so the
+    newest 'reflection' row (the system telemetry) won, not the agent's.
+
+    Mutation check: 'uebernehmen' must adopt the AGENT's reflection content
+    into the lesson, and keep agent_id pinned to the reflecting agent — not
+    silently fall back to the system comment (agent_id=None there, which
+    would land in no agent-scoped Qdrant layer at all)."""
+    from app.models.task import TaskComment
+
+    board = await make_board()
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    lead, lead_token = await _make_agent_with_token(
+        name="Boss", board_id=board.id, is_board_lead=True,
+    )
+    task = await make_task(
+        board_id=board.id, status="in_progress", assigned_agent_id=cody.id,
+    )
+
+    agent_reflection = make_full_reflection_content()
+
+    with patch(
+        "app.services.memory_indexing.index_memory", new_callable=AsyncMock,
+    ), patch(
+        "app.services.activity.broadcast", new_callable=AsyncMock,
+    ):
+        refl_resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={"comment_type": "reflection", "content": agent_reflection},
+            headers=_agent_headers(cody_token),
+        )
+        assert refl_resp.status_code == 201, refl_resp.text[:300]
+
+        # Simulate auto_memory.record_task_completion's telemetry comment,
+        # which lands right after the agent's reflection with the SAME
+        # comment_type but author_type="system" and no useful lesson content.
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            s.add(
+                TaskComment(
+                    id=uuid.uuid4(),
+                    task_id=task.id,
+                    author_type="system",
+                    comment_type="reflection",
+                    content=(
+                        "**Task erledigt:** Test task\n**Agent:** Cody\n"
+                        "**Dauer:** 1h\n**Prioritaet:** medium\n\n"
+                        "**Letzte Kommentare:**\n- irgendein Kommentarauszug "
+                        "ohne Erkenntniswert"
+                    ),
+                )
+            )
+            await s.commit()
+
+        verdict_resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+            json={
+                "comment_type": "reflection_verdict",
+                "content": f"Urteil: uebernehmen\nQuelle: Karte {task.id}",
+            },
+            headers=_agent_headers(lead_token),
+        )
+    assert verdict_resp.status_code == 201, verdict_resp.text[:300]
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        result = await s.exec(
+            select(BoardMemory).where(BoardMemory.memory_type == "lesson")
+        )
+        lessons = result.all()
+    assert len(lessons) == 1, f"Expected exactly 1 lesson, got {len(lessons)}"
+    lesson = lessons[0]
+    assert lesson.agent_id == cody.id, (
+        "agent_id muss der Reflektierende bleiben, nicht None (System-Kommentar "
+        "hat keinen author_agent_id)"
+    )
+    assert "Letzte Kommentare" not in lesson.content, (
+        "Die Lesson darf nicht die System-Telemetrie enthalten"
+    )
+    assert "Test content for field" in lesson.content, (
+        "Die Lesson muss die Reflexion des Agenten enthalten"
+    )
+
+
+@pytest.mark.asyncio
 async def test_reflection_verdict_ablehnen_creates_no_lesson(
     client, fake_redis, make_board, make_task,
 ):
