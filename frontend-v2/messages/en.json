@@ -636,6 +636,17 @@
     "noTranscript": "No transcript available",
     "transcriptLoading": "Loading transcript…",
     "pickSession": "Pick a session in the sidebar.",
+    "jumpToBottom": "Jump to bottom",
+    "newMessagesCount": "{count} new",
+    "status": {
+      "ready": "Ready",
+      "waitingForYou": "Waiting for you",
+      "waitingApproval": "Waiting for approval",
+      "unknown": "Status unknown — check the terminal",
+      "ended": "Session ended — a new message starts the next session",
+      "sent": "Sent…",
+      "workingWords": "Working|Thinking|Pondering|Mulling|Tinkering|Puzzling|Computing|Musing|Figuring|Polishing|Sorting|Combining|Distilling|Tracing|Turning ideas|Pulling threads"
+    },
     "livePreview": "Live preview",
     "noMessagesYet": "No messages yet",
     "noMessagesHint": "Write the first message to {name} below — or open the terminal to see the raw session.",

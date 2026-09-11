@@ -636,6 +636,17 @@
     "noTranscript": "Kein Transkript verfügbar",
     "transcriptLoading": "Transkript wird geladen…",
     "pickSession": "Wähle eine Session in der Seitenleiste.",
+    "jumpToBottom": "Nach unten",
+    "newMessagesCount": "{count} neu",
+    "status": {
+      "ready": "Bereit",
+      "waitingForYou": "Wartet auf dich",
+      "waitingApproval": "Wartet auf Genehmigung",
+      "unknown": "Status unklar — Terminal prüfen",
+      "ended": "Session beendet — neue Nachricht startet die nächste Session",
+      "sent": "Gesendet…",
+      "workingWords": "Arbeitet|Denkt nach|Grübelt|Brütet|Werkelt|Tüftelt|Rechnet|Sinniert|Knobelt|Feilt|Sortiert|Kombiniert|Verdichtet|Spürt nach|Wälzt Ideen|Zieht Fäden"
+    },
     "livePreview": "Live-Vorschau",
     "noMessagesYet": "Noch keine Nachrichten",
     "noMessagesHint": "Schreib unten die erste Nachricht an {name} — oder öffne das Terminal, um die rohe Sitzung zu sehen.",

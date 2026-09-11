@@ -891,7 +891,8 @@ describe("ChatView", () => {
       mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
       renderChatView();
 
-      expect(observed).toHaveLength(1);
+      // Kasten + Inhalt (siehe Tests unten)
+      expect(observed).toHaveLength(2);
       const el = observed[0] as HTMLElement;
       // jsdom reports 0 for every layout metric, so stand in for a long history.
       Object.defineProperty(el, "scrollHeight", { value: 5000, configurable: true });
@@ -901,6 +902,158 @@ describe("ChatView", () => {
       expect(el.scrollTop).toBe(5000);
     } finally {
       window.ResizeObserver = original;
+    }
+  });
+
+  // ── Mitlaufen folgt dem INHALT, nicht nur dem Kasten (Befund 10.09.2026) ──
+  //
+  // Operator: "der Chat geht nicht ganz nach unten, man sieht immer ganz
+  // oben". Ursache: die wachsende Live-Vorschau steht nicht in den Deps des
+  // Scroll-Effekts, und der ResizeObserver sah nur den Kasten (Container),
+  // nie den Inhalt. Wuchs die Vorschau um 400 px, blieb die Ansicht stehen.
+  function beobachterFalle() {
+    const original = window.ResizeObserver;
+    const observed: Element[] = [];
+    let fire: (() => void) | null = null;
+    class Capturing {
+      constructor(cb: ResizeObserverCallback) {
+        fire = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe(el: Element) { observed.push(el); }
+      unobserve() {}
+      disconnect() {}
+    }
+    window.ResizeObserver = Capturing as unknown as typeof ResizeObserver;
+    return { observed, fire: () => fire!(), restore: () => { window.ResizeObserver = original; } };
+  }
+
+  it("beobachtet auch den Inhalt der Zeitleiste, nicht nur den Kasten", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+      // Der Kasten bleibt der erste Beobachtete (die Gesten-Tests bauen darauf),
+      // der Inhalt kommt dazu: nur so loest wachsender Inhalt das Mitlaufen aus.
+      expect(falle.observed[1]).toBe(screen.getByTestId("chat-timeline"));
+    } finally {
+      falle.restore();
+    }
+  });
+
+  it("folgt der wachsenden Live-Vorschau bis ans Ende", () => {
+    // Dieselbe `events`-Referenz wie im echten Reducer: eine Vorschau-Aenderung
+    // ersetzt nur den `preview`-Slot, das Ereignis-Array bleibt identisch.
+    const events = [MSG];
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events,
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-09-10T00:00:00Z", text: "Zeile 1", source: "acp" },
+      })
+    );
+    const { rerender } = renderChatView();
+    const el = screen.getByTestId("preview-row").closest(".overflow-y-auto") as HTMLElement;
+    Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { value: 950, configurable: true });
+    el.scrollTop = 350;
+    fireEvent.scroll(el); // am Ende, Mitlaufen an
+
+    // Die Vorschau waechst — ohne neues Ereignis in `events`.
+    Object.defineProperty(el, "scrollHeight", { value: 1400, configurable: true });
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events,
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-09-10T00:00:01Z", text: "Zeile 1\nZeile 2\nZeile 3", source: "acp" },
+      })
+    );
+    rerender(
+      <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
+    );
+    expect(el.scrollTop).toBe(1400);
+  });
+
+  // Review-Befund 11.09.2026: beide Scroll-Effekte brachen mit `if (!el)
+  // return` ab und hingen nicht an der Ansicht. Wer im Terminal startete
+  // (oder dessen Verlauf erst per 404 als Terminal galt) und dann in den Chat
+  // wechselte, bekam NIE einen Beobachter — der Chat lief nicht mehr mit.
+  it("haengt den Beobachter auch an, wenn der Chat erst nach dem Terminal erscheint", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      const { rerender } = renderChatView({ centerView: "terminal" });
+      expect(falle.observed).toHaveLength(0);
+
+      rerender(
+        <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
+      );
+      expect(falle.observed[1]).toBe(screen.getByTestId("chat-timeline"));
+
+      const el = falle.observed[0] as HTMLElement;
+      Object.defineProperty(el, "scrollHeight", { value: 5000, configurable: true });
+      el.scrollTop = 0;
+      falle.fire();
+      expect(el.scrollTop).toBe(5000);
+    } finally {
+      falle.restore();
+    }
+  });
+
+  // ── Knopf "Nach unten" (Operator-Wunsch 10.09.2026) ───────────────────────
+
+  it("zeigt keinen Knopf, solange die Ansicht am Ende steht", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByRole("button", { name: /Jump to bottom/ })).not.toBeInTheDocument();
+  });
+
+  it("zeigt den Knopf, sobald der Nutzer hochgescrollt hat, und springt per Klick ans Ende", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+      const el = falle.observed[0] as HTMLElement;
+      Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
+
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      const knopf = screen.getByRole("button", { name: /Jump to bottom/ });
+      fireEvent.click(knopf);
+      expect(el.scrollTop).toBe(6000);
+      expect(screen.queryByRole("button", { name: /Jump to bottom/ })).not.toBeInTheDocument();
+    } finally {
+      falle.restore();
+    }
+  });
+
+  it("zaehlt am Knopf die Nachrichten, die seit dem Hochscrollen dazukamen", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      const { rerender } = renderChatView();
+      const el = falle.observed[0] as HTMLElement;
+      Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
+
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+      expect(screen.getByRole("button", { name: /Jump to bottom/ })).not.toHaveTextContent(/new/);
+
+      mockUseChatStream.mockReturnValue(
+        mkStream({ events: [MSG, mkMsg({ uuid: "n1", text: "Neu 1" }), mkMsg({ uuid: "n2", text: "Neu 2" })] })
+      );
+      rerender(
+        <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
+      );
+      expect(screen.getByRole("button", { name: /Jump to bottom/ })).toHaveTextContent("2 new");
+      // Und die Ansicht wurde NICHT weggezogen — der Nutzer liest oben.
+      expect(el.scrollTop).toBe(350);
+    } finally {
+      falle.restore();
     }
   });
 
@@ -1012,12 +1165,49 @@ describe("ChatView", () => {
     await waitFor(() => expect(echoFailed).toHaveBeenCalledWith("geht nicht"));
   });
 
-  it("zeigt die Live-Vorschau als laufende Antwort NACH dem Verlauf, sichtbar markiert", () => {
+  // Befund 10.09.2026 (Operator): die Bildschirm-Vorschau (tmux-Abgriff) zeigte
+  // Bruchstuecke, Werkzeug-Rahmen und den Dispatch-Prompt — "buggy, bewegt
+  // sich zu viel". Sie wird nicht mehr gezeigt; was der Agent tut, sagt die
+  // Statuszeile aus strukturierten Ereignissen. Die ACP-Vorschau (echte
+  // Text-Deltas, z.B. omp) bleibt, weil dort das Transkript erst am Zug-Ende
+  // geschrieben wird.
+  it("zeigt die Bildschirm-Vorschau (pane) nicht mehr", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({
         events: [MSG],
         state: { kind: "state", status: "working", prompt: null },
-        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "Ich lese gerade foo.py …", source: "pane" },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "> dispatch … ⎿ Read poll.sh", source: "pane" },
+      })
+    );
+    renderChatView();
+    expect(screen.queryByTestId("preview-row")).not.toBeInTheDocument();
+  });
+
+  it("leitet das laufende Werkzeug in die Statuszeile", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [MSG, TOOL], state: { kind: "state", status: "working", prompt: null } })
+    );
+    renderChatView();
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Read foo.py");
+  });
+
+  it("nimmt das Werkzeug aus der Statuszeile, sobald sein Ergebnis da ist", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG, { ...TOOL, result: "ok" }],
+        state: { kind: "state", status: "working", prompt: null },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("status-label")).not.toHaveTextContent("Read foo.py");
+  });
+
+  it("zeigt die ACP-Vorschau als laufende Antwort NACH dem Verlauf, sichtbar markiert", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "Ich lese gerade foo.py …", source: "acp" },
       })
     );
     renderChatView();
@@ -1030,6 +1220,22 @@ describe("ChatView", () => {
     expect(screen.getByText("Hallo!").compareDocumentPosition(row)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
+  });
+
+  it("deckelt die ACP-Vorschau in der Hoehe, damit nichts springt", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "a\nb\nc", source: "acp" },
+      })
+    );
+    renderChatView();
+    // Der Text laeuft am unteren Rand mit (justify-end) und waechst nur bis zum
+    // Deckel — danach steht der Block still, aeltere Zeilen wandern oben raus.
+    const clamp = screen.getByTestId("preview-clamp");
+    expect(clamp.className).toMatch(/overflow-hidden/);
+    expect(clamp.className).toMatch(/justify-end/);
   });
 
   it("rendert ohne Vorschau keine Vorschau-Zeile", () => {
@@ -1081,7 +1287,7 @@ describe("ChatView", () => {
     expect(screen.getByTestId("echo-bubble")).toBeInTheDocument();
   });
 
-  it('shows "Gesendet…" until the transcript shows a sign of the turn', () => {
+  it('shows "Sent…" until the transcript shows a sign of the turn', () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ awaitingResponse: true, state: { kind: "state", status: "idle", prompt: null } })
     );
@@ -1089,8 +1295,8 @@ describe("ChatView", () => {
 
     // Outranks the pane probe's stale "idle" — otherwise the line reads
     // "Bereit" one frame after the operator hit send.
-    expect(screen.getByText("Gesendet…")).toBeInTheDocument();
-    expect(screen.queryByText("Bereit")).not.toBeInTheDocument();
+    expect(screen.getByText("Sent…")).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 
   it("hands the server's capabilities to the composer", async () => {
@@ -1342,7 +1548,7 @@ describe("ChatView", () => {
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
     expect(
-      screen.getByText("Session beendet — neue Nachricht startet die nächste Session")
+      screen.getByText("Session ended — a new message starts the next session")
     ).toBeInTheDocument();
   });
 
