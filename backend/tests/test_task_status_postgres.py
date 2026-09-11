@@ -202,3 +202,105 @@ async def test_lock_and_set_sees_fresh_status_not_stale_identity_map(session: As
         )
         assert locked.status == "in_progress"
         await a.rollback()
+
+
+@pytest.mark.postgres
+async def test_resume_task_after_answer_uses_lock_and_set_not_stale_status(
+    session: AsyncSession,
+):
+    """`messaging.resume_task_after_answer()` merge-fix (2026-09-11, PR #478
+    vs #496): #496 extracted the waiting→in_progress resume (previously
+    inline in `routers/tasks.py`) into a shared helper so the LEAD answer
+    path (`agent_scoped.py`, #496 review B4) gets the same resume as the
+    operator path — but the extracted version wrote the status with a plain
+    `task.status = TaskStatus.IN_PROGRESS` instead of going through
+    `task_state.lock_and_set()`. Now that the helper runs from two
+    concurrent-capable callers (operator + lead), a race between them needs
+    the same fresh-read guard as any other transition, or the second caller
+    silently double-resumes on a stale identity-map copy.
+
+    Session A loads the task (identity map) while it is `waiting` — same as
+    both call sites do before invoking this helper. A concurrent writer on
+    an independent connection wins the race first and moves the task to
+    `in_progress` (simulating the other caller's resume already landing).
+    `resume_task_after_answer()` in session A must see that FRESH status,
+    refuse the now-invalid in_progress→in_progress self-transition, and
+    return False instead of posting a second "Antwort erhalten" line.
+
+    Sabotage probe: swap `lock_and_set(...)` back for a plain `task.status =
+    TaskStatus.IN_PROGRESS` assignment in `resume_task_after_answer` — this
+    test goes red (returns True, posts a duplicate message) because the
+    plain assignment validates against session A's stale `waiting` copy
+    instead of the concurrent writer's fresh `in_progress`.
+    """
+    from app.models.agent import Agent
+    from app.models.thread import Thread
+    from app.services.messaging import open_questions, post_message, resume_task_after_answer
+
+    board = Board(name="PG-resume", slug=f"pg-resume-{uuid.uuid4().hex[:6]}")
+    session.add(board)
+    await session.commit()
+
+    agent = Agent(name="probe-agent", board_id=board.id, role="developer")
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+
+    task = Task(
+        board_id=board.id,
+        title="resume race probe",
+        status="waiting",
+        assigned_agent_id=agent.id,
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    agent.current_task_id = task.id
+    session.add(agent)
+    await session.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as a:
+        thread = Thread(kind="task", task_id=task.id)
+        a.add(thread)
+        await a.commit()
+        await a.refresh(thread)
+
+        # Session A: task object now lives in A's identity map as `waiting`.
+        loaded = (await a.exec(select(Task).where(Task.id == task.id))).scalar_one()
+        assert loaded.status == "waiting"
+
+        # Concurrent writer on its own connection — the other caller's
+        # resume_task_after_answer already won the race and moved the task
+        # on. Bypass the trigger the way `_force_status` does: this models
+        # an already-valid `waiting -> in_progress` transition that simply
+        # happened on a different connection, not a malformed state.
+        async with test_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE tasks SET status = 'in_progress' WHERE id = :id"),
+                {"id": task.id},
+            )
+
+        remaining_before = await open_questions(a, thread_id=thread.id)
+        assert remaining_before == []
+
+        resumed = await resume_task_after_answer(a, loaded, thread, changed_by="test")
+
+        assert resumed is False, (
+            "resumed on a stale identity-map status instead of the "
+            "concurrent writer's fresh 'in_progress' — lock_and_set() "
+            "regression (PR #478 vs #496 merge)"
+        )
+
+        fresh = (await a.exec(
+            select(Task).where(Task.id == task.id).execution_options(populate_existing=True)
+        )).scalar_one()
+        assert fresh.status == "in_progress"
+
+        posted = await post_message(
+            a, thread_id=thread.id, sender_type="system", body="probe: count check",
+        )
+        assert posted.seq == 1, (
+            "resume_task_after_answer posted a message on the lost race — "
+            f"expected the thread to still be empty, first real post got seq={posted.seq}"
+        )

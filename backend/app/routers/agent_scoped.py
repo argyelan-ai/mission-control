@@ -1841,6 +1841,20 @@ async def agent_post_thread_message(
     # Zustellung ist mention-gefiltert (routers/agents._group_message_visible_to).
     # Bewusst KEIN Lead-Default und kein "@alle" für Agenten (Sturm-Schutz):
     # ein unaufgeforderter Post liegt im Protokoll, weckt aber niemanden.
+    # Implicit answer (review #496 B2): `mc msg --thread` carries no reply_to
+    # and there is no `mc answer` — so "answered → awaiting=False" had no
+    # reachable trigger. A board lead posting into a task thread that holds
+    # an open question addressed to "boss" answers the OLDEST such question.
+    effective_reply_to = payload.reply_to
+    # Only a plain `message` counts as the implicit answer (review #496 B3):
+    # a `status`/`decision` line ("moment, schaue ich mir an") must not close
+    # the question.
+    if (effective_reply_to is None and agent.is_board_lead and thread.task_id is not None
+            and payload.message_type == "message"):
+        from app.services.messaging import open_questions
+        pending = await open_questions(session, thread_id=thread.id, to="boss")
+        if pending:
+            effective_reply_to = min(pending, key=lambda q: q.seq).id
     group_row = None
     group_mentions: list[str] | None = None
     if thread.kind == "group":
@@ -1888,7 +1902,7 @@ async def agent_post_thread_message(
         sender_id=agent.id,
         message_type=payload.message_type,
         body=body_text,
-        reply_to=payload.reply_to,
+        reply_to=effective_reply_to,
         mentions=group_mentions,
         # Gruppen spiegeln in V1 nicht in die Chat-Kanäle (ADR-075) — eine
         # autonome Runde würde Slack/Telegram fluten.
@@ -1915,9 +1929,14 @@ async def agent_post_thread_message(
     # does not stay "waiting" forever once it has been answered. (The task
     # endpoint does not do this — the operator path in routers/tasks does. Here
     # the agent may be answering in a thread nobody else will touch.)
-    if payload.reply_to is not None:
+    if effective_reply_to is not None:
         await answer_clears_awaiting(session, message)
         await session.commit()
+        # Review #496 B4: an answered `--blocking` question must release the
+        # worker (waiting → in_progress), exactly like the operator path.
+        if task is not None and agent.is_board_lead:
+            from app.services.messaging import resume_task_after_answer
+            await resume_task_after_answer(session, task, thread, changed_by="agent")
 
     logger.info(
         "Message: %s posts on thread %s (kind=%s, type=%s)",
