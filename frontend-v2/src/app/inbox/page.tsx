@@ -15,6 +15,7 @@ import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import type { Approval, Task, Agent } from "@/lib/types";
+import { isOperatorReview } from "@/lib/reviewRouting";
 
 export default function InboxPage() {
   const t = useTranslations("inbox");
@@ -95,17 +96,27 @@ export default function InboxPage() {
   // ── Derived Data ─────────────────────────────────────────────────────────────
 
   const pendingApprovals = approvals ?? [];
-  const agentMap = Object.fromEntries((agents ?? []).map((a) => [a.id, a]));
+
+  const agentMap: Record<string, Agent> = Object.fromEntries((agents ?? []).map((a) => [a.id, a]));
+
+  // Reviews held by a reviewer AGENT (e.g. Rex) are not the operator's
+  // decision — they are listed read-only below. Only tasks the operator
+  // explicitly asked to review, or that no reviewer agent holds, get buttons.
+  const agentReviews = allReviews.filter(
+    (task) => !isOperatorReview(task, task.assigned_agent_id ? agentMap[task.assigned_agent_id] : null),
+  );
+  const agentReviewIds = new Set(agentReviews.map((t) => t.id));
 
   // Filter: Only show tasks that are ready for the operator's review
   const reviews = allReviews.filter((task, i) => {
+    if (agentReviewIds.has(task.id)) return false;
     if (!task.assigned_agent_id) return true;
     const comments = commentQueries[i]?.data;
     if (!comments) return false;
     return comments.some((c) => c.author_agent_id === task.assigned_agent_id);
   });
 
-  const waitingForReview = allReviews.length - reviews.length;
+  const waitingForReview = allReviews.length - reviews.length - agentReviews.length;
   const totalCount = pendingApprovals.length + reviews.length;
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -201,6 +212,34 @@ export default function InboxPage() {
       )}
 
       {/* Waiting for review hint */}
+      {/* Reviews held by a reviewer agent — read-only, no operator buttons */}
+      {agentReviews.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[var(--color-text-muted)]">
+              <Clock size={14} />
+            </span>
+            <span className="text-[11px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)]">
+              {t("agentReviewsCount", { count: agentReviews.length })}
+            </span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {agentReviews.map((task) => (
+              <GlassCard key={task.id} className="px-4 py-3" data-testid="agent-review-row">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[13px] text-[var(--color-text-primary)] truncate">{task.title}</span>
+                  <span className="text-[11px] shrink-0 text-[var(--color-text-muted)]">
+                    {t("agentReviewing", {
+                      agent: (task.assigned_agent_id && agentMap[task.assigned_agent_id]?.name) || "—",
+                    })}
+                  </span>
+                </div>
+              </GlassCard>
+            ))}
+          </div>
+        </section>
+      )}
+
       {waitingForReview > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 4 }}
