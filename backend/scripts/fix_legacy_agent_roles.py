@@ -15,11 +15,13 @@ Gleiche Pruefung fuer Tester/Deployer/Researcher, weil laut Vorfall-Bericht
 dieselbe Mechanik dort als Naechstes bricht (nur Grok hat einen
 Enum-Rollenwert, Hermes hat None, alle anderen inkl. Rex Freitext).
 
-Scope (bewusst eng): NUR die vier namentlich genannten Agenten. Andere
-Freitext-Rollen (Davinci, Downloader, FreeCode, Installer, Kimi,
-Shakespeare, Sparky) bilden keine 1:1 AgentRole-Entsprechung und sind
-ausdruecklich NICHT Teil dieses Vorfalls/dieser Karte — Aendern waere ein
-Rollensystem-Umbau, der laut Task explizit out of scope ist.
+Scope (bewusst eng): NUR die vier namentlich genannten Agenten
+(TARGET_ROLES unten). Andere Agenten mit Freitext-Rollen bilden keine
+1:1 AgentRole-Entsprechung und sind ausdruecklich NICHT Teil dieses
+Vorfalls/dieser Karte — Aendern waere ein Rollensystem-Umbau, der laut
+Task explizit out of scope ist. Das --dry-run-Reporting unten zeigt sie
+trotzdem mit an (reine Sichtbarkeit, siehe weiter unten), nur eben
+unveraendert.
 
 Ausfuehrung (braucht DB-Zugriff, den ein Agent-Token nicht hat — Aendern
 fremder Agent-Rollen ist eine Operator-Aktion, siehe Team Charter Punkt 6):
