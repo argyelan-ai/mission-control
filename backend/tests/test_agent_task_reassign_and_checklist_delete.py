@@ -33,6 +33,14 @@ async def _setup(*, lead: bool = False):
     worker_id = caller_id if not lead else uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(Board(id=board_id, name="B", slug=f"b-{uuid.uuid4().hex[:8]}"))
+        # Flush the Board on its own before the Agent rows that FK to it:
+        # these models carry no relationship() (see conftest.py's "SQLite:
+        # do NOT enable foreign keys" note), so SQLAlchemy's unit-of-work has
+        # no dependency edge between Board and Agent and does not order the
+        # Agent INSERTs after the Board INSERT within one flush. SQLite never
+        # enforces the FK either way, so this was invisible there; Postgres
+        # does enforce it (agents_board_id_fkey) and rejected the batch.
+        await s.flush()
         raw_token, token_hash = generate_agent_token()
         s.add(Agent(
             id=caller_id, name="Lead" if lead else "Worker", board_id=board_id,
