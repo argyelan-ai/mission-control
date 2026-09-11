@@ -688,7 +688,13 @@ class TaskRunnerService:
         if minutes_since_dispatch < rotation_threshold:
             return False  # Still too early
         # W0.1: one heal per card per round — the rotation re-pastes the
-        # prompt, so it competes with every other healer on this task.
+        # prompt, so it competes with every other healer on this task. Claimed
+        # AFTER the local rotated_key dedup: when this dispatch window is
+        # already rotated, no healing would happen and burning the claim here
+        # would block a real healer for a full HEAL_DEDUP_TTL.
+        rotated_key = f"mc:task:{task.id}:attempt_rotated"
+        if await redis.get(rotated_key):
+            return False  # Already rotated within this dispatch window
         if not await try_claim_heal(redis, str(task.id)):
             logger.info(
                 "D-1 silent retry skipped for '%s' — another watchdog "
@@ -696,12 +702,6 @@ class TaskRunnerService:
                 task.title,
             )
             return False
-
-
-
-        rotated_key = f"mc:task:{task.id}:attempt_rotated"
-        if await redis.get(rotated_key):
-            return False  # Already rotated within this dispatch window
 
         import uuid as _uuid
         old_attempt_id = task.dispatch_attempt_id
