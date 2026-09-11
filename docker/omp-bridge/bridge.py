@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import inspect
 import os
 import re
 import sys
@@ -2596,7 +2597,6 @@ def serve_loop(
                 _acp_control_sink.clear()
                 _acp_control_sink.append(acp_cancel)
 
-                acp_cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
                 # Model selector parity with the native launcher (incident
                 # 09.09.2026, first ACP live probe): `omp acp` inherits the
                 # bridge env, and OPENAI_API_KEY enables omp's BUILT-IN
@@ -4149,6 +4149,16 @@ def classify_acp(outcome: RunOutcome) -> Classification:
     )
 
 
+# PR #492 interplay: whether run_acp_once accepts `interrupt_state` is a
+# property of the SIGNATURE, evaluated once at import time. The forwarding
+# below must key off this flag, NOT off the value being None — serve_loop
+# always passes a live InterruptState, so a value check would forward an
+# unknown kwarg on a pre-#492 base and kill every ACP turn with a TypeError.
+_RUN_ACP_ACCEPTS_INTERRUPT_STATE = (
+    "interrupt_state" in inspect.signature(run_acp_once).parameters
+)
+
+
 def _make_acp_run_factory(
     *,
     model: Optional[str],
@@ -4182,10 +4192,13 @@ def _make_acp_run_factory(
     ``interrupt_state`` (PR #492 interplay): forwarded to run_acp_once so a
     cancelled turn carries WHAT interrupted it (kind/reason stamp). WITHOUT
     this the merge of #492 would silently drop the stamp for the ACP path —
-    both PRs green in isolation, the combination loses the stamp. The
-    keyword is forwarded only when the parameter exists on this base
-    (#492 not merged yet) so the factory stays importable before the merge;
-    after #492 lands the pass-through is unconditional.
+    both PRs green in isolation, the combination loses the stamp. The keyword
+    is forwarded only when run_acp_once's SIGNATURE has the parameter
+    (module flag _RUN_ACP_ACCEPTS_INTERRUPT_STATE, evaluated at import) AND
+    a state was passed — a value-only check would forward an unknown kwarg
+    on a pre-#492 base and kill every ACP turn with a TypeError. After #492
+    merges (merge order: #492 first), the flag is True and the pass-through
+    is unconditional.
     """
     import acp_chat_events
 
@@ -4242,7 +4255,7 @@ def _make_acp_run_factory(
             on_session_id=on_session_id,
             **(
                 {"interrupt_state": interrupt_state}
-                if interrupt_state is not None
+                if interrupt_state is not None and _RUN_ACP_ACCEPTS_INTERRUPT_STATE
                 else {}
             ),
         )

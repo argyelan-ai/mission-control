@@ -553,6 +553,20 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
 
     fakes: list = []
     captured: dict = {}
+    # Rex review W2: record EVERY ACPCancelState created during the dispatch.
+    # serve_loop's ACP branch must create exactly ONE — the shared control-
+    # channel state — and run_acp_once must receive THAT object (identity,
+    # not just not-None). A second instance would be a private factory state
+    # no control channel can flip (M2 mutation class: stop knob dead).
+    cancel_instances: list = []
+    orig_cancel_cls = bridge.ACPCancelState
+
+    class _RecordingCancelState(orig_cancel_cls):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            cancel_instances.append(self)
+
+    bridge.ACPCancelState = _RecordingCancelState
     orig_run = bridge.run_acp_once
 
     def spy_run(prompt, **kw):
@@ -560,14 +574,10 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
         fake = InProcessFake(FIXTURES["normal"], [])
         fakes.append(fake)
         kw["client_factory"] = lambda: fake.client
-        # The real run_acp_once on THIS branch may not know newer kwargs
-        # yet (e.g. interrupt_state arrives with PR #492) — drop anything
-        # the base signature rejects so the harness stays merge-compatible.
-        import inspect
-        known = set(inspect.signature(orig_run).parameters)
-        extra = {k: v for k, v in kw.items() if k not in known}
-        for k in extra:
-            kw.pop(k)
+        # NO kwarg filtering here (Rex review B2): the spy must pass through
+        # EXACTLY what production passes. A filter that drops unknown kwargs
+        # would hide a wiring TypeError the production path would die on —
+        # the test must crash with production, not silently heal.
         return orig_run(prompt, **kw)
 
     bridge.run_acp_once = spy_run
@@ -588,6 +598,7 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
             _context_env_path=str(tmp / "mc-context.env"),
         )
     finally:
+        bridge.ACPCancelState = orig_cancel_cls
         bridge.run_acp_once = orig_run
         for fake in fakes:
             try:
@@ -595,9 +606,7 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
             except Exception:
                 pass
     written = sorted(agent_dir.rglob("*.jsonl"))
-    return lc.calls, captured, written
-
-
+    return lc.calls, captured, written, cancel_instances
 def _with_serve_env(fn):
     """Save/restore the serve-relevant env around `fn` (both tests mutate the
     process env; without restore they would poison sibling tests)."""
@@ -629,12 +638,19 @@ def test_serve_loop_acp_writes_transcript_and_preview():
         with tempfile.TemporaryDirectory(prefix="acp-serve-") as td:
             agent_dir = Path(td) / "agent"
             agent_dir.mkdir()
-            calls, captured, written = _drive_serve_loop_acp(agent_dir)
+            calls, captured, written, cancel_instances = _drive_serve_loop_acp(agent_dir)
 
-            # The production path carried the control wiring (Stop-Knopf,
-            # tool heartbeat) AND both chat sinks — the core regression.
+            # Rex review W2: IDENTITY, not just not-None. Exactly ONE
+            # ACPCancelState may be created for the dispatch (serve_loop's
+            # shared control-channel state), and run_acp_once must receive
+            # THAT object — a private factory state (M2) satisfies not-None
+            # but dead-ends the stop knob.
             assert captured.get("cancel_state") is not None, \
                 "serve_loop ACP path must pass its shared cancel_state"
+            assert len(cancel_instances) == 1, \
+                f"expected exactly 1 ACPCancelState (the shared one), got {len(cancel_instances)}"
+            assert captured["cancel_state"] is cancel_instances[0], \
+                "run_acp_once must receive the SAME cancel state serve_loop registered in _acp_control_sink"
             assert captured.get("heartbeat_fn") is not None, \
                 "serve_loop ACP path must pass the tool heartbeat"
             assert captured.get("transcript_sink") is not None, \
@@ -679,10 +695,19 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
                      interrupt_state=None):
         def run(prompt):
             cwd = os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
+            # Rex review B2: the stub must forward EXACTLY what it received
+            # (the real factory forwards interrupt_state too). Swallowing it
+            # here would hide the same class of silent-drop the sabotage
+            # probe is supposed to expose.
+            extra = (
+                {"interrupt_state": interrupt_state}
+                if bridge._RUN_ACP_ACCEPTS_INTERRUPT_STATE else {}
+            )
             return bridge.run_acp_once(
                 prompt, cwd=cwd, model=model, max_time=max_time,
                 permission_policy=permission_policy, task_id=task_id,
                 cancel_state=cancel_state, heartbeat_fn=heartbeat_fn,
+                **extra,
             )
         return run
 
@@ -693,7 +718,7 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
         with tempfile.TemporaryDirectory(prefix="acp-serve-sab-") as td:
             agent_dir = Path(td) / "agent"
             agent_dir.mkdir()
-            calls, captured, written = _drive_serve_loop_acp(agent_dir)
+            calls, captured, written, _cancel_instances = _drive_serve_loop_acp(agent_dir)
             assert captured.get("transcript_sink") is None, list(captured)
             assert captured.get("preview_sink") is None, list(captured)
             assert not written, [str(f) for f in written]
