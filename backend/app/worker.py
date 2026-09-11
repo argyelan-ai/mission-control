@@ -1,38 +1,43 @@
 """Standalone entrypoint for Mission Control's background services.
 
-Architektur E, Teil 1 (Vorbereitung eines eigenen Worker-Containers — siehe
-PR-Text fuer das Inventar aller betroffenen Dienste). Dieses Modul startet
-GENAU denselben Boot-Pfad wie ``app.main.lifespan``: erst ``prepare_process()``
-(Boot-Secret-Guard + DB-Seeds + Channel-/AI-Provider-Overrides — siehe
-Docstring dort), dann dieselben Hintergrund-Dienste ueber die extrahierten
-``start_background_services``/``stop_background_services``. Kein Uvicorn,
-kein offener Port — Request-gebundene Dinge (Terminal-/Browser-WebSockets,
-alle HTTP-Endpunkte) bleiben ausschliesslich im API-Prozess (``app.main``).
+Architektur E, Teil 2 (eigener ``mc-worker``-Container — siehe PR-Text).
+Startet denselben Boot-Pfad wie die API-lifespan, aber OHNE ``app.main`` zu
+importieren: der komplette FastAPI-Rumpf (``app = FastAPI(...)`` + alle
+``include_router()``-Aufrufe + CORS/Rate-Limit-Middleware + Verticals-
+Discovery) laedt damit ausschliesslich im API-Prozess. Ein Importfehler in
+irgendeinem Router legt den Worker nicht mehr lahm — die Schuld aus Teil 1
+(hier stand frueher ``from app.main import ...``) ist behoben.
 
-Achtung: der Import unten (``from app.main import ...``) fuehrt den kompletten
-Modulrumpf von ``app.main`` aus, inklusive ``app = FastAPI(...)`` und aller
-61 ``include_router()``-Aufrufe. "Ohne HTTP-Router" stimmt nur auf Netzwerk-
-ebene (kein Uvicorn bindet den FastAPI-``app``) — ein Importfehler in
-irgendeinem Router legt trotzdem auch den Worker lahm, und der volle Router-
-Importgraph liegt im Worker-Prozess. Fuer Teil 1 vertretbar; Teil 2 muss die
-Dienste aus ``main.py`` herausziehen statt ``main`` zu importieren, wenn
-Architektur E echte Prozesstrennung erreichen soll.
+Boot-Pfad (identisch zur API-lifespan, siehe ``app.background``):
+    1. ``prepare_process()`` — Boot-Secret-Guard, DB-Seeds,
+       Channel-/AI-Provider-Overrides, Qdrant-Index-Setup
+    2. ``start_background_services()`` — die ENABLE_BACKGROUND_SERVICES-
+       gegateden Singleton-Dienste (Scheduler/Watchdog/Task-Runner/Telegram/
+       Slack-Socket/...)
+    3. ``start_vault_services()`` — Vault-Wiring (Index/Activity/Git/
+       Embeddings/Watcher/Compactor/Lint-Cron). Vor Teil 2 an die API-
+       lifespan gebunden, laeuft jetzt HIER.
 
-Teil 1 bindet dieses Modul NOCH NICHT in docker-compose ein — es gibt noch
-keinen ``mc-worker``-Service. Ausfuehren (gleiches Image wie die API):
+Ausfuehren (gleiches Image wie die API, eigener Compose-Service
+``mc-worker`` mit ``command: python -m app.worker``):
 
     python -m app.worker
 
-``ENABLE_BACKGROUND_SERVICES`` muss dafuer auf einem der beiden Prozesse auf
-``false`` stehen (sonst starten Scheduler/Watchdog/etc. doppelt — siehe
-Scheduler-Redis-Lock, der genau das absichert, aber unnoetig waere). Solange
-kein Worker-Container existiert, bleibt der Default ``true`` in der API
-unveraendert, und dieses Modul ist reine Vorbereitung.
+``ENABLE_BACKGROUND_SERVICES`` muss in GENAU EINEM der beiden Prozesse auf
+``true`` stehen (compose setzt: API=false, Worker=true) — sonst starten
+Scheduler/Watchdog/etc. doppelt. Der Scheduler-Redis-Lock (siehe #133)
+sichert das zusaetzlich ab, ist aber bei korrektem Wiring unnoetig.
 
-Vault-Watcher/-Compactor sind NICHT Teil dieses Moduls (siehe PR-Text,
-"Streitfall") — sie haengen am Vault-Wiring in ``app.main.lifespan`` und
-werden dort separat gegated. Das in eine von hier aufrufbare Funktion zu
-ziehen ist Teil 2.
+Bewusst NICHT im Worker (request-gebunden bzw. API-domainspezifisch):
+- HTTP-Router, Terminal-/Browser-WebSockets (nur im API-Prozess sinnvoll)
+- ``jarvis_briefing_loop`` + ``telegram_topic_purge_loop`` (API-lifespan-
+  Crons; haengen an Chat-/Report-Oberflaechen des API-Prozesses — doppelte
+  Ausfuehrung in beiden Prozessen waere ein Verhaltenswechsel, der nicht
+  Teil dieses Umzugs ist)
+
+Vault-Decay-Cron laeuft weiter in der API (unconditional, wie vor Teil 2);
+der Vault-Lint-Cron ist Teil von ``start_vault_services`` und laeuft damit
+jetzt im Worker.
 """
 
 import asyncio
@@ -40,7 +45,13 @@ import logging
 import signal
 
 from app.config import settings
-from app.main import app, prepare_process, start_background_services, stop_background_services
+from app.background import (
+    prepare_process,
+    start_background_services,
+    stop_background_services,
+    start_vault_services,
+    stop_vault_services,
+)
 
 logger = logging.getLogger("mc.worker")
 
@@ -55,7 +66,8 @@ async def run() -> None:
     await prepare_process()
 
     logger.info("Worker startet Hintergrund-Dienste (kein HTTP-Router, kein Port offen)")
-    await start_background_services(app)
+    await start_background_services(object())
+    vault_runtime = await start_vault_services(object())
     logger.info("Worker: Hintergrund-Dienste laufen")
 
     # CPython wandelt SIGTERM NICHT in eine Exception um — die Default-
@@ -75,7 +87,8 @@ async def run() -> None:
         for sig in registered:
             loop.remove_signal_handler(sig)
         logger.info("Worker faehrt Hintergrund-Dienste herunter")
-        await stop_background_services(app)
+        await stop_vault_services(vault_runtime)
+        await stop_background_services(object())
 
 
 def main() -> None:

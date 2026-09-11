@@ -1,8 +1,9 @@
 """ENABLE_BACKGROUND_SERVICES (Architektur E, Teil 1 — Vorbereitung Worker-Container).
 
 ``start_background_services()``/``stop_background_services()`` in
-``app.main`` sind der gemeinsame Startpfad fuer die API-lifespan UND
-``backend/app/worker.py``. CI hat keinen echten Postgres/Redis-Service
+``app.background`` sind der gemeinsame Startpfad fuer die API-lifespan UND
+``backend/app/worker.py`` (Architektur E Teil 2: aus ``app.main`` extrahiert,
+damit der Worker ohne ``app.main``-Import bootet). CI hat keinen echten Postgres/Redis-Service
 (siehe conftest.py — alles laeuft gegen In-Memory-SQLite + fakeredis), und
 jeder Dienst-``.start()`` haengt an genau diesen beiden — deshalb sind diese
 Tests bewusst vollstaendig gemockt statt die echte lifespan() auszufuehren.
@@ -21,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import app.main as main
+import app.background as background
 from app.config import Settings
 
 # Die 17 "einfachen" Singleton-Dienste, die start_/stop_background_services()
@@ -70,21 +72,15 @@ def test_lifespan_gates_background_services_on_the_flag():
     assert "await stop_background_services(app)" in src
 
 
-def test_lifespan_gates_vault_watcher_and_compactor_too():
+def test_vault_services_gating_lives_in_background():
     # Streitfall aus dem PR-Text: vault_watcher/vault_compactor haengen am
-    # Vault-Wiring in lifespan() selbst (nicht in start_background_services),
+    # Vault-Wiring — seit Teil 2 in app.background.start_vault_services(),
     # muessen aber trotzdem hinter demselben Schalter stehen.
     #
     # Regex statt Quelltext-Vergleich inkl. exakter Einrueckung (Rex-Review
-    # PR #479, M4): jede Umformatierung von lifespan() (schwarz/ruff, ein
-    # zusaetzlicher Kommentar) brach den alten wortwoertlichen Vergleich,
-    # ohne dass sich am Verhalten etwas aendert. \s+ toleriert beliebige
-    # Einrueckungstiefe/-art, verlangt aber weiterhin, dass der Aufruf
-    # UNMITTELBAR im if-Block steht (Praezedenzfall test_boot_secret_guard.py
-    # matcht nur einen Funktionsnamen — hier zusaetzlich die Block-Struktur,
-    # weil vault_watcher/vault_compactor sonst unbemerkt aus dem Gating
-    # rutschen koennten).
-    src = inspect.getsource(main.lifespan)
+    # PR #479, M4): \s+ toleriert beliebige Einrueckungstiefe/-art, verlangt
+    # aber weiterhin, dass der Aufruf UNMITTELBAR im if-Block steht.
+    src = inspect.getsource(background.start_vault_services)
     assert re.search(
         r"if settings\.enable_background_services:\s*\n\s*await vault_watcher\.start\(\)",
         src,
@@ -99,7 +95,7 @@ def test_lifespan_gates_vault_watcher_and_compactor_too():
 async def _patched_service_starts(mocks: dict[str, AsyncMock]):
     with contextlib.ExitStack() as stack:
         for name, mock in mocks.items():
-            stack.enter_context(patch.object(getattr(main, name), "start", mock))
+            stack.enter_context(patch.object(getattr(background, name), "start", mock))
         yield
 
 
@@ -107,7 +103,7 @@ async def _patched_service_starts(mocks: dict[str, AsyncMock]):
 async def _patched_service_stops(mocks: dict[str, AsyncMock]):
     with contextlib.ExitStack() as stack:
         for name, mock in mocks.items():
-            stack.enter_context(patch.object(getattr(main, name), "stop", mock))
+            stack.enter_context(patch.object(getattr(background, name), "stop", mock))
         yield
 
 
@@ -132,7 +128,7 @@ async def test_start_background_services_starts_all_17_plus_gh_monitor(monkeypat
 
     start_mocks = {name: AsyncMock() for name in THE_17_SIMPLE_SERVICES}
     async with _patched_service_starts(start_mocks):
-        await main.start_background_services(main.app)
+        await background.start_background_services(main.app)
 
     for name, mock in start_mocks.items():
         mock.assert_awaited_once()
@@ -164,11 +160,11 @@ async def test_stop_background_services_stops_all_17_plus_gh_monitor(monkeypatch
 
     start_mocks = {name: AsyncMock() for name in THE_17_SIMPLE_SERVICES}
     async with _patched_service_starts(start_mocks):
-        await main.start_background_services(main.app)
+        await background.start_background_services(main.app)
 
     stop_mocks = {name: AsyncMock() for name in THE_17_SIMPLE_SERVICES}
     async with _patched_service_stops(stop_mocks):
-        await main.stop_background_services(main.app)
+        await background.stop_background_services(main.app)
 
     for name, mock in stop_mocks.items():
         mock.assert_awaited_once()

@@ -94,6 +94,9 @@ services:
       CDP_BROWSER_URL: http://172.30.99.10:9223
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      # Architektur E Teil 2: Hintergrund-Dienste laufen im eigenen mc-worker-
+      # Container. Default true bleibt als Rueckweg (compose setzt es hier explizit).
+      ENABLE_BACKGROUND_SERVICES: "false"
       AUTH_MODE: local
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
@@ -325,6 +328,83 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+
+  # mc-worker — Architektur E Teil 2 (PR-Teil 2): eigenstaendiger Prozess fuer
+  # alle ENABLE_BACKGROUND_SERVICES-Dienste (Scheduler, Watchdog, Task-Runner,
+  # Telegram-/Slack-Inbound, Vault-Watcher/Compactor, ...). Gleiches Image wie
+  # die API; der Boot-Pfad lebt in app.background (ohne app.main-Import), der
+  # Einstiegspunkt ist backend/app/worker.py. Kein Port, kein Uvicorn.
+  # Rollenverteilung: API=false (siehe environment oben), Worker=true (unten) —
+  # sonst starten Scheduler & Co. doppelt.
+  mc-worker:
+    image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
+    build: ./backend
+    restart: unless-stopped
+    logging: *default-logging
+    # command statt CMD: umgeht docker-entrypoint.sh (Migrate-then-serve ist
+    # API-Aufgabe; alembic laeuft dort vor dem Serverstart).
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      AUTH_MODE: local
+      ENVIRONMENT: production
+      HOME_HOST: ${HOME}
+      MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:-}
+      # Telegram-/Slack-Inbound-Loops + deren Token-Passthrough (nur hier, nicht
+      # mehr in der API — ein Poller pro Nachricht, siehe ADR-072).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
+      SLACK_TEAM_CHAT_ENABLED: ${SLACK_TEAM_CHAT_ENABLED:-false}
+      SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
+      CHAT_CHANNELS: ${CHAT_CHANNELS:-}
+      JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-}
+      SPARK_EMBEDDING_MODEL: ${SPARK_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      AI_EMBEDDINGS_PROVIDER: ${AI_EMBEDDINGS_PROVIDER:-spark}
+      AI_EMBEDDINGS_URL: ${AI_EMBEDDINGS_URL:-}
+      AI_EMBEDDINGS_MODEL: ${AI_EMBEDDINGS_MODEL:-}
+      AI_INSIGHTS_PROVIDER: ${AI_INSIGHTS_PROVIDER:-spark}
+      AI_INSIGHTS_MODEL: ${AI_INSIGHTS_MODEL:-}
+      ENABLE_BACKGROUND_SERVICES: "true"
+      ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+      JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
+      JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      HOST_UID: ${HOST_UID:-502}
+    volumes:
+      - ${HOME}/.mc:${HOME}/.mc
+      - ${HOME}/.mc/deliverables:/deliverables:ro
+      - mc_shared_deliverables:/shared-deliverables
+      - ./backend/templates:/app/templates:ro
+      - ./jarvis_core:/app/jarvis_core:ro
+      - ./scripts/node-agent:/app/scripts/node-agent:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # Kein HTTP-Port — der Worker lebt, solange der Hauptprozess (PID 1)
+      # antwortet. signal-0-Check: brutaler, aber deps-freier Lifeness-Probe.
+      test: ["CMD-SHELL", "python -c 'import os; os.kill(1, 0)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 
   frontend:
     # Prebuilt-Image nutzt die Default-Brand ("Mission.Control"); eigene

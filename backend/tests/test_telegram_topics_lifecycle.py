@@ -502,7 +502,7 @@ async def test_purge_loop_calls_the_tick_and_stops_on_cancel(monkeypatch):
     """Der periodische Job ist verdrahtet: main.py's Loop ruft den Tick."""
     import asyncio
 
-    from app import main as app_main
+    from app import background as app_main
 
     monkeypatch.setattr(app_main, "TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS", 0)
     calls: list[int] = []
