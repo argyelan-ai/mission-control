@@ -43,6 +43,7 @@ jetzt im Worker.
 import asyncio
 import logging
 import signal
+from types import SimpleNamespace
 
 from app.config import settings
 from app.background import (
@@ -56,6 +57,15 @@ from app.background import (
 logger = logging.getLogger("mc.worker")
 
 
+class _WorkerState:
+    """Minimal state carrier for start_/stop_background_services() — the API
+    passes its FastAPI app (uses app.state for obsidian_export_started +
+    gh_monitor_task), the worker only needs an attribute bag."""
+
+    def __init__(self) -> None:
+        self.state = SimpleNamespace()
+
+
 async def run() -> None:
     if not settings.enable_background_services:
         logger.warning(
@@ -66,8 +76,9 @@ async def run() -> None:
     await prepare_process()
 
     logger.info("Worker startet Hintergrund-Dienste (kein HTTP-Router, kein Port offen)")
-    await start_background_services(object())
-    vault_runtime = await start_vault_services(object())
+    state = _WorkerState()
+    await start_background_services(state)
+    vault_runtime = await start_vault_services(state)
     logger.info("Worker: Hintergrund-Dienste laufen")
 
     # CPython wandelt SIGTERM NICHT in eine Exception um — die Default-
@@ -88,7 +99,7 @@ async def run() -> None:
             loop.remove_signal_handler(sig)
         logger.info("Worker faehrt Hintergrund-Dienste herunter")
         await stop_vault_services(vault_runtime)
-        await stop_background_services(object())
+        await stop_background_services(state)
 
 
 def main() -> None:
