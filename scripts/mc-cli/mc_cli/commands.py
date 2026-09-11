@@ -107,17 +107,91 @@ def _cmd_ack(args, client, cfg):
     False-Negative — er HAT ge-ACK'd (poll.sh setzt ack_at automatisch),
     die CLI sagt aber Fehler. Darum: 400 "In Progress -> In Progress" als
     Erfolg behandeln.
+
+    Kontext-Fortschreibung (W5-E, 2026-09-11): nach dem ACK schreibt die CLI
+    TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID der GEACKTEN Karte nach
+    /tmp/mc-context.env. Ohne das arbeiteten alle nachgelagerten Verben
+    (`mc patch`, `mc comment`, …) auf der Karte aus dem ALTEN Kontext —
+    gefaehrlich, weil die Stale-Pruefung des Backends nicht scheitert,
+    sobald die alte Attempt-ID noch gueltig ist, sondern die FALSCHE Karte
+    trifft. `mc ack <task-id>` mit expliziter ID ist der typische
+    Ausloeser: with_task_id ueberschreibt nur cfg.task_id, BOARD_ID und
+    Attempt-ID blieben beim Vorgaenger haengen.
+
+    Der PATCH selbst traegt die Attempt-ID des ZIEL-Tasks (Header-Bindung
+    wie in _cmd_park): das Detail-GET liefert dispatch_attempt_id der
+    geackten Karte; unterscheidet sie sich von der lokalen cfg, wird der
+    Client daran gebunden — sonst 409 "Stale dispatch_attempt_id".
+
+    Karte zugewiesen, aber nie aktiv dispatcht (dispatch_attempt_id=None,
+    z.B. Lead hat via UI zugewiesen ohne Dispatch-Zyklus): der GET liefert
+    None, die CLI ackt MIT ihrem alten Header NICHT blind weiter, sondern
+    ohne Attempt-Header — das Backend nimmt den PATCH an (missing-header-
+    Pfad; Phase B erzwingt nur bei gesetztem task.dispatch_attempt_id) und
+    stampft beim in_progress-Set selbst ack_at/current_task_id. Die
+    Context-Datei bekommt dann BOARD_ID + TASK_ID und leere Attempt-ID,
+    damit kein stale Wert fuer Folge-Calls uebrig bleibt.
     """
+    board_id, task_id = cfg.require_task_context()
+    detail = client.request(
+        "GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail"
+    )
+    target_attempt = (
+        detail.get("dispatch_attempt_id") if isinstance(detail, dict) else None
+    )
+    if target_attempt != cfg.dispatch_attempt_id and (
+        target_attempt or cfg.dispatch_attempt_id
+    ):
+        # Rebind in beide Richtungen: Ziel hat ANDERE attempt-id → Header
+        # auf die Ziel-ID setzen; Ziel hat KEINE (assigned, nie dispatcht)
+        # → Header komplett weglassen (Backend erzwingt die Pruefung nur
+        # bei gesetztem task.dispatch_attempt_id, ein stale Header einer
+        # fremden Karte waere bestenfalls Larm, im schlimmsten Fall 409).
+        from dataclasses import replace as _replace
+        client = type(client)(_replace(cfg, dispatch_attempt_id=target_attempt))
+        cfg = client.cfg
+    already_in_progress = False
     try:
-        return _patch_status(client, cfg, "in_progress")
+        _patch_status(client, cfg, "in_progress")
     except Exception as e:
         msg = str(e)
         if "In Progress" in msg and "In Progress" in msg.replace("In Progress", "", 1):
             # Idempotent-Success: Task war schon in_progress.
-            _, task_id = cfg.require_task_context()
-            print(task_id)
-            return 0
-        raise
+            already_in_progress = True
+        else:
+            raise
+    if already_in_progress:
+        print(task_id)
+    # Context-File NACH dem erfolgreichen ACK schreiben — mit dem
+    # ZIEL-Kontext (auch im Idempotent-Fall). board_id kommt vom Backend-
+    # Detail, nicht aus der alten Env: `mc ack <id>` mit expliziter ID und
+    # falscher BOARD_ID-env bleibt so trotzdem korrekt.
+    _write_context_file(
+        task_id=task_id,
+        board_id=(detail.get("board_id") if isinstance(detail, dict) else None) or board_id,
+        attempt_id=target_attempt or "",
+    )
+    return 0
+
+
+def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> None:
+    """Schreibt /tmp/mc-context.env (poll.sh-Format, poll.sh:489).
+
+    Fehler sind LAUT: schlaegt das Schreiben fehl, arbeitet der naechste
+    `mc`-Call sonst still auf dem alten Kontext — genau der W5-E-Bug.
+    Darum UsageError (exit != 0) statt stderr-Warnung.
+    """
+    try:
+        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+            f.write(f"TASK_ID={task_id}\n")
+            f.write(f"BOARD_ID={board_id}\n")
+            f.write(f"X_DISPATCH_ATTEMPT_ID={attempt_id}\n")
+    except OSError as e:
+        raise UsageError(
+            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
+            "erst Schreibrechte fixen, dann weiterarbeiten."
+        ) from e
 
 
 def _force_close_open_checklist(client: Client, cfg: Config) -> int:
@@ -2520,7 +2594,7 @@ REGISTRY: dict[str, CommandSpec] = {
     "ack": CommandSpec(
         name="ack",
         help="Dispatch bestätigen (status → in_progress)",
-        endpoints=_STATUS_ENDPOINT,
+        endpoints=_STATUS_ENDPOINT + ("GET /boards/{board_id}/tasks/{task_id}/detail",),
         scope="tasks:write",
         handler=_cmd_ack,
         add_args=_add_optional_task_id,
