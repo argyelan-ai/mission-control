@@ -431,10 +431,9 @@ class RedisKeys:
     def auto_memory_feedback(task_id: str, feedback_type: str) -> str:
         return f"mc:auto_memory:feedback:{task_id}:{feedback_type}"
 
-    # ── Auto-Memory Reflection Fold (Phase 5 MSY-01) ─────────────────────
-    @staticmethod
-    def auto_memory_reflection_fold(task_id: str, hash16: str) -> str:
-        return f"mc:auto_memory:reflection_fold:{task_id}:{hash16}"
+    # auto_memory_reflection_fold (Phase 5 MSY-01) removed — Reflexions-Triage
+    # (2026-09-11) deleted the unconditional reflection→journal fold it keyed.
+    # See app/services/auto_memory.py:record_task_completion docstring.
 
     # ── Intelligence ─────────────────────────────────────────────────────
     @staticmethod
