@@ -93,9 +93,36 @@ def test_worker_boot_path_leaves_app_main_out_of_sys_modules():
         "    asyncio.run(bg.prepare_process())\n"
         "except BaseException:\n"
         "    pass\n"
+        "loaded = sorted(m for m in sys.modules if m.startswith('app.routers'))\n"
         "assert 'app.main' not in sys.modules, (\n"
-        "    'prepare_process() zog app.main an: '\n"
-        "    + str(sorted(m for m in sys.modules if m.startswith('app.routers')))\n"
+        "    'prepare_process() zog app.main an: ' + str(loaded)\n"
+        ")\n"
+        # B7 (Rex-Review PR #500, Folgefund 38d1d1b): die Fehlerklasse
+        # "Router-Import zieht in den Worker" kehrte innerhalb dieses PRs
+        # schon einmal zurueck (obsidian_export imports _attachments_root
+        # aus app.routers.memory — 38d1d1b zog den Resolver nach
+        # app.services.fs_roots). app.main bleibt False, solange nur der
+        # Router geladen wird — deshalb die staerkere Eigenschaft: der
+        # Worker-Boot-Pfad laedt GAR KEIN app.routers.*-Modul.
+        "assert not loaded, (\n"
+        "    'prepare_process() zog Router-Module in den Worker: '\n"
+        "    + str(loaded)\n"
+        ")\n"
+        # N1 (Rex-Review PR #500): Positiv-Sentinel. Bei einem kuenftigen
+        # Fruehabbruch von prepare_process() (z. B. neuer Validation-Guard
+        # vor allen Imports) bliebe `loaded` leer und der Router-Waechter
+        # stille gruen — der Test bewiese dann nur Abwesenheit. Der Sentinel
+        # muss ein Modul sein, das ERST IM BOOT-PFAD geladen wird:
+        # app.seeds wird lazy in prepare_process importiert (background.py:266)
+        # und ist nach `import app.worker` noch NICHT in sys.modules
+        # (gemessen). obsidian_export taugt NICHT — das zieht app.worker
+        # schon beim Modul-Import an. Faellt der Sentinel, ist
+        # prepare_process frueher abgebrochen als der Waechter annimmt und
+        # der Router-Waechter hat nichts bewiesen.
+        "assert 'app.seeds' in sys.modules, (\n"
+        "    'prepare_process() brach FRUEHER ab als erwartet — der '\n"
+        "    'Router-Waechter oben hat nichts bewiesen (Sentinel-Import '\n"
+        "    'app.seeds fehlt in sys.modules)'\n"
         ")\n"
     )
     result = subprocess.run(
