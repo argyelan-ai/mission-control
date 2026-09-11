@@ -206,17 +206,21 @@ async def test_lead_reassign_ordering_sees_fresh_assignee_not_stale_copy(client,
     the PATCH target -> no real change -> the dispatch-cycle fields
     (`dispatched_at`) are left untouched, not reset.
 
-    SABOTAGE-PROBE (a temporary commit on this branch, reverted right after —
-    see the PR comment for both CI runs' links): moving the reassignment
-    block to run BEFORE `lock_task()` makes `_old_assigned` read the STALE
-    pre-concurrent-write value (`worker_id`) instead — `worker_id != third_id`
-    -> the block wrongly takes the "changed" branch and resets
-    `dispatched_at`/`ack_at`, killing the dispatch that (per the DB) already
-    went to `third_id`. This test's assertion on `dispatched_at` is what
-    catches that regression. Postgres lane only (`@pytest.mark.postgres`):
-    the concurrent write needs NullPool's genuinely separate connection —
-    see conftest.py's "Test engine" section on why the SQLite lane's shared
-    connection makes identity-map traps like this look harmless.
+    SABOTAGE-PROBE: moving the reassignment block to run BEFORE
+    `lock_task()` makes `_old_assigned` read the STALE pre-concurrent-write
+    value (`worker_id`) instead — `worker_id != third_id` -> the block
+    wrongly takes the "changed" branch and resets `dispatched_at`/`ack_at`,
+    killing the dispatch that (per the DB) already went to `third_id`. This
+    test's assertion on `dispatched_at` is what catches that regression —
+    see the PR comment for the sabotage-probe run confirming it (same
+    pattern as this file's sibling assertions and as
+    `test_lock_and_set_sees_fresh_status_not_stale_identity_map` in
+    test_task_status_postgres.py, which pins the identical
+    `lock_task`/`populate_existing` primitive for the `status` field).
+    Postgres lane only (`@pytest.mark.postgres`): the concurrent write
+    needs NullPool's genuinely separate connection — see conftest.py's
+    "Test engine" section on why the SQLite lane's shared connection makes
+    identity-map traps like this look harmless.
     """
     from app.models.agent import Agent
     import app.services.task_state as task_state_module
