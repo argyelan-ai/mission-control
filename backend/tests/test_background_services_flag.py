@@ -72,19 +72,27 @@ def test_lifespan_gates_background_services_on_the_flag():
 
 def test_lifespan_gates_vault_watcher_and_compactor_too():
     # Streitfall aus dem PR-Text: vault_watcher/vault_compactor haengen am
-    # Vault-Wiring in lifespan() selbst (nicht in start_background_services),
-    # muessen aber trotzdem hinter demselben Schalter stehen.
+    # Vault-Wiring (nicht in start_background_services), muessen aber
+    # trotzdem hinter demselben Schalter stehen.
+    #
+    # Seit Architektur E Teil 2 lebt das Vault-Wiring in app.background
+    # (start_vault_services) — die API-lifespan DELEGIERT dorthin. Das
+    # Gating muss in der delegierten Implementierung unverraendert
+    # bestehen: watcher.start() direkt im if-Block, compactor im try
+    # direkt dahinter.
     #
     # Regex statt Quelltext-Vergleich inkl. exakter Einrueckung (Rex-Review
-    # PR #479, M4): jede Umformatierung von lifespan() (schwarz/ruff, ein
-    # zusaetzlicher Kommentar) brach den alten wortwoertlichen Vergleich,
-    # ohne dass sich am Verhalten etwas aendert. \s+ toleriert beliebige
+    # PR #479, M4): jede Umformatierung (schwarz/ruff, ein zusaetzlicher
+    # Kommentar) brach den alten wortwoertlichen Vergleich, ohne dass sich
+    # am Verhalten etwas aendert. \s+ toleriert beliebige
     # Einrueckungstiefe/-art, verlangt aber weiterhin, dass der Aufruf
     # UNMITTELBAR im if-Block steht (Praezedenzfall test_boot_secret_guard.py
     # matcht nur einen Funktionsnamen — hier zusaetzlich die Block-Struktur,
     # weil vault_watcher/vault_compactor sonst unbemerkt aus dem Gating
     # rutschen koennten).
-    src = inspect.getsource(main.lifespan)
+    import app.background as bg_mod
+
+    src = inspect.getsource(bg_mod.start_vault_services)
     assert re.search(
         r"if settings\.enable_background_services:\s*\n\s*await vault_watcher\.start\(\)",
         src,
@@ -93,21 +101,28 @@ def test_lifespan_gates_vault_watcher_and_compactor_too():
         r"if settings\.enable_background_services:\s*\n\s*try:\s*\n\s*vault_compactor = VaultCompactor\(",
         src,
     ), "vault_compactor = VaultCompactor(...) muss direkt im ENABLE_BACKGROUND_SERVICES-if-Block stehen"
+    # Und die API-lifespan delegiert wirklich — kein zweites Vault-Wiring in app.main.
+    assert "start_vault_services" in inspect.getsource(main.lifespan)
+    assert "stop_vault_services" in inspect.getsource(main.lifespan)
+
+
+import app.background as bg_mod
 
 
 @contextlib.asynccontextmanager
 async def _patched_service_starts(mocks: dict[str, AsyncMock]):
     with contextlib.ExitStack() as stack:
         for name, mock in mocks.items():
-            stack.enter_context(patch.object(getattr(main, name), "start", mock))
+            stack.enter_context(patch.object(getattr(bg_mod, name), "start", mock))
         yield
+
 
 
 @contextlib.asynccontextmanager
 async def _patched_service_stops(mocks: dict[str, AsyncMock]):
     with contextlib.ExitStack() as stack:
         for name, mock in mocks.items():
-            stack.enter_context(patch.object(getattr(main, name), "stop", mock))
+            stack.enter_context(patch.object(getattr(bg_mod, name), "stop", mock))
         yield
 
 

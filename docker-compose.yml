@@ -91,7 +91,12 @@ services:
       docker-socket-proxy:
         condition: service_started
     environment:
-      CDP_BROWSER_URL: http://172.30.99.10:9223
+      # Architektur E Teil 2: Hintergrund-Dienste (Scheduler/Watchdog/Task-
+      # Runner/Telegram-/Slack-Inbound/Vault-Watcher) laufen IM mc-worker-
+      # Container unten — die API bleibt schlank und beantwortet nur Requests.
+      # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
+      # bleibt True (Rueckweg fuer compose-freie Installs).
+      ENABLE_BACKGROUND_SERVICES: "false"
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
@@ -323,6 +328,135 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Architektur E Teil 2: eigener Hintergrund-Dienst-Container. Gleiches
+  # Image wie die API (backend), aber Einstiegspunkt `python -m app.worker`
+  # statt uvicorn — kein HTTP-Port, dafuer Scheduler/Watchdog/Task-Runner/
+  # Telegram-/Slack-Inbound/Vault-Watcher/-Compactor/Lint-Cron.
+  # Genau EIN Prozess mit ENABLE_BACKGROUND_SERVICES=true (hier); die API
+  # oben laeuft mit false. Siehe ~/.claude/skills/mc-deploy/SKILL.md.
+  mc-worker:
+    image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
+    build: ./backend
+    # Worker haengt an der API: Seeds/Migrationen (docker-entrypoint.sh) und
+    # der Settings-Patchlauf (channel/ai-provider overrides) sollen zuerst
+    # gelaufen sein, bevor der Worker dieselben idempotenten Seeds anstoesst.
+    entrypoint: ["/docker-entrypoint.sh"]
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      backend:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    environment:
+      ENABLE_BACKGROUND_SERVICES: "true"
+      # Identische Env wie backend (dieselbe settings-Factory, dieselben
+      # Overrides) — jede Abweichung driftet API- und Worker-Sicht auseinander.
+      CDP_BROWSER_URL: http://172.30.99.10:9223
+      DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      AUTH_MODE: local
+      LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_CATEGORY_ID: ${DISCORD_CATEGORY_ID:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_REPORTS_BOT_TOKEN: ${TELEGRAM_REPORTS_BOT_TOKEN:-}
+      TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
+      TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
+      CHAT_CHANNELS: ${CHAT_CHANNELS:-}
+      SLACK_TEAM_CHAT_ENABLED: ${SLACK_TEAM_CHAT_ENABLED:-false}
+      SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
+      SLACK_REPORTS_CHANNEL: ${SLACK_REPORTS_CHANNEL:-}
+      SLACK_FILE_INGEST_MAX_BYTES: ${SLACK_FILE_INGEST_MAX_BYTES:-26214400}
+      SLACK_APPROVALS_CHANNEL: ${SLACK_APPROVALS_CHANNEL:-}
+      JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
+      JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
+      STT_BASE_URL: ${STT_BASE_URL:-}
+      STT_MODEL: ${STT_MODEL:-}
+      INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:-}
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+      JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
+      JARVIS_BRIEFING_ENABLED: ${JARVIS_BRIEFING_ENABLED:-false}
+      JARVIS_BRIEFING_HOUR: ${JARVIS_BRIEFING_HOUR:-06:30}
+      JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
+      VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
+      VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
+      MC_BACKEND_URL: http://backend:8000
+      MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
+      MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
+      OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
+      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
+      HOST_SSH_USER: ${HOST_SSH_USER:-}
+      PUBLIC_HOST: ${PUBLIC_HOST:-}
+      EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
+      OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
+      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
+      SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-}
+      SPARK_EMBEDDING_MODEL: ${SPARK_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      AI_EMBEDDINGS_PROVIDER: ${AI_EMBEDDINGS_PROVIDER:-spark}
+      AI_EMBEDDINGS_URL: ${AI_EMBEDDINGS_URL:-}
+      AI_EMBEDDINGS_MODEL: ${AI_EMBEDDINGS_MODEL:-}
+      AI_EMBEDDINGS_CLOUD_URL: ${AI_EMBEDDINGS_CLOUD_URL:-}
+      AI_EMBEDDINGS_CLOUD_MODEL: ${AI_EMBEDDINGS_CLOUD_MODEL:-}
+      AI_INSIGHTS_PROVIDER: ${AI_INSIGHTS_PROVIDER:-spark}
+      AI_INSIGHTS_MODEL: ${AI_INSIGHTS_MODEL:-}
+      SPARK_LLM_URL: ${SPARK_LLM_URL:-http://192.0.2.10:8000/v1}
+      DGX_SSH_HOST: ${DGX_SSH_HOST:-}
+      DGX_SSH_USER: ${DGX_SSH_USER:-}
+      DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
+      ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
+      ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
+      ENVIRONMENT: production
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      HOME_HOST: ${HOME}
+      MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
+      MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
+      HOST_UID: ${HOST_UID:-502}
+      MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
+      MC_AGENTS_ROOT: ${HOME}/.mc/agents
+    volumes:
+      - ${HOME}/.mc:${HOME}/.mc
+      - ${HOME}/.mc/deliverables:/deliverables:ro
+      - mc_shared_deliverables:/shared-deliverables
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp
+      - ./backend/templates:/app/templates:ro
+      - ./docker:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker:rw
+      - ./docker-compose.yml:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker-compose.yml:ro
+      - ./.env:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/.env:ro
+      - ./jarvis_core:/app/jarvis_core:ro
+      - ./scripts/node-agent:/app/scripts/node-agent:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Kein HTTP-Port: Lifeness statt Port-Check (siehe mc-deploy SKILL.md).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os, signal; os.kill(1, 0)\""]
+      interval: 30s
       timeout: 5s
       retries: 3
 
