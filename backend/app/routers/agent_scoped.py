@@ -1436,39 +1436,59 @@ async def agent_ask(
     from app.task_status import TaskStatus, is_valid_transition
 
     current_task_id = agent.current_task_id
-    if not current_task_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
-        )
-    current_task = await session.get(Task, current_task_id)
-    if not current_task:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
-        )
+    current_task = await session.get(Task, current_task_id) if current_task_id else None
 
-    # Task 12 (final-review A2, defense-in-depth): a blocking ask parks the
-    # task in `waiting` until an answer is delivered — but answer delivery is
-    # gated on the comm_v2 pilot. A non-pilot agent parking here could never be
-    # released (dead task). Reject blocking asks from non-pilots; non-blocking
-    # asks are harmless (the question lands in the thread, visible in web).
-    if payload.blocking and not getattr(agent, "comm_v2", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="messaging v2 pilot required for blocking asks",
-        )
+    if current_task is None:
+        # W5-C: a Board Lead between cards has no `current_task_id` — poll.sh
+        # clears it (and BOARD_ID) the moment a task ends — but still needs a
+        # way to reach the operator (unstick a hung card, escalate). Before
+        # this fix that was a hard 409 for every agent alike: a Lead was as
+        # mute as a worker with nothing to ask about. Scoped to TASKS_MANAGE
+        # (Leads/orchestrators) so an ordinary worker keeps the original
+        # 409 — it has no board-level reason to ask without a task in hand.
+        from app.scopes import get_agent_effective_scopes
 
-    if payload.blocking and not is_valid_transition(current_task.status, TaskStatus.WAITING):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Task-Status '{current_task.status}' erlaubt keinen Wechsel zu "
-                f"'waiting' — blocking ask nur waehrend aktiver Arbeit moeglich."
-            ),
+        if Scope.TASKS_MANAGE.value not in get_agent_effective_scopes(agent):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
+            )
+        if payload.blocking:
+            # Nothing to pause: `waiting` is a task-status transition, and
+            # there is no task here to move.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Kein aktiver Task — blocking ask braucht einen Task zum "
+                    "Pausieren. Nutze `mc ask` ohne `--blocking`."
+                ),
+            )
+        thread, current_task = await _resolve_message_target(
+            session, agent, create_dm_if_missing=True
         )
+    else:
+        # Task 12 (final-review A2, defense-in-depth): a blocking ask parks
+        # the task in `waiting` until an answer is delivered — but answer
+        # delivery is gated on the comm_v2 pilot. A non-pilot agent parking
+        # here could never be released (dead task). Reject blocking asks from
+        # non-pilots; non-blocking asks are harmless (the question lands in
+        # the thread, visible in web).
+        if payload.blocking and not getattr(agent, "comm_v2", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="messaging v2 pilot required for blocking asks",
+            )
 
-    thread = await ensure_task_thread(session, current_task)
+        if payload.blocking and not is_valid_transition(current_task.status, TaskStatus.WAITING):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Task-Status '{current_task.status}' erlaubt keinen Wechsel zu "
+                    f"'waiting' — blocking ask nur waehrend aktiver Arbeit moeglich."
+                ),
+            )
+
+        thread = await ensure_task_thread(session, current_task)
 
     message = await post_message(
         session,
@@ -1488,7 +1508,9 @@ async def agent_ask(
         },
     )
 
-    your_status = current_task.status
+    # No task here → no task status to report (DM fallback, see above; a
+    # blocking ask without a task was already rejected before this point).
+    your_status = current_task.status if current_task is not None else "no_task"
     if payload.blocking:
         await record_task_event(
             session, current_task.id, current_task.status, TaskStatus.WAITING,
@@ -1510,7 +1532,8 @@ async def agent_ask(
 
     logger.info(
         "Ask: %s asks '%s' (blocking=%s, task %s -> %s)",
-        agent.name, payload.question[:60], payload.blocking, current_task.id, your_status,
+        agent.name, payload.question[:60], payload.blocking,
+        current_task.id if current_task is not None else "no_task", your_status,
     )
 
     return AskResponse(
@@ -1585,7 +1608,9 @@ class MessageResponse(BaseModel):
 _OWNED_TASK_STATUSES = ("inbox", "in_progress", "review", "blocked", "waiting", "user_test")
 
 
-async def _resolve_message_target(session: AsyncSession, agent: Agent):
+async def _resolve_message_target(
+    session: AsyncSession, agent: Agent, *, create_dm_if_missing: bool = False
+):
     """Where does a `mc msg` without an explicit thread belong?
 
     Returns ``(thread, task | None)``. Order matters, and it is not the obvious
@@ -1600,6 +1625,12 @@ async def _resolve_message_target(session: AsyncSession, agent: Agent):
     Raises 409 when nothing fits, and when several owned tasks make the target
     ambiguous — a guess would put the message in the wrong conversation, and
     the refusal names the way out.
+
+    ``create_dm_if_missing`` (W5-C, `mc ask` without an active task): a plain
+    `mc msg` presupposes an existing conversation — creating a DM thread on a
+    reply nobody started would be a monologue. `mc ask` originates one, so a
+    Lead who has never DM'd before still needs a thread to ask into; that
+    caller passes ``True`` to get one created instead of a 409.
     """
     from app.models.thread import Thread
     from app.services.messaging import ensure_task_thread
@@ -1644,10 +1675,14 @@ async def _resolve_message_target(session: AsyncSession, agent: Agent):
         )
     ).first()
     if dm is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
-        )
+        if create_dm_if_missing:
+            from app.services.messaging import ensure_dm_thread
+            dm = await ensure_dm_thread(session, agent)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
+            )
     return dm, None
 
 
