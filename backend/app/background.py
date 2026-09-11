@@ -239,12 +239,12 @@ async def prepare_process() -> None:
     # Fail fast on placeholder secrets (default JWT key = forgeable admin
     # tokens) BEFORE anything else touches the DB or starts services.
     validate_boot_secrets()
-    # Seed helpers + Slot-Runtime-Abgleich leben in app.main (sie seeden via
-    # app.database.engine und app.models — beide importieren app.main nicht,
-    # aber die Helfer sind API-Boots-Code geblieben). Lazy import statt
-    # Modul-Import oben: app.main importiert app.background NICHT auf
-    # Modulebene (nur lazy in lifespan), dadurch bleibt der Graph kreisfrei.
-    from app.main import (
+    # Seed helpers + Slot-Runtime-Abgleich leben in app.seeds (Rex-Review
+    # PR #500, Blocker B1: vorher wurden sie aus app.main importiert, was
+    # den kompletten FastAPI-Rumpf samt aller Router in den Worker zog).
+    # Sie seeden via app.database.engine und app.models — beide importieren
+    # app.main nicht. app.seeds ist bewusst main-frei gehalten.
+    from app.seeds import (
         _seed_templates,
         _seed_scheduled_jobs,
         _seed_playbook_assets,
