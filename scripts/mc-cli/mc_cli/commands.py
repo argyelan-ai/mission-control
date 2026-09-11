@@ -1425,6 +1425,8 @@ def _cmd_delegate(args, client, cfg):
         body["priority"] = args.priority
     if getattr(args, "origin_thread", None):
         body["origin_thread_id"] = args.origin_thread
+    if getattr(args, "parent", None):
+        body["parent_task_id"] = args.parent
 
     resp = client.request(
         "POST",
@@ -1432,6 +1434,9 @@ def _cmd_delegate(args, client, cfg):
         body=body,
     )
     _emit(resp)
+    if isinstance(resp, dict) and resp.get("warning"):
+        import sys as _sys
+        print(f"WARNUNG: {resp['warning']}", file=_sys.stderr)
     return 0
 
 
@@ -1464,6 +1469,18 @@ def _add_delegate_args(p):
             "Herkunfts-Gespraech (Thread-ID aus dem mc-inbox-Footer). Der finale "
             "Report wird serverseitig in diesen Chat-Thread gespiegelt. Ohne "
             "Angabe erbt der Subtask die Herkunft des Parent-Tasks."
+        ),
+    )
+    p.add_argument(
+        "--parent",
+        metavar="TASK_ID",
+        help=(
+            "Explizite Parent-Task-ID statt der impliziten Aufloesung ueber die "
+            "eigene aktive Karte. Nutze das, wenn du keine aktive Karte hast (kein "
+            "409 'Kein aktiver Task') oder bewusst an einer ANDEREN Karte als deiner "
+            "eigenen aktiven anhaengen willst. Ohne --parent UND ohne aktive Karte "
+            "entsteht eine Wurzelkarte ohne Parent/Callback (die Antwort weist "
+            "darauf explizit hin)."
         ),
     )
 
