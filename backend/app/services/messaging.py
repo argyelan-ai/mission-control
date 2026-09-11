@@ -423,14 +423,12 @@ async def resume_task_after_answer(session: AsyncSession, task, thread, *, chang
     if any((q.question_meta or {}).get("blocking") for q in remaining):
         return False
 
-    try:
-        task, from_status = await lock_and_set(
-            session, task.id, TaskStatus.IN_PROGRESS, actor=changed_by
-        )
-    except HTTPException as exc:
-        if exc.status_code == 409:
-            return False
-        raise
+    # SABOTAGE-PROBE (temporaer, wird zurueckgerollt): lock_and_set() durch
+    # plaine Zuweisung ersetzen, um test_resume_task_after_answer_uses_lock_and_set_not_stale_status
+    # auf der Postgres-Lane rot laufen zu lassen (Gegenprobe zum Fix).
+    from_status = task.status
+    task.status = TaskStatus.IN_PROGRESS
+    session.add(task)
 
     agent = None
     agent_name = "Agent"
