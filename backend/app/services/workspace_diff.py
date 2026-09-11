@@ -260,6 +260,37 @@ def _commit_diff(workspace: Path, commit: str) -> dict[str, Any]:
     return _build_result(hash=commit_hash, message=message, author=author, date=date, files=files)
 
 
+def _is_git_repo(path: Path) -> bool:
+    return (path / ".git").exists()
+
+
+def find_repo_root(workspace: Path) -> Path:
+    """Finds the git repo the diff should run in, starting at ``workspace``.
+
+    ``workspace`` itself wins when it is a repo. Otherwise the immediate
+    children are scanned — the agent workspace layout puts the real checkout
+    one level down (``<agent_ws>/<task-slug>/repo/`` for ad-hoc tasks whose
+    agent cloned on its own, ``<agent_ws>/projects/<proj>/…`` for project
+    tasks), so the parent dir is never a repo. With several child repos the
+    most recently used one wins (``.git`` mtime — git touches it on every
+    index/ref write). Raises ``NoWorkspaceError`` when nothing qualifies.
+
+    Incident 2026-09-11: the panel showed "no workspace" for an agent with
+    staged changes because only the non-repo root was ever inspected.
+    """
+    if not workspace.is_dir():
+        raise NoWorkspaceError(f"workspace path does not exist: {workspace}")
+    if _is_git_repo(workspace):
+        return workspace
+    try:
+        children = [c for c in workspace.iterdir() if c.is_dir() and _is_git_repo(c)]
+    except OSError as exc:
+        raise NoWorkspaceError(f"workspace unreadable: {workspace}: {exc}") from exc
+    if not children:
+        raise NoWorkspaceError(f"no git repository in or directly under {workspace}")
+    return max(children, key=lambda c: (c / ".git").stat().st_mtime)
+
+
 def workspace_diff(workspace: Path, scope: str = "worktree") -> dict[str, Any]:
     """Computes the ``CommitDiff`` for an agent's workspace. Synchronous —
     callers on the async request path must wrap this in
