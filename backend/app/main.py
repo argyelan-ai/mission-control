@@ -231,6 +231,18 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
+    # B6 (Rex-Review PR #500): jarvis_briefing_task cancel restored — it was
+    # the FIRST shutdown step on main and got lost in the lifespan split.
+    # Same guard shape as the vault-decay/topic-purge cancels below.
+    _jarvis_briefing_task = getattr(app.state, "jarvis_briefing_task", None)
+    if _jarvis_briefing_task is not None and not _jarvis_briefing_task.done():
+        _jarvis_briefing_task.cancel()
+        try:
+            await _jarvis_briefing_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
     # Vault Memory shutdown — delegiert an app.background.stop_vault_services
     # (gleiche Reihenfolge wie im Worker: lint cron -> compactor -> watcher
     # -> index close). `_vault_runtime` oben gecached, damit der Shutdown
