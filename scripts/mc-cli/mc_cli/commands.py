@@ -123,6 +123,23 @@ def _cmd_ack(args, client, cfg):
     geackten Karte; unterscheidet sie sich von der lokalen cfg, wird der
     Client daran gebunden — sonst 409 "Stale dispatch_attempt_id".
 
+    Fallunterscheidung heilen/ablehnen (W5-E-Nacharbeit, 11.09.2026):
+    cfg.context_task_id ist die Karte, zu der der aktuell GEHALTENE
+    Attempt-Header gehoert (Config.__post_init__ koppelt sie mit task_id;
+    with_task_id lasst sie unangetastet).
+      Fall (a) FREMDE Karte  — context_task_id != Ziel: meine Attempt-ID
+        war nie eine Aussage ueber das Ziel. Adoptieren ist die Heilung
+        (genau der Live-Bug, den PR #511 loest).
+      Fall (b) EIGENE Karte neu dispatcht — context_task_id == Ziel, aber
+        die Attempt-ID differiert: _maybe_redispatch_orphaned_run
+        (routers/agents.py) gibt einer als verwaist geltenden Karte eine
+        FRISCHE Attempt-ID — Status bleibt in_progress, selber Agent,
+        run_control unangetastet. Die Attempt-ID ist das EINZIGE Merkmal,
+        das alten von neuem Run trennt; adoptieren hiesse, der alte Run
+        uebernimmt die Identitaet des neuen und schreibt mit gueltigem
+        Header seine gesamte Restlaufzeit weiter. Darum hier LAUT
+        ablehnen (UsageError), nicht still ueberschreiben.
+
     Karte zugewiesen, aber nie aktiv dispatcht (dispatch_attempt_id=None,
     z.B. Lead hat via UI zugewiesen ohne Dispatch-Zyklus): der GET liefert
     None, die CLI ackt MIT ihrem alten Header NICHT blind weiter, sondern
@@ -139,16 +156,40 @@ def _cmd_ack(args, client, cfg):
     target_attempt = (
         detail.get("dispatch_attempt_id") if isinstance(detail, dict) else None
     )
+    same_card = (
+        cfg.context_task_id is not None and cfg.context_task_id == task_id
+    )
+    if (
+        same_card
+        and target_attempt != cfg.dispatch_attempt_id
+        and (target_attempt or cfg.dispatch_attempt_id)
+    ):
+        # Fall (b): DIESE Karte wurde unter mir neu dispatcht (z.B.
+        # poll_orphan_run). Der alte Run darf sie nicht adoptieren — der
+        # Server wuerde den PATCH mit dem NEUEN Header durchlassen und der
+        # alte Run schreibt fortan mit gueltiger Identitaet des neuen Runs.
+        raise UsageError(
+            f"Task {task_id} wurde neu dispatcht, seit du ihn haeltst: "
+            f"deine Attempt-ID ist {cfg.dispatch_attempt_id!r}, aktuell ist "
+            f"{target_attempt!r}. Dein Run ist veraltet — arbeite nicht auf "
+            "dieser Karte weiter; starte einen frischen Run oder melde dich "
+            "beim Operator (`mc blocked`)."
+        )
     if target_attempt != cfg.dispatch_attempt_id and (
         target_attempt or cfg.dispatch_attempt_id
     ):
-        # Rebind in beide Richtungen: Ziel hat ANDERE attempt-id → Header
-        # auf die Ziel-ID setzen; Ziel hat KEINE (assigned, nie dispatcht)
-        # → Header komplett weglassen (Backend erzwingt die Pruefung nur
-        # bei gesetztem task.dispatch_attempt_id, ein stale Header einer
-        # fremden Karte waere bestenfalls Larm, im schlimmsten Fall 409).
+        # Fall (a): fremde Karte — Rebind in beide Richtungen: Ziel hat
+        # ANDERE attempt-id → Header auf die Ziel-ID setzen; Ziel hat
+        # KEINE (assigned, nie dispatcht) → Header komplett weglassen
+        # (Backend erzwingt die Pruefung nur bei gesetztem
+        # task.dispatch_attempt_id, ein stale Header einer fremden Karte
+        # waere bestenfalls Larm, im schlimmsten Fall 409).
         from dataclasses import replace as _replace
-        client = type(client)(_replace(cfg, dispatch_attempt_id=target_attempt))
+        client = type(client)(_replace(
+            cfg,
+            dispatch_attempt_id=target_attempt,
+            context_task_id=task_id,
+        ))
         cfg = client.cfg
     already_in_progress = False
     try:
