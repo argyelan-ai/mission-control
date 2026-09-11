@@ -16,12 +16,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.auth import require_user
 from app.database import get_session
 from app.models.agent import Agent
+from app.models.task import Task
 from app.redis_client import RedisKeys
 from app.services.agent_chat_input import (
     AgentBusyError,
@@ -54,7 +56,12 @@ from app.services.transcript_chat import (
     resolve_aliveness,
     tailer_manager,
 )
-from app.services.workspace_diff import NoWorkspaceError, resolve_workspace_path, workspace_diff
+from app.services.workspace_diff import (
+    NoWorkspaceError,
+    find_repo_root,
+    resolve_workspace_path,
+    workspace_diff,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
 
@@ -387,16 +394,37 @@ async def get_chat_diff(
     git repository, or (``last-commit`` only) has no commits yet."""
     agent = await _load_agent_or_404(agent_id, session)
 
-    if not agent.workspace_path:
-        return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+    # Where the agent actually works is the TASK workspace
+    # (``<agent_ws>/<task-slug>/…``), not ``agent.workspace_path`` — that is
+    # the per-agent root holding every task dir and is never a repo itself.
+    # Order: running task → most recently touched task with a workspace →
+    # agent root. First candidate that resolves to a git repo wins.
+    candidates: list[str] = []
+    if agent.current_task_id:
+        current = await session.get(Task, agent.current_task_id)
+        if current and current.workspace_path:
+            candidates.append(current.workspace_path)
+    latest = (
+        await session.exec(
+            select(Task.workspace_path)
+            .where(Task.assigned_agent_id == agent.id, Task.workspace_path.is_not(None))
+            .order_by(Task.updated_at.desc())
+            .limit(1)
+        )
+    ).first()
+    if latest and latest not in candidates:
+        candidates.append(latest)
+    if agent.workspace_path and agent.workspace_path not in candidates:
+        candidates.append(agent.workspace_path)
 
-    workspace = resolve_workspace_path(agent.workspace_path)
-    try:
-        diff = await asyncio.to_thread(workspace_diff, workspace, scope)
-    except NoWorkspaceError:
-        return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+    for raw in candidates:
+        try:
+            repo = await asyncio.to_thread(find_repo_root, resolve_workspace_path(raw))
+            return await asyncio.to_thread(workspace_diff, repo, scope)
+        except NoWorkspaceError:
+            continue
 
-    return diff
+    return JSONResponse(status_code=404, content=_NO_WORKSPACE)
 
 
 @router.post("/agents/{agent_id}/chat/input", status_code=204)
