@@ -1,11 +1,14 @@
 """Background services — the shared boot/start/shutdown path, extracted from app.main.
 
 Architektur E, Teil 2 (eigener ``mc-worker``-Container): dieses Modul traegt
-jetzt ALLES, was der Worker-Prozess braucht, OHNE ``app.main`` zu importieren.
-Der komplette FastAPI-Rumpf (``app = FastAPI(...)`` + 61 ``include_router()``
-+ CORS/Rate-Limit-Middleware + Verticals-Discovery) bleibt damit ausschliesslich
-im API-Prozess — ein Importfehler in irgendeinem Router legt den Worker nicht
-mehr lahm (die Schuld aus Teil 1, siehe Docstring in ``app/worker.py``).
+ALLES, was der Worker-Prozess braucht, OHNE ``app.main`` zu importieren —
+weder auf Modul-Ebene noch im Boot-Pfad von ``prepare_process()``. Der
+komplette FastAPI-Rumpf (``app = FastAPI(...)`` + 61 ``include_router()``
++ CORS/Rate-Limit-Middleware + Verticals-Discovery) bleibt ausschliesslich
+im API-Prozess — ein Importfehler in irgendeinem Router legt den Worker
+nicht mehr lahm. (Rex-Review PR #500, B1: die Vorversion importierte die
+Seed-Helfer aus ``app.main`` und zog so doch den ganzen Rumpf in den
+Worker; sie leben jetzt in ``app.seeds``.)
 
 Inhalt (alle symmetric moves aus ``app.main``):
 - ``prepare_process()``          — Boot-Secret-Guard + DB-Seeds + Channel-/AI-Provider-Overrides
@@ -14,6 +17,9 @@ Inhalt (alle symmetric moves aus ``app.main``):
 - ``start_vault_services()``     — Vault-Wiring (Index/Activity/Git/Embeddings/Watcher/Compactor
   + Lint-Cron), vorher inline in ``app.main.lifespan``. Returnt ein Dict der
   Laufzeit-Objekte, damit der Aufrufer sie an ``app.state`` haengen kann.
+  Watcher/Compactor/Lint-Cron laufen hinter ``ENABLE_BACKGROUND_SERVICES``
+  (B3: der Lint-Cron war vorher unconditional — Doppelstart in beiden
+  Prozessen); Index/Activity/Git/Embeddings immer (Read-Pfad).
 
 Request-gebundene Dinge (HTTP-Router, Terminal-/Browser-WebSockets) sind bewusst
 NICHT hier — die bleiben immer im API-Prozess.

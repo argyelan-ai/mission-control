@@ -1,12 +1,16 @@
 """Standalone entrypoint for Mission Control's background services.
 
 Architektur E, Teil 2 (eigener ``mc-worker``-Container — siehe PR-Text).
-Startet denselben Boot-Pfad wie die API-lifespan, aber OHNE ``app.main`` zu
-importieren: der komplette FastAPI-Rumpf (``app = FastAPI(...)`` + alle
-``include_router()``-Aufrufe + CORS/Rate-Limit-Middleware + Verticals-
-Discovery) laedt damit ausschliesslich im API-Prozess. Ein Importfehler in
-irgendeinem Router legt den Worker nicht mehr lahm — die Schuld aus Teil 1
-(hier stand frueher ``from app.main import ...``) ist behoben.
+Startet denselben Boot-Pfad wie die API-lifespan, OHNE ``app.main`` zu
+importieren — weder beim Modul-Import noch im Boot-Pfad: der komplette
+FastAPI-Rumpf (``app = FastAPI(...)`` + alle ``include_router()``-Aufrufe +
+CORS/Rate-Limit-Middleware + Verticals-Discovery) laedt ausschliesslich im
+API-Prozess. Ein Importfehler in irgendeinem Router legt den Worker nicht
+mehr lahm (Rex-Review PR #500, B1/B2: die Vorversion zog in
+``prepare_process()`` per ``from app.main import _seed_*`` doch app.main
+an; die Seed-Helfer leben jetzt in ``app.seeds`` — Test:
+``tests/test_worker_no_main_import.py``, prueft den Boot-Pfad im
+Subprozess, nicht nur die Import-Zeit).
 
 Boot-Pfad (identisch zur API-lifespan, siehe ``app.background``):
     1. ``prepare_process()`` — Boot-Secret-Guard, DB-Seeds,
@@ -36,8 +40,9 @@ Bewusst NICHT im Worker (request-gebunden bzw. API-domainspezifisch):
   Teil dieses Umzugs ist)
 
 Vault-Decay-Cron laeuft weiter in der API (unconditional, wie vor Teil 2);
-der Vault-Lint-Cron ist Teil von ``start_vault_services`` und laeuft damit
-jetzt im Worker.
+der Vault-Lint-Cron ist Teil von ``start_vault_services`` und laeuft im
+ENABLE_BACKGROUND_SERVICES-Prozess (hier) — in der API bei flag=false
+nicht (Rex-Review PR #500, B3: vorher lief er in BEIDEN Prozessen).
 """
 
 import asyncio
