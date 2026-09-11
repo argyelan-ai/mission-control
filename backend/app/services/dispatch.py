@@ -183,11 +183,18 @@ async def find_agent_by_role(
     board_id: uuid.UUID,
     role: "AgentRole",
     exclude_agent_id: uuid.UUID | None = None,
+    fallback_to_lead: bool = True,
 ) -> "Agent | None":
     """Find an agent with a given role on the board (least-busy strategy).
 
     With multiple candidates: prefer the agent with the fewest active tasks.
-    Fallback: Board Lead.
+    Fallback: Board Lead — unless `fallback_to_lead=False`. Callers that
+    search for a SPECIFIC role (e.g. find_reviewer) must pass False: the
+    Board Lead is not a stand-in for that role, and silently returning them
+    routes the card into the operator's approval inbox instead of a visible
+    "no such agent" path (Vorfall 94fda9f9: review cards landed on Boss,
+    not Rex, because this fallback fired before find_reviewer's own
+    name-based fallback ever ran).
     """
     from app.scopes import AgentRole
     from sqlalchemy import func as sa_func, or_
@@ -208,6 +215,8 @@ async def find_agent_by_role(
     candidates = list(result.all())
 
     if not candidates:
+        if not fallback_to_lead:
+            return None
         # Fallback: Board Lead
         lead_result = await session.exec(
             select(Agent).where(

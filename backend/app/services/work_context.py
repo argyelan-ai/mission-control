@@ -529,28 +529,37 @@ async def find_reviewer(
     # CRITICAL (Pattern S2): keep lazy local import to break the cycle
     from app.services.dispatch import find_agent_by_role
 
-    # Primary: role-based search
-    reviewer = await find_agent_by_role(session, board_id, AgentRole.REVIEWER)
+    # Primary: role-based search. fallback_to_lead=False — the Board Lead is
+    # not a reviewer stand-in; the name-based fallback below must get its
+    # chance first, and if even that finds nobody, None is the correct
+    # answer (see docstring below).
+    reviewer = await find_agent_by_role(
+        session, board_id, AgentRole.REVIEWER, fallback_to_lead=False,
+    )
     if reviewer:
         return reviewer
 
-    # Legacy fallback: name-based for agents without a role.
-    # Phase 30: gateway_agent_id filter dropped — runtime is the new check.
+    # Legacy fallback: name-based, for agents whose `role` column holds
+    # freetext instead of the "reviewer" enum value (e.g. a role description
+    # written by hand). The model only validates `role` on creation, so
+    # existing rows can carry arbitrary text — this must NOT be restricted
+    # to `role IS NULL`, or it can never match those agents (Vorfall
+    # 94fda9f9: Rex's role was such freetext, so this fallback was dead code
+    # for exactly the agent it was written for).
     result = await session.exec(
-        select(Agent).where(
-            Agent.board_id == board_id,
-            Agent.role.is_(None),  # type: ignore[union-attr]
-        )
+        select(Agent).where(Agent.board_id == board_id)
     )
     agents = result.all()
     for a in agents:
         name_lower = a.name.lower()
         if "rex" in name_lower or "review" in name_lower:
             return a
-    # Last fallback: Board Lead
-    for a in agents:
-        if a.is_board_lead:
-            return a
+
+    # No reviewer found by role or by name: return None, deliberately. Do
+    # NOT fall back to the Board Lead here — that would silently route the
+    # card into the operator's approval inbox instead of leaving a visible
+    # "no reviewer assigned" state that a human can act on. Callers already
+    # handle None correctly (e.g. task_lifecycle.handle_review_handoff).
     return None
 
 
