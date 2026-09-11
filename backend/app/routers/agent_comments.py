@@ -256,6 +256,57 @@ async def agent_add_comment(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    return await _create_comment(session, task, agent, payload)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# W5-C: board-agnostic comment endpoint for a Board Lead without an
+# active task. `POST /boards/{board_id}/tasks/{task_id}/comments` above
+# is unreachable without an active task: poll.sh clears TASK_ID *and*
+# BOARD_ID from the CLI env the moment a Lead's task ends (docker/shared/
+# poll.sh cancel/stop handlers), so `mc comment` had no board_id to put in
+# the URL — a Lead between cards could not even post a `handoff` on a
+# worker's card. This route needs only task_id: board_id is resolved from
+# the task itself and checked against the caller's OWN board_id (a fixed
+# Agent field, independent of any active task) — the same ownership check
+# the board-scoped route makes, just derived instead of asserted by the
+# caller. Gated on TASKS_MANAGE (Board Leads/orchestrators only) so a
+# regular worker without an active task still gets a clear 403 here
+# instead of silently landing on its own active task via a different verb.
+# ─────────────────────────────────────────────────────────────────────
+@router.post("/tasks/{task_id}/comments", status_code=status.HTTP_201_CREATED)
+async def agent_add_comment_by_task_id(
+    task_id: uuid.UUID,
+    payload: AgentCommentCreate,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if agent.board_id != task.board_id:
+        raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+
+    return await _create_comment(session, task, agent, payload)
+
+
+async def _create_comment(
+    session: AsyncSession,
+    task: Task,
+    agent: Agent,
+    payload: AgentCommentCreate,
+):
+    """Shared comment-write path for both comment endpoints above.
+
+    Everything after "which task, is the caller allowed to write to it" —
+    the closed-task guard, auto-ACK, resolution auto-promote, report-back
+    contract, lead escalation, phase-approval handoff, and the reflection→
+    agent-memory pipeline. Factored out so the board-agnostic route (W5-C)
+    doesn't fork this logic.
+    """
+    board_id = task.board_id
+    task_id = task.id
+
     # ── Closed-task guard (live incident 2026-08-06) ─────────────────────
     # A delivered-type comment on a closed task has no vessel: no ACK, no
     # status, no dispatch record, no watchdog. The worker receives a wall of
