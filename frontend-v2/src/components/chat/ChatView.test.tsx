@@ -891,7 +891,8 @@ describe("ChatView", () => {
       mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
       renderChatView();
 
-      expect(observed).toHaveLength(1);
+      // Kasten + Inhalt (siehe Tests unten)
+      expect(observed).toHaveLength(2);
       const el = observed[0] as HTMLElement;
       // jsdom reports 0 for every layout metric, so stand in for a long history.
       Object.defineProperty(el, "scrollHeight", { value: 5000, configurable: true });
@@ -901,6 +902,132 @@ describe("ChatView", () => {
       expect(el.scrollTop).toBe(5000);
     } finally {
       window.ResizeObserver = original;
+    }
+  });
+
+  // ── Mitlaufen folgt dem INHALT, nicht nur dem Kasten (Befund 10.09.2026) ──
+  //
+  // Operator: "der Chat geht nicht ganz nach unten, man sieht immer ganz
+  // oben". Ursache: die wachsende Live-Vorschau steht nicht in den Deps des
+  // Scroll-Effekts, und der ResizeObserver sah nur den Kasten (Container),
+  // nie den Inhalt. Wuchs die Vorschau um 400 px, blieb die Ansicht stehen.
+  function beobachterFalle() {
+    const original = window.ResizeObserver;
+    const observed: Element[] = [];
+    let fire: (() => void) | null = null;
+    class Capturing {
+      constructor(cb: ResizeObserverCallback) {
+        fire = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe(el: Element) { observed.push(el); }
+      unobserve() {}
+      disconnect() {}
+    }
+    window.ResizeObserver = Capturing as unknown as typeof ResizeObserver;
+    return { observed, fire: () => fire!(), restore: () => { window.ResizeObserver = original; } };
+  }
+
+  it("beobachtet auch den Inhalt der Zeitleiste, nicht nur den Kasten", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+      // Der Kasten bleibt der erste Beobachtete (die Gesten-Tests bauen darauf),
+      // der Inhalt kommt dazu: nur so loest wachsender Inhalt das Mitlaufen aus.
+      expect(falle.observed[1]).toBe(screen.getByTestId("chat-timeline"));
+    } finally {
+      falle.restore();
+    }
+  });
+
+  it("folgt der wachsenden Live-Vorschau bis ans Ende", () => {
+    // Dieselbe `events`-Referenz wie im echten Reducer: eine Vorschau-Aenderung
+    // ersetzt nur den `preview`-Slot, das Ereignis-Array bleibt identisch.
+    const events = [MSG];
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events,
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-09-10T00:00:00Z", text: "Zeile 1", source: "acp" },
+      })
+    );
+    const { rerender } = renderChatView();
+    const el = screen.getByTestId("preview-row").closest(".overflow-y-auto") as HTMLElement;
+    Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { value: 950, configurable: true });
+    el.scrollTop = 350;
+    fireEvent.scroll(el); // am Ende, Mitlaufen an
+
+    // Die Vorschau waechst — ohne neues Ereignis in `events`.
+    Object.defineProperty(el, "scrollHeight", { value: 1400, configurable: true });
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events,
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-09-10T00:00:01Z", text: "Zeile 1\nZeile 2\nZeile 3", source: "acp" },
+      })
+    );
+    rerender(
+      <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
+    );
+    expect(el.scrollTop).toBe(1400);
+  });
+
+  // ── Knopf "Nach unten" (Operator-Wunsch 10.09.2026) ───────────────────────
+
+  it("zeigt keinen Knopf, solange die Ansicht am Ende steht", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByRole("button", { name: /Jump to bottom/ })).not.toBeInTheDocument();
+  });
+
+  it("zeigt den Knopf, sobald der Nutzer hochgescrollt hat, und springt per Klick ans Ende", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      renderChatView();
+      const el = falle.observed[0] as HTMLElement;
+      Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
+
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+
+      const knopf = screen.getByRole("button", { name: /Jump to bottom/ });
+      fireEvent.click(knopf);
+      expect(el.scrollTop).toBe(6000);
+      expect(screen.queryByRole("button", { name: /Jump to bottom/ })).not.toBeInTheDocument();
+    } finally {
+      falle.restore();
+    }
+  });
+
+  it("zaehlt am Knopf die Nachrichten, die seit dem Hochscrollen dazukamen", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      const { rerender } = renderChatView();
+      const el = falle.observed[0] as HTMLElement;
+      Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 6000, configurable: true });
+
+      fireEvent.wheel(el, { deltaY: -400 });
+      el.scrollTop = 350;
+      fireEvent.scroll(el);
+      expect(screen.getByRole("button", { name: /Jump to bottom/ })).not.toHaveTextContent(/new/);
+
+      mockUseChatStream.mockReturnValue(
+        mkStream({ events: [MSG, mkMsg({ uuid: "n1", text: "Neu 1" }), mkMsg({ uuid: "n2", text: "Neu 2" })] })
+      );
+      rerender(
+        <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
+      );
+      expect(screen.getByRole("button", { name: /Jump to bottom/ })).toHaveTextContent("2 new");
+      // Und die Ansicht wurde NICHT weggezogen — der Nutzer liest oben.
+      expect(el.scrollTop).toBe(350);
+    } finally {
+      falle.restore();
     }
   });
 
