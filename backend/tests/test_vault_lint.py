@@ -338,7 +338,7 @@ async def test_vault_lint_loop_sleep_first_semantics(tmp_path, monkeypatch):
     re-lint repeatedly.
     """
     import asyncio
-    import app.background as main_mod
+    import app.main as main_mod
     import app.services.vault_lint as vault_lint_mod
     from app.config import settings as cfg
 
@@ -374,7 +374,7 @@ async def test_vault_lint_loop_sleep_first_semantics(tmp_path, monkeypatch):
 async def test_vault_lint_loop_swallows_report_failure(tmp_path, monkeypatch):
     """When >5 issues + the reports adapter raises, loop must NOT crash."""
     import asyncio
-    import app.background as main_mod
+    import app.main as main_mod
     import app.services.operator_reports as op_mod
     import app.services.vault_lint as vault_lint_mod
     from app.config import settings as cfg
@@ -430,7 +430,7 @@ async def test_vault_lint_loop_swallows_report_failure(tmp_path, monkeypatch):
 async def test_vault_lint_loop_cancellation_is_clean(tmp_path, monkeypatch):
     """CancelledError breaks out of the loop without exception propagation noise."""
     import asyncio
-    import app.background as main_mod
+    import app.main as main_mod
     from app.config import settings as cfg
 
     vault = tmp_path / "vault"
