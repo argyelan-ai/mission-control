@@ -2634,6 +2634,7 @@ def serve_loop(
                         permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                         task_id=_task_id,
                         cancel_state=acp_cancel,
+                        interrupt_state=interrupt_state,
                         heartbeat_fn=_acp_tool_heartbeat,
                     )
 
@@ -2652,6 +2653,7 @@ def serve_loop(
                         permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                         task_id=str(task["id"]),
                         cancel_state=acp_cancel,
+                        interrupt_state=interrupt_state,
                         heartbeat_fn=_acp_tool_heartbeat,
                     )
             else:
@@ -3793,6 +3795,7 @@ def run_acp_once(
     permission_policy: str = "ask",
     task_id: str = "",
     cancel_state: Optional[ACPCancelState] = None,
+    interrupt_state: Optional[InterruptState] = None,
     cancel_poll_interval: float = 1.0,
     client_factory: Optional[Callable[[], "acp_client.ACPClient"]] = None,
     ask_fn: Optional[Callable[[str, str], str]] = None,
@@ -3810,6 +3813,12 @@ def run_acp_once(
       classify_acp() from the streamed agent text, same oracle as native.
     - Interrupt (Stufe 1 of the ladder): cancel_state.requested -> session/cancel,
       prompt resolves stopReason=cancelled -> Kind.INTERRUPTED (Fix 3).
+    - `interrupt_state` (review follow-up): the serve loop's InterruptState
+      is plumbed in so a cancelled turn carries WHAT interrupted it —
+      kind/reason are stamped onto the outcome exactly like the native
+      path's _observe_native_turn (drive_live_run logged
+      "interrupted (None: None)" before). Pure bookkeeping: classification
+      and abort behaviour are untouched.
 
     `heartbeat_fn` (Review #464 Major 7): called on every `tool_call` and
     `tool_call_update`. serve_loop wires it to the SAME liveness stamp the
@@ -4031,6 +4040,22 @@ def run_acp_once(
             outcome.final_text,
             stop_reason="stop" if outcome.final_stop_reason == "end_turn" else "",
         ))
+
+    # Ladder step 1 bookkeeping (review follow-up): when the control channel
+    # fired and the turn ended cancelled, carry WHAT interrupted it on the
+    # outcome — same stamp as the native path's _observe_native_turn, so
+    # drive_live_run logs "interrupted (hard: run_control=stopped ...)"
+    # instead of "interrupted (None: None)". Pure bookkeeping: the
+    # classification (Kind.INTERRUPTED) and the abort behaviour are decided
+    # elsewhere and stay untouched.
+    if (
+        interrupt_state is not None
+        and interrupt_state.fired()
+        and (outcome.final_stop_reason or "").strip().lower() == "cancelled"
+    ):
+        outcome.interrupted = True
+        outcome.interrupt_kind = interrupt_state.kind
+        outcome.interrupt_reason = interrupt_state.reason
     return outcome
 
 

@@ -120,7 +120,8 @@ class _FakeProc:
 
 
 def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = False,
-                ask_answers: list | None = None, model: str | None = "m") -> tuple[bridge.RunOutcome, list]:
+                ask_answers: list | None = None, model: str | None = "m",
+                interrupt_state: "bridge.InterruptState | None" = None) -> tuple[bridge.RunOutcome, list]:
     """Run one bridge.run_acp_once attempt against an in-process fake server."""
     sink: list = []
     fake = InProcessFake(fixture, sink)
@@ -142,6 +143,7 @@ def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = Fa
             cancel_poll_interval=0.01,
             client_factory=lambda: fake.client,
             ask_fn=ask_fn,
+            interrupt_state=interrupt_state,
         )
     finally:
         fake.close()
@@ -222,6 +224,54 @@ def test_acp_cancel_sends_session_cancel_notification():
     assert cancels, "session/cancel must be sent as ladder step 1"
     assert all("id" not in m for m in cancels), "cancel is a bare notification"
     print("PASS test_acp_cancel_sends_session_cancel_notification")
+
+def test_acp_cancel_mid_turn_stamps_interrupt_kind_and_reason():
+    """Ladder step 1 bookkeeping: when the control channel fired and the
+    turn ends cancelled, the outcome carries WHAT interrupted it
+    (kind/reason from the InterruptState) — like the native path's
+    _observe_native_turn stamp. Without the interrupt_state plumbed in,
+    both fields stay None (the drive_live_run log then reads
+    "interrupted (None: None)")."""
+    state = bridge.InterruptState()
+    state.signal("hard", "run_control=stopped")
+    sink: list = []
+    fake = InProcessFake(FIXTURES["cancel"], sink)
+    cancel = bridge.ACPCancelState(requested=True)
+    try:
+        outcome = bridge.run_acp_once(
+            "x", cwd=str(HERE), model="m", max_time=10, permission_policy="yolo",
+            task_id="T1", cancel_state=cancel, cancel_poll_interval=0.01,
+            interrupt_state=state,
+            client_factory=lambda: fake.client,
+        )
+    finally:
+        fake.close()
+    assert outcome.final_stop_reason == "cancelled"
+    assert outcome.interrupted is True
+    assert outcome.interrupt_kind == "hard"
+    assert outcome.interrupt_reason == "run_control=stopped"
+    print("PASS test_acp_cancel_mid_turn_stamps_interrupt_kind_and_reason")
+
+
+def test_acp_run_without_fired_interrupt_leaves_stamp_empty():
+    """No fired control signal -> no stamp. stopReason=cancelled without a
+    ladder signal (e.g. the agent itself cancelled) keeps kind/reason None."""
+    state = bridge.InterruptState()  # created, never fired
+    outcome, _ = run_adapter(FIXTURES["cancel"], cancel_before=True,
+                             interrupt_state=state)
+    assert outcome.final_stop_reason == "cancelled"
+    assert outcome.interrupt_kind is None
+    assert outcome.interrupt_reason is None
+    print("PASS test_acp_run_without_fired_interrupt_leaves_stamp_empty")
+
+
+def test_acp_run_without_interrupt_state_arg_keeps_stamp_empty():
+    """Back-compat: no interrupt_state passed at all (existing call sites in
+    tests / _make_acp_run_factory) -> stamp stays None, nothing breaks."""
+    outcome, _ = run_adapter(FIXTURES["cancel"], cancel_before=True)
+    assert outcome.final_stop_reason == "cancelled"
+    assert outcome.interrupt_kind is None
+    print("PASS test_acp_run_without_interrupt_state_arg_keeps_stamp_empty")
 
 
 # ---------------------------------------------------------------------------
