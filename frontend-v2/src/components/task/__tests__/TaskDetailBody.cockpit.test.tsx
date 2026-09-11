@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TaskDetailBody } from "../TaskDetailBody";
+import { api } from "@/lib/api";
 import type { Task, Agent } from "@/lib/types";
 
 // Cockpit layout (09/2026): four tabs — Conversation · Changes · Results ·
@@ -139,6 +140,19 @@ describe("TaskDetailBody — cockpit", () => {
     fireEvent.click(briefing);
     expect(briefing).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("code_change")).toBeInTheDocument();
+  });
+
+  it("survives a malformed timeline payload (array instead of {entries}) — regression", async () => {
+    // Every endpoint answers `[]` here; `[].entries` is Array.prototype.entries,
+    // a function — the glance must not call .filter on it. Wait until the
+    // timeline query has actually resolved so the guard is exercised.
+    const timelineSpy = vi.spyOn(api.tasks, "timeline").mockResolvedValue([] as never);
+    renderBody(mkTask());
+    await waitFor(() => expect(timelineSpy).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(await screen.findByText(/No checkpoints yet/)).toBeInTheDocument();
   });
 
   it("renders Changes and Results side by side in wide mode", async () => {

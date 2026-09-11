@@ -279,7 +279,13 @@ export function TechnicalTab({
       key: "timeline",
       label: t("techTimeline"),
       show: true,
-      body: () => <TaskTimeline entries={timeline?.entries ?? []} isLoading={isTimelineLoading} truncated={timeline?.truncated} />,
+      body: () => (
+        <TaskTimeline
+          entries={Array.isArray(timeline?.entries) ? timeline!.entries : []}
+          isLoading={isTimelineLoading}
+          truncated={timeline?.truncated}
+        />
+      ),
     },
     {
       key: "history",

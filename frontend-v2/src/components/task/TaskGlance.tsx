@@ -74,8 +74,11 @@ export function TaskGlance({
     queryFn: () => api.tasks.timeline(boardId, task.id),
     refetchInterval: 30_000,
   });
-  const checkpoints = deriveCheckpoints(timeline?.entries ?? [], { limit: showAllCheckpoints ? 30 : 5 });
-  const hasMore = deriveCheckpoints(timeline?.entries ?? [], { limit: 6 }).length > 5;
+  // Defensive: a malformed/empty payload must never take the glance down.
+  const entries = Array.isArray(timeline?.entries) ? timeline!.entries : [];
+  const all = deriveCheckpoints(entries, { limit: 30 });
+  const checkpoints = showAllCheckpoints ? all : all.slice(0, 5);
+  const hasMore = all.length > 5;
 
   const summary = plainSummary(task.description);
   const { tone } = humanStatus(task);
@@ -180,7 +183,7 @@ export function TaskGlance({
           className="mt-1 text-[11px] cursor-pointer"
           style={{ color: C.textMuted }}
         >
-          {showAllCheckpoints ? "−" : "+"} {timeline?.entries ? deriveCheckpoints(timeline.entries, { limit: 30 }).length - 5 : ""}
+          {showAllCheckpoints ? "−" : `+${all.length - 5}`}
         </button>
       )}
     </div>
