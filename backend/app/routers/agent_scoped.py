@@ -1840,6 +1840,20 @@ async def agent_post_thread_message(
     # Zustellung ist mention-gefiltert (routers/agents._group_message_visible_to).
     # Bewusst KEIN Lead-Default und kein "@alle" für Agenten (Sturm-Schutz):
     # ein unaufgeforderter Post liegt im Protokoll, weckt aber niemanden.
+    # Implicit answer (review #496 B2): `mc msg --thread` carries no reply_to
+    # and there is no `mc answer` — so "answered → awaiting=False" had no
+    # reachable trigger. A board lead posting into a task thread that holds
+    # an open question addressed to "boss" answers the OLDEST such question.
+    effective_reply_to = payload.reply_to
+    # Only a plain `message` counts as the implicit answer (review #496 B3):
+    # a `status`/`decision` line ("moment, schaue ich mir an") must not close
+    # the question.
+    if (effective_reply_to is None and agent.is_board_lead and thread.task_id is not None
+            and payload.message_type == "message"):
+        from app.services.messaging import open_questions
+        pending = await open_questions(session, thread_id=thread.id, to="boss")
+        if pending:
+            effective_reply_to = min(pending, key=lambda q: q.seq).id
     group_row = None
     group_mentions: list[str] | None = None
     if thread.kind == "group":
@@ -1887,7 +1901,7 @@ async def agent_post_thread_message(
         sender_id=agent.id,
         message_type=payload.message_type,
         body=body_text,
-        reply_to=payload.reply_to,
+        reply_to=effective_reply_to,
         mentions=group_mentions,
         # Gruppen spiegeln in V1 nicht in die Chat-Kanäle (ADR-075) — eine
         # autonome Runde würde Slack/Telegram fluten.
@@ -1914,9 +1928,14 @@ async def agent_post_thread_message(
     # does not stay "waiting" forever once it has been answered. (The task
     # endpoint does not do this — the operator path in routers/tasks does. Here
     # the agent may be answering in a thread nobody else will touch.)
-    if payload.reply_to is not None:
+    if effective_reply_to is not None:
         await answer_clears_awaiting(session, message)
         await session.commit()
+        # Review #496 B4: an answered `--blocking` question must release the
+        # worker (waiting → in_progress), exactly like the operator path.
+        if task is not None and agent.is_board_lead:
+            from app.services.messaging import resume_task_after_answer
+            await resume_task_after_answer(session, task, thread, changed_by="agent")
 
     logger.info(
         "Message: %s posts on thread %s (kind=%s, type=%s)",
@@ -3508,6 +3527,61 @@ async def agent_update_checklist_item(
     return item
 
 
+@router.delete(
+    "/boards/{board_id}/tasks/{task_id}/checklist/{item_id}",
+    status_code=204,
+    dependencies=[Depends(require_scope(Scope.TASKS_WRITE))],
+)
+async def agent_delete_checklist_item(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    item_id: uuid.UUID,
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent deletes a single checklist item (Bug 2026-09-09).
+
+    Before, items could only be marked done/skipped — a parked (inbox) task
+    with open items could never be closed without falsifying the history.
+    Restricted to Board Leads: workers must not prune foreign checklists
+    (the completion guard in work_context.validate_task_completion relies
+    on items staying visible).
+    """
+    from app.models.checklist import TaskChecklistItem
+
+    if agent.board_id != board_id:
+        raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+
+    if not agent.is_board_lead:
+        raise HTTPException(
+            status_code=403,
+            detail="Checklist-Items loeschen duerfen nur Board-Leads.",
+        )
+
+    item = await session.get(TaskChecklistItem, item_id)
+    if not item or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Checklist-Item nicht gefunden")
+
+    await session.delete(item)
+    await session.flush()
+
+    # Recalculate counters from DB (post-flush, so the delete is visible)
+    result = await session.exec(
+        select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
+    )
+    all_items = result.all()
+    task.checklist_total = len(all_items)
+    task.checklist_done = sum(1 for i in all_items if i.status == "done")
+    session.add(task)
+
+    await session.commit()
+    return None
+
+
 @router.get(
     "/boards/{board_id}/tasks/{task_id}/checklist",
     dependencies=[Depends(require_scope(Scope.TASKS_READ))],
@@ -4527,3 +4601,79 @@ async def agent_get_operator(
         "name": (user.preferred_name or user.name or "").strip(),
         "timezone": user.timezone or "Europe/Berlin",
     }
+
+
+@router.get("/voice/config")
+async def agent_get_voice_config(
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Welchen Sprach-Anbieter der Operator gebunden hat (ADR-082).
+
+    Der voice-worker ruft das zu Beginn JEDES Anrufs auf — nur so wirkt ein
+    Wechsel in MC ohne Container-Neustart. Nur der Jarvis-Agent selbst darf
+    das abfragen; jeder andere Agent bekommt 403 (die Bindung ist Jarvis'
+    Privatsache, kein generisches Runtime-Introspektions-Endpoint).
+
+    Enthaelt bewusst KEIN Schluesselmaterial. Die API-Keys liegen
+    ausschliesslich in der Env des voice-worker-Containers; MC speichert sie
+    nicht und reicht sie nicht durch (ADR-056 Finding 5).
+    """
+    if agent.harness != "jarvis":
+        raise HTTPException(
+            status_code=403,
+            detail="Nur der Jarvis-Agent darf seine Voice-Bindung abfragen.",
+        )
+
+    from app.services.voice_runtime import resolve_voice_config
+
+    return await resolve_voice_config(agent, session)
+
+
+class VoiceUnsupportedModelReport(BaseModel):
+    provider: str
+    model: str | None = None
+    api: str
+
+
+@router.post("/voice/unsupported-model")
+async def agent_report_voice_unsupported_model(
+    payload: VoiceUnsupportedModelReport,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Der Worker meldet: die gebundene Runtime spricht eine API, die diese
+    Worker-Version nicht kann (ADR-082 Follow-up, z.B. OpenAI Live API statt
+    Realtime).
+
+    Macht den stillen Fehlschlag laut: der Worker faellt selbst auf seine
+    Env-Defaults zurueck (sonst bliebe Jarvis stumm) — dieser Call ist NUR
+    dafuer da, dass die Drift in MCs Activity-Feed sichtbar wird, statt dass
+    Mark erst beim naechsten Anruf merkt, dass 'gpt-live-1' nie ankam.
+
+    Nur Jarvis selbst darf das melden (gleiches Gate wie /voice/config).
+    Immer 200 — ein fehlschlagender Melde-Call darf den Worker nicht
+    zusaetzlich stoeren.
+    """
+    if agent.harness != "jarvis":
+        raise HTTPException(
+            status_code=403,
+            detail="Nur der Jarvis-Agent darf eine Voice-API-Inkompatibilitaet melden.",
+        )
+
+    logger.warning(
+        "voice worker refused unsupported api %r for agent %s (provider=%s, model=%s) "
+        "— fell back to env defaults",
+        payload.api, agent.slug or agent.name, payload.provider, payload.model,
+    )
+    await emit_event(
+        session,
+        "agent.voice_unsupported_model",
+        f"{agent.name}: gebundenes Modell '{payload.model or payload.provider}' "
+        f"spricht '{payload.api}' — dieser voice-worker kennt nur 'realtime', "
+        f"faehrt auf Env-Defaults weiter",
+        severity="warning",
+        agent_id=agent.id,
+        detail={"provider": payload.provider, "model": payload.model, "api": payload.api},
+    )
+    return {"ok": True}

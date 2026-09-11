@@ -71,4 +71,5 @@ filterwarnings = [
 ]
 markers = [
     "integration: live integration test requiring Spark/network reachability",
+    "postgres: needs the real Postgres schema (Alembic + triggers + row locks); runs only on the Postgres CI lane",
 ]

@@ -372,7 +372,10 @@ class TestWaitingResumeRecap:
         user_token = create_access_token(str(user_id), "admin")
 
         mock_dispatch = AsyncMock()
-        with patch("app.routers.tasks.auto_dispatch_task", mock_dispatch):
+        # the resume path lives in services/messaging.resume_task_after_answer
+        # since review #496 (shared by operator and lead answers) and imports
+        # auto_dispatch_task lazily from app.services.dispatch.
+        with patch("app.services.dispatch.auto_dispatch_task", mock_dispatch):
             client.headers["Authorization"] = f"Bearer {user_token}"
             resp = await client.post(
                 f"/api/v1/tasks/{task.id}/thread/messages",

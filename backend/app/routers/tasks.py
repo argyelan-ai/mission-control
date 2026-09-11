@@ -2458,86 +2458,8 @@ async def post_thread_message(
         # no open blocking question remains, transition back to in_progress
         # explicitly (VALID_TRANSITIONS + event) — open non-blocking questions
         # never gate the resume. Parking via dispatch-death is Task 9's concern.
-        if task.status == TaskStatus.WAITING:
-            remaining = await open_questions(session, thread_id=thread.id)
-            blocking_open = [q for q in remaining if (q.question_meta or {}).get("blocking")]
-            if not blocking_open and is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
-                agent = None
-                agent_name = "Agent"
-                if task.assigned_agent_id:
-                    agent = await session.get(Agent, task.assigned_agent_id)
-                    if agent:
-                        agent_name = agent.name
-                await record_task_event(
-                    session, task.id, task.status, TaskStatus.IN_PROGRESS,
-                    changed_by="user", reason="answer_received",
-                )
-                task.status = TaskStatus.IN_PROGRESS
-
-                # Parked/absent detection (Task 9): if the agent was released
-                # while the task waited (waiting-timeout park, or the agent
-                # simply moved on), its current_task_id no longer points here.
-                # Then the live poll can't carry the answer — re-deliver via the
-                # dispatch path with a BOUNDED resume recap instead of assuming
-                # a live session.
-                parked = agent is None or agent.current_task_id != task.id
-
-                if parked:
-                    from app.services.task_context_builder import build_waiting_resume_recap
-                    from app.models.task import TaskComment
-                    from app.utils import create_tracked_task
-
-                    task.dispatched_at = None
-                    task.ack_at = None
-                    session.add(task)
-                    await session.commit()
-                    await session.refresh(task)
-
-                    recap = await build_waiting_resume_recap(session, task)
-                    # Durable in the timeline. comment_type="recovery_recap" is
-                    # NOT one of the types build_recovery_context truncates+surfaces,
-                    # so it won't produce a mangled duplicate — the FULL recap
-                    # reaches the prompt via extra_recovery_context below.
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        comment_type="recovery_recap",
-                        content=recap,
-                    ))
-                    await session.commit()
-
-                    await post_message(
-                        session,
-                        thread_id=thread.id,
-                        sender_type="system",
-                        message_type="system",
-                        body=f"▶ Antwort erhalten — {agent_name} wird neu eingelastet",
-                    )
-                    # Clear the park suppression so a later re-park is possible.
-                    try:
-                        from app.redis_client import get_redis
-                        _redis = await get_redis()
-                        await _redis.delete(f"mc:task:{task.id}:waiting_parked")
-                    except Exception:
-                        pass
-                    create_tracked_task(
-                        auto_dispatch_task(
-                            task.id, task.board_id, extra_recovery_context=recap,
-                        )
-                    )
-                else:
-                    session.add(task)
-                    await session.commit()
-                    await session.refresh(task)
-
-                    await post_message(
-                        session,
-                        thread_id=thread.id,
-                        sender_type="system",
-                        message_type="system",
-                        body=f"▶ Antwort erhalten — {agent_name} macht weiter",
-                    )
-
+        from app.services.messaging import resume_task_after_answer
+        await resume_task_after_answer(session, task, thread, changed_by="user")
     return {
         "message_id": str(message.id),
         "thread_id": str(thread.id),
@@ -2822,6 +2744,48 @@ async def mark_thread_read(
     elif payload.last_read_seq > cursor.last_read_seq:
         cursor.last_read_seq = payload.last_read_seq
     await session.commit()
+
+
+
+# ── Checklist item delete (Bug 2026-09-09) ──────────────────────────────────
+# Until now checklist items could only be marked done/skipped — a parked
+# (inbox) task with open items could never be closed honestly, and marking
+# foreign items done falsifies the history. DELETE removes the item and
+# recomputes the denormalized counters.
+
+@router.delete("/boards/{board_id}/tasks/{task_id}/checklist/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_checklist_item(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    item_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """User deletes a single checklist item (UI: clean up a replaced task)."""
+    from app.models.checklist import TaskChecklistItem
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+
+    item = await session.get(TaskChecklistItem, item_id)
+    if not item or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Checklist-Item nicht gefunden")
+
+    await session.delete(item)
+    await session.flush()
+
+    # Recalculate counters from DB (post-flush, so the delete is visible)
+    result = await session.exec(
+        select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
+    )
+    all_items = result.all()
+    task.checklist_total = len(all_items)
+    task.checklist_done = sum(1 for i in all_items if i.status == "done")
+    session.add(task)
+
+    await session.commit()
+    return None
 
 
 # ── Comments ─────────────────────────────────────────────────────────────────

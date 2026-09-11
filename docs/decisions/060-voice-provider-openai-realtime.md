@@ -1,6 +1,11 @@
 # ADR-060 — Voice-Provider-Switch zu OpenAI Realtime, env-basierter xAI-Fallback
 
-**Status:** Accepted
+**Status:** Amended by ADR-082 (2026-09-10) — `VOICE_PROVIDER`/`VOICE_MODEL`
+bleiben als Fail-Soft-Fallback bestehen (siehe `jarvis_core/voice_provider.py`),
+sind aber nicht mehr der primäre Weg: die MC-Runtime-Bindung im Picker
+schlägt die Env, wenn ein Anbieter gebunden ist. Der Rest dieses Dokuments
+(Provider-Struktur, `turn_detection`, Fail-Fast bei fehlendem Key) gilt
+unverändert für den Env-Fallback-Pfad.
 **Datum:** 2026-07-10
 **Scope:** Infra/Runtime (voice-worker), Backend/Config (env), Docs
 

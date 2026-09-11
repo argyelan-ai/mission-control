@@ -49,6 +49,47 @@ jobs:
       - name: Run tests
         run: pytest -x --tb=short -q -n auto
 
+  backend-postgres:
+    name: Backend Tests (Postgres lane)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+      MC_TEST_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+
+      # The real schema — migrations, plpgsql trigger validate_task_transition,
+      # indexes. The SQLite lane never runs any of this (W0.2, 10.09.2026).
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Run Postgres-only tests
+        run: pytest -x --tb=short -q -m postgres
+
   frontend-v2:
     name: Frontend Checks
     runs-on: ubuntu-latest
@@ -127,3 +168,16 @@ jobs:
 
       - name: Build frontend-v2 image
         run: docker build -t mc-frontend-v2-test ./frontend-v2
+
+      # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
+      # The fixtures in test_context_detect.sh catch most regressions on any
+      # grep; this step exists for the NARROW class of divergences that only
+      # show up on BusyBox/musl and that the host lane structurally cannot see
+      # (review #487: e.g. `[:blank:]` semantics; measured against the fleet
+      # binary BusyBox 1.36.1 / musl 1.2.5 extracted from node:22.11.0-alpine).
+      - name: Bash lib smoke test on the BusyBox/musl runtime
+        run: |
+          docker run --rm \
+            -v "$PWD/docker/mc-agent-base/lib/context-detect.sh:/lib.sh:ro" \
+            -v "$PWD/backend/tests/test_context_detect.sh:/t.sh:ro" \
+            alpine:3.20 sh -c 'apk add --no-cache bash >/dev/null && bash /t.sh /lib.sh'
