@@ -397,6 +397,7 @@ export function ChatView({
 }: ChatViewProps) {
   const t = useTranslations("sessions");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [optionsOpen, setOptionsOpen] = useState(false);
   /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
@@ -448,7 +449,9 @@ export function ChatView({
 
   // `renderAll` is in the deps for a reason: when the deferred remainder mounts,
   // content appears ABOVE the viewport, so a scroll position left untouched
-  // would silently show older messages instead of the end.
+  // would silently show older messages instead of the end. `stream.preview`
+  // likewise: the live preview grows without touching `events` (Befund
+  // 10.09.2026 — the view stayed put while the preview added 400px below it).
   useEffect(() => {
     if (!stickToBottom) return;
     const el = scrollRef.current;
@@ -457,7 +460,7 @@ export function ChatView({
     // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
     // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-  }, [stream.events, stickToBottom, renderAll]);
+  }, [stream.events, stream.preview, stickToBottom, renderAll]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
   // which is the whole point.
@@ -477,6 +480,12 @@ export function ChatView({
   // changes when it becomes visible, so the timeline opened at the very top of
   // a 6000px history. Observing the container's own box catches that, plus
   // every later resize (window, rotation, on-screen keyboard).
+  //
+  // The CONTENT box is observed as well: late reflows (markdown, images,
+  // fonts, a preview growing line by line) change the content height without
+  // any new event and without the container moving. Only the content box sees
+  // those. The container stays the first observed element — the gesture tests
+  // rely on that order.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -486,6 +495,7 @@ export function ChatView({
       lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
     });
     observer.observe(el);
+    if (timelineRef.current) observer.observe(timelineRef.current);
     return () => observer.disconnect();
   }, [stickToBottom]);
 
@@ -656,6 +666,28 @@ export function ChatView({
   const items = buildTimelineItems(visibleEvents);
   // Tail first; the remainder joins one frame later (see `renderAll`).
   const visibleItems = renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW);
+
+  // "Nach unten"-Knopf: sobald das Mitlaufen aus ist, merken wir uns, wie
+  // viele Eintraege der Verlauf da hatte — alles darueber ist "neu seitdem".
+  const itemsAtUnstickRef = useRef<number | null>(null);
+  useEffect(() => {
+    itemsAtUnstickRef.current = stickToBottom ? null : items.length;
+    // Nur beim Umschalten einfrieren, nicht bei jedem neuen Eintrag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stickToBottom]);
+  const newSinceUnstick =
+    stickToBottom || itemsAtUnstickRef.current == null
+      ? 0
+      : Math.max(0, items.length - itemsAtUnstickRef.current);
+
+  function jumpToBottom() {
+    const el = scrollRef.current;
+    if (!el) return;
+    userDrivingUntilRef.current = 0;
+    el.scrollTop = el.scrollHeight;
+    lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
+    setStickToBottom(true);
+  }
   const modelBadges = modelBadgeUuids(visibleEvents);
   const liveUuid = liveEventUuid(visibleEvents, stream.state?.status ?? null);
   // Single source for how alive this session is — see resolveAliveness for why
@@ -965,6 +997,7 @@ export function ChatView({
         </div>
       ) : (
         <>
+          <div className="relative flex-1 min-h-0 flex flex-col">
           <div
             ref={scrollRef}
             onScroll={handleScroll}
@@ -980,6 +1013,7 @@ export function ChatView({
             onPointerCancel={handlePointerUp}
             className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
           >
+          <div ref={timelineRef} data-testid="chat-timeline" className="flex flex-col flex-1">
             {items.length === 0 && stream.pendingEchoes.length === 0 ? (
               stream.loading ? (
                 <TimelineSkeleton />
@@ -1057,6 +1091,32 @@ export function ChatView({
                 gerade entsteht — nach allem Bestaetigten und nach dem eigenen
                 Echo, auf das sie antwortet. */}
             {stream.preview && <PreviewRow preview={stream.preview} />}
+          </div>
+          </div>
+
+          {!stickToBottom && (
+            <button
+              type="button"
+              onClick={jumpToBottom}
+              className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-1"
+              style={{
+                background: C.bgElevated,
+                borderColor: C.borderActive,
+                color: C.textPrimary,
+              }}
+            >
+              <ChevronDown size={14} aria-hidden="true" />
+              <span>{t("jumpToBottom")}</span>
+              {newSinceUnstick > 0 && (
+                <span
+                  className="rounded-full px-1.5 py-px text-[11px] tabular-nums"
+                  style={{ background: C.accent, color: C.onAccent }}
+                >
+                  {t("newMessagesCount", { count: newSinceUnstick })}
+                </span>
+              )}
+            </button>
+          )}
           </div>
 
           {prompt && (
