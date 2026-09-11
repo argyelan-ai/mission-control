@@ -93,9 +93,20 @@ def test_worker_boot_path_leaves_app_main_out_of_sys_modules():
         "    asyncio.run(bg.prepare_process())\n"
         "except BaseException:\n"
         "    pass\n"
+        "loaded = sorted(m for m in sys.modules if m.startswith('app.routers'))\n"
         "assert 'app.main' not in sys.modules, (\n"
-        "    'prepare_process() zog app.main an: '\n"
-        "    + str(sorted(m for m in sys.modules if m.startswith('app.routers')))\n"
+        "    'prepare_process() zog app.main an: ' + str(loaded)\n"
+        ")\n"
+        # B7 (Rex-Review PR #500, Folgefund 38d1d1b): die Fehlerklasse
+        # "Router-Import zieht in den Worker" kehrte innerhalb dieses PRs
+        # schon einmal zurueck (obsidian_export imports _attachments_root
+        # aus app.routers.memory — 38d1d1b zog den Resolver nach
+        # app.services.fs_roots). app.main bleibt False, solange nur der
+        # Router geladen wird — deshalb die staerkere Eigenschaft: der
+        # Worker-Boot-Pfad laedt GAR KEIN app.routers.*-Modul.
+        "assert not loaded, (\n"
+        "    'prepare_process() zog Router-Module in den Worker: '\n"
+        "    + str(loaded)\n"
         ")\n"
     )
     result = subprocess.run(
