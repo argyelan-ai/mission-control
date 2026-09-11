@@ -62,6 +62,19 @@ else:
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
 
+# Standalone-Logging fuer den Worker-Prozess (Rex-Review PR #500, Blocker B5):
+# basicConfig + Redaction duerfen nicht vom app.main-Import abhaengen. Vor
+# B1 kam beides als Nebenwirkung des app.main-Imports in prepare_process()
+# mit; ohne diese Zeilen haette der Worker nach dem B1-Fix still in
+# unredigiertes Logging gefallen (kein Root-Handler -> lastResort nur ab
+# WARNING; kein Redaction-Filter -> httpx leakt Telegram-Tokens, der
+# Live-Befund vom 26.07.2026). install_log_redaction() ist laut eigenem
+# Docstring idempotent — der Doppelaufruf aus app.main schadet nicht.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
+
+from app.log_redaction import install_log_redaction
+install_log_redaction()
+
 logger = logging.getLogger("mc.startup")
 
 # Service singletons — extracted from app.main so start/stop live next to
