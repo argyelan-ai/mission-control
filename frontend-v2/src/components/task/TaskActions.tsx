@@ -19,14 +19,18 @@ import { useTranslations } from "next-intl";
 function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
   const t = useTranslations("inbox");
   const [override, setOverride] = useState(false);
-  const { data: agents } = useQuery({
+  const { data: agents, isError } = useQuery({
     queryKey: ["agents", boardId],
     queryFn: () => api.agents.list(boardId),
     staleTime: 60_000,
   });
+  // Explicit operator request: never gated behind the agents lookup, so a
+  // broken/hanging /agents call can't hide the decision UI (Incident PR #514 B1).
+  if (task.human_review_required) return <ReviewDecisionSection task={task} boardId={boardId} />;
   const agent = task.assigned_agent_id ? agents?.find((a) => a.id === task.assigned_agent_id) : null;
   // While agents are still loading, an assigned reviewer must not flash the buttons.
-  const loading = !!task.assigned_agent_id && agents === undefined;
+  // A failed lookup (isError) must not loop forever — fall through to isOperatorReview instead.
+  const loading = !!task.assigned_agent_id && agents === undefined && !isError;
   if (loading) return null;
   if (override || isOperatorReview(task, agent)) {
     return <ReviewDecisionSection task={task} boardId={boardId} />;
