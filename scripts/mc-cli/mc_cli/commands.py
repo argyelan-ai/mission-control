@@ -159,31 +159,28 @@ def _cmd_ack(args, client, cfg):
     same_card = (
         cfg.context_task_id is not None and cfg.context_task_id == task_id
     )
-    if (
+    same_card_redispatched = (
         same_card
+        and bool(cfg.dispatch_attempt_id)
+        and bool(target_attempt)
         and target_attempt != cfg.dispatch_attempt_id
-        and (target_attempt or cfg.dispatch_attempt_id)
-    ):
-        # Fall (b): DIESE Karte wurde unter mir neu dispatcht (z.B.
-        # poll_orphan_run). Der alte Run darf sie nicht adoptieren — der
-        # Server wuerde den PATCH mit dem NEUEN Header durchlassen und der
-        # alte Run schreibt fortan mit gueltiger Identitaet des neuen Runs.
-        raise UsageError(
-            f"Task {task_id} wurde neu dispatcht, seit du ihn haeltst: "
-            f"deine Attempt-ID ist {cfg.dispatch_attempt_id!r}, aktuell ist "
-            f"{target_attempt!r}. Dein Run ist veraltet — arbeite nicht auf "
-            "dieser Karte weiter; starte einen frischen Run oder melde dich "
-            "beim Operator (`mc blocked`)."
-        )
-    if target_attempt != cfg.dispatch_attempt_id and (
+    )
+    if not same_card_redispatched and target_attempt != cfg.dispatch_attempt_id and (
         target_attempt or cfg.dispatch_attempt_id
     ):
-        # Fall (a): fremde Karte — Rebind in beide Richtungen: Ziel hat
-        # ANDERE attempt-id → Header auf die Ziel-ID setzen; Ziel hat
-        # KEINE (assigned, nie dispatcht) → Header komplett weglassen
-        # (Backend erzwingt die Pruefung nur bei gesetztem
+        # Fall (a) + Sonderfaelle: fremde Karte (mein Header sagt nichts
+        # ueber das Ziel) ODER eigene Karte ohne gehaltenen Header
+        # (cfg.dispatch_attempt_id leer — kein Besitzanspruch, das
+        # Backend-Detail ist die Wahrheit). Rebind in beide Richtungen:
+        # Ziel hat ANDERE attempt-id → Header auf die Ziel-ID setzen;
+        # Ziel hat KEINE (assigned, nie dispatcht) → Header komplett
+        # weglassen (Backend erzwingt die Pruefung nur bei gesetztem
         # task.dispatch_attempt_id, ein stale Header einer fremden Karte
         # waere bestenfalls Larm, im schlimmsten Fall 409).
+        #
+        # Fall (b) bleibt AUSGENOMMEN: der PATCH geht unten MIT dem
+        # eigenen (alten) Header raus — der Server-409 ist die echte
+        # Ablehnung und wird darunter in Klartext uebersetzt.
         from dataclasses import replace as _replace
         client = type(client)(_replace(
             cfg,
@@ -196,6 +193,21 @@ def _cmd_ack(args, client, cfg):
         _patch_status(client, cfg, "in_progress")
     except Exception as e:
         msg = str(e)
+        if same_card_redispatched and (
+            "409" in msg or "Stale" in msg or "dispatch_attempt" in msg
+        ):
+            # Fall (b) ABLEHNEN: DIESE Karte wurde unter mir neu dispatcht
+            # (z.B. poll_orphan_run rotiert die Attempt-ID, Status bleibt
+            # in_progress, selber Agent, run_control unangetastet — der
+            # Serverguard ist das EINZIGE, was alten von neuem Run trennt).
+            # Klartext mit beiden IDs statt roher 409.
+            raise UsageError(
+                f"Task {task_id} wurde neu dispatcht, seit du ihn haeltst: "
+                f"deine Attempt-ID ist {cfg.dispatch_attempt_id!r}, aktuell "
+                f"ist {target_attempt!r}. Dein Run ist veraltet — arbeite "
+                "nicht auf dieser Karte weiter; starte einen frischen Run "
+                "oder melde dich beim Operator (`mc blocked`)."
+            ) from e
         if "In Progress" in msg and "In Progress" in msg.replace("In Progress", "", 1):
             # Idempotent-Success: Task war schon in_progress.
             already_in_progress = True
@@ -210,7 +222,13 @@ def _cmd_ack(args, client, cfg):
     _write_context_file(
         task_id=task_id,
         board_id=(detail.get("board_id") if isinstance(detail, dict) else None) or board_id,
-        attempt_id=target_attempt or "",
+        # Fall (b) schreibt nichts vom Ziel ueber: der ACK mit dem eigenen
+        # Header ist (im echten Betrieb) am Server-409 gescheitert — der
+        # Kontext behaelt den EIGENEN Stand, es wird nichts adoptiert.
+        attempt_id=(
+            cfg.dispatch_attempt_id or "" if same_card_redispatched
+            else target_attempt or ""
+        ),
     )
     return 0
 

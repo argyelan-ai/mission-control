@@ -132,22 +132,97 @@ def test_ack_b_moves_context_from_a_to_b_and_patch_hits_b():
     _read_ctx_after_ack_with_followup_patch()
 
 
-def test_ack_without_explicit_id_rewrites_same_context():
-    """env-style ack (keine positionale ID): Kontext bleibt konsistent,
-    Attempt-ID kommt aus dem Backend-Detail, nicht blind aus der Env."""
-    _write_ctx(TASK_A, "STALE-FROM-ENV")
+def test_ack_env_style_same_context_adopts_fresh_attempt():
+    """Fall (a) HEILEN — env-style ack ohne positionale ID: der Kontext
+    zeigt auf DIESE Karte, aber ich halte KEINEN Attempt-Header
+    (dispatch_attempt_id leer — z.B. poll.sh hat X_DISPATCH_ATTEMPT_ID
+    nie geschrieben). Kein Besitzanspruch: das Backend-Detail ist die
+    Wahrheit, die frische Attempt-ID wird adoptiert."""
+    _write_ctx(TASK_A, "")
     cfg = Config(
         api_url="http://test:8000",
         agent_token="tok",
         task_id=TASK_A,
         board_id=BOARD_1,
-        dispatch_attempt_id="STALE-FROM-ENV",
+        dispatch_attempt_id=None,
     )
+    _Client.shared = []
     client = _Client(cfg, attempt_by_task={TASK_A: ATTEMPT_A})
     assert _cmd_ack(_Args(), client, cfg) == 0
     ctx = _read_ctx()
     assert ctx["TASK_ID"] == TASK_A
     assert ctx["X_DISPATCH_ATTEMPT_ID"] == ATTEMPT_A
+    patch_calls = [c for c in client.calls if c[0] == "PATCH"]
+    assert patch_calls[0][3] == ATTEMPT_A
+
+
+def test_ack_same_card_redispatched_with_valid_old_attempt_rejects():
+    """Fall (b) ABLEHNEN — env-style ack ohne positionale ID: ich hielt
+    DIESE Karte (context_task_id == task_id) mit einem gueltigen alten
+    Header, und sie wurde unter mir neu dispatcht (z.B.
+    poll_orphan_run). Der PATCH geht MIT dem eigenen Header raus, der
+    Server-409 wird in Klartext uebersetzt (beide IDs) — statt die neue
+    Attempt-ID zu adoptieren und den Guard fuer diesen Pfad leerlaufen
+    zu lassen."""
+    _write_ctx(TASK_A, "attempt-OLD-RUN")
+    cfg = Config(
+        api_url="http://test:8000",
+        agent_token="tok",
+        task_id=TASK_A,
+        board_id=BOARD_1,
+        dispatch_attempt_id="attempt-OLD-RUN",
+    )
+
+    class _Stale409(_Client):
+        """Emuliert den Serverguard: PATCH mit stale Header -> 409."""
+        def request(self, method, path, body=None, **kw):
+            self.calls.append((method, path, body, self.cfg.dispatch_attempt_id))
+            if path.endswith("/detail"):
+                tid = path.split("/tasks/")[1].split("/")[0]
+                return {"id": tid, "board_id": BOARD_1,
+                        "dispatch_attempt_id": self.attempt_by_task.get(tid)}
+            from mc_cli.errors import ClientError
+            raise ClientError(
+                f"HTTP 409 PATCH {path}: Stale dispatch_attempt_id — "
+                f"Erwartet: attempt-NEW-RUN, gesendet: "
+                f"{self.cfg.dispatch_attempt_id}"
+            )
+
+    _Client.shared = []
+    client = _Stale409(cfg, attempt_by_task={TASK_A: "attempt-NEW-RUN"})
+    with pytest.raises(UsageError, match="neu dispatcht"):
+        _cmd_ack(_Args(), client, cfg)
+    # Der PATCH trug den EIGENEN (alten) Header — nicht die neue ID:
+    patch_calls = [c for c in client.calls if c[0] == "PATCH"]
+    assert len(patch_calls) == 1
+    assert patch_calls[0][3] == "attempt-OLD-RUN"
+    # Beim Abbruch bleibt der alte Kontext unangetastet:
+    ctx = _read_ctx()
+    assert ctx["X_DISPATCH_ATTEMPT_ID"] == "attempt-OLD-RUN", (
+        "beim Abbruch darf der alte Kontext unangetastet bleiben"
+    )
+
+
+def test_ack_foreign_card_with_stale_env_adopts_target_attempt():
+    """Fall (a) mit expliziter ID und wertlosem eigenem Header: der Kontext
+    zeigt auf Karte A, geackt wird Karte B — meine Attempt-ID (aus A)
+    sagt nichts ueber B. Adoption von B's Attempt-ID bleibt richtig."""
+    _write_ctx(TASK_A, "attempt-A")
+    cfg = Config(
+        api_url="http://test:8000",
+        agent_token="tok",
+        task_id=TASK_A,
+        board_id=BOARD_1,
+        dispatch_attempt_id="attempt-A",
+    )
+    _Client.shared = calls = []
+    client = _Client(cfg, attempt_by_task={TASK_B: ATTEMPT_B})
+    assert _cmd_ack(_Args(), client, cfg.with_task_id(TASK_B)) == 0
+    patch_calls = [c for c in calls if c[0] == "PATCH"]
+    assert patch_calls[0][3] == ATTEMPT_B
+    ctx = _read_ctx()
+    assert ctx["TASK_ID"] == TASK_B
+    assert ctx["X_DISPATCH_ATTEMPT_ID"] == ATTEMPT_B
 
 
 def test_ack_patch_header_follows_target_attempt_id():
