@@ -460,7 +460,7 @@ export function ChatView({
     // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
     // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-  }, [stream.events, stream.preview, stickToBottom, renderAll]);
+  }, [stream.events, stream.preview, stickToBottom, renderAll, effectiveView]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
   // which is the whole point.
@@ -497,7 +497,10 @@ export function ChatView({
     observer.observe(el);
     if (timelineRef.current) observer.observe(timelineRef.current);
     return () => observer.disconnect();
-  }, [stickToBottom]);
+    // `effectiveView`: the scroll container only exists in chat view. Started
+    // in the terminal (or forced there by a transcript 404 that clears later),
+    // the first run finds no element — and nothing else re-runs this effect.
+  }, [stickToBottom, effectiveView]);
 
   // Das Mitlaufen wird NUR durch eine echte Geste beendet — nie durch ein
   // Scroll-Ereignis allein (Operator-Befund 20.08.2026: "beginnt ganz am

@@ -973,6 +973,32 @@ describe("ChatView", () => {
     expect(el.scrollTop).toBe(1400);
   });
 
+  // Review-Befund 11.09.2026: beide Scroll-Effekte brachen mit `if (!el)
+  // return` ab und hingen nicht an der Ansicht. Wer im Terminal startete
+  // (oder dessen Verlauf erst per 404 als Terminal galt) und dann in den Chat
+  // wechselte, bekam NIE einen Beobachter — der Chat lief nicht mehr mit.
+  it("haengt den Beobachter auch an, wenn der Chat erst nach dem Terminal erscheint", () => {
+    const falle = beobachterFalle();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+      const { rerender } = renderChatView({ centerView: "terminal" });
+      expect(falle.observed).toHaveLength(0);
+
+      rerender(
+        <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
+      );
+      expect(falle.observed[1]).toBe(screen.getByTestId("chat-timeline"));
+
+      const el = falle.observed[0] as HTMLElement;
+      Object.defineProperty(el, "scrollHeight", { value: 5000, configurable: true });
+      el.scrollTop = 0;
+      falle.fire();
+      expect(el.scrollTop).toBe(5000);
+    } finally {
+      falle.restore();
+    }
+  });
+
   // ── Knopf "Nach unten" (Operator-Wunsch 10.09.2026) ───────────────────────
 
   it("zeigt keinen Knopf, solange die Ansicht am Ende steht", () => {
