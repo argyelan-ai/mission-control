@@ -8,7 +8,11 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
-import { StatusLine, WORKING_WORDS, WORKING_WORD_INTERVAL_MS } from "./StatusLine";
+import { StatusLine, WORKING_WORD_INTERVAL_MS } from "./StatusLine";
+import en from "../../../messages/en.json";
+
+// Die Arbeits-Verben kommen aus dem Katalog (EN/DE), nicht mehr hart aus dem Code.
+const WORKING_WORDS = en.sessions.status.workingWords.split("|");
 import type { StateEvent } from "@/lib/chatTypes";
 import { C } from "@/lib/colors";
 
@@ -33,6 +37,21 @@ describe("StatusLine", () => {
   // 04.09.2026) — gelesen wird darum der Text des ganzen Labels.
   const workingText = () => screen.getByTestId("status-label").textContent;
 
+  // Befund 10.09.2026: die Bildschirm-Vorschau war unruhig und oft falsch.
+  // Stattdessen sagt die Statuszeile, was der Agent GERADE tut — aus dem
+  // strukturierten Werkzeug-Ereignis, nicht aus geratenem Bildschirmtext.
+  it("shows the running tool instead of a rotating verb", () => {
+    render(<StatusLine state={mkState("working")} connected activity={{ title: "Read poll.sh" }} />);
+    expect(workingText()).toBe("Read poll.sh");
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "true");
+    expect(screen.getByTestId("status-label").querySelectorAll("[data-letter]").length).toBe(0);
+  });
+
+  it("ignores a stale activity when the agent is not working", () => {
+    render(<StatusLine state={mkState("idle")} connected activity={{ title: "Read poll.sh" }} />);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
+
   it("shows one of the rotating working verbs for working", () => {
     render(<StatusLine state={mkState("working")} connected />);
     expect(WORKING_WORDS.map((w) => `${w}…`)).toContain(workingText());
@@ -52,7 +71,7 @@ describe("StatusLine", () => {
     render(<StatusLine state={mkState("idle")} connected />);
     expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "false");
     expect(screen.getByTestId("status-label").querySelectorAll("[data-letter]").length).toBe(0);
-    expect(screen.getByText("Bereit")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
   it("rotates the verb while the agent keeps working", () => {
@@ -81,34 +100,34 @@ describe("StatusLine", () => {
     }
   });
 
-  it('shows "Wartet auf dich" for waiting_input', () => {
+  it('shows "Waiting for you" for waiting_input', () => {
     render(<StatusLine state={mkState("waiting_input")} connected />);
-    expect(screen.getByText("Wartet auf dich")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for you")).toBeInTheDocument();
   });
 
-  it('shows "Wartet auf Genehmigung" for permission_prompt', () => {
+  it('shows "Waiting for approval" for permission_prompt', () => {
     render(<StatusLine state={mkState("permission_prompt")} connected />);
-    expect(screen.getByText("Wartet auf Genehmigung")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
   });
 
-  it('shows "Bereit" for idle', () => {
+  it('shows "Ready" for idle', () => {
     render(<StatusLine state={mkState("idle")} connected />);
-    expect(screen.getByText("Bereit")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
   it('shows the truthful fallback for status "unknown"', () => {
     render(<StatusLine state={mkState("unknown")} connected />);
-    expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
+    expect(screen.getByText("Status unknown — check the terminal")).toBeInTheDocument();
   });
 
   it("shows the truthful fallback when disconnected, even with a stale non-unknown state", () => {
     render(<StatusLine state={mkState("working")} connected={false} />);
-    expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
+    expect(screen.getByText("Status unknown — check the terminal")).toBeInTheDocument();
   });
 
   it("shows the truthful fallback when state is null", () => {
     render(<StatusLine state={null} connected />);
-    expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
+    expect(screen.getByText("Status unknown — check the terminal")).toBeInTheDocument();
   });
 
   // ── Ended session: a known end state, not an unknown one ──────────────────
@@ -116,9 +135,9 @@ describe("StatusLine", () => {
   it("reports an ended session plainly instead of as an unknown status", () => {
     render(<StatusLine state={null} connected aliveness="ended" />);
     expect(
-      screen.getByText("Session beendet — neue Nachricht startet die nächste Session")
+      screen.getByText("Session ended — a new message starts the next session")
     ).toBeInTheDocument();
-    expect(screen.queryByText("Status unklar — Terminal prüfen")).not.toBeInTheDocument();
+    expect(screen.queryByText("Status unknown — check the terminal")).not.toBeInTheDocument();
   });
 
   it("does not paint an ended session in the warning tone", () => {
@@ -140,21 +159,21 @@ describe("StatusLine", () => {
     expect(WORKING_WORDS.map((w) => `${w}…`)).toContain(workingText());
   });
 
-  it('reads an IDLE session as "Bereit", never as ended', () => {
+  it('reads an IDLE session as "Ready", never as ended', () => {
     // The complaint this replaces: a running CLI waiting at its prompt writes
     // nothing, so the mtime heuristic called it finished and the UI announced
     // "Session beendet" at a session sitting right there.
     render(<StatusLine state={mkState("idle")} connected aliveness="idle" />);
-    expect(screen.getByText("Bereit")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(
-      screen.queryByText("Session beendet — neue Nachricht startet die nächste Session")
+      screen.queryByText("Session ended — a new message starts the next session")
     ).not.toBeInTheDocument();
   });
 
   it("still reports an unreadable IDLE session honestly", () => {
     // Idle is not a licence to invent a status: a dead stream is still unknown.
     render(<StatusLine state={null} connected={false} aliveness="idle" />);
-    expect(screen.getByText("Status unklar — Terminal prüfen")).toBeInTheDocument();
+    expect(screen.getByText("Status unknown — check the terminal")).toBeInTheDocument();
   });
 });
 

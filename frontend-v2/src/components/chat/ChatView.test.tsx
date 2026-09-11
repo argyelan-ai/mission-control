@@ -1139,12 +1139,49 @@ describe("ChatView", () => {
     await waitFor(() => expect(echoFailed).toHaveBeenCalledWith("geht nicht"));
   });
 
-  it("zeigt die Live-Vorschau als laufende Antwort NACH dem Verlauf, sichtbar markiert", () => {
+  // Befund 10.09.2026 (Operator): die Bildschirm-Vorschau (tmux-Abgriff) zeigte
+  // Bruchstuecke, Werkzeug-Rahmen und den Dispatch-Prompt — "buggy, bewegt
+  // sich zu viel". Sie wird nicht mehr gezeigt; was der Agent tut, sagt die
+  // Statuszeile aus strukturierten Ereignissen. Die ACP-Vorschau (echte
+  // Text-Deltas, z.B. omp) bleibt, weil dort das Transkript erst am Zug-Ende
+  // geschrieben wird.
+  it("zeigt die Bildschirm-Vorschau (pane) nicht mehr", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({
         events: [MSG],
         state: { kind: "state", status: "working", prompt: null },
-        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "Ich lese gerade foo.py …", source: "pane" },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "> dispatch … ⎿ Read poll.sh", source: "pane" },
+      })
+    );
+    renderChatView();
+    expect(screen.queryByTestId("preview-row")).not.toBeInTheDocument();
+  });
+
+  it("leitet das laufende Werkzeug in die Statuszeile", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [MSG, TOOL], state: { kind: "state", status: "working", prompt: null } })
+    );
+    renderChatView();
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Read foo.py");
+  });
+
+  it("nimmt das Werkzeug aus der Statuszeile, sobald sein Ergebnis da ist", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG, { ...TOOL, result: "ok" }],
+        state: { kind: "state", status: "working", prompt: null },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("status-label")).not.toHaveTextContent("Read foo.py");
+  });
+
+  it("zeigt die ACP-Vorschau als laufende Antwort NACH dem Verlauf, sichtbar markiert", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "Ich lese gerade foo.py …", source: "acp" },
       })
     );
     renderChatView();
@@ -1157,6 +1194,22 @@ describe("ChatView", () => {
     expect(screen.getByText("Hallo!").compareDocumentPosition(row)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
+  });
+
+  it("deckelt die ACP-Vorschau in der Hoehe, damit nichts springt", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: { kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text: "a\nb\nc", source: "acp" },
+      })
+    );
+    renderChatView();
+    // Der Text laeuft am unteren Rand mit (justify-end) und waechst nur bis zum
+    // Deckel — danach steht der Block still, aeltere Zeilen wandern oben raus.
+    const clamp = screen.getByTestId("preview-clamp");
+    expect(clamp.className).toMatch(/overflow-hidden/);
+    expect(clamp.className).toMatch(/justify-end/);
   });
 
   it("rendert ohne Vorschau keine Vorschau-Zeile", () => {
@@ -1208,7 +1261,7 @@ describe("ChatView", () => {
     expect(screen.getByTestId("echo-bubble")).toBeInTheDocument();
   });
 
-  it('shows "Gesendet…" until the transcript shows a sign of the turn', () => {
+  it('shows "Sent…" until the transcript shows a sign of the turn', () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ awaitingResponse: true, state: { kind: "state", status: "idle", prompt: null } })
     );
@@ -1216,8 +1269,8 @@ describe("ChatView", () => {
 
     // Outranks the pane probe's stale "idle" — otherwise the line reads
     // "Bereit" one frame after the operator hit send.
-    expect(screen.getByText("Gesendet…")).toBeInTheDocument();
-    expect(screen.queryByText("Bereit")).not.toBeInTheDocument();
+    expect(screen.getByText("Sent…")).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 
   it("hands the server's capabilities to the composer", async () => {
@@ -1469,7 +1522,7 @@ describe("ChatView", () => {
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
     expect(
-      screen.getByText("Session beendet — neue Nachricht startet die nächste Session")
+      screen.getByText("Session ended — a new message starts the next session")
     ).toBeInTheDocument();
   });
 
