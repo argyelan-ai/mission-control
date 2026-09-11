@@ -22,6 +22,7 @@ import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -35,6 +36,7 @@ from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
+from app.services.task_state import lock_and_set
 
 logger = logging.getLogger("mc.task_runner")
 
@@ -1364,7 +1366,28 @@ class TaskRunnerService:
                         task.title[:60],
                     )
                     continue
-                task.status = "review"
+                # PR #478: the actual status write goes through lock_and_set()
+                # (row lock + is_valid_transition), not a plain attribute
+                # assignment — mc:heal only prevents two healers from racing
+                # each other in the same round, it doesn't stop a concurrent
+                # non-watchdog writer (PATCH, worker `mc review`) from having
+                # already moved the task between this sweep's SELECT and here.
+                try:
+                    task, _ = await lock_and_set(session, task.id, "review", actor="watchdog")
+                except HTTPException as e:
+                    if e.status_code == 409:
+                        # Lost race (status changed between this sweep's SELECT
+                        # and lock_and_set's re-read) — skip this task, next
+                        # tick retries. Must not abort the whole stale-check
+                        # sweep for the remaining tasks (same class of bug as
+                        # the watchdog's task_monitor.py fix).
+                        logger.info(
+                            "Stale-Check Auto-Promote lost the race for '%s' — "
+                            "skipping, next tick retries",
+                            task.title[:60],
+                        )
+                        continue
+                    raise
                 task.updated_at = utcnow()
                 session.add(task)
                 await session.commit()
@@ -1642,6 +1665,21 @@ class TaskRunnerService:
                 continue
 
             # ── Tick 2+: BLOCK. Human-wait (blocked_by_task_id IS NULL). ──
+            # lock_and_set() runs FIRST, apply_terminal_unassign() only AFTER
+            # it succeeds (M4, PR #478 review): apply_terminal_unassign only
+            # reads task.blocked_by_task_id/assigned_agent_id/id, none of
+            # which lock_and_set() touches, so the order is free to flip and
+            # this is the safer fix of Rex's two suggested options — a
+            # session.rollback() here would expire every object already
+            # loaded by this sweep's SELECT (not just `agent`), and the next
+            # loop iteration's plain attribute access on the next candidate
+            # task then needs a synchronous lazy-reload that crashes with
+            # MissingGreenlet outside the async greenlet context (caught by
+            # test_blocks_silent_abort_409_rolls_back_agent_mutation using a
+            # second, non-racing candidate — a single-candidate test can't
+            # see this). Ordering it this way means a 409 here never touches
+            # `agent` at all, so there's nothing to undo.
+            #
             # Canonical path: apply_terminal_unassign keeps assigned_agent_id
             # (resumable) but releases agent.current_task_id + sets run_state so
             # the agent doesn't look busy forever and the poll cancel-loop can't
@@ -1657,9 +1695,30 @@ class TaskRunnerService:
                 )
                 continue
 
-
+            # PR #478: mc:heal only arbitrates between healers in the same
+            # round — the status write itself still goes through
+            # lock_and_set() (row lock + is_valid_transition), same reasoning
+            # as the Stale-Check Auto-Promote branch above. Without this call
+            # task.status is never actually set to "blocked" here —
+            # apply_terminal_unassign() below only unassigns, it doesn't
+            # touch status.
+            try:
+                task, _ = await lock_and_set(session, task.id, "blocked", actor="watchdog")
+            except HTTPException as e:
+                if e.status_code == 409:
+                    # Lost race (status changed between this sweep's SELECT and
+                    # lock_and_set's re-read) — skip this task, next tick
+                    # retries. Must not abort the whole sweep for the
+                    # remaining tasks (same class of bug as the watchdog's
+                    # task_monitor.py fix).
+                    logger.info(
+                        "Lifecycle-Watchdog block lost the race for '%s' — "
+                        "skipping, next tick retries",
+                        task.title[:60],
+                    )
+                    continue
+                raise
             await apply_terminal_unassign(session, task, "blocked")
-            task.status = "blocked"
             task.updated_at = utcnow()
             session.add(task)
             # Ensure human-wait agent state even if run_state was 'idle' going in

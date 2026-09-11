@@ -32,6 +32,7 @@ from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import get_redis
 from app.utils import utcnow
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.services.telegram_reports import telegram_reports
 
 logger = logging.getLogger(__name__)
@@ -885,7 +886,7 @@ async def system_finalize_task_done(
     treat this as "not handled" and fall through to a stale-state fallback
     that fights a task that's already done (Critical fix, 2026-07-15 review).
     """
-    task.status = "done"
+    task, _ = await lock_and_set(session, task.id, "done", actor="system")
     task.completed_at = utcnow()
     task.dispatch_intent = "root"
     task.review_decision = "approved"
@@ -1309,8 +1310,7 @@ async def handle_review_rejection(
         # find_dispatch_target() routes unassigned tasks to the Board Lead,
         # so we explicitly kick a dispatch here instead of leaving the task
         # to rot silently.
-        _old_status = task.status
-        task.status = "inbox"
+        task, _old_status = await lock_and_set(session, task.id, "inbox", actor="system")
         task.assigned_agent_id = None
         task.dispatched_at = None
         task.ack_at = None
@@ -1367,8 +1367,7 @@ async def handle_review_rejection(
         # resolve_unblock_action's redispatch/requeue mechanics reused
         # elsewhere) instead of sitting silently as a ghost in_progress task.
         logger.info("Review-Rejection re-dispatch blocked: '%s' — %s", task.title, reason)
-        _old_status = task.status
-        task.status = "inbox"
+        task, _old_status = await lock_and_set(session, task.id, "inbox", actor="system")
         task.assigned_agent_id = original_dev.id
         task.dispatched_at = None
         task.ack_at = None
@@ -1436,7 +1435,7 @@ async def handle_review_rejection(
             agent_id=rejecting_agent.id if rejecting_agent else None,
             reason="review_rejection_queued",
         )
-        task.status = "inbox"
+        task, _ = await lock_and_set(session, task.id, "inbox", actor="system")
         session.add(task)
         await session.commit()
         from app.services.task_queue import enqueue_task
@@ -1455,7 +1454,7 @@ async def handle_review_rejection(
             agent_id=rejecting_agent.id if rejecting_agent else None,
             reason="review_rejection_redispatch",
         )
-        task.status = "inbox"
+        task, _ = await lock_and_set(session, task.id, "inbox", actor="system")
 
         session.add(task)
         await session.commit()
@@ -1567,8 +1566,7 @@ async def requeue_unblocked_task(
     flow (or auto-dispatch) re-delivers it with a full prompt AFTER the
     current work finishes — no interrupt, no state corruption.
     """
-    old_status = task.status
-    task.status = "inbox"
+    task, old_status = await lock_and_set(session, task.id, "inbox", actor="system")
     task.dispatched_at = None
     task.ack_at = None
     session.add(task)
@@ -2381,7 +2379,7 @@ async def handle_phase_approval_decision(
                 return result
 
             # Classic review path for boards with require_review_before_done=true
-            parent.status = "review"
+            parent, _ = await lock_and_set(session, parent.id, "review", actor=agent.name)
             parent.updated_at = utcnow()
             session.add(parent)
             await session.commit()
@@ -2463,12 +2461,12 @@ async def handle_phase_approval_decision(
             # _check_undispatched_tasks ist das Safety-Net. Sofort startbare
             # Subtasks behalten den expliziten Re-Dispatch (Incident
             # 2026-05-20: ohne aktiven Dispatch hing ein reopened Subtask 1h).
+            st, _st_from_status = await lock_and_set(session, st.id, "in_progress", actor=agent.name)
             await record_task_event(
-                session, st.id, st.status, "in_progress",
+                session, st.id, _st_from_status, "in_progress",
                 changed_by="agent", agent_id=agent.id,
                 reason="phase_rewrite_request",
             )
-            st.status = "in_progress"
             st.completed_at = None
             st.dispatched_at = None
             st.ack_at = None

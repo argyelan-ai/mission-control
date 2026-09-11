@@ -30,6 +30,7 @@ from app.models.agent import Agent
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
 # Single Source of Truth: app/comment_types.py (REL-01). Same alias as
@@ -326,13 +327,13 @@ async def agent_add_comment(
                 and not getattr(task, "human_review_required", None)
             )
             if task.parent_task_id is not None or _skip_review_direct:
-                task.status = "done"
+                task, _ = await lock_and_set(session, task.id, "done", actor="agent")
                 task.completed_at = utcnow()
                 # See task_lifecycle.execute_review_decision for why "done"
                 # resets the sticky dispatch_intent label.
                 task.dispatch_intent = "root"
             else:
-                task.status = "review"
+                task, _ = await lock_and_set(session, task.id, "review", actor="agent")
             # Prevent stale dispatch_attempt_id (audit trail).
             from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
             await clear_dispatch_attempt_id(

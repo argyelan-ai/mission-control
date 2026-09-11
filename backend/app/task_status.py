@@ -25,10 +25,16 @@ class TaskStatus(StrEnum):
 # stays alive, it's paused on an operator/agent answer — distinct from
 # `blocked` (external impediment) and `user_test` (Mark's manual test gate).
 # Deliberately NOT inbox -> waiting: a task must be actively worked before it
-# can wait on an answer. Mirrored 1:1 in the Postgres trigger
+# can wait on an answer. Mirrored in the Postgres trigger
 # `validate_task_transition` (migration 0159) — that DB-level guard is the
 # only one enforced in production; this dict is what tests exercise since the
-# SQLite test engine doesn't run Postgres triggers.
+# SQLite test engine doesn't run Postgres triggers. One deliberate
+# divergence: the trigger treats X -> X as a silent no-op
+# (`IF OLD.status = NEW.status THEN RETURN NEW`), this dict has no
+# self-transitions and is_valid_transition() therefore rejects them with a
+# 409 — callers are expected to skip the write instead of asking for a
+# same-status transition, and a 409 here is the intentional way to catch
+# that programmatically.
 VALID_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.INBOX:       {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},
     TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.INBOX, TaskStatus.FAILED, TaskStatus.WAITING},

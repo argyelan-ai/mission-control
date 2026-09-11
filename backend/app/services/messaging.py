@@ -400,19 +400,38 @@ async def resume_task_after_answer(session: AsyncSession, task, thread, *, chang
     Extracted from the operator answer endpoint (tasks.py) so the LEAD answer
     path (agent_scoped, review #496 B4) behaves identically — before, a lead
     answer cleared the awaiting flag but left the worker stuck in `waiting`
-    (PATCH review → 400 "Waiting → Done"). Returns True when resumed."""
+    (PATCH review → 400 "Waiting → Done"). The actual status write goes
+    through task_state.lock_and_set() (PR #478) rather than a plain
+    `task.status = ...` assignment — this function now runs from two
+    concurrent-capable entry points (operator answer + lead answer), so the
+    write needs the same row-locked, freshly-re-read validation as any other
+    status transition. A lost lock_and_set() race (some other writer already
+    moved the task past `waiting` between our early read and the row lock)
+    surfaces as HTTPException(409); we treat that as "nothing left to
+    resume" and return False instead of letting it escape as an error out of
+    either caller's endpoint. Returns True when resumed."""
+    from fastapi import HTTPException
     from app.models.agent import Agent
     from app.models.task import TaskComment
     from app.services.task_lifecycle import record_task_event
-    from app.task_status import TaskStatus, is_valid_transition
+    from app.services.task_state import lock_and_set
+    from app.task_status import TaskStatus
 
     if task.status != TaskStatus.WAITING:
         return False
     remaining = await open_questions(session, thread_id=thread.id)
     if any((q.question_meta or {}).get("blocking") for q in remaining):
         return False
-    if not is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
-        return False
+
+    try:
+        task, from_status = await lock_and_set(
+            session, task.id, TaskStatus.IN_PROGRESS, actor=changed_by
+        )
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return False
+        raise
+
     agent = None
     agent_name = "Agent"
     if task.assigned_agent_id:
@@ -420,10 +439,9 @@ async def resume_task_after_answer(session: AsyncSession, task, thread, *, chang
         if agent:
             agent_name = agent.name
     await record_task_event(
-        session, task.id, task.status, TaskStatus.IN_PROGRESS,
+        session, task.id, from_status, TaskStatus.IN_PROGRESS,
         changed_by=changed_by, reason="answer_received",
     )
-    task.status = TaskStatus.IN_PROGRESS
     parked = agent is None or agent.current_task_id != task.id
     if parked:
         from app.services.dispatch import auto_dispatch_task

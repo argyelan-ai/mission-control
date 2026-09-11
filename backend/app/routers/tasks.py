@@ -24,6 +24,7 @@ from app.redis_client import RedisKeys
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.sse import broadcast, make_sse_response
+from app.services.task_state import lock_and_set
 
 
 # Single Source of Truth — imported from task_status.py
@@ -68,9 +69,21 @@ async def _enforce_board_rules(
     if new_status not in allowed:
         from_label = STATUS_LABELS.get(current, current)
         to_label = STATUS_LABELS.get(new_status, new_status)
+        # 409 + structured dict, not 400 + prose (PR #478 review, B2
+        # Nebenbefund): this is the same "invalid_transition" shape
+        # lock_and_set() raises, so a client going through either write path
+        # (this operator PATCH, or the lock_and_set() call sites) can tell
+        # "lost a race / attempted an invalid transition" apart from a real
+        # error the same way — see task_state.py's docstring on incident #477.
         raise HTTPException(
-            status_code=400,
-            detail=f"Ungültiger Status-Übergang: {from_label} → {to_label}",
+            status_code=409,
+            detail={
+                "error": "invalid_transition",
+                "current_status": current,
+                "expected": new_status,
+                "allowed": sorted(allowed),
+                "message": f"Ungültiger Status-Übergang: {from_label} → {to_label}",
+            },
         )
 
     # Rule 2: parent/child integrity — parent must not become done while children are open
@@ -1422,12 +1435,25 @@ async def update_task(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    old_status = task.status
-    old_assigned = task.assigned_agent_id
     updates = payload.model_dump(exclude_none=True)
 
     if "task_type" in updates and updates["task_type"] not in ("story", "bug", "revision", "chore"):
         raise HTTPException(status_code=422, detail=f"Invalid task_type: {updates['task_type']}")
+
+    # Re-fetch under lock_task() before reading old_status / validating: task
+    # was loaded above only for the 404 check, and a concurrent writer may
+    # have committed a status change since. Without this, old_status and
+    # _enforce_board_rules() below validate against a stale identity-map
+    # copy (PR #478 review, B1/B2) — same bug, this endpoint's write path.
+    if "status" in updates:
+        from app.services.task_state import lock_task
+        locked_task = await lock_task(session, task_id)
+        if locked_task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = locked_task
+
+    old_status = task.status
+    old_assigned = task.assigned_agent_id
 
     # Check board rules before status is changed
     if "status" in updates:
@@ -1693,7 +1719,7 @@ async def update_task(
                 session, next_phase.id, "inbox", "in_progress",
                 changed_by="system", reason="phase_auto_advance",
             )
-            next_phase.status = "in_progress"
+            next_phase, _ = await lock_and_set(session, next_phase.id, "in_progress", actor="system")
             # F2 fix (Plan 26-03): first-set-wins on started_at.
             if next_phase.started_at is None:
                 next_phase.started_at = utcnow()
@@ -2429,11 +2455,8 @@ async def post_thread_message(
     from app.services.messaging import (
         answer_clears_awaiting,
         ensure_task_thread,
-        open_questions,
         post_message,
     )
-    from app.services.task_lifecycle import record_task_event
-    from app.task_status import TaskStatus, is_valid_transition
 
     task = await session.get(Task, task_id)
     if not task:

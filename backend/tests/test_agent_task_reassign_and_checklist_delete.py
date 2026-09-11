@@ -14,6 +14,7 @@ Board-Lead agent endpoint), counters recomputed, and the done-guard passes.
 import uuid
 
 import pytest
+from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from tests.conftest import test_engine
@@ -32,6 +33,14 @@ async def _setup(*, lead: bool = False):
     worker_id = caller_id if not lead else uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(Board(id=board_id, name="B", slug=f"b-{uuid.uuid4().hex[:8]}"))
+        # Flush the Board on its own before the Agent rows that FK to it:
+        # these models carry no relationship() (see conftest.py's "SQLite:
+        # do NOT enable foreign keys" note), so SQLAlchemy's unit-of-work has
+        # no dependency edge between Board and Agent and does not order the
+        # Agent INSERTs after the Board INSERT within one flush. SQLite never
+        # enforces the FK either way, so this was invisible there; Postgres
+        # does enforce it (agents_board_id_fkey) and rejected the batch.
+        await s.flush()
         raw_token, token_hash = generate_agent_token()
         s.add(Agent(
             id=caller_id, name="Lead" if lead else "Worker", board_id=board_id,
@@ -130,6 +139,145 @@ async def test_unknown_patch_field_no_longer_silent_200(client):
         json={"assigned_agent_id_xyz": str(uuid.uuid4())},
     )
     assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_lead_combined_status_and_reassign_both_apply(client):
+    """PATCH with `status` AND `assigned_agent_id` in ONE request must apply
+    both — not silently drop one depending on which block ran first.
+
+    Every other test in this file sends `assigned_agent_id` alone; this pins
+    the combination itself. See
+    `test_lead_reassign_ordering_sees_fresh_assignee_not_stale_copy` below
+    (Postgres lane) for the counter-run that proves the block ORDER — not
+    just this combination — actually matters.
+    """
+    ids = await _setup(lead=True)
+    attempt = (await _task(ids)).dispatch_attempt_id
+
+    # Evidence guard (in_progress -> review) needs >= 1 progress/resolution/
+    # reflection comment from the caller — unrelated to this test's subject,
+    # just satisfying a separate precondition.
+    from app.models.task import TaskComment
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(
+            task_id=ids["task_id"], author_type="agent",
+            author_agent_id=ids["caller_id"], comment_type="progress",
+            content="Update — reassigning + moving to review",
+        ))
+        await s.commit()
+
+    resp = await client.patch(
+        f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}",
+        headers=_headers(ids, attempt=attempt),
+        json={"status": "review", "assigned_agent_id": str(ids["caller_id"])},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "review"
+    assert body["assigned_agent_id"] == str(ids["caller_id"])
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        assert task.status == "review"
+        assert task.assigned_agent_id == ids["caller_id"]
+        # Dispatch cycle reset from the reassignment (dispatched_at, same as
+        # the reassign-only test above). ack_at is NOT asserted None here:
+        # the retroactive-ACK branch for status=review re-sets it right
+        # after, independent of the reassignment — asserting it would test
+        # that unrelated branch, not this fix.
+        assert task.dispatched_at is None
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_lead_reassign_ordering_sees_fresh_assignee_not_stale_copy(client, monkeypatch):
+    """Counter-proof for W3: `lock_task()` must run BEFORE the reassignment
+    block reads `_old_assigned = task.assigned_agent_id` (agent_task_status.py
+    :1721) — not because of `populate_existing` losing in-memory writes (it
+    doesn't, see the comment above that call), but because `_old_assigned`
+    must reflect the CURRENT DB row, not whatever this request's `task`
+    object still held from its earlier ownership-check load.
+
+    Simulates the concurrent writer Rex's review names (DB=B, memory=A,
+    PATCH targets B): a hook on `lock_task()` moves the row's
+    `assigned_agent_id` to `third_id` on a SEPARATE connection right before
+    the real fresh re-read — standing in for "another request already
+    reassigned + dispatched this task to `third_id` between this request's
+    early load and its lock_task() call". The PATCH also targets `third_id`
+    (the lead re-confirming an assignment that, unknown to it, already
+    happened concurrently).
+
+    Correct order (lock_task before the reassignment block): `_old_assigned`
+    is read off the freshly-locked task, so it already equals `third_id` ==
+    the PATCH target -> no real change -> the dispatch-cycle fields
+    (`dispatched_at`) are left untouched, not reset.
+
+    SABOTAGE-PROBE: moving the reassignment block to run BEFORE
+    `lock_task()` makes `_old_assigned` read the STALE pre-concurrent-write
+    value (`worker_id`) instead — `worker_id != third_id` -> the block
+    wrongly takes the "changed" branch and resets `dispatched_at`/`ack_at`,
+    killing the dispatch that (per the DB) already went to `third_id`. This
+    test's assertion on `dispatched_at` is what catches that regression —
+    see the PR comment for the sabotage-probe run confirming it (same
+    pattern as this file's sibling assertions and as
+    `test_lock_and_set_sees_fresh_status_not_stale_identity_map` in
+    test_task_status_postgres.py, which pins the identical
+    `lock_task`/`populate_existing` primitive for the `status` field).
+    Postgres lane only (`@pytest.mark.postgres`): the concurrent write
+    needs NullPool's genuinely separate connection — see conftest.py's
+    "Test engine" section on why the SQLite lane's shared connection makes
+    identity-map traps like this look harmless.
+    """
+    from app.models.agent import Agent
+    import app.services.task_state as task_state_module
+
+    ids = await _setup(lead=True)
+    third_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Agent(
+            id=third_id, name="Third", board_id=ids["board_id"],
+            is_board_lead=False, scopes=["tasks:read", "tasks:write"],
+        ))
+        await s.commit()
+    attempt = (await _task(ids)).dispatch_attempt_id
+
+    original_lock_task = task_state_module.lock_task
+
+    async def _lock_task_after_concurrent_reassign(session, task_id):
+        # Separate connection/transaction — a genuinely different writer,
+        # not this request's own session (mirrors test_task_status_postgres.py's
+        # concurrent-writer pattern for the analogous `status` staleness trap).
+        async with test_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE tasks SET assigned_agent_id = :aid WHERE id = :id"),
+                {"aid": str(third_id), "id": str(task_id)},
+            )
+        return await original_lock_task(session, task_id)
+
+    monkeypatch.setattr(task_state_module, "lock_task", _lock_task_after_concurrent_reassign)
+
+    resp = await client.patch(
+        f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}",
+        headers=_headers(ids, attempt=attempt),
+        json={"status": "blocked", "assigned_agent_id": str(third_id),
+              "blocker_type": "other", "blocker_question": "ordering probe"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["assigned_agent_id"] == str(third_id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        assert task.assigned_agent_id == third_id
+        # The proof: target already matched the FRESH DB value, so this must
+        # be treated as a no-op reassignment — dispatched_at survives.
+        # Reversing lock_task()/reassignment order reads the stale
+        # pre-concurrent-write assignee instead, wrongly takes the
+        # "changed" branch, and resets this to None (see docstring above).
+        assert task.dispatched_at is not None
 
 
 @pytest.mark.asyncio

@@ -86,6 +86,7 @@ from app.models.chat import ChatMessage
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.services.thread_scope import thread_agent_may_write_to
 from app.utils import utcnow
 
@@ -992,7 +993,7 @@ async def agent_help_request(
     session.add(subtask)
 
     # 5. Absender blockieren
-    current_task.status = "blocked"
+    current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
     current_task.blocked_by_task_id = subtask.id
     session.add(current_task)
 
@@ -1196,7 +1197,7 @@ async def agent_delegate_task(
     await session.flush()
 
     if with_callback and current_task is not None:
-        current_task.status = "blocked"
+        current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
         current_task.blocked_by_task_id = subtask.id
         current_task.callback_agent_id = agent.id
         session.add(current_task)
@@ -1319,7 +1320,7 @@ async def agent_clarification(
         session, current_task.id, current_task.status, "blocked",
         changed_by="agent", agent_id=agent.id, reason="clarification_question",
     )
-    current_task.status = "blocked"
+    current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
     session.add(current_task)
 
     # 5. Lead-FYI (G1): Der Lead darf antworten, wenn er die Antwort kennt —
@@ -1493,7 +1494,7 @@ async def agent_ask(
             session, current_task.id, current_task.status, TaskStatus.WAITING,
             changed_by="agent", agent_id=agent.id, reason="ask_blocking",
         )
-        current_task.status = TaskStatus.WAITING
+        current_task, _ = await lock_and_set(session, current_task.id, TaskStatus.WAITING, actor="agent")
         session.add(current_task)
         await session.commit()
         await session.refresh(current_task)

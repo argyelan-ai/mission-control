@@ -44,6 +44,7 @@ from app.models.approval import Approval
 from app.models.board import Board, Project
 from app.models.task import Task, TaskComment, TaskDependency
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.services.work_context import (
     enforce_board_rules_agent as _enforce_board_rules_agent,
     VALID_BLOCKER_TYPES,
@@ -740,7 +741,24 @@ async def get_next_task(
             continue
 
         # Task aktivieren
-        task.status = "in_progress"
+        # M6 (PR #478 review): a lost lock_and_set() race here means another
+        # poller grabbed this exact candidate between our SELECT and the
+        # locked re-read — precisely the race this endpoint exists to
+        # arbitrate. Before this fix a 409 aborted the whole candidate loop
+        # (and the request), leaving this agent with no task even though
+        # other candidates were still available; catch it and try the next
+        # one instead, same as the watchdog sites already do.
+        try:
+            task, _ = await lock_and_set(session, task.id, "in_progress", actor=agent.name)
+        except HTTPException as e:
+            if e.status_code == 409:
+                logger.info(
+                    "get_next_task: '%s' lost the lock_and_set() race for "
+                    "task '%s' — trying next candidate",
+                    agent.name, task.title[:60],
+                )
+                continue
+            raise
         # F2 fix (Plan 26-03): first-set-wins on started_at — preserves
         # original "work began" timestamp on re-opens. Pull-dispatch normally
         # picks fresh inbox tasks (started_at=NULL), but re-queued tasks may
@@ -1500,7 +1518,7 @@ async def agent_create_task(
         parent = await session.get(Task, payload.parent_task_id)
         if (parent and parent.status == "inbox"
                 and parent.assigned_agent_id == agent.id):
-            parent.status = "in_progress"
+            parent, _ = await lock_and_set(session, parent.id, "in_progress", actor=agent.name)
             # F2 fix (Plan 26-03): first-set-wins on started_at.
             if parent.started_at is None:
                 parent.started_at = utcnow()
@@ -1649,8 +1667,41 @@ async def agent_update_task(
                 detail="Agent darf nur eigene Tasks aendern",
             )
 
-    old_status = task.status
     updates = payload.model_dump(exclude_none=True)
+
+    # Re-fetch under lock_task() before reading old_status / validating: task
+    # was loaded above only for the ownership/run-control/dispatch-attempt
+    # guards, and a concurrent writer (e.g. the watchdog, another PATCH) may
+    # have committed a status change since. Without this, old_status and
+    # _enforce_board_rules_agent() below validate against a stale
+    # identity-map copy (PR #478 review, B1/B2) — same bug, this endpoint's
+    # write path (the one behind `mc ack`/`mc review`/`mc done`/`mc finish`).
+    # Does not cover the whole request: see task_state.py's module docstring
+    # for the intermediate-commit caveat (blocker-approval resolution,
+    # report-back auto-draft, and — further down in this function — the
+    # reassignment block's own commit via clear_dispatch_attempt_id(), which
+    # releases Postgres's FOR UPDATE at COMMIT just like the others).
+    #
+    # Must run BEFORE the reassignment block below: `_old_assigned` there
+    # (:1721) reads `task.assigned_agent_id` off this same object, and that
+    # read drives the "did the assignee actually change?" branch. Read from
+    # the pre-lock identity-map copy instead of the freshly-locked row, it
+    # can be stale because the DB row has simply moved since `task` was
+    # loaded:
+    #   DB=B, this object still says A, PATCH targets B: B != A (stale) ->
+    #     full dispatch-cycle reset applied to a task already delivered to
+    #     B — kills that running dispatch
+    #   DB=B, this object still says A, PATCH targets A: A == A (stale) ->
+    #     treated as a no-op, updates.pop()s the field -> silent 200 with no
+    #     effect, the bug class #482 closed
+    if "status" in updates:
+        from app.services.task_state import lock_task
+        locked_task = await lock_task(session, task_id)
+        if locked_task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = locked_task
+
+    old_status = task.status
 
     # ── Reassignment (assigned_agent_id) — permission + application ──
     # Bug 2026-09-09: the field used to be silently discarded by the schema

@@ -551,8 +551,9 @@ async def test_operator_can_close_failed_task_as_done(client, fake_redis):
 @pytest.mark.asyncio
 async def test_operator_failed_to_review_still_blocked(client, fake_redis):
     """The operator widening is scoped to done/aborted — failed→review stays
-    invalid (400) so the cleanup path can't smuggle a failed task back into
-    the review lane."""
+    invalid: 409 with a structured detail (PR #478 review, B2 Nebenbefund —
+    was a bare 400 before), so the cleanup path can't smuggle a failed task
+    back into the review lane."""
     from fastapi import HTTPException
     from app.routers.tasks import _enforce_board_rules
     from app.models.board import Board
@@ -569,7 +570,9 @@ async def test_operator_failed_to_review_still_blocked(client, fake_redis):
 
         with pytest.raises(HTTPException) as exc:
             await _enforce_board_rules(s, board_id, task, "review", agent=None)
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
+        assert exc.value.detail["current_status"] == "failed"
+        assert exc.value.detail["expected"] == "review"
 
 
 @pytest.mark.asyncio

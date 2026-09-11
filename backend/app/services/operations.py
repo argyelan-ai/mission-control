@@ -24,6 +24,7 @@ from app.redis_client import RedisKeys, get_redis
 from app.config import settings
 from app.services.activity import emit_event
 from app.services.task_lifecycle import clear_spawn_tracking, record_task_event
+from app.services.task_state import lock_and_set
 from app.utils import ensure_aware, utcnow
 
 logger = logging.getLogger(__name__)
@@ -218,9 +219,8 @@ async def stop_task_run(
     # TODO Phase 30: drop spawn_session_key column.
 
     # 2. Update task
-    old_status = task.status
+    task, old_status = await lock_and_set(session, task.id, "blocked", actor="user")
     task.run_control = "stopped"
-    task.status = "blocked"
     task.dispatched_at = None
     task.ack_at = None
     # Invalidates all pending agent updates (audit trail).

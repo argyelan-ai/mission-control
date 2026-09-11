@@ -19,6 +19,7 @@ from app.models.task import Task
 from app.services.activity import emit_event
 from app.services import thread_scope
 from app.services.sse import make_sse_response
+from app.services.task_state import lock_and_set
 from app.utils import utcnow
 from app.services.template_renderer import render_all_agent_files, render_agent_file, build_agent_context
 
@@ -3636,8 +3637,7 @@ async def agent_recover_task(
             "last_recovery_at": recent_recovery.created_at.isoformat(),
         }
 
-    old_status = active.status
-    active.status = "inbox"
+    active, old_status = await lock_and_set(session, active.id, "inbox", actor="agent")
     active.dispatched_at = None
     active.ack_at = None
     active.started_at = None
