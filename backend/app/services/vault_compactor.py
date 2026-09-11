@@ -57,7 +57,15 @@ class VaultCompactor:
     async def stop(self) -> None:
         if self._observer:
             self._observer.stop()
-            self._observer.join(timeout=5)
+            # W4 (11.09.2026, Karte 70d6b417): dieselbe Bug-Klasse wie
+            # VaultWatcher.stop() (siehe dort) — Thread.join() ist ein
+            # blockierender Plain-Call, unwrapped haelt er den Event-Loop
+            # bis zu 5s an und verzoegert damit jede SIGTERM-Verarbeitung
+            # waehrend des Shutdowns. Beim urspruenglichen Fix (PR #509)
+            # uebersehen — dieselbe .stop()-Signatur in vault_watcher.py
+            # wurde gefixt, diese hier (identischer Code, anderes Modul)
+            # nicht. Per `asyncio.to_thread` entschaerft statt neu erfunden.
+            await asyncio.to_thread(self._observer.join, 5)
             logger.info("VaultCompactor stopped")
 
     async def compact(self) -> dict[str, int]:

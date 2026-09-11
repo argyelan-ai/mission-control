@@ -80,6 +80,42 @@ async def run() -> None:
         )
         return
 
+    # W4 (11.09.2026, Karte 70d6b417 — Rex-Review PR #509, Blocker B1): die
+    # Handler-Registrierung stand vorher NACH start_background_services()/
+    # start_vault_services(). Ein SIGTERM, das waehrend dieser beiden (u.a.
+    # dem Vault-Reindex) eintrifft, traf damit auf SIG_DFL — keinen
+    # Python-Handler.
+    #
+    # Das ist hier kein harmloses "dann stirbt der Prozess halt sofort statt
+    # spaeter" (was fuer einen gewoehnlichen Prozess so waere — belegt per
+    # Sub-Prozess-Repro im PR-Text: SIG_DFL killt normalerweise instant,
+    # rc=-15). mc-worker laeuft aber als PID 1 seines Containers
+    # (docker-entrypoint.sh: `exec "$@"`, kein tini/dumb-init davor, kein
+    # `init: true` in docker-compose.yml). Fuer PID 1 einer PID-Namespace
+    # gilt eine kernelseitige Sonderregel (siehe `man 7 pid_namespaces`):
+    # ein Signal OHNE registrierten Handler wird NICHT per Default-Aktion
+    # verarbeitet, sondern schlicht VERWORFEN (Ausnahmen: SIGKILL/SIGSTOP).
+    # Ein SIGTERM waehrend des Boots trifft also nicht auf "Prozess stirbt
+    # sofort", sondern auf "Signal verschwindet spurlos" — `docker stop`
+    # wartet dadurch die vollen `stop_grace_period` (30s) und eskaliert erst
+    # dann zu SIGKILL. Exakt der gemessene Befund (Rex-Review, Blocker B1).
+    #
+    # Handler jetzt VOR jedem Boot-Schritt registrieren: ein SIGTERM
+    # waehrend prepare_process()/start_background_services()/
+    # start_vault_services() wird gefangen (`stop` wird gesetzt) und der
+    # Worker faehrt, sobald der laufende (nicht abbrechbare) Boot-Schritt
+    # fertig ist, sofort den geordneten Shutdown-Pfad statt das Signal
+    # verpuffen zu lassen. Die Schritte selbst bleiben nicht-kooperativ
+    # abbrechbar (unveraendert), aber es gibt jetzt ueberhaupt einen Pfad,
+    # der den Scheduler-Lock/Heartbeat sauber aufraeumt, statt sich auf die
+    # 15s-Heartbeat-TTL aus #506 zu verlassen.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    registered: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+        registered.append(sig)
+
     await prepare_process()
 
     logger.info("Worker startet Hintergrund-Dienste (kein HTTP-Router, kein Port offen)")
@@ -105,17 +141,12 @@ async def run() -> None:
 
     heartbeat_task = asyncio.create_task(_heartbeat_loop(), name="worker_heartbeat")
 
-    # CPython wandelt SIGTERM NICHT in eine Exception um — die Default-
-    # Disposition beendet den Prozess sofort, ohne dass ein `finally` laeuft.
-    # `docker stop` schickt SIGTERM (nicht SIGINT). Eigene Handler auf beide
-    # Signale registrieren, statt auf asyncio.run()s KeyboardInterrupt-Weg
-    # (der nur fuer SIGINT funktioniert) zu vertrauen.
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    registered: list[signal.Signals] = []
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-        registered.append(sig)
+    # Handler sind bereits registriert (siehe oben, vor prepare_process()) —
+    # CPython wandelt SIGTERM NICHT in eine Exception um, die Default-
+    # Disposition beendet den Prozess sofort, ohne dass ein `finally` laeuft;
+    # `docker stop` schickt SIGTERM (nicht SIGINT). `stop` kann an dieser
+    # Stelle schon gesetzt sein, wenn das Signal waehrend eines der obigen
+    # Boot-Schritte ankam — `wait()` kehrt dann sofort zurueck.
     try:
         await stop.wait()
     finally:

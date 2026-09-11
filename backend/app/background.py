@@ -84,6 +84,26 @@ install_log_redaction()
 
 logger = logging.getLogger("mc.startup")
 
+
+async def _timed_stop(name: str, coro) -> None:
+    """Shared shutdown-step timer for stop_background_services() and
+    stop_vault_services() (W4, 11.09.2026 — Karte 70d6b417, Rex-Review PR
+    #509 DoD: "schuldiger Shutdown-Schritt namentlich aus dem Log"). Vorher
+    lebte diese Funktion nur lokal in stop_background_services() (Incident
+    Deploy #504) — stop_vault_services() hatte GAR KEIN Timing, obwohl
+    genau dort (VaultCompactor/-Watcher/-Index) der im PR-Text gemessene
+    30s-Shutdown-Haenger sass. Ohne diese Zeile war "welcher der ~21
+    sequenziellen .stop()-Schritte frisst die Zeit" nur zu erraten, nie zu
+    belegen.
+    """
+    started = time.monotonic()
+    try:
+        await coro
+    finally:
+        elapsed = time.monotonic() - started
+        log = logger.warning if elapsed > 1.0 else logger.info
+        log("Shutdown: %s stopped in %.2fs", name, elapsed)
+
 # Service singletons — extracted from app.main so start/stop live next to
 # their wiring. app.main re-imports the same singletons (module identity is
 # shared: both modules import from app.services.*, never from each other).
@@ -200,25 +220,16 @@ async def stop_background_services(app: Any) -> None:
     .stop() implementation in this codebase no-ops on a None/absent task
     (verified across all 17 services below during the ADR-E audit).
 
-    Every step is timed and logged (W4, 11.09.2026 — incident: Deploy #504,
-    the old worker's SchedulerService.stop() never ran because the process
-    was SIGKILLed before this sequential chain reached it; the scheduler's
-    Redis lock then only healed via its 120s TTL). Without per-service
-    timing there was no way to tell WHICH of the 17 services ate the
-    shutdown grace period — this logs each one so the next incident has
-    that answer immediately instead of requiring a repro.
+    Every step is timed and logged via the module-level ``_timed_stop()``
+    (W4, 11.09.2026 — incident: Deploy #504, the old worker's
+    SchedulerService.stop() never ran because the process was SIGKILLed
+    before this sequential chain reached it; the scheduler's Redis lock
+    then only healed via its 120s TTL). Without per-service timing there
+    was no way to tell WHICH of the 17 services ate the shutdown grace
+    period — this logs each one so the next incident has that answer
+    immediately instead of requiring a repro.
     """
     import asyncio as _asyncio
-    import time as _time
-
-    async def _timed_stop(name: str, coro) -> None:
-        started = _time.monotonic()
-        try:
-            await coro
-        finally:
-            elapsed = _time.monotonic() - started
-            log = logger.warning if elapsed > 1.0 else logger.info
-            log("Shutdown: %s stopped in %.2fs", name, elapsed)
 
     _gh_monitor_task = getattr(app.state, "gh_monitor_task", None)
     if _gh_monitor_task is not None:
@@ -512,22 +523,27 @@ async def start_vault_services(app) -> dict:
         index_db = vault_path / ".mc_index.db"
         first_boot = not index_db.exists()
 
-        # W4 (11.09.2026 — Restposten aus #506): VaultIndex(...) und
-        # rebuild_from_vault() sind plain-sync (kein await, kein Yield-Punkt).
-        # Aufgerufen inline haetten sie den Event-Loop fuer ihre gesamte
-        # Laufzeit blockiert — und damit auch jedes SIGTERM, das waehrend
-        # eines laufenden Reindex ankommt: asyncio.add_signal_handler()
-        # liefert den Callback ueber den Loop selbst aus, und der Loop
-        # pollt nur zwischen await-Punkten. Ein `docker stop` waehrend des
-        # Reindex haengt dadurch bis zum Ende des Rebuilds (gemessen:
-        # volle 30s Stop-Timeout -> SIGKILL, siehe Repro in
-        # backend/tests/test_background_services_flag.py::
-        # test_vault_reindex_does_not_block_sigterm_handling). Beide Aufrufe
-        # laufen jetzt in einem Worker-Thread (asyncio.to_thread) — der Loop
-        # bleibt frei, SIGTERM wird sofort verarbeitet, egal wie lange der
-        # Rebuild noch braucht. VaultIndex ist dafuer bereits ausgelegt
-        # (check_same_thread=False + eigener threading.Lock, siehe
-        # vault_index.py) — kein Rewrite noetig.
+        # W4 (11.09.2026 — Restposten aus #506, Karte 70d6b417): VaultIndex(...)
+        # und rebuild_from_vault() sind plain-sync (kein await, kein
+        # Yield-Punkt). Inline aufgerufen blockieren sie den Event-Loop fuer
+        # ihre gesamte Laufzeit. Das allein war NICHT die volle Ursache des
+        # gemessenen 30s-Shutdown-Haengers (Rex-Review PR #509, Blocker B1):
+        # der Worker registriert seinen SIGTERM-Handler erst NACH diesem
+        # Aufruf (siehe backend/app/worker.py, run() — der Handler-Block
+        # steht dort inzwischen bewusst VOR start_vault_services()). Ohne
+        # Handler traf ein SIGTERM hier auf gar keinen Callback, den ein
+        # blockierter Loop haette verzoegern koennen — der eigentliche
+        # Mechanismus ist, dass mc-worker als PID 1 laeuft und ein Signal
+        # ohne Handler dort vom Kernel verworfen statt per Default-Aktion
+        # verarbeitet wird (Details im worker.py-Kommentar). `asyncio.to_thread`
+        # bleibt trotzdem richtig und noetig: es ist die Voraussetzung dafuer,
+        # dass der jetzt FRUEH registrierte Handler waehrend eines laufenden
+        # Reindex ueberhaupt feuern kann, statt selbst vom blockierten Loop
+        # verzoegert zu werden (siehe test_vault_reindex_does_not_block_sigterm_handling
+        # + test_worker_run_survives_sigterm_during_vault_reindex in
+        # backend/tests/test_background_services_flag.py). VaultIndex ist
+        # dafuer bereits ausgelegt (check_same_thread=False + eigener
+        # threading.Lock, siehe vault_index.py) — kein Rewrite noetig.
         vault_index = await asyncio.to_thread(VaultIndex, db_path=index_db, vault_path=vault_path)
         if first_boot or settings.vault_index_rebuild_on_boot:
             _rebuild_started = time.monotonic()
@@ -638,26 +654,37 @@ async def stop_vault_services(runtime: dict) -> None:
     then compactor (drain final compaction into the still-running watcher
     pipeline), then the watcher itself (drains observer thread), then close
     the SQLite index connection.
+
+    Every step timed via the shared ``_timed_stop()`` (W4, 11.09.2026 —
+    Karte 70d6b417, Rex-Review PR #509 DoD): vorher hatte diese Funktion
+    KEIN Timing, obwohl genau hier (VaultCompactor/-Watcher, beide mit
+    einem synchronen ``Thread.join()`` im Unterbau) der im PR-Text
+    gemessene Shutdown-Haenger sass — siehe
+    test_stop_vault_services_names_the_slow_step fuer den Beweis-Log-Lauf.
     """
     _lint_task = runtime.get("vault_lint_task")
     if _lint_task is not None:
-        _lint_task.cancel()
-        try:
-            await _lint_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        async def _cancel_lint() -> None:
+            _lint_task.cancel()
+            try:
+                await _lint_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        await _timed_stop("vault_lint_cron", _cancel_lint())
     try:
         if runtime.get("vault_compactor") is not None:
-            await runtime["vault_compactor"].stop()
+            await _timed_stop("vault_compactor", runtime["vault_compactor"].stop())
     except Exception as e:
         logger.warning("Vault compactor stop failed (non-fatal): %s", e)
     try:
         if runtime.get("vault_watcher") is not None:
-            await runtime["vault_watcher"].stop()
+            await _timed_stop("vault_watcher", runtime["vault_watcher"].stop())
     except Exception as e:
         logger.warning("Vault watcher stop failed (non-fatal): %s", e)
     try:
         if runtime.get("vault_index") is not None:
-            runtime["vault_index"].close()
+            async def _close_index() -> None:
+                runtime["vault_index"].close()
+            await _timed_stop("vault_index", _close_index())
     except Exception as e:
         logger.warning("Vault index close failed (non-fatal): %s", e)
