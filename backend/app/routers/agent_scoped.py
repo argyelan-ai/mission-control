@@ -1080,6 +1080,50 @@ async def agent_delegate_task(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="--parent Task gehoert nicht zu diesem Board.",
             )
+        # B1 (Rex-Review PR #510, 11.09.2026): der Root-Zweig prueft
+        # `agent.board_id != board_id` explizit (Zeile weiter unten) — dieser
+        # Zweig pruefte bisher nur den PARENT, nie den AGENTEN. Ein Agent von
+        # Board A konnte so per --parent auf eine Karte in Board B delegieren.
+        # Gleiche Pruefung wie der Root-Zweig, hier vorgezogen.
+        if agent.board_id != board_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Agent gehoert nicht zu diesem Board.",
+            )
+        # W1 (Rex-Review): eine bereits geschlossene Karte als --parent zu
+        # setzen, haengt die neue Arbeit stillschweigend unter eine tote
+        # Karte auf, die nie wieder angeschaut wird. Ablehnen statt nur warnen.
+        if explicit_parent.status in ("done", "archived", "failed"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"--parent Task {explicit_parent.id} ist bereits "
+                    f"'{explicit_parent.status}' — die Arbeit wuerde unter einer "
+                    f"geschlossenen Karte haengen, die niemand mehr ansieht. "
+                    f"Waehle eine offene Karte, oder lass --parent weg fuer eine "
+                    f"Root-Delegation."
+                ),
+            )
+        # B3 (Rex-Review): der Root-Zweig verlangt `agent.is_board_lead`, wenn
+        # keine eigene aktive Karte vorliegt (Ownership-Gate) — dieser Zweig
+        # umging das komplett: JEDER Agent konnte --parent auf JEDE fremde
+        # Karte setzen, unabhaengig von eigener Arbeit oder Rolle. Boss'
+        # Entscheid (11.09.): --parent WAEHLT den Parent explizit, umgeht aber
+        # nicht die Besitzverhaeltnisse. Board Leads duerfen frei orchestrieren
+        # (wie beim Root-Pfad); alle anderen nur auf eine Karte, die ihnen
+        # tatsaechlich zugewiesen ist (z.B. weil current_task_id stale/leer
+        # ist und --parent die eigene Karte bewusst neu benennt).
+        if not agent.is_board_lead and explicit_parent.assigned_agent_id != agent.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"--parent Task {explicit_parent.id} ist nicht deine aktive "
+                    f"Arbeit (assigned_agent_id stimmt nicht mit dir ueberein) — "
+                    f"Delegation nur aus aktiver Arbeit heraus moeglich. Setze "
+                    f"--parent auf eine dir zugewiesene Karte, oder als Board "
+                    f"Lead auf eine beliebige Karte."
+                ),
+            )
     elif current_task_id:
         current_task = await session.get(Task, current_task_id)
         if not current_task or current_task.status != "in_progress":
@@ -1269,10 +1313,18 @@ async def agent_delegate_task(
         current_task.callback_agent_id = agent.id
         session.add(current_task)
 
-    # Progress comment with delegation context — on the parent, when there is
-    # one (own active task or an explicit --parent). A truly rootless
-    # delegation logs via the activity event only.
-    if parent_for_subtask is not None:
+    # Progress comment with delegation context — on the parent, but ONLY when
+    # ownership is confirmed (own active task, or an explicit --parent that
+    # is actually assigned to this agent). B3-adjacent finding (Rex-Review):
+    # a Board Lead using --parent on a card OWNED BY SOMEONE ELSE is allowed
+    # to delegate (lead privilege), but writing an audit comment into that
+    # foreign card is a side effect nobody asked for — the card doesn't
+    # belong to this agent, confirmed or not. A truly rootless delegation
+    # (or an unconfirmed explicit --parent) logs via the activity event only.
+    write_parent_comment = current_task is not None or (
+        explicit_parent is not None and explicit_parent.assigned_agent_id == agent.id
+    )
+    if write_parent_comment and parent_for_subtask is not None:
         comment = TaskComment(
             id=uuid.uuid4(),
             task_id=parent_for_subtask.id,

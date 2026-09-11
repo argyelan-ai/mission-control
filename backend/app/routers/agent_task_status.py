@@ -156,6 +156,20 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
             candidate is not None
             and candidate.status == "blocked"
             and candidate.blocked_by_task_id is None
+            # B2 (Rex-Review PR #510, 11.09.2026): this fallback was designed
+            # for ONE scenario — the delegating agent's OWN active task
+            # (agent.current_task_id) forgot to set blocked_by_task_id, so we
+            # rediscover it via parent_task_id. In that scenario
+            # candidate.assigned_agent_id == the delegator == callback_agent_id
+            # by construction. `--parent` (W5-F) broke that invariant: it can
+            # set parent_task_id + callback_agent_id on a FOREIGN card nobody
+            # ever confirmed the delegator owns — this fallback then "resumed"
+            # a blocked card that belongs to someone else entirely, contrary
+            # to the PR's own claim that an explicit --parent is "never
+            # auto-blocked/resumed". Requiring the candidate to actually be
+            # assigned to the callback agent restores the original invariant
+            # and excludes exactly the --parent-on-a-foreign-card case.
+            and candidate.assigned_agent_id == subtask.callback_agent_id
         ):
             from app.models.approval import Approval
             pending_approval = (
