@@ -6,7 +6,7 @@
  * for agents the caller reports as having no transcript, selection state,
  * and the rail ↔ sheet variant split (sheet collapses behind a toggle).
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionSidebar } from "./SessionSidebar";
@@ -526,15 +526,37 @@ function mkGroup(overrides: Partial<import("@/lib/groupTypes").GroupSummary> = {
   };
 }
 
+// jsdom hier hat kein brauchbares localStorage — In-Memory-Shim, pro Test frisch
+// (dasselbe Muster wie DiffPanel.test.tsx).
+let store: Record<string, string>;
+beforeEach(() => {
+  store = {};
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+      clear: () => { store = {}; },
+      length: 0,
+      key: () => null,
+    },
+  });
+});
+
 describe("SessionSidebar — Gruppen-Sektion", () => {
   it("renders no group section at all when the caller passes no group props", () => {
     render(
       <SessionSidebar agents={[mkAgent()]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} />
     );
     expect(screen.queryByText("Groups")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
-  it("puts the group section above the agent list", () => {
+  // Marks Wunsch (11.09.): Gruppen standardmässig ZU. Statt Sektion über den
+  // Agenten ein Umschalter oben — Agents ist der Ausgangszustand, die
+  // Gruppenzeilen existieren erst, wenn man den Groups-Tab wählt.
+  it("shows agents by default and hides group rows until the Groups tab is chosen", async () => {
     render(
       <SessionSidebar
         agents={[mkAgent({ name: "Agent One" })]}
@@ -544,15 +566,61 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
         onSelect={() => {}}
         groups={[mkGroup()]}
         onSelectGroup={() => {}}
+        onCreateGroup={() => {}}
       />
     );
-    const listbox = screen.getByRole("listbox", { name: "Sessions" });
-    const text = listbox.textContent ?? "";
-    expect(text.indexOf("Groups")).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf("Groups")).toBeLessThan(text.indexOf("Agent One"));
+    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Groups" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("option", { name: /Agent One/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Spark-Runde/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New group" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
+    expect(screen.getByRole("tab", { name: "Groups" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: /Spark-Runde/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New group" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Agent One/ })).not.toBeInTheDocument();
   });
 
-  it("sorts a waiting group above a running one", () => {
+  it("remembers the chosen tab in localStorage and restores it", async () => {
+    const { unmount } = render(
+      <SessionSidebar agents={[mkAgent()]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} groups={[mkGroup()]} onSelectGroup={() => {}} />
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
+    expect(store["mc.chat.sidebar-mode"]).toBe("groups");
+    unmount();
+
+    render(
+      <SessionSidebar agents={[mkAgent()]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} groups={[mkGroup()]} onSelectGroup={() => {}} />
+    );
+    expect(screen.getByRole("tab", { name: "Groups" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: /Spark-Runde/ })).toBeInTheDocument();
+  });
+
+  it("jumps to the Groups tab when a group is selected (deep link / restore)", () => {
+    render(
+      <SessionSidebar agents={[mkAgent()]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} groups={[mkGroup()]} selectedGroupId="grp-1" onSelectGroup={() => {}} />
+    );
+    expect(screen.getByRole("tab", { name: "Groups" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: /Spark-Runde/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("counts waiting groups on the Groups tab so they stay noticeable while hidden", () => {
+    render(
+      <SessionSidebar
+        agents={[mkAgent()]}
+        tasks={[]}
+        projects={[]}
+        selectedId={null}
+        onSelect={() => {}}
+        groups={[mkGroup({ id: "w1", status: "waiting_gate" }), mkGroup({ id: "r1", status: "running" })]}
+        onSelectGroup={() => {}}
+      />
+    );
+    expect(screen.getByRole("tab", { name: "Groups — 1 waiting" })).toBeInTheDocument();
+  });
+
+  it("sorts a waiting group above a running one", async () => {
     render(
       <SessionSidebar
         agents={[]}
@@ -567,6 +635,7 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
         onSelectGroup={() => {}}
       />
     );
+    await userEvent.click(screen.getByRole("tab", { name: /Groups/ }));
     const text = screen.getByRole("listbox", { name: "Sessions" }).textContent ?? "";
     expect(text.indexOf("Wartet")).toBeLessThan(text.indexOf("Läuft"));
   });
@@ -586,6 +655,7 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
         onCreateGroup={onCreateGroup}
       />
     );
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
     await userEvent.click(screen.getByRole("option", { name: /Spark-Runde/ }));
     expect(onSelectGroup).toHaveBeenCalledWith("grp-1");
 
@@ -593,7 +663,7 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
     expect(onCreateGroup).toHaveBeenCalled();
   });
 
-  it("explains the empty state instead of showing a bare header", () => {
+  it("explains the empty state instead of showing a bare header", async () => {
     render(
       <SessionSidebar
         agents={[]}
@@ -605,6 +675,7 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
         onSelectGroup={() => {}}
       />
     );
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
     expect(screen.getByText("No groups yet — several agents, one goal.")).toBeInTheDocument();
   });
 
@@ -647,7 +718,7 @@ describe("SessionSidebar — Archiv-Sektion", () => {
     expect(screen.queryByTestId("archived-groups-section")).not.toBeInTheDocument();
   });
 
-  it("puts the archive section below the agent list", () => {
+  it("lives on the Groups tab, below the active groups — never on the Agents tab", async () => {
     render(
       <SessionSidebar
         agents={[mkAgent({ name: "Agent One" })]}
@@ -661,9 +732,10 @@ describe("SessionSidebar — Archiv-Sektion", () => {
         onUnarchiveGroup={() => {}}
       />
     );
-    const listbox = screen.getByRole("listbox", { name: "Sessions" });
-    const text = listbox.textContent ?? "";
-    expect(text.indexOf("Archive")).toBeGreaterThan(text.indexOf("Agent One"));
+    expect(screen.queryByTestId("archived-groups-section")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
+    const text = screen.getByRole("listbox", { name: "Sessions" }).textContent ?? "";
+    expect(text.indexOf("Archive")).toBeGreaterThan(text.indexOf("Spark-Runde"));
   });
 
   it("forwards open and restore from the archive section", async () => {
@@ -682,6 +754,7 @@ describe("SessionSidebar — Archiv-Sektion", () => {
         onUnarchiveGroup={onUnarchiveGroup}
       />
     );
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
     await userEvent.click(screen.getByRole("button", { name: /Archive/ }));
     await userEvent.click(screen.getByText("Alte Runde"));
     expect(onSelectGroup).toHaveBeenCalledWith("grp-alt");
@@ -708,7 +781,7 @@ describe("SessionSidebar — Archiv-Sektion", () => {
     expect(screen.queryByTestId("archived-groups-section")).not.toBeInTheDocument();
   });
 
-  it("shows the archive section on the mobile list screen too", () => {
+  it("shows the archive section on the mobile list screen too", async () => {
     render(
       <SessionSidebar
         agents={[]}
@@ -723,6 +796,7 @@ describe("SessionSidebar — Archiv-Sektion", () => {
         variant="list"
       />
     );
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
     expect(screen.getByRole("button", { name: /Archive/ }).className).toContain("min-h-[44px]");
   });
 });

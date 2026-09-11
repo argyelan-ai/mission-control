@@ -16,7 +16,7 @@
  * Defaults to "everyone has a transcript" so the sidebar renders sensibly
  * standalone.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -27,6 +27,22 @@ import { ArchivedGroupsSection } from "@/components/groupchat/ArchivedGroupsSect
 import { AvatarStack } from "@/components/groupchat/AvatarStack";
 import { sortGroups, type GroupSummary } from "@/lib/groupTypes";
 import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
+
+// Umschalter Agents · Groups (Marks Wunsch 11.09.: Gruppen standardmässig
+// zu). Der gewählte Tab überlebt den Reload; eine gewählte Gruppe zieht den
+// Tab trotzdem immer auf „Groups", sonst sähe man seine eigene Auswahl nicht.
+type SidebarMode = "agents" | "groups";
+const SIDEBAR_MODE_KEY = "mc.chat.sidebar-mode";
+
+function loadSidebarMode(): SidebarMode {
+  try {
+    return localStorage.getItem(SIDEBAR_MODE_KEY) === "groups" ? "groups" : "agents";
+  } catch { return "agents"; }
+}
+
+function saveSidebarMode(mode: SidebarMode) {
+  try { localStorage.setItem(SIDEBAR_MODE_KEY, mode); } catch {}
+}
 
 const ADHOC_KEY = "__adhoc__";
 const ADHOC_LABEL = "Ad-hoc";
@@ -140,6 +156,21 @@ export function SessionSidebar({
   const selectedAgent = agents.find((a) => a.id === selectedId) ?? null;
   const showGroupSection = !!onSelectGroup;
   const sortedChatGroups = chatGroups ? sortGroups(chatGroups) : [];
+  const waitingGroups = sortedChatGroups.filter((g) => g.status === "waiting_gate").length;
+
+  // Tab-Zustand: Start immer „agents" (SSR-sicher), gespeicherter Wert erst
+  // nach dem Mount. Reihenfolge der Effekte ist Absicht — die Gruppen-Auswahl
+  // kommt zuletzt und gewinnt damit gegen Speicher UND Agenten-Auswahl.
+  const [mode, setMode] = useState<SidebarMode>("agents");
+  useEffect(() => { setMode(loadSidebarMode()); }, []);
+  useEffect(() => { if (selectedId) setMode("agents"); }, [selectedId]);
+  useEffect(() => { if (selectedGroupId) setMode("groups"); }, [selectedGroupId]);
+  const showGroups = showGroupSection && mode === "groups";
+
+  function chooseMode(next: SidebarMode) {
+    setMode(next);
+    saveSidebarMode(next);
+  }
 
   function handleSelect(agentId: string) {
     onSelect(agentId);
@@ -151,28 +182,68 @@ export function SessionSidebar({
   // has structure. The desktop rail keeps its dense rhythm.
   const stack = variant === "list";
 
-  // Gruppen-Sektion: eigener Kopf mit „+", darunter die Räume. Wartende
-  // Gruppen sortiert `sortGroups` nach oben — sie sind der Grund, warum diese
-  // Sektion überhaupt oben steht.
-  const groupSection = showGroupSection ? (
-    <div>
-      <div className={`flex items-center gap-2 pb-1.5 ${stack ? "px-4" : "px-3"}`}>
-        <span className="label-sys truncate" style={{ color: C.textMuted }}>
-          {t("sectionTitle")}
-        </span>
-        {onCreateGroup && (
+  // Gruppen-Liste (nur auf dem Groups-Tab): „Neue Gruppe" als erste Zeile,
+  // darunter die Räume. Wartende Gruppen sortiert `sortGroups` nach oben.
+  // Umschalter: zwei Tabs, Agents links (Standard), Groups rechts. Wartende
+  // Gruppen zählen auf dem Tab mit — so bleibt „eine Gruppe braucht dich"
+  // sichtbar, obwohl die Zeilen selbst zugeklappt sind.
+  const groupsTabLabel = waitingGroups > 0 ? t("tabGroupsWaiting", { count: waitingGroups }) : t("tabGroups");
+  const modeSwitch = showGroupSection ? (
+    <div
+      role="tablist"
+      aria-label={t("tabListLabel")}
+      className={`flex items-center gap-1 pb-1 ${stack ? "px-4" : "px-3"}`}
+    >
+      {([
+        { key: "agents" as const, label: t("tabAgents"), aria: t("tabAgents"), badge: 0 },
+        { key: "groups" as const, label: t("tabGroups"), aria: groupsTabLabel, badge: waitingGroups },
+      ]).map((tab) => {
+        const active = mode === tab.key;
+        return (
           <button
+            key={tab.key}
             type="button"
-            onClick={onCreateGroup}
-            aria-label={t("newGroup")}
-            title={t("newGroup")}
-            className="ml-auto flex items-center justify-center w-6 h-6 rounded-sm cursor-pointer transition-colors"
-            style={{ color: C.textMuted }}
+            role="tab"
+            aria-selected={active}
+            aria-label={tab.aria}
+            onClick={() => chooseMode(tab.key)}
+            className={`flex items-center gap-1.5 rounded-sm px-2 text-[12px] cursor-pointer transition-colors ${stack ? "min-h-[36px]" : "h-6"}`}
+            style={{
+              color: active ? C.textPrimary : C.textMuted,
+              background: active ? C.bgHover : "transparent",
+              border: `1px solid ${active ? C.border : "transparent"}`,
+            }}
           >
-            <Plus size={14} />
+            <span>{tab.label}</span>
+            {tab.badge > 0 && (
+              <span
+                aria-hidden="true"
+                className="min-w-[16px] h-4 px-1 rounded-full text-[10px] font-medium flex items-center justify-center"
+                style={{ background: C.accent, color: C.bgBase }}
+              >
+                {tab.badge}
+              </span>
+            )}
           </button>
-        )}
-      </div>
+        );
+      })}
+    </div>
+  ) : null;
+
+  const groupSection = showGroups ? (
+    <div>
+      {onCreateGroup && (
+        <button
+          type="button"
+          onClick={onCreateGroup}
+          aria-label={t("newGroup")}
+          className={`flex items-center gap-2 w-full text-left text-[12px] cursor-pointer transition-colors ${stack ? "px-4 min-h-[44px]" : "px-3 py-1.5"}`}
+          style={{ color: C.textMuted }}
+        >
+          <Plus size={14} className="shrink-0" aria-hidden="true" />
+          <span className="truncate">{t("newGroup")}</span>
+        </button>
+      )}
       {sortedChatGroups.length === 0 ? (
         <div
           className={`pb-1 text-[12px] ${stack ? "px-4" : "px-3"}`}
@@ -198,13 +269,14 @@ export function SessionSidebar({
 
   const list = (
     <div role="listbox" aria-label="Sessions" className="flex flex-col gap-3">
+      {modeSwitch}
       {groupSection}
-      {groups.length === 0 && (
+      {!showGroups && groups.length === 0 && (
         <div className="px-4 py-8 text-[13px]" style={{ color: C.textMuted }}>
           Keine Sessions aktiv.
         </div>
       )}
-      {groups.map((group) => (
+      {!showGroups && groups.map((group) => (
         <div key={group.key}>
           <div
             className={`label-sys pb-1.5 truncate ${stack ? "px-4" : "px-3"}`}
@@ -269,10 +341,11 @@ export function SessionSidebar({
           </div>
         </div>
       ))}
-      {/* Archiv zuunterst und zugeklappt: Weggeräumtes darf auffindbar sein,
-          aber nie mit dem aktiven Tagesgeschäft um Aufmerksamkeit ringen.
-          Ohne archivierte Gruppen rendert die Sektion selbst gar nichts. */}
-      {showGroupSection && onUnarchiveGroup && (
+      {/* Archiv zuunterst und zugeklappt, nur auf dem Groups-Tab: Weggeräumtes
+          darf auffindbar sein, aber nie mit dem aktiven Tagesgeschäft um
+          Aufmerksamkeit ringen. Ohne archivierte Gruppen rendert die Sektion
+          selbst gar nichts. */}
+      {showGroups && onUnarchiveGroup && (
         <ArchivedGroupsSection
           groups={archivedGroups ?? []}
           selectedGroupId={selectedGroupId}
