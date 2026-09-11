@@ -363,6 +363,12 @@ services:
         condition: service_started
     environment:
       ENABLE_BACKGROUND_SERVICES: "true"
+      # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
+      # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
+      # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen
+      # genau die Invariante, die der entrypoint-Kommentar behauptet
+      # ("genau ein Backend-Container").
+      MC_SKIP_MIGRATIONS: "1"
       # Identische Env wie backend (dieselbe settings-Factory, dieselben
       # Overrides) — jede Abweichung driftet API- und Worker-Sicht auseinander.
       # AUSNAHME CDP_BROWSER_URL (Rex-Review PR #500, Blocker B4): der einzige
@@ -461,12 +467,17 @@ services:
       - ./scripts/node-agent:/app/scripts/node-agent:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Kein HTTP-Port: Lifeness statt Port-Check (siehe mc-deploy SKILL.md).
+    # Kein HTTP-Port: Lifeness via Herzschlag-Datei (siehe mc-deploy SKILL.md
+    # + app/worker.py _heartbeat_loop). Der alte os.kill(1, 0)-Check war eine
+    # Tautologie (PID 1 = der Worker selbst, konnte nie fehlschlagen) — der
+    # Check meldet jetzt unhealthy, wenn der Ereignis-Loop haengt/stirbt und
+    # /tmp/mc-worker.alive aelter als 90 s wird.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os, signal; os.kill(1, 0)\""]
+      test: ["CMD-SHELL", "python -c \"import os, time; os.path.exists('/tmp/mc-worker.alive') and time.time() - os.path.getmtime('/tmp/mc-worker.alive') < 90 or exit(1)\""]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 60s
 
   frontend:
     # Prebuilt-Image nutzt die Default-Brand ("Mission.Control"); eigene

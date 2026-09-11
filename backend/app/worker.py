@@ -47,7 +47,9 @@ nicht (Rex-Review PR #500, B3: vorher lief er in BEIDEN Prozessen).
 
 import asyncio
 import logging
+import os
 import signal
+import time
 from types import SimpleNamespace
 
 from app.config import settings
@@ -85,6 +87,23 @@ async def run() -> None:
     await start_background_services(state)
     vault_runtime = await start_vault_services(state)
     logger.info("Worker: Hintergrund-Dienste laufen")
+    # W3 (Rex-Review PR #500): der alte Compose-Healthcheck pruefte
+    # os.kill(1, 0) — PID 1 ist der Worker selbst, der Check konnte nie
+    # fehlschlagen. Herzschlag-Datei statt Tautologie: ein Loop toucht
+    # /tmp/mc-worker.alive alle 30s, der Healthcheck prueft das Alter.
+    # Stirbt der Ereignis-Loop (oder haengt er), altert die Datei und der
+    # Container faellt auf unhealthy. /tmp ist containerlokal, kein Volume.
+    heartbeat_path = os.environ.get("MC_WORKER_HEARTBEAT", "/tmp/mc-worker.alive")
+    async def _heartbeat_loop() -> None:
+        while True:
+            try:
+                with open(heartbeat_path, "w") as fh:
+                    fh.write(str(time.time()))
+            except OSError:
+                pass  # Healthcheck darf am Dateifehler nicht crashen
+            await asyncio.sleep(30)
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(), name="worker_heartbeat")
 
     # CPython wandelt SIGTERM NICHT in eine Exception um — die Default-
     # Disposition beendet den Prozess sofort, ohne dass ein `finally` laeuft.
@@ -100,6 +119,7 @@ async def run() -> None:
     try:
         await stop.wait()
     finally:
+        heartbeat_task.cancel()
         for sig in registered:
             loop.remove_signal_handler(sig)
         logger.info("Worker faehrt Hintergrund-Dienste herunter")
