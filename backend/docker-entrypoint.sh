@@ -7,11 +7,13 @@
 # laut Doku erst NACH dem up laufen sollen — und das Frontend wartet via
 # depends_on auf ein healthy Backend, das nie kommt (CI-Fund 2026-07-02).
 #
-# Alembic ist idempotent (no-op wenn aktuell); MC laeuft mit genau einem
-# Backend-Container, es gibt also keinen Migrations-Wettlauf. Postgres
-# ist via depends_on:service_healthy schon erreichbar, ein kurzer Retry
-# faengt Rest-Latenz ab. MC_SKIP_MIGRATIONS=1 schaltet das Verhalten ab
-# (z.B. fuer bewusst manuell verwaltete Deployments).
+# Alembic ist idempotent (no-op wenn aktuell); seit Architektur E Teil 2
+# gibt es zusaetzlich den mc-worker-Container, der MC_SKIP_MIGRATIONS=1
+# setzt — Migrationen macht allein der backend-Container (der Worker startet
+# erst bei service_healthy des Backends), also kein Migrations-Wettlauf.
+# Postgres ist via depends_on:service_healthy schon erreichbar, ein kurzer
+# Retry faengt Rest-Latenz ab. MC_SKIP_MIGRATIONS=1 schaltet das Verhalten
+# ab (z.B. fuer bewusst manuell verwaltete Deployments).
 set -e
 
 if [ "${MC_SKIP_MIGRATIONS:-0}" != "1" ]; then

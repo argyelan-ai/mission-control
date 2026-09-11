@@ -503,8 +503,11 @@ async def test_purge_loop_calls_the_tick_and_stops_on_cancel(monkeypatch):
     import asyncio
 
     from app import main as app_main
+    import app.background as bg_mod
 
-    monkeypatch.setattr(app_main, "TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS", 0)
+    # Architektur E Teil 2: die Loop lebt in app.background (app.main
+    # delegiert). Der Intervall-Konstante wird DORT gelesen — Patch dort.
+    monkeypatch.setattr(bg_mod, "TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS", 0)
     calls: list[int] = []
 
     async def _tick(older_than_days: int = 30) -> int:
