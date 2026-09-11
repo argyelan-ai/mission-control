@@ -97,6 +97,11 @@ services:
       # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
       # bleibt True (Rueckweg fuer compose-freie Installs).
       ENABLE_BACKGROUND_SERVICES: "false"
+      # Konsument ist backend/app/routers/browser_live.py — ein Router, also
+      # der API-Prozess. War auf main gesetzt und wurde beim Teil-2-Umbau
+      # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
+      # wiederhergestellt, Flag-Zeile darueber ergaenzt, nicht ersetzt.
+      CDP_BROWSER_URL: http://172.30.99.10:9223
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
@@ -360,7 +365,10 @@ services:
       ENABLE_BACKGROUND_SERVICES: "true"
       # Identische Env wie backend (dieselbe settings-Factory, dieselben
       # Overrides) — jede Abweichung driftet API- und Worker-Sicht auseinander.
-      CDP_BROWSER_URL: http://172.30.99.10:9223
+      # AUSNAHME CDP_BROWSER_URL (Rex-Review PR #500, Blocker B4): der einzige
+      # Konsument (routers/browser_live.py) laeuft im API-Prozess; der Worker
+      # haengt nur am default-Netz (kein cdpnet), die fixe cdpnet-IP
+      # 172.30.99.10 waere hier unerreichbar. Bewusst nicht kopiert.
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
