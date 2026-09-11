@@ -33,10 +33,23 @@ logger = logging.getLogger("mc.scheduler")
 #   instead of giving up immediately at boot (a bug that until 2026-05-19
 #   caused an abrupt container restart to leave the scheduler completely
 #   dead until the next restart).
+#
+#   Ownership (W4, 11.09.2026 — incident: Deploy #504 left the scheduler
+#   dead for 2 min because the old worker's stop() never got to run before
+#   SIGKILL, and the lock could only heal via TTL): the lock value is a
+#   random owner id, not a constant "1". stop()/the refresh loop only ever
+#   mutate the lock via compare-and-delete / compare-and-expire, so a late
+#   stop() from a dying old worker can never rip the lock out from under a
+#   new worker that has since acquired it. A short-TTL heartbeat key lets a
+#   new worker detect a dead-without-stop() old owner (crash/OOM/SIGKILL)
+#   and steal the lock immediately instead of waiting out the full
+#   LOCK_TTL_SECONDS or the acquire retry loop.
 LOCK_TTL_SECONDS = 120
 LOCK_REFRESH_INTERVAL_SECONDS = 60
 LOCK_ACQUIRE_MAX_ATTEMPTS = 10
 LOCK_ACQUIRE_RETRY_DELAY_SECONDS = 15
+LOCK_HEARTBEAT_TTL_SECONDS = 15
+LOCK_HEARTBEAT_INTERVAL_SECONDS = 5
 
 
 class SchedulerService:
@@ -50,6 +63,11 @@ class SchedulerService:
         )
         self._running = False
         self._refresh_task: asyncio.Task | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        # Random per-instance owner id — the lock value, so stop()/refresh
+        # can tell "my lock" from "someone else's lock" instead of blindly
+        # trusting that whoever holds mc:scheduler:lock must be us.
+        self._owner_id = uuid.uuid4().hex
 
     async def _acquire_lock(self) -> bool:
         """Tries to acquire the Redis lock, with retry.
@@ -57,17 +75,32 @@ class SchedulerService:
         Returns True if the lock was acquired, False if not after all attempts.
         The retry strategy covers the case where an old worker isn't quite dead
         yet during a container restart or left a stale lock behind — thanks to
-        the short TTL it expires after LOCK_TTL_SECONDS at the latest.
+        the short TTL it expires after LOCK_TTL_SECONDS at the latest. If the
+        current holder's heartbeat is missing (it died without running stop()),
+        we steal the lock immediately instead of waiting through the retry
+        loop or the full TTL — see _steal_stale_lock.
         """
         from app.redis_client import RedisKeys, get_redis
         redis = await get_redis()
         for attempt in range(1, LOCK_ACQUIRE_MAX_ATTEMPTS + 1):
             acquired = await redis.set(
-                RedisKeys.scheduler_lock(), "1", nx=True, ex=LOCK_TTL_SECONDS
+                RedisKeys.scheduler_lock(), self._owner_id, nx=True, ex=LOCK_TTL_SECONDS
             )
             if acquired:
+                await redis.set(
+                    RedisKeys.scheduler_lock_heartbeat(),
+                    self._owner_id,
+                    ex=LOCK_HEARTBEAT_TTL_SECONDS,
+                )
                 if attempt > 1:
                     logger.info("Scheduler lock acquired after %d attempts", attempt)
+                return True
+            if await self._steal_stale_lock(redis):
+                logger.info(
+                    "Scheduler lock stolen on attempt %d — previous owner's heartbeat "
+                    "was gone (died without running stop())",
+                    attempt,
+                )
                 return True
             logger.info(
                 "Scheduler lock held by another worker — retry %d/%d in %ds",
@@ -78,14 +111,49 @@ class SchedulerService:
             await asyncio.sleep(LOCK_ACQUIRE_RETRY_DELAY_SECONDS)
         return False
 
+    async def _steal_stale_lock(self, redis) -> bool:
+        """Take over the lock if its heartbeat is gone (previous owner died).
+
+        Uses WATCH/MULTI on BOTH the lock and the heartbeat key, and reads
+        the heartbeat only AFTER establishing the watch — not before. A
+        plain "GET heartbeat, then WATCH+MULTI the lock" would leave a gap:
+        another worker could win the lock AND write its first heartbeat in
+        between our GET and our WATCH, and we'd steal its brand-new lock
+        having decided "stale" on now-outdated information. Watching the
+        heartbeat key too means any such write aborts our transaction.
+        """
+        from redis.exceptions import WatchError
+
+        from app.redis_client import RedisKeys
+
+        lock_key = RedisKeys.scheduler_lock()
+        heartbeat_key = RedisKeys.scheduler_lock_heartbeat()
+        async with redis.pipeline(transaction=True) as pipe:
+            try:
+                await pipe.watch(lock_key, heartbeat_key)
+                heartbeat = await pipe.get(heartbeat_key)
+                if heartbeat is not None:
+                    await pipe.unwatch()
+                    return False  # previous owner is still alive
+                pipe.multi()
+                pipe.set(lock_key, self._owner_id, ex=LOCK_TTL_SECONDS)
+                pipe.set(heartbeat_key, self._owner_id, ex=LOCK_HEARTBEAT_TTL_SECONDS)
+                await pipe.execute()
+                return True
+            except WatchError:
+                return False  # lock or heartbeat changed under us — retry normally
+
     async def _refresh_lock_loop(self):
         """Keeps the lock alive as long as the service runs.
 
-        Refreshes every LOCK_REFRESH_INTERVAL_SECONDS via EXPIRE. If a refresh
-        fails once, the lock expires after LOCK_TTL_SECONDS — APScheduler keeps
-        running with the already-registered jobs regardless (the lock is only a
-        boot gate, not a pre-trigger check). On recovery, the next worker
-        acquires the lock automatically via _acquire_lock.
+        Refreshes every LOCK_REFRESH_INTERVAL_SECONDS via compare-and-expire —
+        only if the lock still holds OUR owner id (a stolen/expired-and-
+        reacquired-by-someone-else lock must never have its TTL extended by
+        us). If a refresh fails once, the lock expires after LOCK_TTL_SECONDS
+        — APScheduler keeps running with the already-registered jobs
+        regardless (the lock is only a boot gate, not a pre-trigger check).
+        On recovery, the next worker acquires the lock automatically via
+        _acquire_lock.
         """
         from app.redis_client import RedisKeys, get_redis
         redis = await get_redis()
@@ -94,18 +162,98 @@ class SchedulerService:
                 await asyncio.sleep(LOCK_REFRESH_INTERVAL_SECONDS)
                 if not self._running:
                     break
-                await redis.expire(RedisKeys.scheduler_lock(), LOCK_TTL_SECONDS)
+                await self._compare_and_expire(redis, RedisKeys.scheduler_lock(), LOCK_TTL_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Scheduler lock refresh failed (will retry next tick)")
+
+    async def _heartbeat_loop(self):
+        """Refreshes the short-TTL heartbeat key so other workers can tell
+        we're still alive. Runs on a much tighter cadence than the main
+        lock refresh — LOCK_HEARTBEAT_TTL_SECONDS is what bounds how long a
+        crashed-without-stop() worker keeps its lock uncontested."""
+        from app.redis_client import RedisKeys, get_redis
+        redis = await get_redis()
+        while self._running:
+            try:
+                await asyncio.sleep(LOCK_HEARTBEAT_INTERVAL_SECONDS)
+                if not self._running:
+                    break
+                await redis.set(
+                    RedisKeys.scheduler_lock_heartbeat(),
+                    self._owner_id,
+                    ex=LOCK_HEARTBEAT_TTL_SECONDS,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Scheduler lock heartbeat failed (will retry next tick)")
+
+    async def _compare_and_expire(self, redis, key: str, ttl: int) -> bool:
+        """EXPIRE ``key`` only if it still holds our owner id."""
+        from redis.exceptions import WatchError
+
+        async with redis.pipeline(transaction=True) as pipe:
+            try:
+                await pipe.watch(key)
+                current = await pipe.get(key)
+                if current != self._owner_id:
+                    await pipe.unwatch()
+                    logger.warning(
+                        "Scheduler lock no longer owned by this worker (owner=%r) — "
+                        "skipping refresh",
+                        current,
+                    )
+                    return False
+                pipe.multi()
+                pipe.expire(key, ttl)
+                await pipe.execute()
+                return True
+            except WatchError:
+                return False
+
+    async def _release_lock_if_owner(self, redis) -> bool:
+        """Compare-and-delete: only remove the lock if it still holds our
+        owner id.
+
+        Without this check, a worker whose stop() runs late (it was itself
+        SIGKILLed mid-shutdown on an earlier attempt, or its stop() call was
+        simply delayed) could delete the lock a NEWER worker has since
+        acquired — see the 11.09.2026 incident this fixes."""
+        from redis.exceptions import WatchError
+
+        from app.redis_client import RedisKeys
+
+        key = RedisKeys.scheduler_lock()
+        async with redis.pipeline(transaction=True) as pipe:
+            try:
+                await pipe.watch(key)
+                current = await pipe.get(key)
+                if current != self._owner_id:
+                    await pipe.unwatch()
+                    if current is not None:
+                        logger.warning(
+                            "Scheduler lock now owned by a different worker "
+                            "(owner=%r) — skipping delete",
+                            current,
+                        )
+                    return False
+                pipe.multi()
+                pipe.delete(key)
+                pipe.delete(RedisKeys.scheduler_lock_heartbeat())
+                await pipe.execute()
+                return True
+            except WatchError:
+                return False
 
     async def start(self):
         """Start the service — Redis lock prevents double-start across multiple workers.
 
         If the lock is held, we wait with retry (see _acquire_lock). This means
         an abrupt container restart is no longer a killer scenario: the old lock
-        expires after LOCK_TTL_SECONDS at the latest and the new worker takes over.
+        expires after LOCK_TTL_SECONDS at the latest and the new worker takes over
+        (or sooner, via the heartbeat-based steal in _steal_stale_lock).
         """
         if not await self._acquire_lock():
             logger.warning(
@@ -117,6 +265,7 @@ class SchedulerService:
         self._running = True
         await self._load_jobs_from_db()
         self._refresh_task = create_tracked_task(self._refresh_lock_loop())
+        self._heartbeat_task = create_tracked_task(self._heartbeat_loop())
         logger.info("SchedulerService started")
 
     async def stop(self):
@@ -126,10 +275,13 @@ class SchedulerService:
             if self._refresh_task is not None:
                 self._refresh_task.cancel()
                 self._refresh_task = None
+            if self._heartbeat_task is not None:
+                self._heartbeat_task.cancel()
+                self._heartbeat_task = None
             self._scheduler.shutdown(wait=False)
-            from app.redis_client import RedisKeys, get_redis
+            from app.redis_client import get_redis
             redis = await get_redis()
-            await redis.delete(RedisKeys.scheduler_lock())
+            await self._release_lock_if_owner(redis)
         logger.info("SchedulerService stopped")
 
     async def _load_jobs_from_db(self):

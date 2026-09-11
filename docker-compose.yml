@@ -351,6 +351,16 @@ services:
     entrypoint: ["/docker-entrypoint.sh"]
     command: ["python", "-m", "app.worker"]
     restart: unless-stopped
+    # W4 (11.09.2026, Incident Deploy #504): Docker default is 10s. The
+    # worker's SIGTERM handler awaits stop_vault_services() + 17
+    # sequential service .stop() calls (app/worker.py, app/background.py)
+    # before SchedulerService.stop() — the last of the chain — can delete
+    # its Redis lock. Under 10s that chain didn't finish before SIGKILL,
+    # so the lock only healed via its 120s TTL. 30s gives the shutdown
+    # chain realistic headroom; per-service duration is now logged
+    # (app/background.py:_timed_stop) so a future slow step is visible
+    # instead of just "scheduler lock stuck again".
+    stop_grace_period: 30s
     logging: *default-logging
     depends_on:
       backend:
