@@ -467,3 +467,127 @@ async def test_heartbeat_own_finish_to_review_is_not_withdrawn(client: AsyncClie
     )
     assert resp.status_code == 200, resp.text
     assert "control" not in resp.json()
+
+
+# ── Own-comment / missing-cursor guard (12.09.2026, Karte 584795fd) ─────────
+#
+# An ACP session's cursor row never gets created by /me/poll while a turn is
+# blocked (that path only runs between turns). Before this fix a missing
+# cursor meant "every historic comment is unseen" — including the agent's
+# OWN blocker comment — so the heartbeat soft-interrupted on EVERY beat
+# forever: the task sat in_progress while nobody worked it.
+
+async def _cursor_row(session: AsyncSession, agent_id: uuid.UUID, task_id: uuid.UUID):
+    from app.models.agent_task_comment_cursor import AgentTaskCommentCursor as _Cursor
+    from sqlmodel import select as _select
+
+    return (await session.exec(
+        _select(_Cursor).where(
+            _Cursor.agent_id == agent_id, _Cursor.task_id == task_id,
+        )
+    )).first()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_does_not_flag_own_blocker(client: AsyncClient):
+    """No cursor row exists yet (fresh ACP session) and the only comment on
+    the task is the agent's OWN blocker — must NOT soft-interrupt, and the
+    cursor is seeded to the current tail (not left missing) so this doesn't
+    repeat next beat."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        own_comment = await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="blocker", content="Warte auf Review-Antwort",
+        )
+        assert await _cursor_row(s, agent.id, task.id) is None
+
+    resp = await _heartbeat(client, token)
+    assert resp.status_code == 200, resp.text
+    assert "control" not in resp.json()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        seeded = await _cursor_row(s, agent.id, task.id)
+        assert seeded is not None
+        assert seeded.last_seen_comment_id == own_comment.id
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_seed_does_not_repeat_next_beat(client: AsyncClient):
+    """Sanity: once the first beat seeds the cursor, a second beat with no
+    new comments stays clean too (no infinite soft-interrupt loop)."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="blocker", content="Warte auf Review-Antwort",
+        )
+
+    first = await _heartbeat(client, token)
+    assert "control" not in first.json()
+    second = await _heartbeat(client, token)
+    assert "control" not in second.json()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_still_soft_on_later_foreign_comment(client: AsyncClient):
+    """The seed-on-first-beat guard must not swallow a REAL foreign message
+    that arrives afterwards — the soft channel is the wake mechanism, not
+    the bug."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="blocker", content="Warte auf Review-Antwort",
+        )
+
+    first = await _heartbeat(client, token)
+    assert "control" not in first.json()  # seeds the cursor
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="handoff", content="Bitte Scope X mitnehmen",
+        )
+
+    second = await _heartbeat(client, token)
+    assert second.json()["control"]["interrupt"] == "soft"
+
+    # Ack: the same foreign comment must not re-trigger a third time in a row.
+    third = await _heartbeat(client, token)
+    assert "control" not in third.json()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_own_new_comment_past_existing_cursor_does_not_interrupt(client: AsyncClient):
+    """A cursor already exists (agent has been running for a while); the
+    agent then posts its OWN new blocker comment (e.g. `mc blocked`) — the
+    very next beat must not soft-interrupt on its own comment just because
+    it sits past the cursor."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        seen = await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="progress", content="checkpoint",
+        )
+        from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
+        s.add(AgentTaskCommentCursor(
+            agent_id=agent.id, task_id=task.id,
+            last_seen_comment_id=seen.id,
+        ))
+        await s.commit()
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="blocker", content="Warte auf Review-Antwort",
+        )
+
+    resp = await _heartbeat(client, token)
+    assert "control" not in resp.json()
