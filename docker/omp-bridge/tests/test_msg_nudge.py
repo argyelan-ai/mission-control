@@ -460,6 +460,16 @@ def test_serve_loop_clears_orphaned_task_lock_at_startup():
             _task_lock_path=lock,
             _nudge_state_file=os.path.join(d, "nudge-state"),
             _nudge_msg_file=os.path.join(d, "nudge.msg"),
+            # Review PR #522 B1 round 2: no `_child_alive_fn`/`_boot_epoch_fn`
+            # stub on purpose — this must exercise the REAL
+            # `_container_boot_epoch()` default against the real container
+            # this test runs in. The lock's epoch (1788330146, "a long-dead
+            # run") predates this test process's own container boot, so the
+            # boot-time comparison alone must clear it. Round 1 pinned
+            # `_child_alive_fn=lambda: False` here — that papered over the
+            # fact that the child-alive signal can't tell a bridge-only
+            # respawn from a real restart in the first place (see the
+            # round-2 tests in test_serve_loop.py).
         )
         assert not os.path.exists(lock), "orphaned task lock must be cleared at serve start"
     print("PASS test_serve_loop_clears_orphaned_task_lock_at_startup")
