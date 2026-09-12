@@ -856,6 +856,11 @@ async def test_compose_challenge_parses_sidecar_response(session, monkeypatch):
     away, so pin the parsing contract here."""
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -902,6 +907,11 @@ async def test_compose_challenge_sends_duration_s_from_challenge(session, monkey
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -941,6 +951,11 @@ async def test_compose_challenge_duration_s_falls_back_to_default(session, monke
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -985,6 +1000,11 @@ async def test_record_entry_uses_challenge_record_duration_s(session, monkeypatc
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -1024,6 +1044,11 @@ async def test_record_entry_falls_back_to_default_duration_when_unset(session, m
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -1064,6 +1089,11 @@ def _fake_compose_client(monkeypatch) -> dict:
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -1253,6 +1283,11 @@ async def test_compose_challenge_no_branding_for_three_entries(session, monkeypa
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -1304,6 +1339,11 @@ async def test_compose_challenge_artifact_size_in_outro_row(session, tmp_path, m
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -1354,6 +1394,11 @@ async def test_compose_challenge_speed_labels_skip_branding(session, monkeypatch
     captured: dict = {}
 
     class FakeResp:
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -1820,6 +1865,11 @@ async def test_compose_challenge_default_output_name_is_versioned(session, monke
     class FakeResp:
         def __init__(self, output_path):
             self._output_path = output_path
+
+        # Mirrors httpx.Response: compose_challenge checks is_error, not
+        # raise_for_status, so the sidecar's error detail survives.
+        is_error = False
+        status_code = 200
 
         def raise_for_status(self):
             pass

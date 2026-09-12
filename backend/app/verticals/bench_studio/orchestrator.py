@@ -679,8 +679,55 @@ async def on_task_done(session: AsyncSession, task) -> None:
 # ── Render + Compose ─────────────────────────────────────────────────────
 
 
+# One heavy media step at a time (2026-08-19). Every /record spawns a
+# Chromium at 2880x1620 plus an ffmpeg libx264 encoder inside the
+# mc-playwright container; the compose tail adds a second Chromium for the
+# branding cards. Two of those in parallel do not fit in the Docker VM —
+# on 2026-08-18 three challenges started minutes apart overlapped here and
+# the kernel OOM-killer took ffmpeg out mid-encode (rc=-9), failing all
+# three. Entries within one challenge were already sequential; challenges
+# are independent asyncio tasks and had nothing holding them apart.
+_MEDIA_SLOT: asyncio.Semaphore | None = None
+_MEDIA_SLOT_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def media_slot() -> asyncio.Semaphore:
+    """The process-wide "one recording/compose at a time" gate.
+
+    Created lazily and re-created per event loop: a module-level Semaphore
+    binds to the loop that first awaits it, which breaks every test after
+    the first one (pytest-asyncio builds a fresh loop per test).
+    """
+    global _MEDIA_SLOT, _MEDIA_SLOT_LOOP
+    loop = asyncio.get_running_loop()
+    if _MEDIA_SLOT is None or _MEDIA_SLOT_LOOP is not loop:
+        _MEDIA_SLOT = asyncio.Semaphore(1)
+        _MEDIA_SLOT_LOOP = loop
+    return _MEDIA_SLOT
+
+
+def _sidecar_error(resp: httpx.Response, what: str) -> RuntimeError:
+    """Turns an mc-playwright error response into a message that names the
+    actual cause.
+
+    resp.raise_for_status() reports only "502 Bad Gateway" and drops the
+    body — which is where the sidecar puts the one line that matters
+    ("ffmpeg (pipe encode) failed (rc=-9)"). That cost an evening of
+    reproduction on 2026-08-18; the detail belongs in entry.error.
+    """
+    try:
+        detail = resp.json().get("detail", "")
+    except Exception:  # noqa: BLE001 — non-JSON body (proxy error page, empty)
+        detail = resp.text
+    detail = str(detail).strip() or "(no detail from mc-playwright)"
+    return RuntimeError(f"{what} failed [HTTP {resp.status_code}]: {detail}"[:1500])
+
+
 async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
     """POST /record on mc-playwright (PR 1) for one entry. Raises on failure.
+
+    Serialised against every other recording/compose via media_slot() —
+    see the comment there for why parallel runs cannot work.
 
     Uses the challenge's operator-chosen record_duration_s (Bench #18) when
     set, else the legacy RECORD_DURATION_S default — same fallback the
@@ -691,18 +738,20 @@ async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
         if challenge.record_duration_s is not None
         else RECORD_DURATION_S
     )
-    async with httpx.AsyncClient(timeout=RECORD_TIMEOUT_S) as cli:
-        resp = await cli.post(
-            f"{PLAYWRIGHT_BASE}/record",
-            json={
-                "html_path": entry.artifact_path,
-                "duration_s": duration_s,
-                "viewport": RECORD_VIEWPORT,
-                "output_dir": out_dir,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
+    async with media_slot():
+        async with httpx.AsyncClient(timeout=RECORD_TIMEOUT_S) as cli:
+            resp = await cli.post(
+                f"{PLAYWRIGHT_BASE}/record",
+                json={
+                    "html_path": entry.artifact_path,
+                    "duration_s": duration_s,
+                    "viewport": RECORD_VIEWPORT,
+                    "output_dir": out_dir,
+                },
+            )
+            if resp.is_error:
+                raise _sidecar_error(resp, "record")
+            return resp.json()
 
 
 def format_speed_label(metrics: dict) -> str:
@@ -905,13 +954,17 @@ async def compose_challenge(
     # path unchanged (pre-existing behaviour, regression-safe).
     if not speed_labels and len(ordered) in (1, 2):
         payload["branding"] = await _build_branding_payload(session, challenge, ordered)
-    async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
-        resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
-        resp.raise_for_status()
-        # ComposeResponse (service.py) names the field output_path — NOT
-        # video_path like /record's RecordResponse (KeyError incident
-        # 2026-07-12, first live side-by-side compose).
-        return resp.json()["output_path"]
+    # Same gate as record_entry: the branded compose path screenshots two
+    # more Chromium pages and runs ffmpeg over the recordings.
+    async with media_slot():
+        async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
+            resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
+            if resp.is_error:
+                raise _sidecar_error(resp, "compose")
+            # ComposeResponse (service.py) names the field output_path — NOT
+            # video_path like /record's RecordResponse (KeyError incident
+            # 2026-07-12, first live side-by-side compose).
+            return resp.json()["output_path"]
 
 
 async def _render_and_compose(
