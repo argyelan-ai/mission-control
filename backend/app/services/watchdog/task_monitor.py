@@ -10,7 +10,7 @@ sessions-list). Stale-task ownership lies with task_runner._check_dispatch_ack.
 
 import logging
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import or_, and_
@@ -22,9 +22,25 @@ from app.models.task import Task, TaskComment
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.services.activity import emit_event
 from app.services.task_state import lock_and_set
-from app.utils import utcnow
+from app.utils import ensure_aware, utcnow
 
 logger = logging.getLogger("mc.watchdog")
+
+# Silent-card watchdog (report-only). A card in in_progress OR waiting with
+# no agent turn and no non-system comment for this long is reported to the
+# Board Lead — never auto-moved. One notify per silent phase (DB, not Redis
+# TTL: a 1h key is what stacked identical watchdog_notify comments overnight).
+SILENT_CARD_STATUSES = ("in_progress", "waiting")
+SILENT_CARD_THRESHOLD_MINUTES = 30
+_SILENT_CARD_OPEN_CHILD = frozenset({
+    "inbox", "in_progress", "review", "waiting", "user_test", "blocked",
+})
+
+
+def _dt_max(*values: datetime | None) -> datetime | None:
+    """Return the latest timezone-aware instant, ignoring Nones."""
+    aware = [ensure_aware(v) for v in values if v is not None]
+    return max(aware) if aware else None
 
 
 class TaskMonitorMixin:
@@ -1223,6 +1239,246 @@ class TaskMonitorMixin:
         logger.info(
             "Review decision missing nudge for '%s' (comment %dmin ago)",
             task.title, int(comment_age_min),
+        )
+
+    async def _check_silent_cards(self, session: AsyncSession) -> None:
+        """Report silent in_progress/waiting cards to the Board Lead.
+
+        A card is silent when, for SILENT_CARD_THRESHOLD_MINUTES, there has
+        been neither an agent turn on this card nor a non-system comment.
+        The watchdog posts exactly one ``watchdog_notify`` per silent phase
+        (until real activity resumes) and does **not** change status.
+
+        Why this exists: the other watchdogs either skip in_progress
+        (assuming someone is working) or auto-block/reset. Three live
+        incidents (finished card left in_progress, waiting parent with
+        all children done, wrapper-alive/turn-dead worker) were caught
+        by a human, not the system.
+
+        Dedup is DB-based on the last ``watchdog_notify``, not a Redis
+        TTL — a 1h key is what stacked a dozen identical reminders
+        overnight. If another watchdog already posted ``watchdog_notify``
+        in this silent phase, we stay quiet (one message, not two).
+        """
+        from app.models.approval import Approval
+        from app.models.board import Board
+
+        result = await session.exec(
+            select(Task)
+            .join(Board, Board.id == Task.board_id)
+            .where(
+                Task.status.in_(SILENT_CARD_STATUSES),  # type: ignore[union-attr]
+                Board.is_archived == False,  # noqa: E712
+            )
+        )
+        candidates = result.all()
+        if not candidates:
+            return
+
+        now = utcnow()
+        threshold = timedelta(minutes=SILENT_CARD_THRESHOLD_MINUTES)
+
+        for task in candidates:
+            if not task.board_id:
+                continue
+            if task.review_decision == "hold":
+                continue
+            if task.run_control in ("stopped", "manual_hold"):
+                continue
+
+            agent = None
+            if task.assigned_agent_id:
+                agent = await session.get(Agent, task.assigned_agent_id)
+            if agent is not None and getattr(agent, "operational_mode", "active") == "paused":
+                continue
+
+            children = list((await session.exec(
+                select(Task).where(Task.parent_task_id == task.id)
+            )).all())
+
+            # Parent still waiting on open children: orchestration, not silence.
+            # The silent *child* (if any) is selected on its own row.
+            if any(c.status in _SILENT_CARD_OPEN_CHILD for c in children):
+                continue
+
+            # Callback-wait on a still-open card: same — the blocking child
+            # is the one to report if *it* is silent.
+            if task.blocked_by_task_id is not None:
+                blocker = await session.get(Task, task.blocked_by_task_id)
+                if blocker is not None and blocker.status in _SILENT_CARD_OPEN_CHILD:
+                    continue
+
+            # in_progress parent, all children done, phase_approval done:
+            # _check_stuck_orchestrator_close already nudges (and may
+            # auto-close). Stay out of that conversation.
+            if (
+                task.status == "in_progress"
+                and children
+                and any(
+                    c.delegation_type == "phase_approval" and c.status == "done"
+                    for c in children
+                )
+                and not any(
+                    c.delegation_type == "phase_approval"
+                    and c.status in ("inbox", "in_progress", "review")
+                    for c in children
+                )
+            ):
+                continue
+
+            # Operator already has a ticket on this card — don't add a
+            # second report (existing watchdogs must not get louder).
+            pending_approval = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.status == "pending",
+                )
+            )).first()
+            if pending_approval is not None:
+                continue
+
+            last_activity = await self._silent_card_last_activity_at(
+                session, task, agent, children,
+            )
+            if last_activity is None:
+                last_activity = ensure_aware(task.created_at) if task.created_at else now
+            else:
+                last_activity = ensure_aware(last_activity)
+
+            silent_for = now - last_activity
+            if silent_for < threshold:
+                continue
+
+            last_notify = (await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type == "watchdog_notify",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            if (
+                last_notify is not None
+                and last_notify.created_at is not None
+                and ensure_aware(last_notify.created_at) >= last_activity
+            ):
+                continue  # same silent phase, already reported (us or another watchdog)
+
+            lead_result = await session.exec(
+                select(Agent).where(
+                    Agent.board_id == task.board_id,
+                    Agent.is_board_lead == True,  # noqa: E712
+                )
+            )
+            lead = lead_result.first()
+            if lead is None:
+                logger.debug(
+                    "Silent card '%s' has no Board Lead — skip (no operator escalate)",
+                    (task.title or "")[:60],
+                )
+                continue
+
+            minutes_silent = int(silent_for.total_seconds() / 60)
+            assigned_name = agent.name if agent else "unzugewiesen"
+            child_line = ""
+            if children:
+                done_n = sum(1 for c in children if c.status == "done")
+                child_line = f"Kinder: {done_n}/{len(children)} done\n"
+
+            msg = (
+                f"STILLE KARTE: \"{task.title}\" steht seit {minutes_silent}min "
+                f"auf `{task.status}` — kein Agenten-Zug, kein Kommentar.\n\n"
+                f"**Board-Lead {lead.name}:** bitte pruefen. "
+                f"Der Waechter aendert den Status NICHT.\n\n"
+                f"Task-ID: {task.id}\n"
+                f"Agent: {assigned_name}\n"
+                f"Letzte echte Aktivitaet: vor {minutes_silent}min\n"
+                f"{child_line}"
+                f"Wenn du nicht reagierst, greift die bestehende Operator-Eskalation."
+            )
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=msg,
+                comment_type="watchdog_notify",
+            ))
+            await session.commit()
+
+            try:
+                await emit_event(
+                    session,
+                    "task.silent_card",
+                    f"Stille Karte: '{task.title}' ({task.status}, {minutes_silent}min) "
+                    f"→ Lead {lead.name}",
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    agent_id=lead.id,
+                    severity="warning",
+                    detail={
+                        "status": task.status,
+                        "minutes_silent": minutes_silent,
+                        "lead_id": str(lead.id),
+                        "source": "silent_card_watchdog",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — notify already persisted
+                logger.debug("silent_card event emit failed: %s", e)
+
+            logger.info(
+                "Silent card reported to lead %s: '%s' (%s, %dmin)",
+                lead.name, (task.title or "")[:60], task.status, minutes_silent,
+            )
+
+    async def _silent_card_last_activity_at(
+        self,
+        session: AsyncSession,
+        task: Task,
+        agent: Agent | None,
+        children: list[Task],
+    ) -> datetime | None:
+        """Latest real activity on this card (not system comments, not heartbeats).
+
+        Counts:
+        - agent/user comments on this task (system/watchdog_notify ignored —
+          counting those as activity is what restacks reminders)
+        - assigned agent's last_task_activity_at, but only if they are
+          actually on THIS card (the column is agent-global)
+        - ack_at / started_at (work started)
+        - last child completed_at/updated_at (so a parent whose children
+          just finished is not flagged for 30 min)
+        Deliberately omitted: updated_at (any metadata PATCH resets it),
+        last_seen_at (wrapper heartbeat ≠ a turn).
+        """
+        last_real_comment = (await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_type != "system",
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+
+        turn_at = None
+        if (
+            agent is not None
+            and agent.current_task_id == task.id
+            and agent.last_task_activity_at is not None
+        ):
+            turn_at = agent.last_task_activity_at
+
+        child_times = [
+            (c.completed_at or c.updated_at)
+            for c in children
+        ]
+
+        return _dt_max(
+            last_real_comment.created_at if last_real_comment else None,
+            turn_at,
+            task.ack_at,
+            task.started_at,
+            *child_times,
         )
 
     async def _check_undispatched_tasks(self, session: AsyncSession) -> None:

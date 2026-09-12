@@ -138,6 +138,11 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             await self._check_dependency_zombies(session)
             await self._check_review_tasks(session)
             await self._check_stuck_orchestrator_close(session)
+            # Report-only: in_progress/waiting cards with no turn and no
+            # (non-system) comment. Must run BEFORE orphan recovery so a
+            # silent card is visible to the Board Lead even if a later
+            # healer resets it. Never changes status.
+            await self._check_silent_cards(session)
 
             # Orphan recovery: tasks stuck in in_progress without agent heartbeat
             recovered = await self._recover_orphaned_tasks(session)
