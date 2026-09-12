@@ -75,6 +75,30 @@ services:
       - ${HOME}/.mc/vault:/vault:rw
       - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+  # Hand-maintained, pre-fix openclaude instance (docs/adr-022 audit,
+  # 2026-09-12): has /workspace-ref (predates the renderer entirely — added
+  # by hand when the agent was created) but never got /shared-deliverables or
+  # /shared-mcp, because those are claude-harness-only mounts. This is the
+  # parity target for the appended-openclaude test below.
+  mc-agent-worker-c:
+    <<: *openclaude-agent-base
+    container_name: mc-agent-worker-c
+    environment:
+      - AGENT_NAME=worker-c
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_WORKER_C}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/worker-c
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=worker-c
+    volumes:
+      - ${HOME}/.mc/agents/worker-c/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/worker-c:/workspace
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/deliverables/worker-c:/deliverables
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
+
 networks:
   mission-control_default:
     external: true
@@ -179,13 +203,15 @@ async def test_appended_claude_block_has_same_mount_targets_as_static_block(
 
 
 @pytest.mark.asyncio
-async def test_appended_openclaude_block_does_not_get_claude_only_mounts(
+async def test_appended_openclaude_block_has_same_mount_targets_as_static_block(
     async_session, compose_path
 ):
-    """The three claude-only mounts are scoped to the claude anchor — an
-    appended openclaude-harness agent must NOT get them (matches the one real
-    openclaude instance today, which predates this fix and has no
-    shared-mcp/shared-deliverables mount)."""
+    """Same parity check as the claude test above, against the hand-maintained
+    ``worker-c`` openclaude fixture block: ``/workspace-ref`` present,
+    ``/shared-deliverables``/``/shared-mcp`` absent (claude-only). A set
+    comparison — not a fixed list of today's mounts — so the next mount added
+    to the real openclaude convention but not to the renderer fails this test
+    too, instead of reopening the exact gap PR #524 found."""
     rt = Runtime(
         slug="qwen-local",
         display_name="Qwen Local",
@@ -208,7 +234,17 @@ async def test_appended_openclaude_block_does_not_get_claude_only_mounts(
 
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
     block = _extract_service_block(rendered, "local-coder")
-
     assert "<<: *openclaude-agent-base" in block
-    assert "/shared-deliverables:ro" not in block
-    assert "/shared-mcp:ro" not in block
+
+    static_block = _extract_service_block(rendered, "worker-c")
+    static_targets = _mount_targets(static_block)
+    appended_targets = _mount_targets(block)
+
+    missing = static_targets - appended_targets
+    extra = appended_targets - static_targets
+    assert not missing, (
+        f"appended openclaude block is missing mounts present in the static one: {missing}"
+    )
+    assert not extra, (
+        f"appended openclaude block has mounts absent from the static one: {extra}"
+    )

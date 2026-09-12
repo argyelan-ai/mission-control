@@ -24,8 +24,9 @@
 #   /mc-servers         ro  → ~/.mc/mcp-servers/             MCP-Server
 #   /vault              rw  → ~/.mc/vault/                   gemeinsames Wissen
 #
-# Zusaetzlich fuer den claude-Harness (nicht omp/kimi/openclaude):
+# Zusaetzlich fuer claude UND openclaude (nicht omp/kimi):
 #   /workspace-ref        ro  → ~/Workspace/Projects/            Code des Operators als Referenz
+# Nur fuer den claude-Harness (nicht omp/kimi/openclaude):
 #   /shared-deliverables  ro  → Named Volume mc_shared_deliverables
 #   /shared-mcp           ro  → ~/.mc/mcp-screenshots/           Playwright-MCP-Sidecar-Output
 #

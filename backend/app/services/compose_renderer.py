@@ -303,14 +303,18 @@ _VAULT_VOLUME_TEMPLATE = "      - ${HOME}/.mc/vault:/vault:rw"
 # auflösen (compose-up läuft mit HOME=HOME_HOST, docker_agent_sync.py).
 _REFERENCES_VOLUME_TEMPLATE = "      - ${HOME}/.mc/references:${HOME}/.mc/references:ro"
 
-# ADR-022 standard mounts for the Anthropic claude harness — every
-# hand-maintained ``claude-agent-base`` service in docker-compose.agents.yml
-# carries these three. Incident 2026-09-12: the append path
+# ADR-022 standard mounts. Incident 2026-09-12: the append path
 # (_build_new_agent_block) never emitted them, so a Reviewer agent recreated
 # via that path came up without ``/workspace-ref`` — the mount its own SOUL
-# tells it to `git clone` from. Scoped to the claude anchor only: omp/kimi
-# have their own mount conventions (see _OMP_SESSIONS_TARGET / kimi-config
-# below), and the one real openclaude-anchor agent predates this fix.
+# tells it to `git clone` from. omp/kimi have their own mount conventions
+# (see _OMP_SESSIONS_TARGET / kimi-config below) and stay out of scope.
+#
+# ``/workspace-ref`` is NOT claude-exclusive: the real openclaude-anchor agent
+# that predates this fix already carries it by hand (verified against the
+# live docker-compose.agents.yml during review of PR #524) — only
+# ``/shared-deliverables`` and ``/shared-mcp`` are absent there. So
+# workspace-ref is emitted for claude AND openclaude; the other two stay
+# claude-only.
 _WORKSPACE_REF_VOLUME_TEMPLATE = "      - ${HOME}/Workspace/Projects:/workspace-ref:ro"
 _SHARED_DELIVERABLES_VOLUME_TEMPLATE = "      - mc_shared_deliverables:/shared-deliverables:ro"
 _SHARED_MCP_VOLUME_TEMPLATE = "      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro"
@@ -844,8 +848,9 @@ def _build_new_agent_block(
     - Env: standard 7-var set (AGENT_NAME, MC_API_URL, MC_TOKEN, RECYCLER,
       VAULT_PATH, VAULT_INBOX, AGENT_SLUG).
     - Volumes: 4 standard mounts + optional vault :rw when ``is_vault_writer``.
-      For the claude anchor, 3 more (workspace-ref, shared-deliverables,
-      shared-mcp) — see ``_WORKSPACE_REF_VOLUME_TEMPLATE`` and neighbors.
+      For claude AND openclaude anchors, workspace-ref; for the claude anchor
+      only, also shared-deliverables and shared-mcp — see
+      ``_WORKSPACE_REF_VOLUME_TEMPLATE`` and neighbors.
 
     ENVKEY = slug.upper().replace('-', '_').
     """
@@ -907,7 +912,7 @@ def _build_new_agent_block(
         "      - ${HOME}/.mc/mcp-servers:/mc-servers:ro",
         f"      - ${{HOME}}/.mc/workspaces/{slug}:/workspace",
     ]
-    if anchor == "claude-agent-base":
+    if anchor in ("claude-agent-base", "openclaude-agent-base"):
         lines.append(_WORKSPACE_REF_VOLUME_TEMPLATE)
     lines.append(f"      - ${{HOME}}/.mc/deliverables/{slug}:/deliverables")
     if anchor == "claude-agent-base":
