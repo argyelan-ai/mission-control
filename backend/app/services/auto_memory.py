@@ -9,7 +9,6 @@ Each function creates its own DB session (background-task pattern).
 Redis dedup prevents duplicate entries.
 """
 
-import hashlib
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -99,134 +98,41 @@ async def _dedup_check(key: str, ttl: int = 3600) -> bool:
         return True
 
 
-# ── Phase 5 MSY-01: Reflection-Fold Helpers ──────────────────────────────────
-
-
-async def _load_reflections_for_task(
-    session: AsyncSession, task_id: uuid.UUID
-) -> list[TaskComment]:
-    """Phase 5 MSY-01: all reflection comments of a task, oldest first.
-
-    Mirrors the `_load_reflection_and_last_comments` pattern from
-    `services/report_auto_draft.py:46-72`. Only reflection-typed comments,
-    not all of them.
-
-    W4.2: excludes author_type='system' to avoid re-folding the auto-generated
-    task-done TaskComments back into BoardMemory (would re-introduce the noise
-    we are eliminating in W4).
-    """
-    result = await session.exec(
-        select(TaskComment)
-        .where(TaskComment.task_id == task_id)
-        .where(TaskComment.comment_type == "reflection")
-        .where(TaskComment.author_type != "system")  # W4.2: skip auto-generated summaries
-        .order_by(TaskComment.created_at)  # type: ignore[union-attr]
-    )
-    return list(result.all())
-
-
-def _reflection_dedup_key(task_id: uuid.UUID, reflection_text: str) -> str:
-    """Phase 5 MSY-01 D-03: dedup key per (task_id, reflection_text-sha256).
-
-    Per D-03: identical reflection on same task → silent skip; different
-    reflection on same task → fresh emission.
-    """
-    h = hashlib.sha256(reflection_text.encode("utf-8")).hexdigest()[:16]
-    return RedisKeys.auto_memory_reflection_fold(str(task_id), h)
-
-
-async def _fold_reflections_into_memory(
-    session: AsyncSession,
-    task_id: uuid.UUID,
-    task: Task,
-    project_tags: list[str],
-) -> int:
-    """Phase 5 MSY-01 D-04: fold all un-folded reflections into BoardMemory.
-
-    Runs OUTSIDE the top-level `auto_memory_task_done` dedup short-circuit so
-    that legacy reflections (predating MSY-01) get picked up on the first
-    post-MSY-01 invocation. Per-reflection dedup via
-    `_reflection_dedup_key` provides idempotency.
-
-    Pitfall 1 (05-PATTERNS.md): the existing `agent_comments.py:395-422`
-    reflection→`lesson` pipeline coexists by design. This fold writes a
-    `journal`-style BoardMemory at task-completion time, board-scoped;
-    the existing pipeline writes a `lesson` BoardMemory at comment-post
-    time, agent-scoped. Two distinct rows for the same reflection — by
-    design.
-
-    Returns count of newly-folded reflections.
-    """
-    # Lazy import (Pitfall 1 — IMPORT, do NOT reimplement)
-    from app.routers.agent_comments import _extract_reflection_lesson
-
-    reflections = await _load_reflections_for_task(session, task_id)
-    folded = 0
-    for refl in reflections:
-        refl_text = refl.content or ""
-        if not refl_text.strip():
-            continue
-        refl_key = _reflection_dedup_key(task_id, refl_text)
-        if not await _dedup_check(refl_key, ttl=86400 * 30):  # 30-day TTL
-            continue
-        lesson_text = _extract_reflection_lesson(refl_text)
-        if not lesson_text:
-            lesson_text = refl_text[:500]
-        refl_memory = BoardMemory(
-            board_id=task.board_id,
-            title=f"Reflection: {task.title[:80]}",
-            content=lesson_text,
-            memory_type="journal",
-            source="system",
-            auto_generated=True,
-            tags=["auto", "reflection_fold"] + project_tags,
-        )
-        session.add(refl_memory)
-        await session.commit()
-        await session.refresh(refl_memory)
-        try:
-            from app.services.memory_indexing import index_memory
-            await index_memory(refl_memory)
-        except Exception as e:
-            logger.warning("auto_memory reflection_fold index failed: %s", e)
-        logger.info(
-            "Auto-memory: reflection_fold recorded for task '%s' (refl_id=%s)",
-            task.title, refl.id,
-        )
-        folded += 1
-    return folded
+# ── Reflection-Fold — REMOVED (Reflexions-Triage, 2026-09-11) ───────────────
+#
+# Phase 5 MSY-01 used to fold every reflection comment of a completed task
+# straight into a BoardMemory(memory_type='journal') row, unconditionally,
+# on every `record_task_completion` call — no Lead judgement involved. That
+# is exactly the automatic-landing path Mark's 11.09.2026 decision closes:
+# reflections may only reach board_memory/Vault after the Lead posts a
+# `reflection_verdict` comment with verdict "uebernehmen" (see
+# `app.routers.agent_comments._handle_reflection_verdict`, which now owns
+# the *only* remaining reflection→BoardMemory write). `_load_reflections_for_task`,
+# `_reflection_dedup_key` and `_fold_reflections_into_memory` were deleted
+# together with their call site below — there is no gated equivalent to
+# preserve because the trigger (task completion) fires before a Lead has
+# had a chance to triage anything.
 
 
 # ── Task Completion ──────────────────────────────────────────────────────────
 
 
 async def record_task_completion(task_id: uuid.UUID, agent_id: uuid.UUID | None) -> None:
-    """Records a lesson when a task is set to 'done'.
+    """Writes an audit-trail TaskComment when a task is set to 'done'.
 
-    Phase 5 MSY-01 (D-04): reflections are folded UNCONDITIONALLY on every
-    call (per-reflection dedup via `_reflection_dedup_key` provides
-    idempotency). The existing `auto_memory_task_done` short-circuit then
-    gates only the legacy journal-summary INSERT — preserving its
-    at-most-once semantics.
-
-    This shape ensures legacy reflections (created before MSY-01) get folded
-    on the first post-MSY-01 invocation, even though the top-level dedup key
-    was already written at original completion time.
+    Reflexions-Triage (2026-09-11): this used to also fold every reflection
+    comment into a BoardMemory(memory_type='journal') row, unconditionally,
+    via `_fold_reflections_into_memory` (Phase 5 MSY-01 D-04) — removed. That
+    write ran automatically at task-done time, before any Lead could judge
+    the reflection, which is exactly the ungated path the new rule closes.
+    The only remaining reflection→BoardMemory write is Lead-gated: see
+    `app.routers.agent_comments._handle_reflection_verdict`.
     """
     async with AsyncSession(engine, expire_on_commit=False) as session:
         try:
             task = await session.get(Task, task_id)
             if not task:
                 return
-
-            project_tags = await _load_project_tags(session, task.project_id)
-
-            # Phase 5 MSY-01 (D-04): fold reflections on EVERY call.
-            # Idempotency comes from per-reflection dedup keys — NOT from
-            # the top-level auto_memory_task_done key. Legacy reflections
-            # (predating MSY-01) get picked up on first post-MSY-01 call
-            # because the top-level key being already-set doesn't gate this.
-            await _fold_reflections_into_memory(session, task_id, task, project_tags)
 
             # Existing top-level dedup short-circuit for the journal-summary
             # INSERT (Pitfall 1 — behaviour-preserving, byte-identical to

@@ -1,21 +1,24 @@
-"""Phase 5 MSY-01 tests — reflection-fold into Auto-Memory.
+"""Reflexions-Triage (2026-09-11) — record_task_completion no longer folds
+reflections into BoardMemory.
 
-Plan 05-04 (D-01..D-04). Bodies replace the Wave-0 xfail stubs.
+Was hier vorher stand (Phase 5 MSY-01, D-01..D-04): `record_task_completion`
+folded EVERY reflection comment of a completed task into a
+BoardMemory(memory_type='journal') row, unconditionally, via
+`_fold_reflections_into_memory`. That is exactly the automatic,
+ungated board_memory write Mark's 11.09.2026 decision closes ("81 Lessons
+in 2 Tagen, unbelegt, doppelt, unbewertet"). `_load_reflections_for_task`,
+`_reflection_dedup_key` and `_fold_reflections_into_memory` were deleted
+from `app/services/auto_memory.py`; the RedisKeys.auto_memory_reflection_fold
+dedup-key helper was deleted from `app/redis_client.py`.
 
-Coverage:
-- D-02: a finished task with ≥1 reflection produces ≥1 new BoardMemory
-  journal entry (in addition to the existing task_done summary)
-- D-03: re-running record_task_completion with the same reflection is
-  idempotent — per-reflection dedup key blocks the fold; top-level
-  dedup blocks the journal-summary INSERT
-- D-04: legacy reflections (predating MSY-01) get back-filled lazily
-  on the first post-MSY-01 invocation. The fold runs OUTSIDE the
-  top-level auto_memory_task_done short-circuit so a previously-set
-  top-level key cannot suppress the fold.
+The only reflection→BoardMemory write left in the system is Lead-gated:
+`app.routers.agent_comments._handle_reflection_verdict`, exercised by
+`backend/tests/test_reflection_enforcement.py`
+(`test_reflection_verdict_uebernehmen_creates_lesson_with_quelle` et al.).
 
-Patches `app.services.auto_memory.engine` and `.get_redis` to wire the
-in-memory SQLite engine + fakeredis into the production code path
-(canonical pattern from `tests/test_memory_indexing_gaps.py:154-159`).
+This file keeps a narrow regression test: a completed task with reflections
+must NOT produce any BoardMemory row via `record_task_completion`, no matter
+how many times it's called (mutation check for a resurrected auto-fold).
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -28,7 +31,6 @@ from app.models.agent import Agent
 from app.models.board import Board
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
-from app.redis_client import RedisKeys
 from app.services.auto_memory import record_task_completion
 from app.utils import utcnow
 from tests.conftest import test_engine
@@ -48,8 +50,8 @@ async def _seed_task_with_reflection(
         s.add(
             Board(
                 id=bid,
-                name="MSY01",
-                slug=f"msy01-{bid.hex[:8]}",
+                name="Triage-Test",
+                slug=f"triage-test-{bid.hex[:8]}",
                 require_review_before_done=False,
             )
         )
@@ -103,16 +105,14 @@ async def _count_memory(session: AsyncSession, board_id: uuid.UUID) -> int:
 
 
 @pytest.mark.asyncio
-async def test_reflection_produces_journal_entry(fake_redis):
-    """MSY-01 D-02: task with reflection produces ≥ 1 new BoardMemory journal entry.
-
-    W4.2 update: the top-level task_done summary is now a TaskComment (not a
-    BoardMemory), so only the reflection_fold BoardMemory is expected. The count
-    assertion is updated from ≥2 to ≥1.
-    """
+async def test_record_task_completion_creates_no_board_memory_from_reflection(fake_redis):
+    """Mutation check: an un-triaged reflection must produce ZERO BoardMemory
+    rows when the task completes — not even once, not even the old
+    'journal' fold. Only a Lead's `reflection_verdict` (verdict=uebernehmen)
+    may write to board_memory (see test_reflection_enforcement.py)."""
     reflection = (
-        "## Was lief gut\n- klar\n## Was war schwierig\n- nichts\n"
-        "## Naechstes Mal\n- weitermachen\n## Lesson\nReflection-fold sollte funktionieren."
+        "## Was wurde gemacht\n- x\n## Was hat funktioniert\n- x\n"
+        "## Was war unklar\n- x\n## Lesson für Agent-Memory\nSollte NICHT automatisch landen."
     )
     bid, aid, tid = await _seed_task_with_reflection(reflection)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -125,80 +125,23 @@ async def test_reflection_produces_journal_entry(fake_redis):
             new=AsyncMock(return_value=None),
          ):
         await record_task_completion(tid, aid)
+        # Second call (task re-saved as done, e.g. retry) must stay at zero too.
+        await record_task_completion(tid, aid)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         after = await _count_memory(s, bid)
-        rows = (
-            await s.exec(select(BoardMemory).where(BoardMemory.board_id == bid))
-        ).all()
-    # W4.2: task_done is now a TaskComment — only reflection_fold produces a BoardMemory
-    assert after >= before + 1, (
-        f"Expected at least 1 new memory (reflection_fold), got {after - before}"
-    )
-    refl_rows = [r for r in rows if r.tags and "reflection_fold" in r.tags]
-    assert len(refl_rows) >= 1, "Expected at least one reflection_fold BoardMemory"
-    assert refl_rows[0].memory_type == "journal"
-    assert refl_rows[0].source == "system"
-    assert refl_rows[0].auto_generated is True
-
-
-@pytest.mark.asyncio
-async def test_reflection_fold_idempotent(fake_redis):
-    """MSY-01 D-03: re-running record_task_completion produces no duplicates.
-
-    Each folded reflection (gated by auto_memory_reflection_fold:{task_id}:{sha16})
-    is idempotent on re-run with identical input.
-
-    W4.2 update: the top-level journal-summary INSERT is now a TaskComment write
-    (gated by auto_memory_task_done). BoardMemory idempotency is verified via
-    _count_memory, which only counts BoardMemory rows (not TaskComments).
-    W4.2 also added author_type != 'system' filter in _load_reflections_for_task
-    so the auto-generated TaskComment is never re-folded into a BoardMemory.
-    """
-    reflection = "## Lesson\nIdempotency-Test"
-    bid, aid, tid = await _seed_task_with_reflection(reflection)
-
-    with patch("app.services.auto_memory.engine", test_engine), \
-         patch("app.services.auto_memory.get_redis", AsyncMock(return_value=fake_redis)), \
-         patch(
-            "app.services.memory_indexing.index_memory",
-            new=AsyncMock(return_value=None),
-         ):
-        await record_task_completion(tid, aid)
-        async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            after_first = await _count_memory(s, bid)
-        # Second call — per-reflection dedup blocks the fold even though
-        # reflection-fold runs OUTSIDE the top-level short-circuit (D-04).
-        # Top-level short-circuit blocks the TaskComment write (W4.2).
-        # author_type='system' filter prevents the TaskComment from being re-folded.
-        await record_task_completion(tid, aid)
-        async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            after_second = await _count_memory(s, bid)
-
-    assert after_second == after_first, (
-        f"Idempotency broken: {after_first} → {after_second}"
+    assert after == before == 0, (
+        f"record_task_completion darf keine BoardMemory mehr aus Reflexionen "
+        f"anlegen (Reflexions-Triage, 2026-09-11). before={before} after={after}"
     )
 
 
 @pytest.mark.asyncio
-async def test_legacy_reflection_backfill(fake_redis):
-    """MSY-01 D-04: legacy reflections (predating this plan) get folded on next call.
-
-    Simulates the lazy-backfill scenario: a task whose reflection was created
-    BEFORE MSY-01 shipped, and whose top-level auto_memory_task_done key was
-    already set at original completion time. The FIRST post-MSY-01
-    record_task_completion call must still pick up the reflection — because
-    the fold runs OUTSIDE the top-level short-circuit (D-04).
-    """
-    reflection = "## Lesson\nLegacy-backfill"
+async def test_record_task_completion_still_writes_audit_comment(fake_redis):
+    """The task-done audit trail (W4.2 TaskComment redirect) is unaffected
+    by the reflection-fold removal — it's a separate write path."""
+    reflection = "## Lesson für Agent-Memory\nAudit-Trail bleibt bestehen."
     bid, aid, tid = await _seed_task_with_reflection(reflection)
-
-    # Pre-set the top-level dedup key to simulate "already processed before
-    # MSY-01 shipped". If the fold were inside the short-circuit, it would be
-    # skipped entirely and refl_rows would be empty.
-    await fake_redis.set(
-        RedisKeys.auto_memory_task_done(str(tid)), "1", ex=86400
-    )
 
     with patch("app.services.auto_memory.engine", test_engine), \
          patch("app.services.auto_memory.get_redis", AsyncMock(return_value=fake_redis)), \
@@ -209,17 +152,13 @@ async def test_legacy_reflection_backfill(fake_redis):
         await record_task_completion(tid, aid)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        rows = (
-            await s.exec(select(BoardMemory).where(BoardMemory.board_id == bid))
-        ).all()
-    refl_rows = [r for r in rows if r.tags and "reflection_fold" in r.tags]
-    assert len(refl_rows) >= 1, (
-        "Legacy reflection should have been folded on first post-MSY-01 call "
-        "(fold must run OUTSIDE the auto_memory_task_done short-circuit)"
-    )
-    # And the per-reflection dedup key should now exist (so future re-runs
-    # are idempotent).
-    keys = await fake_redis.keys(f"mc:auto_memory:reflection_fold:{tid}:*")
-    assert len(keys) >= 1, (
-        "Per-reflection dedup key should be set after the fold runs"
+        result = await s.exec(
+            select(TaskComment)
+            .where(TaskComment.task_id == tid)
+            .where(TaskComment.comment_type == "reflection")
+            .where(TaskComment.author_type == "system")
+        )
+        audit_comments = result.all()
+    assert len(audit_comments) == 1, (
+        f"Expected 1 system audit-trail TaskComment, got {len(audit_comments)}"
     )
