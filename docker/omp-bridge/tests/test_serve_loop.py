@@ -62,7 +62,7 @@ class RecordingLifecycle(bridge.MCLifecycle):
         self.calls.append(("comment", task_id))
 
 
-def _run(poll_states, run_factory, *, iterations, lifecycle=None):
+def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=None):
     lc = lifecycle or RecordingLifecycle()
     it = iter(poll_states)
 
@@ -82,6 +82,7 @@ def _run(poll_states, run_factory, *, iterations, lifecycle=None):
         poll_interval=0,
         max_iterations=iterations,
         _poll_fn=poll,
+        _recovery_fn=recovery_fn if recovery_fn is not None else (lambda: None),
         _lifecycle_factory=lambda task: lc,
         _run_factory=run_factory,
         _sleep=lambda _s: None,
@@ -150,6 +151,150 @@ def test_idle_clears_dedup_then_reruns():
     )
     assert runs["n"] == 2, runs
     print("PASS test_idle_clears_dedup_then_reruns")
+
+
+# ── Startup recovery (G2, dispatch-path-parity #521 row 7 / card f5cc4cee
+# point e): a container restart drops every in-memory bridge state while the
+# backend still shows the card `in_progress` with a live ack. Poll then
+# reports `state: working` WITHOUT a task object forever (agents.py:3167).
+# serve_loop must recover it via GET /me/active-task-recovery on the very
+# first iteration only — never on a later, genuine mid-run `working`.
+
+
+def test_startup_recovery_runs_active_task_on_working_with_no_task():
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    # First poll reports `working` with no task — exactly what agents.py:3167
+    # returns for an ack'd in_progress/waiting card with no live run signal.
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        rf, iterations=1, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert runs["n"] == 1, runs
+    assert ("ack", "task-1") in lc.calls
+    assert any(c[0] == "finish" for c in lc.calls)
+    print("PASS test_startup_recovery_runs_active_task_on_working_with_no_task")
+
+
+def test_startup_recovery_noop_when_nothing_active():
+    # GET /me/active-task-recovery reports {"active": false} → _make_http_recovery
+    # (and any equivalent test double) returns None. serve_loop must fall back
+    # to idling, not crash or spin.
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        iterations=1, recovery_fn=lambda: None,
+    )
+    assert lc.calls == []
+    print("PASS test_startup_recovery_noop_when_nothing_active")
+
+
+def test_startup_recovery_only_fires_on_first_iteration():
+    # A SECOND `working`-with-no-task poll (this bridge's OWN turn genuinely
+    # in flight, e.g. a message-nudge turn outside the dispatch bookkeeping)
+    # must NOT trigger another recovery fetch — only the very first iteration
+    # is a startup boundary.
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return None
+
+    lc = _run(
+        [
+            {"state": "working", "task_id": "task-1"},
+            {"state": "working", "task_id": "task-1"},
+        ],
+        lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        iterations=2, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert lc.calls == []
+    print("PASS test_startup_recovery_only_fires_on_first_iteration")
+
+
+def test_startup_recovery_not_triggered_by_idle_or_new_task():
+    # Recovery is scoped to the EXACT `working`-with-no-task gap — a normal
+    # idle or new_task first poll must never call it.
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    def rf(task, cwd):
+        return _finish_outcome
+
+    lc = _run([{"state": "idle"}], rf, iterations=1, recovery_fn=recovery)
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert lc.calls == []
+
+    lc2 = _run(
+        [{"state": "new_task", "task": TASK}], rf, iterations=1, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert any(c[0] == "finish" for c in lc2.calls)
+    print("PASS test_startup_recovery_not_triggered_by_idle_or_new_task")
+
+
+def test_make_http_recovery_translates_active_and_inactive():
+    import urllib.request
+
+    class _FakeResp:
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self._body
+
+    responses = [b'{"active": false, "reason": "no_active_task"}']
+
+    def fake_urlopen(req, timeout=0):
+        return _FakeResp(responses[0])
+
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        recover = bridge._make_http_recovery("http://backend:8000", "tok")
+        assert recover() is None
+
+        responses[0] = (
+            b'{"active": true, "task": {"id": "t9", "title": "x", '
+            b'"status": "in_progress", "board_id": "b1", '
+            b'"workspace_path": "/ws", "prompt": "do it", '
+            b'"dispatch_attempt_id": "att-9"}}'
+        )
+        payload = recover()
+        assert payload == {
+            "state": "new_task",
+            "task": {
+                "id": "t9", "title": "x", "status": "in_progress",
+                "board_id": "b1", "workspace_path": "/ws", "prompt": "do it",
+                "dispatch_attempt_id": "att-9",
+            },
+        }
+    finally:
+        urllib.request.urlopen = orig
+    print("PASS test_make_http_recovery_translates_active_and_inactive")
 
 
 def test_retryable_abort_exhausts_to_blocker():

@@ -2363,6 +2363,7 @@ def serve_loop(
     poll_interval: float = 5.0,
     max_iterations: Optional[int] = None,
     _poll_fn: Optional[Callable[[], Optional[dict]]] = None,
+    _recovery_fn: Optional[Callable[[], Optional[dict]]] = None,
     _lifecycle_factory: Optional[Callable[[dict], MCLifecycle]] = None,
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
     _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
@@ -2439,6 +2440,10 @@ def serve_loop(
     )
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)
+    # G2 (dispatch-path-parity #521 row 7 / card f5cc4cee point e): recovers a
+    # card poll reports `working` for on the very first iteration — see the
+    # startup-recovery check below.
+    recovery_fn = _recovery_fn or _make_http_recovery(api_url, token)
     # Fix 3: the heartbeat control channel. One InterruptState per serve
     # loop; the heartbeater's `_on_control` sets it mid-run and
     # `_observe_native_turn` (via run_native_turn/continue) consumes it.
@@ -2496,6 +2501,36 @@ def serve_loop(
 
         state = (payload or {}).get("state")
         task = (payload or {}).get("task") if state == "new_task" else None
+
+        # Startup recovery (G2, dispatch-path-parity #521 row 7 / card
+        # f5cc4cee point e): a container restart drops every in-memory bridge
+        # state (last_attempt_id, the TUI, this very process) while the
+        # backend still shows the card `in_progress` with a live ack. Poll
+        # then reports `state: working` WITHOUT a task object forever
+        # (agents.py:3167 — `active.ack_at is not None` short-circuits before
+        # a task is ever attached), because nothing ever asks for the prompt
+        # again; the card only heals once the backend's own orphan-liveness
+        # threshold trips. poll.sh closes this gap on its own first poll via
+        # `recover_task()` (GET /me/active-task-recovery); serve_loop never
+        # had an equivalent call. One-shot on the very first iteration only —
+        # every later `working` is this bridge's OWN turn in flight and must
+        # not re-trigger a redundant recovery fetch.
+        if iterations == 1 and state == "working" and task is None:
+            try:
+                recovery_payload = recovery_fn()
+            except Exception as e:  # noqa: BLE001 — recovery must never crash the loop
+                sys.stderr.write(
+                    f"[serve] startup-recovery error: {type(e).__name__}: {e}\n"
+                )
+                recovery_payload = None
+            if recovery_payload is not None:
+                sys.stderr.write(
+                    "[serve] startup-recovery: active task found — "
+                    "re-delivering prompt (read-only, no status change)\n"
+                )
+                payload = recovery_payload
+                state = payload.get("state")
+                task = payload.get("task") if state == "new_task" else None
 
         if state in ("idle", "cancelled", "stopped"):
             last_attempt_id = None  # clear dedup so a re-opened task dispatches
@@ -2797,6 +2832,30 @@ def _make_http_poll(
         return json.loads(body) if body.strip() else None
 
     return _poll
+
+
+def _make_http_recovery(api_url: str, token: str) -> Callable[[], Optional[dict]]:
+    """GET /me/active-task-recovery once at startup (ADR-024) — the bridge's
+    counterpart of poll.sh's ``recover_task()``. Read-only: mutates no task
+    status, only (best-effort, backend-side) the dispatch_attempt_id. Returns
+    a `new_task`-shaped payload — the same shape `/me/poll` would hand
+    serve_loop — when an active in_progress/blocked/review card exists, else
+    None (nothing to recover)."""
+    import urllib.request
+
+    url = f"{api_url}/api/v1/agent/me/active-task-recovery"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def _recover() -> Optional[dict]:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8")
+        data = json.loads(body) if body.strip() else {}
+        if not data.get("active"):
+            return None
+        return {"state": "new_task", "task": data.get("task")}
+
+    return _recover
 
 
 # ---------------------------------------------------------------------------
