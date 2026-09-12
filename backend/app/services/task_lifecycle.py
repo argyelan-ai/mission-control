@@ -920,15 +920,21 @@ async def execute_review_decision(
             detail={"decision": "hold", "actor": actor_name},
         )
 
-    # One-turn stop flag from stop_running_reviewer_turn: the hard
-    # interrupt is delivered on the reviewer's next heartbeat/poll, so the
-    # flag MUST persist past this request. It is cleared here when the
-    # decision moves the card out of review (approve/request_changes — no
-    # reviewer turn will run on it again), and for hold it is cleared by
-    # the existing resume/recover/inbox paths (tasks.py:1476,
-    # agent_task_status.py:1922, agents.py:3646) like any operator stop.
-    if task.run_control == "stopped" and decision in ("approve", "request_changes"):
-        task.run_control = None
+    # The one-turn stop flag from stop_running_reviewer_turn PERSISTS past
+    # this request: the reviewer's live turn only ends when its next
+    # heartbeat/poll translates run_control="stopped" into a hard interrupt
+    # (routers/agents.py:_heartbeat_control). Clearing it in the same
+    # request would erase the interrupt before it is ever delivered —
+    # exactly the "reviewer dies with a bare 409" incident this feature
+    # exists to prevent. Downstream paths clean it up on their own:
+    #   - approve/request_changes: handle_review_rejection and the
+    #     requeue/park paths (tasks.py:1476, agent_task_status.py:1922,
+    #     agents.py:3646) reset run_control when the card moves out of
+    #     review, and check_dispatch_allowed blocks a re-dispatch of a
+    #     stopped card in the meantime (operations.py:133).
+    #   - hold: the card stays in review; the operator releases it via the
+    #     existing resume flow (operations.py:resume_task_run) — identical
+    #     to the operator Stop-Button semantics.
     task.updated_at = utcnow()
     session.add(task)
     await session.commit()

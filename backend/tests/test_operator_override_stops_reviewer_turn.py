@@ -14,8 +14,10 @@ for the bridge's live turn. Guardrails:
     "reviewer" is the caller itself;
   - a card with NO reviewer agent assigned is never touched (operator-only
     cards stay stop-free);
-  - on approve/request_changes the stop flag is cleared again with the
-    final status so no stale "stopped" blocks later transitions.
+  - the stop flag PERSISTS past the decision request: the reviewer's next
+    heartbeat/poll must still see it to receive the hard interrupt (the
+    same-request clear was review blocker B1); downstream requeue/park/
+    resume paths reset it when the card moves on.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -56,15 +58,21 @@ async def test_operator_override_stops_running_reviewer_turn(
         board_id=board.id, title="Override Stop",
         status="review", assigned_agent_id=reviewer.id,
     )
-
     await _decide(task, board.id, "approve", "Operator entscheidet selbst.")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task.id)
-        # Reviewer released: card moved out of review; one-turn stop flag
-        # cleared with the final status (approve -> done, run_control None).
+        # Card moved out of review, but the one-turn stop flag PERSISTS:
+        # the reviewer's next heartbeat must still deliver the hard
+        # interrupt (same-request clear was review blocker B1).
         assert t.status == "done"
-        assert t.run_control is None
+        assert t.run_control == "stopped"
+        from app.routers.agents import _heartbeat_control
+        control = _heartbeat_control(t, reviewer.id, [], None)
+        assert control == {
+            "interrupt": "hard",
+            "reason": "run_control=stopped (Stop durch Operator)",
+        }
         comments = (await s.exec(
             select(TaskComment).where(TaskComment.task_id == task.id)
             .order_by(TaskComment.created_at.asc())
@@ -92,6 +100,7 @@ async def test_agent_decision_does_not_stop_or_comment(make_board, make_agent, m
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task.id)
         assert t.status == "done"
+        # Agent path never sets the flag — nothing to persist.
         assert t.run_control is None
         comments = (await s.exec(
             select(TaskComment).where(TaskComment.task_id == task.id)
@@ -126,7 +135,8 @@ async def test_operator_override_on_request_changes_keeps_flow(
     make_board, make_agent, make_task,
 ):
     """request_changes by the operator: stop comment written, reviewer
-    released, stop flag cleared with the final in_progress/inbox state."""
+    released, and the stop flag PERSISTS with the final inbox state so the
+    reviewer's next heartbeat still hard-interrupts the live turn."""
     board = await make_board(name="Rework Board", slug="rework-board")
     reviewer = await make_agent(name="Reviewer-Rework", board_id=board.id, role="reviewer")
     developer = await make_agent(name="Dev-Rework", board_id=board.id)
@@ -158,7 +168,14 @@ async def test_operator_override_on_request_changes_keeps_flow(
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task.id)
-        assert t.run_control is None
+        # Flag persists with the final state (inbox) — the reviewer's next
+        # heartbeat must still see it (B1: same-request clear erased the
+        # interrupt before it was ever delivered).
+        assert t.status == "inbox"
+        assert t.run_control == "stopped"
+        from app.routers.agents import _heartbeat_control
+        control = _heartbeat_control(t, reviewer.id, [], None)
+        assert control is not None and control["interrupt"] == "hard"
         comments = (await s.exec(
             select(TaskComment).where(TaskComment.task_id == task.id)
             .order_by(TaskComment.created_at.asc())
