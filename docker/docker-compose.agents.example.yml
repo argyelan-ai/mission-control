@@ -24,6 +24,11 @@
 #   /mc-servers         ro  → ~/.mc/mcp-servers/             MCP-Server
 #   /vault              rw  → ~/.mc/vault/                   gemeinsames Wissen
 #
+# Zusaetzlich fuer den claude-Harness (nicht omp/kimi/openclaude):
+#   /workspace-ref        ro  → ~/Workspace/Projects/            Code des Operators als Referenz
+#   /shared-deliverables  ro  → Named Volume mc_shared_deliverables
+#   /shared-mcp           ro  → ~/.mc/mcp-screenshots/           Playwright-MCP-Sidecar-Output
+#
 # ── Zugangsdaten ─────────────────────────────────────────────────────────
 #   CLAUDE_CODE_OAUTH_TOKEN  Anthropic-OAuth (`claude setup-token`) → root .env
 #   MC_TOKEN_<SLUG>          pro Agent, aus dem Vault → docker/.env.agents
