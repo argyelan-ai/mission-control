@@ -521,6 +521,72 @@ async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[
     return worker_agent_ids
 
 
+async def stop_running_reviewer_turn(
+    session: AsyncSession,
+    task: Task,
+    decision: str,
+    actor_name: str,
+) -> bool:
+    """Operator override: hard-stop a reviewer agent's RUNNING turn.
+
+    When the operator decides on a review themselves ("Selbst entscheiden"),
+    the reviewer agent may still be mid-turn on this card. Releasing the
+    lock via update_agent_active_task alone leaves that turn running — it
+    then dies at the end with a bare 409 ("Task ist nicht im Review") and
+    the review work is lost without explanation.
+
+    This runs BEFORE the reviewer is released and only fires when a
+    reviewer agent actually holds the card (never on operator-only cards
+    with assigned_agent_id=None):
+      1. A TaskComment (author_type=system) names the decision and the
+         decider — visible to the reviewer in the transcript.
+      2. run_control="stopped" — the heartbeat control channel
+         (routers/agents.py:_heartbeat_control, Fix 3) translates this into
+         a hard interrupt for the bridge's live turn, which ends the run
+         cleanly instead of letting it crash into the 409.
+
+    The caller clears run_control again on the task's final commit —
+    this is a one-turn interrupt, not a task stop.
+
+    Returns True if a running reviewer turn was stopped.
+    """
+    reviewer_id = task.assigned_agent_id
+    if not reviewer_id:
+        return False
+    reviewer = await session.get(Agent, reviewer_id)
+    # Only a dedicated reviewer agent can be mid-turn on this card.
+    if reviewer is None or reviewer.role != "reviewer":
+        return False
+
+    task.run_control = "stopped"
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        comment_type="system",
+        content=(
+            "**Operator-Override: dein laufender Review-Zug wurde gestoppt.**\n\n"
+            f"Der Operator hat selbst entschieden: `{decision}` "
+            f"(Entscheider: {actor_name}). Der Zug wurde hart beendet, "
+            "damit dein Turn nicht in einen 409 laeuft — dein bisheriger "
+            "Review-Fortschritt ist im Transkript sichtbar."
+        ),
+    ))
+    await emit_event(
+        session, "review.reviewer_turn_stopped",
+        f"Operator-Override ({decision}): laufender Review-Zug von "
+        f"{reviewer.name} gestoppt",
+        board_id=task.board_id, task_id=task.id, agent_id=reviewer.id,
+        severity="warning",
+        detail={"decision": decision, "decider": actor_name},
+    )
+    logger.info(
+        "Reviewer-Turn-Stop: '%s' — laufender Zug von %s gestoppt "
+        "(Operator-Override, decision=%s)",
+        task.title[:40], reviewer.name, decision,
+    )
+    return True
+
+
 async def execute_review_decision(
     session: AsyncSession,
     task: Task,
@@ -612,6 +678,13 @@ async def execute_review_decision(
 
     old_status = task.status
     actor_name = actor_agent.name if actor_agent else "Operator"
+
+    # ── 0. Operator override: stop the reviewer's RUNNING turn ──
+    # Only when a reviewer agent holds the card and the OPERATOR decides
+    # (actor_agent is None). The agent path (actor_agent set) is the
+    # reviewer itself — its turn is the one POSTing this decision.
+    if actor_agent is None:
+        await stop_running_reviewer_turn(session, task, decision, actor_name)
 
     # ── 1. Comment (always, atomic with the decision) ──────
     comment = TaskComment(
@@ -847,6 +920,15 @@ async def execute_review_decision(
             detail={"decision": "hold", "actor": actor_name},
         )
 
+    # One-turn stop flag from stop_running_reviewer_turn: the hard
+    # interrupt is delivered on the reviewer's next heartbeat/poll, so the
+    # flag MUST persist past this request. It is cleared here when the
+    # decision moves the card out of review (approve/request_changes — no
+    # reviewer turn will run on it again), and for hold it is cleared by
+    # the existing resume/recover/inbox paths (tasks.py:1476,
+    # agent_task_status.py:1922, agents.py:3646) like any operator stop.
+    if task.run_control == "stopped" and decision in ("approve", "request_changes"):
+        task.run_control = None
     task.updated_at = utcnow()
     session.add(task)
     await session.commit()
