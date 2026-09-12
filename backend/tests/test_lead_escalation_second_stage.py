@@ -464,3 +464,112 @@ def test_escalation_wired_into_check_all():
     assert src.index("_check_lead_notify_escalations") < src.index(
         "_recover_orphaned_tasks"
     )
+
+async def _make_escalatable(make_board, make_agent, make_task, **task_kwargs):
+    """Board + lead + worker + task, staged for an overdue escalation."""
+    now = utcnow()
+    board = await make_board(name="B", slug=f"le-{uuid.uuid4().hex[:8]}")
+    await make_agent(name="Lead", board_id=board.id,
+                     is_board_lead=True, role="lead")
+    worker = await make_agent(name="Worker", board_id=board.id,
+                              is_board_lead=False, role="developer",
+                              last_seen_at=now)
+    defaults = dict(status="in_progress",
+                    assigned_agent_id=worker.id,
+                    updated_at=now - timedelta(minutes=75))
+    defaults.update(task_kwargs)
+    task = await make_task(board_id=board.id, title="Silent card", **defaults)
+    await _add_stage1(task.id, age_minutes=45)
+    return board, worker, task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_kwargs", [
+    {"review_decision": "hold"},
+    {"run_control": "stopped"},
+    {"run_control": "manual_hold"},
+])
+async def test_stage1_silence_guards_suppress_escalation(
+    make_board, make_agent, make_task, task_kwargs,
+):
+    """A card stage 1 deliberately stays silent on must not reach the
+    operator through the louder stage-2 channel 30 minutes later."""
+    _b, _w, task = await _make_escalatable(
+        make_board, make_agent, make_task, **task_kwargs,
+    )
+
+    async with _session() as s:
+        await _run_check(s)
+
+    assert await _comments(task.id, "lead_escalated_notify") == []
+    assert await _approvals(task.id, "lead_escalation") == []
+
+
+@pytest.mark.asyncio
+async def test_paused_assigned_agent_suppresses_escalation(
+    make_board, make_agent, make_task,
+):
+    """Paused worker: stage 1 stays silent (#518), so must stage 2."""
+    _b, worker, task = await _make_escalatable(make_board, make_agent, make_task)
+
+    async with _session() as s:
+        from app.models.agent import Agent
+        agent = await s.get(Agent, worker.id)
+        agent.operational_mode = "paused"
+        s.add(agent)
+        await s.commit()
+
+    async with _session() as s:
+        await _run_check(s)
+
+    assert await _comments(task.id, "lead_escalated_notify") == []
+
+
+
+@pytest.mark.asyncio
+async def test_archived_board_suppresses_escalation(make_board, make_agent, make_task):
+    """An archived board's lead messages never escalate to the operator."""
+    now = utcnow()
+    board = await make_board(name="B", slug=f"le-{uuid.uuid4().hex[:8]}",
+                             is_archived=True)
+    await make_agent(name="Lead", board_id=board.id,
+                     is_board_lead=True, role="lead")
+    worker = await make_agent(name="Worker", board_id=board.id,
+                              is_board_lead=False, role="developer",
+                              last_seen_at=now)
+    task = await make_task(board_id=board.id, title="Silent card",
+                           status="in_progress",
+                           assigned_agent_id=worker.id,
+                           updated_at=now - timedelta(minutes=75))
+    await _add_stage1(task.id, age_minutes=45)
+
+    async with _session() as s:
+        await _run_check(s)
+
+    assert await _comments(task.id, "lead_escalated_notify") == []
+
+
+# ── B2: marker and approval commit atomically ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_escalation_persists_marker_and_approval_together(
+    make_board, make_agent, make_task,
+):
+    """Approval and marker commit in one transaction: neither a marker
+    without an approval (claiming an escalation that never happened) nor
+    an approval without a marker (which would escalate twice)."""
+    _b, _w, task = await _make_escalatable(make_board, make_agent, make_task)
+
+    async with _session() as s:
+        await _run_check(s)
+
+    markers = await _comments(task.id, "lead_escalated_notify")
+    approvals = await _approvals(task.id, "lead_escalation")
+    assert len(markers) == 1
+    assert len(approvals) == 1
+    # The marker must not predate the approval (marker-first was the bug:
+    # an approval-write failure left a marker with no escalation behind it)
+    assert approvals[0].created_at is not None
+    assert markers[0].created_at is not None
+    assert approvals[0].created_at <= markers[0].created_at + timedelta(seconds=5)

@@ -1553,12 +1553,16 @@ class TaskMonitorMixin:
         (new silent phase) legitimately opens a new escalation window.
         """
         from app.models.approval import Approval
+        from app.models.board import Board
 
         result = await session.exec(
             select(TaskComment)
+            .join(Task, Task.id == TaskComment.task_id)
+            .join(Board, Board.id == Task.board_id)
             .where(
                 TaskComment.author_type == "system",
                 TaskComment.comment_type.in_(LEAD_NOTIFY_COMMENT_TYPES),  # type: ignore[union-attr]
+                Board.is_archived == False,  # noqa: E712
             )
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
         )
@@ -1577,6 +1581,16 @@ class TaskMonitorMixin:
             task = await session.get(Task, stage1.task_id)
             if task is None or task.status in ("done", "failed", "aborted"):
                 continue
+
+            # Same deliberate-silence conditions as _check_silent_cards:
+            # a card the stage-1 watchdog deliberately stays quiet on must
+            # not wake the operator 30 minutes later through the LOUDER
+            # channel (review feedback B1, PR #525).
+            if task.review_decision == "hold":
+                continue  # Lead parked this card on purpose
+            if task.run_control in ("stopped", "manual_hold"):
+                continue  # operator/lead-controlled hold
+
             if stage1.created_at is None:
                 continue
             stage1_at = ensure_aware(stage1.created_at)
@@ -1599,6 +1613,15 @@ class TaskMonitorMixin:
 
             if await self._lead_reacted_after(session, task, lead, stage1_at):
                 continue
+
+            # Paused assigned agent: stage 1 stays silent on purpose (#518).
+            if task.assigned_agent_id:
+                assigned_agent = await session.get(Agent, task.assigned_agent_id)
+                if (
+                    assigned_agent is not None
+                    and getattr(assigned_agent, "operational_mode", "active") == "paused"
+                ):
+                    continue
 
             # Operator already has a live decision ticket on this card —
             # a second, parallel channel would be noise, not escalation.
@@ -1647,14 +1670,12 @@ class TaskMonitorMixin:
                 f"Agent: {assigned_name}\n"
                 f"Lead-Meldung vom: {stage1_at.isoformat()}"
             )
-            session.add(TaskComment(
-                task_id=task.id,
-                author_type="system",
-                content=msg,
-                comment_type="lead_escalated_notify",
-            ))
-            await session.commit()
-
+            # Marker and effect commit TOGETHER (review feedback B2, PR #525):
+            # committing the ``lead_escalated_notify`` marker before the
+            # Approval means an approval-write failure leaves a marker that
+            # claims an escalation that never happened — and exactly-once
+            # dedup then suppresses the real escalation forever. One
+            # transaction: either both exist or neither does.
             approval = Approval(
                 board_id=task.board_id,
                 task_id=task.id,
@@ -1675,6 +1696,12 @@ class TaskMonitorMixin:
                 expires_at=now + timedelta(hours=24),
             )
             session.add(approval)
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=msg,
+                comment_type="lead_escalated_notify",
+            ))
             await session.commit()
 
             try:
@@ -1684,7 +1711,8 @@ class TaskMonitorMixin:
                     f"Lead-Meldung ohne Reaktion seit {minutes_waiting}min "
                     f"(Lead: {lead.name}).",
                 )
-            except Exception as e:  # noqa: BLE001 — Kommentar ist schon persistiert
+            except Exception as e:  # noqa: BLE001 — Approval+Marker sind persistiert,
+                # der Operator sieht es im Approval-Inbox auch ohne Push
                 logger.warning(
                     "Lead-escalation operator push failed for '%s': %s",
                     task.title, e,
