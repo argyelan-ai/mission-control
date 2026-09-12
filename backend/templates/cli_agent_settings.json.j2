@@ -39,5 +39,16 @@
     "type": "command",
     "command": "bash /home/agent/.claude/statusline-mc.sh"
   },
-  {% endif %}"skipDangerousModePermissionPrompt": true
+  {% endif %}{#
+    AskUserQuestion deny: a native dialog in headless agent operation is a
+    silent stall — the question sits in the TUI, nobody sees it, the card
+    stays in progress. `mc ask` is the path that reaches Lead/Operator, so
+    the tool itself is denied here rather than relying on prompt discipline.
+    Rendered for both harnesses (claude + openclaude) since both load this
+    settings.json; the omp/ACP bridge has no equivalent (approval-mode yolo
+    never surfaces a dialog there, but there is also no deny to add).
+  #}"permissions": {
+    "deny": ["AskUserQuestion"]
+  },
+  "skipDangerousModePermissionPrompt": true
 }
