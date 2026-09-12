@@ -257,6 +257,7 @@ export function Stage({
             hostName={headHost?.host.slug ?? null}
             servingName={runtime.display_name}
             runtimeId={runtime.id}
+            multiNode={(runtime.member_hosts ?? []).length > 0}
             variant={status === "failed" ? "trouble" : "normal"}
             onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
           />
