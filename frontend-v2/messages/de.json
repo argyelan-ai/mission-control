@@ -430,6 +430,7 @@
     "decideYourself": "Selbst entscheiden",
     "agentReviewOnHold": "zurückgestellt",
     "agentReviewing": "{agent} prüft",
+    "selfReviewStall": "{agent} hat die Karte selbst entwickelt — wartet auf Lead",
     "approvalsCount": "Freigaben ({count})",
     "awaitingReview": "{count, plural, one {1 Aufgabe wartet noch auf Review} other {# Aufgaben warten noch auf Review}}",
     "allClear": "Alles erledigt",

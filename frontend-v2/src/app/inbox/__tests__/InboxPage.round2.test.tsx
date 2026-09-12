@@ -57,6 +57,8 @@ function mkTask(o: Partial<Task> = {}): Task {
     assigned_agent_id: "agent-argus", human_review_required: false,
     review_decision: null, run_control: null, created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z", priority: "medium",
+    // Real handoff by default — a held review still requires a genuine handoff.
+    dispatch_intent: "review_handoff",
     ...o,
   } as unknown as Task;
 }

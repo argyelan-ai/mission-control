@@ -18,6 +18,7 @@ import { C } from "@/lib/colors";
 import Link from "next/link";
 import type { Task, Agent } from "@/lib/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { isSelfReviewStall } from "@/lib/reviewRouting";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -57,6 +58,11 @@ export function ReviewTaskRow({
     task.priority === "high" ? C.warning :
     C.textMuted;
 
+  // W2 (PR #514 Rex review): reviewer === developer of this card → backend
+  // skipped the handoff, so this card landed here (operator/Lead's list)
+  // without ever having human_review_required set. Say why.
+  const selfReviewStall = !task.human_review_required && isSelfReviewStall(task);
+
   return (
     <motion.div
       layout
@@ -83,6 +89,19 @@ export function ReviewTaskRow({
                   }}
                 >
                   <UserCheck size={10} /> {t("yourReview")}
+                </span>
+              )}
+              {selfReviewStall && (
+                <span
+                  className="text-[10px] font-medium px-2 py-1 rounded-sm inline-flex items-center gap-1"
+                  data-testid="self-review-stall-badge"
+                  style={{
+                    color: C.warning,
+                    backgroundColor: `${C.warning}1A`,
+                    border: `1px solid ${C.warning}40`,
+                  }}
+                >
+                  <UserCheck size={10} /> {t("selfReviewStall", { agent: agent?.name ?? "—" })}
                 </span>
               )}
               <span
