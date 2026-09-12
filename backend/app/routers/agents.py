@@ -370,6 +370,8 @@ async def list_agents(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    from app.scopes import normalize_agent_role
+
     query = select(Agent)
     if board_id and not include_unassigned:
         query = query.where(Agent.board_id == board_id)
@@ -382,7 +384,16 @@ async def list_agents(
         query = query.where(Agent.archived_at.is_(None))
     query = query.order_by(Agent.name)
     result = await session.exec(query)
-    return result.all()
+    agents = result.all()
+    # W1 (PR #514 Rex review): `role` can be freetext (setattr in PATCH bypasses
+    # the model's validator — see scopes.normalize_agent_role docstring). The
+    # frontend's strict `role === "reviewer"` check needs a value it can trust,
+    # so add the canonical form here instead of duplicating the enum-matching
+    # heuristic in TypeScript. Raw `role` stays untouched for display purposes.
+    return [
+        {**a.model_dump(), "role_canonical": normalize_agent_role(a.role)}
+        for a in agents
+    ]
 
 
 @router.get("/agents/stream")

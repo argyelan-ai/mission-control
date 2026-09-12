@@ -36,7 +36,7 @@ vi.mock("@/lib/api", () => ({
 
 import { TaskActions } from "../TaskActions";
 
-const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
+const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer", role_canonical: "reviewer" } as unknown as Agent;
 
 function mkTask(o: Partial<Task> = {}): Task {
   return {
