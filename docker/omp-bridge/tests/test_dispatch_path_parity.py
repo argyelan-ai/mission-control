@@ -5,7 +5,13 @@ test_serve_loop_wiring.py — every dispatch/access mechanic that the parity
 table documents has a NAMED entry point in serve_loop; the test fails when a
 path stops wiring it. Known, not-yet-closed gaps are an explicit exception
 list (KNOWN_GAPS) so the test is green today but trips as soon as a NEW gap
-appears or the exception becomes stale (fix landed → remove the exception).
+appears — and the path inventory is DERIVED FROM SOURCE (reverse direction),
+so a new run factory or a new OMP_DRIVER branch trips the suite before it
+ships unwired.
+
+Both directions matter (review PR #521, blocker B1):
+  forward : every registry entry still exists in the code
+  reverse : every path-shaped thing in the code is in the registry
 
 Scope note: the poll.sh path's side lives in shell (docker/shared/poll.sh) and
 is exercised by backend integration tests; this module pins the BRIDGE paths
@@ -16,6 +22,7 @@ backend/app/routers/agents.py — path-independent by construction.
 Run: pytest docker/omp-bridge/tests/test_dispatch_path_parity.py -q
 """
 
+import ast
 import inspect
 import os
 import re
@@ -33,10 +40,22 @@ AGENTS_ROUTER = os.path.join(
     REPO_ROOT, "backend", "app", "routers", "agents.py"
 )
 
-# The three delivery paths under audit. A NEW path (a new run factory or a
-# new driver branch in serve_loop) must be added here AND wired for every
-# mechanism below — otherwise the wiring assertions fail.
+# The audited bridge paths. This list is pinned by BOTH directions below:
+# test_all_bridge_run_factories_exist (forward: entry still exists) and
+# test_new_paths_must_join_the_registry (reverse: a path-shaped function that
+# is NOT listed here fails the suite).
 BRIDGE_RUN_FACTORIES = ["run_native_turn", "run_native_continue", "run_acp_once"]
+
+# A module-level function whose name looks like a run driver is treated as a
+# dispatch path. Deliberately narrow suffix set so helpers don't false-trip:
+# `run_omp_subprocess` (the legacy ADR-045 headless one-shot behind --run/
+# --replay) does NOT match and is not one of the three audited serve_loop
+# paths — add it here with a reason if the audit ever covers it.
+PATH_DEF_RE = re.compile(r"^run_[a-z_]*(_once|_turn|_continue)$")
+
+# OMP_DRIVER values serve_loop branches on (main: only the ACP driver).
+# A new value means a new driver branch → must join the table + wiring.
+KNOWN_DRIVER_VALUES = {"acp"}
 
 # mechanism -> named entry points that must appear in serve_loop's source.
 # Each entry is the *symbol* the parity table cites as evidence.
@@ -48,7 +67,11 @@ SERVE_LOOP_WIRING = {
     "soft_hard_interrupt": ["interrupt_state", "_on_control", "start_heartbeater"],
     "task_context_env": ["write_task_context_env"],
     "finish_guard": ["drive_live_run", "set_blocker"],
-    "startup_recovery": [],  # KNOWN GAP G2 — exceptions below
+    # Intentionally EMPTY: G2 (startup recovery) has NO wired symbol on any
+    # bridge path today — there is nothing to assert. The gap itself is
+    # covered by the KNOWN_GAPS exception machinery below, and the reverse
+    # direction is covered by test_serve_loop_driver_branches_are_known.
+    "startup_recovery": [],
     "acp_cancel_flip": ["_acp_control_sink"],
 }
 
@@ -78,19 +101,96 @@ KNOWN_GAPS = [
     ("G3", "transcript_sink", "serve_loop's ACP run_once calls run_acp_once "
      "without sinks; _make_acp_run_factory owns them but is unused on main"),
     ("G3", "preview_sink", "same as transcript_sink — PR #498 open"),
-    # G4: ACP progress is synthesized only on tool events.
+    # G4: ACP progress is synthesized only on tool events. The symbol
+    # _acp_tool_heartbeat EXISTS (that is the gap: it fires on tool calls
+    # only), so a stale-check on absence cannot work — G4 deliberately has
+    # no absence-tripwire. A G4 fix (non-tool progress source) should replace
+    # this comment with a positive assertion on the new symbol.
     ("G4", "_acp_tool_heartbeat", "exists, but no non-tool progress source — "
      "documented gap, fix card pending"),
 ]
+
+
+def _bridge_source() -> str:
+    return inspect.getsource(bridge)
 
 
 def _serve_loop_source() -> str:
     return inspect.getsource(bridge.serve_loop)
 
 
+def _serve_loop_ast() -> ast.Module:
+    return ast.parse(_serve_loop_source())
+
+
 def _file_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as fh:
         return fh.read()
+
+
+def _module_run_functions() -> set:
+    """Every module-level function whose name is path-shaped (reverse
+    direction of the registry check)."""
+    tree = ast.parse(_bridge_source())
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and PATH_DEF_RE.match(node.name)
+    }
+
+
+def _mentions_driver(node: ast.AST) -> bool:
+    """True if this expression subtree references the OMP_DRIVER selection:
+    either the literal env key or a *_driver helper call."""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and sub.value == "OMP_DRIVER":
+            return True
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id.endswith("driver")
+        ):
+            return True
+    return False
+
+
+def _driver_cmp_values(tree: ast.AST) -> set:
+    """String values compared against an OMP_DRIVER selection anywhere in the
+    given AST — e.g. `_acp_env_driver() == "acp"` or
+    `os.environ.get("OMP_DRIVER") == "gemini"`."""
+    values = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        for i, op in enumerate(operands):
+            if isinstance(op, ast.Constant) and isinstance(op.value, str):
+                others = [o for j, o in enumerate(operands) if j != i]
+                if any(_mentions_driver(o) for o in others):
+                    values.add(op.value)
+    return values
+
+
+def _run_acp_once_call_keywords() -> list:
+    """Keyword names of EVERY run_acp_once call site inside serve_loop
+    (AST-based — survives nested parens like max_time=int(turn_deadline),
+    which a `[^)]*` regex cannot)."""
+    calls = []
+    for node in ast.walk(_serve_loop_ast()):
+        if isinstance(node, ast.Call):
+            name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else getattr(node.func, "attr", None)
+            )
+            if name == "run_acp_once":
+                calls.append(sorted(kw.arg for kw in node.keywords if kw.arg))
+    assert calls, "no run_acp_once call site found in serve_loop"
+    return calls
+
+
+# ── forward direction: registry entries exist and are wired ────────────────
 
 
 def test_all_bridge_run_factories_exist():
@@ -127,6 +227,36 @@ def test_backend_anchors_present():
     )
 
 
+# ── reverse direction: new paths must join the registry ────────────────────
+
+
+def test_new_paths_must_join_the_registry():
+    """A path-shaped run function in bridge.py that is NOT in
+    BRIDGE_RUN_FACTORIES fails here — a new path must enter the parity table
+    AND wire every mechanism in serve_loop before it ships."""
+    unknown = _module_run_functions() - set(BRIDGE_RUN_FACTORIES)
+    assert not unknown, (
+        "NEW dispatch path detected in bridge.py — add it to "
+        "docs/dispatch-path-parity.md and wire every mechanism in serve_loop "
+        "(or extend PATH_DEF_RE with a reason if this is not a path): "
+        + ", ".join(sorted(unknown))
+    )
+
+
+def test_serve_loop_driver_branches_are_known():
+    """A new OMP_DRIVER branch in serve_loop (even without its own run
+    factory) fails here — same reverse direction for driver selection."""
+    unknown = _driver_cmp_values(_serve_loop_ast()) - KNOWN_DRIVER_VALUES
+    assert not unknown, (
+        "NEW OMP_DRIVER branch in serve_loop — add it to "
+        "docs/dispatch-path-parity.md and audit its wiring: "
+        + ", ".join(sorted(unknown))
+    )
+
+
+# ── exception list hygiene ──────────────────────────────────────────────────
+
+
 def test_known_gaps_reference_real_symbols():
     """Every exception must cite a symbol that is REALLY absent today —
     the exception goes stale (fails here) the moment someone wires it,
@@ -148,20 +278,18 @@ def test_known_gaps_reference_real_symbols():
 
 def test_acp_branch_does_not_silently_gain_sinks():
     """G3 tripwire: when the sinks wiring lands (PR #498 merge), this fails
-    and the exception + doc row must be updated in the same change."""
-    source = _serve_loop_source()
-    acp_wired = "transcript_sink" in source or "_make_acp_run_factory" in source
-    exception_open = any(g == "G3" for g, _s, _w in KNOWN_GAPS)
-    if acp_wired and exception_open:
-        # run_acp_once has sink params on main too (it is sink-ready) — the
-        # wiring test is the serve_loop call site, so only flag a REAL change.
-        call_site = re.search(r"run_acp_once\(([^)]*)\)", source)
-        assert call_site is not None, "ACP call site vanished from serve_loop"
-        assert "transcript_sink" not in call_site.group(1) and (
-            "_make_acp_run_factory" not in source.split("def serve_loop")[1]
-            .split("def ")[0]
-            or exception_open
-        ), "G3 appears CLOSED — update KNOWN_GAPS + docs/dispatch-path-parity.md"
+    and the exception + doc row must be updated in the same change.
+
+    AST-based on every run_acp_once call site in serve_loop (a keyword regex
+    is not viable: `max_time=int(turn_deadline)` closes the group early)."""
+    sinks = {"transcript_sink", "preview_sink"}
+    for call_keywords in _run_acp_once_call_keywords():
+        wired = sinks & set(call_keywords)
+        assert not wired, (
+            "G3 appears CLOSED — run_acp_once call site now passes "
+            f"{sorted(wired)}: remove the G3 rows from KNOWN_GAPS and update "
+            "rows 13/14 in docs/dispatch-path-parity.md in the same change"
+        )
 
 
 def test_doc_gap_table_matches_exception_list():
