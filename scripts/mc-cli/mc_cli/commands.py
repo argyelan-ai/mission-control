@@ -529,8 +529,76 @@ def _cmd_review(args, client, cfg):
 # when no --feedback is given; reject hard-requires --feedback locally so the
 # author always gets an actionable reason.
 
-def _review_decision(client, cfg, *, decision: str, comment: str):
+_VERB_FEEDBACK_HINT = {
+    "reject": ' --feedback "..."',
+    "review-note": ' --decision ... --feedback "..."',
+}
+
+
+def _resolve_review_target(args, client, cfg, *, verb: str) -> tuple[str, str]:
+    """Return (board_id, task_id) for a review verb — explicitly, never guessed.
+
+    A review verb decides SOMEONE ELSE'S card. The env TASK_ID that poll.sh
+    injects is YOUR card, which makes it the wrong default here far more often
+    than the right one: a reviewer ran `mc reject` with no argument and hit its
+    own round-1 review card — the only card sitting in `review` — which then
+    fell `review` -> `inbox` carrying review_decision=changes_requested and
+    triggered a pointless correction re-dispatch.
+
+    So: an explicit task-id is taken as given, no questions asked. Without one
+    we look at the card the env actually points to and decide whether it can
+    possibly be a review target:
+
+      * it carries `source_task_id` -> it IS a review card (delegation_type
+        "review"), i.e. the card you are reviewing FROM. Never the target. We
+        refuse and name the id it points at, so the next command is a copy-paste
+        away — naming a structural reference is not the same as guessing one.
+      * it is not in `review` -> a review decision has nothing to act on. Refuse
+        and ask for the id.
+      * otherwise -> the review-handoff case: handle_review_handoff assigned the
+        AUTHOR's card to you and dispatched you on it. The env id is correct and
+        this path stays exactly as it was.
+    """
+    explicit = (getattr(args, "task_id", None) or "").strip()
     board_id, task_id = cfg.require_task_context()
+    if explicit:
+        return board_id, task_id  # __main__ already folded it into cfg.task_id
+
+    detail = client.request(
+        "GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail"
+    )
+    task = detail.get("task") if isinstance(detail, dict) else None
+    if not isinstance(task, dict):
+        task = detail if isinstance(detail, dict) else {}
+
+    source_task_id = task.get("source_task_id")
+    status = task.get("status")
+
+    if source_task_id:
+        raise UsageError(
+            f"mc {verb} braucht die Task-ID der Karte, die du reviewst.\n"
+            f"Deine eigene Karte ({task_id}) ist eine Review-Karte — sie verweist "
+            f"per source_task_id auf das Review-Ziel.\n"
+            f"Ruf auf:\n"
+            f"  mc {verb} {source_task_id}{_VERB_FEEDBACK_HINT.get(verb, '')}"
+        )
+
+    if status != "review":
+        raise UsageError(
+            f"mc {verb} braucht die Task-ID der Karte, die du reviewst.\n"
+            f"Deine eigene Karte ({task_id}) steht auf '{status}' — auf ihr gibt es "
+            f"nichts zu entscheiden, und geraten wird hier nicht.\n"
+            f"Ruf auf:\n"
+            f"  mc {verb} <task-id>{_VERB_FEEDBACK_HINT.get(verb, '')}\n"
+            f"Ist die Autorenkarte bereits geschlossen, halte dein Urteil mit "
+            f"`mc review-note <task-id> --decision ... --feedback \"...\"` fest."
+        )
+
+    return board_id, task_id
+
+
+def _review_decision(args, client, cfg, *, decision: str, comment: str, verb: str):
+    board_id, task_id = _resolve_review_target(args, client, cfg, verb=verb)
     resp = client.request(
         "POST",
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
@@ -540,14 +608,34 @@ def _review_decision(client, cfg, *, decision: str, comment: str):
     return 0
 
 
+def _add_review_target_task_id(p):
+    """Positional task-id for the review verbs.
+
+    Deliberately NOT _add_optional_task_id: there the env TASK_ID is the right
+    default, because those verbs act on your own card. A review verb acts on
+    someone else's, so the env id is a fallback only in the one shape where it
+    provably is the author's card — see _resolve_review_target.
+    """
+    p.add_argument(
+        "task_id", nargs="?", default=None,
+        help=(
+            "Task-UUID der Karte, die du reviewst (die des AUTORS). Ohne Angabe "
+            "nur gueltig, wenn du per Review-Handoff direkt auf dieser Karte "
+            "dispatcht wurdest — sonst bricht der Aufruf mit der noetigen ID ab."
+        ),
+    )
+
+
 def _cmd_approve(args, client, cfg):
     """mc approve [--feedback ...] — Review approven (decision=approve)."""
     comment = (getattr(args, "feedback", None) or "").strip() or "Approved."
-    return _review_decision(client, cfg, decision="approve", comment=comment)
+    return _review_decision(
+        args, client, cfg, decision="approve", comment=comment, verb="approve",
+    )
 
 
 def _add_approve_args(p):
-    _add_optional_task_id(p)
+    _add_review_target_task_id(p)
     p.add_argument(
         "--feedback",
         default=None,
@@ -563,15 +651,71 @@ def _cmd_reject(args, client, cfg):
             "mc reject: --feedback ist Pflicht — der Author braucht einen "
             "konkreten Grund, was geaendert werden soll."
         )
-    return _review_decision(client, cfg, decision="request_changes", comment=feedback)
+    return _review_decision(
+        args, client, cfg, decision="request_changes", comment=feedback, verb="reject",
+    )
 
 
 def _add_reject_args(p):
-    _add_optional_task_id(p)
+    _add_review_target_task_id(p)
     p.add_argument(
         "--feedback",
         required=True,
         help="Pflicht — was muss der Author aendern? Wird als review-comment gespeichert.",
+    )
+
+
+def _cmd_review_note(args, client, cfg):
+    """mc review-note <task-id> --decision ... --feedback ... — Nachzuegler-Review.
+
+    For the case the normal verbs cannot serve: the author's card has already
+    left `review` (it is `done`), so POST /review answers 409 and the verdict
+    has nowhere formal to go. Seen on PR #500, where a well-argued
+    request_changes survived only as a feedback comment because both author
+    cards were closed.
+
+    Records the verdict on the author's card — review comment +
+    review_decision — and changes NO status. Reopening a closed card stays a
+    separate, deliberate act; a late note must not do it by surprise.
+    """
+    feedback = (getattr(args, "feedback", None) or "").strip()
+    if not feedback:
+        raise UsageError(
+            "mc review-note: --feedback ist Pflicht — ein Nachtrag ohne "
+            "Begruendung ist kein Urteil."
+        )
+    if not (getattr(args, "task_id", None) or "").strip():
+        raise UsageError(
+            "mc review-note: die Task-ID der reviewten Karte ist Pflicht.\n"
+            "  mc review-note <task-id> --decision request_changes --feedback \"...\"\n"
+            "Die env-TASK_ID ist deine EIGENE Karte und wird hier nicht geraten."
+        )
+
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note",
+        body={"decision": args.decision, "comment": feedback},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_review_note_args(p):
+    p.add_argument(
+        "task_id", nargs="?", default=None,
+        help="Pflicht — Task-UUID der reviewten Karte (NICHT deine eigene).",
+    )
+    p.add_argument(
+        "--decision",
+        default="request_changes",
+        choices=["approve", "request_changes", "hold"],
+        help="Urteil (default: request_changes).",
+    )
+    p.add_argument(
+        "--feedback",
+        required=True,
+        help="Pflicht — die Begruendung des Nachtrag-Urteils.",
     )
 
 
@@ -2811,6 +2955,17 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_reject,
         add_args=_add_reject_args,
+    ),
+    "review-note": CommandSpec(
+        name="review-note",
+        help=(
+            "Nachzuegler-Review auf einer bereits geschlossenen Karte festhalten "
+            "(Kommentar + review_decision, KEIN Statuswechsel)."
+        ),
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review-note",),
+        scope="tasks:write",
+        handler=_cmd_review_note,
+        add_args=_add_review_note_args,
     ),
     "finish": CommandSpec(
         name="finish",

@@ -2848,6 +2848,35 @@ async def agent_review_decision(
     return {"status": "ok", "decision": body.decision}
 
 
+@router.post("/boards/{board_id}/tasks/{task_id}/review-note")
+async def agent_late_review_note(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    body: ReviewDecisionBody,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
+):
+    """Late review verdict on a card that has already left `review`.
+
+    POST /review needs status == "review"; a reviewer arriving after the
+    author's card is closed therefore has no formal way to file its judgement
+    (PR #500: both author cards were already `done`). This records the verdict
+    — review comment + review_decision — WITHOUT any status transition.
+    """
+    if agent.board_id != board_id:
+        raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    from app.services.task_lifecycle import record_late_review_note
+    return await record_late_review_note(
+        session, task, board_id, body.decision, body.comment,
+        actor_agent=agent,
+    )
+
+
 # ── Checkpoint Endpoints ───────────────────────────────────────────────────
 
 
