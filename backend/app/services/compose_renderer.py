@@ -310,7 +310,7 @@ _REFERENCES_VOLUME_TEMPLATE = "      - ${HOME}/.mc/references:${HOME}/.mc/refere
 # via that path came up without ``/workspace-ref`` — the mount its own SOUL
 # tells it to `git clone` from. Scoped to the claude anchor only: omp/kimi
 # have their own mount conventions (see _OMP_SESSIONS_TARGET / kimi-config
-# below), and openclaude's one real instance (sparky) predates this fix.
+# below), and the one real openclaude-anchor agent predates this fix.
 _WORKSPACE_REF_VOLUME_TEMPLATE = "      - ${HOME}/Workspace/Projects:/workspace-ref:ro"
 _SHARED_DELIVERABLES_VOLUME_TEMPLATE = "      - mc_shared_deliverables:/shared-deliverables:ro"
 _SHARED_MCP_VOLUME_TEMPLATE = "      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro"
