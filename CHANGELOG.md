@@ -6,6 +6,12 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+### Added
+- **Silent-card watchdog.** Cards in `in_progress` or `waiting` with no
+  agent turn and no (non-system) comment for 30 minutes are reported once
+  to the Board Lead via `watchdog_notify`. Status is never auto-changed.
+  One message per silent phase (DB-dedup, not a Redis TTL).
+
 ### Changed
 - **Your agent fleet leaves version control.**
   `docker/docker-compose.agents.yml` describes your machine — agent names,
