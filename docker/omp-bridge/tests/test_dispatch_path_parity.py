@@ -68,8 +68,8 @@ SERVE_LOOP_WIRING = {
     "task_context_env": ["write_task_context_env"],
     "finish_guard": ["drive_live_run", "set_blocker"],
     # G2 CLOSED (card f5cc4cee point e): serve_loop now calls
-    # GET /me/active-task-recovery on its very first iteration when poll
-    # reports `working` with no task object — the same startup boundary
+    # GET /me/active-task-recovery on the first poll that actually returns a
+    # payload with `working`/no task object — the same startup boundary
     # poll.sh's recover_task() heals on FIRST_POLL.
     "startup_recovery": ["_make_http_recovery", "recovery_fn"],
     "acp_cancel_flip": ["_acp_control_sink"],

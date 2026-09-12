@@ -1397,6 +1397,49 @@ def _set_task_lock(active: bool) -> None:
         sys.stderr.write(f"[serve] task-lock {'set' if active else 'clear'} failed: {e}\n")
 
 
+def _container_boot_epoch() -> Optional[float]:
+    """Epoch this container's PID 1 started (review PR #522 B1, round 2).
+
+    `omp-recycler.sh` respawns bridge.py in-place whenever it isn't alive —
+    that never touches PID 1. Only a genuine container restart (Docker
+    recreate/OOM-kill) gets a fresh PID 1. That makes PID 1's start time the
+    one clock that tells "bridge-only respawn" and "real container restart"
+    apart — `tui.child_alive()` cannot, because `entrypoint.sh:start_native()`
+    always builds Window 0 (with a live shell child) BEFORE Window 1
+    (bridge.py) starts, so the pane always looks "alive" on the very first
+    serve_loop iteration regardless of which case this is.
+    """
+    try:
+        btime = None
+        with open("/proc/stat", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    btime = int(line.split()[1])
+                    break
+        if btime is None:
+            return None
+        with open("/proc/1/stat", "r", encoding="utf-8") as fh:
+            # comm (field 2) can contain spaces/parens; split after its
+            # closing ")" so the fixed-width fields after it line up.
+            rest = fh.read().rsplit(")", 1)[-1].split()
+        # Field 22 (starttime, clock ticks since boot) is rest[19] once the
+        # leading pid+comm+")" has been split off (fields 3.. become rest[0..]).
+        starttime_ticks = int(rest[19])
+        hz = os.sysconf("SC_CLK_TCK")
+        return btime + (starttime_ticks / hz)
+    except (OSError, ValueError, IndexError):  # pragma: no cover — defensive
+        return None
+
+
+def _read_task_lock_epoch(path: str) -> Optional[float]:
+    """Parse the epoch `_set_task_lock(True)` wrote into the lock file."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return float(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def drive_live_run(
     lifecycle: MCLifecycle,
     run_once: Callable[[], RunOutcome],
@@ -2375,6 +2418,7 @@ def serve_loop(
     _nudge_state_file: Optional[str] = None,
     _nudge_msg_file: Optional[str] = None,
     _child_alive_fn: Optional[Callable[[], bool]] = None,
+    _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -2423,41 +2467,64 @@ def serve_loop(
     tui = NativeTuiController(session=session, signal_file=signal_file, window=tui_window,
                               launcher=launcher)
     child_alive_fn = _child_alive_fn or tui.child_alive
+    boot_epoch_fn = _boot_epoch_fn or _container_boot_epoch
 
     # Orphaned task lock from a previous container life (SIGKILL mid-run, e.g.
     # a Docker restart 2026-09-02): nobody else ever removes it, so gate_open()
     # stayed False forever and the agent went deaf to messages. Originally
     # this removed the lock unconditionally ("nothing can be in flight at
     # serve start"), but that assumption breaks for a bridge-only respawn
-    # (review PR #522 B1): omp-recycler.sh:57-59 respawns THIS process
-    # without any task_active gate whenever it's not alive, while Window 0
-    # (the persistent native TUI, and any native turn running in it) is a
-    # separate tmux window that survives untouched. In that case the lock is
-    # NOT stale — a turn may genuinely still be running — and both removing
-    # it and (below) firing startup recovery on top of it would kill live
-    # work via controller.relaunch()'s `tmux respawn-window -k`. Distinguish
-    # the two cases with the only two signals available: the lock file
-    # itself (only ever set by _set_task_lock(True) at a real turn's start)
-    # and whether Window 0's child process is still alive. Only when the
-    # child is gone too — the real-container-restart case, where the tmux
-    # server died with it — do we treat the lock as orphaned, mirroring
-    # poll.sh's turn_state=working startup skip (docker/shared/poll.sh:1247-
-    # 1252) on the other side of the same decision.
+    # (review PR #522 B1, round 1): omp-recycler.sh:57-59 respawns THIS
+    # process without any task_active gate whenever it's not alive, while
+    # Window 0 (the persistent native TUI, and any native turn running in
+    # it) is a separate tmux window that survives untouched. In that case
+    # the lock is NOT stale — a turn may genuinely still be running — and
+    # both removing it and (below) firing startup recovery on top of it
+    # would kill live work via controller.relaunch()'s `tmux respawn-window
+    # -k`.
+    #
+    # Round 1 tried "Window 0's child process alive" as the discriminator —
+    # WRONG (review PR #522 B1, round 2): `entrypoint.sh:start_native()`
+    # always builds Window 0 (with a live shell, later the TUI) BEFORE
+    # Window 1 (bridge.py) starts, so on the very FIRST serve_loop iteration
+    # the pane always has a live child — on a bridge-only respawn AND on a
+    # genuine container restart alike. That signal can't tell the two cases
+    # apart because the entrypoint recreates it identically in both.
+    #
+    # Round 2 fix: compare the lock's own timestamp (`_set_task_lock(True)`
+    # writes `int(time.time())`) against this container's boot time (PID 1's
+    # start time — the one clock a bridge-only respawn never touches, only a
+    # real container restart does). Lock older than this boot → it was
+    # written in a PREVIOUS container life → genuinely orphaned, clear it.
+    # Lock at or after this boot → written DURING this very life → a turn
+    # may still be running in Window 0 right now, leave it and skip
+    # recovery. Mirrors poll.sh's turn_state=working startup skip
+    # (docker/shared/poll.sh:1247-1252) on the other side of the same
+    # decision, using a signal poll.sh doesn't need because it never shares
+    # a process with a respawn script.
     turn_appears_in_flight = False
     if os.path.exists(task_lock_path):
-        if child_alive_fn():
-            turn_appears_in_flight = True
-            sys.stderr.write(
-                "[serve] task lock present and Window 0 child alive — "
-                "treating as a native turn in flight (bridge-only respawn), "
-                "leaving the lock and skipping startup recovery\n"
-            )
+        lock_epoch = _read_task_lock_epoch(task_lock_path)
+        boot_epoch = boot_epoch_fn()
+        if lock_epoch is not None and boot_epoch is not None:
+            stale = lock_epoch < boot_epoch
         else:
+            # Can't read either clock (e.g. non-Linux dev host without
+            # /proc) — fall back to the round-1 signal rather than guess.
+            stale = not child_alive_fn()
+        if stale:
             try:
                 os.remove(task_lock_path)
                 sys.stderr.write(f"[serve] removed orphaned task lock {task_lock_path}\n")
             except OSError as e:  # pragma: no cover — best-effort
                 sys.stderr.write(f"[serve] orphaned task lock removal failed: {e}\n")
+        else:
+            turn_appears_in_flight = True
+            sys.stderr.write(
+                "[serve] task lock was set during this container's own "
+                "life — treating as a native turn in flight (bridge-only "
+                "respawn), leaving the lock and skipping startup recovery\n"
+            )
 
     delivery = _MsgDelivery(
         tui, signal_file=signal_file, queue_dir=msg_queue_dir,
@@ -2511,6 +2578,16 @@ def serve_loop(
     last_attempt_id: Optional[str] = None
     ready_printed = False
     iterations = 0
+    # Review PR #522 W3: `iterations == 1` burns the one-shot startup-recovery
+    # check on a poll that never got an answer. Right at container start is
+    # exactly when the backend is LEAST likely to be reachable yet —
+    # entrypoint.sh budgets up to 6 bootstrap retries for it. A single
+    # timeout on iteration 1 used to mean the check would never fire again
+    # for the rest of this process's life. Track "have we actually evaluated
+    # the startup-recovery condition against a real poll answer yet" instead
+    # of "is this the first loop pass" — cleared only once a poll actually
+    # returns a payload, however many iterations that takes.
+    startup_recovery_pending = True
 
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
@@ -2538,16 +2615,20 @@ def serve_loop(
         # again; the card only heals once the backend's own orphan-liveness
         # threshold trips. poll.sh closes this gap on its own first poll via
         # `recover_task()` (GET /me/active-task-recovery); serve_loop never
-        # had an equivalent call. One-shot on the very first iteration only —
-        # every later `working` is this bridge's OWN turn in flight and must
-        # not re-trigger a redundant recovery fetch. Review PR #522 B1: also
-        # skip entirely when `turn_appears_in_flight` (computed above from
-        # the task lock + Window 0 child-alive check) — a bridge-only
-        # respawn already has a live native turn running, and re-delivering
-        # the prompt here would `controller.relaunch()` (tmux respawn-window
-        # -k) it dead mid-work, same class of bug as the missing recovery
-        # this block was written to close.
-        if iterations == 1 and state == "working" and task is None and not turn_appears_in_flight:
+        # had an equivalent call. One-shot on the first poll that actually
+        # answers — every later `working` is this bridge's OWN turn in
+        # flight and must not re-trigger a redundant recovery fetch. Review
+        # PR #522 B1: also skip entirely when `turn_appears_in_flight`
+        # (computed above from the task lock's own timestamp vs. this
+        # container's boot time) — a bridge-only respawn already has a live
+        # native turn running, and re-delivering the prompt here would
+        # `controller.relaunch()` (tmux respawn-window -k) it dead mid-work,
+        # same class of bug as the missing recovery this block was written
+        # to close.
+        startup_recovery_check_due = startup_recovery_pending and payload is not None
+        if startup_recovery_check_due:
+            startup_recovery_pending = False
+        if startup_recovery_check_due and state == "working" and task is None and not turn_appears_in_flight:
             try:
                 recovery_payload = recovery_fn()
             except Exception as e:  # noqa: BLE001 — recovery must never crash the loop
@@ -2883,7 +2964,12 @@ def _make_http_recovery(api_url: str, token: str) -> Callable[[], Optional[dict]
         with urllib.request.urlopen(req, timeout=15) as resp:
             body = resp.read().decode("utf-8")
         data = json.loads(body) if body.strip() else {}
-        if not data.get("active"):
+        # Review PR #522 N1: `active: true` without a `task` object is not
+        # currently reachable (the endpoint always sends both together), but
+        # returning a `new_task` payload with `task: None` would leave
+        # serve_loop running with `state == "new_task"` and no task to act
+        # on. Treat it the same as "nothing to recover" defensively.
+        if not data.get("active") or not data.get("task"):
             return None
         return {"state": "new_task", "task": data.get("task")}
 
