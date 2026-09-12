@@ -2374,6 +2374,7 @@ def serve_loop(
     _task_lock_path: Optional[str] = None,
     _nudge_state_file: Optional[str] = None,
     _nudge_msg_file: Optional[str] = None,
+    _child_alive_fn: Optional[Callable[[], bool]] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -2417,21 +2418,46 @@ def serve_loop(
     nudge_state_file = _nudge_state_file or MSG_NUDGE_STATE_FILE
     nudge_msg_file = _nudge_msg_file or MSG_NUDGE_MSG_FILE
 
-    # Orphaned task lock from a previous container life (SIGKILL mid-run, e.g.
-    # a Docker restart 2026-09-02): nobody else ever removes it, so gate_open()
-    # stayed False forever and the agent went deaf to messages. Nothing can be
-    # in flight at serve start — mirror poll.sh's startup `rm -f`.
-    if os.path.exists(task_lock_path):
-        try:
-            os.remove(task_lock_path)
-            sys.stderr.write(f"[serve] removed orphaned task lock {task_lock_path}\n")
-        except OSError as e:  # pragma: no cover — best-effort
-            sys.stderr.write(f"[serve] orphaned task lock removal failed: {e}\n")
-
     # One controller for the container's lifetime; run_native_turn relaunches +
     # truncates the signal per task, so state never bleeds between tasks.
     tui = NativeTuiController(session=session, signal_file=signal_file, window=tui_window,
                               launcher=launcher)
+    child_alive_fn = _child_alive_fn or tui.child_alive
+
+    # Orphaned task lock from a previous container life (SIGKILL mid-run, e.g.
+    # a Docker restart 2026-09-02): nobody else ever removes it, so gate_open()
+    # stayed False forever and the agent went deaf to messages. Originally
+    # this removed the lock unconditionally ("nothing can be in flight at
+    # serve start"), but that assumption breaks for a bridge-only respawn
+    # (review PR #522 B1): omp-recycler.sh:57-59 respawns THIS process
+    # without any task_active gate whenever it's not alive, while Window 0
+    # (the persistent native TUI, and any native turn running in it) is a
+    # separate tmux window that survives untouched. In that case the lock is
+    # NOT stale — a turn may genuinely still be running — and both removing
+    # it and (below) firing startup recovery on top of it would kill live
+    # work via controller.relaunch()'s `tmux respawn-window -k`. Distinguish
+    # the two cases with the only two signals available: the lock file
+    # itself (only ever set by _set_task_lock(True) at a real turn's start)
+    # and whether Window 0's child process is still alive. Only when the
+    # child is gone too — the real-container-restart case, where the tmux
+    # server died with it — do we treat the lock as orphaned, mirroring
+    # poll.sh's turn_state=working startup skip (docker/shared/poll.sh:1247-
+    # 1252) on the other side of the same decision.
+    turn_appears_in_flight = False
+    if os.path.exists(task_lock_path):
+        if child_alive_fn():
+            turn_appears_in_flight = True
+            sys.stderr.write(
+                "[serve] task lock present and Window 0 child alive — "
+                "treating as a native turn in flight (bridge-only respawn), "
+                "leaving the lock and skipping startup recovery\n"
+            )
+        else:
+            try:
+                os.remove(task_lock_path)
+                sys.stderr.write(f"[serve] removed orphaned task lock {task_lock_path}\n")
+            except OSError as e:  # pragma: no cover — best-effort
+                sys.stderr.write(f"[serve] orphaned task lock removal failed: {e}\n")
 
     delivery = _MsgDelivery(
         tui, signal_file=signal_file, queue_dir=msg_queue_dir,
@@ -2514,8 +2540,14 @@ def serve_loop(
         # `recover_task()` (GET /me/active-task-recovery); serve_loop never
         # had an equivalent call. One-shot on the very first iteration only —
         # every later `working` is this bridge's OWN turn in flight and must
-        # not re-trigger a redundant recovery fetch.
-        if iterations == 1 and state == "working" and task is None:
+        # not re-trigger a redundant recovery fetch. Review PR #522 B1: also
+        # skip entirely when `turn_appears_in_flight` (computed above from
+        # the task lock + Window 0 child-alive check) — a bridge-only
+        # respawn already has a live native turn running, and re-delivering
+        # the prompt here would `controller.relaunch()` (tmux respawn-window
+        # -k) it dead mid-work, same class of bug as the missing recovery
+        # this block was written to close.
+        if iterations == 1 and state == "working" and task is None and not turn_appears_in_flight:
             try:
                 recovery_payload = recovery_fn()
             except Exception as e:  # noqa: BLE001 — recovery must never crash the loop

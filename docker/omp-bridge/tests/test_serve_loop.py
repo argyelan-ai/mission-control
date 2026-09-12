@@ -62,7 +62,8 @@ class RecordingLifecycle(bridge.MCLifecycle):
         self.calls.append(("comment", task_id))
 
 
-def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=None):
+def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=None,
+         task_lock_path=None, child_alive=None):
     lc = lifecycle or RecordingLifecycle()
     it = iter(poll_states)
 
@@ -87,6 +88,8 @@ def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=No
         _run_factory=run_factory,
         _sleep=lambda _s: None,
         _context_env_path=ctx,
+        _task_lock_path=task_lock_path,
+        _child_alive_fn=child_alive,
     )
     return lc
 
@@ -248,6 +251,81 @@ def test_startup_recovery_not_triggered_by_idle_or_new_task():
     assert recovery_calls["n"] == 0, recovery_calls
     assert any(c[0] == "finish" for c in lc2.calls)
     print("PASS test_startup_recovery_not_triggered_by_idle_or_new_task")
+
+
+def test_startup_recovery_skipped_when_native_turn_appears_in_flight():
+    # Review PR #522 B1: omp-recycler.sh:57-59 respawns bridge.py without any
+    # task_active gate whenever it isn't alive — a bare bridge-only crash/
+    # respawn leaves Window 0 (the persistent native TUI, and any turn
+    # running in it) untouched. serve_loop must NOT mistake that for a
+    # genuine orphan and re-deliver the prompt via recovery, because
+    # run_native_turn's isolate path calls controller.relaunch() (`tmux
+    # respawn-window -k`) and would kill the still-running turn. The task
+    # lock (only ever set for a real turn, _set_task_lock(True)) present
+    # together with Window 0's child process still alive is the signal that
+    # a turn appears in flight — mirrors poll.sh's own turn_state=working
+    # startup skip (poll.sh:1247-1252).
+    import tempfile
+    lock_path = os.path.join(tempfile.mkdtemp(prefix="omp-lock-"), "task.lock")
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("123")
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        iterations=1, recovery_fn=recovery,
+        task_lock_path=lock_path, child_alive=lambda: True,
+    )
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert lc.calls == []
+    # The lock must survive too — it is NOT stale, a turn appears to still
+    # own it, so treating it as orphaned would also be wrong.
+    assert os.path.exists(lock_path), "lock must not be removed while a turn appears in flight"
+    print("PASS test_startup_recovery_skipped_when_native_turn_appears_in_flight")
+
+
+def test_startup_recovery_runs_when_lock_present_but_child_dead():
+    # Counter-probe for the guard above: a REAL container restart kills the
+    # tmux server (and Window 0's child) along with everything else, so a
+    # stale lock file left over from before the restart must still be
+    # treated as orphaned and recovery must still fire — the guard is
+    # scoped to "child alive", not to "lock present" alone.
+    lock_path = os.path.join(
+        __import__("tempfile").mkdtemp(prefix="omp-lock-dead-"), "task.lock"
+    )
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("123")
+
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        rf, iterations=1, recovery_fn=recovery,
+        task_lock_path=lock_path, child_alive=lambda: False,
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert runs["n"] == 1, runs
+    assert any(c[0] == "finish" for c in lc.calls)
+    assert not os.path.exists(lock_path), "a genuinely orphaned lock must still be removed"
+    print("PASS test_startup_recovery_runs_when_lock_present_but_child_dead")
 
 
 def test_make_http_recovery_translates_active_and_inactive():

@@ -460,6 +460,15 @@ def test_serve_loop_clears_orphaned_task_lock_at_startup():
             _task_lock_path=lock,
             _nudge_state_file=os.path.join(d, "nudge-state"),
             _nudge_msg_file=os.path.join(d, "nudge.msg"),
+            # Review PR #522 B1: a real Docker restart (this test's scenario)
+            # kills the tmux server along with the container, so Window 0's
+            # child is gone too — the lock is genuinely orphaned. Pin that
+            # explicitly instead of falling through to the real
+            # `tui.child_alive()` default, which shells out to the actual
+            # local tmux and would pick up whatever session happens to be
+            # named after this test-runner's own AGENT_NAME (false "alive"
+            # inside an agent container that itself runs under tmux).
+            _child_alive_fn=lambda: False,
         )
         assert not os.path.exists(lock), "orphaned task lock must be cleared at serve start"
     print("PASS test_serve_loop_clears_orphaned_task_lock_at_startup")
