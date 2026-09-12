@@ -159,6 +159,22 @@ win=$(bash -c 'set -euo pipefail; source "$1"; _input_field_tail_lines "$(printf
     || fail "case C8b: _input_field_tail_lines bricht unter set -euo pipefail ab, wenn kein Anker im Pane ist"
 [ "$win" = "12" ] || fail "case C8b: ohne Anker muss der Default 12 greifen, war '$win'"
 
+# Case C10: der Anker muss auf ECHTEN Panes aller vier Runtimes greifen, nicht
+# nur auf den zwei Fixtures oben. Findet er die Composer-Box nicht, faellt er
+# stillschweigend auf 12 zurueck — und genau dann ist B1 wieder da, ohne dass
+# ein Test rot wird. Erwartung: jedes aufgezeichnete Pane liefert ein Fenster
+# kleiner als der Default.
+pane_dir="$REPO_ROOT/backend/tests/fixtures/panes"
+checked=0
+for real in "$pane_dir"/*/idle.txt "$pane_dir"/*/working.txt; do
+    [ -f "$real" ] || continue
+    win=$(_input_field_tail_lines "$(cat "$real")")
+    [ "$win" -gt 0 ] && [ "$win" -lt 12 ] \
+        || fail "case C10: ${real#$pane_dir/} ergab Feldfenster '$win' — Composer-Anker nicht gefunden (Fallback auf 12)"
+    checked=$((checked + 1))
+done
+[ "$checked" -ge 6 ] || fail "case C10: nur $checked echte Panes geprueft — Fixtures fehlen, der Test deckt nichts ab"
+
 # Case C9 (Sabotage-Probe): mit dem ALTEN festen 12-Zeilen-Fenster kollabieren
 # C5 und C6 auf denselben Wert — genau die Blindheit, die B1 beschreibt. Die
 # Probe haelt fest, dass die Anker-Logik der einzige Grund fuer C5 ist.
