@@ -214,10 +214,14 @@ def test_factory_forwards_what_serve_loop_passes():
         "factory parameter(s) received but NOT forwarded to run_acp_once "
         f"(swallowed — the M1/M2 mutation class): {sorted(swallowed)}"
     )
-    # And whatever the factory accepts, serve_loop must supply (chain head):
+    # And whatever the factory accepts, serve_loop must supply (chain head).
+    # No exemptions since M8: interrupt_state included — serve_loop always
+    # has a live InterruptState to pass, and dropping it here is exactly the
+    # "both PRs green in isolation, the combination loses the stamp" class
+    # (factory holds it, the serve_loop -> factory leg silently dies).
     serve = _find_fn(tree, "serve_loop")
     serve_to_factory = _kwargs_of_calls(serve, "_make_acp_run_factory")
-    unsupplied = factory_params - set(serve_to_factory) - {"interrupt_state"}
+    unsupplied = factory_params - set(serve_to_factory)
     assert not unsupplied, (
         f"factory parameter(s) serve_loop never passes: {sorted(unsupplied)}"
     )
