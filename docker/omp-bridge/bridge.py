@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import inspect
 import os
 import re
 import sys
@@ -1397,6 +1398,49 @@ def _set_task_lock(active: bool) -> None:
         sys.stderr.write(f"[serve] task-lock {'set' if active else 'clear'} failed: {e}\n")
 
 
+def _container_boot_epoch() -> Optional[float]:
+    """Epoch this container's PID 1 started (review PR #522 B1, round 2).
+
+    `omp-recycler.sh` respawns bridge.py in-place whenever it isn't alive —
+    that never touches PID 1. Only a genuine container restart (Docker
+    recreate/OOM-kill) gets a fresh PID 1. That makes PID 1's start time the
+    one clock that tells "bridge-only respawn" and "real container restart"
+    apart — `tui.child_alive()` cannot, because `entrypoint.sh:start_native()`
+    always builds Window 0 (with a live shell child) BEFORE Window 1
+    (bridge.py) starts, so the pane always looks "alive" on the very first
+    serve_loop iteration regardless of which case this is.
+    """
+    try:
+        btime = None
+        with open("/proc/stat", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    btime = int(line.split()[1])
+                    break
+        if btime is None:
+            return None
+        with open("/proc/1/stat", "r", encoding="utf-8") as fh:
+            # comm (field 2) can contain spaces/parens; split after its
+            # closing ")" so the fixed-width fields after it line up.
+            rest = fh.read().rsplit(")", 1)[-1].split()
+        # Field 22 (starttime, clock ticks since boot) is rest[19] once the
+        # leading pid+comm+")" has been split off (fields 3.. become rest[0..]).
+        starttime_ticks = int(rest[19])
+        hz = os.sysconf("SC_CLK_TCK")
+        return btime + (starttime_ticks / hz)
+    except (OSError, ValueError, IndexError):  # pragma: no cover — defensive
+        return None
+
+
+def _read_task_lock_epoch(path: str) -> Optional[float]:
+    """Parse the epoch `_set_task_lock(True)` wrote into the lock file."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return float(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def drive_live_run(
     lifecycle: MCLifecycle,
     run_once: Callable[[], RunOutcome],
@@ -2363,6 +2407,7 @@ def serve_loop(
     poll_interval: float = 5.0,
     max_iterations: Optional[int] = None,
     _poll_fn: Optional[Callable[[], Optional[dict]]] = None,
+    _recovery_fn: Optional[Callable[[], Optional[dict]]] = None,
     _lifecycle_factory: Optional[Callable[[dict], MCLifecycle]] = None,
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
     _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
@@ -2373,6 +2418,8 @@ def serve_loop(
     _task_lock_path: Optional[str] = None,
     _nudge_state_file: Optional[str] = None,
     _nudge_msg_file: Optional[str] = None,
+    _child_alive_fn: Optional[Callable[[], bool]] = None,
+    _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -2416,21 +2463,69 @@ def serve_loop(
     nudge_state_file = _nudge_state_file or MSG_NUDGE_STATE_FILE
     nudge_msg_file = _nudge_msg_file or MSG_NUDGE_MSG_FILE
 
-    # Orphaned task lock from a previous container life (SIGKILL mid-run, e.g.
-    # a Docker restart 2026-09-02): nobody else ever removes it, so gate_open()
-    # stayed False forever and the agent went deaf to messages. Nothing can be
-    # in flight at serve start — mirror poll.sh's startup `rm -f`.
-    if os.path.exists(task_lock_path):
-        try:
-            os.remove(task_lock_path)
-            sys.stderr.write(f"[serve] removed orphaned task lock {task_lock_path}\n")
-        except OSError as e:  # pragma: no cover — best-effort
-            sys.stderr.write(f"[serve] orphaned task lock removal failed: {e}\n")
-
     # One controller for the container's lifetime; run_native_turn relaunches +
     # truncates the signal per task, so state never bleeds between tasks.
     tui = NativeTuiController(session=session, signal_file=signal_file, window=tui_window,
                               launcher=launcher)
+    child_alive_fn = _child_alive_fn or tui.child_alive
+    boot_epoch_fn = _boot_epoch_fn or _container_boot_epoch
+
+    # Orphaned task lock from a previous container life (SIGKILL mid-run, e.g.
+    # a Docker restart 2026-09-02): nobody else ever removes it, so gate_open()
+    # stayed False forever and the agent went deaf to messages. Originally
+    # this removed the lock unconditionally ("nothing can be in flight at
+    # serve start"), but that assumption breaks for a bridge-only respawn
+    # (review PR #522 B1, round 1): omp-recycler.sh:57-59 respawns THIS
+    # process without any task_active gate whenever it's not alive, while
+    # Window 0 (the persistent native TUI, and any native turn running in
+    # it) is a separate tmux window that survives untouched. In that case
+    # the lock is NOT stale — a turn may genuinely still be running — and
+    # both removing it and (below) firing startup recovery on top of it
+    # would kill live work via controller.relaunch()'s `tmux respawn-window
+    # -k`.
+    #
+    # Round 1 tried "Window 0's child process alive" as the discriminator —
+    # WRONG (review PR #522 B1, round 2): `entrypoint.sh:start_native()`
+    # always builds Window 0 (with a live shell, later the TUI) BEFORE
+    # Window 1 (bridge.py) starts, so on the very FIRST serve_loop iteration
+    # the pane always has a live child — on a bridge-only respawn AND on a
+    # genuine container restart alike. That signal can't tell the two cases
+    # apart because the entrypoint recreates it identically in both.
+    #
+    # Round 2 fix: compare the lock's own timestamp (`_set_task_lock(True)`
+    # writes `int(time.time())`) against this container's boot time (PID 1's
+    # start time — the one clock a bridge-only respawn never touches, only a
+    # real container restart does). Lock older than this boot → it was
+    # written in a PREVIOUS container life → genuinely orphaned, clear it.
+    # Lock at or after this boot → written DURING this very life → a turn
+    # may still be running in Window 0 right now, leave it and skip
+    # recovery. Mirrors poll.sh's turn_state=working startup skip
+    # (docker/shared/poll.sh:1247-1252) on the other side of the same
+    # decision, using a signal poll.sh doesn't need because it never shares
+    # a process with a respawn script.
+    turn_appears_in_flight = False
+    if os.path.exists(task_lock_path):
+        lock_epoch = _read_task_lock_epoch(task_lock_path)
+        boot_epoch = boot_epoch_fn()
+        if lock_epoch is not None and boot_epoch is not None:
+            stale = lock_epoch < boot_epoch
+        else:
+            # Can't read either clock (e.g. non-Linux dev host without
+            # /proc) — fall back to the round-1 signal rather than guess.
+            stale = not child_alive_fn()
+        if stale:
+            try:
+                os.remove(task_lock_path)
+                sys.stderr.write(f"[serve] removed orphaned task lock {task_lock_path}\n")
+            except OSError as e:  # pragma: no cover — best-effort
+                sys.stderr.write(f"[serve] orphaned task lock removal failed: {e}\n")
+        else:
+            turn_appears_in_flight = True
+            sys.stderr.write(
+                "[serve] task lock was set during this container's own "
+                "life — treating as a native turn in flight (bridge-only "
+                "respawn), leaving the lock and skipping startup recovery\n"
+            )
 
     delivery = _MsgDelivery(
         tui, signal_file=signal_file, queue_dir=msg_queue_dir,
@@ -2439,6 +2534,10 @@ def serve_loop(
     )
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)
+    # G2 (dispatch-path-parity #521 row 7 / card f5cc4cee point e): recovers a
+    # card poll reports `working` for on the very first iteration — see the
+    # startup-recovery check below.
+    recovery_fn = _recovery_fn or _make_http_recovery(api_url, token)
     # Fix 3: the heartbeat control channel. One InterruptState per serve
     # loop; the heartbeater's `_on_control` sets it mid-run and
     # `_observe_native_turn` (via run_native_turn/continue) consumes it.
@@ -2480,6 +2579,16 @@ def serve_loop(
     last_attempt_id: Optional[str] = None
     ready_printed = False
     iterations = 0
+    # Review PR #522 W3: `iterations == 1` burns the one-shot startup-recovery
+    # check on a poll that never got an answer. Right at container start is
+    # exactly when the backend is LEAST likely to be reachable yet —
+    # entrypoint.sh budgets up to 6 bootstrap retries for it. A single
+    # timeout on iteration 1 used to mean the check would never fire again
+    # for the rest of this process's life. Track "have we actually evaluated
+    # the startup-recovery condition against a real poll answer yet" instead
+    # of "is this the first loop pass" — cleared only once a poll actually
+    # returns a payload, however many iterations that takes.
+    startup_recovery_pending = True
 
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
@@ -2496,6 +2605,46 @@ def serve_loop(
 
         state = (payload or {}).get("state")
         task = (payload or {}).get("task") if state == "new_task" else None
+
+        # Startup recovery (G2, dispatch-path-parity #521 row 7 / card
+        # f5cc4cee point e): a container restart drops every in-memory bridge
+        # state (last_attempt_id, the TUI, this very process) while the
+        # backend still shows the card `in_progress` with a live ack. Poll
+        # then reports `state: working` WITHOUT a task object forever
+        # (agents.py:3167 — `active.ack_at is not None` short-circuits before
+        # a task is ever attached), because nothing ever asks for the prompt
+        # again; the card only heals once the backend's own orphan-liveness
+        # threshold trips. poll.sh closes this gap on its own first poll via
+        # `recover_task()` (GET /me/active-task-recovery); serve_loop never
+        # had an equivalent call. One-shot on the first poll that actually
+        # answers — every later `working` is this bridge's OWN turn in
+        # flight and must not re-trigger a redundant recovery fetch. Review
+        # PR #522 B1: also skip entirely when `turn_appears_in_flight`
+        # (computed above from the task lock's own timestamp vs. this
+        # container's boot time) — a bridge-only respawn already has a live
+        # native turn running, and re-delivering the prompt here would
+        # `controller.relaunch()` (tmux respawn-window -k) it dead mid-work,
+        # same class of bug as the missing recovery this block was written
+        # to close.
+        startup_recovery_check_due = startup_recovery_pending and payload is not None
+        if startup_recovery_check_due:
+            startup_recovery_pending = False
+        if startup_recovery_check_due and state == "working" and task is None and not turn_appears_in_flight:
+            try:
+                recovery_payload = recovery_fn()
+            except Exception as e:  # noqa: BLE001 — recovery must never crash the loop
+                sys.stderr.write(
+                    f"[serve] startup-recovery error: {type(e).__name__}: {e}\n"
+                )
+                recovery_payload = None
+            if recovery_payload is not None:
+                sys.stderr.write(
+                    "[serve] startup-recovery: active task found — "
+                    "re-delivering prompt (read-only, no status change)\n"
+                )
+                payload = recovery_payload
+                state = payload.get("state")
+                task = payload.get("task") if state == "new_task" else None
 
         if state in ("idle", "cancelled", "stopped"):
             last_attempt_id = None  # clear dedup so a re-opened task dispatches
@@ -2596,7 +2745,6 @@ def serve_loop(
                 _acp_control_sink.clear()
                 _acp_control_sink.append(acp_cancel)
 
-                acp_cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
                 # Model selector parity with the native launcher (incident
                 # 09.09.2026, first ACP live probe): `omp acp` inherits the
                 # bridge env, and OPENAI_API_KEY enables omp's BUILT-IN
@@ -2623,19 +2771,32 @@ def serve_loop(
                     except OSError:
                         pass
 
-                def run_once(_p=prompt, _task_id=str(task["id"])) -> RunOutcome:
+                # Production-Verdrahtung (2026-09-10): the sinks used to live
+                # ONLY inside _make_acp_run_factory, which no production code
+                # called — serve_loop drove run_acp_once bare, so sessions
+                # chat got neither transcript nor preview. Now the factory is
+                # the ONE place that owns sink creation (Review #465 Blocker
+                # 1 discipline: one sink object per session, lazy, reused on
+                # session_id change) and serve_loop feeds it ITS control
+                # wiring: the shared acp_cancel (Stop-Knopf, ladder Stufe 1 —
+                # the heartbeater's _on_control flips THIS object via
+                # _acp_control_sink) and the tool heartbeat. Per-turn resets
+                # (cancel flag, interrupt stamp) stay HERE, on the closures
+                # the driver calls.
+                acp_run = _make_acp_run_factory(
+                    model=acp_model,
+                    max_time=int(turn_deadline) if turn_deadline else 900,
+                    permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
+                    task_id=str(task["id"]),
+                    cancel_state=acp_cancel,
+                    heartbeat_fn=_acp_tool_heartbeat,
+                    interrupt_state=interrupt_state,
+                )
+
+                def run_once(_p=prompt) -> RunOutcome:
                     acp_cancel.requested = False  # fresh cancel per turn (Major 4)
                     interrupt_state.clear()  # fresh signal per turn
-                    return run_acp_once(
-                        _p,
-                        cwd=acp_cwd,
-                        model=acp_model,
-                        max_time=int(turn_deadline) if turn_deadline else 900,
-                        permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
-                        task_id=_task_id,
-                        cancel_state=acp_cancel,
-                        heartbeat_fn=_acp_tool_heartbeat,
-                    )
+                    return acp_run(_p)
 
                 # Continue-Nudge (Fix B, ACP flavour — Review #464 Major 3):
                 # the ACP session survives a turn end, so a continueable abort
@@ -2644,16 +2805,7 @@ def serve_loop(
                 def continue_once(nudge: str) -> RunOutcome:
                     acp_cancel.requested = False
                     interrupt_state.clear()
-                    return run_acp_once(
-                        nudge,
-                        cwd=acp_cwd,
-                        model=acp_model,
-                        max_time=int(turn_deadline) if turn_deadline else 900,
-                        permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
-                        task_id=str(task["id"]),
-                        cancel_state=acp_cancel,
-                        heartbeat_fn=_acp_tool_heartbeat,
-                    )
+                    return acp_run(nudge)
             else:
                 task_file = _task_file_for(str(task["id"]))
                 _isolate = isolation != "slash"
@@ -2797,6 +2949,35 @@ def _make_http_poll(
         return json.loads(body) if body.strip() else None
 
     return _poll
+
+
+def _make_http_recovery(api_url: str, token: str) -> Callable[[], Optional[dict]]:
+    """GET /me/active-task-recovery once at startup (ADR-024) — the bridge's
+    counterpart of poll.sh's ``recover_task()``. Read-only: mutates no task
+    status, only (best-effort, backend-side) the dispatch_attempt_id. Returns
+    a `new_task`-shaped payload — the same shape `/me/poll` would hand
+    serve_loop — when an active in_progress/blocked/review card exists, else
+    None (nothing to recover)."""
+    import urllib.request
+
+    url = f"{api_url}/api/v1/agent/me/active-task-recovery"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def _recover() -> Optional[dict]:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8")
+        data = json.loads(body) if body.strip() else {}
+        # Review PR #522 N1: `active: true` without a `task` object is not
+        # currently reachable (the endpoint always sends both together), but
+        # returning a `new_task` payload with `task: None` would leave
+        # serve_loop running with `state == "new_task"` and no task to act
+        # on. Treat it the same as "nothing to recover" defensively.
+        if not data.get("active") or not data.get("task"):
+            return None
+        return {"state": "new_task", "task": data.get("task")}
+
+    return _recover
 
 
 # ---------------------------------------------------------------------------
@@ -4164,12 +4345,25 @@ def classify_acp(outcome: RunOutcome) -> Classification:
     )
 
 
+# PR #492 interplay: whether run_acp_once accepts `interrupt_state` is a
+# property of the SIGNATURE, evaluated once at import time. The forwarding
+# below must key off this flag, NOT off the value being None — serve_loop
+# always passes a live InterruptState, so a value check would forward an
+# unknown kwarg on a pre-#492 base and kill every ACP turn with a TypeError.
+_RUN_ACP_ACCEPTS_INTERRUPT_STATE = (
+    "interrupt_state" in inspect.signature(run_acp_once).parameters
+)
+
+
 def _make_acp_run_factory(
     *,
     model: Optional[str],
     max_time: int,
     permission_policy: str,
     task_id: str,
+    cancel_state: Optional[ACPCancelState] = None,
+    heartbeat_fn: Optional[Callable[[], None]] = None,
+    interrupt_state: Optional[InterruptState] = None,
 ) -> Callable[[str], RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable.
 
@@ -4181,10 +4375,30 @@ def _make_acp_run_factory(
     created ONCE per run and reused; its file name carries the REAL ACP
     sessionId via ``mapper.set_session_id`` (flowing through
     ``run_acp_once``'s on-session hook), not the "acp-session" stub.
+
+    ``cancel_state``/``heartbeat_fn`` (2026-09-10, Production-Verdrahtung):
+    the factory previously created its OWN ACPCancelState, so serve_loop's
+    heartbeat control channel (``_acp_control_sink``) could never flip the
+    cancel flag and tool heartbeats went nowhere — the factory was called
+    only from a test while serve_loop called run_acp_once bare. serve_loop
+    now passes ITS cancel state (ladder Stufe 1: Stop-Knopf) and its tool
+    heartbeat (Review #464 Major 7) through here; ``None`` keeps the old
+    private-state behaviour (tests, replay).
+
+    ``interrupt_state`` (PR #492 interplay): forwarded to run_acp_once so a
+    cancelled turn carries WHAT interrupted it (kind/reason stamp). WITHOUT
+    this the merge of #492 would silently drop the stamp for the ACP path —
+    both PRs green in isolation, the combination loses the stamp. The keyword
+    is forwarded only when run_acp_once's SIGNATURE has the parameter
+    (module flag _RUN_ACP_ACCEPTS_INTERRUPT_STATE, evaluated at import) AND
+    a state was passed — a value-only check would forward an unknown kwarg
+    on a pre-#492 base and kill every ACP turn with a TypeError. After #492
+    merges (merge order: #492 first), the flag is True and the pass-through
+    is unconditional.
     """
     import acp_chat_events
 
-    cancel_state = ACPCancelState()
+    cancel_state = cancel_state or ACPCancelState()
 
     def run(prompt: str) -> RunOutcome:
         cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
@@ -4231,9 +4445,15 @@ def _make_acp_run_factory(
             permission_policy=permission_policy,
             task_id=task_id,
             cancel_state=cancel_state,
+            heartbeat_fn=heartbeat_fn,
             transcript_sink=sink,
             preview_sink=preview_sink,
             on_session_id=on_session_id,
+            **(
+                {"interrupt_state": interrupt_state}
+                if interrupt_state is not None and _RUN_ACP_ACCEPTS_INTERRUPT_STATE
+                else {}
+            ),
         )
 
     return run

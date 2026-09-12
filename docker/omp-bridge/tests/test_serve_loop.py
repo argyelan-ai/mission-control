@@ -62,15 +62,19 @@ class RecordingLifecycle(bridge.MCLifecycle):
         self.calls.append(("comment", task_id))
 
 
-def _run(poll_states, run_factory, *, iterations, lifecycle=None):
+def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=None,
+         task_lock_path=None, child_alive=None, boot_epoch=None):
     lc = lifecycle or RecordingLifecycle()
     it = iter(poll_states)
 
     def poll():
         try:
-            return next(it)
+            item = next(it)
         except StopIteration:
             return {"state": "idle"}
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     # Isolated context-env path: the default MC_CONTEXT_ENV_PATH is the LIVE
     # /tmp/mc-context.env the real bridge writes for the agent's `mc` CLI —
@@ -78,14 +82,26 @@ def _run(poll_states, run_factory, *, iterations, lifecycle=None):
     import tempfile
     ctx = os.path.join(tempfile.mkdtemp(prefix="omp-serve-ctx-"), "mc-context.env")
 
+    # `boot_epoch=None` (the default) exercises the REAL `_container_boot_epoch()`
+    # default rather than stubbing it — most of these tests don't care about
+    # the wall-clock value, only about relative order (lock epoch vs. this
+    # process's own container boot, which is always in the past by now).
+    # Pass an explicit epoch to control which side of "this boot" a lock
+    # timestamp falls on.
+    boot_epoch_fn = (lambda: boot_epoch) if boot_epoch is not None else None
+
     bridge.serve_loop(
         poll_interval=0,
         max_iterations=iterations,
         _poll_fn=poll,
+        _recovery_fn=recovery_fn if recovery_fn is not None else (lambda: None),
         _lifecycle_factory=lambda task: lc,
         _run_factory=run_factory,
         _sleep=lambda _s: None,
         _context_env_path=ctx,
+        _task_lock_path=task_lock_path,
+        _child_alive_fn=child_alive,
+        _boot_epoch_fn=boot_epoch_fn,
     )
     return lc
 
@@ -150,6 +166,322 @@ def test_idle_clears_dedup_then_reruns():
     )
     assert runs["n"] == 2, runs
     print("PASS test_idle_clears_dedup_then_reruns")
+
+
+# ── Startup recovery (G2, dispatch-path-parity #521 row 7 / card f5cc4cee
+# point e): a container restart drops every in-memory bridge state while the
+# backend still shows the card `in_progress` with a live ack. Poll then
+# reports `state: working` WITHOUT a task object forever (agents.py:3167).
+# serve_loop must recover it via GET /me/active-task-recovery on the very
+# first iteration only — never on a later, genuine mid-run `working`.
+
+
+def test_startup_recovery_runs_active_task_on_working_with_no_task():
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    # First poll reports `working` with no task — exactly what agents.py:3167
+    # returns for an ack'd in_progress/waiting card with no live run signal.
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        rf, iterations=1, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert runs["n"] == 1, runs
+    assert ("ack", "task-1") in lc.calls
+    assert any(c[0] == "finish" for c in lc.calls)
+    print("PASS test_startup_recovery_runs_active_task_on_working_with_no_task")
+
+
+def test_startup_recovery_noop_when_nothing_active():
+    # GET /me/active-task-recovery reports {"active": false} → _make_http_recovery
+    # (and any equivalent test double) returns None. serve_loop must fall back
+    # to idling, not crash or spin.
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        iterations=1, recovery_fn=lambda: None,
+    )
+    assert lc.calls == []
+    print("PASS test_startup_recovery_noop_when_nothing_active")
+
+
+def test_startup_recovery_only_fires_on_first_iteration():
+    # A SECOND `working`-with-no-task poll (this bridge's OWN turn genuinely
+    # in flight, e.g. a message-nudge turn outside the dispatch bookkeeping)
+    # must NOT trigger another recovery fetch — only the very first iteration
+    # is a startup boundary.
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return None
+
+    lc = _run(
+        [
+            {"state": "working", "task_id": "task-1"},
+            {"state": "working", "task_id": "task-1"},
+        ],
+        lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        iterations=2, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert lc.calls == []
+    print("PASS test_startup_recovery_only_fires_on_first_iteration")
+
+
+def test_startup_recovery_survives_a_failed_first_poll():
+    # Review PR #522 W3: `iterations == 1` burned the one-shot startup-
+    # recovery check on a poll that never got an answer — exactly the
+    # moment right after container start, when the backend is LEAST likely
+    # to be reachable yet (entrypoint.sh budgets up to 6 bootstrap retries
+    # for it). A poll error on iteration 1 used to mean recovery would never
+    # fire again for the rest of this process's life. Simulate that: the
+    # first poll raises, the second succeeds with `working`/no task — the
+    # check must fire on THAT poll, not be permanently spent.
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    lc = _run(
+        [
+            RuntimeError("backend not reachable yet"),
+            {"state": "working", "task_id": "task-1"},
+        ],
+        rf, iterations=2, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert runs["n"] == 1, runs
+    assert any(c[0] == "finish" for c in lc.calls)
+    print("PASS test_startup_recovery_survives_a_failed_first_poll")
+
+
+def test_startup_recovery_not_triggered_by_idle_or_new_task():
+    # Recovery is scoped to the EXACT `working`-with-no-task gap — a normal
+    # idle or new_task first poll must never call it.
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    def rf(task, cwd):
+        return _finish_outcome
+
+    lc = _run([{"state": "idle"}], rf, iterations=1, recovery_fn=recovery)
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert lc.calls == []
+
+    lc2 = _run(
+        [{"state": "new_task", "task": TASK}], rf, iterations=1, recovery_fn=recovery,
+    )
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert any(c[0] == "finish" for c in lc2.calls)
+    print("PASS test_startup_recovery_not_triggered_by_idle_or_new_task")
+
+
+def test_startup_recovery_skipped_when_lock_postdates_container_boot():
+    # Review PR #522 B1, round 2: omp-recycler.sh:57-59 respawns bridge.py
+    # without any task_active gate whenever it isn't alive — a bare
+    # bridge-only crash/respawn leaves Window 0 (the persistent native TUI,
+    # and any turn running in it) untouched. serve_loop must NOT mistake
+    # that for a genuine orphan and re-deliver the prompt via recovery,
+    # because run_native_turn's isolate path calls controller.relaunch()
+    # (`tmux respawn-window -k`) and would kill the still-running turn.
+    # Round 1 used "Window 0's child alive" as the signal — WRONG, because
+    # entrypoint.sh always builds Window 0 with a live child BEFORE Window 1
+    # (bridge.py) starts, so it looks alive on iteration 1 regardless of
+    # which case this is (see test_startup_recovery_runs_when_lock_predates_
+    # container_boot_even_if_child_alive below for the regression this
+    # caused). Round 2 signal: the lock's own timestamp (`_set_task_lock`
+    # writes `int(time.time())`) vs. this container's boot time — a lock
+    # newer than the boot means it was set DURING this life, so a turn may
+    # genuinely still be running.
+    import tempfile
+    lock_path = os.path.join(tempfile.mkdtemp(prefix="omp-lock-"), "task.lock")
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("2000000000")  # set "after" the boot_epoch stub below
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        iterations=1, recovery_fn=recovery,
+        task_lock_path=lock_path, boot_epoch=1000000000,
+    )
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert lc.calls == []
+    # The lock must survive too — it is NOT stale, a turn appears to still
+    # own it, so treating it as orphaned would also be wrong.
+    assert os.path.exists(lock_path), "lock must not be removed while a turn appears in flight"
+    print("PASS test_startup_recovery_skipped_when_lock_postdates_container_boot")
+
+
+def test_startup_recovery_runs_when_lock_predates_container_boot_even_if_child_alive():
+    # THE round-2 regression test (review PR #522 B1, round 2 finding): this
+    # mirrors entrypoint.sh's actual startup order — Window 0 (with a live
+    # shell/TUI child) is always built BEFORE Window 1 (bridge.py) starts,
+    # so on a REAL container restart the child is alive too, exactly like on
+    # a bridge-only respawn. `child_alive=True` here reproduces that; the
+    # only thing that must decide is whether the lock predates THIS
+    # container's boot. It does (it's from a genuinely dead previous life),
+    # so recovery must fire and the orphaned lock must be cleared — the
+    # round-1 fix got this backwards and left both broken (review evidence:
+    # "[serve] task lock present and Window 0 child alive ... skipping
+    # startup recovery" fired on exactly this scenario).
+    import tempfile
+    lock_path = os.path.join(
+        tempfile.mkdtemp(prefix="omp-lock-predates-boot-"), "task.lock"
+    )
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("1000000000")  # set "before" the boot_epoch stub below
+
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        rf, iterations=1, recovery_fn=recovery,
+        task_lock_path=lock_path, boot_epoch=2000000000,
+        child_alive=lambda: True,  # Window 0 always looks alive at this point
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert runs["n"] == 1, runs
+    assert any(c[0] == "finish" for c in lc.calls)
+    assert not os.path.exists(lock_path), "a genuinely orphaned lock must still be removed"
+    print(
+        "PASS test_startup_recovery_runs_when_lock_predates_container_boot_even_if_child_alive"
+    )
+
+
+def test_startup_recovery_falls_back_to_child_alive_when_boot_epoch_unavailable():
+    # Defensive fallback: `_container_boot_epoch()` returns None when /proc
+    # is unreadable (e.g. a non-Linux dev host). serve_loop must not guess —
+    # it falls back to the round-1 child-alive signal rather than silently
+    # always-stale or always-fresh.
+    import tempfile
+    lock_path = os.path.join(
+        tempfile.mkdtemp(prefix="omp-lock-no-boot-epoch-"), "task.lock"
+    )
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("123")
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    it = iter([{"state": "working", "task_id": "task-1"}])
+
+    def poll():
+        try:
+            return next(it)
+        except StopIteration:
+            return {"state": "idle"}
+
+    lc_holder = RecordingLifecycle()
+    import tempfile as _tempfile
+    ctx = os.path.join(_tempfile.mkdtemp(prefix="omp-serve-ctx-"), "mc-context.env")
+    bridge.serve_loop(
+        poll_interval=0, max_iterations=1,
+        _poll_fn=poll, _recovery_fn=recovery,
+        _lifecycle_factory=lambda t: lc_holder,
+        _run_factory=lambda task, cwd: (_ for _ in ()).throw(AssertionError("must not run")),
+        _sleep=lambda _s: None,
+        _context_env_path=ctx,
+        _task_lock_path=lock_path,
+        _boot_epoch_fn=lambda: None,  # simulates /proc unavailable
+        _child_alive_fn=lambda: True,  # falls back to "in flight"
+    )
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert lc_holder.calls == []
+    assert os.path.exists(lock_path), "fallback treated the turn as in flight, lock kept"
+    print("PASS test_startup_recovery_falls_back_to_child_alive_when_boot_epoch_unavailable")
+
+
+def test_make_http_recovery_translates_active_and_inactive():
+    import urllib.request
+
+    class _FakeResp:
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self._body
+
+    responses = [b'{"active": false, "reason": "no_active_task"}']
+
+    def fake_urlopen(req, timeout=0):
+        return _FakeResp(responses[0])
+
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        recover = bridge._make_http_recovery("http://backend:8000", "tok")
+        assert recover() is None
+
+        responses[0] = (
+            b'{"active": true, "task": {"id": "t9", "title": "x", '
+            b'"status": "in_progress", "board_id": "b1", '
+            b'"workspace_path": "/ws", "prompt": "do it", '
+            b'"dispatch_attempt_id": "att-9"}}'
+        )
+        payload = recover()
+        assert payload == {
+            "state": "new_task",
+            "task": {
+                "id": "t9", "title": "x", "status": "in_progress",
+                "board_id": "b1", "workspace_path": "/ws", "prompt": "do it",
+                "dispatch_attempt_id": "att-9",
+            },
+        }
+    finally:
+        urllib.request.urlopen = orig
+    print("PASS test_make_http_recovery_translates_active_and_inactive")
 
 
 def test_retryable_abort_exhausts_to_blocker():
