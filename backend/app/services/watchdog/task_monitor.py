@@ -18,7 +18,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
-from app.models.task import Task, TaskComment
+from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.services.activity import emit_event
 from app.services.task_state import lock_and_set
@@ -32,6 +32,18 @@ logger = logging.getLogger("mc.watchdog")
 # TTL: a 1h key is what stacked identical watchdog_notify comments overnight).
 SILENT_CARD_STATUSES = ("in_progress", "waiting")
 SILENT_CARD_THRESHOLD_MINUTES = 30
+
+# Second stage (_check_lead_notify_escalations below): a stage-1 lead
+# message that got NO lead reaction for this long is reported to the
+# operator — exactly once per silent phase. "Lead reaction" is explicit:
+# a comment posted by the Board Lead on the card, or a status change
+# authored by the Board Lead, both AFTER the stage-1 message.
+LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES = 30
+# Stage-1 messages this escalation watches. Both end in the same dead end:
+# the Lead is addressed on the card, and if he never reads it, nobody
+# louder is ever told (incident 2026-09-12 07:16: 81 minutes, no reaction).
+LEAD_NOTIFY_COMMENT_TYPES = ("watchdog_notify", "blocker_lead_notify")
+
 _SILENT_CARD_OPEN_CHILD = frozenset({
     "inbox", "in_progress", "review", "waiting", "user_test", "blocked",
 })
@@ -1480,6 +1492,228 @@ class TaskMonitorMixin:
             task.started_at,
             *child_times,
         )
+
+    async def _lead_reacted_after(
+        self,
+        session: AsyncSession,
+        task: Task,
+        lead: Agent,
+        since: datetime,
+    ) -> bool:
+        """Explicit definition of "the Lead reacted" (task card, 2026-09-12).
+
+        Reaction means, AFTER ``since`` (the stage-1 message):
+        - the Board Lead posted ANY comment on the card himself, or
+        - the card's status changed with the Board Lead as the author
+          (``mc review``/``mc done``/PATCH — every real status change is a
+          TaskEvent row).
+        System comments, watchdog messages and other agents' activity do
+        NOT count — they are exactly the noise the Lead is not reading.
+        """
+        lead_comment = (await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_agent_id == lead.id,
+                TaskComment.author_type == "agent",
+                TaskComment.created_at > since,  # type: ignore[union-attr]
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+        if lead_comment is not None:
+            return True
+
+        status_event = (await session.exec(
+            select(TaskEvent)
+            .where(
+                TaskEvent.task_id == task.id,
+                TaskEvent.agent_id == lead.id,
+                TaskEvent.created_at > since,  # type: ignore[union-attr]
+            )
+            .order_by(TaskEvent.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+        return status_event is not None
+
+    async def _check_lead_notify_escalations(self, session: AsyncSession) -> None:
+        """Second stage: an unanswered lead message goes to the operator.
+
+        Stage 1 (silent-card watchdog, blocker lead-triage FYI) posts
+        ``watchdog_notify``/``blocker_lead_notify`` addressed to the Board
+        Lead. If the Lead does not react within
+        LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES, the operator is told —
+        via a pending ``lead_escalation`` Approval + a push through the
+        existing approval fan-out (Telegram/Slack).
+
+        Exactly once per silent phase, deduped in the DB: the last
+        stage-1 message is compared against the last
+        ``lead_escalated_notify`` system comment. No new task status, no
+        schema change, no repeated reminders — a second stage-1 message
+        (new silent phase) legitimately opens a new escalation window.
+        """
+        from app.models.approval import Approval
+
+        result = await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.author_type == "system",
+                TaskComment.comment_type.in_(LEAD_NOTIFY_COMMENT_TYPES),  # type: ignore[union-attr]
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        )
+        stage1_messages = result.all()
+        if not stage1_messages:
+            return
+
+        now = utcnow()
+        seen_tasks: set[uuid.UUID] = set()
+
+        for stage1 in stage1_messages:
+            if stage1.task_id in seen_tasks:
+                continue  # newest stage-1 message per task wins
+            seen_tasks.add(stage1.task_id)
+
+            task = await session.get(Task, stage1.task_id)
+            if task is None or task.status in ("done", "failed", "aborted"):
+                continue
+            if stage1.created_at is None:
+                continue
+            stage1_at = ensure_aware(stage1.created_at)
+
+            waiting_for = now - stage1_at
+            if waiting_for < timedelta(minutes=LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES):
+                continue
+
+            lead = None
+            if task.board_id:
+                lead_result = await session.exec(
+                    select(Agent).where(
+                        Agent.board_id == task.board_id,
+                        Agent.is_board_lead == True,  # noqa: E712
+                    )
+                )
+                lead = lead_result.first()
+            if lead is None:
+                continue
+
+            if await self._lead_reacted_after(session, task, lead, stage1_at):
+                continue
+
+            # Operator already has a live decision ticket on this card —
+            # a second, parallel channel would be noise, not escalation.
+            pending_approval = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.status == "pending",
+                )
+            )).first()
+            if pending_approval is not None:
+                continue
+
+            # Exactly-once: only escalate if no escalation marker exists
+            # AFTER the newest stage-1 message of this silent phase.
+            last_escalation = (await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type == "lead_escalated_notify",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            if (
+                last_escalation is not None
+                and last_escalation.created_at is not None
+                and ensure_aware(last_escalation.created_at) >= stage1_at
+            ):
+                continue
+
+            minutes_waiting = int(waiting_for.total_seconds() / 60)
+            assigned_name = "unzugewiesen"
+            if task.assigned_agent_id:
+                assigned = await session.get(Agent, task.assigned_agent_id)
+                if assigned is not None:
+                    assigned_name = assigned.name
+
+            msg = (
+                f"ESKALATION STUFE 2: \"{task.title}\" — Board-Lead {lead.name} "
+                f"hat seit {minutes_waiting}min nicht auf die Lead-Meldung reagiert.\n\n"
+                f"**Operator:** der Lead wurde {minutes_waiting}min zuvor auf dieser "
+                f"Karte angeschrieben und hat weder kommentiert noch den Status "
+                f"geaendert. Bitte selbst pruefen.\n\n"
+                f"Task-ID: {task.id}\n"
+                f"Status: {task.status}\n"
+                f"Agent: {assigned_name}\n"
+                f"Lead-Meldung vom: {stage1_at.isoformat()}"
+            )
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=msg,
+                comment_type="lead_escalated_notify",
+            ))
+            await session.commit()
+
+            approval = Approval(
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=task.assigned_agent_id,
+                action_type="lead_escalation",
+                description=(
+                    f"Lead {lead.name} hat seit {minutes_waiting}min nicht auf die "
+                    f"Lead-Meldung bei \"{task.title}\" reagiert"
+                ),
+                payload={
+                    "stage1_comment_type": stage1.comment_type,
+                    "stage1_at": stage1_at.isoformat(),
+                    "minutes_waiting": minutes_waiting,
+                    "lead_id": str(lead.id),
+                    "task_status": task.status,
+                },
+                status="pending",
+                expires_at=now + timedelta(hours=24),
+            )
+            session.add(approval)
+            await session.commit()
+
+            try:
+                from app.services import operator_approvals
+                await operator_approvals.send_approval(
+                    approval.id, assigned_name, task.title,
+                    f"Lead-Meldung ohne Reaktion seit {minutes_waiting}min "
+                    f"(Lead: {lead.name}).",
+                )
+            except Exception as e:  # noqa: BLE001 — Kommentar ist schon persistiert
+                logger.warning(
+                    "Lead-escalation operator push failed for '%s': %s",
+                    task.title, e,
+                )
+
+            try:
+                await emit_event(
+                    session,
+                    "task.lead_notify_escalated",
+                    f"Stufe 2: Lead {lead.name} reagierte nicht ({minutes_waiting}min) "
+                    f"auf '{task.title}' → Operator",
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    agent_id=lead.id,
+                    severity="warning",
+                    detail={
+                        "stage1_comment_type": stage1.comment_type,
+                        "minutes_waiting": minutes_waiting,
+                        "lead_id": str(lead.id),
+                        "source": "lead_notify_escalation",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — Eskalation ist persistiert
+                logger.debug("lead_notify_escalated event emit failed: %s", e)
+
+            logger.info(
+                "Lead notify escalated to operator: '%s' (lead %s, %dmin no reaction)",
+                (task.title or "")[:60], lead.name, minutes_waiting,
+            )
 
     async def _check_undispatched_tasks(self, session: AsyncSession) -> None:
         """Find tasks that are assigned but were never dispatched, and re-dispatch them.

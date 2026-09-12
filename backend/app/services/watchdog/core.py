@@ -143,6 +143,10 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             # silent card is visible to the Board Lead even if a later
             # healer resets it. Never changes status.
             await self._check_silent_cards(session)
+            # Second stage: a stage-1 lead message (watchdog_notify /
+            # blocker_lead_notify) with no lead reaction for 30 minutes is
+            # reported to the operator — once per silent phase, report-only.
+            await self._check_lead_notify_escalations(session)
 
             # Orphan recovery: tasks stuck in in_progress without agent heartbeat
             recovered = await self._recover_orphaned_tasks(session)

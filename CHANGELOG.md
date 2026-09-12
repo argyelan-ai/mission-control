@@ -7,6 +7,13 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 ## [Unreleased]
 
 ### Added
+- **Lead-escalation second stage.** A stage-1 lead message
+  (`watchdog_notify` from the silent-card watchdog, `blocker_lead_notify`
+  from blocker lead-triage) that got no Board-Lead reaction for 30
+  minutes is reported to the operator — exactly once per silent phase.
+  "Reaction" is explicit: a Lead-authored comment on the card or a
+  Lead-authored status change after the message. Report-only: pending
+  `lead_escalation` approval + push, no status change, no new schema.
 - **Silent-card watchdog.** Cards in `in_progress` or `waiting` with no
   agent turn and no (non-system) comment for 30 minutes are reported once
   to the Board Lead via `watchdog_notify`. Status is never auto-changed.
