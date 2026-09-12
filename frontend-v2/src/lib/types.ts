@@ -634,7 +634,8 @@ export interface Agent {
   last_seen_at: string | null;
   last_task_activity_at: string | null;
   current_task_id: string | null;
-  context_tokens: number;
+  /** null = unbekannt (Agent meldet seit >= 3 Heartbeats keinen Kontextwert) */
+  context_tokens: number | null;
   context_max: number;
   session_message_count: number;
   total_tasks_completed: number;
@@ -1625,7 +1626,8 @@ export interface AgentUsageSnapshot {
   model: string | null;
   status: AgentStatus;
   run_state: string;
-  context_tokens: number;
+  /** null = unbekannt (Agent meldet seit >= 3 Heartbeats keinen Kontextwert) */
+  context_tokens: number | null;
   context_max: number;
   context_pct: number;
   tasks_completed: number;

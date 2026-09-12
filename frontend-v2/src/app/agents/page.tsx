@@ -296,7 +296,10 @@ const PROVISION_MAP: Record<string, { labelKey: string; color: string }> = {
   error: { labelKey: "provError", color: C.error },
 };
 
-function ContextBar({ pct }: { pct: number }) {
+function ContextBar({ pct: pctIn }: { pct: number | null }) {
+  // null = unbekannt: leerer Balken, "—" statt einer alten Zahl
+  const pct = pctIn ?? 0;
+  const known = pctIn !== null;
   const t = useTranslations("agents");
   const color = pct >= 90 ? C.error : pct >= 70 ? C.warning : C.info;
   return (
@@ -314,7 +317,7 @@ function ContextBar({ pct }: { pct: number }) {
         className="text-[10px] tabular-nums w-8 text-right"
         style={{ color: pct >= 70 ? color : C.textMuted }}
       >
-        {pct}%
+        {known ? `${pct}%` : "—"}
       </span>
     </span>
   );
@@ -522,7 +525,7 @@ function AgentActionsSheet({
               <div className="flex items-center gap-2 text-[10px]" style={{ color: C.textMuted }}>
                 <StatusDot status={dot} />
                 <span className="capitalize">{agent.status}</span>
-                <span>· {t("contextPct", { pct })}</span>
+                <span>· {pct === null ? "—" : t("contextPct", { pct })}</span>
                 {agent.last_seen_at && <span>· {timeAgo(agent.last_seen_at, locale)}</span>}
               </div>
             </div>

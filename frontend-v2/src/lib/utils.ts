@@ -7,8 +7,9 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function contextPercent(tokens: number, max: number): number {
-  if (!max) return 0;
+/** null = unbekannt (kein frischer Wert vom Agenten) — nie als 0 anzeigen. */
+export function contextPercent(tokens: number | null | undefined, max: number): number | null {
+  if (!max || tokens === null || tokens === undefined) return null;
   return Math.round((tokens / max) * 100);
 }
 
@@ -26,7 +27,8 @@ export function fmtCtx(n: number): string {
   return `${Math.round(n / 1000)}k`;
 }
 
-export function contextColor(pct: number): string {
+export function contextColor(pct: number | null): string {
+  if (pct === null) return "var(--color-text-muted)";
   if (pct >= 90) return "var(--color-status-error)";
   if (pct >= 70) return "var(--color-status-warning)";
   return "var(--color-status-online)";
