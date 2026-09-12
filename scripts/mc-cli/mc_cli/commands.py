@@ -867,6 +867,96 @@ def _has_recent_self_reflection(comments, agent_id, window_s) -> bool:
     return False
 
 
+# `mc finish --needs-decision` — fertige Karte, offene Menschen-Entscheidung.
+#
+# Vorfall 11.09.2026: eine Karte war um 05:40 fertig (CI gruen, Beweislauf
+# bestanden, Reflexion geschrieben) und stand um 08:30 immer noch auf
+# `in_progress` — der Worker hatte statt `mc finish` einen Kommentar
+# "Zurueckgestellt, wartet auf Rollout-Entscheid" gepostet. Ueber
+# `blocked_by_task_id` hing die Elternkarte dadurch auf `blocked`, und gemerkt
+# hat es ein Mensch: fuer `in_progress` gibt es keinen Waechter, weil das
+# System annimmt, es arbeite jemand daran.
+#
+# Der Worker hat sich nicht falsch verhalten — ihm fehlte der Weg. "Fertig,
+# aber jemand muss entscheiden" war kein Zustand, den die CLI ausdruecken
+# konnte. Bewusst KEIN neuer Status dafuer: die Karte schliesst regulaer, die
+# Elternkarte wird frei, und die Frage geht zwei Wege gleichzeitig —
+#
+#   1. als offene Thread-Frage an den Operator (POST /tasks/current/ask, der
+#      in #496 gehaertete Weg: eine offene Frage ueberlebt dort eine bereits
+#      beendete Karte und wird weiter zugestellt),
+#   2. als Kommentar `needs_decision` AN der Karte, damit die Frage auffindbar
+#      an ihr haengt statt nur als Meldung zu verpuffen.
+#
+# Der ask-Endpunkt loest den Task ueber `agent.current_task_id` auf. Nach dem
+# PATCH auf `done` ist das fuer einen gewoehnlichen Worker ein 409 — die Frage
+# muss also VOR dem Statuswechsel raus. Reihenfolge ist Vertrag, siehe
+# tests/test_finish_needs_decision.py.
+_NEEDS_DECISION_TO = "mark"
+_NEEDS_DECISION_PRIORITY = "high"
+
+
+def _validate_decision_question(raw: str) -> str:
+    """Frage normalisieren — leer ist schlimmer als gar nicht gefragt.
+
+    Eine leere `--needs-decision`-Frage wuerde eine geschlossene Karte mit
+    einem inhaltslosen Wartezeichen zuruecklassen: der Operator sieht, dass
+    etwas entschieden werden soll, aber nicht was. Darum harter Abbruch,
+    lokal und vor jedem HTTP-Call.
+    """
+    question = (raw or "").strip()
+    if not question:
+        raise UsageError(
+            "--needs-decision braucht eine konkrete Frage. Eine leere Frage ist "
+            "schlimmer als keine — der Operator saehe ein Wartezeichen ohne "
+            "Inhalt. Beispiel:\n"
+            '  mc finish --needs-decision "Rollout heute abend oder erst nach '
+            'dem Release?" "<Reflexion>"'
+        )
+    return question
+
+
+def _post_decision_question(client: Client, cfg, question: str) -> None:
+    """Die Frage auf beide Wege legen: Operator-Thread und Karte.
+
+    Reihenfolge mit Absicht: erst der ask-Endpunkt (der Call, der fehlschlagen
+    KANN — 409 ohne aktiven Task, 403 ohne chat:write), danach der Kommentar.
+    Faellt der erste um, bricht `mc finish` ab, bevor irgendetwas geschrieben
+    wurde — die Karte bleibt offen statt still mit einer verschluckten Frage
+    zu schliessen.
+    """
+    board_id, task_id = cfg.require_task_context()
+    client.request(
+        "POST",
+        "/api/v1/agent/tasks/current/ask",
+        body={
+            "question": question,
+            "blocking": False,  # die Karte schliesst — hier wird nichts geparkt
+            "to": _NEEDS_DECISION_TO,
+            "priority": _NEEDS_DECISION_PRIORITY,
+            "options": None,
+            "default": None,
+            "deadline": None,
+        },
+    )
+    client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        body={
+            "comment_type": "needs_decision",
+            "content": (
+                "**Entscheid offen** — die Arbeit an dieser Karte ist fertig, "
+                "die Karte wird geschlossen. Offen ist nur noch eine "
+                "menschliche Entscheidung.\n\n"
+                f"**Frage an den Operator**\n{question}\n\n"
+                "Die Frage liegt zusaetzlich als offene Frage im Thread dieser "
+                "Karte. Eine Antwort dort schliesst sie; was aus der "
+                "Entscheidung folgt, gehoert auf eine neue Karte."
+            ),
+        },
+    )
+
+
 def _cmd_finish(args, client, cfg):
     """Reflexion posten + Status auf done (oder review mit --review).
 
@@ -885,6 +975,10 @@ def _cmd_finish(args, client, cfg):
     `mc review` separat re-tryen kann.
     """
     _validate_reflection(args.message)
+    needs_decision = getattr(args, "needs_decision", None)
+    decision_question = (
+        _validate_decision_question(needs_decision) if needs_decision is not None else None
+    )
     # Normalize recognised headers to canonical German (idempotent on canonical
     # input) so the POSTed reflection — and thus the memory pipeline's lesson
     # extraction — always sees the canonical `## <German>` headers even when the
@@ -910,6 +1004,11 @@ def _cmd_finish(args, client, cfg):
 
     if pre["should_post_comment"]:
         board_id, task_id = cfg.require_task_context()
+        # Frage VOR der Reflexion: damit macht eine frische eigene Reflexion im
+        # Dedup-Fenster den Beweis, dass die Frage schon raus ist — ein Retry
+        # nach fehlgeschlagenem PATCH postet sie darum kein zweites Mal.
+        if decision_question:
+            _post_decision_question(client, cfg, decision_question)
         client.request(
             "POST",
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
@@ -929,10 +1028,15 @@ def _cmd_finish(args, client, cfg):
         # Comment ist ggf. schon im Audit-Trail. Klare Message zum recovery
         # statt nacktem HTTP-Stacktrace, damit der Agent weiss was zu tun ist.
         if pre["should_post_comment"]:
+            extra = (
+                "\n# Die Frage ist bereits gestellt (Thread + Karten-Kommentar) — "
+                "NICHT erneut `--needs-decision` aufrufen."
+                if decision_question else ""
+            )
             print(
                 f"# Reflexion wurde gepostet, aber Status-PATCH fehlgeschlagen: {exc}\n"
                 f"# Retry NUR den Status (kein neuer Comment) mit:\n"
-                f"#   mc {'review' if target_status == 'review' else 'done'}",
+                f"#   mc {'review' if target_status == 'review' else 'done'}{extra}",
                 file=sys.stderr,
             )
         raise
@@ -960,6 +1064,18 @@ def _add_finish_args(p):
             "Offene Checklist-Items automatisch auf done setzen bevor `mc finish` "
             "den Task schliesst. Ohne --force bricht der Pre-Flight mit UsageError ab "
             "wenn Items offen sind."
+        ),
+    )
+    p.add_argument(
+        "--needs-decision",
+        dest="needs_decision",
+        metavar="FRAGE",
+        help=(
+            "Die Arbeit ist fertig, offen ist nur noch eine menschliche "
+            "Entscheidung: schliesst die Karte GANZ NORMAL (Reflexionspflicht "
+            "unveraendert) und legt die Frage an den Operator — als offene Frage "
+            "im Thread der Karte und als Kommentar an der Karte. Kein neuer "
+            "Status, kein Liegenlassen. Leere Frage wird abgelehnt."
         ),
     )
 
