@@ -67,6 +67,7 @@ import type {
   TaskEvent,
   TaskGitInfo,
   CommitDiff,
+  BranchDiff,
   TaskPipelineResponse,
   Runtime,
   RuntimesResponse,
@@ -805,6 +806,8 @@ export const api = {
       request<TaskGitInfo>(`/api/v1/boards/${boardId}/tasks/${taskId}/git-info`),
     gitDiff: (boardId: string, taskId: string, commit: string) =>
       request<CommitDiff>(`/api/v1/boards/${boardId}/tasks/${taskId}/git-diff?commit=${encodeURIComponent(commit)}`),
+    gitBranchDiff: (boardId: string, taskId: string, base = "main") =>
+      request<BranchDiff>(`/api/v1/boards/${boardId}/tasks/${taskId}/git-branch-diff?base=${encodeURIComponent(base)}`),
     review: (boardId: string, taskId: string, body: { decision: "approve" | "request_changes" | "hold"; comment: string }) =>
       request<{ status: string; decision: string }>(`/api/v1/boards/${boardId}/tasks/${taskId}/review`, {
         method: "POST",

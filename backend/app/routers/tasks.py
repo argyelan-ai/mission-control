@@ -1408,6 +1408,35 @@ async def get_task_git_diff_endpoint(
     return diff
 
 
+@router.get("/boards/{board_id}/tasks/{task_id}/git-branch-diff")
+async def get_task_git_branch_diff_endpoint(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    base: str = "main",
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Diff of the task branch against `base` (three-dot) — everything the
+    agent built on this task, for the cockpit's Changes column."""
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+
+    if not task.workspace_path:
+        raise HTTPException(status_code=404, detail="Kein Workspace gefunden")
+
+    # A ref name only — never a flag or a range (this reaches a shell-free
+    # subprocess, but `-`-prefixed values would still be parsed as git options).
+    if not base or base.startswith("-") or any(ch in base for ch in " \t\n.."):
+        raise HTTPException(status_code=422, detail="Ungültiger base-Ref")
+
+    from app.services.git_service import git_service
+    try:
+        return await git_service.get_branch_diff(task.workspace_path, base=base)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ── Single Task CRUD ─────────────────────────────────────────────────────────
 
 @router.get("/boards/{board_id}/tasks/{task_id}")

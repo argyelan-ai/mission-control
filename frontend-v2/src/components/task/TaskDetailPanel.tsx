@@ -1,17 +1,21 @@
 "use client";
 
 /**
- * TaskDetailPanel — chrome around <TaskDetailBody> (07/2026 redesign).
+ * TaskDetailPanel — chrome around <TaskDetailBody> (07/2026 redesign, 09/2026
+ * cockpit width).
  *
  * Two variants share one body:
- *  - "panel": embedded side column (used by the /tasks split view)
- *  - "modal": centered dialog with backdrop (used by pipeline / lists)
+ *  - "panel": embedded side column (used by the /tasks split view) — narrow,
+ *    single column.
+ *  - "modal": centered dialog with backdrop (used by pipeline / lists). On a
+ *    desktop viewport (≥ 1024px) the modal opens wide and the body renders
+ *    its two-column cockpit (story | changes + results).
  *
  * All content, queries and mutations live in TaskDetailBody — the previous
  * ~180-line duplication between the two variants is gone.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C } from "@/lib/colors";
@@ -26,6 +30,21 @@ interface TaskDetailPanelProps {
   variant?: "modal" | "panel";
 }
 
+const WIDE_QUERY = "(min-width: 1024px)";
+
+function useWideViewport(): boolean {
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(WIDE_QUERY);
+    const update = () => setWide(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return wide;
+}
+
 export default function TaskDetailPanel({
   task,
   agents,
@@ -33,6 +52,8 @@ export default function TaskDetailPanel({
   onClose,
   variant,
 }: TaskDetailPanelProps) {
+  const wide = useWideViewport() && variant !== "panel";
+
   // iOS-safe scroll lock — only in modal variant (M4); panel variant is embedded in layout
   useBodyScrollLock(variant === "modal");
 
@@ -87,13 +108,13 @@ export default function TaskDetailPanel({
           if (e.target === e.currentTarget) onClose();
         }}
       >
-        {/* Centered panel */}
+        {/* Centered panel — wide on desktop for the two-column cockpit */}
         <motion.div
           initial={{ opacity: 0, y: "100%" }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: "100%" }}
           transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-          className="relative w-full rounded-t-lg sm:rounded-lg sm:max-w-2xl flex flex-col z-[51] overflow-hidden"
+          className={`relative w-full rounded-t-lg sm:rounded-lg flex flex-col z-[51] overflow-hidden ${wide ? "sm:max-w-5xl" : "sm:max-w-2xl"}`}
           role="dialog"
           aria-modal="true"
           aria-label="Task details"
@@ -109,7 +130,7 @@ export default function TaskDetailPanel({
           <div className="sm:hidden flex justify-center pt-2 pb-1 shrink-0">
             <div className="w-9 h-1 rounded-sm" style={{ backgroundColor: "var(--color-bg-hover)" }} />
           </div>
-          <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} />
+          <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} wide={wide} />
         </motion.div>
       </motion.div>
     </>

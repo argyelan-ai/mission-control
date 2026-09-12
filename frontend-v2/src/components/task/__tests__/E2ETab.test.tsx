@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { E2ETab } from "../E2ETab";
 import { TaskDetailBody } from "../TaskDetailBody";
@@ -227,7 +227,9 @@ describe("TaskDetailBody — E2E tab visibility", () => {
       />
     );
 
-    expect(await screen.findByRole("tab", { name: "E2E" })).toBeInTheDocument();
+    // Cockpit (09/2026): E2E is a collapsed group inside the Technical tab.
+    fireEvent.click(await screen.findByRole("tab", { name: /Technical/ }));
+    expect(await screen.findByRole("button", { name: /E2E test/ })).toBeInTheDocument();
   });
 
   it("hides the E2E tab when e2e is not required and no result comment exists", async () => {
@@ -252,7 +254,8 @@ describe("TaskDetailBody — E2E tab visibility", () => {
       />
     );
 
-    await screen.findByRole("tab", { name: "Comments" });
-    expect(screen.queryByRole("tab", { name: "E2E" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: /Technical/ }));
+    await screen.findByRole("button", { name: /Properties/ });
+    expect(screen.queryByRole("button", { name: /E2E test/ })).not.toBeInTheDocument();
   });
 });

@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TaskDetailBody } from "../TaskDetailBody";
 import type { Task, Agent } from "@/lib/types";
 
-// Task-Detail öffnet standardmässig den Comments-Tab (Task #12) — vorher war
-// es Thread. Store-Mock folgt demselben Muster wie TasksPage.test.tsx.
+// Task-Detail öffnet auf dem Gespräch, und darin auf den Kommentaren (Task
+// #12: Comments vor Thread). Seit dem Cockpit (09/2026) ist Thread kein
+// eigener Tab mehr, sondern ein Umschalter innerhalb von „Conversation".
+// Store-Mock folgt demselben Muster wie TasksPage.test.tsx.
 vi.mock("@/lib/store", () => ({
   useAppStore: (selector?: (s: { currentUser: null }) => unknown) =>
     selector ? selector({ currentUser: null }) : { currentUser: null },
@@ -100,23 +102,23 @@ describe("TaskDetailBody — default tab", () => {
     );
   });
 
-  it("opens on the Comments tab, not Thread", async () => {
+  it("opens on Conversation with Comments selected, not Thread", async () => {
     renderBody(mkTask());
 
-    const commentsTab = await screen.findByRole("tab", { name: "Comments" });
-    const threadTab = screen.getByRole("tab", { name: "Thread" });
+    const conversationTab = await screen.findByRole("tab", { name: /Conversation/ });
+    expect(conversationTab).toHaveAttribute("aria-selected", "true");
 
-    expect(commentsTab).toHaveAttribute("aria-selected", "true");
-    expect(threadTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: "Comments" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("still switches to Thread on click (tab-switch behavior untouched)", async () => {
+  it("still switches to Thread on click (switch behavior untouched)", async () => {
     renderBody(mkTask());
 
-    const threadTab = await screen.findByRole("tab", { name: "Thread" });
-    fireEvent.click(threadTab);
+    const threadBtn = await screen.findByRole("button", { name: "Thread" });
+    fireEvent.click(threadBtn);
 
-    expect(threadTab).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Comments" })).toHaveAttribute("aria-selected", "false");
+    expect(threadBtn).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Comments" })).toHaveAttribute("aria-pressed", "false");
   });
 });
