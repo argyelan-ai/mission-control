@@ -121,7 +121,11 @@ describe("PROBE W3 — held reviews are recognisable in the inbox", () => {
     apiMock.tasksList.mockResolvedValue([mkTask()]);
     apiMock.agentsList.mockResolvedValue([argusNoCanonical]);
     renderInbox();
-    await waitFor(() => expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument());
+    // Anchor on the loaded state before asserting absence — a negative
+    // assertion with no prior anchor is satisfied on the first synchronous
+    // render, before the agents query has even resolved (Rex review, PR #520).
+    await waitFor(() => expect(apiMock.agentsList).toHaveBeenCalled());
     expect(await screen.findByText("Ship it")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument());
   });
 });
