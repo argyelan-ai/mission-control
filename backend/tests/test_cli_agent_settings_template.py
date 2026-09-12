@@ -6,6 +6,10 @@ file renders the actual backend/templates/cli_agent_settings.json.j2 and
 asserts the rendered settings.json is valid JSON, with the hooks block present
 for the claude harness (turn_signal_hooks=True) and ABSENT for openclaude
 (turn_signal_hooks=False) — without touching the plugin cache on disk.
+
+Also asserts `permissions.deny` always contains `AskUserQuestion` (both
+harnesses render this settings.json, see `_assert_common`) — a native dialog
+in headless agent operation is a silent stall nobody can answer.
 """
 
 import json
@@ -35,6 +39,9 @@ def _assert_common(data, extra_marketplaces):
     assert data["model"] == "claude-sonnet-4-6"
     assert data["systemPrompt"] == 'You are "Rex".\nMulti-line\tprompt.'
     assert data["skipDangerousModePermissionPrompt"] is True
+    # AskUserQuestion must stay denied for both harnesses — a native dialog
+    # in headless agent operation is a silent stall nobody can answer.
+    assert data["permissions"]["deny"] == ["AskUserQuestion"]
     assert data["enabledPlugins"]["superpowers@claude-plugins-official"] is True
     assert data["enabledPlugins"]["x@y"] is False
     if extra_marketplaces:
