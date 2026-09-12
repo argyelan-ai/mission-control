@@ -428,6 +428,7 @@
     "tasksForReview": "Aufgaben zum Review ({count})",
     "agentReviewsCount": "{count, plural, one {1 Review beim Agenten} other {# Reviews bei Agenten}}",
     "decideYourself": "Selbst entscheiden",
+    "agentReviewOnHold": "zurückgestellt",
     "agentReviewing": "{agent} prüft",
     "approvalsCount": "Freigaben ({count})",
     "awaitingReview": "{count, plural, one {1 Aufgabe wartet noch auf Review} other {# Aufgaben warten noch auf Review}}",

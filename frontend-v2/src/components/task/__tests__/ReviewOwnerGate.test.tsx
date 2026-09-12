@@ -1,5 +1,5 @@
 /**
- * REX REVIEW PROBE (PR #514) — not part of the PR, review evidence only.
+ * REVIEW PROBE (independent reviewer) (PR #514) — not part of the PR, review evidence only.
  * Question: can a card the OPERATOR must decide lose its buttons?
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -27,12 +27,12 @@ vi.mock("@/lib/api", () => ({
 
 import { TaskActions } from "../TaskActions";
 
-const rex: Agent = { id: "agent-rex", name: "Rex", role: "reviewer" } as unknown as Agent;
+const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
 
 function mkTask(o: Partial<Task> = {}): Task {
   return {
     id: "task-1", board_id: "board-1", title: "Ship it", status: "review",
-    assigned_agent_id: "agent-rex", human_review_required: false,
+    assigned_agent_id: "agent-argus", human_review_required: false,
     run_control: null, review_decision: null, dispatch_phase: null,
     parent_task_id: null, dispatched_at: null,
     ...o,
@@ -55,19 +55,19 @@ beforeEach(() => {
 });
 
 describe("PROBE A — agent review is hidden (the intended fix)", () => {
-  it("Rex holds the review → note instead of buttons", async () => {
-    apiMock.agentsList.mockResolvedValue([rex]);
+  it("Argus holds the review → note instead of buttons", async () => {
+    apiMock.agentsList.mockResolvedValue([argus]);
     renderGate(mkTask());
     expect(await screen.findByTestId("agent-review-note")).toBeInTheDocument();
     expect(screen.queryByText("Approve")).not.toBeInTheDocument();
-    expect(screen.getByText("Rex is reviewing")).toBeInTheDocument();
+    expect(screen.getByText("Argus is reviewing")).toBeInTheDocument();
     expect(screen.getByText("Decide yourself")).toBeInTheDocument();
   });
 });
 
 describe("PROBE B — counter-probe: the operator's own review keeps its buttons", () => {
-  it("human_review_required=true + Rex assigned → Approve still there", async () => {
-    apiMock.agentsList.mockResolvedValue([rex]);
+  it("human_review_required=true + Argus assigned → Approve still there", async () => {
+    apiMock.agentsList.mockResolvedValue([argus]);
     renderGate(mkTask({ human_review_required: true }));
     expect(await screen.findByText("Approve")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-review-note")).not.toBeInTheDocument();
@@ -80,7 +80,7 @@ describe("PROBE B — counter-probe: the operator's own review keeps its buttons
   });
 
   it("no assignee at all → Approve still there", async () => {
-    apiMock.agentsList.mockResolvedValue([rex]);
+    apiMock.agentsList.mockResolvedValue([argus]);
     renderGate(mkTask({ assigned_agent_id: null }));
     expect(await screen.findByText("Approve")).toBeInTheDocument();
   });
@@ -114,7 +114,7 @@ describe("PROBE C — DANGER: agent list unavailable", () => {
 
 describe("PROBE D — 'Decide yourself' override", () => {
   it("override opens the real decision section and posts a real operator decision", async () => {
-    apiMock.agentsList.mockResolvedValue([rex]);
+    apiMock.agentsList.mockResolvedValue([argus]);
     renderGate(mkTask());
     fireEvent.click(await screen.findByText("Decide yourself"));
     expect(await screen.findByText("Approve")).toBeInTheDocument();

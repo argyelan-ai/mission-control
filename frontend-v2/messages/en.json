@@ -428,6 +428,7 @@
     "tasksForReview": "Tasks for review ({count})",
     "agentReviewsCount": "{count, plural, one {1 review with an agent} other {# reviews with agents}}",
     "decideYourself": "Decide yourself",
+    "agentReviewOnHold": "on hold",
     "agentReviewing": "{agent} is reviewing",
     "approvalsCount": "Approvals ({count})",
     "awaitingReview": "{count, plural, one {1 task still awaiting review} other {# tasks still awaiting review}}",

@@ -1,4 +1,4 @@
-/** REX REVIEW PROBE (PR #514) — inbox list level. Review evidence only. */
+/** REVIEW PROBE (independent reviewer) (PR #514) — inbox list level. Review evidence only. */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -36,15 +36,15 @@ vi.mock("@/lib/store", () => ({
     sel ? sel({ notifications: [] }) : { notifications: [] },
 }));
 
-import InboxPage from "./page";
+import InboxPage from "../page";
 
-const rex: Agent = { id: "agent-rex", name: "Rex", role: "reviewer" } as unknown as Agent;
-const dev: Agent = { id: "agent-dev", name: "FreeCode", role: "developer" } as unknown as Agent;
+const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
+const dev: Agent = { id: "agent-dev", name: "Delta", role: "developer" } as unknown as Agent;
 
 function mkTask(o: Partial<Task> = {}): Task {
   return {
     id: "t1", board_id: "board-1", title: "Ship it", status: "review",
-    assigned_agent_id: "agent-rex", human_review_required: false,
+    assigned_agent_id: "agent-argus", human_review_required: false,
     review_decision: null, run_control: null, created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z", priority: "medium",
     ...o,
@@ -64,23 +64,23 @@ beforeEach(() => {
   Object.values(apiMock).forEach((m) => m.mockReset());
   apiMock.approvals.mockResolvedValue([]);
   // assignee has commented → old filter would have shown buttons
-  apiMock.comments.mockResolvedValue([{ id: "c1", author_agent_id: "agent-rex", content: "review läuft" }]);
+  apiMock.comments.mockResolvedValue([{ id: "c1", author_agent_id: "agent-argus", content: "review läuft" }]);
 });
 
 describe("PROBE E — inbox list", () => {
-  it("Rex holds it → read-only row, no decision row", async () => {
+  it("Argus holds it → read-only row, no decision row", async () => {
     apiMock.tasksList.mockResolvedValue([mkTask()]);
-    apiMock.agentsList.mockResolvedValue([rex, dev]);
+    apiMock.agentsList.mockResolvedValue([argus, dev]);
     renderInbox();
     expect(await screen.findByTestId("agent-review-row")).toBeInTheDocument();
     expect(screen.queryByText("Approve")).not.toBeInTheDocument();
-    expect(screen.getByText("Rex is reviewing")).toBeInTheDocument();
+    expect(screen.getByText("Argus is reviewing")).toBeInTheDocument();
     expect(screen.getByText(/review with an agent|reviews with agents/i)).toBeInTheDocument();
   });
 
   it("COUNTER-PROBE human_review_required=true → still in the operator list", async () => {
     apiMock.tasksList.mockResolvedValue([mkTask({ human_review_required: true })]);
-    apiMock.agentsList.mockResolvedValue([rex, dev]);
+    apiMock.agentsList.mockResolvedValue([argus, dev]);
     renderInbox();
     await waitFor(() => expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument());
     expect(await screen.findByText("Ship it")).toBeInTheDocument();
@@ -91,7 +91,7 @@ describe("PROBE E — inbox list", () => {
 
   it("COUNTER-PROBE unknown assignee → stays with the operator", async () => {
     apiMock.tasksList.mockResolvedValue([mkTask({ assigned_agent_id: "ghost" })]);
-    apiMock.agentsList.mockResolvedValue([rex, dev]);
+    apiMock.agentsList.mockResolvedValue([argus, dev]);
     apiMock.comments.mockResolvedValue([{ id: "c1", author_agent_id: "ghost", content: "done" }]);
     renderInbox();
     expect(await screen.findByText(/Tasks for review/i)).toBeInTheDocument();

@@ -232,6 +232,11 @@ export default function InboxPage() {
                     {t("agentReviewing", {
                       agent: (task.assigned_agent_id && agentMap[task.assigned_agent_id]?.name) || "—",
                     })}
+                    {task.review_decision === "hold" && (
+                      <span className="ml-2" style={{ color: C.warning }} data-testid="agent-review-hold">
+                        {t("agentReviewOnHold")}
+                      </span>
+                    )}
                   </span>
                 </div>
               </GlassCard>
