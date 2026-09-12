@@ -3936,6 +3936,22 @@ async def _collect_heartbeat_control(session, agent, active_task):
     # watermark instead (B1, PR #519 Rex review). Separate try — a write
     # hiccup here must never discard a `control` signal already decided
     # above.
+    #
+    # This advance happens unconditionally, so the soft interrupt fires at
+    # most ONCE per comment, not repeatedly until the agent actually acts on
+    # it — a beat that decides `soft` still pulls the watermark past that
+    # comment. Nothing is lost: delivery to the agent runs on the separate
+    # `last_seen_comment_id` watermark (untouched here), so the next
+    # `/me/poll` hands the comment over regardless (PR #519 Rex review,
+    # round 2, warning 1).
+    #
+    # Same when a HARD control wins the same beat: `if control is None and
+    # soft_unread` below never fires, so any soft-eligible comments in
+    # `unseen` are never signalled — yet the watermark still advances past
+    # them here, since it is unconditional on `all_comments`, not on which
+    # branch of `control` was chosen. Again no data loss (poll's watermark
+    # is separate), just no soft signal for a comment the hard interrupt
+    # already made moot (PR #519 Rex review, round 2, warning 2).
     try:
         if all_comments and (
             not had_signal_cursor

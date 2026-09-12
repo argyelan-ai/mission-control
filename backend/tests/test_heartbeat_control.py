@@ -519,6 +519,47 @@ async def test_heartbeat_missing_cursor_does_not_flag_own_blocker(client: AsyncC
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_seeds_past_foreign_comment_without_flagging(
+    client: AsyncClient,
+):
+    """(b) pinned on its own: no cursor row, and the only pre-beat comment is
+    a FOREIGN blocker (not the agent's own) — the agent's-own-comment filter
+    (a) must NOT be the only thing keeping this quiet. The dispatch prompt
+    already carried this comment as history, so the first beat must still
+    seed past it without flagging `control`.
+
+    Without this test, `unseen = []` in the missing-cursor branch could be
+    reverted to `unseen = all_comments` and the suite stayed green — every
+    other missing-cursor test here uses the agent's own comment as the
+    pre-beat state, so filter (a) alone masked (b) (PR #519 Rex review,
+    round 2, B2)."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        foreign_comment = await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="blocker", content="Vor dem ersten Beat schon da",
+        )
+        assert await _cursor_row(s, agent.id, task.id) is None
+
+    resp = await _heartbeat(client, token)
+    assert resp.status_code == 200, resp.text
+    assert "control" not in resp.json()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        seeded = await _cursor_row(s, agent.id, task.id)
+        assert seeded is not None
+        assert seeded.last_signalled_comment_id == foreign_comment.id
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_missing_cursor_seed_does_not_repeat_next_beat(client: AsyncClient):
     """Sanity: once the first beat seeds the cursor, a second beat with no
     new comments stays clean too (no infinite soft-interrupt loop)."""
