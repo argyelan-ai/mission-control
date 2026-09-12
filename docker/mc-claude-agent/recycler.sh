@@ -134,6 +134,15 @@ while true; do
     LAST=$(stat -c %Y "$MARKER" 2>/dev/null || echo "$NOW")
     IDLE_MIN=$(( (NOW - LAST) / 60 ))
 
+    # G4 (Paritaets-Audit #521): ein stummer Kindprozess ist Arbeit —
+    # identisch zum mc-agent-base-Recycler. Jiffies-Delta ueber den
+    # Prozessbaum zwischen zwei Ticks; ohne das killt der Recycler einen
+    # Agenten mitten in einem stillen pytest-/build-Lauf (12.09.).
+    if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ] && subtree_busy "$PID"; then
+        log "abort recycle: silent child busy (pid=$PID busy=$(subtree_cpu_jiffies "$PID"), idle=${IDLE_MIN}min) — Arbeit ohne Pane-Output"
+        continue
+    fi
+
     # Decision (idle takes precedence — primary path; threshold is safety net)
     if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ]; then
         # Lockfile-Guard: nicht killen wenn poll.sh einen aktiven Task meldet.

@@ -139,6 +139,20 @@ while true; do
     LAST=$(stat -c %Y "$MARKER" 2>/dev/null || echo "$NOW")
     IDLE_MIN=$(( (NOW - LAST) / 60 ))
 
+    # G4 (Paritaets-Audit #521): ein stummer Kindprozess ist Arbeit. Ein
+    # langer pytest-/build-Lauf rendert NICHTS im Pane — der Marker bleibt
+    # alt, IDLE_MIN steigt, und der Recycler killte einen arbeitenden Agenten
+    # (12.09.: "idle nach working, 36 Zyklen", zweimal
+    # orphaned_run_redispatched). CPU-/IO-Aktivitaet des TUI-Prozesses ODER
+    # eines seiner Nachfahren zaehlt als Leben: jiffies-Delta (utime+stime aus
+    # /proc/<pid>/stat) ueber den Prozessbaum zwischen zwei Loop-Ticks —
+    # Fortschritt, nicht kumulative Last. Nur der IDLE-Pfad ist betroffen —
+    # der RSS-Threshold (Speicher-Hygiene) bleibt unangetastet.
+    if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ] && subtree_busy "$PID"; then
+        log "abort recycle: silent child busy (pid=$PID busy=$(subtree_cpu_jiffies "$PID"), idle=${IDLE_MIN}min) — Arbeit ohne Pane-Output"
+        continue
+    fi
+
     # Task-Lock-Guard: wenn poll.sh einen aktiven Task hat UND noch läuft,
     # idle-Kill blocken. Stale-Lock-Schutz: Lock nur respektieren wenn poll.sh
     # noch läuft (verhindert ewigen Block nach poll.sh-Crash).
