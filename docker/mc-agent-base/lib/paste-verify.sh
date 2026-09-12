@@ -112,3 +112,98 @@ verify_paste_landed() {
     done
     return 1
 }
+
+# classify_paste_outcome FILE — drei-Wege-Klassifikation des Post-Paste-
+# Zustands (Interrupt-Gate fix 2026-09-12). verify_paste_landed antwortete
+# nur binär und verschwieg den wichtigsten Live-Fall: das Enter ging in den
+# Interrupted-Dialog, der Text stand sichtbar IM EINGABEFELD — der
+# Fingerprint matchte dort trotzdem (das Feld ist Teil des Captures), und
+# die Meldung "Fingerprint nicht sichtbar" beschrieb nicht, was wirklich
+# passiert war.
+#
+# Gibt zurueck (auf stdout):
+#   "0" — abgesendet: Fingerprint im SCROLLBACK (ausserhalb des Feld-Tails)
+#         sichtbar, oder Collapse-Marker gewachsen, oder Feld leer + Fingerprint
+#         im Tail (Turn hat konsumiert).
+#   "2" — im Eingabefeld stehengeblieben: Fingerprint NUR im letzten
+#         PASTE_INPUT_TAIL_LINES Zeilen sichtbar, nicht im Rest des Verlaufs.
+#   "1" — gar nicht angekommen: Fingerprint nirgends sichtbar.
+#
+# Dasselbe progressive Shrinking (full/50%/25%) + der last_line-Anker wie
+# verify_paste_landed. Kein Probe-Loop: der Aufrufer (paste_and_submit) steuert
+# Timing und Retries.
+classify_paste_outcome() {
+    local file="$1"
+    local full
+    full=$(grep -v '^$' "$file" 2>/dev/null | head -n 1 | sed 's/^[#>*[:space:]]*//' | cut -c1-"${PASTE_FINGERPRINT_LEN:-40}")
+    if [ -z "$full" ]; then
+        echo "0"
+        return 0
+    fi
+    local last_line
+    last_line=$(grep -v '^$' "$file" 2>/dev/null | tail -n 1 | sed 's/^[#>*[:space:]]*//' | cut -c1-"${PASTE_FINGERPRINT_LEN:-40}")
+    local len_full=${#full}
+    local len_half=$(( len_full / 2 ))
+    local len_quarter=$(( len_full / 4 ))
+    [ "$len_half" -lt 8 ] && len_half=$len_full
+    [ "$len_quarter" -lt 8 ] && len_quarter=$len_half
+    local fp_half="${full:0:$len_half}"
+    local fp_quarter="${full:0:$len_quarter}"
+
+    local pane
+    pane=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S "-${PASTE_SCROLLBACK_LINES:-2000}" 2>/dev/null || echo "")
+    if [ -z "$pane" ]; then
+        echo "1"
+        return 0
+    fi
+
+    _pane_matches_fp() {
+        # $1 = pane text; matcht full/half/quarter + last_line-Anker.
+        echo "$1" | grep -qF "$full" 2>/dev/null \
+            || echo "$1" | grep -qF "$fp_half" 2>/dev/null \
+            || echo "$1" | grep -qF "$fp_quarter" 2>/dev/null \
+            || echo "$1" | grep -qF "$last_line" 2>/dev/null
+    }
+
+    local input_tail_lines=${PASTE_INPUT_TAIL_LINES:-12}
+    local tail_fingerprint="0" tail_pane body
+    tail_pane=$(echo "$pane" | tail -n "$input_tail_lines")
+    if _pane_matches_fp "$tail_pane"; then
+        tail_fingerprint="1"
+    fi
+
+    # Collapse-Marker-Pfad (identisch zu verify_paste_landed): nur ein ZUWACHS
+    # gegen das Pre-Paste-Snapshot zaehlt.
+    local marker_count
+    marker_count=$(printf '%s\n' "$pane" | tail -n "${PASTE_COLLAPSE_TAIL_LINES:-40}" | grep -cF '[Pasted text' 2>/dev/null || true)
+    [ -n "$marker_count" ] || marker_count=0
+    if [ "$marker_count" -gt "${PASTE_PRE_COLLAPSE_COUNT:-0}" ]; then
+        echo "0"
+        return 0
+    fi
+    if [ "$tail_fingerprint" = "1" ]; then
+        # Fingerprint im Feld-Tail sichtbar — abgesendet oder haengengeblieben?
+        # Absendet-Indizien: Fingerprint auch IRGENDWO ausserhalb des Feld-
+        # Tails (der Turn hat den Text in den Verlauf gerendert).
+        body=$(echo "$pane" | head -n -"$input_tail_lines")
+        if _pane_matches_fp "$body"; then
+            echo "0"
+            return 0
+        fi
+        # Fingerprint NUR im Feld-Tail → haengengeblieben, das Submit-Enter
+        # ist woanders gelandet (klassisch: in den Interrupted-Dialog).
+        echo "2"
+        return 0
+    fi
+
+    # Fingerprint nicht im Feld-Tail. Falls er ausserhalb sichtbar ist, war
+    # er im Verlauf (Turn hat konsumiert, Feld inzwischen weitergerückt).
+    body=$(echo "$pane" | head -n -"$input_tail_lines")
+    if _pane_matches_fp "$body"; then
+        echo "0"
+        return 0
+    fi
+
+    echo "1"
+    return 0
+}
