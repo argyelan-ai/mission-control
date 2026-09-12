@@ -1,22 +1,51 @@
 import type { Agent, Task } from "@/lib/types";
 
 /**
+ * `dispatch_intent` values that mean "this task never got a real, positive
+ * handoff into its current holder" — carried over unchanged from whatever
+ * the in_progress phase set, because `handle_review_handoff` (task_lifecycle.py)
+ * returned early before overwriting it. Each is a value the task can still
+ * be wearing once it reaches `review`:
+ *  - "root" — first submission of a root task; never left in_progress via a
+ *    handoff.
+ *  - "subtask" — same, for a delegated subtask.
+ *  - "review_rework" — came back from a request_changes cycle and the
+ *    resubmitting developer hit the same "reviewer === developer" wall again
+ *    on their next `review` transition.
+ *
+ * Deliberately NOT in this set (B2, PR #517 Rex review — the original
+ * `!== "review_handoff"` check wrongly caught these too):
+ *  - "manual_redispatch" — set by tasks.py / agent_task_status.py on ANY
+ *    `assigned_agent_id` change, independent of status. A Lead reassigning a
+ *    stuck review from one reviewer to another produces exactly this value
+ *    on the NEW reviewer — that reviewer IS being actively handed the card,
+ *    just not through `handle_review_handoff`, so it must not read as a stall.
+ *  - "human_review" — `handle_human_review_handoff` clears
+ *    `assigned_agent_id` in the same step, so a task carrying this value
+ *    never reaches this function with an agent still assigned in the first
+ *    place.
+ *  - "test_handoff" — moves the task to `user_test`, not `review`; not a
+ *    reachable state here.
+ *  - "review_handoff" — the real-handoff value itself, excluded by
+ *    definition (that's what a non-stall looks like).
+ */
+const NO_HANDOFF_DISPATCH_INTENTS = new Set<Task["dispatch_intent"]>([
+  "root",
+  "subtask",
+  "review_rework",
+]);
+
+/**
  * True when a `review` task is assigned to a reviewer-role agent, but no
  * actual handoff to that agent ever happened — the card just sits with the
  * same agent that developed it (W2, PR #514 Rex review).
  *
- * Backend rule (task_lifecycle.py:handle_review_handoff): "Reviewer must not
- * be the same agent" — if the only available reviewer is also the developer
- * of this card, the function returns early and skips the handoff entirely,
- * *before* it ever sets `task.dispatch_intent = "review_handoff"`. So a task
- * that reached `review` through a real handoff always carries
- * `dispatch_intent === "review_handoff"`; a self-review that never got
- * handed off keeps whatever intent it had from the in_progress phase
- * (typically "root"). That gap is the only signal the frontend has — the
+ * See `NO_HANDOFF_DISPATCH_INTENTS` for which `dispatch_intent` values this
+ * checks against and why — that gap is the only signal the frontend has, the
  * backend does not expose a dedicated "self-review" flag.
  */
 export function isSelfReviewStall(task: Pick<Task, "assigned_agent_id" | "dispatch_intent">): boolean {
-  return !!task.assigned_agent_id && task.dispatch_intent !== "review_handoff";
+  return !!task.assigned_agent_id && NO_HANDOFF_DISPATCH_INTENTS.has(task.dispatch_intent);
 }
 
 /**

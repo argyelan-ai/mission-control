@@ -112,7 +112,18 @@ describe("PROBE E — inbox list", () => {
     expect(await screen.findByText("Ship it")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument();
     expect(await screen.findByText("Approve")).toBeInTheDocument();
-    expect(screen.getByText(/Argus developed this card themselves.*awaiting lead/i)).toBeInTheDocument();
+    expect(screen.getByText(/No handoff happened.*awaiting lead.*Argus/i)).toBeInTheDocument();
+  });
+
+  // B2 (PR #517 Rex review): a Lead manually reassigning a stuck review to a
+  // different reviewer sets dispatch_intent="manual_redispatch" — that must
+  // read as a real handoff (agent-review row), not a self-review stall.
+  it("B2 manual reassignment to a new reviewer (dispatch_intent 'manual_redispatch') → read-only agent-review row, not the operator's decision list", async () => {
+    apiMock.tasksList.mockResolvedValue([mkTask({ dispatch_intent: "manual_redispatch" })]);
+    apiMock.agentsList.mockResolvedValue([argus, dev]);
+    renderInbox();
+    expect(await screen.findByTestId("agent-review-row")).toBeInTheDocument();
+    expect(screen.queryByText("Approve")).not.toBeInTheDocument();
   });
 
   it("DIRECTION agents request FAILS → operator keeps the card (inbox falls safe)", async () => {

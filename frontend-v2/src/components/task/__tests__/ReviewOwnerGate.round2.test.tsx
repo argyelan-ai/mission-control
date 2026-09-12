@@ -44,6 +44,9 @@ function mkTask(o: Partial<Task> = {}): Task {
     assigned_agent_id: "agent-argus", human_review_required: false,
     run_control: null, review_decision: null, dispatch_phase: null,
     parent_task_id: null, dispatched_at: null,
+    // Real handoff by default — probes for the self-review-stall case (W2,
+    // PR #514) override this explicitly.
+    dispatch_intent: "review_handoff",
     ...o,
   } as unknown as Task;
 }

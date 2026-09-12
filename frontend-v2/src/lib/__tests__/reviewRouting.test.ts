@@ -40,6 +40,14 @@ describe("isOperatorReview", () => {
   it("reviewer role assigned after a rework round with no fresh handoff (dispatch_intent 'review_rework') → operator's/Lead's", () => {
     expect(isOperatorReview({ human_review_required: false, assigned_agent_id: "argus", dispatch_intent: "review_rework" }, argus)).toBe(true);
   });
+
+  // B2 (PR #517 Rex review): a Lead manually reassigning a review from one
+  // reviewer to another sets dispatch_intent="manual_redispatch" on the NEW
+  // reviewer — that agent IS actively holding the card, just not via
+  // handle_review_handoff, so this must NOT read as a self-review stall.
+  it("reviewer role assigned via manual reassignment (dispatch_intent 'manual_redispatch') → NOT the operator's (real handoff, just not the automatic one)", () => {
+    expect(isOperatorReview({ human_review_required: false, assigned_agent_id: "reviewer-b", dispatch_intent: "manual_redispatch" }, argus)).toBe(false);
+  });
 });
 
 describe("isSelfReviewStall", () => {
@@ -51,5 +59,11 @@ describe("isSelfReviewStall", () => {
   });
   it("nobody assigned → not a stall (that's just 'unassigned', handled separately)", () => {
     expect(isSelfReviewStall({ assigned_agent_id: null, dispatch_intent: "root" })).toBe(false);
+  });
+  it("resubmission after a rework round with no fresh handoff (dispatch_intent stayed 'review_rework') → stalled", () => {
+    expect(isSelfReviewStall({ assigned_agent_id: "argus", dispatch_intent: "review_rework" })).toBe(true);
+  });
+  it("manual reassignment (dispatch_intent 'manual_redispatch') → NOT a stall (B2, PR #517 Rex review)", () => {
+    expect(isSelfReviewStall({ assigned_agent_id: "reviewer-b", dispatch_intent: "manual_redispatch" })).toBe(false);
   });
 });

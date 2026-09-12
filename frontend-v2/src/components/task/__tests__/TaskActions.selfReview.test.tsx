@@ -80,8 +80,17 @@ describe("PROBE W2 — card view review gate", () => {
     apiMock.agentsList.mockResolvedValue([argus]);
     renderActions(mkTask({ dispatch_intent: "root" }));
     expect(await screen.findByTestId("self-review-stall-note")).toBeInTheDocument();
-    expect(screen.getByText(/Argus developed this card themselves.*awaiting lead/i)).toBeInTheDocument();
+    expect(screen.getByText(/No handoff happened.*awaiting lead.*Argus/i)).toBeInTheDocument();
     expect(screen.queryByTestId("agent-review-note")).not.toBeInTheDocument();
     expect(screen.getByText("Approve", { exact: false })).toBeInTheDocument();
+  });
+
+  it("manual reassignment to a different reviewer (dispatch_intent='manual_redispatch') → real handoff, NOT a self-review stall (B2, PR #517 Rex review)", async () => {
+    apiMock.agentsList.mockResolvedValue([argus]);
+    renderActions(mkTask({ dispatch_intent: "manual_redispatch" }));
+    expect(await screen.findByTestId("agent-review-note")).toBeInTheDocument();
+    expect(screen.getByText("Argus is reviewing")).toBeInTheDocument();
+    expect(screen.queryByTestId("self-review-stall-note")).not.toBeInTheDocument();
+    expect(screen.queryByText("Approve", { exact: false })).not.toBeInTheDocument();
   });
 });

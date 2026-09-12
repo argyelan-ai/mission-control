@@ -430,7 +430,7 @@
     "decideYourself": "Decide yourself",
     "agentReviewOnHold": "on hold",
     "agentReviewing": "{agent} is reviewing",
-    "selfReviewStall": "{agent} developed this card themselves — awaiting lead",
+    "selfReviewStall": "No handoff happened — awaiting lead ({agent})",
     "approvalsCount": "Approvals ({count})",
     "awaitingReview": "{count, plural, one {1 task still awaiting review} other {# tasks still awaiting review}}",
     "allClear": "All clear",
