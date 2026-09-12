@@ -138,7 +138,17 @@ while true; do
     # identisch zum mc-agent-base-Recycler. Jiffies-Delta ueber den
     # Prozessbaum zwischen zwei Ticks; ohne das killt der Recycler einen
     # Agenten mitten in einem stillen pytest-/build-Lauf (12.09.).
-    if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ] && subtree_busy "$PID"; then
+    #
+    # Review-Blocker-Regel: subtree_busy muss JEDEN Tick laufen, nicht erst
+    # hinter dem IDLE-Schwellen-UND — der erste Aufruf primt nur die
+    # Baseline und liefert false, sodass genau der Tick, in dem IDLE_MIN
+    # die Schwelle erreicht, zum PRIMING-Tick wird und ein fleissiger
+    # stiller Kindprozess exakt dort recycelt wuerde. Kontinuierlicher
+    # Aufruf haelt die Baseline frisch; der Guard wertet den gecachten
+    # Delta-Befund nur im Schwellen-Fall aus.
+    SUBTREE_BUSY_NOW=false
+    subtree_busy "$PID" && SUBTREE_BUSY_NOW=true
+    if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ] && [ "$SUBTREE_BUSY_NOW" = "true" ]; then
         log "abort recycle: silent child busy (pid=$PID busy=$(subtree_cpu_jiffies "$PID"), idle=${IDLE_MIN}min) — Arbeit ohne Pane-Output"
         continue
     fi

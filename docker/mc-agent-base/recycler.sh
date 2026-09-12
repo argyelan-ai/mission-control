@@ -148,7 +148,17 @@ while true; do
     # /proc/<pid>/stat) ueber den Prozessbaum zwischen zwei Loop-Ticks —
     # Fortschritt, nicht kumulative Last. Nur der IDLE-Pfad ist betroffen —
     # der RSS-Threshold (Speicher-Hygiene) bleibt unangetastet.
-    if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ] && subtree_busy "$PID"; then
+    #
+    # Review-Blocker-Regel: subtree_busy muss JEDEN Tick laufen, nicht erst
+    # hinter dem IDLE-Schwellen-UND. Der erste Aufruf primt nur die Baseline
+    # und liefert false — genau der Tick, in dem IDLE_MIN die Schwelle
+    # erreicht, waere sonst der PRIMING-Tick, und ein fleissiger stiller
+    # Kindprozess wuerde exakt dort als "nicht beschaeftigt" recycelt.
+    # Kontinuierlicher Aufruf haelt die Baseline frisch; der Guard wertet
+    # den gecachten Delta-Befund nur im Schwellen-Fall aus.
+    SUBTREE_BUSY_NOW=false
+    subtree_busy "$PID" && SUBTREE_BUSY_NOW=true
+    if [ "$IDLE_MIN" -ge "$IDLE_THRESHOLD_MIN" ] && [ "$SUBTREE_BUSY_NOW" = "true" ]; then
         log "abort recycle: silent child busy (pid=$PID busy=$(subtree_cpu_jiffies "$PID"), idle=${IDLE_MIN}min) — Arbeit ohne Pane-Output"
         continue
     fi

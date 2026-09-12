@@ -189,3 +189,37 @@ def test_both_recyclers_source_the_shared_lib():
         script = (LIB.parents[1] / variant / "recycler.sh").read_text()
         assert "subtree_busy" in script, f"{variant}/recycler.sh lacks the G4 guard"
         assert "recycler-lib.sh" in script, f"{variant}/recycler.sh must source the shared lib"
+
+
+def test_recycler_guard_samples_busy_every_tick():
+    """WIRING PROBE (review blocker on 741d0ff): the recycler guard must call
+    subtree_busy EVERY tick, not only once IDLE_MIN crosses the threshold.
+
+    Behind the short-circuit AND (`idle && subtree_busy`), the very tick that
+    crosses the threshold is the PRIMING call — it returns false by contract,
+    so a genuinely busy silent child got recycled in exactly the tick the
+    guard was supposed to save it. The fix calls subtree_busy unconditionally
+    and the guard evaluates the cached verdict.
+
+    Asserted on the script text (the real loop cannot run here — no tmux /
+    claude / markers) with a positive AND a negative probe, so a regression
+    to `IDLE_MIN ... && subtree_busy` goes red again.
+    """
+    for variant in ("mc-agent-base", "mc-claude-agent"):
+        script = (LIB.parents[1] / variant / "recycler.sh").read_text()
+        assert "SUBTREE_BUSY_NOW" in script, (
+            f"{variant}/recycler.sh samples subtree_busy only behind the idle "
+            "threshold — the threshold-crossing tick is the priming call and "
+            "kills a working silent child (review blocker)"
+        )
+        assert 'subtree_busy "$PID" && SUBTREE_BUSY_NOW=true' in script, (
+            f"{variant}/recycler.sh must sample the busy delta unconditionally"
+        )
+        assert '&& [ "$SUBTREE_BUSY_NOW" = "true" ]' in script, (
+            f"{variant}/recycler.sh guard must evaluate the sampled verdict"
+        )
+        # Negative probe: no direct short-circuit sampling left in a guard.
+        assert '&& subtree_busy "$PID"' not in script, (
+            f"{variant}/recycler.sh still samples subtree_busy behind the "
+            "threshold AND — priming tick kills the busy child"
+        )
