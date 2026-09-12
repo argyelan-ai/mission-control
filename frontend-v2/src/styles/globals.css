@@ -163,11 +163,19 @@
   --text-2xl: 32px;
   --text-3xl: 40px;
 
-  /* ---- Font weights ---- */
-  --font-body: 400;
-  --font-medium: 500;
-  --font-semibold: 600;
-  --font-bold: 700;
+  /* ---- Font weights ----
+     ACHTUNG, teuer gelernt (18.08.2026): In Tailwind v4 ist `--font-*` der
+     Namensraum fuer SCHRIFTFAMILIEN, nicht fuer Strichstaerken. Solange diese
+     Werte hier `--font-medium` hiessen, erzeugte Tailwind
+     `.font-medium{font-family:var(--font-medium)}` — also `font-family: 500`,
+     eine ungueltige Angabe, die der Browser verwirft. Ergebnis: `font-medium`,
+     `font-semibold` und `font-bold` waren app-weit WIRKUNGSLOS (601 Fundstellen),
+     ohne dass irgendetwas kaputt aussah — der Text blieb einfach ueberall normal.
+     Der Namensraum fuer Strichstaerken heisst `--font-weight-*`. */
+  --font-weight-body: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
 
   /* ---- Easing (Task-Spezifikation) ---- */
   --ease-spring: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -343,6 +351,17 @@ html {
 }
 button, a, [role="button"], input, select, textarea, [role="tab"] {
   touch-action: manipulation;
+}
+
+/* Alt-Namen als Aliasse: einzelne Stellen nutzen `var(--font-body)` direkt
+   (z.B. die body-Regel unten). Sie leben bewusst in :root statt in @theme —
+   in @theme wuerde Tailwind aus ihnen wieder Schriftfamilien-Klassen bauen,
+   genau der Fehler, den dieser Commit behebt. */
+:root {
+  --font-body: var(--font-weight-body);
+  --font-medium: var(--font-weight-medium);
+  --font-semibold: var(--font-weight-semibold);
+  --font-bold: var(--font-weight-bold);
 }
 
 body {
