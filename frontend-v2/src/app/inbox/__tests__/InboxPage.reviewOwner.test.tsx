@@ -47,6 +47,9 @@ function mkTask(o: Partial<Task> = {}): Task {
     assigned_agent_id: "agent-argus", human_review_required: false,
     review_decision: null, run_control: null, created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z", priority: "medium",
+    // Real handoff by default — probes that want the self-review-stall case
+    // (no handoff, W2) override this explicitly.
+    dispatch_intent: "review_handoff",
     ...o,
   } as unknown as Task;
 }
@@ -96,6 +99,31 @@ describe("PROBE E — inbox list", () => {
     renderInbox();
     expect(await screen.findByText(/Tasks for review/i)).toBeInTheDocument();
     expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument();
+  });
+
+  // W2 (PR #514 Rex review): Argus reviews its own card — backend skips the
+  // handoff (task_lifecycle.py:handle_review_handoff), dispatch_intent never
+  // becomes "review_handoff". The card must land with the operator, not in
+  // the read-only agent-review bucket, and must carry decision buttons.
+  it("W2 self-review stall (Argus is also the developer, no handoff) → operator list with decision buttons, not the read-only agent row", async () => {
+    apiMock.tasksList.mockResolvedValue([mkTask({ dispatch_intent: "root" })]);
+    apiMock.agentsList.mockResolvedValue([argus, dev]);
+    renderInbox();
+    expect(await screen.findByText("Ship it")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument();
+    expect(await screen.findByText("Approve")).toBeInTheDocument();
+    expect(screen.getByText(/No handoff happened.*awaiting lead.*Argus/i)).toBeInTheDocument();
+  });
+
+  // B2 (PR #517 Rex review): a Lead manually reassigning a stuck review to a
+  // different reviewer sets dispatch_intent="manual_redispatch" — that must
+  // read as a real handoff (agent-review row), not a self-review stall.
+  it("B2 manual reassignment to a new reviewer (dispatch_intent 'manual_redispatch') → read-only agent-review row, not the operator's decision list", async () => {
+    apiMock.tasksList.mockResolvedValue([mkTask({ dispatch_intent: "manual_redispatch" })]);
+    apiMock.agentsList.mockResolvedValue([argus, dev]);
+    renderInbox();
+    expect(await screen.findByTestId("agent-review-row")).toBeInTheDocument();
+    expect(screen.queryByText("Approve")).not.toBeInTheDocument();
   });
 
   it("DIRECTION agents request FAILS → operator keeps the card (inbox falls safe)", async () => {

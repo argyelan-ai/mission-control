@@ -6,7 +6,7 @@ import { AlertTriangle, CheckCircle, RotateCcw, Pause, StopCircle, Play } from "
 import { api } from "@/lib/api";
 import type { Task, TaskStatus, ReviewDecision } from "@/lib/types";
 import { C } from "@/lib/colors";
-import { isOperatorReview } from "@/lib/reviewRouting";
+import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
 import { useTranslations } from "next-intl";
 
 // ── Review owner gate ────────────────────────────────────────────────────────
@@ -32,8 +32,30 @@ function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
   // A failed lookup (isError) must not loop forever — fall through to isOperatorReview instead.
   const loading = !!task.assigned_agent_id && agents === undefined && !isError;
   if (loading) return null;
+  // W2 (PR #514 Rex review): reviewer === developer of this card → backend
+  // skipped the handoff, nobody is independently reviewing it. isOperatorReview
+  // already routes this to the decision section below; this only decides the
+  // wording above it ("wartet auf Lead" instead of pretending nothing changed).
+  const selfReviewStall = !!agent && agent.role_canonical === "reviewer" && isSelfReviewStall(task);
   if (override || isOperatorReview(task, agent)) {
-    return <ReviewDecisionSection task={task} boardId={boardId} />;
+    return (
+      <>
+        {selfReviewStall && !override && (
+          <div
+            className="px-3 py-2 rounded-lg text-xs"
+            data-testid="self-review-stall-note"
+            style={{
+              backgroundColor: `${C.warning}0F`,
+              color: C.textSecondary ?? C.warning,
+              border: `1px solid ${C.warning}26`,
+            }}
+          >
+            {t("selfReviewStall", { agent: agent?.name ?? "—" })}
+          </div>
+        )}
+        <ReviewDecisionSection task={task} boardId={boardId} />
+      </>
+    );
   }
   return (
     <div

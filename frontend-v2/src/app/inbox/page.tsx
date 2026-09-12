@@ -15,7 +15,7 @@ import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import type { Approval, Task, Agent } from "@/lib/types";
-import { isOperatorReview } from "@/lib/reviewRouting";
+import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
 
 export default function InboxPage() {
   const t = useTranslations("inbox");
@@ -111,6 +111,11 @@ export default function InboxPage() {
   const reviews = allReviews.filter((task, i) => {
     if (agentReviewIds.has(task.id)) return false;
     if (!task.assigned_agent_id) return true;
+    // Self-review stall (W2, PR #514 Rex review): the assigned "reviewer" is
+    // the card's own developer, no independent review is ever coming — don't
+    // make the operator wait for a comment from an agent who already said
+    // everything they're going to say while developing it.
+    if (isSelfReviewStall(task)) return true;
     const comments = commentQueries[i]?.data;
     if (!comments) return false;
     return comments.some((c) => c.author_agent_id === task.assigned_agent_id);
