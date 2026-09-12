@@ -38,6 +38,13 @@ source "$POLL_LIB_DIR/ui-detect.sh"
 # shellcheck source=lib/context-detect.sh
 source "$POLL_LIB_DIR/context-detect.sh"
 # Cached runtime-UI of tmux Window 0. Set by wait_for_clean_prompt() on every
+# Karte, auf die paste_and_submit eskaliert, wenn ein Paste unabgesendet im
+# Eingabefeld haengenbleibt. Leer => CURRENT_TASK_ID/CURRENT_BOARD_ID. Nur der
+# Dispatch-Pfad setzt sie, weil CURRENT_TASK_ID dort noch die VORHERIGE Karte
+# haelt.
+PASTE_ESCALATION_TASK_ID=""
+PASTE_ESCALATION_BOARD_ID=""
+
 # successful detect, used by paste_and_submit() to decide whether to send the
 # `\e[201~` end-marker. Empty until first detection — paste_and_submit treats
 # empty as "send marker" (safe default for claude-cli majority).
@@ -259,10 +266,22 @@ wait_for_clean_prompt() {
     # Bug 14 fix (2026-05-13): bei jedem positiven Match wird die globale
     # PANE_UI_DETECTED gesetzt, damit paste_and_submit weiss ob es den
     # Bracketed-Paste-End-Marker schicken darf (claude) oder nicht (openclaude).
+    #
+    # Interrupt-Gate fix (2026-09-12): nach einem User-Interrupt (Esc) zeigt die
+    # TUI den Dialog `Interrupted · What should Claude do instead?`. Die Box-
+    # Glyphs / `❯` sind darin SICHTBAR, detect_pane_ui matcht also weiterhin —
+    # das alte Gate veroeffnete den Paste zu frueh, der Submit-Enter ging in den
+    # Dialog statt ins Eingabefeld, und der Nudge blieb unabgeschickt stehen
+    # (vier Live-Faelle am 2026-09-12). Ein Pane im Interrupted-Dialog ist KEIN
+    # clean prompt: solange der Dialog sichtbar ist, pollen wir weiter.
     local deadline
     deadline=$(( $(date +%s) + READY_TIMEOUT_SEC ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local ui
+        if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
         if ui=$(detect_pane_ui "${SESSION_NAME}:0"); then
             PANE_UI_DETECTED="$ui"
             return 0
@@ -270,6 +289,19 @@ wait_for_clean_prompt() {
         sleep "$READY_POLL_INTERVAL_SEC"
     done
     return 1
+}
+
+# pane_in_interrupted_dialog TARGET — 0 (true) wenn das Pane den claude-
+# Interrupt-Dialog rendert (`Interrupted` + `What should Claude do instead?`).
+# Nur der letzte ~15 Zeilen zählen: ein alter Dialog im Scrollback (aus einem
+# früheren Turn) darf den Paste nicht dauerhaft blockieren — maßgeblich ist der
+# sichtbare untere Bildschirmbereich.
+pane_in_interrupted_dialog() {
+    local tail
+    tail=$(tmux capture-pane -t "$1" -p -S -15 2>/dev/null || echo "")
+    [ -n "$tail" ] || return 1
+    echo "$tail" | grep -q 'Interrupted' \
+        && echo "$tail" | grep -q 'What should Claude do instead'
 }
 
 # Bug 10 (2026-05-13): fail-open des paste-Schritts war silent — bei Race
@@ -289,6 +321,49 @@ PASTE_MAX_ATTEMPTS="${PASTE_MAX_ATTEMPTS:-2}"
 # verify_paste_landed wird aus lib/paste-verify.sh geladen (sourceable fuer Tests).
 # shellcheck source=lib/paste-verify.sh
 source "$POLL_LIB_DIR/paste-verify.sh"
+
+# escalate_unsubmitted_nudge TASK_ID BOARD_ID DETAIL — der laute Pfad.
+#
+# Wenn der Text nach dem zweiten Enter IMMER NOCH unabgesendet im Eingabefeld
+# steht, ist der Agent gewedged: der naechste Paste wuerde sich an den Rest im
+# Feld anhaengen, und der laufende Zug startet nie. Genau hier hat am
+# 12.09.2026 viermal ein Mensch von Hand Enter gedrueckt, weil poll.sh den
+# Fehlschlag nur ins Log geschrieben hat — sichtbar fuer niemanden.
+#
+# "Laut" heisst deshalb zwei Dinge, nicht eins:
+#   1. Kommentar auf die Karte (comment_type=blocker) mit der exakten Diagnose.
+#   2. Status blocked — erst die Statusflanke startet die Lead-Triage
+#      (blocker_triage.py). Ein Blocker-Kommentar allein pingt niemanden.
+# Beides macht report_blocker bereits; das Escape darin raeumt zusaetzlich den
+# haengengebliebenen Text aus dem Eingabefeld, damit der naechste Dispatch
+# nicht auf einem verschmutzten Feld landet.
+#
+# Ohne bekannte Karte (Dispatch vor dem ersten Task, Nudge ohne aktiven Task)
+# bleibt nur das ERROR-Log — dann gibt es keine Karte, auf die man schreiben
+# koennte. Still weitergegangen wird trotzdem nie: der Aufrufer gibt 2 zurueck.
+escalate_unsubmitted_nudge() {
+    local task_id="$1"
+    local board_id="$2"
+    local detail="$3"
+    if [ -z "$task_id" ] || [ -z "$board_id" ]; then
+        log "ERROR: Nudge steht unabgesendet im Eingabefeld und es ist KEINE Karte zugeordnet (task_id='${task_id}', board_id='${board_id}') — keine Eskalation moeglich, nur dieses Log. Manueller Eingriff noetig."
+        return 1
+    fi
+    local prev_task="$CURRENT_TASK_ID" prev_board="$CURRENT_BOARD_ID"
+    CURRENT_TASK_ID="$task_id"
+    CURRENT_BOARD_ID="$board_id"
+    report_blocker "$task_id" \
+        "Nudge blieb unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt" \
+        "$detail" \
+        "poll.sh paste_and_submit"
+    # report_blocker leert CURRENT_TASK_ID/BOARD_ID absichtlich. War vorher eine
+    # ANDERE Karte aktiv, stellen wir die nicht wieder her — sie waere jetzt
+    # falsch; war es dieselbe, muss sie geleert bleiben.
+    if [ -n "$prev_task" ] && [ "$prev_task" != "$task_id" ]; then
+        log "WARNING: escalate_unsubmitted_nudge hat Karte $task_id blockiert, vorher aktiv war $prev_task ($prev_board) — Turn-State-Tracking ist zurueckgesetzt."
+    fi
+    return 0
+}
 
 paste_and_submit() {
     # Optionaler erster Parameter --no-fail-open: statt nach READY_TIMEOUT_SEC
@@ -340,22 +415,56 @@ paste_and_submit() {
             sleep 0.2
         fi
         tmux_submit "${SESSION_NAME}:0"
-        # Post-Paste-Verify (Bug 10 fix). Wir warten kurz und prueffen ob die
-        # Eingabe in den Pane gerendert wurde. Wenn nicht: retry.
+        # Post-Paste-Verify (Bug 10 fix). Wir warten kurz und klassifizieren das
+        # Ergebnis DREI-WEG (Interrupt-Gate fix 2026-09-12):
+        #   0 = abgesendet  (Fingerprint im Scrollback ODER Feld leer)
+        #   2 = im Feld, nicht abgesendet (Fingerprint nur im Input-Feld-Tail)
+        #   1 = gar nicht angekommen (Fingerprint nirgends)
+        # Die alten Meldungen verschwiegen Fall 2 ("Fingerprint nicht sichtbar"),
+        # obwohl der Text sichtbar im Feld stand — wer das las, suchte an der
+        # falschen Stelle.
         sleep "$PASTE_VERIFY_DELAY_SEC"
-        if verify_paste_landed "$file"; then
+        local outcome
+        outcome=$(classify_paste_outcome "$file")
+        if [ "$outcome" = "0" ]; then
             if [ "$attempt" -gt 1 ]; then
                 log "paste_and_submit erfolgreich auf Versuch ${attempt}."
             fi
             return 0
         fi
-        if [ "$attempt" -lt "$PASTE_MAX_ATTEMPTS" ]; then
-            log "WARNING: paste_and_submit Versuch ${attempt}: Fingerprint nicht im Pane sichtbar — Retry in ${PASTE_RETRY_DELAY_SEC}s."
+        if [ "$outcome" = "2" ]; then
+            # Text steht sichtbar im Eingabefeld, das Enter ging woanders hin
+            # (klassisch: in den Interrupted-Dialog). EIN zweites Enter nach-
+            # schieben, bevor wir aufgeben — das ist der vorgesehene Selbstheil-
+            # pfand, kein stiller Fehlschlag.
+            log "WARNING: paste_and_submit Versuch ${attempt}: Text steht im Eingabefeld, aber wurde NICHT abgesendet — zweites Enter."
+            tmux_submit "${SESSION_NAME}:0"
+            sleep "$PASTE_VERIFY_DELAY_SEC"
+            outcome=$(classify_paste_outcome "$file")
+            if [ "$outcome" = "0" ]; then
+                log "paste_and_submit: zweites Enter hat den Nudge abgesendet (Versuch ${attempt})."
+                return 0
+            fi
+            if [ "$outcome" = "2" ]; then
+                log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. Eskalation: Kommentar auf die Karte plus Status blocked (Lead-Triage). NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
+                escalate_unsubmitted_nudge \
+                    "${PASTE_ESCALATION_TASK_ID:-$CURRENT_TASK_ID}" \
+                    "${PASTE_ESCALATION_BOARD_ID:-$CURRENT_BOARD_ID}" \
+                    "paste_and_submit Versuch ${attempt}: der Text steht sichtbar im Eingabefeld, wurde aber nicht abgesendet (classify_paste_outcome=2 auch nach dem zweiten Enter). Typische Ursache: das Submit-Enter landete in einem Dialog statt im Feld. Das Feld wurde per Escape geraeumt; der Nudge ist NICHT zugestellt."
+                # 2 statt 1: der Aufrufer soll wissen, dass die Karte bereits
+                # blockiert wurde und er kein Turn-State-Tracking mehr aufsetzt.
+                return 2
+            fi
+            # outcome=1 nach zweitem Enter: Feld leer geworden, aber Fingerprint
+            # nicht im Scrollback — als Nicht-Angekommen melden und normal retry.
+            log "WARNING: paste_and_submit Versuch ${attempt}: Feld nach zweitem Enter leer, aber Fingerprint nicht im Verlauf — behandle als nicht angekommen."
+        elif [ "$attempt" -lt "$PASTE_MAX_ATTEMPTS" ]; then
+            log "WARNING: paste_and_submit Versuch ${attempt}: Eingabe ist NICHT im claude-Pane angekommen (Fingerprint nirgends sichtbar) — Retry in ${PASTE_RETRY_DELAY_SEC}s."
             sleep "$PASTE_RETRY_DELAY_SEC"
         fi
         attempt=$((attempt + 1))
     done
-    log "ERROR: paste_and_submit FAILED nach ${PASTE_MAX_ATTEMPTS} Versuchen — Eingabe ist NICHT im claude-Pane gelandet. Task stuck. Manueller Eingriff (Status-Flip oder tmux send-keys) noetig."
+    log "ERROR: paste_and_submit FAILED nach ${PASTE_MAX_ATTEMPTS} Versuchen — Eingabe ist NICHT im claude-Pane gelandet (weder abgesendet noch sichtbar im Feld). Task stuck. Manueller Eingriff (Status-Flip oder tmux send-keys) noetig."
     return 1
 }
 
@@ -620,7 +729,24 @@ except Exception:
     # Task doch lief. Jetzt: Return-Code explicit handlen — bei Fehler nur
     # WARN-Log, kein poll.sh exit. Der Task bleibt assigned + in_progress,
     # claude meldet sich entweder selbst oder der Operator sieht den Task stuck.
-    if ! paste_and_submit "$TASK_PROMPT_FILE"; then
+    # Die Eskalation in paste_and_submit braucht die Karte, die GERADE gepastet
+    # wird — CURRENT_TASK_ID zeigt hier noch auf die vorherige (es wird erst
+    # unten gesetzt). Ohne diese beiden Variablen wuerde ein Fehlschlag die
+    # falsche Karte blockieren.
+    PASTE_ESCALATION_TASK_ID="$task_id"
+    PASTE_ESCALATION_BOARD_ID="$board_id"
+    local paste_rc=0
+    paste_and_submit "$TASK_PROMPT_FILE" || paste_rc=$?
+    PASTE_ESCALATION_TASK_ID=""
+    PASTE_ESCALATION_BOARD_ID=""
+    if [ "$paste_rc" = "2" ]; then
+        # Karte ist bereits blockiert + Feld geraeumt (escalate_unsubmitted_nudge).
+        # Kein Turn-State-Tracking aufsetzen — sonst wuerde die eben blockierte
+        # Karte unten als "working" wieder aktiv gesetzt.
+        log "Task $task_id: Prompt blieb unabgesendet im Eingabefeld — Karte wurde blockiert und an den Lead gemeldet. Kein Turn-State-Tracking."
+        return
+    fi
+    if [ "$paste_rc" != "0" ]; then
         log "WARNING: paste_and_submit returnte non-zero fuer Task $task_id — claude koennte den Prompt verzoegert verarbeiten oder Task ist stuck. Kein poll.sh exit, Task bleibt in_progress."
     else
         log "Task $task_id (attempt ${attempt_id:-unbekannt}) an claude gesendet (fire-and-forget)"
@@ -698,18 +824,23 @@ report_blocker() {
     local task_id="$1"
     local reason="$2"
     local error_detail="${3:-no error detail captured}"
+    # Quellenkennung im Kommentar. Default = der alte Wortlaut, damit die
+    # beiden turn-state-Aufrufer unveraendert bleiben; der Nudge-Pfad
+    # (escalate_unsubmitted_nudge) setzt seine eigene, damit der Lead auf den
+    # ersten Blick sieht, dass es NICHT die turn-state-Erkennung war.
+    local source_label="${4:-poll.sh turn-state}"
     log "Blocker erkannt auf Task $task_id: $reason"
 
     # Blocker-Kommentar via Python (sichere JSON-Encoding mit Newlines/Quotes)
     if [ -n "$CURRENT_BOARD_ID" ]; then
-        POLL_REASON="$reason" POLL_ERROR="$error_detail" \
+        POLL_REASON="$reason" POLL_ERROR="$error_detail" POLL_SOURCE="$source_label" \
         POLL_URL="$MC_API_URL/api/v1/agent/boards/$CURRENT_BOARD_ID/tasks/$task_id/comments" \
         POLL_TOKEN="$MC_TOKEN" python3 -c "
 import json, os, urllib.request
 reason = os.environ['POLL_REASON']
 err = os.environ['POLL_ERROR']
 body = {
-    'content': f'**Automatisch erkannt (poll.sh turn-state):** {reason}\n\n\`\`\`\n{err}\n\`\`\`',
+    'content': f'**Automatisch erkannt ({os.environ[\"POLL_SOURCE\"]}):** {reason}\n\n\`\`\`\n{err}\n\`\`\`',
     'comment_type': 'blocker',
 }
 req = urllib.request.Request(
