@@ -4043,6 +4043,14 @@ def run_acp_once(
             if c.get("type") == "text":
                 full_text.append(c.get("text") or "")
                 outcome.saw_agent_start = True
+            # G4 (parity audit #521): a streaming token IS forward progress —
+            # the same liveness channel the native hook's message_update feeds
+            # (turn-end-hook.mjs STREAM_HEARTBEAT_MS). A long pure-reasoning
+            # stretch with NO tool call used to produce zero progress records,
+            # so the idle watchdog killed a producing run (watchdog_killed ->
+            # ABORT_HANG -> blocker). Throttled to at most one stamp per
+            # second by _stream_heartbeat.
+            _stream_heartbeat()
         elif su == "tool_call":
             tool_count[0] += 1
             outcome.saw_agent_start = True
@@ -4092,6 +4100,17 @@ def run_acp_once(
             heartbeat_fn()
         except Exception:  # noqa: BLE001 — liveness must never kill the run
             pass
+
+    # G4 stream-liveness throttle: at most one heartbeat per second (dict, not
+    # a bare local — on_event must be able to rebind it across calls).
+    _stream_throttle = {"at": 0.0}
+
+    def _stream_heartbeat() -> None:
+        now = time.monotonic()
+        if now - _stream_throttle["at"] < 1.0:
+            return
+        _stream_throttle["at"] = now
+        _heartbeat()
 
     def make_client() -> "acp_client.ACPClient":
         if client_factory is not None:
