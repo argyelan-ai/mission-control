@@ -140,11 +140,13 @@ async def test_heartbeat_soft_on_unread_blocker_comment(client: AsyncClient):
             s, task, author_type="agent", author_agent_id=agent.id,
             comment_type="progress", content="checkpoint",
         )
-        # Advance the agent's comment cursor past its own progress comment.
+        # Advance the agent's heartbeat SIGNAL watermark past its own
+        # progress comment (not last_seen_comment_id — that's /me/poll's
+        # delivery watermark, a separate field since B1, PR #519 Rex review).
         from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
         s.add(AgentTaskCommentCursor(
             agent_id=agent.id, task_id=task.id,
-            last_seen_comment_id=seen.id,
+            last_signalled_comment_id=seen.id,
         ))
         await s.commit()
         # THEN the lead posts a blocker comment -> unread -> soft (posted in
@@ -183,8 +185,9 @@ async def test_heartbeat_own_block_does_not_interrupt(client: AsyncClient):
             s, task, author_type="agent", author_agent_id=agent.id,
             comment_type="blocker", content="Warte auf Approval",
         )
-        # The agent has seen its own comment (poll auto-acks delivered
-        # comments) — advance the cursor so soft doesn't fire either.
+        # The agent has already been signalled about its own comment by a
+        # prior beat — advance the SIGNAL watermark so soft doesn't fire
+        # either.
         from sqlmodel import select as _select
         from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
         comments = list((await s.exec(
@@ -192,7 +195,7 @@ async def test_heartbeat_own_block_does_not_interrupt(client: AsyncClient):
         )).all())
         s.add(AgentTaskCommentCursor(
             agent_id=agent.id, task_id=task.id,
-            last_seen_comment_id=comments[-1].id,
+            last_signalled_comment_id=comments[-1].id,
         ))
         await s.commit()
 
@@ -509,7 +512,10 @@ async def test_heartbeat_missing_cursor_does_not_flag_own_blocker(client: AsyncC
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         seeded = await _cursor_row(s, agent.id, task.id)
         assert seeded is not None
-        assert seeded.last_seen_comment_id == own_comment.id
+        # The heartbeat seeds its OWN watermark, not /me/poll's delivery
+        # cursor (B1, PR #519 Rex review) — the two must stay independent.
+        assert seeded.last_signalled_comment_id == own_comment.id
+        assert seeded.last_seen_comment_id is None
 
 
 @pytest.mark.asyncio
@@ -581,7 +587,7 @@ async def test_heartbeat_own_new_comment_past_existing_cursor_does_not_interrupt
         from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
         s.add(AgentTaskCommentCursor(
             agent_id=agent.id, task_id=task.id,
-            last_seen_comment_id=seen.id,
+            last_signalled_comment_id=seen.id,
         ))
         await s.commit()
         await _add_comment(
@@ -591,3 +597,88 @@ async def test_heartbeat_own_new_comment_past_existing_cursor_does_not_interrupt
 
     resp = await _heartbeat(client, token)
     assert "control" not in resp.json()
+
+
+# ── B1 (PR #519 Rex review) — the seam between the heartbeat and /me/poll ──
+# The heartbeat advancing the SAME field poll uses as its delivery watermark
+# silently swallowed real comments: the heartbeat would mark a comment
+# "seen" before poll ever handed it to the agent. Both variants below are
+# Rex's exact repro from the review, now as regression tests.
+
+async def _poll(client: AsyncClient, token: str):
+    return await client.get(
+        "/api/v1/agent/me/poll",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_beat_does_not_swallow_poll_delivery_no_prior_cursor(client: AsyncClient):
+    """Variante A (Rex review, PR #519): NO comment cursor exists yet (fresh
+    ACP session) when an operator comment arrives, then one heartbeat beat
+    happens before the agent ever polls. The comment must still be
+    deliverable afterwards — the beat's own signal watermark must not double
+    as poll's delivery watermark."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        assert await _cursor_row(s, agent.id, task.id) is None
+        await _add_comment(
+            s, task, author_type="user",
+            comment_type="handoff", content="OPERATOR-NACHRICHT",
+        )
+
+    beat = await _heartbeat(client, token)
+    assert beat.status_code == 200, beat.text
+
+    poll = await _poll(client, token)
+    contents = [c["content"] for c in poll.json()["new_comments"]]
+    assert contents == ["OPERATOR-NACHRICHT"]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_beat_does_not_swallow_poll_delivery_with_prior_cursor(client: AsyncClient):
+    """Variante B (Rex review, PR #519): the turn has been running long
+    enough for the heartbeat to have its own signal watermark already (from
+    an earlier beat) AND a real prior poll delivery. A foreign blocker
+    arrives mid-turn, the heartbeat correctly soft-interrupts on it — and
+    the comment must still come back on the next poll, not an empty
+    `new_comments` list."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        seen = await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="progress", content="checkpoint",
+        )
+        from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
+        s.add(AgentTaskCommentCursor(
+            agent_id=agent.id, task_id=task.id,
+            last_seen_comment_id=seen.id,  # a REAL prior poll delivery
+        ))
+        await s.commit()
+
+    # An earlier beat during the same turn already signalled up to "seen" —
+    # establishes the heartbeat's own watermark (mirrors a turn that has
+    # been running a while, several beats in).
+    first = await _heartbeat(client, token)
+    assert "control" not in first.json()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="blocker", content="STOPP — bitte pruefen",
+        )
+
+    beat = await _heartbeat(client, token)
+    assert beat.json()["control"]["interrupt"] == "soft"
+
+    poll = await _poll(client, token)
+    contents = [c["content"] for c in poll.json()["new_comments"]]
+    assert contents == ["STOPP — bitte pruefen"]

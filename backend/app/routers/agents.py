@@ -2612,6 +2612,45 @@ async def _upsert_cursor(
     await session.execute(stmt)
 
 
+async def _upsert_signalled_cursor(
+    session: AsyncSession,
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    last_signalled_comment_id: uuid.UUID,
+) -> None:
+    """Dialect-agnostic upsert for the heartbeat's OWN watermark column.
+
+    Deliberately separate from `_upsert_cursor` (B1, PR #519 Rex review):
+    that one advances `last_seen_comment_id`, the /me/poll DELIVERY
+    watermark. This one advances `last_signalled_comment_id`, which only the
+    heartbeat's soft-interrupt channel reads/writes — see
+    AgentTaskCommentCursor's docstring for why they must not be the same
+    field. `ON CONFLICT DO UPDATE SET` here touches only this one column, so
+    a concurrent poll's `last_seen_comment_id` write is never clobbered (and
+    vice versa).
+    """
+    from app.models.agent_task_comment_cursor import AgentTaskCommentCursor as _Cursor
+
+    dialect = session.bind.dialect.name if session.bind else "postgresql"
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as _insert
+    else:
+        from sqlalchemy.dialects.postgresql import insert as _insert
+
+    stmt = _insert(_Cursor.__table__).values(
+        agent_id=agent_id,
+        task_id=task_id,
+        last_signalled_comment_id=last_signalled_comment_id,
+    ).on_conflict_do_update(
+        index_elements=["agent_id", "task_id"],
+        set_={
+            "last_signalled_comment_id": last_signalled_comment_id,
+            "updated_at": datetime.now(timezone.utc),
+        },
+    )
+    await session.execute(stmt)
+
+
 # The delivery scope moved to services/thread_scope so the REPLY path can be
 # authorised by the very same rule (an agent may answer exactly where it may
 # listen). These names stay as aliases — imports and tests elsewhere use them,
@@ -3788,29 +3827,35 @@ async def _withdrawn_task_reason(session, agent, task_id, *, previously_held=Non
 
 async def _collect_heartbeat_control(session, agent, active_task):
     """DB side of the control channel: assembles the inputs for
-    _heartbeat_control from the active task's comments + the agent's cursor,
-    plus the soft check (unread blocker/handoff beyond the cursor).
+    _heartbeat_control from the active task's comments + the agent's own
+    signal watermark, plus the soft check (unread blocker/handoff beyond it).
 
-    Also maintains `AgentTaskCommentCursor` itself (mirrors `_upsert_cursor`
-    below, the one poll.sh's `/me/poll` uses) — the heartbeat is the ONLY
-    comment-awareness channel the ACP-bridge path has while a turn is
-    blocked (it doesn't poll again until the turn ends), so if the
-    heartbeat never advanced the cursor, that path never would (incident
-    12.09.2026, Karte 584795fd: an ACP session's cursor row never existed,
-    so every beat re-read the full comment log as "unseen").
+    Maintains `AgentTaskCommentCursor.last_signalled_comment_id` — a field
+    separate from `last_seen_comment_id` (B1, PR #519 Rex review; see that
+    model's docstring). `last_seen_comment_id` is the /me/poll DELIVERY
+    watermark: poll.sh advances it only AFTER handing a comment to the
+    agent. The heartbeat is the ONLY comment-awareness channel the
+    ACP-bridge path has while a turn is blocked (it doesn't poll again
+    until the turn ends), so it needs its own watermark to advance on every
+    beat without touching poll's — writing `last_seen_comment_id` here
+    instead marked comments "delivered" before poll ever sent them,
+    silently swallowing real messages (incident 12.09.2026, Karte 584795fd
+    surfaced the missing-cursor case; the shared-field bug affected every
+    ACP turn once fixed for that, live-reproduced in this PR's review).
 
-    Two guards keep a missing/stale cursor from misfiring the soft channel:
+    Two guards keep a missing/stale signal-cursor from misfiring the soft
+    channel:
       - A comment authored by the agent itself is never an unread message
         TO itself — filtered out of `soft_unread` regardless of the cursor.
-      - No cursor row yet does NOT mean "every historic comment is unseen".
-        The dispatch prompt already carried that full history (mirrors the
-        bridge's own `delivery.drop_comments()` at dispatch) — so the first
-        beat seeds the cursor to the current tail and reports nothing new,
-        instead of re-flagging the agent's own past blocker/handoff comment
-        on every single beat forever.
+      - No signal-cursor row yet does NOT mean "every historic comment is
+        unseen". The dispatch prompt already carried that full history
+        (mirrors the bridge's own `delivery.drop_comments()` at dispatch)
+        — so the first beat seeds the watermark to the current tail and
+        reports nothing new, instead of re-flagging the agent's own past
+        blocker/handoff comment on every single beat forever.
 
     Any failure in the decision itself returns None, so the heartbeat
-    response stays legacy-shaped; a failure while persisting the cursor
+    response stays legacy-shaped; a failure while persisting the watermark
     is separately best-effort and never discards an already-decided
     control signal.
     """
@@ -3827,7 +3872,9 @@ async def _collect_heartbeat_control(session, agent, active_task):
                 AgentTaskCommentCursor.task_id == active_task.id,
             )
         )).first()
-        had_cursor = cursor is not None and cursor.last_seen_comment_id is not None
+        had_signal_cursor = (
+            cursor is not None and cursor.last_signalled_comment_id is not None
+        )
 
         all_comments = list((await session.exec(
             select(_TC)
@@ -3847,14 +3894,14 @@ async def _collect_heartbeat_control(session, agent, active_task):
             if blocked_at is None or _aware(c.created_at) >= blocked_at
         ]
 
-        # Unseen slice relative to the cursor (mirrors the poll's comment
-        # cursor semantics: position of last_seen in the FULL log, then the
-        # comments after it). No cursor yet -> nothing NEW this beat (see
-        # docstring); the seed-to-tail write happens below.
-        if had_cursor:
+        # Unseen slice relative to the signal watermark (position of
+        # last_signalled in the FULL log, then the comments after it). No
+        # watermark yet -> nothing NEW this beat (see docstring); the
+        # seed-to-tail write happens below.
+        if had_signal_cursor:
             idx = next(
                 (i for i, c in enumerate(all_comments)
-                 if c.id == cursor.last_seen_comment_id),
+                 if c.id == cursor.last_signalled_comment_id),
                 -1,
             )
             unseen = all_comments[idx + 1:] if idx >= 0 else all_comments
@@ -3872,7 +3919,7 @@ async def _collect_heartbeat_control(session, agent, active_task):
 
         control = _heartbeat_control(
             active_task, agent.id, episode,
-            cursor.last_seen_comment_id if cursor else None,
+            cursor.last_signalled_comment_id if cursor else None,
         )
         if control is None and soft_unread:
             control = {
@@ -3882,20 +3929,27 @@ async def _collect_heartbeat_control(session, agent, active_task):
     except Exception:  # noqa: BLE001 — control is best-effort, never breaks the heartbeat
         return None
 
-    # Ack: advance the cursor to what this beat has now accounted for (the
-    # seed-to-tail case above, or a cursor that already existed but sits
-    # behind the log). Separate try — a write hiccup here must never
-    # discard a `control` signal already decided above.
+    # Ack: advance the SIGNAL watermark to what this beat has now accounted
+    # for (the seed-to-tail case above, or a watermark that already existed
+    # but sits behind the log). `_upsert_signalled_cursor`, NOT
+    # `_upsert_cursor` — the latter would advance /me/poll's delivery
+    # watermark instead (B1, PR #519 Rex review). Separate try — a write
+    # hiccup here must never discard a `control` signal already decided
+    # above.
     try:
         if all_comments and (
-            not had_cursor or all_comments[-1].id != cursor.last_seen_comment_id
+            not had_signal_cursor
+            or all_comments[-1].id != cursor.last_signalled_comment_id
         ):
-            await _upsert_cursor(session, agent.id, active_task.id, all_comments[-1].id)
+            await _upsert_signalled_cursor(
+                session, agent.id, active_task.id, all_comments[-1].id,
+            )
             await session.commit()
     except Exception:  # noqa: BLE001 — cursor persistence is best-effort
         pass
 
     return control
+
 
 @router.post("/agent/me/heartbeat")
 async def agent_heartbeat(
