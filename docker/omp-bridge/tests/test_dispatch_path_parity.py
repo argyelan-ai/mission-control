@@ -67,11 +67,11 @@ SERVE_LOOP_WIRING = {
     "soft_hard_interrupt": ["interrupt_state", "_on_control", "start_heartbeater"],
     "task_context_env": ["write_task_context_env"],
     "finish_guard": ["drive_live_run", "set_blocker"],
-    # Intentionally EMPTY: G2 (startup recovery) has NO wired symbol on any
-    # bridge path today — there is nothing to assert. The gap itself is
-    # covered by the KNOWN_GAPS exception machinery below, and the reverse
-    # direction is covered by test_serve_loop_driver_branches_are_known.
-    "startup_recovery": [],
+    # G2 CLOSED (card f5cc4cee point e): serve_loop now calls
+    # GET /me/active-task-recovery on the first poll that actually returns a
+    # payload with `working`/no task object — the same startup boundary
+    # poll.sh's recover_task() heals on FIRST_POLL.
+    "startup_recovery": ["_make_http_recovery", "recovery_fn"],
     "acp_cancel_flip": ["_acp_control_sink"],
 }
 
@@ -93,10 +93,10 @@ BACKEND_WIRING = {
 # When a fix lands, the symbol appears, this test fails, and the exception
 # row + doc row go in the same change.
 KNOWN_GAPS = [
-    # G2: serve_loop has no startup recovery call (poll.sh does, poll.sh:454).
-    ("G2", "active_task_recovery", "serve_loop never calls the "
-     "active-task-recovery endpoint; backend orphan redispatch is the only "
-     "safety net (agents.py:2835)"),
+    # G2 CLOSED (card f5cc4cee point e, fix/acp-unblock-and-startup-recovery):
+    # serve_loop now calls GET /me/active-task-recovery on its first
+    # iteration — see SERVE_LOOP_WIRING["startup_recovery"] above for the
+    # positive wiring assertion that replaces this absence-tripwire.
     # G3: ACP runs on main carry no transcript/preview sinks (PR #498 open).
     ("G3", "transcript_sink", "serve_loop's ACP run_once calls run_acp_once "
      "without sinks; _make_acp_run_factory owns them but is unused on main"),
