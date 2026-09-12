@@ -22,6 +22,7 @@ import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -30,11 +31,12 @@ from app.models.agent import Agent
 from app.models.approval import Approval
 from app.models.task import Task, TaskComment
 from app.utils import utcnow, ensure_aware
-from app.redis_client import RedisKeys, get_redis
+from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
+from app.services.task_state import lock_and_set
 
 logger = logging.getLogger("mc.task_runner")
 
@@ -495,6 +497,17 @@ class TaskRunnerService:
         if not other:
             return  # §4.2 — nothing else to do, session stays put
 
+        # W0.1: one heal per card per round — parking releases the agent,
+        # so it competes with every other healer on this task.
+        if not await try_claim_heal(redis, str(task.id)):
+            logger.info(
+                "Waiting-Timeout Park skipped for '%s' — another watchdog "
+                "healed this task this round",
+                task.title,
+            )
+            return
+
+
         # ── Park ──
         thread = await ensure_task_thread(session, task)
         hours = int(WAITING_TIMEOUT_SECONDS / 3600)
@@ -676,6 +689,17 @@ class TaskRunnerService:
         rotation_threshold = ack_timeout / 2.0
         if minutes_since_dispatch < rotation_threshold:
             return False  # Still too early
+        # W0.1: one heal per card per round — the rotation re-pastes the
+        # prompt, so it competes with every other healer on this task.
+        if not await try_claim_heal(redis, str(task.id)):
+            logger.info(
+                "D-1 silent retry skipped for '%s' — another watchdog "
+                "healed this task this round",
+                task.title,
+            )
+            return False
+
+
 
         rotated_key = f"mc:task:{task.id}:attempt_rotated"
         if await redis.get(rotated_key):
@@ -738,6 +762,17 @@ class TaskRunnerService:
                 return  # Task is active in queue, all good
         except Exception:
             return  # Bridge unreachable → do nothing, next cycle will retry
+
+        # W0.1: one heal per card per round — the reset forces a fresh
+        # dispatch, so it competes with every other healer on this task.
+        redis = await get_redis()
+        if not await try_claim_heal(redis, str(task.id)):
+            logger.info(
+                "CLI bridge stale dispatch reset skipped for '%s' — another "
+                "watchdog healed this task this round",
+                task.title,
+            )
+            return
 
         # Task not in queue → reset dispatched_at for a fresh dispatch
         task.dispatched_at = None
@@ -806,6 +841,17 @@ class TaskRunnerService:
         recovery_key = f"mc:task_runner:cli_bridge_recovery:{task.id}"
         if await redis.get(recovery_key):
             return  # Recovery already started, cooldown active
+
+        # W0.1: one heal per card per round — the re-enqueue restarts the
+        # worker on this task, so it competes with every other healer.
+        if not await try_claim_heal(redis, str(task.id)):
+            logger.info(
+                "CLI-Bridge Recovery skipped for '%s' — another watchdog "
+                "healed this task this round",
+                task.title,
+            )
+            return
+
 
         # Build recap prompt from recent comments
         recap_lines = [
@@ -987,6 +1033,18 @@ class TaskRunnerService:
           4. Notify operator via emit_event(severity='error') -> auto-Discord
         """
         redis = await get_redis()
+
+        # W0.1: one heal per card per round — this recovery restarts the
+        # container and re-dispatches; it must not fight another healer
+        # (e.g. orphan → inbox) acting on the same card in the same tick.
+        if not await try_claim_heal(redis, str(task.id)):
+            logger.info(
+                "Tiered recovery skipped for '%s' — another watchdog "
+                "healed this task this round",
+                task.title[:40],
+            )
+            return True  # treat as handled this round, like the in-flight dedup
+
 
         # Dedup: 600s TTL covers Tier 1 (10s) + Tier 2 (30s wait) + Tier 3 (5min)
         recovery_key = RedisKeys.recovery_inprogress(str(agent.id), str(task.id))
@@ -1294,7 +1352,42 @@ class TaskRunnerService:
                     # for comm_v2 agents — nudge them to `mc finish` instead.
                     await maybe_post_finish_nudge(session, task)
                     continue
-                task.status = "review"
+                # W0.1: one heal per card per round — the auto-promote IS a
+                # card mutation (in_progress -> review). It must claim
+                # mc:heal like every other healer: the concrete race is
+                # _recover_orphaned_tasks (watchdog, 30s tick) taking the
+                # claim and resetting this same card to inbox while this
+                # 60s-tick loop promotes it to review.
+                redis = await get_redis()
+                if not await try_claim_heal(redis, str(task.id)):
+                    logger.info(
+                        "Stale-Check Auto-Promote skipped for '%s' — another "
+                        "mechanism healed this task this round (mc:heal)",
+                        task.title[:60],
+                    )
+                    continue
+                # PR #478: the actual status write goes through lock_and_set()
+                # (row lock + is_valid_transition), not a plain attribute
+                # assignment — mc:heal only prevents two healers from racing
+                # each other in the same round, it doesn't stop a concurrent
+                # non-watchdog writer (PATCH, worker `mc review`) from having
+                # already moved the task between this sweep's SELECT and here.
+                try:
+                    task, _ = await lock_and_set(session, task.id, "review", actor="watchdog")
+                except HTTPException as e:
+                    if e.status_code == 409:
+                        # Lost race (status changed between this sweep's SELECT
+                        # and lock_and_set's re-read) — skip this task, next
+                        # tick retries. Must not abort the whole stale-check
+                        # sweep for the remaining tasks (same class of bug as
+                        # the watchdog's task_monitor.py fix).
+                        logger.info(
+                            "Stale-Check Auto-Promote lost the race for '%s' — "
+                            "skipping, next tick retries",
+                            task.title[:60],
+                        )
+                        continue
+                    raise
                 task.updated_at = utcnow()
                 session.add(task)
                 await session.commit()
@@ -1572,12 +1665,60 @@ class TaskRunnerService:
                 continue
 
             # ── Tick 2+: BLOCK. Human-wait (blocked_by_task_id IS NULL). ──
+            # lock_and_set() runs FIRST, apply_terminal_unassign() only AFTER
+            # it succeeds (M4, PR #478 review): apply_terminal_unassign only
+            # reads task.blocked_by_task_id/assigned_agent_id/id, none of
+            # which lock_and_set() touches, so the order is free to flip and
+            # this is the safer fix of Rex's two suggested options — a
+            # session.rollback() here would expire every object already
+            # loaded by this sweep's SELECT (not just `agent`), and the next
+            # loop iteration's plain attribute access on the next candidate
+            # task then needs a synchronous lazy-reload that crashes with
+            # MissingGreenlet outside the async greenlet context (caught by
+            # test_blocks_silent_abort_409_rolls_back_agent_mutation using a
+            # second, non-racing candidate — a single-candidate test can't
+            # see this). Ordering it this way means a 409 here never touches
+            # `agent` at all, so there's nothing to undo.
+            #
             # Canonical path: apply_terminal_unassign keeps assigned_agent_id
             # (resumable) but releases agent.current_task_id + sets run_state so
             # the agent doesn't look busy forever and the poll cancel-loop can't
             # fire. Helper does NOT set status → set it explicitly.
+            # W0.1: one heal per card per round — the block is the heaviest
+            # healing action; if another watchdog (e.g. orphan → inbox) won
+            # this round, blocking now would fight it.
+            if not await try_claim_heal(redis, str(task.id)):
+                logger.info(
+                    "Lifecycle-Watchdog block skipped for '%s' — another "
+                    "watchdog healed this task this round",
+                    task.title,
+                )
+                continue
+
+            # PR #478: mc:heal only arbitrates between healers in the same
+            # round — the status write itself still goes through
+            # lock_and_set() (row lock + is_valid_transition), same reasoning
+            # as the Stale-Check Auto-Promote branch above. Without this call
+            # task.status is never actually set to "blocked" here —
+            # apply_terminal_unassign() below only unassigns, it doesn't
+            # touch status.
+            try:
+                task, _ = await lock_and_set(session, task.id, "blocked", actor="watchdog")
+            except HTTPException as e:
+                if e.status_code == 409:
+                    # Lost race (status changed between this sweep's SELECT and
+                    # lock_and_set's re-read) — skip this task, next tick
+                    # retries. Must not abort the whole sweep for the
+                    # remaining tasks (same class of bug as the watchdog's
+                    # task_monitor.py fix).
+                    logger.info(
+                        "Lifecycle-Watchdog block lost the race for '%s' — "
+                        "skipping, next tick retries",
+                        task.title[:60],
+                    )
+                    continue
+                raise
             await apply_terminal_unassign(session, task, "blocked")
-            task.status = "blocked"
             task.updated_at = utcnow()
             session.add(task)
             # Ensure human-wait agent state even if run_state was 'idle' going in

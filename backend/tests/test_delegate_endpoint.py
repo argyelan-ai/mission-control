@@ -451,3 +451,258 @@ async def test_callback_resume_fallback_via_parent_task_id():
         parent = await s.get(Task, parent_id)
         assert parent.status == "in_progress", "Parent sollte via Fallback geweckt werden"
         assert parent.blocked_by_task_id is None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# W5-F: `mc delegate` darf nie stillschweigend eine elternlose Karte anlegen.
+#
+# Live incident 2026-09-11: Boss delegierte zweimal per `mc delegate` ohne
+# aktive Karte → beide Subtasks liefen mit `parent_task_id=None` auf,
+# Antwort war nur `{"your_status": "no_task"}` — kein Fehler, kein Hinweis.
+# Fix: (1) ein aktiver aber nicht-in_progress Task wird jetzt mit Klartext
+# (Parent-ID + Status) abgelehnt statt lautlos zur Waise zu werden — das war
+# vorher schon ein 409, aber mit einer Message ohne jeden Bezug zum
+# betroffenen Task; (2) `--parent <task-id>` gibt einen expliziten,
+# bewussten Weg, einen Parent zu setzen, unabhaengig von der impliziten
+# current_task_id-Aufloesung; (3) eine wirklich elternlose Anlage (kein
+# current_task, kein --parent) bleibt fuer Board Leads erlaubt, aber die
+# Response sagt es jetzt ausdruecklich statt es unter "no_task" zu verstecken.
+# ─────────────────────────────────────────────────────────────────────────
+
+async def _setup_delegate_scenario_variant(
+    *, parent_status: str = "in_progress", current_task_id_set: bool = True,
+    is_board_lead: bool = True,
+):
+    """Wie `_setup_delegate_scenario`, aber Parent-Status/Board-Lead-Flag frei
+    waehlbar — fuer die Sabotage-Probe (aktive Karte auf `waiting`) und den
+    echten Root-Fall (Board Lead ohne current_task_id).
+    """
+    from app.models.board import Board
+    from app.models.agent import Agent
+    from app.models.task import Task
+    from app.auth import generate_agent_token
+
+    board_id = uuid.uuid4()
+    boss_id = uuid.uuid4()
+    researcher_id = uuid.uuid4()
+    parent_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(id=board_id, name="Delegate Board", slug=f"deleg-{uuid.uuid4().hex[:6]}")
+        s.add(board)
+
+        boss_token, boss_hash = generate_agent_token()
+        boss = Agent(
+            id=boss_id,
+            name="Boss",
+            role="orchestrator",
+            board_id=board_id,
+            agent_token_hash=boss_hash,
+            is_board_lead=is_board_lead,
+            scopes=["tasks:read", "tasks:write", "tasks:create"],
+            current_task_id=parent_id if current_task_id_set else None,
+        )
+        s.add(boss)
+
+        researcher = Agent(
+            id=researcher_id,
+            name="Researcher",
+            role="researcher",
+            board_id=board_id,
+            agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read", "tasks:write"],
+            provision_status="provisioned",
+        )
+        s.add(researcher)
+
+        parent = Task(
+            id=parent_id,
+            board_id=board_id,
+            title="Boss Orchestration Task",
+            status=parent_status,
+            assigned_agent_id=boss_id,
+        )
+        s.add(parent)
+        await s.commit()
+        for obj in [board, boss, researcher, parent]:
+            await s.refresh(obj)
+
+    return {
+        "board_id": board_id,
+        "boss_id": boss_id,
+        "researcher_id": researcher_id,
+        "parent_id": parent_id,
+        "boss_token": boss_token,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sabotage_probe_waiting_parent_rejects_loud_with_id_and_status(client, fake_redis):
+    """Sabotage-Probe (DoD #1): aktive Karte auf `waiting` -> 409 mit Klartext,
+    der die Parent-ID UND den Status nennt. Keine Waisenkarte."""
+    data = await _setup_delegate_scenario_variant(parent_status="waiting")
+
+    from app.models.task import Task
+    from sqlmodel import func
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        tasks_before = (await s.exec(select(func.count()).select_from(Task))).one()
+
+    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
+        with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/v1/agent/boards/{data['board_id']}/delegate",
+                json={
+                    "title": "Sub",
+                    "description": "Should be rejected loudly, not orphaned",
+                    "assigned_agent_id": str(data["researcher_id"]),
+                },
+                headers={"Authorization": f"Bearer {data['boss_token']}"},
+            )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert str(data["parent_id"]) in detail, "Message muss die Parent-ID nennen"
+    assert "waiting" in detail, "Message muss den aktuellen Status nennen"
+    assert "--parent" in detail, "Message muss den Ausweg (--parent) nennen"
+
+    # Keine Waisenkarte entstanden
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        tasks_after = (await s.exec(select(func.count()).select_from(Task))).one()
+    assert tasks_after == tasks_before, "409 darf keine Karte anlegen"
+
+
+@pytest.mark.asyncio
+async def test_sabotage_probe_blocked_parent_rejects_loud(client, fake_redis):
+    """Gleiche Probe wie oben, aber Status `blocked` statt `waiting` — jeder
+    Nicht-in_progress-Status muss laut ablehnen, nicht nur `waiting`."""
+    data = await _setup_delegate_scenario_variant(parent_status="blocked")
+
+    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
+        with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/v1/agent/boards/{data['board_id']}/delegate",
+                json={
+                    "title": "Sub",
+                    "description": "Should be rejected loudly, not orphaned",
+                    "assigned_agent_id": str(data["researcher_id"]),
+                },
+                headers={"Authorization": f"Bearer {data['boss_token']}"},
+            )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert str(data["parent_id"]) in detail
+    assert "blocked" in detail
+
+
+@pytest.mark.asyncio
+async def test_explicit_parent_flag_attaches_child_to_named_parent(client, fake_redis):
+    """DoD #2: `--parent <id>` gesetzt -> Kind haengt am genannten Parent,
+    unabhaengig von der eigenen current_task_id (hier: aktive Karte `waiting`,
+    die implizite Aufloesung wuerde also ablehnen — --parent umgeht das bewusst)."""
+    data = await _setup_delegate_scenario_variant(parent_status="waiting")
+
+    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
+        with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/v1/agent/boards/{data['board_id']}/delegate",
+                json={
+                    "title": "Sub via explicit parent",
+                    "description": "Explicit parent overrides implicit resolution",
+                    "assigned_agent_id": str(data["researcher_id"]),
+                    "parent_task_id": str(data["parent_id"]),
+                },
+                headers={"Authorization": f"Bearer {data['boss_token']}"},
+            )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["parent_task_id"] == str(data["parent_id"])
+    assert body["warning"] is None
+
+    from app.models.task import Task
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        subtask = await s.get(Task, uuid.UUID(body["subtask_id"]))
+        assert subtask.parent_task_id == data["parent_id"], (
+            "parent_task_id muss nachweislich auf den genannten Parent zeigen "
+            "(per API/DB gelesen, nicht nur behauptet)"
+        )
+        # Der --parent-Task selbst wird NICHT angefasst -- kein automatisches
+        # Block/Resume auf einem Task, den wir nicht als eigene aktive Arbeit
+        # bestaetigt haben.
+        parent = await s.get(Task, data["parent_id"])
+        assert parent.status == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_explicit_parent_must_exist(client, fake_redis):
+    """--parent auf eine nicht existierende Task-ID -> 404, keine Waise."""
+    data = await _setup_delegate_scenario_variant(parent_status="in_progress")
+    bogus_parent = uuid.uuid4()
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{data['board_id']}/delegate",
+        json={
+            "title": "Sub",
+            "description": "Parent does not exist",
+            "assigned_agent_id": str(data["researcher_id"]),
+            "parent_task_id": str(bogus_parent),
+        },
+        headers={"Authorization": f"Bearer {data['boss_token']}"},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.asyncio
+async def test_root_delegation_without_active_task_warns_explicitly(client, fake_redis):
+    """DoD #3: Board Lead ohne aktive Karte, ohne --parent -> Anlage klappt,
+    aber die Antwort weist ausdruecklich auf 'kein Parent, kein Callback' hin
+    (statt nur `your_status: no_task` ohne jeden Hinweis, wie im Incident)."""
+    data = await _setup_delegate_scenario_variant(
+        current_task_id_set=False, is_board_lead=True,
+    )
+
+    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
+        with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/v1/agent/boards/{data['board_id']}/delegate",
+                json={
+                    "title": "Sub",
+                    "description": "Root delegation, no active task, no --parent",
+                    "assigned_agent_id": str(data["researcher_id"]),
+                },
+                headers={"Authorization": f"Bearer {data['boss_token']}"},
+            )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["your_status"] == "no_task"
+    assert body["parent_task_id"] is None
+    assert body["warning"], "Response MUSS explizit auf fehlenden Parent/Callback hinweisen"
+    assert "Parent" in body["warning"] and "Callback" in body["warning"]
+
+    from app.models.task import Task
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        subtask = await s.get(Task, uuid.UUID(body["subtask_id"]))
+        assert subtask.parent_task_id is None
+
+
+@pytest.mark.asyncio
+async def test_worker_without_active_task_still_rejects_loud(client, fake_redis):
+    """Regression: ein Nicht-Board-Lead ohne aktive Karte und ohne --parent
+    bleibt weiterhin hart abgelehnt (kein root-Fallback fuer Worker)."""
+    data = await _setup_delegate_scenario_variant(
+        current_task_id_set=False, is_board_lead=False,
+    )
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{data['board_id']}/delegate",
+        json={
+            "title": "Sub",
+            "description": "Should be rejected — worker, no active task, no --parent",
+            "assigned_agent_id": str(data["researcher_id"]),
+        },
+        headers={"Authorization": f"Bearer {data['boss_token']}"},
+    )
+    assert resp.status_code == 409, resp.text

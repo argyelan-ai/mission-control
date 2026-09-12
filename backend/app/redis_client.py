@@ -53,6 +53,56 @@ async def try_claim_recovery_comment_cooldown(redis: aioredis.Redis, task_id: st
     return bool(claimed)
 
 
+# Derivation (W1): the TTL must cover the SLOWEST round budget among the
+# participating healers, not the fastest tick:
+# - WatchdogService: tick 30s, self-accepted round budget = lock TTL
+#   `ex=interval * 3` = 90s (watchdog/core.py:99)
+# - TaskRunnerService: tick 60s, lock TTL `ex=interval` = 60s
+#   (task_runner.py:390); 6 of 12 gate sites live on this loop
+# - Poll-orphan redispatch: HTTP poll path, no tick at all
+# A claim of 30s (one watchdog tick) would expire mid-round whenever a
+# watchdog round runs longer than 30s (which both lock budgets explicitly
+# allow), and would never bridge a TaskRunner round (60s tick -> 30s open
+# window between rounds). 90s = the longest round budget the system itself
+# budgets, so exactly one healer acts per card per round on every loop.
+HEAL_DEDUP_TTL = 90  # seconds — see derivation above
+
+
+async def try_claim_heal(redis: aioredis.Redis, task_id: str) -> bool:
+    """Atomically claim this round's healing action for a task (W0.1).
+
+    Returns True if the caller may perform its healing action (requeue,
+    restart, redispatch, ...) on the task. Returns False if another
+    watchdog mechanism already healed this task within the last
+    HEAL_DEDUP_TTL seconds — the caller must skip the action this round
+    (log + continue the loop, never abort it).
+
+    Rationale: several independent watchdogs (orphan recovery, stale
+    recovery, dispatch-ACK, poll-orphan redispatch, ...) can pick the
+    SAME task in the SAME tick and each apply its own healing action —
+    one requeues the task to inbox while another restarts the container.
+    The race produced zombie trains. One claim per task per tick makes
+    exactly one healer act.
+
+    Uses SET NX EX (atomic check-and-set) rather than GET-then-SET so two
+    mechanisms racing on the same watchdog tick can't both observe "not set"
+    and both heal.
+
+    Takes an already-resolved ``redis`` client (rather than calling
+    get_redis() itself) so callers keep using whichever get_redis reference
+    their own module/tests already patch — task_runner.py and
+    task_monitor.py both hold a local ``redis`` from an earlier
+    ``await get_redis()`` in the same function.
+    """
+    claimed = await redis.set(
+        RedisKeys.task_heal_claim(task_id),
+        "1",
+        nx=True,
+        ex=HEAL_DEDUP_TTL,
+    )
+    return bool(claimed)
+
+
 # Redis key helpers
 class RedisKeys:
     @staticmethod
@@ -292,6 +342,16 @@ class RedisKeys:
     def scheduler_lock() -> str:
         return "mc:scheduler:lock"
 
+    @staticmethod
+    def scheduler_lock_heartbeat() -> str:
+        """Short-TTL companion key to scheduler_lock() (W4, 11.09.2026).
+
+        Refreshed far more often than the lock's own 120s TTL so a worker
+        that died without running stop() (SIGKILL, OOM) is detectable as
+        gone within LOCK_HEARTBEAT_TTL_SECONDS instead of forcing a new
+        worker to wait out the full lock TTL."""
+        return "mc:scheduler:lock:heartbeat"
+
     # ── Task Runner ──────────────────────────────────────────────────────
     @staticmethod
     def task_runner_lock() -> str:
@@ -371,10 +431,9 @@ class RedisKeys:
     def auto_memory_feedback(task_id: str, feedback_type: str) -> str:
         return f"mc:auto_memory:feedback:{task_id}:{feedback_type}"
 
-    # ── Auto-Memory Reflection Fold (Phase 5 MSY-01) ─────────────────────
-    @staticmethod
-    def auto_memory_reflection_fold(task_id: str, hash16: str) -> str:
-        return f"mc:auto_memory:reflection_fold:{task_id}:{hash16}"
+    # auto_memory_reflection_fold (Phase 5 MSY-01) removed — Reflexions-Triage
+    # (2026-09-11) deleted the unconditional reflection→journal fold it keyed.
+    # See app/services/auto_memory.py:record_task_completion docstring.
 
     # ── Intelligence ─────────────────────────────────────────────────────
     @staticmethod
@@ -448,6 +507,22 @@ class RedisKeys:
         Does NOT gate operator-facing Approvals or Telegram notifications —
         only the TaskComment spam."""
         return f"mc:recovery:comment_cooldown:{task_id}"
+
+    @staticmethod
+    def task_heal_claim(task_id: str) -> str:
+        """One-heal-per-round claim marker for a task (W0.1).
+
+        ``SET ... NX EX HEAL_DEDUP_TTL`` via try_claim_heal — only the
+        watchdog mechanism that wins the claim may apply its healing
+        action (requeue / restart / redispatch / ...) for this task in
+        the current round. All other healers that tick see the key and
+        skip. TTL covers the slowest participating round budget (90s,
+        derivation at HEAL_DEDUP_TTL), so the next round can heal again
+        if the card is still sick. Separate namespace from the
+        recovery_comment_cooldown (that one dedupes comments, this one
+        dedupes actions)."""
+        return f"mc:heal:{task_id}"
+
 
     # ── Compaction Lock (Phase 6 CTX-02) ──────────────────────────────
     @staticmethod

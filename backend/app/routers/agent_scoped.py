@@ -86,6 +86,7 @@ from app.models.chat import ChatMessage
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.services.thread_scope import thread_agent_may_write_to
 from app.utils import utcnow
 
@@ -162,12 +163,24 @@ class DelegateCreate(BaseModel):
     # Subtask die Herkunft des Parent-Tasks — der Konsolidierungs-Report des
     # Orchestrators landet damit im richtigen Chat-Thread.
     origin_thread_id: uuid.UUID | None = None
+    # Explizite Parent-Wahl (W5-F, live incident 2026-09-11: Boss hat per
+    # `mc delegate` zwei elternlose Karten erzeugt, b7d29be3 + 70d6b417 —
+    # `your_status: no_task`, kein Fehler, kein Hinweis). Ohne agent.current_task_id
+    # (kein aktiver Task) blieb die einzige Option bisher stillschweigende
+    # Waisen-Anlage. --parent gibt dem Aufrufer einen bewussten, expliziten Weg,
+    # einen Parent zu setzen, statt sich auf die implizite current_task_id-Aufloesung
+    # zu verlassen. Ueberschreibt current_task_id, wenn gesetzt.
+    parent_task_id: uuid.UUID | None = None
 
 
 class DelegateResponse(BaseModel):
     subtask_id: uuid.UUID
     assigned_to: str
     your_status: str  # "blocked" if callback=True, otherwise "in_progress"
+    parent_task_id: uuid.UUID | None = None
+    # Nur gesetzt, wenn die Karte wirklich elternlos ist (kein current_task,
+    # kein --parent) — macht den stillen Fallback laut statt lautlos.
+    warning: str | None = None
 
 
 class ClarificationCreate(BaseModel):
@@ -992,7 +1005,7 @@ async def agent_help_request(
     session.add(subtask)
 
     # 5. Absender blockieren
-    current_task.status = "blocked"
+    current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
     current_task.blocked_by_task_id = subtask.id
     session.add(current_task)
 
@@ -1048,13 +1061,87 @@ async def agent_delegate_task(
 
     current_task_id = agent.current_task_id
     current_task: Task | None = None
-    if current_task_id:
-        current_task = await session.get(Task, current_task_id)
-        if not current_task or current_task.status != "in_progress":
+    # Explicit override (W5-F): --parent bypasses the implicit
+    # agent.current_task_id resolution entirely — the caller names the
+    # parent instead of relying on a lock the backend can silently get
+    # wrong (stale field, no active task, wrong task). It is NOT subject
+    # to the in_progress guard below: that guard exists to stop a SILENT
+    # fallback, and an explicit --parent is the opposite of silent.
+    explicit_parent: Task | None = None
+    if payload.parent_task_id is not None:
+        explicit_parent = await session.get(Task, payload.parent_task_id)
+        if not explicit_parent:
+            raise HTTPException(
+                status_code=404,
+                detail=f"--parent Task {payload.parent_task_id} nicht gefunden.",
+            )
+        if explicit_parent.board_id != board_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="--parent Task gehoert nicht zu diesem Board.",
+            )
+        # B1 (Rex-Review PR #510, 11.09.2026): der Root-Zweig prueft
+        # `agent.board_id != board_id` explizit (Zeile weiter unten) — dieser
+        # Zweig pruefte bisher nur den PARENT, nie den AGENTEN. Ein Agent von
+        # Board A konnte so per --parent auf eine Karte in Board B delegieren.
+        # Gleiche Pruefung wie der Root-Zweig, hier vorgezogen.
+        if agent.board_id != board_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Agent gehoert nicht zu diesem Board.",
+            )
+        # W1 (Rex-Review): eine bereits geschlossene Karte als --parent zu
+        # setzen, haengt die neue Arbeit stillschweigend unter eine tote
+        # Karte auf, die nie wieder angeschaut wird. Ablehnen statt nur warnen.
+        if explicit_parent.status in ("done", "archived", "failed"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Aktiver Task ist nicht in_progress — Delegation blockiert.",
+                detail=(
+                    f"--parent Task {explicit_parent.id} ist bereits "
+                    f"'{explicit_parent.status}' — die Arbeit wuerde unter einer "
+                    f"geschlossenen Karte haengen, die niemand mehr ansieht. "
+                    f"Waehle eine offene Karte, oder lass --parent weg fuer eine "
+                    f"Root-Delegation."
+                ),
             )
+        # B3 (Rex-Review): der Root-Zweig verlangt `agent.is_board_lead`, wenn
+        # keine eigene aktive Karte vorliegt (Ownership-Gate) — dieser Zweig
+        # umging das komplett: JEDER Agent konnte --parent auf JEDE fremde
+        # Karte setzen, unabhaengig von eigener Arbeit oder Rolle. Boss'
+        # Entscheid (11.09.): --parent WAEHLT den Parent explizit, umgeht aber
+        # nicht die Besitzverhaeltnisse. Board Leads duerfen frei orchestrieren
+        # (wie beim Root-Pfad); alle anderen nur auf eine Karte, die ihnen
+        # tatsaechlich zugewiesen ist (z.B. weil current_task_id stale/leer
+        # ist und --parent die eigene Karte bewusst neu benennt).
+        if not agent.is_board_lead and explicit_parent.assigned_agent_id != agent.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"--parent Task {explicit_parent.id} ist nicht deine aktive "
+                    f"Arbeit (assigned_agent_id stimmt nicht mit dir ueberein) — "
+                    f"Delegation nur aus aktiver Arbeit heraus moeglich. Setze "
+                    f"--parent auf eine dir zugewiesene Karte, oder als Board "
+                    f"Lead auf eine beliebige Karte."
+                ),
+            )
+    elif current_task_id:
+        current_task = await session.get(Task, current_task_id)
+        if not current_task or current_task.status != "in_progress":
+            if current_task is None:
+                detail = (
+                    f"Aktiver Task {current_task_id} existiert nicht mehr — "
+                    f"Delegation blockiert, keine stillschweigende Waisenkarte. "
+                    f"Nutze --parent <task-id>, um bewusst einen Parent zu setzen."
+                )
+            else:
+                detail = (
+                    f"Aktiver Task {current_task.id} hat Status '{current_task.status}' "
+                    f"(erwartet 'in_progress') — Delegation blockiert, keine "
+                    f"stillschweigende Waisenkarte. Nutze --parent <task-id>, um "
+                    f"bewusst einen anderen Parent zu setzen, oder reaktiviere den "
+                    f"aktiven Task zuerst."
+                )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
         if current_task.board_id != board_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1063,7 +1150,10 @@ async def agent_delegate_task(
     elif not agent.is_board_lead:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — Delegation nur aus aktiver Arbeit heraus moeglich.",
+            detail=(
+                "Kein aktiver Task — Delegation nur aus aktiver Arbeit heraus "
+                "moeglich (oder --parent <task-id> explizit setzen)."
+            ),
         )
     else:
         # Root delegation (live incident 2026-08-06): a Board Lead handling a
@@ -1121,6 +1211,8 @@ async def agent_delegate_task(
             )
     elif current_task is not None:
         origin_thread_id = current_task.origin_thread_id
+    elif explicit_parent is not None:
+        origin_thread_id = explicit_parent.origin_thread_id
 
     # Root mode: no parent to inherit from — board default project and explicit
     # priority or medium.
@@ -1134,28 +1226,38 @@ async def agent_delegate_task(
     # (agent_task_status's completion hook and _deliver_root_callback both key
     # off exactly that field). So the resume half stays off for root, the
     # notify half follows the caller's request.
+    #
+    # explicit_parent (W5-F) gets the same treatment as root for the
+    # block/resume half: we did NOT verify the delegating agent actually owns
+    # or is working on that task, so blocking it and later auto-resuming it
+    # would be reaching into a task this agent has no confirmed claim on.
+    # notify_requester still follows the caller's request either way.
+    parent_for_subtask = current_task if current_task is not None else explicit_parent
     notify_requester = payload.callback
-    if current_task is None:
+    if current_task is not None:
+        project_id = current_task.project_id
+        with_callback = payload.callback
+    elif explicit_parent is not None:
+        project_id = explicit_parent.project_id
+        with_callback = False
+    else:
         project_id = None
         board_row = await session.get(Board, board_id)
         if board_row is not None:
             project_id = board_row.default_project_id
         with_callback = False
-    else:
-        project_id = current_task.project_id
-        with_callback = payload.callback
 
     # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
         board_id=board_id,
         project_id=project_id,
-        parent_task_id=current_task.id if current_task else None,
+        parent_task_id=parent_for_subtask.id if parent_for_subtask else None,
         title=payload.title,
         description=payload.description,
         status="inbox",
         priority=payload.priority
-        or (current_task.priority if current_task else "medium"),
+        or (parent_for_subtask.priority if parent_for_subtask else "medium"),
         task_type="story",
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
@@ -1164,8 +1266,18 @@ async def agent_delegate_task(
         # for a root delegation too, so the completion actually reaches them.
         callback_agent_id=agent.id if notify_requester else None,
         is_auto_created=True,
-        auto_reason=f"delegation from {agent.name}"
-        + ("" if current_task else " (root, no active task)"),
+        auto_reason=(
+            f"delegation from {agent.name}"
+            + (
+                ""
+                if current_task
+                else (
+                    " (explicit --parent, no active task)"
+                    if explicit_parent
+                    else " (root, no active task)"
+                )
+            )
+        ),
     )
 
     # Dispatch guard BEFORE commit — no zombie subtask if the system/agent isn't dispatchable right now
@@ -1196,17 +1308,26 @@ async def agent_delegate_task(
     await session.flush()
 
     if with_callback and current_task is not None:
-        current_task.status = "blocked"
+        current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
         current_task.blocked_by_task_id = subtask.id
         current_task.callback_agent_id = agent.id
         session.add(current_task)
 
-    # Progress comment with delegation context — on the parent, when there is
-    # one. A root delegation logs via the activity event only.
-    if current_task is not None:
+    # Progress comment with delegation context — on the parent, but ONLY when
+    # ownership is confirmed (own active task, or an explicit --parent that
+    # is actually assigned to this agent). B3-adjacent finding (Rex-Review):
+    # a Board Lead using --parent on a card OWNED BY SOMEONE ELSE is allowed
+    # to delegate (lead privilege), but writing an audit comment into that
+    # foreign card is a side effect nobody asked for — the card doesn't
+    # belong to this agent, confirmed or not. A truly rootless delegation
+    # (or an unconfirmed explicit --parent) logs via the activity event only.
+    write_parent_comment = current_task is not None or (
+        explicit_parent is not None and explicit_parent.assigned_agent_id == agent.id
+    )
+    if write_parent_comment and parent_for_subtask is not None:
         comment = TaskComment(
             id=uuid.uuid4(),
-            task_id=current_task.id,
+            task_id=parent_for_subtask.id,
             author_type="agent",
             author_agent_id=agent.id,
             content=(
@@ -1226,14 +1347,15 @@ async def agent_delegate_task(
         title=f"{agent.name} delegiert an {target_agent.name}: {payload.title}",
         severity="info",
         board_id=board_id,
-        task_id=current_task.id if current_task else subtask.id,
+        task_id=parent_for_subtask.id if parent_for_subtask else subtask.id,
         agent_id=agent.id,
         detail={
             "subtask_id": str(subtask.id),
             "target_agent": target_agent.name,
             "callback": with_callback,
             "notify_requester": notify_requester,
-            "root_delegation": current_task is None,
+            "root_delegation": parent_for_subtask is None,
+            "explicit_parent": explicit_parent is not None,
         },
     )
 
@@ -1247,17 +1369,32 @@ async def agent_delegate_task(
     logger.info(
         "Delegate: %s → %s (subtask %s, parent %s %s)",
         agent.name, target_agent.name, subtask.id,
-        current_task.id if current_task else "-",
-        "blocked" if with_callback else ("root" if current_task is None else "in_progress"),
+        parent_for_subtask.id if parent_for_subtask else "-",
+        "blocked" if with_callback else ("root" if parent_for_subtask is None else "in_progress"),
     )
+
+    # Loud instead of silent (W5-F): a truly rootless card — no owned
+    # current_task, no explicit --parent — is still allowed (Board Leads
+    # legitimately open root cards from a chat order), but the response now
+    # says so in plain text instead of the bare, easy-to-miss "no_task"
+    # status that shipped the two orphans b7d29be3/70d6b417 on 2026-09-11.
+    warning = None
+    if parent_for_subtask is None:
+        warning = (
+            "Kein Parent, kein Callback — diese Karte haengt an nichts und "
+            "niemand wird bei Fertigstellung automatisch benachrichtigt. "
+            "Falls das nicht gewollt war: naechstes Mal --parent <task-id> setzen."
+        )
 
     return DelegateResponse(
         subtask_id=subtask.id,
         assigned_to=target_agent.name,
         your_status=(
             "blocked" if with_callback
-            else ("no_task" if current_task is None else "in_progress")
+            else ("no_task" if parent_for_subtask is None else "in_progress")
         ),
+        parent_task_id=parent_for_subtask.id if parent_for_subtask else None,
+        warning=warning,
     )
 
 
@@ -1319,7 +1456,7 @@ async def agent_clarification(
         session, current_task.id, current_task.status, "blocked",
         changed_by="agent", agent_id=agent.id, reason="clarification_question",
     )
-    current_task.status = "blocked"
+    current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
     session.add(current_task)
 
     # 5. Lead-FYI (G1): Der Lead darf antworten, wenn er die Antwort kennt —
@@ -1435,39 +1572,59 @@ async def agent_ask(
     from app.task_status import TaskStatus, is_valid_transition
 
     current_task_id = agent.current_task_id
-    if not current_task_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
-        )
-    current_task = await session.get(Task, current_task_id)
-    if not current_task:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
-        )
+    current_task = await session.get(Task, current_task_id) if current_task_id else None
 
-    # Task 12 (final-review A2, defense-in-depth): a blocking ask parks the
-    # task in `waiting` until an answer is delivered — but answer delivery is
-    # gated on the comm_v2 pilot. A non-pilot agent parking here could never be
-    # released (dead task). Reject blocking asks from non-pilots; non-blocking
-    # asks are harmless (the question lands in the thread, visible in web).
-    if payload.blocking and not getattr(agent, "comm_v2", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="messaging v2 pilot required for blocking asks",
-        )
+    if current_task is None:
+        # W5-C: a Board Lead between cards has no `current_task_id` — poll.sh
+        # clears it (and BOARD_ID) the moment a task ends — but still needs a
+        # way to reach the operator (unstick a hung card, escalate). Before
+        # this fix that was a hard 409 for every agent alike: a Lead was as
+        # mute as a worker with nothing to ask about. Scoped to TASKS_MANAGE
+        # (Leads/orchestrators) so an ordinary worker keeps the original
+        # 409 — it has no board-level reason to ask without a task in hand.
+        from app.scopes import get_agent_effective_scopes
 
-    if payload.blocking and not is_valid_transition(current_task.status, TaskStatus.WAITING):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Task-Status '{current_task.status}' erlaubt keinen Wechsel zu "
-                f"'waiting' — blocking ask nur waehrend aktiver Arbeit moeglich."
-            ),
+        if Scope.TASKS_MANAGE.value not in get_agent_effective_scopes(agent):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
+            )
+        if payload.blocking:
+            # Nothing to pause: `waiting` is a task-status transition, and
+            # there is no task here to move.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Kein aktiver Task — blocking ask braucht einen Task zum "
+                    "Pausieren. Nutze `mc ask` ohne `--blocking`."
+                ),
+            )
+        thread, current_task = await _resolve_message_target(
+            session, agent, create_dm_if_missing=True
         )
+    else:
+        # Task 12 (final-review A2, defense-in-depth): a blocking ask parks
+        # the task in `waiting` until an answer is delivered — but answer
+        # delivery is gated on the comm_v2 pilot. A non-pilot agent parking
+        # here could never be released (dead task). Reject blocking asks from
+        # non-pilots; non-blocking asks are harmless (the question lands in
+        # the thread, visible in web).
+        if payload.blocking and not getattr(agent, "comm_v2", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="messaging v2 pilot required for blocking asks",
+            )
 
-    thread = await ensure_task_thread(session, current_task)
+        if payload.blocking and not is_valid_transition(current_task.status, TaskStatus.WAITING):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Task-Status '{current_task.status}' erlaubt keinen Wechsel zu "
+                    f"'waiting' — blocking ask nur waehrend aktiver Arbeit moeglich."
+                ),
+            )
+
+        thread = await ensure_task_thread(session, current_task)
 
     message = await post_message(
         session,
@@ -1487,13 +1644,15 @@ async def agent_ask(
         },
     )
 
-    your_status = current_task.status
+    # No task here → no task status to report (DM fallback, see above; a
+    # blocking ask without a task was already rejected before this point).
+    your_status = current_task.status if current_task is not None else "no_task"
     if payload.blocking:
         await record_task_event(
             session, current_task.id, current_task.status, TaskStatus.WAITING,
             changed_by="agent", agent_id=agent.id, reason="ask_blocking",
         )
-        current_task.status = TaskStatus.WAITING
+        current_task, _ = await lock_and_set(session, current_task.id, TaskStatus.WAITING, actor="agent")
         session.add(current_task)
         await session.commit()
         await session.refresh(current_task)
@@ -1509,7 +1668,8 @@ async def agent_ask(
 
     logger.info(
         "Ask: %s asks '%s' (blocking=%s, task %s -> %s)",
-        agent.name, payload.question[:60], payload.blocking, current_task.id, your_status,
+        agent.name, payload.question[:60], payload.blocking,
+        current_task.id if current_task is not None else "no_task", your_status,
     )
 
     return AskResponse(
@@ -1584,7 +1744,9 @@ class MessageResponse(BaseModel):
 _OWNED_TASK_STATUSES = ("inbox", "in_progress", "review", "blocked", "waiting", "user_test")
 
 
-async def _resolve_message_target(session: AsyncSession, agent: Agent):
+async def _resolve_message_target(
+    session: AsyncSession, agent: Agent, *, create_dm_if_missing: bool = False
+):
     """Where does a `mc msg` without an explicit thread belong?
 
     Returns ``(thread, task | None)``. Order matters, and it is not the obvious
@@ -1599,6 +1761,12 @@ async def _resolve_message_target(session: AsyncSession, agent: Agent):
     Raises 409 when nothing fits, and when several owned tasks make the target
     ambiguous — a guess would put the message in the wrong conversation, and
     the refusal names the way out.
+
+    ``create_dm_if_missing`` (W5-C, `mc ask` without an active task): a plain
+    `mc msg` presupposes an existing conversation — creating a DM thread on a
+    reply nobody started would be a monologue. `mc ask` originates one, so a
+    Lead who has never DM'd before still needs a thread to ask into; that
+    caller passes ``True`` to get one created instead of a 409.
     """
     from app.models.thread import Thread
     from app.services.messaging import ensure_task_thread
@@ -1643,10 +1811,14 @@ async def _resolve_message_target(session: AsyncSession, agent: Agent):
         )
     ).first()
     if dm is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
-        )
+        if create_dm_if_missing:
+            from app.services.messaging import ensure_dm_thread
+            dm = await ensure_dm_thread(session, agent)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
+            )
     return dm, None
 
 
@@ -1840,6 +2012,20 @@ async def agent_post_thread_message(
     # Zustellung ist mention-gefiltert (routers/agents._group_message_visible_to).
     # Bewusst KEIN Lead-Default und kein "@alle" für Agenten (Sturm-Schutz):
     # ein unaufgeforderter Post liegt im Protokoll, weckt aber niemanden.
+    # Implicit answer (review #496 B2): `mc msg --thread` carries no reply_to
+    # and there is no `mc answer` — so "answered → awaiting=False" had no
+    # reachable trigger. A board lead posting into a task thread that holds
+    # an open question addressed to "boss" answers the OLDEST such question.
+    effective_reply_to = payload.reply_to
+    # Only a plain `message` counts as the implicit answer (review #496 B3):
+    # a `status`/`decision` line ("moment, schaue ich mir an") must not close
+    # the question.
+    if (effective_reply_to is None and agent.is_board_lead and thread.task_id is not None
+            and payload.message_type == "message"):
+        from app.services.messaging import open_questions
+        pending = await open_questions(session, thread_id=thread.id, to="boss")
+        if pending:
+            effective_reply_to = min(pending, key=lambda q: q.seq).id
     group_row = None
     group_mentions: list[str] | None = None
     if thread.kind == "group":
@@ -1887,7 +2073,7 @@ async def agent_post_thread_message(
         sender_id=agent.id,
         message_type=payload.message_type,
         body=body_text,
-        reply_to=payload.reply_to,
+        reply_to=effective_reply_to,
         mentions=group_mentions,
         # Gruppen spiegeln in V1 nicht in die Chat-Kanäle (ADR-075) — eine
         # autonome Runde würde Slack/Telegram fluten.
@@ -1914,9 +2100,14 @@ async def agent_post_thread_message(
     # does not stay "waiting" forever once it has been answered. (The task
     # endpoint does not do this — the operator path in routers/tasks does. Here
     # the agent may be answering in a thread nobody else will touch.)
-    if payload.reply_to is not None:
+    if effective_reply_to is not None:
         await answer_clears_awaiting(session, message)
         await session.commit()
+        # Review #496 B4: an answered `--blocking` question must release the
+        # worker (waiting → in_progress), exactly like the operator path.
+        if task is not None and agent.is_board_lead:
+            from app.services.messaging import resume_task_after_answer
+            await resume_task_after_answer(session, task, thread, changed_by="agent")
 
     logger.info(
         "Message: %s posts on thread %s (kind=%s, type=%s)",

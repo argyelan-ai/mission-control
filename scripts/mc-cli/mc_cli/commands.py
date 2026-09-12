@@ -107,17 +107,150 @@ def _cmd_ack(args, client, cfg):
     False-Negative — er HAT ge-ACK'd (poll.sh setzt ack_at automatisch),
     die CLI sagt aber Fehler. Darum: 400 "In Progress -> In Progress" als
     Erfolg behandeln.
+
+    Kontext-Fortschreibung (W5-E, 2026-09-11): nach dem ACK schreibt die CLI
+    TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID der GEACKTEN Karte nach
+    /tmp/mc-context.env. Ohne das arbeiteten alle nachgelagerten Verben
+    (`mc patch`, `mc comment`, …) auf der Karte aus dem ALTEN Kontext —
+    gefaehrlich, weil die Stale-Pruefung des Backends nicht scheitert,
+    sobald die alte Attempt-ID noch gueltig ist, sondern die FALSCHE Karte
+    trifft. `mc ack <task-id>` mit expliziter ID ist der typische
+    Ausloeser: with_task_id ueberschreibt nur cfg.task_id, BOARD_ID und
+    Attempt-ID blieben beim Vorgaenger haengen.
+
+    Der PATCH selbst traegt die Attempt-ID des ZIEL-Tasks (Header-Bindung
+    wie in _cmd_park): das Detail-GET liefert dispatch_attempt_id der
+    geackten Karte; unterscheidet sie sich von der lokalen cfg, wird der
+    Client daran gebunden — sonst 409 "Stale dispatch_attempt_id".
+
+    Fallunterscheidung heilen/ablehnen (W5-E-Nacharbeit, 11.09.2026):
+    cfg.context_task_id ist die Karte, zu der der aktuell GEHALTENE
+    Attempt-Header gehoert (Config.__post_init__ koppelt sie mit task_id;
+    with_task_id lasst sie unangetastet).
+      Fall (a) FREMDE Karte  — context_task_id != Ziel: meine Attempt-ID
+        war nie eine Aussage ueber das Ziel. Adoptieren ist die Heilung
+        (genau der Live-Bug, den PR #511 loest).
+      Fall (b) EIGENE Karte neu dispatcht — context_task_id == Ziel, aber
+        die Attempt-ID differiert: _maybe_redispatch_orphaned_run
+        (routers/agents.py) gibt einer als verwaist geltenden Karte eine
+        FRISCHE Attempt-ID — Status bleibt in_progress, selber Agent,
+        run_control unangetastet. Die Attempt-ID ist das EINZIGE Merkmal,
+        das alten von neuem Run trennt; adoptieren hiesse, der alte Run
+        uebernimmt die Identitaet des neuen und schreibt mit gueltigem
+        Header seine gesamte Restlaufzeit weiter. Darum hier LAUT
+        ablehnen (UsageError), nicht still ueberschreiben.
+
+    Karte zugewiesen, aber nie aktiv dispatcht (dispatch_attempt_id=None,
+    z.B. Lead hat via UI zugewiesen ohne Dispatch-Zyklus): der GET liefert
+    None, die CLI ackt MIT ihrem alten Header NICHT blind weiter, sondern
+    ohne Attempt-Header — das Backend nimmt den PATCH an (missing-header-
+    Pfad; Phase B erzwingt nur bei gesetztem task.dispatch_attempt_id) und
+    stampft beim in_progress-Set selbst ack_at/current_task_id. Die
+    Context-Datei bekommt dann BOARD_ID + TASK_ID und leere Attempt-ID,
+    damit kein stale Wert fuer Folge-Calls uebrig bleibt.
     """
+    board_id, task_id = cfg.require_task_context()
+    detail = client.request(
+        "GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail"
+    )
+    target_attempt = (
+        detail.get("dispatch_attempt_id") if isinstance(detail, dict) else None
+    )
+    same_card = (
+        cfg.context_task_id is not None and cfg.context_task_id == task_id
+    )
+    same_card_redispatched = (
+        same_card
+        and bool(cfg.dispatch_attempt_id)
+        and bool(target_attempt)
+        and target_attempt != cfg.dispatch_attempt_id
+    )
+    if not same_card_redispatched and target_attempt != cfg.dispatch_attempt_id and (
+        target_attempt or cfg.dispatch_attempt_id
+    ):
+        # Fall (a) + Sonderfaelle: fremde Karte (mein Header sagt nichts
+        # ueber das Ziel) ODER eigene Karte ohne gehaltenen Header
+        # (cfg.dispatch_attempt_id leer — kein Besitzanspruch, das
+        # Backend-Detail ist die Wahrheit). Rebind in beide Richtungen:
+        # Ziel hat ANDERE attempt-id → Header auf die Ziel-ID setzen;
+        # Ziel hat KEINE (assigned, nie dispatcht) → Header komplett
+        # weglassen (Backend erzwingt die Pruefung nur bei gesetztem
+        # task.dispatch_attempt_id, ein stale Header einer fremden Karte
+        # waere bestenfalls Larm, im schlimmsten Fall 409).
+        #
+        # Fall (b) bleibt AUSGENOMMEN: der PATCH geht unten MIT dem
+        # eigenen (alten) Header raus — der Server-409 ist die echte
+        # Ablehnung und wird darunter in Klartext uebersetzt.
+        from dataclasses import replace as _replace
+        client = type(client)(_replace(
+            cfg,
+            dispatch_attempt_id=target_attempt,
+            context_task_id=task_id,
+        ))
+        cfg = client.cfg
+    already_in_progress = False
     try:
-        return _patch_status(client, cfg, "in_progress")
+        _patch_status(client, cfg, "in_progress")
     except Exception as e:
         msg = str(e)
+        if same_card_redispatched and (
+            "409" in msg or "Stale" in msg or "dispatch_attempt" in msg
+        ):
+            # Fall (b) ABLEHNEN: DIESE Karte wurde unter mir neu dispatcht
+            # (z.B. poll_orphan_run rotiert die Attempt-ID, Status bleibt
+            # in_progress, selber Agent, run_control unangetastet — der
+            # Serverguard ist das EINZIGE, was alten von neuem Run trennt).
+            # Klartext mit beiden IDs statt roher 409.
+            raise UsageError(
+                f"Task {task_id} wurde neu dispatcht, seit du ihn haeltst: "
+                f"deine Attempt-ID ist {cfg.dispatch_attempt_id!r}, aktuell "
+                f"ist {target_attempt!r}. Dein Run ist veraltet — arbeite "
+                "nicht auf dieser Karte weiter; starte einen frischen Run "
+                "oder melde dich beim Operator (`mc blocked`)."
+            ) from e
         if "In Progress" in msg and "In Progress" in msg.replace("In Progress", "", 1):
             # Idempotent-Success: Task war schon in_progress.
-            _, task_id = cfg.require_task_context()
-            print(task_id)
-            return 0
-        raise
+            already_in_progress = True
+        else:
+            raise
+    if already_in_progress:
+        print(task_id)
+    # Context-File NACH dem erfolgreichen ACK schreiben — mit dem
+    # ZIEL-Kontext (auch im Idempotent-Fall). board_id kommt vom Backend-
+    # Detail, nicht aus der alten Env: `mc ack <id>` mit expliziter ID und
+    # falscher BOARD_ID-env bleibt so trotzdem korrekt.
+    _write_context_file(
+        task_id=task_id,
+        board_id=(detail.get("board_id") if isinstance(detail, dict) else None) or board_id,
+        # Fall (b) schreibt nichts vom Ziel ueber: der ACK mit dem eigenen
+        # Header ist (im echten Betrieb) am Server-409 gescheitert — der
+        # Kontext behaelt den EIGENEN Stand, es wird nichts adoptiert.
+        attempt_id=(
+            cfg.dispatch_attempt_id or "" if same_card_redispatched
+            else target_attempt or ""
+        ),
+    )
+    return 0
+
+
+def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> None:
+    """Schreibt /tmp/mc-context.env (poll.sh-Format, poll.sh:489).
+
+    Fehler sind LAUT: schlaegt das Schreiben fehl, arbeitet der naechste
+    `mc`-Call sonst still auf dem alten Kontext — genau der W5-E-Bug.
+    Darum UsageError (exit != 0) statt stderr-Warnung.
+    """
+    try:
+        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+            f.write(f"TASK_ID={task_id}\n")
+            f.write(f"BOARD_ID={board_id}\n")
+            f.write(f"X_DISPATCH_ATTEMPT_ID={attempt_id}\n")
+    except OSError as e:
+        raise UsageError(
+            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
+            "erst Schreibrechte fixen, dann weiterarbeiten."
+        ) from e
 
 
 def _force_close_open_checklist(client: Client, cfg: Config) -> int:
@@ -882,7 +1015,6 @@ COMMENT_TYPES = [
 
 
 def _cmd_comment(args, client, cfg):
-    board_id, task_id = cfg.require_task_context()
     # Guard against the 2026-05-17 Researcher-Bug: agents sometimes wrap their
     # content in {"content": "..."} JSON because they imagine the CLI needs an
     # envelope. The CLI takes plain text. Detect + refuse early with a useful
@@ -900,11 +1032,27 @@ def _cmd_comment(args, client, cfg):
                 )
         except _json.JSONDecodeError:
             pass  # nicht valid JSON → durchlassen, kein false-positive
-    resp = client.request(
-        "POST",
-        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
-        body={"comment_type": args.type, "content": args.message},
-    )
+
+    # --task-id (W5-C): board-agnostic path, fuer Board Leads/Orchestratoren
+    # (Scope tasks:manage) OHNE aktiven Task — poll.sh raeumt TASK_ID/BOARD_ID
+    # aus der Env sobald der letzte Task endet, `cfg.require_task_context()`
+    # waere hier also blind. Der Task selbst traegt board_id server-seitig;
+    # das Backend prueft dort Agent.board_id == Task.board_id (403 statt
+    # stillem Schreiben anderswo, wenn die Karte nicht zum eigenen Board
+    # gehoert — und 403 "Missing scopes" wenn der Scope fehlt).
+    if getattr(args, "task_id", None):
+        resp = client.request(
+            "POST",
+            f"/api/v1/agent/tasks/{args.task_id}/comments",
+            body={"comment_type": args.type, "content": args.message},
+        )
+    else:
+        board_id, task_id = cfg.require_task_context()
+        resp = client.request(
+            "POST",
+            f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+            body={"comment_type": args.type, "content": args.message},
+        )
     # Bug 9 (2026-05-13): Backend liefert `delivery_hint` mit wenn ein
     # `message`-Comment auf einem fremden assigned Task gepostet wurde
     # (silent-fail-Warnung). _emit gibt bei id-Responses nur die id auf stdout
@@ -925,6 +1073,12 @@ def _add_comment_args(p):
     )
     p.add_argument("type", choices=COMMENT_TYPES, help=type_help)
     p.add_argument("message", help="Inhalt")
+    p.add_argument(
+        "--task-id", dest="task_id", default=None,
+        help="Fremde Karte kommentieren, auch ohne eigenen aktiven Task "
+             "(Board Lead/Orchestrator, Scope tasks:manage). Ohne --task-id "
+             "geht's wie bisher auf den aktiven Task.",
+    )
 
 
 # ── Checklist ─────────────────────────────────────────────────────────────
@@ -1024,6 +1178,18 @@ def _add_checklist_args(p):
 # ── Clarification / Help / Deliverable / Memory ──────────────────────────
 
 def _cmd_question(args, client, cfg):
+    if not cfg.board_id or not cfg.task_id:
+        # `mc question` blockiert IMMER die aktive Karte (Approval-Flow) —
+        # ohne eine gibt es nichts zu blockieren, das bleibt so (W5-C: kein
+        # Umbau der Zustellung). Aber statt des generischen "TASK_ID/BOARD_ID
+        # fehlen"-Fehlers (der einen Board Lead zwischen zwei Karten nur
+        # verwirrt) zeigt der Fehler hier den Weg, der ohne aktiven Task
+        # tatsaechlich funktioniert.
+        raise UsageError(
+            "mc question braucht eine aktive Karte zum Blockieren — ohne "
+            "aktiven Task nutze `mc ask \"<Frage>\"` stattdessen (erreicht "
+            "den Operator auch ohne aktiven Task, Scope tasks:manage)."
+        )
     board_id, _ = cfg.require_task_context()
     options = [o.strip() for o in args.options.split(",")] if args.options else None
     resp = client.request(
@@ -1392,6 +1558,8 @@ def _cmd_delegate(args, client, cfg):
         body["priority"] = args.priority
     if getattr(args, "origin_thread", None):
         body["origin_thread_id"] = args.origin_thread
+    if getattr(args, "parent", None):
+        body["parent_task_id"] = args.parent
 
     resp = client.request(
         "POST",
@@ -1399,6 +1567,9 @@ def _cmd_delegate(args, client, cfg):
         body=body,
     )
     _emit(resp)
+    if isinstance(resp, dict) and resp.get("warning"):
+        import sys as _sys
+        print(f"WARNUNG: {resp['warning']}", file=_sys.stderr)
     return 0
 
 
@@ -1431,6 +1602,18 @@ def _add_delegate_args(p):
             "Herkunfts-Gespraech (Thread-ID aus dem mc-inbox-Footer). Der finale "
             "Report wird serverseitig in diesen Chat-Thread gespiegelt. Ohne "
             "Angabe erbt der Subtask die Herkunft des Parent-Tasks."
+        ),
+    )
+    p.add_argument(
+        "--parent",
+        metavar="TASK_ID",
+        help=(
+            "Explizite Parent-Task-ID statt der impliziten Aufloesung ueber die "
+            "eigene aktive Karte. Nutze das, wenn du keine aktive Karte hast (kein "
+            "409 'Kein aktiver Task') oder bewusst an einer ANDEREN Karte als deiner "
+            "eigenen aktiven anhaengen willst. Ohne --parent UND ohne aktive Karte "
+            "entsteht eine Wurzelkarte ohne Parent/Callback (die Antwort weist "
+            "darauf explizit hin)."
         ),
     )
 
@@ -2046,6 +2229,20 @@ def _cmd_recover(args, client, cfg):
     Schreibt auch /tmp/mc-context.env mit TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID
     damit nachfolgende `mc ack`/`mc done`-Calls den korrekten Header senden.
 
+    Fallunterscheidung heilen/ablehnen (W5-E-Nacharbeit, 11.09.2026,
+    Spiegel zu _cmd_ack): recover schreibt die aktuelle Attempt-ID der
+    aktiven Karte ins Context-File — ein ZOMBIE-Run kann sich damit OHNE
+    jeden anderen Call neu scharf machen. Halte ich DIESE Karte bereits
+    mit einem eigenen Header (cfg.context_task_id == task['id']) und sie
+    wurde unter mir neu dispatcht (Attempt-ID differiert, z.B.
+    poll_orphan_run), wird die neue ID NICHT uebernommen — UsageError
+    mit beiden IDs. Anderer Task (context_task_id != task['id']): mein
+    Header sagt nichts ueber die Karte, Fortschreibung ist die Heilung.
+
+    `mc park` ist hier bewusst NICHT angepasst: dort ist der Rebind auf
+    die Ziel-Attempt-ID semantisch berechtigt (Lead-Werkzeug, das fremde
+    Karten zurueckstellt — der Lead WILL auf der Ziel-Karte handeln).
+
     Nutzen:
     - Nach Container/Session-Restart: `mc recover` zeigt dir wo du warst
     - Wenn du unsicher bist welcher Task gerade laeuft
@@ -2056,6 +2253,20 @@ def _cmd_recover(args, client, cfg):
         print("Kein aktiver Task — du bist frei.", file=sys.stderr)
         return 0
     task = resp["task"]
+    if (
+        cfg.context_task_id
+        and cfg.context_task_id == task.get("id")
+        and cfg.dispatch_attempt_id
+        and task.get("dispatch_attempt_id")
+        and task.get("dispatch_attempt_id") != cfg.dispatch_attempt_id
+    ):
+        raise UsageError(
+            f"Task {task.get('id')} wurde neu dispatcht, seit du ihn "
+            f"haeltst: deine Attempt-ID ist {cfg.dispatch_attempt_id!r}, "
+            f"aktuell ist {task.get('dispatch_attempt_id')!r}. Dein Run ist "
+            "veraltet — arbeite nicht auf dieser Karte weiter; starte einen "
+            "frischen Run oder melde dich beim Operator (`mc blocked`)."
+        )
     # Context-File so schreiben dass nachfolgende mc-Calls den Header setzen
     # koennen. poll.sh schreibt diese Datei normalerweise bei new_task —
     # beim manuellen `mc recover` ausserhalb von poll.sh muss der CLI das
@@ -2066,7 +2277,11 @@ def _cmd_recover(args, client, cfg):
             f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
     except OSError as e:
-        print(f"Warn: /tmp/mc-context.env nicht schreibbar: {e}", file=sys.stderr)
+        raise UsageError(
+            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
+            "erst Schreibrechte fixen, dann weiterarbeiten."
+        ) from e
     # Prompt auf stdout (agent liest das) — kein JSON-Wrapping
     print(f"# Recovery-Prompt fuer Task {task['id']}")
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
@@ -2520,7 +2735,7 @@ REGISTRY: dict[str, CommandSpec] = {
     "ack": CommandSpec(
         name="ack",
         help="Dispatch bestätigen (status → in_progress)",
-        endpoints=_STATUS_ENDPOINT,
+        endpoints=_STATUS_ENDPOINT + ("GET /boards/{board_id}/tasks/{task_id}/detail",),
         scope="tasks:write",
         handler=_cmd_ack,
         add_args=_add_optional_task_id,
@@ -2641,9 +2856,13 @@ REGISTRY: dict[str, CommandSpec] = {
     ),
     "comment": CommandSpec(
         name="comment",
-        help="Kommentar posten (progress/blocker/feedback/resolution[terminal]/...)",
-        endpoints=("POST /boards/{board_id}/tasks/{task_id}/comments",),
-        scope="tasks:write",
+        help="Kommentar posten (progress/blocker/feedback/resolution[terminal]/...). "
+             "--task-id fuer fremde Karten ohne aktiven Task (Board Lead, Scope tasks:manage).",
+        endpoints=(
+            "POST /boards/{board_id}/tasks/{task_id}/comments",
+            "POST /tasks/{task_id}/comments",
+        ),
+        scope="tasks:write",  # --task-id braucht zusaetzlich tasks:manage (backend-geprueft)
         handler=_cmd_comment,
         add_args=_add_comment_args,
     ),

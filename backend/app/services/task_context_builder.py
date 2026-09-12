@@ -16,6 +16,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 
+from sqlalchemy import and_, func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -817,6 +818,51 @@ async def _load_dispatch_context(
 
 WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 9)
 
+# W0.3: bounds for the Operator-/Lead-Anweisungen block in build_recovery_context.
+OPERATOR_LEAD_COMMENT_LIMIT = 3
+# Nacharbeit-2 PR #489 (Operator-Review, 2026-09-10): 250/900 waren zu knapp
+# bemessen — der Vorfall, der W0.3 ausgeloest hat, war eine sechsteilige
+# Nacharbeits-Anweisung von rund 2000 Zeichen; bei 250 Zeichen pro Kommentar
+# kam davon nur Schritt 1 und die Haelfte von Schritt 2 an. Der Cap loeste das
+# Problem "Anweisung kommt nicht an" also nicht, er verschob es nur. Der Platz
+# dafuer kommt aus PROGRESS_COMMENT_LIMIT (5 -> 3) und CHECKLIST_OPEN_ITEM_LIMIT
+# (unbegrenzt -> max 10 offene Items) — siehe Messung in `docs/` bzw. PR-Text.
+OPERATOR_LEAD_MAX_CHARS = 1800
+# Nacharbeit-3 PR #489 (Operator-Review, 2026-09-10): der gleiche Pro-Kommentar-
+# Cap fuer alle drei Kommentare war der eigentliche Fehler, nicht der
+# Gesamt-Cap. 3 x 800 = 2400 Rohzeichen gegen 1800 Gesamt-Cap kann rechnerisch
+# nie aufgehen — der Gesamt-Cap griff dadurch strukturell immer statt als
+# Notnetz (siehe der jetzt veraltete Messwert in
+# test_recovery_context_heavy_scenario_measured_for_pr_text). Die drei
+# Anweisungen sind aber nicht gleich wichtig: die juengste ist fast immer die,
+# auf die es ankommt, die beiden aelteren sind nur Kontext. Deshalb ungleiche
+# Verteilung statt eines gleichen Caps:
+OPERATOR_LEAD_LATEST_MAX_CHARS = 1200  # juengster Operator-/Lead-Kommentar
+OPERATOR_LEAD_OLDER_MAX_CHARS = 250  # die beiden aelteren Kommentare
+# 1200 + 250 + 250 = 1700 Rohtext + Kopfzeilen bleibt unter dem 1800er
+# Gesamt-Cap — der Block traegt damit den Fall, fuer den er gebaut wurde,
+# ohne dass der Gesamt-Cap den Cap-Loop ueberschreibt.
+#
+# Bekannte Grenze (Nacharbeit-4 PR #489, Nit): "juengster" heisst hier strikt
+# `created_at`, nicht Wichtigkeit. Schreibt der Operator erst eine lange
+# Anweisung und danach ein kurzes "danke", wird das "danke" zur juengsten
+# und die lange Anweisung faellt auf den 250er-Cap. Realer Ablauf, kein
+# Kunstfall. Keine Aenderung hier — jede Alternative braeuchte Semantik
+# (Wichtigkeit, Anweisung vs. Bestaetigung), die dieser Kontext-Bauer nicht
+# hat. Bewusst als bekannte Grenze dokumentiert, damit sie nicht neu entdeckt
+# werden muss.
+
+# Nacharbeit-2 PR #489: Fortschritts-Block von 5 auf 3 Kommentare, um Platz
+# fuer den hoeheren Anweisungs-Cap oben freizumachen.
+PROGRESS_COMMENT_LIMIT = 3
+
+# Nacharbeit-2 PR #489: die Checkliste war im Recovery-Kontext unbegrenzt —
+# bei 40 Eintraegen (erledigte eingeschlossen) sprengte sie den Kontext, ohne
+# dass ein Cap das je gebremst haette. Erledigte Eintraege gehoeren nicht in
+# einen Recovery-Prompt (der Agent soll nicht neu anfangen, nicht die
+# Historie lesen); nur offene Items zaehlen, davon maximal so viele.
+CHECKLIST_OPEN_ITEM_LIMIT = 10
+
 
 async def build_waiting_resume_recap(session: AsyncSession, task: Task) -> str:
     """Bounded recap for resuming a task that was parked while `waiting`.
@@ -885,7 +931,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     from app.models.agent import Agent
     from app.models.checklist import TaskChecklistItem
 
-    # Comments — last 5 relevant lifecycle entries, chronological.
+    # Comments — last PROGRESS_COMMENT_LIMIT relevant lifecycle entries, chronological.
     relevant_types = ("progress", "blocker", "feedback", "resolution")
     result = await session.exec(
         select(TaskComment)
@@ -894,20 +940,104 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             TaskComment.comment_type.in_(relevant_types),  # type: ignore[union-attr]
         )
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
-        .limit(5)
+        .limit(PROGRESS_COMMENT_LIMIT)
     )
     comments = list(result.all())
     comments.sort(key=lambda c: c.created_at)
 
-    # Checklist items — ordered, flagged for first-pending.
+    # W0.3: Operator-/Lead-Anweisungen — eigener Bucket, andere Semantik als
+    # relevant_types oben (das sind Worker-Fortschrittsmeldungen). `message`
+    # ist der Kanal, den der Operator fuer freien Text benutzt; `handoff` ist
+    # der Wake-Kanal, den ein Lead nutzt, um einem bereits zugewiesenen
+    # Worker eine Anweisung zu geben (comment_types.py:33). Beide fielen
+    # bisher komplett aus dem Recovery-Kontext, weil relevant_types sie nicht
+    # kannte — Incident 2026-09-09: eine Nacharbeits-Anweisung erreichte einen
+    # Kollegen deswegen dreimal nicht.
+    #
+    # author_type=="system" ist bewusst ausgeschlossen: das sind keine von
+    # Mensch oder Lead geschriebenen Anweisungen, sondern automatische Notizen
+    # die zufaellig denselben comment_type tragen — z.B. der System-`handoff`
+    # beim Human-Review-Uebergang (task_lifecycle.py, request_human_review)
+    # oder der System-`message`-Callback bei Subtask-Abschluss
+    # (agent_task_status.py). `message` ist zusaetzlich auf author_type=="user"
+    # eingeschraenkt (nicht nur "!= system"), weil Worker-Agents "message" als
+    # formlosen Peer-Kommentar benutzen koennen, der keine Anweisung ist;
+    # `handoff` dagegen ist per Definition immer ein Wake-Signal von Operator
+    # oder Lead, deshalb reicht dort "!= system".
+    operator_lead_filter = or_(
+        and_(
+            TaskComment.comment_type == "message",  # type: ignore[union-attr]
+            TaskComment.author_type == "user",  # type: ignore[union-attr]
+        ),
+        and_(
+            TaskComment.comment_type == "handoff",  # type: ignore[union-attr]
+            TaskComment.author_type != "system",  # type: ignore[union-attr]
+        ),
+    )
+    ol_result = await session.exec(
+        select(TaskComment)
+        .where(TaskComment.task_id == task.id, operator_lead_filter)
+        .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        .limit(OPERATOR_LEAD_COMMENT_LIMIT)
+    )
+    operator_comments = list(ol_result.all())
+    operator_comments.sort(key=lambda c: c.created_at)
+
+    # Operator-/Lead-Block vorab zusammenbauen (Per-Kommentar-Cap, siehe unten)
+    # — `rendered_operator_comments` ist die Menge, die tatsaechlich im Prompt
+    # landet. Anders als die alte Alles-oder-nichts-Schleife wird hier kein
+    # Kommentar mehr komplett fallengelassen (nur der Text pro Kommentar
+    # gekuerzt), deshalb bleibt das immer == operator_comments. Trotzdem wird
+    # shown_count explizit aus dieser Menge gebildet statt aus der Rohliste —
+    # M2 (Nacharbeit PR #489): der alte Code zaehlte `operator_comments` VOR
+    # dem Cap-Loop, der Loop selbst droppte danach noch welche -> Postfach-
+    # Zeile und tatsaechlich gezeigte Kommentare liefen auseinander (6
+    # Kommentare -> 2 gezeigt, aber "3 weitere" gemeldet, einer verschwand
+    # spurlos). Damit das nicht wieder passieren kann, falls hier jemals
+    # wieder eine Drop-Logik einzieht, ist die Zaehlung strikt an das
+    # gebunden, was tatsaechlich gerendert wird.
+    rendered_operator_comments = operator_comments
+
+    # Postfach-Hinweis: wie viele relevante Kommentare (beide Buckets
+    # zusammen) es insgesamt gibt vs. was hier tatsaechlich gezeigt wird —
+    # der Agent soll wissen, dass es mehr gibt, auch wenn es nicht ungekuerzt
+    # in den Prompt passt.
+    count_result = await session.exec(
+        select(func.count()).where(  # type: ignore[arg-type]
+            TaskComment.task_id == task.id,
+            or_(
+                TaskComment.comment_type.in_(relevant_types),  # type: ignore[union-attr]
+                operator_lead_filter,
+            ),
+        )
+    )
+    total_relevant_count = count_result.one()
+    shown_count = len(comments) + len(rendered_operator_comments)
+    unread_count = max(0, total_relevant_count - shown_count)
+
+    # Checklist items — ordered, nur offene (Nacharbeit-2 PR #489: erledigte
+    # Eintraege gehoeren nicht in einen Recovery-Prompt, der Rest war
+    # unbegrenzt und sprengte bei grossen Checklisten den Kontext). Die erste
+    # offene Position bekommt weiterhin den HIER-WEITERMACHEN-Marker — da nur
+    # offene Items uebrig bleiben, ist das automatisch die erste der Liste.
     items_result = await session.exec(
         select(TaskChecklistItem)
         .where(TaskChecklistItem.task_id == task.id)
         .order_by(TaskChecklistItem.sort_order)  # type: ignore[union-attr]
     )
-    items = list(items_result.all())
+    all_items = list(items_result.all())
+    open_items = [i for i in all_items if i.status in ("pending", "in_progress")]
+    shown_items = open_items[:CHECKLIST_OPEN_ITEM_LIMIT]
+    hidden_open_count = len(open_items) - len(shown_items)
+    # B6 (Nacharbeit-4 PR #489): erledigte (bzw. blocked/skipped) Items werden
+    # oben komplett aus `open_items` herausgefiltert und tauchten bisher in
+    # keiner Zaehlung mehr auf — bei 28 erledigten/12 offenen stand ueber die
+    # 28 kein Wort. `done_count` erfasst alles, was nicht offen ist, und wird
+    # unten in der Hinweiszeile genannt, damit der Agent weiss, dass es sie
+    # gibt, auch wenn sie hier nicht einzeln aufgelistet werden.
+    done_count = len(all_items) - len(open_items)
 
-    if not comments and not items:
+    if not comments and not open_items and not operator_comments and not done_count:
         return None
 
     parts: list[str] = [
@@ -917,16 +1047,94 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         "fort oder beim letzten `progress`-Eintrag. Kein Re-Doing.",
     ]
 
-    if items:
+    if unread_count > 0:
+        # M3 (Nacharbeit PR #489): der Text versprach "N weitere Kommentare",
+        # gezaehlt wird aber nur relevant_types + operator_lead_filter — bei
+        # Kommentaren wie `reflection`/`report_back`/`escalate_to_operator`/
+        # `checkpoint` bleibt unread_count 0, obwohl welche existieren, und es
+        # erscheint gar keine Zeile. Die Zaehlung ist bewusst so (siehe oben),
+        # nur der Wortlaut hat mehr versprochen als er hielt — praezisiert auf
+        # genau das, was gezaehlt wird.
+        parts.append(
+            f"\n**Postfach:** {unread_count} weitere Anweisungen/"
+            f"Fortschrittseintraege nicht in diesem Kontext -> "
+            f"`mc task-get {task.id}`"
+        )
+
+    # Nacharbeit-2 PR #489: Anweisungen zuerst — was der Agent tun soll, steht
+    # oben, nicht hinter Checkliste und Fortschritt begraben.
+    if rendered_operator_comments:
+        # B1-Fix (Nacharbeit PR #489): kein Kommentar wird mehr komplett
+        # fallengelassen (das alte Alles-oder-nichts liess bei genau einem
+        # uebrigen Kommentar den Gesamt-Cap gaenzlich ins Leere laufen — ein
+        # einzelner 20000-Zeichen-Kommentar ergab 20423 Zeichen Kontext).
+        # Stattdessen: jeder Kommentar wird einzeln gekuerzt, mit sichtbarem
+        # Marker (gleiches Idiom wie _load_feedback() oben).
+        #
+        # Nacharbeit-3 PR #489: der Cap ist nicht mehr fuer alle Kommentare
+        # gleich. `rendered_operator_comments` ist aufsteigend nach
+        # created_at sortiert (oldest -> newest), der letzte Eintrag ist also
+        # immer der juengste — der bekommt OPERATOR_LEAD_LATEST_MAX_CHARS
+        # (1200), die aelteren nur OPERATOR_LEAD_OLDER_MAX_CHARS (250). Der
+        # Block ist damit hart durch OPERATOR_LEAD_LATEST_MAX_CHARS +
+        # (OPERATOR_LEAD_COMMENT_LIMIT - 1) * OPERATOR_LEAD_OLDER_MAX_CHARS
+        # begrenzt.
+        #
+        # Gekuerzt ist in Ordnung, stillschweigend gekuerzt nicht (Korrektur
+        # der DoD) — der Marker traegt deshalb zusaetzlich zum sichtbaren
+        # `[...gekuerzt]` einen ausdruecklichen Verweis, wo der Rest steht.
+        block_lines = []
+        any_truncated = False
+        last_idx = len(rendered_operator_comments) - 1
+        for idx, c in enumerate(rendered_operator_comments):
+            ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
+            who = "Operator" if c.author_type == "user" else "Lead"
+            content = c.content.strip()
+            per_item_cap = (
+                OPERATOR_LEAD_LATEST_MAX_CHARS if idx == last_idx
+                else OPERATOR_LEAD_OLDER_MAX_CHARS
+            )
+            if len(content) > per_item_cap:
+                content = (
+                    content[:per_item_cap]
+                    + f"\n[...gekuerzt] (Rest: `mc task-get {task.id}`)"
+                )
+                any_truncated = True
+            block_lines.append(f"[{who}/{c.comment_type} @ {ts}]\n{content}")
+        block_text = "\n\n".join(block_lines)
+
+        # Sicherheitsnetz falls OPERATOR_LEAD_COMMENT_LIMIT jemals erhoeht
+        # wird: haerter Gesamt-Cap, kuerzt aber nur das Blockende, droppt
+        # keinen einzelnen Kommentar.
+        if len(block_text) > OPERATOR_LEAD_MAX_CHARS:
+            block_text = (
+                block_text[:OPERATOR_LEAD_MAX_CHARS]
+                + f"\n[...gekuerzt] (Rest: `mc task-get {task.id}`)"
+            )
+            any_truncated = True
+
+        header = "\n### Operator-/Lead-Anweisungen"
+        header += " (gekuerzt bei Bedarf)" if any_truncated else " (ungekuerzt)"
+        parts.append(header)
+        parts.append(block_text)
+
+    if shown_items or done_count > 0:
         parts.append("\n### Deine Checkliste")
-        _found_first_pending = False
-        for item in items:
-            mark = "[x]" if item.status == "done" else "[ ]"
-            hint = ""
-            if item.status in ("pending", "in_progress") and not _found_first_pending:
-                hint = " ← **HIER WEITERMACHEN**"
-                _found_first_pending = True
-            parts.append(f"- {mark} {item.title}{hint}")
+        for i, item in enumerate(shown_items):
+            hint = " ← **HIER WEITERMACHEN**" if i == 0 else ""
+            parts.append(f"- [ ] {item.title}{hint}")
+        if hidden_open_count > 0 or done_count > 0:
+            # B6 (Nacharbeit-4 PR #489): vorher nur "N weitere" fuer verdeckte
+            # OFFENE Items — erledigte kamen in keiner Zaehlung vor. Jetzt
+            # werden beide genannt, auch wenn nur eine der beiden Zahlen > 0
+            # ist (z.B. alle offenen Items passen rein, aber es gibt
+            # erledigte, die trotzdem sichtbar bleiben muessen).
+            note_parts = []
+            if hidden_open_count > 0:
+                note_parts.append(f"{hidden_open_count} weitere offene")
+            if done_count > 0:
+                note_parts.append(f"{done_count} erledigte")
+            parts.append(f"- ... und {', '.join(note_parts)} (`mc task-get {task.id}`)")
 
     if comments:
         parts.append("\n### Letzter Fortschritt")
@@ -940,7 +1148,19 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             }.get(c.comment_type, c.comment_type)
             # Truncate long comments in the recap — agent can fetch full via
             # `mc comment list` if needed.
-            snippet = c.content.strip().splitlines()[0][:180]
+            #
+            # B7 (Nacharbeit-4 PR #489): genau der Ursprungsbug dieses PRs
+            # (erste Zeile, 180 Zeichen, ohne Marker) — nur hier im
+            # Fortschritts- statt im Anweisungs-Block. 180 Zeichen sind fuer
+            # einen Statuseintrag in Ordnung, aber gekuerzt muss sichtbar
+            # sein — gleicher Marker/Verweis wie im Anweisungs-Block oben.
+            full_content = c.content.strip()
+            content_lines = full_content.splitlines()
+            first_line = content_lines[0] if content_lines else ""
+            snippet = first_line[:180]
+            truncated = len(content_lines) > 1 or len(first_line) > 180
+            if truncated:
+                snippet += f" [...gekuerzt] (Rest: `mc task-get {task.id}`)"
             parts.append(f"[{label} @ {ts}] {snippet}")
 
     # Workspace hint — Task.workspace_path is authoritative (Bundle 4),

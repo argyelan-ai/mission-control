@@ -14,11 +14,12 @@ from sqlmodel import select
 from app.auth import require_agent, require_control_plane, require_user, require_user_or_control_plane
 from app.database import get_session
 from app.models.agent import Agent, AgentMetrics
+from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.models.task import Task
-from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services import thread_scope
 from app.services.sse import make_sse_response
+from app.services.task_state import lock_and_set
 from app.utils import utcnow
 from app.services.template_renderer import render_all_agent_files, render_agent_file, build_agent_context
 
@@ -2625,8 +2626,14 @@ async def _get_or_create_thread_cursor(
     thread_id: uuid.UUID,
     *,
     fast_forward: bool = False,
+    start_after_seq: int | None = None,
 ):
     """Fetch the (agent, thread) cursor, creating one on first sight.
+
+    start_after_seq (review #496 W1): initialize a NEWLY created cursor at
+    this seq (delivery starts at seq+1) — used for lead-question threads so
+    the lead gets the question, not the card's whole history. Ignored for
+    existing cursors; wins over fast_forward.
 
     fast_forward=True initializes a NEWLY created cursor at the thread's
     current max seq instead of 0 (live pilot finding 2026-07-20, Befund C):
@@ -2651,7 +2658,9 @@ async def _get_or_create_thread_cursor(
     cursor = res.first()
     if cursor is None:
         start_seq = 0
-        if fast_forward:
+        if start_after_seq is not None:
+            start_seq = max(0, int(start_after_seq))
+        elif fast_forward:
             max_res = await session.exec(
                 select(func.coalesce(func.max(Message.seq), 0)).where(
                     Message.thread_id == thread_id
@@ -2742,10 +2751,16 @@ async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agen
     """
     resolved = []
     created_any = False
+    # Lead-question threads (review #496 W1): a fresh cursor starts right
+    # before the oldest open question, so the lead sees the question (and
+    # what follows), not the card's whole history.
+    _lead_starts = await thread_scope.lead_question_start_seqs(agent, session)
     for thread, thread_task in await _message_threads_for_agent(agent, session):
+        _start_after = _lead_starts.get(thread.id)
         cursor, created = await _get_or_create_thread_cursor(
             session, agent.id, thread.id,
             fast_forward=bool(thread_task) and thread_task.status in ("done", "failed"),
+            start_after_seq=(_start_after - 1) if _start_after else None,
         )
         created_any = created_any or created
         resolved.append((thread, cursor))
@@ -2878,6 +2893,19 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
 
     # Orphaned: rotate the run identity + clear the ACK so the poll claim
     # path re-delivers the prompt on this same response chain.
+    #
+    # W0.1: one heal per card per round — the redispatch re-delivers the
+    # prompt, so it competes with every other healer (watchdog orphans,
+    # tiered recovery) acting on this card in the same round.
+    redis = await get_redis()
+    if not await try_claim_heal(redis, str(task.id)):
+        logger.info(
+            "Poll-orphan redispatch skipped for task %s — another watchdog "
+            "healed this task this round",
+            task.id,
+        )
+        return None
+
     task.ack_at = None
     session.add(task)
     await session.commit()
@@ -2888,7 +2916,6 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
         only_if_null=False,
     )
 
-    redis = await get_redis()
     count_key = RedisKeys.poll_orphan_redispatch_count(str(task.id))
     redispatch_count = int(await redis.incr(count_key))
     await redis.expire(count_key, 86400 * 7)
@@ -3610,8 +3637,7 @@ async def agent_recover_task(
             "last_recovery_at": recent_recovery.created_at.isoformat(),
         }
 
-    old_status = active.status
-    active.status = "inbox"
+    active, old_status = await lock_and_set(session, active.id, "inbox", actor="agent")
     active.dispatched_at = None
     active.ack_at = None
     active.started_at = None

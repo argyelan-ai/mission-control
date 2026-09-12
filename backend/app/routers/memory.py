@@ -40,16 +40,9 @@ _MAX_FILES_PER_MEMORY = 5  # cap per BoardMemory entry (D-12)
 
 
 def _attachments_root() -> str:
-    """Phase 5 MSY-03: HOME_HOST resolver for the attachments directory.
-
-    NEVER ``expanduser('~')`` standalone (memory feedback rule
-    ``feedback_home_host_pattern.md``). The chain is:
-    ``HOME_HOST`` env-var (set on Docker containers via the host-side
-    docker-compose mount) → ``HOME`` env-var → ``expanduser('~')`` last
-    resort. Returns ``${HOME_HOST}/.mc/attachments``.
-    """
-    home_host = os.environ.get("HOME_HOST") or os.environ.get("HOME") or os.path.expanduser("~")
-    return f"{home_host}/.mc/attachments"
+    """Backward-compat alias — the resolver lives in app.services.fs_roots."""
+    from app.services.fs_roots import attachments_root
+    return attachments_root()
 
 
 def _entry_attachment_dir(entry: BoardMemory) -> str:

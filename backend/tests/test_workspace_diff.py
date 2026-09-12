@@ -14,6 +14,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.services import workspace_diff as wd
+from app.services.workspace_diff import NoWorkspaceError, find_repo_root
 
 # Module mixes sync (direct workspace_diff() calls) and async (router HTTP)
 # tests — no module-level `pytestmark = pytest.mark.asyncio` here since
@@ -221,6 +222,40 @@ def test_worktree_diff_truncates_file_count_at_cap(repo, monkeypatch):
     assert result["stats"]["files"] == 2
 
 
+# ── find_repo_root ────────────────────────────────────────────────────────────
+# Vorfall 11.09.2026: Diff-Panel zeigte „Kein Workspace", obwohl der Agent
+# längst Änderungen hatte — agent.workspace_path ist der Agenten-STAMM
+# (~/.mc/workspaces/<slug>), das Repo lag unter <task-dir>/repo/. Das Repo
+# muss also eine Ebene tiefer gesucht werden.
+
+
+def test_find_repo_root_returns_repo_itself(repo):
+    assert find_repo_root(repo) == repo
+
+
+def test_find_repo_root_descends_one_level_into_single_child_repo(tmp_path, repo):
+    # tmp_path/repo ist das Repo; tmp_path selbst ist keins
+    assert find_repo_root(tmp_path) == repo
+
+
+def test_find_repo_root_picks_most_recently_used_child_repo(tmp_path):
+    old = tmp_path / "old-repo"
+    new = tmp_path / "new-repo"
+    _init_repo(old)
+    _init_repo(new)
+    import os
+    stale = 1_600_000_000
+    os.utime(old / ".git", (stale, stale))
+    assert find_repo_root(tmp_path) == new
+
+
+def test_find_repo_root_raises_when_nothing_is_a_repo(tmp_path):
+    (tmp_path / "notes").mkdir()
+    with pytest.raises(NoWorkspaceError):
+        find_repo_root(tmp_path)
+
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Router: GET /agents/{id}/chat/diff
 # ══════════════════════════════════════════════════════════════════════════
@@ -277,6 +312,69 @@ async def test_diff_router_404_workspace_not_a_git_repo(auth_client: AsyncClient
 
     assert resp.status_code == 404
     assert resp.json() == {"reason": "no_workspace"}
+
+
+async def test_diff_router_prefers_current_task_workspace_over_agent_root(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, repo
+):
+    """agent.workspace_path = Stamm ohne Git; die laufende Task arbeitet in
+    <stamm>/<task-slug>/repo/ — genau das Live-Bild vom 11.09.2026."""
+    root = tmp_path / "agent-root"
+    task_dir = root / "w4-restposten-abc123"
+    task_dir.mkdir(parents=True)
+    _init_repo(task_dir / "repo")
+    (task_dir / "repo" / "f.txt").write_text("one\n")
+    _git("add", "f.txt", cwd=task_dir / "repo")
+    _git("commit", "-m", "task work", cwd=task_dir / "repo")
+    (task_dir / "repo" / "f.txt").write_text("one\ntwo\n")
+
+    board = await make_board()
+    agent = await make_agent(name="Alpha", agent_runtime="cli-bridge", workspace_path=str(root))
+    task = await make_task(
+        board.id, title="W4", status="in_progress",
+        assigned_agent_id=agent.id, workspace_path=str(task_dir),
+    )
+    from app.models.agent import Agent
+    from tests.conftest import test_engine  # noqa: PLC0415
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        db_agent = await s.get(Agent, agent.id)
+        db_agent.current_task_id = task.id
+        s.add(db_agent)
+        await s.commit()
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/diff")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["files"][0]["filename"] == "f.txt"
+
+
+async def test_diff_router_falls_back_to_latest_task_workspace_when_idle(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path
+):
+    # Task-Workspace bewusst AUSSERHALB des Agenten-Stamms (z.B. Projekt-
+    # Worktree) — nur der Task-Datensatz kennt den Pfad.
+    root = tmp_path / "agent-root"
+    root.mkdir()
+    task_dir = tmp_path / "elsewhere" / "done-task"
+    _init_repo(task_dir)
+    (task_dir / "g.txt").write_text("x\n")
+    _git("add", "g.txt", cwd=task_dir)
+    _git("commit", "-m", "done work", cwd=task_dir)
+
+    board = await make_board()
+    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", workspace_path=str(root))
+    await make_task(
+        board.id, title="Done", status="done",
+        assigned_agent_id=agent.id, workspace_path=str(task_dir),
+    )
+
+    resp = await auth_client.get(
+        f"/api/v1/agents/{agent.id}/chat/diff", params={"scope": "last-commit"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["message"] == "done work"
 
 
 async def test_diff_router_422_invalid_scope(auth_client: AsyncClient, make_agent, repo):

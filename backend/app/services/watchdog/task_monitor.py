@@ -12,14 +12,16 @@ import logging
 import uuid
 from datetime import timedelta
 
+from fastapi import HTTPException
 from sqlalchemy import or_, and_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.task import Task, TaskComment
-from app.redis_client import RedisKeys, get_redis
+from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
 logger = logging.getLogger("mc.watchdog")
@@ -198,7 +200,21 @@ class TaskMonitorMixin:
                         "Phase complete but no Board Lead on board %s — fallback to Rex handoff",
                         parent.board_id,
                     )
-                    parent.status = "review"
+                    try:
+                        parent, _ = await lock_and_set(session, parent.id, "review", actor="watchdog")
+                    except HTTPException as e:
+                        if e.status_code == 409:
+                            # Expected outcome of a lost race (status changed between
+                            # this sweep's SELECT and lock_and_set's re-read) — skip
+                            # this parent, next watchdog tick retries. Must not abort
+                            # the whole sweep for the remaining parent_tasks.
+                            logger.info(
+                                "Phase-completion review transition lost the race for "
+                                "'%s' — skipping, next tick retries",
+                                parent.title[:40],
+                            )
+                            continue
+                        raise
                     parent.updated_at = utcnow()
                     session.add(parent)
                     await session.commit()
@@ -390,11 +406,36 @@ class TaskMonitorMixin:
             # If we're now at count=2 and the parent is STILL stuck,
             # we auto-close (review). The operator makes the final decision (done).
             if nudge_count >= 2:
+                # W0.1: one heal per card per round -- the auto-close IS a
+                # card mutation (in_progress -> review) and must claim
+                # mc:heal like every other healer. Without the claim it can
+                # race _maybe_redispatch_orphaned_run (HTTP poll path, runs
+                # outside any tick), which re-dispatches the same card.
+                if not await try_claim_heal(redis, str(parent.id)):
+                    logger.info(
+                        "Auto-close of stuck parent '%s' skipped — another "
+                        "mechanism healed this task this round (mc:heal)",
+                        (parent.title or "")[:60],
+                    )
+                    continue
                 logger.warning(
                     "Auto-close stuck parent '%s' (id=%s): %d nudges ohne Reaktion",
                     (parent.title or "")[:60], parent.id, nudge_count,
                 )
-                parent.status = "review"
+                try:
+                    parent, _ = await lock_and_set(session, parent.id, "review", actor="watchdog")
+                except HTTPException as e:
+                    if e.status_code == 409:
+                        # Lost race (status changed between SELECT and lock_and_set's
+                        # re-read) — skip this parent, next tick retries. Must not
+                        # abort the whole sweep for the remaining candidates.
+                        logger.info(
+                            "Auto-close review transition lost the race for '%s' — "
+                            "skipping, next tick retries",
+                            (parent.title or "")[:60],
+                        )
+                        continue
+                    raise
                 parent.updated_at = utcnow()
                 session.add(parent)
                 await session.commit()
@@ -636,13 +677,31 @@ class TaskMonitorMixin:
         if not next_phase:
             return
 
+        try:
+            next_phase, _ = await lock_and_set(session, next_phase.id, "in_progress", actor="watchdog")
+        except HTTPException as e:
+            if e.status_code == 409:
+                # Lost race (status changed between the SELECT above and
+                # lock_and_set's re-read) — skip auto-advance for this phase,
+                # next tick retries. Checked BEFORE record_task_event (not
+                # after, as before this fix) so a lost race can't leave a
+                # phantom "auto_advance_phase" TaskEvent for a transition
+                # that never happened — the caller's loop still runs
+                # _update_project_progress() afterwards, which commits.
+                logger.info(
+                    "Auto-advance transition lost the race for phase '%s' — "
+                    "skipping, next tick retries",
+                    next_phase.title[:40],
+                )
+                return
+            raise
+
         from app.services.task_lifecycle import record_task_event
         await record_task_event(
             session, next_phase.id, "inbox", "in_progress",
             changed_by="watchdog", reason="auto_advance_phase",
         )
 
-        next_phase.status = "in_progress"
         next_phase.started_at = utcnow()
         next_phase.updated_at = utcnow()
         session.add(next_phase)
@@ -1249,6 +1308,16 @@ class TaskMonitorMixin:
                     dispatched_agents.add(agent.id)
                     continue
 
+                # W0.1: one heal per card per round.
+                redis = await get_redis()
+                if not await try_claim_heal(redis, str(task.id)):
+                    logger.info(
+                        "Undispatched recovery (CLI bridge) skipped for '%s' — "
+                        "another watchdog healed this task this round",
+                        task.title,
+                    )
+                    continue
+
                 try:
                     message = await _build_dispatch_message(task, agent, session)
                     from app.services.cli_bridge_runner import dispatch_to_cli_bridge
@@ -1280,6 +1349,16 @@ class TaskMonitorMixin:
                 )
             )
             if busy_result.first():
+                continue
+
+            # W0.1: one heal per card per round.
+            _redis = await get_redis()
+            if not await try_claim_heal(_redis, str(task.id)):
+                logger.info(
+                    "Undispatched recovery skipped for '%s' — another "
+                    "watchdog healed this task this round",
+                    task.title,
+                )
                 continue
 
             try:
@@ -1343,9 +1422,31 @@ class TaskMonitorMixin:
                 if (now - last_seen).total_seconds() < 1800:
                     continue
 
+            redis = await get_redis()
+            if not await try_claim_heal(redis, str(task.id)):
+                logger.info(
+                    "Orphan recovery skipped for '%s' — another watchdog "
+                    "healed this task this round (mc:heal claim held)",
+                    task.title,
+                )
+                continue
+
             # Reset task back to inbox
-            old_status = task.status
-            task.status = "inbox"
+            try:
+                task, old_status = await lock_and_set(session, task.id, "inbox", actor="watchdog")
+            except HTTPException as e:
+                if e.status_code == 409:
+                    # Lost race (status changed between the SELECT above and
+                    # lock_and_set's re-read) — skip this task, next tick
+                    # retries. Must not abort the batch commit for the other
+                    # already-processed / still-to-process stuck_tasks.
+                    logger.info(
+                        "Orphan-recovery transition lost the race for '%s' — "
+                        "skipping, next tick retries",
+                        task.title[:40] if task.title else task.id,
+                    )
+                    continue
+                raise
             task.updated_at = now
             session.add(task)
             recovered += 1

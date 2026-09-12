@@ -503,8 +503,11 @@ async def test_purge_loop_calls_the_tick_and_stops_on_cancel(monkeypatch):
     import asyncio
 
     from app import main as app_main
+    import app.background as bg_mod
 
-    monkeypatch.setattr(app_main, "TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS", 0)
+    # Architektur E Teil 2: die Loop lebt in app.background (app.main
+    # delegiert). Der Intervall-Konstante wird DORT gelesen — Patch dort.
+    monkeypatch.setattr(bg_mod, "TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS", 0)
     calls: list[int] = []
 
     async def _tick(older_than_days: int = 30) -> int:
@@ -534,6 +537,10 @@ async def test_system_finalize_done_renames_the_topic(async_session: AsyncSessio
 
     board = await _board(async_session)
     task, thread = await _task_with_thread(async_session, board, "Recherche")
+    task.status = "review"  # matches old_status="review" below (task_state.lock_and_set validates it)
+    async_session.add(task)
+    await async_session.commit()
+    await async_session.refresh(task)
     client = FakeForumClient(next_id=161)
     await ensure_topic_for_thread(async_session, thread, client)
 

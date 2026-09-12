@@ -54,7 +54,7 @@ from app.models.agent import Agent
 from app.models.board import Board, Project
 from app.models.memory import BoardMemory
 from app.redis_client import RedisKeys, get_redis
-from app.routers.memory import _attachments_root
+from app.services.fs_roots import attachments_root as _attachments_root
 from app.services.git_service import slugify_project
 
 logger = logging.getLogger("mc.obsidian_export")

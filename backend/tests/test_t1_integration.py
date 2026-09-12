@@ -208,9 +208,12 @@ async def test_scenario_recovery_context_includes_checklist(session):
     # We're only testing here that it doesn't crash.
     recovery = await build_recovery_context(session, task)
 
-    # Recovery context must include checklist (if checklist section is implemented)
+    # Nacharbeit-2 PR #489: erledigte Checklist-Items gehoeren nicht mehr in
+    # den Recovery-Kontext (nur offene). "Analyse"/"Tests schreiben" sind
+    # done -> duerfen NICHT auftauchen; "API anbinden" ist offen -> muss.
     if recovery and "Checkliste" in recovery:
-        assert "Analyse" in recovery
+        assert "Analyse" not in recovery
+        assert "Tests schreiben" not in recovery
         assert "API anbinden" in recovery
         assert "HIER WEITERMACHEN" in recovery
     # If there's no comment → None is OK
