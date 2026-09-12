@@ -105,6 +105,7 @@ function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
     board_id: null,
     name: "Cody",
     role: null,
+    role_canonical: null,
     emoji: null,
     status: "idle",
     model: null,

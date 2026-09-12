@@ -152,6 +152,7 @@ function mkAgent(
     board_id: null,
     name: "Agent One",
     role: null,
+    role_canonical: null,
     emoji: null,
     status: "idle",
     model: null,

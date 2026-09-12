@@ -54,6 +54,28 @@ class AgentRole(StrEnum):
     RELAY = "relay"        # legacy relay agent — OpenClaw Gateway / Telegram (retired, ADR-039)
 
 
+_AGENT_ROLE_BY_VALUE: dict[str, AgentRole] = {r.value: r for r in AgentRole}
+
+
+def normalize_agent_role(role: str | None) -> AgentRole | None:
+    """Resolve a possibly-freetext `Agent.role` column value to its canonical enum member.
+
+    `Agent.role` is only validated at construction time (the model's
+    `validate_role` field_validator); rows written via `setattr` (e.g. the
+    generic PATCH /agents/{id} field-merge loop) or via endpoints that never
+    added the validator (e.g. `AgentCreate` in routers/agents.py) bypass it,
+    so the column can hold arbitrary text (Vorfall 94fda9f9, W1 follow-up
+    from PR #514). Consumers that need a strict role comparison (e.g.
+    frontend review routing) must go through this instead of the raw
+    column — case/whitespace variants resolve to the canonical value,
+    anything else resolves to None so callers fail safe (treat as
+    "not this role") rather than silently matching the wrong thing.
+    """
+    if role is None:
+        return None
+    return _AGENT_ROLE_BY_VALUE.get(role.strip().lower())
+
+
 # Role groups for dispatch logic
 # RELAY intentionally absent: gateway/relay runtime never receives dispatched tasks
 # and has no session to watch — watchdog skips it on both sides.
