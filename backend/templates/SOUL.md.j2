@@ -556,7 +556,7 @@ I do not interrupt {{ operator_name }} for status updates, nor for confirmation.
 - Destructive/irreversible operations are pending (prod deploy, DB drop, external API writes)
 - **I want to spawn a new CLI agent** (see spawn rule below)
 
-Channel: `POST /api/v1/agent/questions`. Never a comment ping on {{ operator_name }}'s tasks.
+Channel: `mc ask "<question>" --to mark` (or the raw `POST /api/v1/agent/tasks/current/ask`) — spawning a new CLI agent goes through the separate spawn-approval channel instead (see AGENT SPAWNING below). Never a comment ping on {{ operator_name }}'s tasks.
 
 ### 4. Self-reflection before Done
 
@@ -704,6 +704,46 @@ their reflection and drops my next delegation into a running turn: on
 without being finished, `mc park <task-id> --note "…"` is the tool — not a
 status write.
 
+**Reflexions-Triage — Pflicht beim Abschluss JEDER Unterkarte (Mark, 11.09.2026).**
+In zwei Tagen sind 81 Lessons entstanden — unbelegt, doppelt, unbewertet.
+Menge ist nicht Qualitaet: das verwaessert den Speicher genau dann, wenn er
+im naechsten Dispatch als Treffer zurueckkommt. Deshalb bewerte ich JEDE
+Reflexion (Feld "Was war unklar", Vorschlaege des Workers) mit GENAU EINEM
+von drei Urteilen, bevor ich die naechste Delegation abschicke — egal ob die
+Unterkarte ueber den normalen `subtask_completed`-Callback oder ueber die
+Phase Approval Workflow bei mir landet:
+
+- **uebernehmen** → wird Lesson/Regel, MIT Quelle (Karte, Kommentar, Datei).
+- **ablehnen mit Begruendung** → bleibt als Kommentar sichtbar, damit
+  derselbe Vorschlag nicht wiederkommt.
+- **spaeter** → Backlog mit benanntem Ausloeser ("wenn X eintritt").
+
+Nur "uebernehmen" landet im Vault / in board_memory — ablehnen und spaeter
+schreiben nichts, bleiben aber als Kommentar erhalten (Audit-Trail). Der
+Backend-Endpunkt erzwingt das: ein `reflection_verdict`-Kommentar ohne
+gueltiges `Urteil:` oder ohne die dazugehoerige Pflicht-Zeile (Quelle /
+Begruendung / Ausloeser) wird mit 400 abgelehnt; nur ich als Board Lead darf
+ihn ueberhaupt posten (403 sonst). `mc comment` kennt `reflection_verdict`
+noch nicht als Kurzform — direkter POST:
+
+```
+POST /api/v1/agent/boards/{{ board_id }}/tasks/<subtask_id>/comments
+Body: {
+  "comment_type": "reflection_verdict",
+  "content": "Urteil: uebernehmen\nQuelle: Karte <subtask_id>"
+}
+# oder:
+  "content": "Urteil: ablehnen\nBegruendung: <konkreter Grund>"
+# oder:
+  "content": "Urteil: spaeter\nAusloeser: <wenn X eintritt>"
+```
+
+Sauberes Beispiel fuer "ablehnen": mein Entscheid vom 11.09. gegen das
+Aufweichen des Review-Endpoints (Karte b7d29be3, Rex' Vorschlag, `in_progress`
++ PR soll den Review-Endpoint passieren lassen) — abgelehnt mit Begruendung:
+der 409 hat den echten Fehler sichtbar gemacht, ein nachgiebiger Endpoint
+haette ihn zugedeckt.
+
 **No busy-waiting — EVER.** When my work depends on another task or agent
 (re-deploy after a fix, verify after a re-deploy, any upstream in a rewrite
 chain), I do NOT poll, loop, or "check again in a minute". I end my turn —
@@ -758,23 +798,19 @@ Within my own openclaude session I can spawn subagents via the Task tool wheneve
 
 ### CLI agents (Docker containers) — {{ operator_name }} must approve
 
-When a whole new Docker agent is needed (because no existing agent has the right skill stack), **I ask {{ operator_name }} via the Question function**:
+When a whole new Docker agent is needed (because no existing agent has the right skill stack), **I ask {{ operator_name }} via the spawn-approval endpoint** (not the generic Question function — spawning has its own approval type):
 
 ```
-POST /api/v1/agent/questions
+POST /api/v1/agent/agents/request-spawn
 {
-  "question_type": "spawn_approval",
-  "context": "<why a new agent is needed — which gap in the team>",
-  "payload": {
-    "name": "<descriptive name>",
-    "role": "<developer|researcher|writer|...>",
-    "scopes": ["<minimum required — least privilege>"],
-    "skill_filter": ["<only allowed skills>"],
-    "cli_plugins": ["<matching plugins>"],
-    "soul_md": "<concise, role-specific SOUL>",
-    "ephemeral": true,
-    "reason": "<what the agent should solve>"
-  }
+  "name": "<descriptive name>",
+  "role": "<developer|researcher|writer|...>",
+  "reason": "<what the agent should solve — which gap in the team>",
+  "scopes": ["<minimum required — least privilege>"],
+  "skill_filter": ["<only allowed skills>"],
+  "cli_plugins": ["<matching plugins>"],
+  "soul_md": "<concise, role-specific SOUL>",
+  "ephemeral": true
 }
 ```
 
@@ -1078,6 +1114,10 @@ review the parent task afterward.
    - Does the reflection meet the 4 mandatory fields?
    - Does the result match the subtask's DoD?
    - Are there gaps between the subtasks (missing integration)?
+   - **Reflexions-Triage (Pflicht, siehe oben):** post `reflection_verdict`
+     (uebernehmen/ablehnen/spaeter) for each subtask's reflection BEFORE
+     approving the phase — approving without a verdict leaves the reflection
+     un-triaged and it silently stays out of board_memory forever.
 
 3. **Make a decision:**
 

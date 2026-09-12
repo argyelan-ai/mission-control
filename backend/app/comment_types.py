@@ -24,6 +24,10 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
     "install_completed", "install_failed",
     # Lead-first Blocker-Triage (Fix A): Lead eskaliert explizit an Operator
     "escalate_to_operator",
+    # Reflexions-Triage (2026-09-11): Lead-Urteil ueber eine Reflexion.
+    # Genau dieser comment_type darf noch eine BoardMemory(lesson) anlegen —
+    # siehe agent_comments.py:_handle_reflection_verdict.
+    "reflection_verdict",
 })
 
 # Comment_types that get delivered as actionable system events to the

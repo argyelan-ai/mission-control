@@ -1015,7 +1015,6 @@ COMMENT_TYPES = [
 
 
 def _cmd_comment(args, client, cfg):
-    board_id, task_id = cfg.require_task_context()
     # Guard against the 2026-05-17 Researcher-Bug: agents sometimes wrap their
     # content in {"content": "..."} JSON because they imagine the CLI needs an
     # envelope. The CLI takes plain text. Detect + refuse early with a useful
@@ -1033,11 +1032,27 @@ def _cmd_comment(args, client, cfg):
                 )
         except _json.JSONDecodeError:
             pass  # nicht valid JSON → durchlassen, kein false-positive
-    resp = client.request(
-        "POST",
-        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
-        body={"comment_type": args.type, "content": args.message},
-    )
+
+    # --task-id (W5-C): board-agnostic path, fuer Board Leads/Orchestratoren
+    # (Scope tasks:manage) OHNE aktiven Task — poll.sh raeumt TASK_ID/BOARD_ID
+    # aus der Env sobald der letzte Task endet, `cfg.require_task_context()`
+    # waere hier also blind. Der Task selbst traegt board_id server-seitig;
+    # das Backend prueft dort Agent.board_id == Task.board_id (403 statt
+    # stillem Schreiben anderswo, wenn die Karte nicht zum eigenen Board
+    # gehoert — und 403 "Missing scopes" wenn der Scope fehlt).
+    if getattr(args, "task_id", None):
+        resp = client.request(
+            "POST",
+            f"/api/v1/agent/tasks/{args.task_id}/comments",
+            body={"comment_type": args.type, "content": args.message},
+        )
+    else:
+        board_id, task_id = cfg.require_task_context()
+        resp = client.request(
+            "POST",
+            f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+            body={"comment_type": args.type, "content": args.message},
+        )
     # Bug 9 (2026-05-13): Backend liefert `delivery_hint` mit wenn ein
     # `message`-Comment auf einem fremden assigned Task gepostet wurde
     # (silent-fail-Warnung). _emit gibt bei id-Responses nur die id auf stdout
@@ -1058,6 +1073,12 @@ def _add_comment_args(p):
     )
     p.add_argument("type", choices=COMMENT_TYPES, help=type_help)
     p.add_argument("message", help="Inhalt")
+    p.add_argument(
+        "--task-id", dest="task_id", default=None,
+        help="Fremde Karte kommentieren, auch ohne eigenen aktiven Task "
+             "(Board Lead/Orchestrator, Scope tasks:manage). Ohne --task-id "
+             "geht's wie bisher auf den aktiven Task.",
+    )
 
 
 # ── Checklist ─────────────────────────────────────────────────────────────
@@ -1157,6 +1178,18 @@ def _add_checklist_args(p):
 # ── Clarification / Help / Deliverable / Memory ──────────────────────────
 
 def _cmd_question(args, client, cfg):
+    if not cfg.board_id or not cfg.task_id:
+        # `mc question` blockiert IMMER die aktive Karte (Approval-Flow) —
+        # ohne eine gibt es nichts zu blockieren, das bleibt so (W5-C: kein
+        # Umbau der Zustellung). Aber statt des generischen "TASK_ID/BOARD_ID
+        # fehlen"-Fehlers (der einen Board Lead zwischen zwei Karten nur
+        # verwirrt) zeigt der Fehler hier den Weg, der ohne aktiven Task
+        # tatsaechlich funktioniert.
+        raise UsageError(
+            "mc question braucht eine aktive Karte zum Blockieren — ohne "
+            "aktiven Task nutze `mc ask \"<Frage>\"` stattdessen (erreicht "
+            "den Operator auch ohne aktiven Task, Scope tasks:manage)."
+        )
     board_id, _ = cfg.require_task_context()
     options = [o.strip() for o in args.options.split(",")] if args.options else None
     resp = client.request(
@@ -1525,6 +1558,8 @@ def _cmd_delegate(args, client, cfg):
         body["priority"] = args.priority
     if getattr(args, "origin_thread", None):
         body["origin_thread_id"] = args.origin_thread
+    if getattr(args, "parent", None):
+        body["parent_task_id"] = args.parent
 
     resp = client.request(
         "POST",
@@ -1532,6 +1567,9 @@ def _cmd_delegate(args, client, cfg):
         body=body,
     )
     _emit(resp)
+    if isinstance(resp, dict) and resp.get("warning"):
+        import sys as _sys
+        print(f"WARNUNG: {resp['warning']}", file=_sys.stderr)
     return 0
 
 
@@ -1564,6 +1602,18 @@ def _add_delegate_args(p):
             "Herkunfts-Gespraech (Thread-ID aus dem mc-inbox-Footer). Der finale "
             "Report wird serverseitig in diesen Chat-Thread gespiegelt. Ohne "
             "Angabe erbt der Subtask die Herkunft des Parent-Tasks."
+        ),
+    )
+    p.add_argument(
+        "--parent",
+        metavar="TASK_ID",
+        help=(
+            "Explizite Parent-Task-ID statt der impliziten Aufloesung ueber die "
+            "eigene aktive Karte. Nutze das, wenn du keine aktive Karte hast (kein "
+            "409 'Kein aktiver Task') oder bewusst an einer ANDEREN Karte als deiner "
+            "eigenen aktiven anhaengen willst. Ohne --parent UND ohne aktive Karte "
+            "entsteht eine Wurzelkarte ohne Parent/Callback (die Antwort weist "
+            "darauf explizit hin)."
         ),
     )
 
@@ -2806,9 +2856,13 @@ REGISTRY: dict[str, CommandSpec] = {
     ),
     "comment": CommandSpec(
         name="comment",
-        help="Kommentar posten (progress/blocker/feedback/resolution[terminal]/...)",
-        endpoints=("POST /boards/{board_id}/tasks/{task_id}/comments",),
-        scope="tasks:write",
+        help="Kommentar posten (progress/blocker/feedback/resolution[terminal]/...). "
+             "--task-id fuer fremde Karten ohne aktiven Task (Board Lead, Scope tasks:manage).",
+        endpoints=(
+            "POST /boards/{board_id}/tasks/{task_id}/comments",
+            "POST /tasks/{task_id}/comments",
+        ),
+        scope="tasks:write",  # --task-id braucht zusaetzlich tasks:manage (backend-geprueft)
         handler=_cmd_comment,
         add_args=_add_comment_args,
     ),
