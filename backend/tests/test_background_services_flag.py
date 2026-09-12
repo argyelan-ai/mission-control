@@ -340,3 +340,318 @@ async def test_worker_run_shuts_down_gracefully_on_signal(monkeypatch, sig):
 
     start_mock.assert_awaited_once()
     stop_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch):
+    """W4 (11.09.2026, Karte 70d6b417 — Restposten aus #506, Punkt 2):
+    live gemessen haengte ein `docker stop` direkt nach einem
+    Worker-Recreate die vollen 30s, waehrend der Worker noch im
+    Vault-Reindex war -> SIGKILL (der Lock blieb liegen, wurde vom neuen
+    Worker aber korrekt auf Versuch 1 gestohlen -- der #506-Fix hielt).
+
+    Ursache (gemessen, nicht vermutet -- siehe
+    tools/repro_sigterm.py-artiges Setup unten): ``VaultIndex(...)`` und
+    ``rebuild_from_vault()`` liefen in ``start_vault_services()`` synchron
+    (kein await, kein Yield-Punkt). asyncio liefert einen per
+    ``add_signal_handler`` registrierten Callback nur aus, wenn der
+    Event-Loop pollt -- ein rein synchroner Call haelt den Loop komplett
+    an, also auch jede Signalverarbeitung, fuer seine gesamte Laufzeit.
+    Ein waehrend des Reindex eintreffendes SIGTERM (echtes ``docker
+    stop``) konnte dadurch erst verarbeitet werden, NACHDEM der Rebuild
+    fertig war -- bei einem hinreichend grossen Vault laenger als
+    Dockers Stop-Timeout, daher SIGKILL statt eines sauberen Shutdowns.
+
+    Reproduziert das Signal real (``os.kill`` auf den eigenen Prozess,
+    gleiches Muster wie ``test_worker_run_shuts_down_gracefully_on_signal``
+    oben) waehrend eines kuenstlich verlangsamten Rebuilds -- misst also
+    tatsaechlich, ob der Event-Loop responsive bleibt, statt es zu
+    behaupten.
+    """
+    import os
+    import signal
+    import threading
+    import time
+
+    import app.background as bg
+
+    # first_boot ist in der session-weiten Test-Vault meist schon False
+    # (siehe conftest._TEST_VAULT_ROOT) -- das Flag erzwingt den Rebuild-Pfad
+    # unabhaengig davon.
+    monkeypatch.setattr(bg.settings, "vault_index_rebuild_on_boot", True)
+    monkeypatch.setattr(bg.VaultWatcher, "start", AsyncMock())
+
+    REINDEX_SECONDS = 2.0
+
+    def _slow_rebuild(self):
+        time.sleep(REINDEX_SECONDS)  # Stellvertreter fuer einen echten Vault-Scan
+        return {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
+
+    monkeypatch.setattr(bg.VaultIndex, "rebuild_from_vault", _slow_rebuild)
+
+    loop = asyncio.get_running_loop()
+    signal_received_at: dict[str, float] = {}
+
+    def _on_term():
+        signal_received_at["t"] = time.monotonic()
+
+    loop.add_signal_handler(signal.SIGTERM, _on_term)
+    try:
+        sent_at = time.monotonic()
+
+        def _sender():
+            time.sleep(0.3)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=_sender, daemon=True).start()
+
+        await bg.start_vault_services(SimpleNamespace(state=SimpleNamespace()))
+
+        # Dem Loop einen Moment geben, den bereits gequeuten Callback
+        # auszuliefern, falls er nicht schon gefeuert hat.
+        await asyncio.sleep(0.1)
+
+        assert "t" in signal_received_at, "SIGTERM-Handler ist nie gefeuert"
+        delay = signal_received_at["t"] - sent_at
+        assert delay < 1.0, (
+            f"SIGTERM wurde erst nach {delay:.2f}s verarbeitet -- der "
+            f"Vault-Reindex ({REINDEX_SECONDS}s) hat den Event-Loop "
+            "blockiert statt in einem eigenen Thread zu laufen"
+        )
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
+def test_worker_run_registers_signal_handlers_before_boot_steps():
+    """W4 (11.09.2026, Karte 70d6b417 — Rex-Review PR #509, Blocker B1):
+
+    Der obige Test (test_vault_reindex_does_not_block_sigterm_handling)
+    registriert seinen SIGTERM-Handler VOR dem Aufruf von
+    start_vault_services() -- also in genau der falschen Reihenfolge im
+    Vergleich zu worker.run(), das den Handler bis nach prepare_process()
+    + start_background_services() + start_vault_services() gar nicht
+    registrierte. Ein SIGTERM, das waehrend dieser drei Schritte eintraf,
+    lief damit auf SIG_DFL -- keinen Python-Handler. Fuer einen GEWOEHNLICHEN
+    Prozess killt SIG_DFL/SIGTERM sofort (Sub-Prozess-Repro, siehe PR-Text:
+    rc=-15, keine messbare Verzoegerung) -- mc-worker laeuft aber als PID 1
+    seines Containers, wo der Kernel ein Signal ohne Handler laut
+    `man 7 pid_namespaces` gar nicht per Default-Aktion verarbeitet, sondern
+    verwirft (siehe worker.py-Kommentar oben fuer Details) -- was den
+    gemessenen 30s-Haenger-bis-SIGKILL erst erklaert. Der obige Test bewies
+    also nur, dass der Loop responsive bleibt, WENN schon ein Handler
+    existiert -- nicht, dass im Worker ueberhaupt einer existiert, wenn
+    es darauf ankommt. Fix: Handler-Registrierung an den Anfang von
+    run() gezogen, vor jeden Boot-Schritt.
+
+    Diese Guard-Assertion laeuft bewusst OHNE echtes Signal (ein
+    unbehandeltes SIGTERM im Test-Prozess selbst wuerde nicht den Test,
+    sondern den gesamten pytest-Lauf beenden -- das eigentliche
+    Sub-Prozess-Repro dafuer steht im PR-Text). Stattdessen strukturelle
+    Quellcode-Pruefung, analog zum Muster in test_boot_secret_guard.py::
+    test_lifespan_wires_the_guard: Ohne den Fix (Handler-Block NACH den
+    drei Boot-Calls) ist diese Assertion ROT -- mit dem Fix GRUEN.
+    """
+    import app.worker as worker
+
+    src = inspect.getsource(worker.run)
+    handler_idx = src.index("add_signal_handler")
+    prepare_idx = src.index("await prepare_process()")
+    start_bg_idx = src.index("await start_background_services(state)")
+    start_vault_idx = src.index("await start_vault_services(state)")
+
+    assert handler_idx < prepare_idx, (
+        "add_signal_handler() muss VOR prepare_process() stehen -- sonst "
+        "trifft ein frueh eintreffendes SIGTERM auf SIG_DFL"
+    )
+    assert handler_idx < start_bg_idx, (
+        "add_signal_handler() muss VOR start_background_services() stehen"
+    )
+    assert handler_idx < start_vault_idx, (
+        "add_signal_handler() muss VOR start_vault_services() stehen -- "
+        "das war Blocker B1 aus Rex-Review PR #509"
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_run_survives_sigterm_during_vault_reindex(monkeypatch):
+    """W4 (11.09.2026, Karte 70d6b417 — Rex-Review PR #509, Blocker B1):
+
+    Faehrt den ECHTEN Produktionspfad (worker.run(), nicht nur
+    start_vault_services() isoliert) mit einem SIGTERM, das waehrend
+    eines verlangsamten Vault-Reindex eintrifft -- genau das vom Review
+    verlangte Szenario. prepare_process()/start_background_services()/
+    stop_background_services() sind gemockt (gleiches Muster wie
+    test_worker_run_shuts_down_gracefully_on_signal oben; CI hat kein
+    echtes Postgres/Redis fuer diese 17 Dienste), start_vault_services()/
+    stop_vault_services() sind ECHT -- das ist der Teil, um den es beim
+    B1-Blocker ging.
+
+    Sicher, weil mit dem B1-Fix der Handler laengst registriert ist, BEVOR
+    dieser Test das Signal ueberhaupt schickt -- ein unbehandeltes SIGTERM
+    (das den Testlauf killen wuerde) kann hier nicht mehr auftreten. Genau
+    das ist die Verhaltensaenderung, die bewiesen werden soll: vorher
+    (Handler-Registrierung nach start_vault_services) waere dieser Test
+    bei einem Direktaufruf real mit rc=-15 gestorben statt zu asserten --
+    siehe Sub-Prozess-Repro im PR-Text fuer den Beleg dieses roten
+    Verhaltens (in-process ist ein SIGTERM-Tod nicht sicher reproduzierbar,
+    siehe Docstring von test_worker_run_registers_signal_handlers_before_boot_steps).
+    """
+    import os
+    import signal
+    import time
+
+    import app.background as bg
+    import app.worker as worker
+
+    monkeypatch.setattr(worker, "prepare_process", AsyncMock())
+    start_mock = AsyncMock()
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(worker, "start_background_services", start_mock)
+    monkeypatch.setattr(worker, "stop_background_services", stop_mock)
+    monkeypatch.setattr(worker.settings, "enable_background_services", True)
+
+    monkeypatch.setattr(bg.settings, "vault_index_rebuild_on_boot", True)
+    monkeypatch.setattr(bg.VaultWatcher, "start", AsyncMock())
+
+    REINDEX_SECONDS = 0.5
+
+    def _slow_rebuild(self):
+        time.sleep(REINDEX_SECONDS)
+        return {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
+
+    monkeypatch.setattr(bg.VaultIndex, "rebuild_from_vault", _slow_rebuild)
+
+    async def _send_signal_mid_reindex():
+        await asyncio.sleep(0.1)  # nach start(), waehrend des 0.5s-Reindex
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    await asyncio.wait_for(
+        asyncio.gather(worker.run(), _send_signal_mid_reindex()), timeout=5
+    )
+
+    start_mock.assert_awaited_once()
+    stop_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_vault_compactor_stop_does_not_block_event_loop(monkeypatch):
+    """W4 (11.09.2026, Karte 70d6b417): zweiter Fund beim Nacharbeiten von
+    Blocker B1 (Rex-Review PR #509) -- Grep nach jedem synchronen
+    ``.join(`` im Backend (``grep -rn "\\.join(" backend/app/``) zeigte,
+    dass ``VaultCompactor.stop()`` (vault_compactor.py:60) exakt dieselbe
+    Bug-Klasse hat wie der urspruengliche Vault-Reindex und
+    ``VaultWatcher.stop()`` -- ein plain-sync ``Thread.join(timeout=5)``
+    im Event-Loop, das jede Signalverarbeitung fuer bis zu 5s blockieren
+    kann. Im urspruenglichen PR wurde ``VaultWatcher.stop()`` gefixt,
+    ``VaultCompactor.stop()`` (identischer Code, anderes Modul) aber
+    uebersehen.
+
+    Gleiches Testmuster wie test_vault_reindex_does_not_block_sigterm_handling:
+    Handler VOR dem Aufruf registrieren (das ist hier sicher -- es geht
+    um Responsivitaet bei einem bereits existierenden Handler, nicht um
+    dessen Existenz), Observer.join kuenstlich verlangsamen, SIGTERM
+    waehrend des Joins schicken, Verarbeitungsverzoegerung messen.
+    """
+    import os
+    import signal
+    import threading
+    import time
+    from unittest.mock import MagicMock
+
+    from app.services.vault_compactor import VaultCompactor
+
+    redis_mock = MagicMock(set=AsyncMock(return_value=True), publish=AsyncMock())
+    compactor = VaultCompactor(vault_path=None, redis=redis_mock)
+
+    JOIN_SECONDS = 1.5
+
+    class _FakeObserver:
+        def stop(self):
+            pass
+
+        def join(self, timeout=None):
+            time.sleep(JOIN_SECONDS)  # Stellvertreter fuer einen echten, langsam drainenden Observer-Thread
+
+    compactor._observer = _FakeObserver()
+
+    loop = asyncio.get_running_loop()
+    signal_received_at: dict[str, float] = {}
+
+    def _on_term():
+        signal_received_at["t"] = time.monotonic()
+
+    loop.add_signal_handler(signal.SIGTERM, _on_term)
+    try:
+        sent_at = time.monotonic()
+
+        def _sender():
+            time.sleep(0.2)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=_sender, daemon=True).start()
+
+        await compactor.stop()
+
+        await asyncio.sleep(0.1)
+
+        assert "t" in signal_received_at, "SIGTERM-Handler ist nie gefeuert"
+        delay = signal_received_at["t"] - sent_at
+        assert delay < 1.0, (
+            f"SIGTERM wurde erst nach {delay:.2f}s verarbeitet -- "
+            f"VaultCompactor.stop() ({JOIN_SECONDS}s Observer.join) hat "
+            "den Event-Loop blockiert statt in einem eigenen Thread zu laufen"
+        )
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
+@pytest.mark.asyncio
+async def test_stop_vault_services_names_the_slow_step_in_log(caplog):
+    """W4 (11.09.2026, Karte 70d6b417 — Rex-Review PR #509 DoD-Punkt 4):
+    "der schuldige Shutdown-Schritt ist aus dem `_timed_stop`-Log
+    NAMENTLICH benannt, nicht vermutet". stop_vault_services() hatte VOR
+    diesem Fix ueberhaupt kein Timing -- anders als stop_background_services(),
+    das seine 17 Schritte schon seit Incident Deploy #504 einzeln loggt.
+
+    Simuliert einen langsamen Compactor-Stop (die real gefundene Ursache,
+    siehe test_vault_compactor_stop_does_not_block_event_loop) und prueft,
+    dass das Log den Schritt beim Namen nennt -- nicht "irgendwas war
+    langsam", sondern konkret "vault_compactor".
+    """
+    import logging
+    import time
+
+    import app.background as bg
+
+    class _SlowCompactor:
+        async def stop(self):
+            await asyncio.to_thread(time.sleep, 1.2)
+
+    runtime = {
+        "vault_lint_task": None,
+        "vault_compactor": _SlowCompactor(),
+        "vault_watcher": None,
+        "vault_index": None,
+    }
+
+    with caplog.at_level(logging.INFO, logger="mc.startup"):
+        await bg.stop_vault_services(runtime)
+
+    matching = [
+        r for r in caplog.records
+        if "Shutdown: vault_compactor stopped in" in r.getMessage()
+    ]
+    assert matching, (
+        "Log nennt den langsamen Schritt nicht namentlich -- gefundene "
+        f"Zeilen: {[r.getMessage() for r in caplog.records]}"
+    )
+    logged_seconds = float(matching[0].getMessage().rsplit(" ", 1)[-1].rstrip("s"))
+    assert logged_seconds >= 1.0, (
+        f"geloggte Dauer ({logged_seconds}s) passt nicht zum simulierten "
+        "1.2s-Compactor-Stop"
+    )
+    assert matching[0].levelname == "WARNING", (
+        "Shutdown-Schritte >1s sollen als WARNING geloggt werden (siehe "
+        "_timed_stop), damit sie im Deploy-Log auffallen statt in INFO "
+        "unterzugehen"
+    )
