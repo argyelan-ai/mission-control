@@ -38,6 +38,17 @@ import { TaskActions } from "../TaskActions";
 
 const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer", role_canonical: "reviewer" } as unknown as Agent;
 
+// FALLBACK-PROBE (W1 follow-up): `role_canonical` is resolved server-side
+// (app/scopes.py:normalize_agent_role) and only shipped by a backend that has
+// already deployed that change. Until every environment is on that backend,
+// `GET /api/v1/agents` can still answer without the field — so the fixture
+// must model "field absent", not "field null", to match what actually happens
+// on the wire. Ownership while that gap exists: lib/reviewRouting.ts's
+// documented fail-safe (`!== "reviewer"` on `undefined`) keeps the decision
+// with the operator, never silently with the agent — that's the contract
+// this probe pins.
+const argusNoCanonical: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
+
 function mkTask(o: Partial<Task> = {}): Task {
   return {
     id: "task-1", board_id: "board-1", title: "Ship it", status: "review",
@@ -101,5 +112,18 @@ describe("PROBE G3 — a stopped reviewer run does not move the decision", () =>
     renderGate(mkTask({ run_control: "stopped" }));
     expect(await screen.findByTestId("agent-review-note")).toBeInTheDocument();
     expect(screen.queryByText("Approve")).not.toBeInTheDocument();
+  });
+});
+
+describe("PROBE G4 — agent resolves but is missing role_canonical (backend not yet redeployed)", () => {
+  it("reviewer holds the card + agent has no role_canonical → decision falls back to the operator", async () => {
+    apiMock.agentsList.mockResolvedValue([argusNoCanonical]);
+    renderGate(mkTask());
+    await waitFor(() => expect(apiMock.agentsList).toHaveBeenCalled());
+    const approve = await screen.findByText("Approve");
+    // eslint-disable-next-line no-console
+    console.log("PROBE G4 RESULT — Approve:", !!approve, "| note:", !!screen.queryByTestId("agent-review-note"));
+    expect(approve).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-review-note")).not.toBeInTheDocument();
   });
 });
