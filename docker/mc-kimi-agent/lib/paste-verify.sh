@@ -113,6 +113,50 @@ verify_paste_landed() {
     return 1
 }
 
+# _input_field_tail_lines PANE — wie viele Zeilen am Pane-Ende gehoeren zum
+# Eingabefeld (Composer-Box), nicht zum Verlauf?
+#
+# Bug B1 (2026-09-12): das Feld-Fenster war eine feste Zahl (12 Zeilen). Die
+# claude-TUI laeuft im Alternate Screen — `capture-pane -S -2000` liefert
+# genau die sichtbaren ~24 Zeilen, KEIN Scrollback. Ein frisch abgesendeter
+# Nudge rendert seinen Echo-Abdruck in der unteren Bildschirmhaelfte, also
+# INNERHALB der letzten 12 Zeilen, waehrend der Verlauf darueber ihn nicht
+# mehr enthaelt. classify_paste_outcome sah "Fingerprint nur im Tail" und
+# meldete "2 = haengengeblieben" fuer einen Nudge, der laengst lief. Folge:
+# ein zweites Enter mitten in den laufenden Zug plus eine laute Fehlmeldung
+# auf einem gesunden Pfad — also genau der Fehler, den der Fix abstellen soll,
+# nur mit umgekehrtem Vorzeichen.
+#
+# Das Eingabefeld ist strukturell erkennbar und steht IMMER am Pane-Ende:
+#   `❯`  — claude-cli >= 2.1 und openclaude (Prompt-Zeile)
+#   `╭`  — kimi-code und claude-cli <= 2.0 (obere Box-Kante)
+# Der UNTERSTE Treffer ist die Composer-Box; jeder `❯` weiter oben ist der
+# Echo-Abdruck einer bereits abgesendeten Nachricht und gehoert zum Verlauf.
+#
+# Ohne Anker (fremde CLI, Box aus dem sichtbaren Bereich geschoben) faellt die
+# Funktion auf PASTE_INPUT_TAIL_LINES (Default 12) zurueck — das alte
+# Verhalten. Ein explizit gesetztes PASTE_INPUT_TAIL_LINES gewinnt immer.
+_input_field_tail_lines() {
+    local pane="$1"
+    local fallback="${PASTE_INPUT_TAIL_LINES:-12}"
+    if [ -n "${PASTE_INPUT_TAIL_LINES:-}" ]; then
+        echo "$fallback"
+        return 0
+    fi
+    local total anchor
+    total=$(printf '%s\n' "$pane" | grep -c '' 2>/dev/null || echo 0)
+    # `|| true` ist Pflicht, nicht Kosmetik: poll.sh laeuft mit
+    # `set -euo pipefail`, und grep gibt ohne Treffer 1 zurueck. Ungeschuetzt
+    # wuerde ausgerechnet der Fallback-Pfad (Pane ohne erkennbare Box) den
+    # gesamten poll-Loop abbrechen.
+    anchor=$(printf '%s\n' "$pane" | grep -n -E '^[[:space:]]*(❯|╭)' 2>/dev/null | tail -n 1 | cut -d: -f1 || true)
+    if [ -z "$anchor" ] || [ "$total" -le 0 ] 2>/dev/null; then
+        echo "$fallback"
+        return 0
+    fi
+    echo $(( total - anchor + 1 ))
+}
+
 # classify_paste_outcome FILE — drei-Wege-Klassifikation des Post-Paste-
 # Zustands (Interrupt-Gate fix 2026-09-12). verify_paste_landed antwortete
 # nur binär und verschwieg den wichtigsten Live-Fall: das Enter ging in den
@@ -122,11 +166,10 @@ verify_paste_landed() {
 # passiert war.
 #
 # Gibt zurueck (auf stdout):
-#   "0" — abgesendet: Fingerprint im SCROLLBACK (ausserhalb des Feld-Tails)
-#         sichtbar, oder Collapse-Marker gewachsen, oder Feld leer + Fingerprint
-#         im Tail (Turn hat konsumiert).
-#   "2" — im Eingabefeld stehengeblieben: Fingerprint NUR im letzten
-#         PASTE_INPUT_TAIL_LINES Zeilen sichtbar, nicht im Rest des Verlaufs.
+#   "0" — abgesendet: Fingerprint im Verlauf oberhalb des Eingabefelds
+#         sichtbar, oder Collapse-Marker gewachsen.
+#   "2" — im Eingabefeld stehengeblieben: Fingerprint NUR im Eingabefeld
+#         sichtbar, nicht im Verlauf darueber.
 #   "1" — gar nicht angekommen: Fingerprint nirgends sichtbar.
 #
 # Dasselbe progressive Shrinking (full/50%/25%) + der last_line-Anker wie
@@ -159,6 +202,9 @@ classify_paste_outcome() {
 
     _pane_matches_fp() {
         # $1 = pane text; matcht full/half/quarter + last_line-Anker.
+        # Der last_line-Anker nur wenn er nicht leer und nicht mit dem
+        # Erstzeilen-Fingerprint identisch ist: `grep -qF ""` matcht sonst
+        # JEDEN Text und die Klassifikation faellt immer auf "abgesendet".
         echo "$1" | grep -qF "$full" 2>/dev/null \
             || echo "$1" | grep -qF "$fp_half" 2>/dev/null \
             || echo "$1" | grep -qF "$fp_quarter" 2>/dev/null \
@@ -166,12 +212,16 @@ classify_paste_outcome() {
                  && echo "$1" | grep -qF "$last_line" 2>/dev/null; }
     }
 
-    local input_tail_lines=${PASTE_INPUT_TAIL_LINES:-12}
+    local input_tail_lines
+    input_tail_lines=$(_input_field_tail_lines "$pane")
     local tail_fingerprint="0" tail_pane body
     tail_pane=$(echo "$pane" | tail -n "$input_tail_lines")
     if _pane_matches_fp "$tail_pane"; then
         tail_fingerprint="1"
     fi
+    # Alles OBERHALB des Eingabefelds ist Verlauf. Steht der Fingerprint hier,
+    # hat die TUI die Nachricht gerendert — sie ist also abgesendet.
+    body=$(echo "$pane" | head -n -"$input_tail_lines")
 
     # Collapse-Marker-Pfad (identisch zu verify_paste_landed): nur ein ZUWACHS
     # gegen das Pre-Paste-Snapshot zaehlt.
@@ -183,23 +233,17 @@ classify_paste_outcome() {
         return 0
     fi
 
+    if _pane_matches_fp "$body"; then
+        echo "0"
+        return 0
+    fi
     if [ "$tail_fingerprint" = "1" ]; then
-        # Fingerprint im Feld-Tail sichtbar — abgesendet oder haengengeblieben?
-        # Absendet-Indizien: (a) Fingerprint auch IRGENDWO ausserhalb des Tails
-        # (Turn hat den Text in den Verlauf gerendert), oder (b) das Feld ist
-        # zwischenzeitlich leer und die letzten Zeilen zeigen den Prompt.
-        body=$(echo "$pane" | head -n -"$input_tail_lines")
-        if _pane_matches_fp "$body"; then
-            echo "0"
-            return 0
-        fi
-        # (b): Feld-Tail ohne den Fingerprint UND ohne Input-Reste ⇒ der Text
-        # ist aus dem Feld raus (abgesendet). Achtung false-positive-Gefahr:
-        # ohne rendering im Verlauf (collapse-Pfad oben abgedeckt) sind wir
-        # konservativ — nur wenn der Fingerprint im Tail WEG ist gilt (b).
+        # Fingerprint NUR im Eingabefeld → haengengeblieben, das Submit-Enter
+        # ist woanders gelandet (klassisch: in den Interrupted-Dialog).
         echo "2"
         return 0
     fi
+
     echo "1"
     return 0
 }

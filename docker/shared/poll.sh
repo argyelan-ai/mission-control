@@ -38,6 +38,13 @@ source "$POLL_LIB_DIR/ui-detect.sh"
 # shellcheck source=lib/context-detect.sh
 source "$POLL_LIB_DIR/context-detect.sh"
 # Cached runtime-UI of tmux Window 0. Set by wait_for_clean_prompt() on every
+# Karte, auf die paste_and_submit eskaliert, wenn ein Paste unabgesendet im
+# Eingabefeld haengenbleibt. Leer => CURRENT_TASK_ID/CURRENT_BOARD_ID. Nur der
+# Dispatch-Pfad setzt sie, weil CURRENT_TASK_ID dort noch die VORHERIGE Karte
+# haelt.
+PASTE_ESCALATION_TASK_ID=""
+PASTE_ESCALATION_BOARD_ID=""
+
 # successful detect, used by paste_and_submit() to decide whether to send the
 # `\e[201~` end-marker. Empty until first detection — paste_and_submit treats
 # empty as "send marker" (safe default for claude-cli majority).
@@ -315,6 +322,49 @@ PASTE_MAX_ATTEMPTS="${PASTE_MAX_ATTEMPTS:-2}"
 # shellcheck source=lib/paste-verify.sh
 source "$POLL_LIB_DIR/paste-verify.sh"
 
+# escalate_unsubmitted_nudge TASK_ID BOARD_ID DETAIL — der laute Pfad.
+#
+# Wenn der Text nach dem zweiten Enter IMMER NOCH unabgesendet im Eingabefeld
+# steht, ist der Agent gewedged: der naechste Paste wuerde sich an den Rest im
+# Feld anhaengen, und der laufende Zug startet nie. Genau hier hat am
+# 12.09.2026 viermal ein Mensch von Hand Enter gedrueckt, weil poll.sh den
+# Fehlschlag nur ins Log geschrieben hat — sichtbar fuer niemanden.
+#
+# "Laut" heisst deshalb zwei Dinge, nicht eins:
+#   1. Kommentar auf die Karte (comment_type=blocker) mit der exakten Diagnose.
+#   2. Status blocked — erst die Statusflanke startet die Lead-Triage
+#      (blocker_triage.py). Ein Blocker-Kommentar allein pingt niemanden.
+# Beides macht report_blocker bereits; das Escape darin raeumt zusaetzlich den
+# haengengebliebenen Text aus dem Eingabefeld, damit der naechste Dispatch
+# nicht auf einem verschmutzten Feld landet.
+#
+# Ohne bekannte Karte (Dispatch vor dem ersten Task, Nudge ohne aktiven Task)
+# bleibt nur das ERROR-Log — dann gibt es keine Karte, auf die man schreiben
+# koennte. Still weitergegangen wird trotzdem nie: der Aufrufer gibt 2 zurueck.
+escalate_unsubmitted_nudge() {
+    local task_id="$1"
+    local board_id="$2"
+    local detail="$3"
+    if [ -z "$task_id" ] || [ -z "$board_id" ]; then
+        log "ERROR: Nudge steht unabgesendet im Eingabefeld und es ist KEINE Karte zugeordnet (task_id='${task_id}', board_id='${board_id}') — keine Eskalation moeglich, nur dieses Log. Manueller Eingriff noetig."
+        return 1
+    fi
+    local prev_task="$CURRENT_TASK_ID" prev_board="$CURRENT_BOARD_ID"
+    CURRENT_TASK_ID="$task_id"
+    CURRENT_BOARD_ID="$board_id"
+    report_blocker "$task_id" \
+        "Nudge blieb unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt" \
+        "$detail" \
+        "poll.sh paste_and_submit"
+    # report_blocker leert CURRENT_TASK_ID/BOARD_ID absichtlich. War vorher eine
+    # ANDERE Karte aktiv, stellen wir die nicht wieder her — sie waere jetzt
+    # falsch; war es dieselbe, muss sie geleert bleiben.
+    if [ -n "$prev_task" ] && [ "$prev_task" != "$task_id" ]; then
+        log "WARNING: escalate_unsubmitted_nudge hat Karte $task_id blockiert, vorher aktiv war $prev_task ($prev_board) — Turn-State-Tracking ist zurueckgesetzt."
+    fi
+    return 0
+}
+
 paste_and_submit() {
     # Optionaler erster Parameter --no-fail-open: statt nach READY_TIMEOUT_SEC
     # trotzdem zu pasten (fail-open), wird mit Return-Code 2 abgebrochen. Nutzt
@@ -396,8 +446,14 @@ paste_and_submit() {
                 return 0
             fi
             if [ "$outcome" = "2" ]; then
-                log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. LAUT MELDEN: Kommentar auf die Karte plus Meldung an den Lead. NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
-                return 1
+                log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. Eskalation: Kommentar auf die Karte plus Status blocked (Lead-Triage). NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
+                escalate_unsubmitted_nudge \
+                    "${PASTE_ESCALATION_TASK_ID:-$CURRENT_TASK_ID}" \
+                    "${PASTE_ESCALATION_BOARD_ID:-$CURRENT_BOARD_ID}" \
+                    "paste_and_submit Versuch ${attempt}: der Text steht sichtbar im Eingabefeld, wurde aber nicht abgesendet (classify_paste_outcome=2 auch nach dem zweiten Enter). Typische Ursache: das Submit-Enter landete in einem Dialog statt im Feld. Das Feld wurde per Escape geraeumt; der Nudge ist NICHT zugestellt."
+                # 2 statt 1: der Aufrufer soll wissen, dass die Karte bereits
+                # blockiert wurde und er kein Turn-State-Tracking mehr aufsetzt.
+                return 2
             fi
             # outcome=1 nach zweitem Enter: Feld leer geworden, aber Fingerprint
             # nicht im Scrollback — als Nicht-Angekommen melden und normal retry.
@@ -673,7 +729,24 @@ except Exception:
     # Task doch lief. Jetzt: Return-Code explicit handlen — bei Fehler nur
     # WARN-Log, kein poll.sh exit. Der Task bleibt assigned + in_progress,
     # claude meldet sich entweder selbst oder der Operator sieht den Task stuck.
-    if ! paste_and_submit "$TASK_PROMPT_FILE"; then
+    # Die Eskalation in paste_and_submit braucht die Karte, die GERADE gepastet
+    # wird — CURRENT_TASK_ID zeigt hier noch auf die vorherige (es wird erst
+    # unten gesetzt). Ohne diese beiden Variablen wuerde ein Fehlschlag die
+    # falsche Karte blockieren.
+    PASTE_ESCALATION_TASK_ID="$task_id"
+    PASTE_ESCALATION_BOARD_ID="$board_id"
+    local paste_rc=0
+    paste_and_submit "$TASK_PROMPT_FILE" || paste_rc=$?
+    PASTE_ESCALATION_TASK_ID=""
+    PASTE_ESCALATION_BOARD_ID=""
+    if [ "$paste_rc" = "2" ]; then
+        # Karte ist bereits blockiert + Feld geraeumt (escalate_unsubmitted_nudge).
+        # Kein Turn-State-Tracking aufsetzen — sonst wuerde die eben blockierte
+        # Karte unten als "working" wieder aktiv gesetzt.
+        log "Task $task_id: Prompt blieb unabgesendet im Eingabefeld — Karte wurde blockiert und an den Lead gemeldet. Kein Turn-State-Tracking."
+        return
+    fi
+    if [ "$paste_rc" != "0" ]; then
         log "WARNING: paste_and_submit returnte non-zero fuer Task $task_id — claude koennte den Prompt verzoegert verarbeiten oder Task ist stuck. Kein poll.sh exit, Task bleibt in_progress."
     else
         log "Task $task_id (attempt ${attempt_id:-unbekannt}) an claude gesendet (fire-and-forget)"
@@ -751,18 +824,23 @@ report_blocker() {
     local task_id="$1"
     local reason="$2"
     local error_detail="${3:-no error detail captured}"
+    # Quellenkennung im Kommentar. Default = der alte Wortlaut, damit die
+    # beiden turn-state-Aufrufer unveraendert bleiben; der Nudge-Pfad
+    # (escalate_unsubmitted_nudge) setzt seine eigene, damit der Lead auf den
+    # ersten Blick sieht, dass es NICHT die turn-state-Erkennung war.
+    local source_label="${4:-poll.sh turn-state}"
     log "Blocker erkannt auf Task $task_id: $reason"
 
     # Blocker-Kommentar via Python (sichere JSON-Encoding mit Newlines/Quotes)
     if [ -n "$CURRENT_BOARD_ID" ]; then
-        POLL_REASON="$reason" POLL_ERROR="$error_detail" \
+        POLL_REASON="$reason" POLL_ERROR="$error_detail" POLL_SOURCE="$source_label" \
         POLL_URL="$MC_API_URL/api/v1/agent/boards/$CURRENT_BOARD_ID/tasks/$task_id/comments" \
         POLL_TOKEN="$MC_TOKEN" python3 -c "
 import json, os, urllib.request
 reason = os.environ['POLL_REASON']
 err = os.environ['POLL_ERROR']
 body = {
-    'content': f'**Automatisch erkannt (poll.sh turn-state):** {reason}\n\n\`\`\`\n{err}\n\`\`\`',
+    'content': f'**Automatisch erkannt ({os.environ[\"POLL_SOURCE\"]}):** {reason}\n\n\`\`\`\n{err}\n\`\`\`',
     'comment_type': 'blocker',
 }
 req = urllib.request.Request(

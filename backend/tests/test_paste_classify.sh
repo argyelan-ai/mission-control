@@ -25,6 +25,11 @@
 
 set -euo pipefail
 
+# Ohne diese Definition endet JEDE fehlgeschlagene Assertion mit
+# "fail: command not found" (exit 127) statt mit der Meldung, die sagt was
+# schiefging — dieselbe Klasse Fehler, die diese Karte behebt.
+fail() { echo "FAIL: $1" >&2; exit 1; }
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LIB="$REPO_ROOT/docker/mc-agent-base/lib/paste-verify.sh"
 POLL="$REPO_ROOT/docker/shared/poll.sh"
@@ -64,6 +69,10 @@ chmod +x "$TMUX_STUB_DIR/tmux"
 export PATH="$TMUX_STUB_DIR:$PATH"
 
 export SESSION_NAME="testsession"
+# Sabotage-Probe (nicht entfernen): mit dem ALTEN festen 12-Zeilen-Fenster ist
+# der abgesendete Nudge im 24-Zeilen-Pane von einem haengengebliebenen nicht zu
+# unterscheiden. Schlaegt dieser Block fehl, ist die Anker-Logik tot und C5
+# wuerde nur noch zufaellig gruen sein.
 export PASTE_FINGERPRINT_LEN=40
 
 # ── classify_paste_outcome ──────────────────────────────────────────────────
@@ -110,6 +119,55 @@ printf 'Uniquely different first line entirely unrelated to pane\n' > "$msg_c4"
 out=$(classify_paste_outcome "$msg_c4")
 [ "$out" = "0" ] || fail "case C4: collapse-marker growth must classify 0, got '$out'"
 
+# ── Bug B1: echtes 24-Zeilen-Pane aus dem Alternate Screen ─────────────────
+# Die claude-TUI laeuft im Alternate Screen: `capture-pane -S -2000` liefert
+# nur die sichtbaren ~24 Zeilen, KEIN Scrollback. Ein frisch abgesendeter
+# Nudge rendert seinen Echo-Abdruck in der unteren Bildschirmhaelfte — mit
+# einem festen 12-Zeilen-Feldfenster lag er im "Eingabefeld" und der
+# abgesendete Nudge war vom haengengebliebenen nicht zu unterscheiden (beide
+# "2"). Fixtures sind echte Panes, nicht synthetische Fuellzeilen.
+FIX_DIR="$REPO_ROOT/backend/tests/fixtures/paste"
+msg_b1="$FIX_DIR/nudge-message.txt"
+
+# Case C5: abgesendet — Echo im Verlauf (Zeile 14), Composer-Box unten leer.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+out=$(classify_paste_outcome "$msg_b1")
+[ "$out" = "0" ] || fail "case C5: abgesendeter Nudge im 24-Zeilen-Pane muss 0 sein, war '$out'"
+
+# Case C6: haengengeblieben — nichts im Verlauf, Text steht IN der Box.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-unsubmitted.txt"
+out=$(classify_paste_outcome "$msg_b1")
+[ "$out" = "2" ] || fail "case C6: unabgesendeter Nudge im 24-Zeilen-Pane muss 2 sein, war '$out'"
+
+# Case C7: der Anker haengt am UNTERSTEN `❯`, nicht am ersten. Sonst wuerde
+# der Echo-Abdruck im Verlauf die Box-Erkennung nach oben ziehen und C5
+# wieder als "2" kippen.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+pane_c7=$(cat "$FIX_DIR/claude-24-submitted.txt")
+win=$(_input_field_tail_lines "$pane_c7")
+[ "$win" = "3" ] || fail "case C7: Feldfenster im 24-Zeilen-Pane muss 3 sein (Box ab Zeile 22), war '$win'"
+
+# Case C8: explizit gesetztes PASTE_INPUT_TAIL_LINES gewinnt (Ops-Override).
+win=$(PASTE_INPUT_TAIL_LINES=9 _input_field_tail_lines "$pane_c7")
+[ "$win" = "9" ] || fail "case C8: gesetztes PASTE_INPUT_TAIL_LINES muss gewinnen, war '$win'"
+
+# Case C8b: Pane ohne erkennbare Box darf den poll-Loop nicht killen. poll.sh
+# laeuft mit `set -euo pipefail`; grep ohne Treffer gibt 1 zurueck. Der Test
+# laeuft in einer eigenen Shell MIT diesen Flags, weil das Smoke-Skript sie
+# selbst gesetzt hat und ein Abbruch hier sonst als "Test kaputt" durchginge.
+win=$(bash -c 'set -euo pipefail; source "$1"; _input_field_tail_lines "$(printf "a\nb\nc\n")"' _ "$LIB") \
+    || fail "case C8b: _input_field_tail_lines bricht unter set -euo pipefail ab, wenn kein Anker im Pane ist"
+[ "$win" = "12" ] || fail "case C8b: ohne Anker muss der Default 12 greifen, war '$win'"
+
+# Case C9 (Sabotage-Probe): mit dem ALTEN festen 12-Zeilen-Fenster kollabieren
+# C5 und C6 auf denselben Wert — genau die Blindheit, die B1 beschreibt. Die
+# Probe haelt fest, dass die Anker-Logik der einzige Grund fuer C5 ist.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+out_sub=$(PASTE_INPUT_TAIL_LINES=12 classify_paste_outcome "$msg_b1")
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-unsubmitted.txt"
+out_uns=$(PASTE_INPUT_TAIL_LINES=12 classify_paste_outcome "$msg_b1")
+[ "$out_sub" = "2" ] && [ "$out_uns" = "2" ] || fail "case C9: Sabotage-Probe erwartet 2/2 mit festem Fenster, war '$out_sub'/'$out_uns' — Fixture oder Logik hat sich verschoben"
+
 # ── pane_in_interrupted_dialog (sourced from poll.sh, functions only) ──────
 # poll.sh sources $POLL_LIB_DIR/{turn-state,ui-detect,context-detect}.sh even in
 # SOURCE_ONLY mode. Point POLL_LIB_DIR at the REAL mc-agent-base lib (so
@@ -148,5 +206,58 @@ export TMUX_STUB_PANE_FILE="$pane_p3"
 if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
     fail "case P3: normal idle pane must not be flagged as interrupted dialog"
 fi
+
+# ── Bug B3: der laute Pfad ─────────────────────────────────────────────────
+# Bleibt der Text auch nach dem zweiten Enter im Feld, darf poll.sh NICHT
+# still weitergehen. Verlangt sind zwei Dinge: Kommentar auf die Karte UND
+# Statusflanke auf blocked (erst die startet die Lead-Triage). Hier wird
+# report_blocker gestubbt und geprueft, dass paste_and_submit es mit der
+# richtigen Karte aufruft und 2 zurueckgibt.
+export MC_API_URL="http://stub" MC_TOKEN="stub"
+PASTE_VERIFY_DELAY_SEC=0
+PASTE_RETRY_DELAY_SEC=0
+PASTE_MAX_ATTEMPTS=1
+READY_TIMEOUT_SEC=0
+CURRENT_TASK_ID="stale-task"
+CURRENT_BOARD_ID="stale-board"
+BLOCKER_LOG=$(mktemp)
+report_blocker() { echo "report_blocker task=$1 source=${4:-} detail=$3" >> "$BLOCKER_LOG"; CURRENT_TASK_ID=""; CURRENT_BOARD_ID=""; }
+classify_paste_outcome() { echo "2"; }
+wait_for_clean_prompt() { PANE_UI_DETECTED="claude"; return 0; }
+log() { :; }
+
+msg_e1=$(mktemp)
+printf 'Weiter mit der Karte\n' > "$msg_e1"
+
+# Case E1: Dispatch-Pfad — die Eskalation muss die GERADE gepastete Karte
+# treffen, nicht die noch in CURRENT_TASK_ID stehende vorherige.
+PASTE_ESCALATION_TASK_ID="fresh-task"
+PASTE_ESCALATION_BOARD_ID="fresh-board"
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "2" ] || fail "case E1: paste_and_submit muss 2 zurueckgeben (Karte blockiert), war '$rc'"
+grep -q "task=fresh-task" "$BLOCKER_LOG" || fail "case E1: Eskalation traf die falsche Karte: $(cat "$BLOCKER_LOG")"
+grep -q "source=poll.sh paste_and_submit" "$BLOCKER_LOG" || fail "case E1: Quellenkennung fehlt: $(cat "$BLOCKER_LOG")"
+
+# Case E2: ohne Escalation-Override faellt es auf die laufende Karte zurueck.
+: > "$BLOCKER_LOG"
+PASTE_ESCALATION_TASK_ID=""
+PASTE_ESCALATION_BOARD_ID=""
+CURRENT_TASK_ID="running-task"
+CURRENT_BOARD_ID="running-board"
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "2" ] || fail "case E2: paste_and_submit muss 2 zurueckgeben, war '$rc'"
+grep -q "task=running-task" "$BLOCKER_LOG" || fail "case E2: Fallback auf CURRENT_TASK_ID fehlt: $(cat "$BLOCKER_LOG")"
+
+# Case E3: ohne bekannte Karte gibt es nichts zu blockieren — aber still
+# weitergegangen wird trotzdem nicht (rc=2, kein report_blocker).
+: > "$BLOCKER_LOG"
+CURRENT_TASK_ID=""
+CURRENT_BOARD_ID=""
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "2" ] || fail "case E3: paste_and_submit muss auch ohne Karte 2 zurueckgeben, war '$rc'"
+[ ! -s "$BLOCKER_LOG" ] || fail "case E3: ohne Karte darf report_blocker nicht laufen: $(cat "$BLOCKER_LOG")"
 
 echo "PASS: all paste-classify smoke tests"
