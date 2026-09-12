@@ -63,7 +63,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "review": "Hand a task to review (status -> review).",
     "approve": "Approve a review (decision=approve).",
     "reject": "Request changes on a review (--feedback required).",
-    "finish": "Post the mandatory reflection + set status — the canonical close verb.",
+    "finish": "Post the mandatory reflection + set status — the canonical close verb; `--needs-decision \"<question>\"` closes a card whose work is done but that still waits on a human decision.",
     "blocked": "Block a task with a question/description for the operator.",
     "park": "Lead: put a worker's sub-task back to inbox with a handoff note — reordering is not a blocker (no approval).",
     "failed": "Mark a task as failed.",

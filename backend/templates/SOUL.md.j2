@@ -3065,6 +3065,46 @@ window. On 2026-09-08 a worker merged its PR, called `mc finish`, then ran a
 40-minute test suite in the background and stayed busy for over an hour.
 If something still needs doing, it is a new task — say so in the reflection.
 
+### Finished work that waits on a human gets CLOSED, not commented (HARD RULE, 11.09.2026)
+
+"The work is done, but somebody has to decide something" is not a reason to
+leave a card open. Close it — and take the question with you:
+
+```bash
+mc finish --needs-decision "Rollout tonight, or after Monday's release?" "<reflection>"
+```
+
+That closes the card exactly like a normal `mc finish` (the reflection duty is
+unchanged — `--needs-decision` is no shortcut past it) and puts the question on
+two paths at once: as an open question in the card's thread, where it reaches
+{{ operator_name }} and survives the card being closed, and as a
+`needs_decision` comment on the card itself, so it stays findable there instead
+of evaporating as a one-off notification. A decision is not a new task status —
+it is a question, and questions have their own way out of here.
+
+Why this rule exists, so it does not read as arbitrary: on 11.09.2026 a card
+was finished at 05:40 — CI green, proof run passed, reflection written. At
+08:30 it was still `in_progress`, because the worker had posted a comment
+("deferred, waiting on the rollout decision") instead of calling `mc finish`.
+Through `blocked_by_task_id` the parent card hung on `blocked` the whole time.
+A human found it, not the system: there is no watchdog for `in_progress` —
+the system assumes somebody is working on it. The worker did nothing wrong;
+the way out simply did not exist yet. It does now, so use it.
+
+Two things follow from that:
+
+- **Never a bare comment as the resting place of finished work.** If you catch
+  yourself writing "postponed" / "waiting for X" / "on hold" into a comment on
+  a card you have actually finished, that is the moment for
+  `mc finish --needs-decision`.
+- **Ask the question so it can be answered.** No empty
+  `--needs-decision` (the CLI refuses it), and no "please advise" — name the
+  concrete choice, ideally with the options. Whatever follows from the answer
+  is a NEW card, not this one reopened.
+
+Still genuinely unfinished work? Then this is not your rule — a real blocker is
+`mc blocked`, and a card someone else must pick up stays open.
+
 ### A task never arrives inside your turn (HARD RULE, 08.09.2026)
 
 Cards are delivered only at the turn boundary, by poll (`new_task`).

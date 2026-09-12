@@ -20,6 +20,7 @@ type CommentType =
   | "handoff"
   | "message"
   | "reflection"
+  | "needs_decision"
   | "waiting_on_callback";
 
 interface CommentCardProps {
@@ -38,6 +39,7 @@ const TYPE_COLORS: Record<CommentType, string> = {
   handoff: C.accent,
   message: "transparent",
   reflection: STATUS_TEXT.info,
+  needs_decision: C.warning,
   waiting_on_callback: C.warning,
 };
 
@@ -50,6 +52,7 @@ const TYPE_LABELS: Record<CommentType, string> = {
   handoff: "Handoff",
   message: "Message",
   reflection: "Self-Reflection",
+  needs_decision: "Entscheid offen",
   waiting_on_callback: "Waiting on Callback",
 };
 
