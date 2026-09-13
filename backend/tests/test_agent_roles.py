@@ -163,6 +163,119 @@ async def test_find_agent_by_role_least_busy(session, make_board, make_agent, ma
     assert result.id == dev2.id
 
 
+@pytest.mark.asyncio
+async def test_find_agent_by_role_counts_held_review_cards(
+    session, make_board, make_agent, make_task,
+):
+    """Gehaltene review-Karten zaehlen in die Last — ein Reviewer mit 5
+    wartenden Reviews und 0 Zuegen wird NICHT gewaehlt."""
+    board = await make_board()
+    busy = await make_agent(name="Busy Rex", role="reviewer", board_id=board.id)
+    free = await make_agent(name="Free Rex", role="reviewer", board_id=board.id)
+
+    # Busy haelt 5 Reviews, faehrt aber 0 Zuege (kein in_progress).
+    for i in range(5):
+        await make_task(
+            board_id=board.id, title=f"Review {i}",
+            status="review", assigned_agent_id=busy.id,
+        )
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(session, board.id, AgentRole.REVIEWER)
+    assert result is not None
+    assert result.id == free.id
+
+
+@pytest.mark.asyncio
+async def test_find_agent_by_role_skips_offline_reviewer(session, make_board, make_agent):
+    """Offline-Reviewer (last_seen_at stale) wird nicht gewaehlt."""
+    from datetime import timedelta
+    from app.utils import utcnow
+
+    board = await make_board()
+    offline = await make_agent(
+        name="Offline Rex", role="reviewer", board_id=board.id,
+        last_seen_at=utcnow() - timedelta(hours=1),
+    )
+    online = await make_agent(
+        name="Online Rex", role="reviewer", board_id=board.id,
+        last_seen_at=utcnow(),
+    )
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(session, board.id, AgentRole.REVIEWER)
+    assert result is not None
+    assert result.id == online.id
+    assert result.id != offline.id
+
+
+@pytest.mark.asyncio
+async def test_find_agent_by_role_none_when_only_offline_reviewer(
+    session, make_board, make_agent,
+):
+    """Nur offline Reviewer, kein Lead → explizit None (kein stiller Fallback)."""
+    from datetime import timedelta
+    from app.utils import utcnow
+
+    board = await make_board()
+    await make_agent(
+        name="Offline Rex", role="reviewer", board_id=board.id,
+        last_seen_at=utcnow() - timedelta(hours=1),
+    )
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(session, board.id, AgentRole.REVIEWER)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_agent_by_role_excludes_author(session, make_board, make_agent):
+    """Autor der Karte (exclude_agent_id) wird nicht gewaehlt — auch nicht
+    als einziger Kandidat; kein stiller Fallback auf ihn."""
+    board = await make_board()
+    author = await make_agent(name="Author Rex", role="reviewer", board_id=board.id)
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(
+        session, board.id, AgentRole.REVIEWER, exclude_agent_id=author.id,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_handle_review_handoff_never_selects_author(
+    make_board, make_agent, make_task,
+):
+    """End-to-End (FreeCode-Bug): Autor des PR == einziger Reviewer →
+    handle_review_handoff liefert None und weist die Karte NICHT zu."""
+    board = await make_board(name="Author Board", slug="author-board")
+    developer = await make_agent(
+        name="FreeCode", board_id=board.id, role="reviewer", is_board_lead=False,
+    )
+    task = await make_task(
+        board_id=board.id, title="PR Review",
+        status="review", assigned_agent_id=developer.id,
+    )
+
+    from tests.conftest import test_engine
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+    ):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(type(task), task.id)
+            from app.services.task_lifecycle import handle_review_handoff
+            result = await handle_review_handoff(s, t, board.id, developer=developer)
+
+        assert result is None
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(type(task), task.id)
+            assert t.assigned_agent_id == developer.id  # unveraendert, kein Self-Review
+            assert t.dispatch_intent != "review_handoff"
+
+
 # ── _find_reviewer() Role-Based Tests ────────────────────────────────
 
 

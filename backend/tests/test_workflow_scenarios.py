@@ -378,16 +378,16 @@ async def test_self_review_prevention(client, fake_redis):
         task_status="review", task_assigned_to="developer", with_reviewer=False,
     )
 
-    with patch("app.routers.agent_scoped._find_reviewer", new_callable=AsyncMock, return_value=data["developer"]):
-        with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
-            async with AsyncSession(test_engine, expire_on_commit=False) as s:
-                task = await s.get(data["task"].__class__, data["task"].id)
-                developer = await s.get(data["developer"].__class__, data["developer"].id)
-                result = await handle_review_handoff(
-                    s, task, data["board"].id, developer=developer,
-                )
-
-    assert result is None, "Self-review should be prevented"
+    # Kein _find_reviewer-Mock: der Autor-Ausschluss steckt JETZT in der
+    # echten Auswahl (dispatch.find_agent_by_role exclude_agent_id) — genau
+    # die soll dieser Test ueben.
+    with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            task = await s.get(data["task"].__class__, data["task"].id)
+            developer = await s.get(data["developer"].__class__, data["developer"].id)
+            result = await handle_review_handoff(
+                s, task, data["board"].id, developer=developer,
+            )
 
 
 @pytest.mark.asyncio
