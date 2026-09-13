@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Power } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 
 /**
  * Engine Control v0 (ADR-057) — per-runtime "Autostart bei Boot" toggle.
@@ -55,7 +55,7 @@ export function AutostartToggle({ slug }: { slug: string }) {
       // minimum of 24px.
       className="shrink-0 inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 min-h-11 sm:min-h-6 leading-none transition-opacity"
       style={{
-        border: `1px solid ${unknown ? C.borderActive : enabled ? `${STATUS.online}40` : C.borderActive}`,
+        border: `1px solid ${unknown ? C.borderActive : enabled ? `${alpha(STATUS.online, 0.25)}` : C.borderActive}`,
         color: unknown ? C.textDim : enabled ? STATUS_TEXT.online : C.textMuted,
         background: "transparent",
         cursor: unknown || busy ? "not-allowed" : "pointer",

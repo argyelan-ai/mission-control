@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { CompatMatrixHostHarness, Harness, HostHarness } from "@/lib/types";
 import type { WizardAgentRuntime, WizardStepProps } from "../types";
 import { initialWizardState } from "../types";
@@ -255,8 +255,8 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
             <div
               className="rounded-lg px-3 py-2 text-[11px]"
               style={{
-                backgroundColor: `${C.warning}14`,
-                border: `1px solid ${C.warning}33`,
+                backgroundColor: `${alpha(C.warning, 0.08)}`,
+                border: `1px solid ${alpha(C.warning, 0.2)}`,
                 color: "var(--color-text-secondary)",
               }}
             >

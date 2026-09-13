@@ -29,7 +29,7 @@ import AppShell from "@/components/layout/AppShell";
 import TaskListColumn from "@/components/tasks/TaskListColumn";
 import { TaskDetailBody } from "@/components/task/TaskDetailBody";
 import type { Task, TaskStatus, Agent, Project, Tag, ProjectPhase } from "@/lib/types";
-import { C, LANE, STATUS_TEXT } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
@@ -44,9 +44,9 @@ function TagChip({ tag, size = "sm" }: { tag: Tag; size?: "xs" | "sm" }) {
         size === "xs" ? "text-[9px] px-1.5 py-0" : "text-[10px] px-2 py-0.5"
       )}
       style={{
-        backgroundColor: `${color}18`,
+        backgroundColor: `${alpha(color, 0.09)}`,
         color: color,
-        border: `1px solid ${color}30`,
+        border: `1px solid ${alpha(color, 0.19)}`,
       }}
     >
       {tag.name}
@@ -332,7 +332,7 @@ function TaskRow({
               style={{
                 background:
                   task.checklist_done === task.checklist_total
-                    ? `${C.online}26`
+                    ? `${alpha(C.online, 0.15)}`
                     : C.accentSubtle,
                 color:
                   task.checklist_done === task.checklist_total
@@ -364,7 +364,7 @@ function TaskRow({
               title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
+                backgroundColor: isCritical ? `${alpha(C.error, 0.1)}` : `${alpha(C.warning, 0.1)}`,
               }}
             >
               <Clock size={10} />
@@ -404,7 +404,7 @@ function TaskRow({
           className="absolute right-2 top-full mt-1 z-10 p-3 rounded-md text-xs"
           style={{
             backgroundColor: C.bgBase,
-            border: `1px solid ${C.warning}40`,
+            border: `1px solid ${alpha(C.warning, 0.25)}`,
             boxShadow: "var(--shadow-elevated)",
           }}
         >
@@ -420,7 +420,7 @@ function TaskRow({
               onClick={handleForceDispatch}
               disabled={dispatchMutation.isPending}
               className="px-2 py-1 rounded-sm text-[11px] font-medium cursor-pointer"
-              style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
+              style={{ backgroundColor: `${alpha(C.warning, 0.12)}`, color: C.warning }}
             >
               {t("yesDispatch")}
             </button>
@@ -1231,7 +1231,7 @@ function TasksPageContent() {
                       onClick={() => deleteProjectMutation.mutate(projectView.id)}
                       disabled={deleteProjectMutation.isPending}
                       className="px-2 py-1 rounded-sm text-[11px] font-semibold cursor-pointer"
-                      style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
+                      style={{ backgroundColor: `${alpha(C.error, 0.15)}`, color: STATUS_TEXT.error }}
                     >
                       {deleteProjectMutation.isPending ? "…" : t("deleteProject")}
                     </button>

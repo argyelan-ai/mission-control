@@ -19,7 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, getToken, request } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -323,7 +323,7 @@ export function ChallengeDetail({
               onClick={() => stopMutation.mutate()}
               disabled={stopMutation.isPending}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
-              style={{ color: C.error, border: `1px solid ${C.error}55` }}
+              style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.33)}` }}
             >
               <Square size={13} /> {t("stop")}
             </button>
@@ -425,7 +425,7 @@ export function ChallengeDetail({
       {challenge.error && (
         <div
           className="rounded-lg px-3 py-2 text-sm"
-          style={{ color: C.error, border: `1px solid ${C.error}40`, backgroundColor: `${C.error}10` }}
+          style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.25)}`, backgroundColor: `${alpha(C.error, 0.06)}` }}
         >
           {challenge.error}
         </div>

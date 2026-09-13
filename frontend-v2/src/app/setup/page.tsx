@@ -12,7 +12,7 @@ import { motion } from "framer-motion";
 import { Check, ExternalLink, Loader2, Rocket } from "lucide-react";
 import { AUTH_TOKEN_KEY, api } from "@/lib/api";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 import type { GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
@@ -274,8 +274,8 @@ export default function SetupWizardPage() {
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
-                    backgroundColor: `${C.error}14`,
-                    border: `1px solid ${C.error}26`,
+                    backgroundColor: `${alpha(C.error, 0.08)}`,
+                    border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
                   {error}
@@ -348,8 +348,8 @@ export default function SetupWizardPage() {
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
-                    backgroundColor: `${C.error}14`,
-                    border: `1px solid ${C.error}26`,
+                    backgroundColor: `${alpha(C.error, 0.08)}`,
+                    border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
                   {githubError}
@@ -430,8 +430,8 @@ export default function SetupWizardPage() {
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
-                    backgroundColor: `${C.error}14`,
-                    border: `1px solid ${C.error}26`,
+                    backgroundColor: `${alpha(C.error, 0.08)}`,
+                    border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
                   {error}

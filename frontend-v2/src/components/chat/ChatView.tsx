@@ -21,7 +21,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
@@ -835,9 +835,9 @@ export function ChatView({
             data-aliveness={aliveness}
             className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded-sm font-mono shrink-0"
             style={{
-              background: aliveness === "active" ? `${C.online}1A` : C.bgHover,
+              background: aliveness === "active" ? `${alpha(C.online, 0.1)}` : C.bgHover,
               color: aliveness === "active" ? C.online : C.textMuted,
-              border: `1px solid ${aliveness === "active" ? `${C.online}33` : C.border}`,
+              border: `1px solid ${aliveness === "active" ? `${alpha(C.online, 0.2)}` : C.border}`,
             }}
           >
             {aliveness === "active" ? "live" : "beendet"}

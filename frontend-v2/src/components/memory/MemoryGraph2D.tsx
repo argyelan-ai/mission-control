@@ -60,7 +60,7 @@ import {
 } from "./graphConfig";
 import { computeCommunities } from "@/lib/graphLouvain";
 import { useContainerSize } from "@/hooks/useContainerSize";
-import { C } from "@/lib/colors";
+import { C, resolveColor } from "@/lib/colors";
 
 // ── Public imperative handle ──────────────────────────────────────────────────
 
@@ -399,7 +399,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(x, y, radius + 2.5, 0, 2 * Math.PI);
-          ctx.strokeStyle = C.textPrimary;
+          ctx.strokeStyle = resolveColor(C.textPrimary, "#F2F2F2");
           ctx.lineWidth = 1.5 / globalScale;
           ctx.stroke();
         }
@@ -410,7 +410,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
           ctx.font = `${fontSize}px 'Geist Mono', monospace`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillStyle = C.textPrimary;
+          ctx.fillStyle = resolveColor(C.textPrimary, "#F2F2F2");
           ctx.fillText(n.label, x, y + radius + 2 / globalScale);
         }
 

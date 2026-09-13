@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
@@ -161,7 +161,7 @@ export function ChatMessage({
               color: C.textSecondary,
               borderRight: `2px solid ${C.borderSubtle}`,
               borderRadius: "var(--radius-sm)",
-              background: `${C.bgElevated}80`,
+              background: `${alpha(C.bgElevated, 0.5)}`,
             }}
           >
             <span className="sr-only">Du</span>
@@ -225,7 +225,7 @@ export function ChatMessage({
           className="max-w-[85%] min-w-0 px-3.5 py-2.5 text-[14px] leading-[1.6] transition-opacity"
           style={{
             background: C.bgElevated,
-            border: `1px solid ${unconfirmed ? `${C.warning}55` : C.border}`,
+            border: `1px solid ${unconfirmed ? `${alpha(C.warning, 0.33)}` : C.border}`,
             borderRadius: "var(--radius-xl)",
             // Volle Deckkraft, auch waehrend "pending": Der Server hat die
             // Zustellung mit 204 quittiert, die Nachricht IST unterwegs. Bis

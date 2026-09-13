@@ -20,7 +20,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { SkillBadges } from "@/components/agent/AgentCard";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Agent, Board } from "@/lib/types";
 import { HARNESS_LABELS, type Harness } from "@/lib/types";
@@ -36,9 +36,9 @@ const CINEMA = {
   border: C.border,
   borderSubtle: C.borderSubtle,
   surfaceBg: "var(--color-border-subtle)",
-  errorBg: `${C.error}1F`,
-  warningBg: `${C.warning}14`,
-  warningBorder: `${C.warning}33`,
+  errorBg: `${alpha(C.error, 0.12)}`,
+  warningBg: `${alpha(C.warning, 0.08)}`,
+  warningBorder: `${alpha(C.warning, 0.2)}`,
 } as const;
 
 const modalOverlayClass = "fixed inset-0 z-50 flex items-end sm:items-center justify-center px-3 sm:px-4";
@@ -369,8 +369,8 @@ function AgentRosterRow({
               className="max-sm:hidden inline-flex items-center justify-center w-6 h-6 rounded-sm shrink-0"
               style={{
                 color: C.textMuted,
-                backgroundColor: `${C.textMuted}14`,
-                border: `1px solid ${C.textMuted}26`,
+                backgroundColor: `${alpha(C.textMuted, 0.08)}`,
+                border: `1px solid ${alpha(C.textMuted, 0.15)}`,
               }}
               title={harnessLabel(agent.harness)}
               aria-label={harnessLabel(agent.harness)}
@@ -383,7 +383,7 @@ function AgentRosterRow({
               className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 max-sm:hidden"
               style={{
                 color: boardName ? C.textMuted : C.warning,
-                border: `1px solid ${boardName ? CINEMA.borderSubtle : `${C.warning}4D`}`,
+                border: `1px solid ${boardName ? CINEMA.borderSubtle : `${alpha(C.warning, 0.3)}`}`,
               }}
             >
               {boardName ?? t("noBoard")}

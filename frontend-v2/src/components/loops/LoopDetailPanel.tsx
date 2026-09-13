@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowUpRight, Loader2, Pause, Play, Square, Trash2 } from "lucide-react";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { LoopRound } from "@/lib/types";
 import { canPauseLoop, canStartLoop, canStopLoop, isLoopInactive, LOOP_STATUS_META } from "./loopMeta";
 
@@ -63,8 +63,8 @@ export function LoopDetailPanel({
             <span
               className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
               style={{
-                background: `${LOOP_STATUS_META[loop.status].color}22`,
-                border: `1px solid ${LOOP_STATUS_META[loop.status].color}55`,
+                background: `${alpha(LOOP_STATUS_META[loop.status].color, 0.13)}`,
+                border: `1px solid ${alpha(LOOP_STATUS_META[loop.status].color, 0.33)}`,
                 color: LOOP_STATUS_META[loop.status].textColor,
               }}
             >
@@ -89,7 +89,7 @@ export function LoopDetailPanel({
           {loop.last_error && (
             <div
               className="flex items-start gap-2 rounded-md px-3 py-2 text-xs"
-              style={{ background: `${C.error}14`, border: `1px solid ${C.error}55`, color: C.error }}
+              style={{ background: `${alpha(C.error, 0.08)}`, border: `1px solid ${alpha(C.error, 0.33)}`, color: C.error }}
             >
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span>{loop.last_error}</span>
@@ -178,7 +178,7 @@ function RoundCard({ round }: { round: LoopRound }) {
         </span>
         <span
           className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
-          style={{ background: `${outcomeMeta.color}22`, color: outcomeMeta.color }}
+          style={{ background: `${alpha(outcomeMeta.color, 0.13)}`, color: outcomeMeta.color }}
         >
           {outcomeMeta.label}
         </span>
@@ -233,7 +233,7 @@ function PanelActionButton({
       onClick={onClick}
       disabled={disabled}
       className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      style={{ background: `${tone}1A`, border: `1px solid ${tone}4D`, color: tone }}
+      style={{ background: `${alpha(tone, 0.1)}`, border: `1px solid ${alpha(tone, 0.3)}`, color: tone }}
     >
       {icon}
       {label}

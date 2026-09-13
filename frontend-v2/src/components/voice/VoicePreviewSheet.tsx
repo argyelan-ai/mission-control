@@ -15,7 +15,7 @@ import ReactMarkdown from "react-markdown";
 import { api } from "@/lib/api";
 import type { DisplayCard } from "./cards/types";
 import { useVoiceContext } from "./VoiceWidget";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
 
 const STATUS_COLORS: Record<string, string> = {
   inbox: LANE.inbox,
@@ -111,9 +111,9 @@ function HangupChip() {
       onClick={() => endSession()}
       className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:opacity-90 cursor-pointer transition-opacity"
       style={{
-        background: `linear-gradient(135deg, ${C.error}CC 0%, ${C.error} 100%)`,
+        background: `linear-gradient(135deg, ${alpha(C.error, 0.8)} 0%, ${C.error} 100%)`,
         color: C.textPrimary,
-        boxShadow: `0 2px 8px ${C.error}40`,
+        boxShadow: `0 2px 8px ${alpha(C.error, 0.25)}`,
       }}
       title="End call (saves tokens) — this preview stays open"
     >

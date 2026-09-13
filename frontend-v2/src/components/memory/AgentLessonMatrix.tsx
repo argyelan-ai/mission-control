@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
 import type { Agent, BoardMemory } from "@/lib/types";
 import { MergeCandidateBadge } from "./MergeCandidateBadge";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 /**
  * AgentLessonMatrix — Links Agent-Liste, rechts deren Lessons.
@@ -94,7 +94,7 @@ export function AgentLessonMatrix({
                 onClick={() => setSelectedAgentId(agentId)}
                 className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left cursor-pointer transition-colors"
                 style={{
-                  background: isActive ? `${C.error}0F` : "transparent",
+                  background: isActive ? `${alpha(C.error, 0.06)}` : "transparent",
                   borderLeft: isActive ? `2px solid ${C.error}` : "2px solid transparent",
                 }}
                 onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--color-bg-surface)"; }}
@@ -156,7 +156,7 @@ export function AgentLessonMatrix({
                   <div className="flex items-center gap-2 mb-1.5">
                     <span
                       className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
-                      style={{ background: `${C.error}1F`, color: STATUS_TEXT.error }}
+                      style={{ background: `${alpha(C.error, 0.12)}`, color: STATUS_TEXT.error }}
                     >
                       Lesson
                     </span>

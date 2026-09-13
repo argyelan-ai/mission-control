@@ -309,7 +309,7 @@ export function HostRecipeSwitcher({
             primary ? "h-10 px-3.5 text-sm font-semibold" : compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"
           }`}
           style={{
-            background: primary ? C.accent : C.bgSurface,
+            backgroundColor: primary ? C.accent : C.bgSurface,
             border: `1px solid ${primary ? C.accent : open ? C.borderAccent : C.border}`,
             color: primary ? C.onAccent : C.textPrimary,
           }}

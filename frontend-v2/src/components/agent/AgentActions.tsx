@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { Archive, ArchiveRestore, Trash2, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { Agent } from "@/lib/types";
 
 // ── Agent lifecycle actions (Phase: archive → delete) ────────────────────────
@@ -66,9 +66,9 @@ function LifecycleButton({
       title={title}
       className="flex items-center justify-center gap-1.5 text-[11px] px-3 py-1.5 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       style={{
-        backgroundColor: `${color}18`,
+        backgroundColor: `${alpha(color, 0.09)}`,
         color,
-        border: `1px solid ${color}30`,
+        border: `1px solid ${alpha(color, 0.19)}`,
       }}
     >
       {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
@@ -158,7 +158,7 @@ export function AgentActions({
             onClick={() => deleteMutation.mutate()}
             disabled={deleteMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer font-medium disabled:opacity-50"
-            style={{ backgroundColor: `${C.error}26`, color: C.error }}
+            style={{ backgroundColor: `${alpha(C.error, 0.15)}`, color: C.error }}
           >
             {deleteMutation.isPending && <Loader2 size={11} className="animate-spin" />}
             {t("yesDelete")}

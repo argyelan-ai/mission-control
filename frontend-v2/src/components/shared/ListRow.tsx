@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
 /**
@@ -50,9 +50,9 @@ const DOT: Record<Tone, string> = {
 };
 
 const CHIP: Record<Tone, { color: string; border: string; background: string }> = {
-  ok: { color: STATUS_TEXT.online, border: `${C.online}40`, background: "transparent" },
-  warn: { color: STATUS_TEXT.warning, border: `${C.warning}40`, background: "transparent" },
-  error: { color: STATUS_TEXT.error, border: `${C.error}40`, background: "transparent" },
+  ok: { color: STATUS_TEXT.online, border: `${alpha(C.online, 0.25)}`, background: "transparent" },
+  warn: { color: STATUS_TEXT.warning, border: `${alpha(C.warning, 0.25)}`, background: "transparent" },
+  error: { color: STATUS_TEXT.error, border: `${alpha(C.error, 0.25)}`, background: "transparent" },
   idle: { color: C.textMuted, border: C.borderActive, background: "transparent" },
   accent: { color: C.accent, border: C.borderAccent, background: C.accentSubtle },
 };

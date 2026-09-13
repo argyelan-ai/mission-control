@@ -5,6 +5,7 @@
  */
 
 import { C } from "./colors";
+import { alpha } from "@/lib/colors";
 
 // ── Section heading ──────────────────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ export function SparklineChart({
         <span className="text-[11px] font-mono font-semibold tabular-nums" style={{ color }}>{value}</span>
       </div>
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={height} preserveAspectRatio="none">
-        <path d={fillPath} fill={`${color}15`} />
+        <path d={fillPath} fill={`${alpha(color, 0.08)}`} />
         <path d={linePath} fill="none" stroke={color} strokeWidth={1.2} strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </div>
@@ -142,7 +143,7 @@ export function Badge({
   color: string;
 }) {
   return (
-    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm" style={{ color, backgroundColor: `${color}15` }} >
+    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm" style={{ color, backgroundColor: `${alpha(color, 0.08)}` }} >
       {children}
     </span>
   );

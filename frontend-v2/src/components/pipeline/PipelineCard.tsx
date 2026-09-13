@@ -3,7 +3,7 @@
 import { CheckCircle, XCircle, Lock, Pause } from "lucide-react";
 import { SpotlightCard } from "@/components/shared/SpotlightCard";
 import type { PipelineTask } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Priority helpers ──────────────────────────────────────────────────────────
@@ -13,10 +13,10 @@ type LaneKey = "inbox" | "in_progress" | "review" | "user_test" | "waiting" | "b
 function priorityStripeGradient(priority: string, isDone: boolean): string {
   // Done = calm: heavily muted stripe instead of full green — the saturated
   // C.online clashed with the health/KPI greens on Home (operator, Jun 11)
-  if (isDone) return `linear-gradient(180deg, ${C.online}59, ${C.online}26)`;
+  if (isDone) return `linear-gradient(180deg, ${alpha(C.online, 0.35)}, ${alpha(C.online, 0.15)})`;
   switch (priority) {
-    case "critical": return `linear-gradient(180deg, ${C.error}, ${C.error}CC)`;
-    case "high": return `linear-gradient(180deg, ${C.warning}, ${C.warning}CC)`;
+    case "critical": return `linear-gradient(180deg, ${C.error}, ${alpha(C.error, 0.8)})`;
+    case "high": return `linear-gradient(180deg, ${C.warning}, ${alpha(C.warning, 0.8)})`;
     case "medium": return `linear-gradient(180deg, ${C.textMuted}, ${C.textDim})`;
     default: return "transparent";
   }
@@ -25,8 +25,8 @@ function priorityStripeGradient(priority: string, isDone: boolean): string {
 function priorityGlowColor(priority: string): string | null {
   // No colored glows — flat design rule. Only subtle structural radial kept for visual depth.
   switch (priority) {
-    case "critical": return `${C.error}1A`;
-    case "high": return `${C.warning}1A`;
+    case "critical": return `${alpha(C.error, 0.1)}`;
+    case "high": return `${alpha(C.warning, 0.1)}`;
     default: return null;
   }
 }
@@ -55,11 +55,11 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
     : C.bgSurface;
 
   const borderColor = isBlocked || isFailed
-    ? `${C.error}40`
+    ? `${alpha(C.error, 0.25)}`
     : task.has_blocked_deps
-    ? `${C.error}26`
+    ? `${alpha(C.error, 0.15)}`
     : isDone
-    ? `${C.online}26`
+    ? `${alpha(C.online, 0.15)}`
     : C.border;
 
   return (
@@ -168,7 +168,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
           {task.dispatch_phase === "ready" && (
             <span
               className="text-[10px] font-semibold tracking-wider uppercase shrink-0 px-1 py-0.5 rounded-sm"
-              style={{ color: C.online, backgroundColor: `${C.online}1F` }}
+              style={{ color: C.online, backgroundColor: `${alpha(C.online, 0.12)}` }}
             >
               READY
             </span>
@@ -203,8 +203,8 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
                 style={{
                   color: task.priority === "critical" ? C.error : C.warning,
                   backgroundColor: task.priority === "critical"
-                    ? `${C.error}26`
-                    : `${C.warning}26`,
+                    ? `${alpha(C.error, 0.15)}`
+                    : `${alpha(C.warning, 0.15)}`,
                 }}
               >
                 {task.priority === "critical" ? "CRIT" : "HIGH"}

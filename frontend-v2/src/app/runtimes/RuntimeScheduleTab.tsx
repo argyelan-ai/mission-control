@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import type { RuntimeSchedule, RuntimeScheduleCreate } from "@/lib/types";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // labelKey pattern (docs/i18n.md): resolved via t() at the render site.
 const DAYS_BADGE_KEY: Record<string, string> = {
@@ -281,8 +281,8 @@ function ScheduleEntry({
                 onClick={handleDelete}
                 className="text-xs px-2.5 py-1 rounded-lg cursor-pointer"
                 style={{
-                  background: `${C.error}14`,
-                  border: `1px solid ${C.error}33`,
+                  background: `${alpha(C.error, 0.08)}`,
+                  border: `1px solid ${alpha(C.error, 0.2)}`,
                   color: STATUS_TEXT.error,
                 }}
               >

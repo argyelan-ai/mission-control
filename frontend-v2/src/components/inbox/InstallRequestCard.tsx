@@ -8,7 +8,7 @@ import { cn, timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { Approval, InstallApprovalPayload, InstallActionType } from "@/lib/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 8, height: 0 }}
     >
-      <GlassCard className="p-4" glow={`${accentColor}12`}>
+      <GlassCard className="p-4" glow={`${alpha(accentColor, 0.07)}`}>
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
@@ -88,9 +88,9 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
               <span
                 className="text-[11px] px-2 py-0.5 rounded-lg font-medium flex items-center gap-1.5"
                 style={{
-                  backgroundColor: `${accentColor}18`,
+                  backgroundColor: `${alpha(accentColor, 0.09)}`,
                   color: accentColor,
-                  border: `1px solid ${accentColor}30`,
+                  border: `1px solid ${alpha(accentColor, 0.19)}`,
                 }}
               >
                 <Icon size={12} />
@@ -186,9 +186,9 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             disabled={isResolving !== null}
             className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
             style={{
-              backgroundColor: `${C.online}1F`,
+              backgroundColor: `${alpha(C.online, 0.12)}`,
               color: C.online,
-              border: `1px solid ${C.online}40`,
+              border: `1px solid ${alpha(C.online, 0.25)}`,
             }}
           >
             <Check size={13} />
@@ -200,9 +200,9 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             disabled={isResolving !== null}
             className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
             style={{
-              backgroundColor: `${C.error}1F`,
+              backgroundColor: `${alpha(C.error, 0.12)}`,
               color: C.error,
-              border: `1px solid ${C.error}40`,
+              border: `1px solid ${alpha(C.error, 0.25)}`,
             }}
           >
             <X size={13} />

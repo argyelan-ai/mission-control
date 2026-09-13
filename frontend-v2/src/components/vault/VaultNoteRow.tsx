@@ -27,6 +27,7 @@ import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import type { VaultNote } from "@/lib/types";
 import { colorForAgent } from "./agentColors";
+import { alpha } from "@/lib/colors";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -287,7 +288,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
   // We expose --agent-color so the hover Tailwind utility picks it up.
   const rowStyle = {
     "--agent-color": agentColor,
-    background: selected ? `${agentColor}0E` : "transparent",
+    background: selected ? `${alpha(agentColor, 0.05)}` : "transparent",
     transition: "background 0.2s ease",
   } as React.CSSProperties;
 
@@ -368,9 +369,9 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
               fontSize: "9.5px",
               letterSpacing: "0.14em",
               padding: "3px 7px 3px 7px",
-              background: `${agentColor}1A`,
+              background: `${alpha(agentColor, 0.1)}`,
               color: agentColor,
-              border: `1px solid ${agentColor}38`,
+              border: `1px solid ${alpha(agentColor, 0.22)}`,
               lineHeight: 1,
             }}
           >

@@ -18,7 +18,7 @@ import ReactMarkdown from "react-markdown";
 import { CheckCircle2, XCircle, Clock, Film, ZoomIn, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, getToken } from "@/lib/api";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Task, TaskComment, TaskDeliverable } from "@/lib/types";
 
 // ── Result-marker parsing ────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ function ResultBadge({ result, status }: { result: E2EResult; status: Task["stat
     return (
       <span
         className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium"
-        style={{ background: `${C.online}1F`, border: `1px solid ${C.online}55`, color: C.online }}
+        style={{ background: `${alpha(C.online, 0.12)}`, border: `1px solid ${alpha(C.online, 0.33)}`, color: C.online }}
       >
         <CheckCircle2 size={13} /> E2E passed
       </span>
@@ -59,7 +59,7 @@ function ResultBadge({ result, status }: { result: E2EResult; status: Task["stat
     return (
       <span
         className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium"
-        style={{ background: `${C.error}1F`, border: `1px solid ${C.error}55`, color: STATUS_TEXT.error }}
+        style={{ background: `${alpha(C.error, 0.12)}`, border: `1px solid ${alpha(C.error, 0.33)}`, color: STATUS_TEXT.error }}
       >
         <XCircle size={13} /> E2E failed
       </span>
@@ -117,7 +117,7 @@ function AuthVideo({ src }: { src: string }) {
       >
         <div
           className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
-          style={{ borderColor: `${C.accent}40`, borderTopColor: "transparent" }}
+          style={{ borderColor: `${alpha(C.accent, 0.25)}`, borderTopColor: "transparent" }}
         />
       </div>
     );

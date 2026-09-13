@@ -1190,8 +1190,20 @@
     "save": "Save",
     "saved": "Saved",
     "cancel": "Cancel",
+    "appearance": {
+      "title": "Appearance",
+      "description": "How Mission Control looks on this device.",
+      "dark": "Dark",
+      "darkDesc": "The ops-room look — for evenings and long sessions.",
+      "light": "Light",
+      "lightDesc": "Paper and ink — calmer in daylight.",
+      "system": "System",
+      "systemDesc": "Follows your operating system.",
+      "note": "Stored in this browser. Terminals stay dark in both themes."
+    },
     "sections": {
       "profile": "Profile",
+      "appearance": "Appearance",
       "security": "Security",
       "autonomy": "Autonomy",
       "intelligence": "Intelligence",

@@ -40,7 +40,7 @@ import type {
   Task,
   TaskStatus,
 } from "@/lib/types";
-import { C, LANE, STATUS_TEXT } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // Helpers
 function formatMs(ms: number): string {
@@ -72,12 +72,12 @@ function scheduleLabel(job: ScheduledJob, t: Translate): string {
 
 // Task status chips via LANE map
 const TASK_STATUS_COLOR: Record<string, string> = {
-  inbox:       `${LANE.inbox}26`,
-  in_progress: `${LANE.in_progress}2E`,
-  review:      `${LANE.review}2E`,
-  blocked:     `${LANE.blocked}2E`,
-  done:        `${LANE.done}29`,
-  failed:      `${LANE.failed}2E`,
+  inbox:       `${alpha(LANE.inbox, 0.15)}`,
+  in_progress: `${alpha(LANE.in_progress, 0.18)}`,
+  review:      `${alpha(LANE.review, 0.18)}`,
+  blocked:     `${alpha(LANE.blocked, 0.18)}`,
+  done:        `${alpha(LANE.done, 0.16)}`,
+  failed:      `${alpha(LANE.failed, 0.18)}`,
 };
 const TASK_STATUS_TEXT: Record<string, string> = {
   inbox:       C.textMuted,
@@ -296,14 +296,14 @@ export default function ScheduleJobDetailPage() {
                       dataKey="success"
                       stackId="1"
                       stroke={C.online}
-                      fill={`${C.online}4D`}
+                      fill={`${alpha(C.online, 0.3)}`}
                     />
                     <Area
                       type="monotone"
                       dataKey="failed"
                       stackId="1"
                       stroke={C.error}
-                      fill={`${C.error}4D`}
+                      fill={`${alpha(C.error, 0.3)}`}
                     />
                   </AreaChart>
                 </ResponsiveContainer>

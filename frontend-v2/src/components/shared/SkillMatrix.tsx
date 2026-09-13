@@ -6,7 +6,7 @@ import { Save, Undo2, Loader2, Check, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 /**
  * SkillMatrix — Custom Skills pro Agent ein-/ausschalten.
@@ -149,8 +149,8 @@ export function SkillMatrix() {
               disabled={saving}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
               style={{
-                background: `${C.accent}26`,
-                border: `1px solid ${C.accent}4D`,
+                background: `${alpha(C.accent, 0.15)}`,
+                border: `1px solid ${alpha(C.accent, 0.3)}`,
                 color: C.accentHover,
               }}
             >
@@ -226,11 +226,11 @@ export function SkillMatrix() {
                         onClick={() => toggle(agent.id, skill.name)}
                         className="w-5 h-5 rounded-sm flex items-center justify-center cursor-pointer transition-colors mx-auto"
                         style={{
-                          background: enabled ? `${C.accent}33` : "var(--color-bg-hover)",
+                          background: enabled ? `${alpha(C.accent, 0.2)}` : "var(--color-bg-hover)",
                           border: changed
                             ? `2px solid ${C.warning}`
                             : enabled
-                              ? `1px solid ${C.accent}66`
+                              ? `1px solid ${alpha(C.accent, 0.4)}`
                               : "1px solid var(--color-border)",
                         }}
                       >

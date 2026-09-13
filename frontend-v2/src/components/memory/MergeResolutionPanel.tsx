@@ -29,7 +29,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import type { BoardMemory } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface Props {
@@ -175,7 +175,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
             disabled={busy}
             className="px-4 py-2 rounded-lg text-sm border disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-red-500/50"
             style={{
-              borderColor: `${C.error}66`,
+              borderColor: `${alpha(C.error, 0.4)}`,
               color: C.error,
             }}
           >

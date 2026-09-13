@@ -128,8 +128,10 @@ import { C } from "@/lib/colors";
 
 /** Token value as jsdom reports it — derived from the single source in
  *  lib/colors.ts, so a palette change never breaks this assertion. */
-function rgbOf(hex: string): string {
-  const h = hex.replace("#", "");
+// Tokens are `var(--color-…)` since ADR-084 — jsdom keeps them verbatim.
+function rgbOf(token: string): string {
+  if (token.startsWith("var(")) return token;
+  const h = token.replace("#", "");
   const n = parseInt(h, 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
 }
@@ -677,7 +679,7 @@ describe("SessionsPage — islands sit a step above the page ground", () => {
     await screen.findAllByText("Agent One");
 
     const listGround = screen.getByTestId("session-list-mobile").firstElementChild as HTMLElement;
-    expect(listGround.style.background).toBe(BG_SURFACE);
+    expect(listGround.style.backgroundColor).toBe(BG_SURFACE);
 
     await user.click(
       within(screen.getByTestId("session-list-mobile")).getByRole("option", { name: /Agent One/ })

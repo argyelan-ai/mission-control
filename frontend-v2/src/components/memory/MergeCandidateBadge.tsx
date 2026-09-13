@@ -10,7 +10,7 @@
  *
  * Visual contract — see 05-UI-SPEC.md "Component Inventory":
  *   inline-flex pill, 10px text, uppercase semibold + tracking-wider,
- *   teal tint background `${C.accent}1F` + teal border
+ *   teal tint background `${alpha(C.accent, 0.12)}` + teal border
  *   `C.borderAccent` + accent text `C.accent`,
  *   lucide GitMerge icon at 12px.
  *
@@ -20,7 +20,7 @@
 
 import { GitMerge } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 export function MergeCandidateBadge() {
   const prefersReduce = useReducedMotion();

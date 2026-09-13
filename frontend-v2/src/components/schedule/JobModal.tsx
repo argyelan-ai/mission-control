@@ -39,7 +39,7 @@ import {
 } from "@/components/shared/TaskFormFields";
 import { TriggerEditor, type TriggerEditorValue } from "./TriggerEditor";
 import { JOB_TEMPLATES, type JobTemplate } from "./jobTemplates";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface JobModalProps {
@@ -659,8 +659,8 @@ export function JobModal({
                 <div
                   className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs"
                   style={{
-                    borderColor: `${C.error}66`,
-                    background: `${C.error}14`,
+                    borderColor: `${alpha(C.error, 0.4)}`,
+                    background: `${alpha(C.error, 0.08)}`,
                     color: STATUS_TEXT.error,
                   }}
                 >

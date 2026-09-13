@@ -32,7 +32,7 @@ import { api } from "@/lib/api";
 import type { HostRole, NodeInstallCommand, NodePairingCodeResponse } from "@/lib/types";
 import { RoleField, suggestRole } from "./RoleField";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { extractApiError } from "@/components/shared/SshProcessDeployDialog";
 
 /**
@@ -201,7 +201,7 @@ export function NodePairingDialog({ open, onClose }: { open: boolean; onClose: (
         {error && (
           <div
             className="text-xs px-3 py-2 rounded-lg"
-            style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
+            style={{ background: `${alpha(C.error, 0.08)}`, border: `1px solid ${alpha(C.error, 0.2)}`, color: STATUS_TEXT.error }}
           >
             {error}
           </div>

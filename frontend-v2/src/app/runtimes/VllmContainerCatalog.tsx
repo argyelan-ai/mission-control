@@ -7,7 +7,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { VllmContainer } from "@/lib/types";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 
 function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onAdd: () => void }) {
@@ -159,8 +159,8 @@ function AddVllmModal({
                   className="font-mono text-[11px] px-2.5 py-1 rounded-sm cursor-pointer transition-colors"
                   style={{
                     color: active ? C.info : C.textMuted,
-                    border: `1px solid ${active ? `${C.info}66` : C.borderSubtle}`,
-                    background: active ? `${C.info}1A` : "var(--color-bg-hover)",
+                    border: `1px solid ${active ? `${alpha(C.info, 0.4)}` : C.borderSubtle}`,
+                    background: active ? `${alpha(C.info, 0.1)}` : "var(--color-bg-hover)",
                   }}
                 >
                   {tag}
@@ -175,8 +175,8 @@ function AddVllmModal({
             className="text-xs px-3 py-2 rounded-lg mb-3"
             style={{
               color: STATUS_TEXT.error,
-              background: `${C.error}0F`,
-              border: `1px solid ${C.error}26`,
+              background: `${alpha(C.error, 0.06)}`,
+              border: `1px solid ${alpha(C.error, 0.15)}`,
             }}
           >
             {error}
@@ -198,8 +198,8 @@ function AddVllmModal({
             className="text-xs px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5"
             style={{
               color: C.info,
-              border: `1px solid ${C.info}66`,
-              background: `${C.info}1A`,
+              border: `1px solid ${alpha(C.info, 0.4)}`,
+              background: `${alpha(C.info, 0.1)}`,
               opacity: addMutation.isPending ? 0.6 : 1,
             }}
           >

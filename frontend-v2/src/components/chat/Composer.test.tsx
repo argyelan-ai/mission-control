@@ -12,8 +12,12 @@ import { notify } from "@/lib/notify";
 
 /** Token value as jsdom reports it — derived from the single source in
  *  lib/colors.ts, so a palette change never breaks this assertion. */
-function rgbOf(hex: string): string {
-  const h = hex.replace("#", "");
+// Tokens are `var(--color-…)` since ADR-084; jsdom keeps them verbatim in
+// inline styles, so the comparison value is the token itself. Hex literals
+// (external brand colours) are still normalised to rgb() like jsdom does.
+function rgbOf(token: string): string {
+  if (token.startsWith("var(")) return token;
+  const h = token.replace("#", "");
   const n = parseInt(h, 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
 }
@@ -501,7 +505,7 @@ describe("Composer", () => {
     const textarea = screen.getByPlaceholderText(/Message the agent/);
     const pill = textarea.parentElement as HTMLElement;
 
-    expect(pill.style.border).toContain("rgba(168, 168, 168, 0.1)");
+    expect(pill.style.border).toContain(C.border);
 
     await user.click(textarea);
     // Neutral grey frame (text-muted, 4.6:1 against the pill) — perceivable,

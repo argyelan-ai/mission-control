@@ -86,7 +86,9 @@ describe("RuntimePill", () => {
     const dot = Array.from(container.querySelectorAll("span")).find(
       (el) =>
         el.getAttribute("style")?.includes("193, 190, 178") ||
-        el.getAttribute("style")?.toLowerCase().includes("#c1beb2"),
+        el.getAttribute("style")?.toLowerCase().includes("#c1beb2") ||
+        // ADR-084: tokens are CSS variables now
+        el.getAttribute("style")?.includes("var(--color-accent-deep)"),
     );
     expect(dot, "expected a span with the hermes accent-deep color #C1BEB2").toBeDefined();
     expect(dot).toBeTruthy();

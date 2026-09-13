@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Check, Link2, Pencil, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VaultNote } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useVaultNote } from "@/hooks/useVaultNote";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { VaultMarkdown } from "./VaultMarkdown";
@@ -408,9 +408,9 @@ function PanelContent({
               fontSize: "9.5px",
               letterSpacing: "0.14em",
               padding: "3px 7px",
-              background: `${agentColor}1A`,
+              background: `${alpha(agentColor, 0.1)}`,
               color: agentColor,
-              border: `1px solid ${agentColor}38`,
+              border: `1px solid ${alpha(agentColor, 0.22)}`,
               lineHeight: 1,
             }}
           >

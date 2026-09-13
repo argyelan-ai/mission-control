@@ -4,7 +4,7 @@ import { Fragment, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 import type { CommitDiff, CommitDiffFile } from "@/lib/types";
-import { C, BRAND } from "@/lib/colors";
+import { C, BRAND, alpha } from "@/lib/colors";
 
 // ── File type detection ──────────────────────────────────────────────────────
 
@@ -46,11 +46,11 @@ function getFileExt(filename: string) {
 
 function FileStatusBadge({ status }: { status: string }) {
   const cfg = {
-    added:    { label: "A", color: C.online,   bg: `${C.online}1A` },
-    deleted:  { label: "D", color: C.error,    bg: `${C.error}1A` },
-    renamed:  { label: "R", color: C.warning,  bg: `${C.warning}1A` },
-    modified: { label: "M", color: C.accent,   bg: `${C.accent}1A` },
-  }[status] ?? { label: "M", color: C.accent, bg: `${C.accent}1A` };
+    added:    { label: "A", color: C.online,   bg: `${alpha(C.online, 0.1)}` },
+    deleted:  { label: "D", color: C.error,    bg: `${alpha(C.error, 0.1)}` },
+    renamed:  { label: "R", color: C.warning,  bg: `${alpha(C.warning, 0.1)}` },
+    modified: { label: "M", color: C.accent,   bg: `${alpha(C.accent, 0.1)}` },
+  }[status] ?? { label: "M", color: C.accent, bg: `${alpha(C.accent, 0.1)}` };
 
   return (
     <span
@@ -69,7 +69,7 @@ function LangBadge({ ext }: { ext: string }) {
   return (
     <span
       className="text-[9px] font-semibold px-1 py-0.5 rounded-sm shrink-0 leading-none"
-      style={{ color, background: `${color}18`, border: `1px solid ${color}30`, fontFamily: "var(--font-geist-mono), monospace" }}
+      style={{ color, background: `${alpha(color, 0.09)}`, border: `1px solid ${alpha(color, 0.19)}`, fontFamily: "var(--font-geist-mono), monospace" }}
     >
       {label}
     </span>
@@ -103,12 +103,12 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
         onClick={() => setOpen((x) => !x)}
         className="w-full flex items-center gap-2 px-3 py-2 text-left transition-all duration-150"
         style={{
-          background: open ? `${C.accent}0A` : `${C.borderSubtle}`,
+          background: open ? `${alpha(C.accent, 0.04)}` : `${C.borderSubtle}`,
           border: "none",
           cursor: "pointer",
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = `${C.accent}0F`; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = open ? `${C.accent}0A` : C.borderSubtle; }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = `${alpha(C.accent, 0.06)}`; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = open ? `${alpha(C.accent, 0.04)}` : C.borderSubtle; }}
       >
         {/* Chevron */}
         <motion.span
@@ -184,11 +184,11 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                             colSpan={4}
                             className="text-[10px] select-none"
                             style={{
-                              background: `${C.info}12`,
+                              background: `${alpha(C.info, 0.07)}`,
                               color: C.info,
                               padding: "2px 12px",
-                              borderTop: `1px solid ${C.info}1F`,
-                              borderBottom: `1px solid ${C.info}14`,
+                              borderTop: `1px solid ${alpha(C.info, 0.12)}`,
+                              borderBottom: `1px solid ${alpha(C.info, 0.08)}`,
                               fontFamily: "var(--font-geist-mono), monospace",
                             }}
                           >
@@ -205,9 +205,9 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                               key={`${hi}-${li}`}
                               style={{
                                 background: isAdd
-                                  ? `${C.online}0F`
+                                  ? `${alpha(C.online, 0.06)}`
                                   : isDel
-                                  ? `${C.error}0F`
+                                  ? `${alpha(C.error, 0.06)}`
                                   : "transparent",
                               }}
                             >
@@ -216,7 +216,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                                 className="select-none text-right"
                                 style={{
                                   padding: "0 6px",
-                                  color: isDel ? `${C.error}59` : C.bgHover,
+                                  color: isDel ? `${alpha(C.error, 0.35)}` : C.bgHover,
                                   minWidth: 34,
                                   fontSize: 10,
                                   verticalAlign: "top",
@@ -233,7 +233,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                                 className="select-none text-right"
                                 style={{
                                   padding: "0 6px",
-                                  color: isAdd ? `${C.online}59` : C.bgHover,
+                                  color: isAdd ? `${alpha(C.online, 0.35)}` : C.bgHover,
                                   minWidth: 34,
                                   fontSize: 10,
                                   verticalAlign: "top",
@@ -310,10 +310,10 @@ function DiffBar({ additions, deletions }: { additions: number; deletions: numbe
   return (
     <span className="flex items-center gap-0.5 shrink-0">
       {Array.from({ length: addBlocks }).map((_, i) => (
-        <span key={`a${i}`} className="block w-2 h-2 rounded-sm" style={{ background: `${C.online}B3` }} />
+        <span key={`a${i}`} className="block w-2 h-2 rounded-sm" style={{ background: `${alpha(C.online, 0.7)}` }} />
       ))}
       {Array.from({ length: delBlocks }).map((_, i) => (
-        <span key={`d${i}`} className="block w-2 h-2 rounded-sm" style={{ background: `${C.error}B3` }} />
+        <span key={`d${i}`} className="block w-2 h-2 rounded-sm" style={{ background: `${alpha(C.error, 0.7)}` }} />
       ))}
     </span>
   );
@@ -328,7 +328,7 @@ export function GitDiffView({ diff }: { diff: CommitDiff }) {
       <div
         className="flex items-center gap-3 px-4 py-2 text-[10px] font-mono"
         style={{
-          background: `${C.accent}08`,
+          background: `${alpha(C.accent, 0.03)}`,
           borderBottom: `1px solid ${C.borderSubtle}`,
           color: C.textMuted,
         }}

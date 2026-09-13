@@ -14,7 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ExternalLink, GitBranch, GitCommit } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { GitDiffView } from "@/components/git/GitDiffView";
 import type { CommitDiff, TaskGitInfo } from "@/lib/types";
 
@@ -76,7 +76,7 @@ export function GitPanel({
         {gitInfo.uncommitted && (
           <span
             className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium shrink-0"
-            style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}
+            style={{ background: `${alpha(C.warning, 0.1)}`, color: C.warning, border: `1px solid ${alpha(C.warning, 0.2)}` }}
           >
             uncommitted
           </span>
