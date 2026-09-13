@@ -1491,9 +1491,20 @@ async def update_task(
             # escape (`mc release` only accepts status=inbox, not this
             # card's new status). Overriding the lead's hold is fine — the
             # operator is allowed to — it just must not leave the card
-            # running under a lock nothing can lift. Deliberately narrowed
-            # to run_control=="manual_hold": an admin "stopped" run has its
-            # own resume path (operations.py) and must not be cleared here.
+            # running under a lock nothing can lift. The check reads
+            # run_control=="manual_hold" specifically, not "not None" —
+            # not as a deliberate exclusion of "stopped" among two live
+            # possibilities, but because "stopped" structurally can't reach
+            # this branch at all: stop_task_run (operations.py) always sets
+            # status="blocked" together with run_control="stopped", so a
+            # stopped task never has old_status=="inbox" for this elif to
+            # see in the first place. Only mc hold (agent-scoped, on an
+            # inbox card) produces the inbox+manual_hold combination this
+            # branch exists for. Nit (PR #533 Nacharbeit, review card
+            # 041bee7c): an earlier version of this comment framed the
+            # narrowing as a deliberate choice to defer to operations.py's
+            # own resume path for "stopped" — that implied a live case this
+            # elif was choosing not to touch, when in fact none exists.
             task.run_control = None
             task.hold_reason = None
 

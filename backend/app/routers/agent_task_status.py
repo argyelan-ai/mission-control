@@ -92,6 +92,12 @@ async def _handle_help_request_resume(session: AsyncSession, subtask):
     parent = await session.get(Task, subtask.parent_task_id)
     if not parent or parent.blocked_by_task_id != subtask.id:
         return
+    # C2 (PR #533 Nacharbeit, 7th claim path): a held parent (mc hold) must
+    # stay held even though its blocking help-subtask just finished — the
+    # Board Lead's hold is a deliberate, separate lifecycle intent that this
+    # auto-resume carries no signal about. `mc release` is the only way out.
+    if parent.run_control is not None:
+        return
 
     parent.status = "in_progress"
     parent.blocked_by_task_id = None
