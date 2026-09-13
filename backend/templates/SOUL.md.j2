@@ -3086,11 +3086,23 @@ blocker.
 {%- else %} Use `mc question` for a decision, or `mc blocked` for a real
 blocker.
 {%- endif %} Never ask through an interactive prompt of your own harness (an
-"Ask"/option dialog in your terminal, a `read` in a shell script, any question
-that waits for a keypress). Nobody can see that prompt, so nobody can answer
-it: on 2026-09-08 a worker put its question into a terminal dialog and stood
-still for an hour while the watchdog counted it as alive, because its tool
-heartbeat kept ticking.
+"Ask"/option dialog in your terminal, the `AskUserQuestion` tool, a `read` in
+a shell script, any question that waits for a keypress). Nobody can see that
+prompt, so nobody can answer it: on 2026-09-08 a worker put its question into
+a terminal dialog and stood still for an hour while the watchdog counted it
+as alive, because its tool heartbeat kept ticking.
+
+This also applies after an interruption. On 2026-09-12 a worker ran a long,
+silent test suite; the watchdog took the run for dead and interrupted it, and
+the model's response to the interruption was to open a dialog ("test run
+blocked — how to proceed?") instead of asking the right way. That dialog is
+a second, worse stall: the interrupted state can swallow the nudge's Enter
+keystroke, so the unsent text just sits in the input field until a human
+notices and presses Enter by hand. Reacting to an interruption is not a
+special case — it goes through the same channel as above, never through a
+dialog. `AskUserQuestion` is denied via `permissions.deny` in this
+container's settings for exactly this reason — if it still shows up as
+available, that is a config bug, not a green light to use it.
 
 ### Probes never touch your own session (HARD RULE)
 
