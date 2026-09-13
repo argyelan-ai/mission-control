@@ -136,6 +136,18 @@ verify_paste_landed() {
 # Ohne Anker (fremde CLI, Box aus dem sichtbaren Bereich geschoben) faellt die
 # Funktion auf PASTE_INPUT_TAIL_LINES (Default 12) zurueck — das alte
 # Verhalten. Ein explizit gesetztes PASTE_INPUT_TAIL_LINES gewinnt immer.
+# _cpo_field_anchored PANE — steht im Pane ueberhaupt eine erkennbare
+# Composer-Box? rc 0 = ja (Anker gefunden), rc 1 = nein (Fallback-Fenster).
+#
+# Gebraucht vom Collapse-Marker-Pfad: ohne Anker ist die Grenze zwischen
+# Verlauf und Eingabefeld geraten, und ein Marker laesst sich keiner Seite
+# zuordnen. Bewusst eine eigene Funktion statt eines Rueckgabewerts von
+# _input_field_tail_lines: deren Aufrufer steht in einer Kommandosubstitution,
+# und eine dort gesetzte Variable erreicht die aufrufende Shell nie.
+_cpo_field_anchored() {
+    printf '%s\n' "$1" | grep -q -E '^[[:space:]]*(❯|╭)' 2>/dev/null
+}
+
 _input_field_tail_lines() {
     local pane="$1"
     local fallback="${PASTE_INPUT_TAIL_LINES:-12}"
@@ -200,7 +212,7 @@ classify_paste_outcome() {
         return 0
     fi
 
-    _pane_matches_fp() {
+    _cpo_matches_fp() {
         # $1 = pane text; matcht full/half/quarter + last_line-Anker.
         # Der last_line-Anker nur wenn er nicht leer und nicht mit dem
         # Erstzeilen-Fingerprint identisch ist: `grep -qF ""` matcht sonst
@@ -216,30 +228,64 @@ classify_paste_outcome() {
     input_tail_lines=$(_input_field_tail_lines "$pane")
     local tail_fingerprint="0" tail_pane body
     tail_pane=$(echo "$pane" | tail -n "$input_tail_lines")
-    if _pane_matches_fp "$tail_pane"; then
+    if _cpo_matches_fp "$tail_pane"; then
         tail_fingerprint="1"
     fi
     # Alles OBERHALB des Eingabefelds ist Verlauf. Steht der Fingerprint hier,
     # hat die TUI die Nachricht gerendert — sie ist also abgesendet.
     body=$(echo "$pane" | head -n -"$input_tail_lines")
 
-    # Collapse-Marker-Pfad (identisch zu verify_paste_landed): nur ein ZUWACHS
-    # gegen das Pre-Paste-Snapshot zaehlt.
-    local marker_count
-    marker_count=$(printf '%s\n' "$pane" | tail -n "${PASTE_COLLAPSE_TAIL_LINES:-40}" | grep -cF '[Pasted text' 2>/dev/null || true)
-    [ -n "$marker_count" ] || marker_count=0
-    if [ "$marker_count" -gt "${PASTE_PRE_COLLAPSE_COUNT:-0}" ]; then
-        echo "0"
-        return 0
+    # ── Collapse-Marker-Pfad ────────────────────────────────────────────
+    # claude-cli >= 2.x faltet mehrzeilige Pastes zu `[Pasted text #N +M lines]`
+    # zusammen — der Inhalt rendert NIE im Pane, nur der Marker. Deshalb zaehlt
+    # hier ein ZUWACHS gegen das Pre-Paste-Snapshot (PASTE_PRE_COLLAPSE_COUNT,
+    # gesetzt in poll.sh) als Beleg statt des Fingerprints.
+    #
+    # Bug B1/Runde 2 (Review PR #529, 2026-09-13): die Zaehlung lief ueber das
+    # GESAMTE 40-Zeilen-Fenster und kehrte VOR der Verlauf/Feld-Trennung
+    # zurueck. Die Composer-Box liegt in diesem Fenster — ein Marker, der
+    # unabgeschickt IN der Box steht, zaehlte also wie einer im Verlauf, und
+    # der Klassifikator meldete "0 = abgesendet". Das trifft den Normalfall,
+    # nicht den Randfall: Dispatch-Prompts und Queue-Messages sind mehrzeilig
+    # und falten immer zusammen. Genau fuer sie gab es dann kein zweites Enter,
+    # keine Eskalation, keinen Blocker — der stille Stall ueberlebte den Fix
+    # an der haeufigsten Stelle.
+    #
+    # Das Fenster wird gebildet wie beim Pre-Snapshot (letzte $collapse_tail
+    # Zeilen des Panes) und ERST DANN an der Ankergrenze geteilt. Wuerde man
+    # stattdessen ueber den ganzen `body` zaehlen, reichte das Fenster bei
+    # vorhandenem Scrollback weiter nach oben als beim Pre-Snapshot und alte
+    # Marker saehen wie Zuwachs aus.
+    local collapse_tail=${PASTE_COLLAPSE_TAIL_LINES:-40}
+    local window body_markers tail_markers
+    window=$(printf '%s\n' "$pane" | tail -n "$collapse_tail")
+    if _cpo_field_anchored "$pane"; then
+        body_markers=$(printf '%s\n' "$window" | head -n -"$input_tail_lines" | grep -cF '[Pasted text' 2>/dev/null || true)
+        tail_markers=$(printf '%s\n' "$tail_pane" | grep -cF '[Pasted text' 2>/dev/null || true)
+    else
+        # Keine erkennbare Box: die Grenze waere geraten, ein Marker liesse sich
+        # keiner Seite zuordnen. Dann bleibt es beim alten Verhalten ueber das
+        # ganze Fenster. Bewusst in diese Richtung: ein falsches "2" schickt ein
+        # zweites Enter in einen moeglicherweise laufenden Zug und eskaliert
+        # laut auf einem gesunden Pfad — derselbe Fehler mit umgekehrtem
+        # Vorzeichen, den die Vorrunde schon gefunden hat.
+        body_markers=$(printf '%s\n' "$window" | grep -cF '[Pasted text' 2>/dev/null || true)
+        tail_markers=0
     fi
+    [ -n "$body_markers" ] || body_markers=0
+    [ -n "$tail_markers" ] || tail_markers=0
 
-    if _pane_matches_fp "$body"; then
+    # Reihenfolge: Verlauf schlaegt Eingabefeld. Fingerprint ODER Marker-Zuwachs
+    # oberhalb der Box heisst, die TUI hat die Nachricht gerendert.
+    if _cpo_matches_fp "$body" || [ "$body_markers" -gt "${PASTE_PRE_COLLAPSE_COUNT:-0}" ]; then
         echo "0"
         return 0
     fi
-    if [ "$tail_fingerprint" = "1" ]; then
-        # Fingerprint NUR im Eingabefeld → haengengeblieben, das Submit-Enter
-        # ist woanders gelandet (klassisch: in den Interrupted-Dialog).
+    if [ "$tail_fingerprint" = "1" ] || [ "$tail_markers" -gt 0 ]; then
+        # Fingerprint oder Collapse-Marker NUR im Eingabefeld → haengengeblieben,
+        # das Submit-Enter ist woanders gelandet (klassisch: in den
+        # Interrupted-Dialog). Beim Marker genuegt jedes Vorkommen: die Box ist
+        # vor dem Paste leer, alles was dort steht ist der neue Paste.
         echo "2"
         return 0
     fi

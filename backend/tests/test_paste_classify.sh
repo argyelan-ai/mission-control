@@ -184,6 +184,63 @@ export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-unsubmitted.txt"
 out_uns=$(PASTE_INPUT_TAIL_LINES=12 classify_paste_outcome "$msg_b1")
 [ "$out_sub" = "2" ] && [ "$out_uns" = "2" ] || fail "case C9: Sabotage-Probe erwartet 2/2 mit festem Fenster, war '$out_sub'/'$out_uns' — Fixture oder Logik hat sich verschoben"
 
+# ── Bug B1/Runde 2: der Collapse-Marker-Pfad kannte die Ankergrenze nicht ──
+# claude-cli >= 2.x faltet mehrzeilige Pastes zu `[Pasted text #N +M lines]`
+# zusammen — der Inhalt rendert nie im Pane. Die Marker-Zaehlung lief ueber das
+# GESAMTE 40-Zeilen-Fenster und kehrte vor der Verlauf/Feld-Trennung zurueck,
+# also zaehlte ein Marker IN der Composer-Box wie einer im Verlauf: der
+# haengengebliebene Paste meldete "0 = abgesendet". Das ist der Normalfall,
+# nicht der Randfall — Dispatch-Prompts und Queue-Messages falten immer
+# zusammen.
+#
+# Beide Faelle sind aus dem ECHTEN 24-Zeilen-Pane gebaut (nicht aus
+# Fuellzeilen): nur der Text an der jeweiligen Stelle ist durch den Marker
+# ersetzt, den die TUI dort tatsaechlich rendert. Der Klartext-Fingerprint
+# kommt in keinem der beiden Panes vor — sonst wuerde der Fingerprint-Pfad
+# antworten und der Marker-Pfad bliebe ungetestet.
+#
+# Achtung beim Aendern: hinter dem `❯` der Fixture steht ein NBSP (U+00A0),
+# kein normales Leerzeichen. Ein sed-Muster `^❯ ` matcht dort nicht.
+pane_c11=$(mktemp)
+sed 's|Weiter mit der Karte.*|[Pasted text #1 +6 lines]|' \
+    "$FIX_DIR/claude-24-unsubmitted.txt" > "$pane_c11"
+grep -qF '[Pasted text' "$pane_c11" \
+    || fail "case C11: Fixture-Aufbau kaputt — Marker nicht in der Box gelandet"
+grep -qF 'Weiter mit der Karte' "$pane_c11" \
+    && fail "case C11: Klartext noch im Pane — der Test wuerde den Fingerprint-Pfad messen, nicht den Marker-Pfad"
+export TMUX_STUB_PANE_FILE="$pane_c11"
+PASTE_PRE_COLLAPSE_COUNT=0
+out=$(classify_paste_outcome "$msg_b1")
+[ "$out" = "2" ] || fail "case C11: Collapse-Marker IN der Box muss 2 sein (haengengeblieben), war '$out'"
+
+# Case C11b: Gegenprobe — derselbe Paste, aber abgesendet: der Marker steht im
+# Verlauf, die Box ist leer. Muss 0 bleiben, sonst haette der Fix nur das
+# Vorzeichen gedreht statt zu unterscheiden.
+pane_c11b=$(mktemp)
+sed 's|^● Ich habe den Watchdog-Pfad.*|> [Pasted text #1 +6 lines]|; s|Weiter mit der Karte.*||' \
+    "$FIX_DIR/claude-24-unsubmitted.txt" > "$pane_c11b"
+grep -qF '[Pasted text' "$pane_c11b" \
+    || fail "case C11b: Fixture-Aufbau kaputt — Marker nicht im Verlauf gelandet"
+export TMUX_STUB_PANE_FILE="$pane_c11b"
+PASTE_PRE_COLLAPSE_COUNT=0
+out=$(classify_paste_outcome "$msg_b1")
+[ "$out" = "0" ] || fail "case C11b: Collapse-Marker im Verlauf muss 0 bleiben (abgesendet), war '$out'"
+
+# Case C11c (Sabotage-Probe zu C11): mit der ALTEN Zaehlung ueber das ganze
+# Fenster kollabieren C11 und C11b auf denselben Wert — genau die Blindheit,
+# die der Review beschreibt. Nachgestellt ueber das Fallback-Fenster: ohne
+# Composer-Anker kann die Zuordnung nicht stattfinden, beide ergeben 0. Faellt
+# dieser Block, ist die Ankergrenze im Marker-Pfad tot und C11 waere nur noch
+# zufaellig gruen.
+pane_c11_noanchor=$(mktemp)
+sed 's|^[[:space:]]*❯|>|' "$pane_c11" > "$pane_c11_noanchor"
+_cpo_field_anchored "$(cat "$pane_c11_noanchor")" \
+    && fail "case C11c: Sabotage-Pane hat noch einen Anker — die Probe misst nichts"
+export TMUX_STUB_PANE_FILE="$pane_c11_noanchor"
+PASTE_PRE_COLLAPSE_COUNT=0
+out=$(classify_paste_outcome "$msg_b1")
+[ "$out" = "0" ] || fail "case C11c: ohne Anker ist die alte Ganzfenster-Zaehlung erwartet (0), war '$out'"
+
 # ── pane_in_interrupted_dialog (sourced from poll.sh, functions only) ──────
 # poll.sh sources $POLL_LIB_DIR/{turn-state,ui-detect,context-detect}.sh even in
 # SOURCE_ONLY mode. Point POLL_LIB_DIR at the REAL mc-agent-base lib (so
@@ -267,13 +324,96 @@ paste_and_submit "$msg_e1" || rc=$?
 grep -q "task=running-task" "$BLOCKER_LOG" || fail "case E2: Fallback auf CURRENT_TASK_ID fehlt: $(cat "$BLOCKER_LOG")"
 
 # Case E3: ohne bekannte Karte gibt es nichts zu blockieren — aber still
-# weitergegangen wird trotzdem nicht (rc=2, kein report_blocker).
+# weitergegangen wird trotzdem nicht.
+#
+# W2 (Review PR #529): der Fall gab frueher ebenfalls 2 zurueck. Der
+# Dispatch-Aufrufer (poll.sh, Zweig `paste_rc = 2`) loggt darauf "Karte wurde
+# blockiert und an den Lead gemeldet" — eine Aussage, die hier nachweislich
+# falsch war: ohne Karte laeuft weder Kommentar noch Statusflanke, und das
+# Escape steckt in report_blocker, lief also auch nicht. Der Test pinnt jetzt
+# den ehrlichen Vertrag: rc 1 (= nicht zugestellt, NICHTS eskaliert), kein
+# report_blocker, aber das Feld wird trotzdem geraeumt.
 : > "$BLOCKER_LOG"
 CURRENT_TASK_ID=""
 CURRENT_BOARD_ID=""
+PASTE_ESCALATION_TASK_ID=""
+PASTE_ESCALATION_BOARD_ID=""
+export TMUX_KEYS_LOG=$(mktemp)
+: > "$TMUX_KEYS_LOG"
 rc=0
 paste_and_submit "$msg_e1" || rc=$?
-[ "$rc" = "2" ] || fail "case E3: paste_and_submit muss auch ohne Karte 2 zurueckgeben, war '$rc'"
+[ "$rc" = "1" ] || fail "case E3: ohne Karte muss paste_and_submit 1 zurueckgeben (nichts eskaliert), war '$rc' — bei 2 behauptet der Aufrufer eine Blockade, die nie stattfand"
 [ ! -s "$BLOCKER_LOG" ] || fail "case E3: ohne Karte darf report_blocker nicht laufen: $(cat "$BLOCKER_LOG")"
+grep -q 'Escape' "$TMUX_KEYS_LOG" \
+    || fail "case E3: ohne Karte muss das Feld trotzdem per Escape geraeumt werden — sonst haengt sich der naechste Paste an den stehengebliebenen Text: $(cat "$TMUX_KEYS_LOG")"
+unset TMUX_KEYS_LOG
+
+# ── W1: die Quellenkennung muss die Lead-Triage erreichen ──────────────────
+# Der Kommentar trug das Label schon, der Status-PATCH aber nicht — dort stand
+# fest verdrahtet "poll.sh turn-state auto-detection". Genau die
+# blocker_question liest die Triage, und bei einem Nudge-Blocker sagte sie
+# damit das Gegenteil von dem, wofuer das Label gebaut wurde.
+#
+# Kein Source-Grep, sondern der echte Pfad: report_blocker laeuft unveraendert
+# gegen einen lokalen HTTP-Server, der Kommentar-POST und Status-PATCH
+# mitschreibt. Wir pruefen den WIRKLICH gesendeten Body.
+w1_dir=$(mktemp -d)
+w1_port=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
+python3 - "$w1_dir" "$w1_port" <<'W1SRV' &
+import json, sys, http.server
+out_dir, port = sys.argv[1], int(sys.argv[2])
+class H(http.server.BaseHTTPRequestHandler):
+    def _rec(self, kind):
+        n = int(self.headers.get('Content-Length') or 0)
+        body = self.rfile.read(n).decode()
+        with open(f"{out_dir}/{kind}.json", "w") as f:
+            f.write(body)
+        self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+    def do_POST(self): self._rec("comment")
+    def do_PATCH(self): self._rec("patch")
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()
+W1SRV
+w1_srv_pid=$!
+# Auf den Port warten statt blind zu schlafen — ein fester sleep macht den Test
+# auf langsamer CI flaky.
+for _ in $(seq 1 50); do
+    python3 -c "import socket,sys; s=socket.socket();
+sys.exit(0) if s.connect_ex(('127.0.0.1', $w1_port)) == 0 else sys.exit(1)" 2>/dev/null && break
+    sleep 0.1
+done
+
+(
+    # Eigene Shell: hier soll das ECHTE report_blocker laufen, nicht der Stub
+    # aus dem B3-Block oben.
+    set -uo pipefail
+    POLL_SH_SOURCE_ONLY=1 source "$POLL"
+    MC_API_URL="http://127.0.0.1:$w1_port"
+    MC_TOKEN="stub-token"
+    SESSION_NAME="testsession"
+    CURRENT_BOARD_ID="board-1"
+    CURRENT_TASK_ID="task-1"
+    log() { :; }
+    reset_turn_signal() { :; }
+    TASK_LOCK_FILE=$(mktemp)
+    report_blocker "task-1" "Nudge blieb unabgesendet im Eingabefeld" "detail-text" "poll.sh paste_and_submit"
+) || fail "case W1: report_blocker ist abgebrochen"
+
+kill "$w1_srv_pid" 2>/dev/null || true
+wait "$w1_srv_pid" 2>/dev/null || true
+
+[ -s "$w1_dir/patch.json" ] || fail "case W1: kein Status-PATCH angekommen — der Test misst nichts"
+w1_q=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['blocker_question'])" "$w1_dir/patch.json")
+case "$w1_q" in
+    *"poll.sh paste_and_submit"*) : ;;
+    *) fail "case W1: blocker_question traegt die Quellenkennung nicht — die Triage liest genau dieses Feld. War: '$w1_q'" ;;
+esac
+case "$w1_q" in
+    *"turn-state"*) fail "case W1: blocker_question behauptet weiterhin turn-state, obwohl der Nudge-Pfad eskaliert hat: '$w1_q'" ;;
+    *) : ;;
+esac
+[ -s "$w1_dir/comment.json" ] || fail "case W1: kein Blocker-Kommentar angekommen"
+grep -qF 'poll.sh paste_and_submit' "$w1_dir/comment.json" \
+    || fail "case W1: Kommentar traegt die Quellenkennung nicht: $(cat "$w1_dir/comment.json")"
 
 echo "PASS: all paste-classify smoke tests"

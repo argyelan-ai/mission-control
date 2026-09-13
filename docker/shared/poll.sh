@@ -274,6 +274,21 @@ wait_for_clean_prompt() {
     # Dialog statt ins Eingabefeld, und der Nudge blieb unabgeschickt stehen
     # (vier Live-Faelle am 2026-09-12). Ein Pane im Interrupted-Dialog ist KEIN
     # clean prompt: solange der Dialog sichtbar ist, pollen wir weiter.
+    #
+    # W3 (Review PR #529) — wer loest den Dialog auf? Bewusst NICHT dieses Gate.
+    # Aufgeloest wird er (a) vom naechsten erfolgreich abgesendeten Paste — der
+    # Dialog-Composer nimmt den Text an, und der Zweit-Enter-Pfad in
+    # paste_and_submit faengt ab, wenn das erste Enter im Dialog verschluckt
+    # wurde, (b) vom Escape in report_blocker auf dem Eskalationspfad, (c) vom
+    # Menschen, der interrupted hat. Ein Escape hier waere falsch: das Gate
+    # laeuft vor JEDEM Paste, und ein blindes Escape wuerde einen legitim
+    # laufenden Zug abbrechen.
+    # Folge fuer die Queue: nur flush_msg_queue (--no-fail-open) haelt strikt
+    # und laesst die Message gequeued; Nudge- und Dispatch-Pfad pasten nach
+    # READY_TIMEOUT_SEC fail-open, und deren Ergebnis wird jetzt korrekt
+    # klassifiziert und notfalls laut eskaliert. Ein dauerhaft stehender Dialog
+    # staut also die Queue, bleibt aber nicht still — die Eskalation auf dem
+    # Nudge-Pfad blockiert die Karte vorher.
     local deadline
     deadline=$(( $(date +%s) + READY_TIMEOUT_SEC ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -447,13 +462,29 @@ paste_and_submit() {
             fi
             if [ "$outcome" = "2" ]; then
                 log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. Eskalation: Kommentar auf die Karte plus Status blocked (Lead-Triage). NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
-                escalate_unsubmitted_nudge \
+                # W2 (Review PR #529): rc auswerten. Ohne zugeordnete Karte
+                # macht escalate_unsubmitted_nudge NICHTS — kein Kommentar,
+                # kein blocked, und auch kein Escape, weil das in
+                # report_blocker steckt. Ein pauschales `return 2` liess den
+                # Aufrufer dann "Karte wurde blockiert und an den Lead
+                # gemeldet" loggen, obwohl niemand etwas erfahren hat: wieder
+                # eine Meldung, die nicht beschreibt was passiert ist.
+                if escalate_unsubmitted_nudge \
                     "${PASTE_ESCALATION_TASK_ID:-$CURRENT_TASK_ID}" \
                     "${PASTE_ESCALATION_BOARD_ID:-$CURRENT_BOARD_ID}" \
-                    "paste_and_submit Versuch ${attempt}: der Text steht sichtbar im Eingabefeld, wurde aber nicht abgesendet (classify_paste_outcome=2 auch nach dem zweiten Enter). Typische Ursache: das Submit-Enter landete in einem Dialog statt im Feld. Das Feld wurde per Escape geraeumt; der Nudge ist NICHT zugestellt."
-                # 2 statt 1: der Aufrufer soll wissen, dass die Karte bereits
-                # blockiert wurde und er kein Turn-State-Tracking mehr aufsetzt.
-                return 2
+                    "paste_and_submit Versuch ${attempt}: der Text steht sichtbar im Eingabefeld, wurde aber nicht abgesendet (classify_paste_outcome=2 auch nach dem zweiten Enter). Typische Ursache: das Submit-Enter landete in einem Dialog statt im Feld. Das Feld wurde per Escape geraeumt; der Nudge ist NICHT zugestellt."; then
+                    # 2 statt 1: der Aufrufer soll wissen, dass die Karte
+                    # bereits blockiert wurde und er kein Turn-State-Tracking
+                    # mehr aufsetzt.
+                    return 2
+                fi
+                # Keine Karte zugeordnet: das Escape hier selbst senden, sonst
+                # bleibt der unabgesendete Text im Feld stehen und der naechste
+                # Paste haengt sich daran. rc 1 = "nicht zugestellt, NICHTS
+                # eskaliert" — der Aufrufer darf keine Blockade behaupten.
+                tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+                log "ERROR: paste_and_submit (Versuch ${attempt}): Nudge steht unabgesendet im Feld UND es ist keine Karte zugeordnet — Feld per Escape geraeumt, aber es wurde NICHTS eskaliert. Nur dieses Log. Manueller Eingriff noetig."
+                return 1
             fi
             # outcome=1 nach zweitem Enter: Feld leer geworden, aber Fingerprint
             # nicht im Scrollback — als Nicht-Angekommen melden und normal retry.
@@ -863,14 +894,18 @@ except Exception as e:
     # Felder → HTTP 422 + Task bleibt in_progress → Watchdog stale-loop
     # alle 60min (recovery_started Discord-spam). Daher senden wir hier
     # einen vollstaendigen Body mit blocker_type='technical_problem'.
-    POLL_REASON="$reason" POLL_ERROR="$error_detail" \
+    # W1 (Review PR #529): POLL_SOURCE gehoert AUCH hierher. Die
+    # blocker_question ist das Feld, das die Lead-Triage liest — stand dort
+    # fest verdrahtet "turn-state auto-detection", sagte sie bei einem
+    # Nudge-Blocker das Gegenteil von dem, wofuer das Label gebaut wurde.
+    POLL_REASON="$reason" POLL_ERROR="$error_detail" POLL_SOURCE="$source_label" \
     POLL_URL="$MC_API_URL/api/v1/agent/me/tasks/$task_id" \
     POLL_TOKEN="$MC_TOKEN" python3 -c "
 import json, os, urllib.request
 body = {
     'status': 'blocked',
     'blocker_type': 'technical_problem',
-    'blocker_question': f'Agent stalled — poll.sh turn-state auto-detection: {os.environ[\"POLL_REASON\"]}',
+    'blocker_question': f'Agent stalled — {os.environ[\"POLL_SOURCE\"]}: {os.environ[\"POLL_REASON\"]}',
     'blocker_description': os.environ['POLL_ERROR'][:300],
 }
 req = urllib.request.Request(
