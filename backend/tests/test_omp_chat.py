@@ -67,6 +67,8 @@ CUSTOM_TOOL_START_LINE = '{"type":"custom","customType":"tool_execution_start","
 
 CUSTOM_SESSION_EXIT_LINE = '{"type":"custom","customType":"session_exit","data":{"reason":"exit","kind":"process_exit","recordedAt":"2026-07-23T17:30:02.570Z"},"id":"a382260c","parentId":"167ff326","timestamp":"2026-07-23T17:30:02.570Z"}'
 
+CHAT_ERROR_LINE = '{"type":"custom_message","customType":"chat_error","content":"Das Modell wurde abgelehnt.","display":true,"data":{"code":"rpc_error","detail":"unknown model"},"id":"e1e1e1e1","timestamp":"2026-09-13T08:49:44.991Z"}'
+CHAT_ERROR_NO_DATA_LINE = '{"type":"custom_message","customType":"chat_error","content":"Etwas ging schief.","display":true,"id":"e2e2e2e2","timestamp":"2026-09-13T08:50:44.991Z"}'
 CUSTOM_MESSAGE_LINE = '{"type":"custom_message","customType":"async-result","content":"<system-notice>\\nHintergrund-Job bg_1 ist fertig.\\n</system-notice>","display":true,"details":{"jobs":[{"jobId":"bg_1","type":"bash"}]},"attribution":"agent","id":"b0e6c25b","parentId":"97948230","timestamp":"2026-07-23T08:49:44.991Z"}'
 
 CUSTOM_MESSAGE_HIDDEN_LINE = CUSTOM_MESSAGE_LINE.replace('"display":true', '"display":false')
@@ -381,6 +383,27 @@ def test_custom_message_shown_by_omp_is_not_a_message_of_the_operator():
     assert "Hintergrund-Job bg_1" in ev["text"]
 
 
+def test_custom_message_chat_error_becomes_an_error_event():
+    """Chat over ACP: der Chat-Daemon schreibt seine Fehler als
+    ``customType: "chat_error"`` ins Transkript — sie muessen als EIGENE
+    Ereignissorte ankommen (rote Karte mit Code), nicht als weiterer
+    Systemhinweis unter vielen."""
+    (ev,) = parse(CHAT_ERROR_LINE)
+    assert ev["kind"] == "message"
+    assert ev["role"] == "teammate"
+    assert ev["source"] == {"kind": "error", "title": "chat_error"}
+    assert ev["error"] == {"code": "rpc_error", "detail": "unknown model"}
+    assert "Modell" in ev["text"]
+
+
+def test_custom_message_chat_error_without_data_still_carries_a_code():
+    """Fehlende ``data``: lieber ein leerer Code als eine verschluckte
+    Fehlermeldung — die Karte muss trotzdem erscheinen."""
+    (ev,) = parse(CHAT_ERROR_NO_DATA_LINE)
+    assert ev["source"]["kind"] == "error"
+    assert ev["error"] == {"code": None, "detail": None}
+
+
 def test_custom_message_without_a_display_field_is_still_shown():
     """``display`` FEHLT ist nicht ``display: false``. Das Format ist
     versioniert und aendert sich ohne Ankuendigung — ein weggeworfener
@@ -432,6 +455,26 @@ def omp_home(tmp_path, monkeypatch):
 
 def test_resolve_transcript_dir(omp_home):
     assert resolve_transcript_dir(_Agent()) == omp_home / ".mc/agents/omp-agent/omp-sessions"
+
+
+def test_resolve_transcript_dir_for_hermes_host_agent(omp_home):
+    """Chat over ACP: der Hermes-Daemon auf dem Host schreibt dasselbe
+    omp-Transkriptformat — damit liest die ganze Leser-/Vorschau-Kette
+    unveraendert weiter, statt ein zweites Format zu lernen."""
+    agent = _Agent(slug="hermes", agent_runtime="host", harness="hermes")
+    assert resolve_transcript_dir(agent) == omp_home / ".mc/agents/hermes/omp-sessions"
+
+
+@pytest.mark.parametrize(
+    "agent",
+    [
+        _Agent(slug="hermes", agent_runtime="cli-bridge", harness="hermes"),
+        _Agent(slug="hermes", agent_runtime="host", harness="claude"),
+    ],
+)
+def test_resolve_transcript_dir_hermes_stays_fail_closed(agent, omp_home):
+    """Der Hermes-Zweig gilt fuer host+hermes — und nur dafuer."""
+    assert resolve_transcript_dir(agent) is None
 
 
 @pytest.mark.parametrize(
