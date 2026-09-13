@@ -665,11 +665,17 @@ class TaskMonitorMixin:
         if not completed_parent.project_id:
             return
 
+        # C2 (PR #533 Nacharbeit): mirrors the run_control guard added to
+        # tasks.py's inline phase-auto-advance — a lead-held next phase must
+        # not be force-started via this sweep either. Since this runs on
+        # every watchdog tick as long as completed_parent stays "done", the
+        # phase is picked up automatically on the first tick after release.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == completed_parent.project_id,
                 Task.parent_task_id.is_(None),  # type: ignore[attr-defined]
                 Task.status == "inbox",
+                Task.run_control.is_(None),  # type: ignore[union-attr]
                 Task.sort_order > completed_parent.sort_order,
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()

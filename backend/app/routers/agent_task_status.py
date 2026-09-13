@@ -731,10 +731,17 @@ async def get_next_task(
 
     # 2. Zugewiesene inbox-Tasks laden
     # dispatch_phase guard: tasks with "planning" are NOT available (must be promoted first)
+    # C2 (PR #533 Nacharbeit): same guard as the poll-claim path (agents.py
+    # candidates query) — a lead-held card (run_control=manual_hold) or an
+    # admin-stopped card must not be claimed here either. This endpoint
+    # bypasses check_dispatch_allowed entirely (it calls lock_and_set()
+    # directly below), so without this filter it was a second, undocumented
+    # door around the hold.
     candidates = (await session.exec(
         select(Task).where(
             Task.assigned_agent_id == agent.id,
             Task.status == "inbox",
+            Task.run_control.is_(None),  # type: ignore[union-attr]
             or_(
                 Task.dispatch_phase.is_(None),  # type: ignore[union-attr]
                 Task.dispatch_phase == "ready",
@@ -1531,6 +1538,11 @@ async def agent_create_task(
     if payload.parent_task_id:
         parent = await session.get(Task, payload.parent_task_id)
         if (parent and parent.status == "inbox"
+                and parent.run_control is None
+                # C2 (PR #533 Nacharbeit): a held parent (mc hold, e.g. the
+                # Board Lead holding its own root task) must stay held —
+                # spawning a subtask under it must not silently start it
+                # via this side door. `mc release` is the only way out.
                 and parent.assigned_agent_id == agent.id):
             parent, _ = await lock_and_set(session, parent.id, "in_progress", actor=agent.name)
             # F2 fix (Plan 26-03): first-set-wins on started_at.
@@ -1708,8 +1720,17 @@ async def agent_reassign_task(
         if candidate and candidate.board_id == board_id:
             target = candidate
     else:
+        # C2 (PR #533 Nacharbeit, Warning 3): this is meant to be an exact,
+        # case-insensitive name match, not a substring search — ilike()
+        # against a raw, unescaped payload.to treats '%' and '_' as SQL
+        # wildcards. `--to "%"` matched the first agent row on the board.
+        # func.lower() equality has no wildcard semantics, so it needs no
+        # escaping at all.
+        from sqlalchemy import func as _sa_func
         result = await session.exec(
-            select(Agent).where(Agent.board_id == board_id).where(Agent.name.ilike(payload.to))
+            select(Agent)
+            .where(Agent.board_id == board_id)
+            .where(_sa_func.lower(Agent.name) == payload.to.strip().lower())
         )
         target = result.first()
 
@@ -1721,6 +1742,14 @@ async def agent_reassign_task(
     if old_agent_id is not None:
         old_agent = await session.get(Agent, old_agent_id)
         old_agent_name = old_agent.name if old_agent else str(old_agent_id)
+        # C2 (PR #533 Nacharbeit, Warning 2): the old agent's active-task
+        # lock must follow the card away. Left dangling, dispatch.py's Guard
+        # 1 (`best_agent.current_task_id`) keeps queuing every future push
+        # for the old agent behind a task it no longer owns — silently, with
+        # no error and no expiry, since nothing else ever clears that field.
+        if old_agent is not None and old_agent.current_task_id == task.id:
+            old_agent.current_task_id = None
+            session.add(old_agent)
 
     task.assigned_agent_id = target.id
     task.dispatched_at = None

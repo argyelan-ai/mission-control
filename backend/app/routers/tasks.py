@@ -1474,6 +1474,12 @@ async def update_task(
             # the task gets dispatched again, the agent works, but isn't
             # allowed to switch to review -> deadlock.
             task.run_control = None
+            # hold_reason is free text set by mc hold (agent_task_status.py)
+            # and normally cleared by mc release. A direct PATCH status=inbox
+            # bypasses that verb, so without this the reason string survives
+            # as a phantom justification for a hold that no longer exists
+            # (PR #533 Nacharbeit, Warning 1).
+            task.hold_reason = None
         elif new_status == "in_progress" and old_status != "in_progress":
             # F2 fix (Plan 26-03): first-set-wins. Re-opens (review→in_progress,
             # blocked→in_progress) preserve the original started_at for accurate
@@ -1705,11 +1711,18 @@ async def update_task(
     # Phase done → auto-advance to the next phase + project progress
     if new_status == "done" and task.parent_task_id is None and task.project_id:
         # Find and start the next phase
+        # C2 (PR #533 Nacharbeit): a lead-held next phase (run_control=
+        # manual_hold) must not be force-started here — same reasoning as
+        # the poll/pull claim-path guards. Skipping it isn't a dead end:
+        # the phase stays status="done" for its predecessor, so the
+        # watchdog's periodic _auto_advance_next_phase (task_monitor.py)
+        # re-checks and starts it on its own once the hold is released.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == task.project_id,
                 Task.parent_task_id.is_(None),  # type: ignore[attr-defined]
                 Task.status == "inbox",
+                Task.run_control.is_(None),  # type: ignore[union-attr]
                 Task.sort_order > task.sort_order,
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()
