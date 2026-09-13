@@ -20,9 +20,25 @@
 # the WS call is roughly 15-20x the ~0.3s a healthy roundtrip takes in
 # practice, so brief scheduling/GC jitter won't trip it while a genuinely
 # wedged socket still gets caught well before Playwright's own 30s timeout.
+#
+# Deliberately NOT `-1`/--one-message: that reads exactly one WS message and
+# stops, so an unsolicited event arriving before the id-matched response
+# (Rex' review on PR #544 — measured exit 1 after 0.16s while the real
+# answer was 0.2s away) false-positives the check red. Without -1, websocat
+# keeps forwarding every message it receives, one per line, until the
+# connection closes or `timeout 5` kills it — so grep effectively loops over
+# incoming messages until it sees the matching id, still bounded by the same
+# 5s. -n stays: it only suppresses the Close frame websocat would otherwise
+# send on stdin EOF (right after the single request line), which is what
+# keeps the socket open long enough to read the response at all.
+#
+# grep only matches on id, not on result-vs-error — an id:1 *error* response
+# (the command failing browser-side) still counts as "answered" here, and
+# that's intentional: this check verifies the WS command channel itself
+# round-trips, not that Target.getTargets specifically succeeds.
 set -eu
 
-CDP_HOST="127.0.0.1:9223"
+CDP_HOST="${CDP_HOST:-127.0.0.1:9223}"
 
 WS_URL=$(timeout 3 wget -qO- "http://$CDP_HOST/json/version" 2>/dev/null \
   | sed -n 's/.*"webSocketDebuggerUrl": *"\([^"]*\)".*/\1/p')
@@ -30,5 +46,5 @@ WS_URL=$(timeout 3 wget -qO- "http://$CDP_HOST/json/version" 2>/dev/null \
 [ -n "$WS_URL" ] || exit 1
 
 echo '{"id":1,"method":"Target.getTargets"}' \
-  | timeout 5 websocat -1 -n "$WS_URL" 2>/dev/null \
+  | timeout 5 websocat -n "$WS_URL" 2>/dev/null \
   | grep -q '"id":1'

@@ -724,9 +724,14 @@ services:
       # path was wedged and every Playwright call hung at its 30s timeout.
       # timeout: 10s covers the script's own worst case (3s HTTP + 5s WS = 8s)
       # with margin, so Docker's own kill never fires before the script's.
+      # start_period: 30s — the check now does two real round-trips instead
+      # of one HTTP GET, so it's more likely to catch Chromium still coming
+      # up right after container start. Cheap insurance against that being
+      # mistaken for the wedge this check exists to find.
       test: ["CMD-SHELL", "/usr/local/bin/cdp-healthcheck.sh"]
       interval: 30s
       timeout: 10s
+      start_period: 30s
       retries: 3
 
   playwright-mcp:
