@@ -490,7 +490,17 @@ _SERVE_REFLECTION = (
 )
 
 _SERVE_TASK = {"id": "task-1", "board_id": "board-1", "dispatch_attempt_id": "att-1",
-               "workspace_path": "/workspace", "prompt": "Do the thing."}
+               "prompt": "Do the thing."}
+# Rex review B1 (PR #555 follow-up): `workspace_path` used to be the literal
+# "/workspace" — that only exists on this machine because it's the agent
+# container's mount point. On ubuntu-latest (the omp-bridge CI lane added by
+# this same PR series) it doesn't exist, so the G8 guard
+# (_require_prepared_acp_workspace) aborts the turn before run_acp_once is
+# ever reached, and the two tests below fail for an environment reason that
+# has nothing to do with the code under test. `_drive_serve_loop_acp` now
+# points `workspace_path` at a real subdirectory of the TemporaryDirectory the
+# calling test already owns, so both tests run identically on a laptop, this
+# container, and a bare CI runner.
 
 
 class _ServeRecordingLifecycle(bridge.MCLifecycle):
@@ -533,6 +543,8 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
     _run_factory injection) against the in-process fake server. Returns
     (lifecycle calls, captured run_acp_once kwargs, written jsonl paths)."""
     tmp = agent_dir.parent
+    workspace_dir = tmp / "workspace"
+    workspace_dir.mkdir(exist_ok=True)
     os.environ.update({
         "PI_CODING_AGENT_DIR": str(agent_dir),
         "OMP_DRIVER": "acp",
@@ -582,7 +594,14 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
 
     bridge.run_acp_once = spy_run
     lc = _ServeRecordingLifecycle()
-    poll_states = iter([{"state": "new_task", "task": dict(_SERVE_TASK)}])
+    # setdefault, not an unconditional override: test_acp_workspace_parity.py
+    # monkeypatches `tat._SERVE_TASK` with its own explicit workspace_path
+    # (a real dir to prove cwd-threading, a missing one to prove the G8
+    # blocker) — those must win. Only the two tests in THIS file, which use
+    # `_SERVE_TASK` unmodified, get the safe real-tempdir default.
+    task = dict(_SERVE_TASK)
+    task.setdefault("workspace_path", str(workspace_dir))
+    poll_states = iter([{"state": "new_task", "task": task}])
 
     def poll():
         try:
@@ -694,8 +713,11 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
     Rex review W1 (PR #547 follow-up): the three assertions below are ALSO
     all true if `bridge.run_acp_once` is never reached at all — e.g. the G8
     guard (`_require_prepared_acp_workspace`) aborts the turn up front
-    because `workspace_path` ("/workspace", from `_SERVE_TASK` above) does
-    not exist on this machine. That collapses the turn to a
+    because `workspace_path` points at a directory that does not exist (the
+    original probe hardcoded "/workspace", which only happens to exist on
+    the agent container that wrote this test — `_drive_serve_loop_acp` now
+    points it at a real tempdir subdirectory for exactly that reason, PR
+    #555 follow-up B1). That collapses the turn to a
     "technical_problem" blocker BEFORE `bare_factory`'s `run()` ever
     executes, and this probe reported PASSED without exercising the
     sabotage at all (verified manually: `bridge.container_workspace_path`
