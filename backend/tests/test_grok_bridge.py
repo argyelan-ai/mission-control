@@ -1291,3 +1291,48 @@ def test_reset_tui_session_sets_dispatch_in_flight_during_reset(bridge, monkeypa
     bridge.reset_tui_session()
     assert seen["during_reset"] is True
     assert bridge._dispatch_in_flight is False
+
+
+# ── W5 (2026-09-13): per-agent context env path ────────────────────────────────
+
+
+def test_context_env_path_defaults_to_agent_config_dir(monkeypatch, tmp_path):
+    """W5: the shared /tmp/mc-context.env made 'last writer wins' set TASK_ID
+    for EVERY host bridge agent (13.09. incident: Hermes' card id leaked into
+    other agents' context). Default must be this agent's own config dir."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    monkeypatch.delenv("MC_CONTEXT_ENV_PATH", raising=False)
+    mod = _load_bridge()
+    assert mod.CONFIG_DIR == tmp_path / ".mc" / "agents" / "grok"
+    assert mod.MC_CONTEXT_ENV_PATH == str(tmp_path / ".mc" / "agents" / "grok" / "mc-context.env")
+
+
+def test_context_env_path_env_override_wins(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    monkeypatch.setenv("MC_CONTEXT_ENV_PATH", "/custom/mc-context.env")
+    mod = _load_bridge()
+    assert mod.MC_CONTEXT_ENV_PATH == "/custom/mc-context.env"
+
+
+def test_write_task_context_env_is_owner_only(bridge, tmp_path):
+    """Attempt ids are not world material: the per-agent file is 0600."""
+    path = tmp_path / "mc-context.env"
+    bridge.write_task_context_env(
+        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"}, path=str(path),
+    )
+    import stat
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_deliver_task_context_publishes_path_into_tmux_env(bridge, tmp_path, monkeypatch):
+    """Without MC_CONTEXT_ENV_PATH in the session env, the agent's `mc` falls
+    back to the legacy /tmp file and reads a DIFFERENT file than the bridge
+    wrote — the per-agent split would silently not apply."""
+    ctx = tmp_path / "mc-context.env"
+    monkeypatch.setattr(bridge, "MC_CONTEXT_ENV_PATH", str(ctx))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(bridge, "_tmux", lambda args, **kw: calls.append(list(args)))
+    bridge.deliver_task_context(
+        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"}
+    )
+    assert ["set-environment", "-t", bridge.SESSION, "MC_CONTEXT_ENV_PATH", str(ctx)] in calls
