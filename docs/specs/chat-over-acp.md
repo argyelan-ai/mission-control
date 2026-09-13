@@ -108,14 +108,14 @@ When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `
 
 ## Proofs (live, each PR before merge/deploy)
 
-1. Message typed to Sparky appears as user line + streamed preview + final assistant line in the Sessions chat; `docker exec … acp_chat_ctl.py state` shows `turn` incremented.
+1. Message typed to the ACP agent appears as user line + streamed preview + final assistant line in the Sessions chat; `docker exec … acp_chat_ctl.py state` shows `turn` incremented.
 2. `/usage` from the palette answers in the chat; `/model <other>` changes `configOptions.model.currentValue`.
 3. Effort chip `high` → state `thinking=high`.
 4. Stop during a long turn → turn ends with `cancelled`, no error card.
 5. Sabotage: `config model=does-not-exist` → red `chat_error` card with `rpc_error`.
-6. Sparky Sessions page: no Chat/Terminal toggle; `?view=terminal` still opens the pane.
+6. The ACP agent's Sessions page: no Chat/Terminal toggle; `?view=terminal` still opens the pane.
 7. Hermes: chat message answered over `hermes acp`; history survives a bridge restart.
 
 ## Rollout
 
-PR A (bridge daemon + ctl + entrypoint + tests) → PR B (backend) → PR C (frontend) → PR D (Hermes). Container recreate of Sparky only after Boss reports the #148 follow-up task finished; hermes-bridge reload only after Hermes' task G5 — both announced to Boss first.
+PR A (bridge daemon + ctl + entrypoint + tests) → PR B (backend) → PR C (frontend) → PR D (Hermes). Container recreate of the ACP agent only after Boss reports the #148 follow-up task finished; hermes-bridge reload only after Hermes' task G5 — both announced to Boss first.
