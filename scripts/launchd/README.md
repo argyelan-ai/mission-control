@@ -58,13 +58,21 @@ launchctl list | grep 'com.mc\.'
 - **Script:** `scripts/docker-health-restart.sh`
 - **Interval:** 60s
 - **Zweck:** Positivlisten-basierter Host-Waechter fuer unhealthy Docker-
-  Services (`cdp-browser`, `playwright-mcp`). Bei `unhealthy`:
-  `docker restart` mit Exponential-Backoff (120s → 240s), max. 3 Versuche,
-  danach Stopp + genau eine Telegram-Meldung. **mc-agent-\* Container werden
-  per Hard-Guard nie angefasst**, egal was in der Allowlist steht.
+  Services (`cdp-browser`, `playwright-mcp`). Entprellt in beide Richtungen:
+  ein einzelner unhealthy-Tick loest noch keinen Versuch aus (erst 2 in
+  Folge), und ein einzelner gesunder Tick raeumt einen laufenden Incident
+  noch nicht weg (erst 3 in Folge gilt er als vorbei) — sonst faengt ein
+  flatternder Service nach jedem kurzen Erholen wieder bei Versuch 1 an. Bei
+  unhealthy: `docker restart` mit Exponential-Backoff (120s → 240s), max. 3
+  Versuche, danach Stopp + genau eine Telegram-Meldung — die aber erst als
+  zugestellt gilt, wenn sie nachweislich ankam (bis zu 5 Retries bei
+  Telegram-Ausfall, danach verstummt sie geloggt statt endlos nachzubohren).
+  **mc-agent-\* Container werden per Hard-Guard nie angefasst**, egal was in
+  der Allowlist steht.
 - **State:** `~/.mc/docker-health-restart-state/<service>.state` (Attempts,
-  letzter Versuch, Notified-Flag, Given-up-Flag — pro Service, reset bei
-  Recovery)
+  letzter Versuch, Notified-Flag, Given-up-Flag, Fehlversuche der
+  Aufgeben-Meldung, aufeinanderfolgende unhealthy-/gesunde-Ticks — pro
+  Service, reset erst nach 3 aufeinanderfolgenden gesunden Ticks)
 - **Log:** `~/.mc/docker-health-restart.log`
 - **Context:** angelegt 2026-09-13, nachdem der cdp-browser-Container 5 Tage
   `healthy` meldete waehrend die WebSocket-Verbindung haengen geblieben war
@@ -84,7 +92,13 @@ launchctl list | grep 'com.mc\.'
   Kandidaten (bis zu ~90s Settle-Zeit: interval 30s × retries 3) eine faire
   Chance vor dem naechsten Urteil. Genau 2 moegliche Meldungen pro Incident
   (Start + Give-up) statt einer pro Tick — Anlass war ein anderer Vorfall mit
-  13 Wiederholungs-Meldungen in 2h.
+  13 Wiederholungs-Meldungen in 2h. 2 aufeinanderfolgende unhealthy-Ticks vor
+  dem ersten Versuch filtern einen einzelnen verpassten Healthcheck heraus.
+  3 aufeinanderfolgende gesunde Ticks (> 120s Basis-Backoff) vor dem
+  vollstaendigen Zuruecksetzen verhindern, dass ein flatternder Service nach
+  jedem kurzen Erholen eine komplette neue Runde beginnt (Rex-Review PR #546,
+  Runde 2 — ohne diese Entprellung waeren es bei einem alle 3 Ticks
+  flatternden Service ~30 Meldungen/h statt maximal 2 pro Incident).
 - **Bekannte Luecke (bewusst nicht Teil dieser Karte):** ohne diesen Job
   reagiert HEUTE niemand automatisch auf `unhealthy` — `restart:
   unless-stopped` in docker-compose.yml greift nur bei Prozess-Exit, nicht

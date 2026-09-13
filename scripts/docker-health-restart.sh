@@ -24,10 +24,17 @@
 # rutschen wuerden — ein Agent-Container mit laufendem Task darf nie
 # automatisch neu gestartet werden.
 #
-# Laeuft alle 60s via launchd. Bei unhealthy: docker restart mit
-# Exponential-Backoff. Nach MAX_ATTEMPTS erfolglosen Versuchen: aufhoeren,
-# EINMALIG melden, Mensch uebernimmt. Keine Wiederholungs-Meldung pro Tick
-# (13 Wiederholungen in 2h an anderer Stelle war der Anlass fuer diese Regel).
+# Laeuft alle 60s via launchd. Entprellt in BEIDE Richtungen: ein einzelner
+# unhealthy-Tick loest noch KEINEN Versuch aus (erst DEBOUNCE_UNHEALTHY_TICKS
+# in Folge), und ein einzelner gesunder Tick raeumt einen laufenden Incident
+# noch NICHT weg (erst HEALTHY_CLEAR_TICKS in Folge gilt er als vorbei) —
+# sonst faengt ein flatternder Service nach jedem kurzen Erholen wieder bei
+# Versuch 1 an. Bei unhealthy: docker restart mit Exponential-Backoff. Nach
+# MAX_ATTEMPTS erfolglosen Versuchen: aufhoeren, EINMALIG melden (erst wenn
+# die Meldung nachweislich ankam), Mensch uebernimmt. Keine
+# Wiederholungs-Meldung pro Tick (13 Wiederholungen in 2h an anderer Stelle
+# war der Anlass fuer diese Regel) — und keine neue Spam-Quelle durch
+# Flattern (Rex-Review PR #546, Runde 2).
 #
 # Stoppen:
 #   launchctl unload ~/Library/LaunchAgents/com.mc.docker-health-restart.plist
@@ -66,6 +73,27 @@ BACKOFF_BASE_SECONDS="${MC_HEALTH_BACKOFF_BASE_SECONDS:-120}" # Healthcheck-Sett
 INCIDENT_MAX_AGE_SECONDS=86400  # State-Cleanup: verwaiste Incident-Files
                                  # (z.B. Service wurde manuell entfernt)
                                  # nach 24h wegraeumen.
+DEBOUNCE_UNHEALTHY_TICKS="${MC_HEALTH_DEBOUNCE_TICKS:-2}"     # Entprellung: ein einzelner unhealthy-Tick loest noch
+                           # keinen Versuch aus (kann ein einzelner
+                           # verpasster Healthcheck-Tick sein) — erst ab
+                           # so vielen AUFEINANDERFOLGENDEN unhealthy-Ticks
+                           # zaehlt es als Incident-Start.
+HEALTHY_CLEAR_TICKS="${MC_HEALTH_HEALTHY_CLEAR_TICKS:-3}"     # Kehrseite der Entprellung: ein einzelner gesunder
+                           # Tick raeumt einen Incident (inkl. given_up)
+                           # NICHT mehr komplett weg — erst nach so vielen
+                           # AUFEINANDERFOLGENDEN gesunden Ticks gilt der
+                           # Incident als wirklich vorbei. Verhindert, dass
+                           # ein flatternder Service nach jedem kurzen
+                           # Gesund-Blip eine komplett neue Runde (Restarts +
+                           # Meldungen) von vorne beginnt (Rex-Review PR #546
+                           # Blocker 3).
+MAX_GIVEUP_NOTIFY_ATTEMPTS="${MC_HEALTH_MAX_GIVEUP_NOTIFY_ATTEMPTS:-5}"  # Die Aufgeben-Meldung ("Mensch,
+                           # uebernimm") darf nicht als zugestellt gelten,
+                           # wenn sie nie ankam (Rex-Review PR #546
+                           # Blocker 2) — wird bei Telegram-Fehler erneut
+                           # versucht, aber nicht endlos: nach so vielen
+                           # Fehlversuchen verstummt sie mit einem
+                           # Log-Eintrag statt fuer immer nachzubohren.
 
 # --- Pfade (folgt der ~/.mc/ Konvention aus poll-health-check.sh) -----------
 DOCKER_BIN="${DOCKER_BIN:-/usr/local/bin/docker}"
@@ -87,8 +115,12 @@ command -v docker >/dev/null 2>&1 && DOCKER_BIN="$(command -v docker)"
 REPORTS_TOKEN=""
 REPORTS_CHAT=""
 if [ -f "$ENV_FILE" ]; then
-    REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
-    REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+    # `|| true` ist Pflicht: fehlt einer der beiden Keys, liefert `grep` non-
+    # zero, `pipefail` reicht das durch, und `set -e` wuerde das Skript HIER
+    # beenden — vor dem ersten log()-Aufruf, also lautlos und ohne Log-Zeile
+    # (Rex-Review PR #546 Blocker 1; gleiches Muster wie poll-health-check.sh).
+    REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
 fi
 
 notify() {
@@ -132,9 +164,19 @@ health_status() {
 }
 
 # --- State-Format pro Service: EINE Zeile "attempts<TAB>last_attempt_ts<TAB>
-# notified_start<TAB>given_up" in $STATE_DIR/<service>.state. Bash-3.2-
-# kompatibel (macOS Default-Bash) — keine associative arrays, siehe
-# poll-health-check.sh Kommentar zum selben Thema.
+# notified_start<TAB>given_up<TAB>giveup_notify_attempts<TAB>unhealthy_streak
+# <TAB>healthy_streak" in $STATE_DIR/<service>.state. Bash-3.2-kompatibel
+# (macOS Default-Bash) — keine associative arrays, siehe poll-health-check.sh
+# Kommentar zum selben Thema.
+#   giveup_notify_attempts — wie oft die Aufgeben-Meldung erfolglos versucht
+#                            wurde (Blocker 2: given_up wird erst gesetzt,
+#                            wenn sie ankam).
+#   unhealthy_streak        — aufeinanderfolgende unhealthy-Ticks in Folge,
+#                            fuer die Entprellung (reset bei jedem gesunden
+#                            Tick).
+#   healthy_streak          — aufeinanderfolgende gesunde Ticks in Folge,
+#                            entscheidet ob ein Incident wirklich vorbei ist
+#                            (Blocker 3: reset bei jedem unhealthy-Tick).
 state_file() { echo "$STATE_DIR/$1.state"; }
 
 read_state() {
@@ -143,13 +185,17 @@ read_state() {
     if [ -f "$f" ]; then
         cat "$f"
     else
-        echo "0	0	0	0"
+        echo "0	0	0	0	0	0	0"
     fi
 }
 
 write_state() {
     local svc="$1" attempts="$2" last_ts="$3" notified_start="$4" given_up="$5"
-    printf '%s\t%s\t%s\t%s\n' "$attempts" "$last_ts" "$notified_start" "$given_up" > "$(state_file "$svc")"
+    local giveup_notify_attempts="$6" unhealthy_streak="$7" healthy_streak="$8"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$attempts" "$last_ts" "$notified_start" "$given_up" \
+        "$giveup_notify_attempts" "$unhealthy_streak" "$healthy_streak" \
+        > "$(state_file "$svc")"
 }
 
 clear_state() {
@@ -179,27 +225,56 @@ for svc in "${ALLOWLIST[@]}"; do
 
     status="$(health_status "$container")"
 
+    # State immer lesen, auch im gesunden Fall — die Streak-Zaehler fuer
+    # beide Entprellungs-Richtungen muessen ueber den jeweils GEGENTEILIGEN
+    # Einzel-Tick hinweg ueberleben (Rex-Review PR #546 Blocker 3).
+    IFS=$'\t' read -r attempts last_ts notified_start given_up giveup_notify_attempts unhealthy_streak healthy_streak <<< "$(read_state "$svc")"
+    # Defensiv gegen alte 4-Spalten-State-Files aus der Zeit vor diesem Fix.
+    giveup_notify_attempts="${giveup_notify_attempts:-0}"
+    unhealthy_streak="${unhealthy_streak:-0}"
+    healthy_streak="${healthy_streak:-0}"
+
     if [ "$status" = "healthy" ] || [ "$status" = "no-healthcheck" ]; then
-        # Gesund (oder hat gar keinen Healthcheck) — Incident-State fuer
-        # diesen Service zuruecksetzen, damit ein KUENFTIGER Ausfall wieder
-        # als neuer Incident behandelt wird (frische Einmal-Meldung).
-        if [ -f "$(state_file "$svc")" ]; then
-            log "RECOVERED $svc ($container) — Status=$status, Incident-State geloescht"
+        if [ ! -f "$(state_file "$svc")" ]; then
+            continue  # kein offener Incident — nichts zu tun.
+        fi
+
+        new_healthy_streak=$((healthy_streak + 1))
+        if [ "$new_healthy_streak" -ge "$HEALTHY_CLEAR_TICKS" ]; then
+            # Erst nach HEALTHY_CLEAR_TICKS aufeinanderfolgenden gesunden
+            # Ticks gilt der Incident als wirklich vorbei — ein einzelner
+            # gesunder Blip loescht given_up NICHT mehr (Blocker 3: sonst
+            # startet ein flatternder Service nach jedem kurzen Erholen eine
+            # komplette neue 3-Versuche-Runde von vorne).
+            log "RECOVERED $svc ($container) — Status=$status seit ${new_healthy_streak} Ticks in Folge, Incident-State geloescht"
             clear_state "$svc"
+        else
+            log "HEALTHY-TICK $svc ($container) — ${new_healthy_streak}/${HEALTHY_CLEAR_TICKS} gesunde Ticks in Folge, Incident bleibt offen (given_up=${given_up})"
+            write_state "$svc" "$attempts" "$last_ts" "$notified_start" "$given_up" "$giveup_notify_attempts" "0" "$new_healthy_streak"
         fi
         continue
     fi
 
     # --- unhealthy ---
-    IFS=$'\t' read -r attempts last_ts notified_start given_up <<< "$(read_state "$svc")"
+    new_unhealthy_streak=$((unhealthy_streak + 1))
 
     if [ "$given_up" = "1" ]; then
         # Backoff bereits ausgeschoepft, Mensch wurde einmalig informiert.
         # Kein weiterer Restart-Versuch, keine weitere Meldung — Stille bis
-        # der Service von Hand repariert wird (Status wechselt dann zu
-        # healthy und der Incident-State wird oben geloescht) oder ein
-        # Mensch den State-File manuell entfernt.
+        # der Service von Hand repariert wird (HEALTHY_CLEAR_TICKS
+        # aufeinanderfolgende gesunde Ticks) oder ein Mensch den State-File
+        # manuell entfernt.
         log "SKIP $svc ($container) — given_up=1, wartet auf manuelle Intervention (Status weiterhin $status)"
+        write_state "$svc" "$attempts" "$last_ts" "$notified_start" "1" "$giveup_notify_attempts" "$new_unhealthy_streak" "0"
+        continue
+    fi
+
+    if [ "$new_unhealthy_streak" -lt "$DEBOUNCE_UNHEALTHY_TICKS" ]; then
+        # Entprellung: ein einzelner unhealthy-Tick reicht noch nicht — kann
+        # ein einzelner verpasster Healthcheck sein. Kein Versuch, keine
+        # Meldung, attempts bleibt unangetastet.
+        log "DEBOUNCE $svc ($container) — Status=$status, Tick ${new_unhealthy_streak}/${DEBOUNCE_UNHEALTHY_TICKS}, noch kein Incident"
+        write_state "$svc" "$attempts" "$last_ts" "$notified_start" "$given_up" "$giveup_notify_attempts" "$new_unhealthy_streak" "0"
         continue
     fi
 
@@ -217,8 +292,24 @@ for svc in "${ALLOWLIST[@]}"; do
 Automatischer Neustart wurde eingestellt — bitte manuell pruefen. Keine weiteren Meldungen fuer diesen Incident."
         if notify "$msg"; then
             log "GIVE-UP-MELDUNG gesendet fuer $svc nach $attempts Versuchen"
+            # given_up erst NACH erfolgreichem notify setzen (Blocker 2) —
+            # sonst gilt "Mensch, uebernimm" als zugestellt, obwohl sie nie
+            # ankam, und der Waechter verstummt endgueltig ohne dass es
+            # jemand merkt.
+            write_state "$svc" "$attempts" "$last_ts" "$notified_start" "1" "0" "$new_unhealthy_streak" "0"
+        else
+            next_giveup_attempt=$((giveup_notify_attempts + 1))
+            if [ "$next_giveup_attempt" -ge "$MAX_GIVEUP_NOTIFY_ATTEMPTS" ]; then
+                # Telegram bleibt dauerhaft unerreichbar — nicht fuer immer
+                # nachbohren (sonst neuer Spam-Vektor), aber die Kapitulation
+                # ist geloggt statt still.
+                log "GIVE-UP-MELDUNG fuer $svc nach ${next_giveup_attempt} Fehlversuchen endgueltig nicht zustellbar — verstumme (given_up wird trotzdem gesetzt)"
+                write_state "$svc" "$attempts" "$last_ts" "$notified_start" "1" "$next_giveup_attempt" "$new_unhealthy_streak" "0"
+            else
+                log "GIVE-UP-MELDUNG fuer $svc fehlgeschlagen (Versuch ${next_giveup_attempt}/${MAX_GIVEUP_NOTIFY_ATTEMPTS}) — given_up bleibt 0, naechster Tick holt nach"
+                write_state "$svc" "$attempts" "$last_ts" "$notified_start" "0" "$next_giveup_attempt" "$new_unhealthy_streak" "0"
+            fi
         fi
-        write_state "$svc" "$attempts" "$last_ts" "$notified_start" "1"
         continue
     fi
 
@@ -230,6 +321,7 @@ Automatischer Neustart wurde eingestellt — bitte manuell pruefen. Keine weiter
         elapsed=$((NOW_EPOCH - last_ts))
         if [ "$elapsed" -lt "$backoff" ]; then
             log "SKIP $svc ($container) — Backoff aktiv (${elapsed}s/${backoff}s seit letztem Versuch #${attempts})"
+            write_state "$svc" "$attempts" "$last_ts" "$notified_start" "0" "$giveup_notify_attempts" "$new_unhealthy_streak" "0"
             continue
         fi
     fi
@@ -261,7 +353,7 @@ Automatischer Neustart wurde eingestellt — bitte manuell pruefen. Keine weiter
         fi
     fi
 
-    write_state "$svc" "$next_attempt" "$NOW_EPOCH" "$new_notified_start" "0"
+    write_state "$svc" "$next_attempt" "$NOW_EPOCH" "$new_notified_start" "0" "0" "$new_unhealthy_streak" "0"
 done
 
 # --- Verwaiste State-Files aufraeumen (Service nicht mehr in Allowlist) -----
