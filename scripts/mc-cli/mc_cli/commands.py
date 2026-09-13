@@ -2727,6 +2727,73 @@ def _add_docs_args(p):
     p.add_argument("topic", nargs="?", default=None, help="Topic-Slug (z.B. 'telegram'). Ohne Arg: INDEX/Topic-Liste.")
 
 
+# ── C2: Board Lead queue control (hold / release / reassign) ──────────────
+#
+# Unlike ack/done/blocked/etc., these always target ANOTHER card in the
+# lead's own queue — never "the task I'm currently dispatched on". So the
+# task-id positional is REQUIRED here (see _add_required_task_id), not the
+# `nargs="?"` pattern used for status commands. board_id still comes from
+# the lead's own env context (BOARD_ID / /tmp/mc-context.env) — a lead only
+# controls its own board's queue.
+
+
+def _add_required_task_id(p, help_suffix: str = ""):
+    p.add_argument(
+        "task_id",
+        help=f"Task-UUID der Karte in der eigenen Queue{help_suffix}",
+    )
+
+
+def _cmd_hold(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/hold",
+        body={"reason": args.reason},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_hold_args(p):
+    _add_required_task_id(p, " (noch nicht dispatcht, status=inbox)")
+    p.add_argument("--reason", required=True, help="Warum wird die Karte angehalten?")
+
+
+def _cmd_release(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/release",
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_release_args(p):
+    _add_required_task_id(p, " (zuvor mit mc hold angehalten)")
+
+
+def _cmd_reassign(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/reassign",
+        body={"to": args.to},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_reassign_args(p):
+    _add_required_task_id(p)
+    p.add_argument(
+        "--to",
+        required=True,
+        help="Ziel-Agent (Name oder UUID) — z.B. --to Rex",
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────
 
 _STATUS_ENDPOINT = ("PATCH /boards/{board_id}/tasks/{task_id}",)
@@ -2822,6 +2889,30 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_finish,
         add_args=_add_finish_args,
+    ),
+    "hold": CommandSpec(
+        name="hold",
+        help="C2: eigene Queue — noch nicht dispatchte Karte anhalten (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/hold",),
+        scope="tasks:manage",
+        handler=_cmd_hold,
+        add_args=_add_hold_args,
+    ),
+    "release": CommandSpec(
+        name="release",
+        help="C2: eigene Queue — zuvor gehaltene Karte wieder freigeben (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/release",),
+        scope="tasks:manage",
+        handler=_cmd_release,
+        add_args=_add_release_args,
+    ),
+    "reassign": CommandSpec(
+        name="reassign",
+        help="C2: eigene Queue — Karte an anderen Agenten umhaengen (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/reassign",),
+        scope="tasks:manage",
+        handler=_cmd_reassign,
+        add_args=_add_reassign_args,
     ),
     "blocked": CommandSpec(
         name="blocked",

@@ -76,11 +76,24 @@ def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool
     Non-committing — mirrors record_task_event: the caller commits together
     with whatever else it writes (the comment / message row). Returns True iff
     this call performed the ACK, so callers can log / emit exactly once.
+
+    C2 (PR #533 Nacharbeit Runde 3, Rex review B2): `run_control is None` is
+    part of the guard for the same reason it was added to the poll/pull-claim
+    candidate queries and the phase-auto-advance selects — a lead-held card
+    (run_control=manual_hold) sits in exactly the dispatched-but-unacked shape
+    this handshake looks for (status stays "inbox", dispatched_at is already
+    set — `mc hold` only checks status, not dispatched_at). Without this
+    guard, the assigned agent's very next comment or message silently claims
+    the card the lead just held: ack_at gets set, status flips to
+    in_progress, and the active-task lock is taken — undoing the hold through
+    a channel that carries no lifecycle intent at all. The comment/message
+    itself still gets written either way; only the implicit ACK is skipped.
     """
     if not (
         task.assigned_agent_id == agent.id
         and task.ack_at is None
         and task.dispatched_at is not None
+        and task.run_control is None
     ):
         return False
 
