@@ -1620,6 +1620,31 @@ def _get_turn_context() -> Optional[dict]:
         return dict(_TURN_CONTEXT) if _TURN_CONTEXT else None
 
 
+# G5 (path-parity audit #521): the ACP path has no TUI pane, so the
+# capture_pane scrape in _build_heartbeat_payload reads an empty/foreign tmux
+# pane and ACP agents never reported a context%. The adapter stamps the latest
+# usage_update-derived percent (omp's own context-window numbers, size/used)
+# into this holder; _build_heartbeat_payload reports it through the SAME
+# payload field (context_pct) on the SAME endpoint the Claude path uses
+# (poll.sh heartbeat -> POST /me/heartbeat; backend receiver
+# backend/app/routers/agents.py AgentHeartbeat.context_pct, Field(ge=0,
+# le=100)). No second field, no second endpoint — the existing display works
+# without frontend changes. Module-global read mirrors _get_turn_context.
+_ACP_CONTEXT_PCT: Optional[float] = None
+_ACP_CONTEXT_PCT_LOCK = threading.Lock()
+
+
+def _set_acp_context_pct(pct: Optional[float]) -> None:
+    global _ACP_CONTEXT_PCT
+    with _ACP_CONTEXT_PCT_LOCK:
+        _ACP_CONTEXT_PCT = pct
+
+
+def _get_acp_context_pct() -> Optional[float]:
+    with _ACP_CONTEXT_PCT_LOCK:
+        return _ACP_CONTEXT_PCT
+
+
 def _build_heartbeat_payload(
     status: str, capture_pane: Optional[Callable[[], str]]
 ) -> dict:
@@ -1651,6 +1676,17 @@ def _build_heartbeat_payload(
                 payload["context_pct"] = float(pct)
         except Exception:  # noqa: BLE001 — scrape darf heartbeat nie reissen
             pass
+    # G5 (parity audit #521): the ACP path has no TUI pane — on
+    # OMP_DRIVER=acp the scrape above reads an empty/foreign pane and yields
+    # nothing. Fill the gap from the adapter's usage_update-stamped holder,
+    # reporting through the SAME context_pct field on the SAME heartbeat the
+    # Claude path uses (poll.sh heartbeat() is the template). A scrape hit
+    # still wins, so native/Claude behaviour is byte-identical; the holder is
+    # only consulted when the scrape produced nothing.
+    if "context_pct" not in payload:
+        acp_pct = _get_acp_context_pct()
+        if acp_pct is not None:
+            payload["context_pct"] = float(acp_pct)
     return payload
 
 
@@ -4078,6 +4114,18 @@ def run_acp_once(
             if str((upd.get("status") or "")).lower() in ("failed", "error"):
                 tool_error_flags[0] = True
             _heartbeat()
+        elif su == "usage_update":
+            # G5 (parity audit #521): omp reports the context window here —
+            # size = window in tokens, used = tokens in use (same numbers the
+            # chat mapper stamps onto the final assistant line). Stamp the
+            # shared holder so the existing heartbeater reports context_pct;
+            # validation mirrors acp_chat_events (ints, size>0) plus the
+            # poll.sh sanitize rule (0-100) — garbage never reaches the
+            # backend Field(ge=0, le=100). Best-effort: never kills the run.
+            size, used = upd.get("size"), upd.get("used")
+            if (isinstance(size, int) and size > 0
+                    and isinstance(used, int) and 0 <= used <= size):
+                _set_acp_context_pct(round(used / size * 100.0, 1))
         # Sessions chat stream: mapping is deliberately SEPARATE from the
         # classification bookkeeping above. Preview flushes go to their OWN
         # channel (the sibling preview file via emit_preview) — never the
