@@ -27,6 +27,7 @@ SESSION="${AGENT_NAME:-omp-agent}"
 BRIDGE=/opt/omp-bridge/bridge.py
 HOOK_FILE=/opt/omp-bridge/turn-end-hook.mjs
 LAUNCHER=/opt/omp-bridge/launch-omp.sh
+CHAT_DAEMON=/opt/omp-bridge/acp_chat.py
 OMP_DEFAULT_CWD="${OMP_DEFAULT_CWD:-/workspace}"
 
 # ── 1. Bootstrap tokens from MC (analog to mc-agent-base entrypoint) ─────────
@@ -234,7 +235,9 @@ start_native() {
         "OMP_HOME=${OMP_HOME}" "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-${OMP_HOME}/agent}" \
         "OMP_HOOK_FILE=${HOOK_FILE}" "OMP_TURN_SIGNAL_FILE=${OMP_TURN_SIGNAL_FILE}" \
         "OMP_DEFAULT_CWD=${OMP_DEFAULT_CWD}" "OMP_ENV_FILE=${OMP_ENV_FILE}" \
-        "OMP_LAUNCHER=${LAUNCHER}" "AGENT_NAME=${SESSION}" "HOME=${HOME}"; do
+        "OMP_LAUNCHER=${LAUNCHER}" "AGENT_NAME=${SESSION}" "HOME=${HOME}" \
+        "OMP_DRIVER=${OMP_DRIVER:-}" "OMP_ACP_CWD=${OMP_ACP_CWD:-}" \
+        "OMP_ACP_PERMISSIONS=${OMP_ACP_PERMISSIONS:-ask}"; do
         tmux set-environment -g "${_kv%%=*}" "${_kv#*=}"
     done
     # Window 0: the visible native TUI (loads the hook, boots to chat).
@@ -245,6 +248,13 @@ start_native() {
     tmux new-window -t "$SESSION" -n win1 "exec python3 $BRIDGE --serve"
     # Window 2: recycler tracking BOTH the TUI and the bridge.
     tmux new-window -t "$SESSION" -n win2 "exec /usr/local/bin/omp-recycler.sh"
+    # Window 3 (ACP driver only): the long-lived chat daemon. For an ACP agent
+    # the Sessions chat must not type into the TUI in Window 0 — it talks to
+    # ITS own ACP session over the Unix socket ($OMP_HOME/acp-chat.sock).
+    # Native agents never get this window.
+    if [ "${OMP_DRIVER:-}" = "acp" ]; then
+        tmux new-window -t "$SESSION" -n win3 "exec python3 $CHAT_DAEMON --serve"
+    fi
     tmux select-window -t "$SESSION":0
 }
 
