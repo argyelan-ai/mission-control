@@ -2,17 +2,29 @@
 # docker/omp-bridge/entrypoint.sh — Container PID 1 (ADR-049, supersedes the
 # ADR-045 headless-one-shot boot).
 #
-# 3-window tmux, same bootstrap-token pattern as mc-agent-base, but now:
+# 3-window tmux (4 under OMP_DRIVER=acp), same bootstrap-token pattern as
+# mc-agent-base, but now:
 #   Window 0 = the NATIVE omp TUI  (`launch-omp.sh` -> a real, scrollable omp
 #              chat session the Sessions page attaches to; loads the turn-end
 #              hook and boots STRAIGHT to chat via setupVersion:1).
+#              Under OMP_DRIVER=acp there is no TUI here — this window
+#              instead prints the OMP_ACP_READY banner and drops to a plain
+#              shell (fix omp-acp-no-tui-window, 13.09.2026): tasks and chat
+#              both run over ACP, so a live native TUI would just be an idle
+#              "ghost" session in the Terminal view.
 #   Window 1 = bridge.py --serve   (the poll driver: injects tasks into Window 0
-#              via `tmux send-keys @file` and reads the hook signal).
-#   Window 2 = omp-recycler.sh     (keeps BOTH the TUI and the bridge alive).
+#              via `tmux send-keys @file` and reads the hook signal — native
+#              driver only; under ACP it drives `omp acp` directly, see
+#              bridge.py run_acp_once).
+#   Window 2 = omp-recycler.sh     (keeps BOTH the TUI and the bridge alive;
+#              skips the TUI relaunch under OMP_DRIVER=acp).
+#   Window 3 (ACP driver only) = acp_chat.py --serve (the chat daemon).
 #
-# omp is the persistent Window-0 process (not a bridge subprocess). The bridge
-# relaunches it per task (`tmux respawn-window`) for isolation + the correct
-# --cwd, and SIGKILLs+relaunches it on a watchdog trip.
+# omp is the persistent Window-0 process (not a bridge subprocess) under the
+# native driver. The bridge relaunches it per task (`tmux respawn-window`)
+# for isolation + the correct --cwd, and SIGKILLs+relaunches it on a watchdog
+# trip. None of that applies under OMP_DRIVER=acp — Window 0 is a static
+# banner shell there.
 #
 # Do NOT `docker build` this from the omp-runtime workflow — image build is GATED
 # (the operator runs scripts/build-agent-images.sh mc-omp-agent). This file is authored
@@ -240,8 +252,27 @@ start_native() {
         "OMP_ACP_PERMISSIONS=${OMP_ACP_PERMISSIONS:-ask}"; do
         tmux set-environment -g "${_kv%%=*}" "${_kv#*=}"
     done
-    # Window 0: the visible native TUI (loads the hook, boots to chat).
-    tmux send-keys -t "$SESSION":0 "exec ${LAUNCHER} ${OMP_DEFAULT_CWD}" C-m
+    # Window 0: under the native driver this is the visible TUI the Sessions
+    # page attaches to. Under OMP_DRIVER=acp there is no TUI — tasks run
+    # through `omp acp` (bridge.py run_acp_once) and chat through Window 3's
+    # daemon (acp_chat.py) — so a live native TUI here would be a "ghost"
+    # session that never gets any work (Mark, live 13.09.2026: sah eine leere
+    # Zweit-Session in der Terminal-Ansicht und will keine Ghost-Sessions).
+    # Window 0 itself stays (Boss: Terminal view reachable until the live
+    # proof, docs/specs/chat-over-acp.md) — it just shows a quiet banner +
+    # shell instead of launching omp. OMP_ACP_READY is the health-gate
+    # sentinel (docker_agent_sync._wait_for_window_ready / OMP_READY_SIGNALS);
+    # the native TUI never prints it, so there is no false-positive risk.
+    if [ "${OMP_DRIVER:-}" = "acp" ]; then
+        # The token is split ('OMP_ACP''_READY') ON PURPOSE: the health gate
+        # substring-matches `tmux capture-pane`, and the pane echoes this
+        # typed command line before it runs. A contiguous token here would
+        # satisfy the gate even if the shell never executed the command
+        # (swallowed C-m, hung prompt). Only printf's OUTPUT may carry it.
+        tmux send-keys -t "$SESSION":0 "printf '%s\n' 'OMP_ACP''_READY' 'This agent runs headless over ACP (OMP_DRIVER=acp).' 'Chat and tasks go through the Sessions page — there is no TUI here.'; exec bash" C-m
+    else
+        tmux send-keys -t "$SESSION":0 "exec ${LAUNCHER} ${OMP_DEFAULT_CWD}" C-m
+    fi
     # Window 1: the persistent poll driver. It injects tasks into Window 0 and
     # reads the hook signal; it prints OMP_BRIDGE_READY into ITS pane (a Window-1
     # liveness log — the health-gate now anchors on Window 0's TUI glyph).
