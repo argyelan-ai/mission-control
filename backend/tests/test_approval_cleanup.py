@@ -149,6 +149,41 @@ async def test_watchdog_reconciliation():
 
 
 @pytest.mark.asyncio
+async def test_review_stuck_superseded_when_task_leaves_review():
+    """review_stuck → superseded once the card is no longer 'review'.
+
+    Regression guard for the 2026-09-13 incident: three review_stuck
+    approvals sat in the operator's inbox for cards that were long done —
+    'review_stuck' was simply missing from APPROVAL_VALID_STATES, so neither
+    the immediate cleanup nor the watchdog reconciliation ever touched it.
+    """
+    ids = await _create_task_with_approval("review_stuck", task_status="review")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "done")
+        assert count == 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "Superseded" in approval.resolver_note
+
+
+@pytest.mark.asyncio
+async def test_review_stuck_stays_pending_while_still_in_review():
+    """review_stuck stays pending while the card genuinely hangs in review."""
+    ids = await _create_task_with_approval("review_stuck", task_status="review")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "review")
+        assert count == 0
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_done_supersedes_all_flow_approvals():
     """Task set to done → all flow-related pending approvals superseded."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
