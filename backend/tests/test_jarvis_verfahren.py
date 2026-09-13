@@ -133,3 +133,13 @@ def test_backend_brevity_is_default_not_hard_cap():
     assert "short is the default, not a hard cap" in text
     assert "accuracy wins over brevity" in text
     assert "never pad" in text
+
+
+def test_backend_example_does_not_spell_out_protected_term():
+    """Der PR-Kennungs-Beispiel darf 'Pull Request' nicht ausschreiben — PR
+    steht wenige Zeilen darunter auf der Liste der Begriffe, die NIE erklaert
+    werden. Ein Beispiel, das der eigenen Regel widerspricht, bringt dem
+    Modell das Gegenteil bei: es lernt aus Beispielen staerker als aus der
+    Regel selbst."""
+    text = _backend()
+    assert "pull request" not in text
