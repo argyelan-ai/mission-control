@@ -1113,6 +1113,10 @@ class TaskMonitorMixin:
                 # through the list), `task.status` here is stale. Re-read the
                 # status fresh right before creating the operator approval so
                 # an already-closed card doesn't land in Mark's inbox.
+                # Column selection with intent — select(Task) would hit the
+                # session's identity map and hand back this same stale
+                # object (expire_on_commit=False), silently turning this
+                # guard into a no-op. Only select(Task.status) bypasses it.
                 current_status = (await session.exec(
                     select(Task.status).where(Task.id == task.id)
                 )).first()

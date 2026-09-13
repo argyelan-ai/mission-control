@@ -851,6 +851,20 @@ async def execute_review_decision(
     session.add(task)
     await session.commit()
 
+    # W1 fix (PR #558 follow-up): this review path sets task.status directly
+    # and never goes through the generic PATCH handlers (routers/tasks.py,
+    # routers/agent_task_status.py) where cleanup_obsolete_approvals is
+    # normally wired to updates["status"] — so a pending review_stuck (or
+    # blocker_decision/clarification_question/spawn_timeout/
+    # dispatch_escalation) approval on this task would sit as a zombie in
+    # the operator's inbox until the next watchdog reconciliation tick
+    # (~30s). task.status here already reflects the final state for every
+    # branch above (done/user_test/blocked-on-E2E for approve, whatever
+    # handle_review_rejection landed on for request_changes, unchanged
+    # "review" for hold), so one call after the commit covers all of them.
+    from app.services.approval_cleanup import cleanup_obsolete_approvals
+    await cleanup_obsolete_approvals(session, task.id, task.status, board_id)
+
 
 async def system_finalize_task_done(
     session: AsyncSession,

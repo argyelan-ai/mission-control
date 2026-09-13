@@ -184,6 +184,41 @@ async def test_review_stuck_stays_pending_while_still_in_review():
 
 
 @pytest.mark.asyncio
+async def test_reconcile_stale_approvals_supersedes_review_stuck():
+    """reconcile_stale_approvals (the periodic safety net) supersedes a
+    drifted review_stuck approval on its own — the real path for a review
+    approved via `execute_review_decision`, which does not call
+    cleanup_obsolete_approvals directly for this action_type until the next
+    watchdog tick.
+
+    PR #558 follow-up (Rex, W1): the two review_stuck tests above only
+    exercise `cleanup_obsolete_approvals` directly — the reconciliation
+    test (`test_watchdog_reconciliation`) only ever drifted a
+    blocker_decision. Neither covered the actual production path this
+    approval type drifts through. This closes that gap.
+    """
+    ids = await _create_task_with_approval("review_stuck", task_status="review")
+
+    # Card leaves "review" without cleanup_obsolete_approvals having run
+    # (e.g. execute_review_decision approved it) — simulates the drift.
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "done"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await reconcile_stale_approvals(s)
+        assert count >= 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "reconciliation" in approval.resolver_note
+
+
+@pytest.mark.asyncio
 async def test_done_supersedes_all_flow_approvals():
     """Task set to done → all flow-related pending approvals superseded."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
