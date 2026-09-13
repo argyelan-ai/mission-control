@@ -29,8 +29,16 @@ live terminal (``routers/cli_terminal.py``):
   bytes arriving in the attach handshake or just before the client was
   terminated were lost, and the bridge still logged "wrote N bytes".
 
-Every other host-runtime agent (Hermes, Jarvis, ...) has no input channel at
-all — ``InputNotSupportedError`` for the router to turn into 409
+- **Kopflose Agenten (ACP)**: ein Agent mit ACP-Treiber hat gar keine
+  bedienbare TUI mehr — der Sessions-Chat ist seine einzige Oberflaeche
+  (docs/specs/chat-over-acp.md). Statt Tastendruecken geht ALLES (Prompt,
+  Stop, Denk-Stufe, Modell) ueber den Steuerkanal in
+  ``acp_chat_transport.py``: ``acp-docker`` = CLI-Shim im Container,
+  ``acp-http`` = hermes-bridge auf dem Host. Und alles, was der Composer
+  ANZEIGT, kommt dort aus ``acp-chat-state.json`` statt aus einer Pane-Sonde.
+
+Every other host-runtime agent (Hermes ohne ACP-Treiber, Jarvis, ...) has
+no input channel at all — ``InputNotSupportedError`` for the router to turn into 409
 ``{"reason": "input_not_supported"}``, mirroring A2's hard privacy/capability
 rule that only cli-bridge agents and Boss get a live session surface.
 
@@ -1234,6 +1242,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
     Tabelle. Faellt eine der beiden aus, steht das WARUM in ``effortReason``
     (Codes siehe ``_no_effort``): das UI erklaert es am Chip, statt das
     Bedienelement wortlos verschwinden zu lassen.
+
+    Kopflose Agenten (``acp-docker``/``acp-http``) beantworten beide Fragen
+    aus EINER Quelle: ``configOptions[id=thinking]`` in der Zustandsdatei des
+    Chat-Daemons. Fehlt sie, ist die Antwort leer mit Grund
+    ``acp_state_missing`` — nie eine Ausnahme.
 
     Never raises: an unsupported runtime is a normal, expected answer here
     (unlike ``set_effort``, where it's a request the caller made in error),

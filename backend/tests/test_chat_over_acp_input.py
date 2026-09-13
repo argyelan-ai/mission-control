@@ -372,3 +372,25 @@ async def test_router_maps_unreachable_to_502(auth_client, make_agent, monkeypat
     )
     assert resp.status_code == 502, resp.text
     assert resp.json()["reason"] == "acp_unreachable"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Adapter-Registrierung (Hermes liest das omp-Transkriptformat)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_hermes_uses_the_omp_transcript_adapter(tmp_path, monkeypatch):
+    """Ohne diese Registrierung waere der Hermes-Zweig in
+    ``omp_chat.resolve_transcript_dir`` toter Code: der History-Endpunkt
+    fragt IMMER ueber ``adapter_for``, und ein unbekannter Harness landet
+    beim Claude-Adapter, der fuer einen Host-Agenten nichts findet."""
+    from app.services import omp_chat
+    from app.services.transcript_adapters import adapter_for
+
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
+
+    adapter = adapter_for(agent)
+    assert adapter.resolve_transcript_dir(agent) == (
+        tmp_path / ".mc/agents/hermes/omp-sessions"
+    )
