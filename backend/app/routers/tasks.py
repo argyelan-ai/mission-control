@@ -1644,7 +1644,15 @@ async def update_task(
         # is the reviewer, no Rex dispatch (mirrors agent_task_status.py).
         if new_status == "review" and old_status == "in_progress":
             if not getattr(task, "human_review_required", None):
-                await handle_review_handoff(session, task, board_id)
+                # Autor-Ausschluss auch auf dem UI-Pfad: der der Karte
+                # zugewiesene Developer (Autor des eingereichten Works)
+                # darf nicht zum eigenen Reviewer werden. Kein assignment
+                # → kein bekannter Autor → None ist korrekt.
+                _author = (
+                    await session.get(Agent, task.assigned_agent_id)
+                    if task.assigned_agent_id else None
+                )
+                await handle_review_handoff(session, task, board_id, developer=_author)
             else:
                 from app.services.task_lifecycle import handle_human_review_handoff
                 await handle_human_review_handoff(session, task, board_id)

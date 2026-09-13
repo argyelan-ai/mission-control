@@ -187,14 +187,32 @@ async def find_agent_by_role(
 ) -> "Agent | None":
     """Find an agent with a given role on the board (least-busy strategy).
 
-    With multiple candidates: prefer the agent with the fewest active tasks.
-    Fallback: Board Lead — unless `fallback_to_lead=False`. Callers that
-    search for a SPECIFIC role (e.g. find_reviewer) must pass False: the
-    Board Lead is not a stand-in for that role, and silently returning them
-    routes the card into the operator's approval inbox instead of a visible
-    "no such agent" path (Vorfall 94fda9f9: review cards landed on Boss,
-    not Rex, because this fallback fired before find_reviewer's own
-    name-based fallback ever ran).
+    Kandidaten-Filter, in dieser Reihenfolge:
+      1. Rolle + dispatchfaehige Runtime (NON_GATEWAY_RUNTIMES).
+      2. Liveness: ``last_seen_at`` innerhalb des Wrapper-alive Fensters
+         (``_liveness_floor_seconds`` = 2x Heartbeat-Interval, min 120s —
+         dieselbe Quelle, die task_runner fuer Wrapper-Liveness benutzt).
+         Agents OHNE last_seen_at (nie gesehen, keine Daten) passieren den
+         Filter — konsistent mit watchdog/session_monitor, das last_seen_at
+         ebenfalls nur bei vorhandenem Wert auswertet.
+      3. ``exclude_agent_id`` (z.B. Autor der Karte) — gilt auch fuer den
+         Board-Lead-Fallback.
+
+    Least-Busy-Last = ``in_progress`` + dispatchte ``inbox`` + gehaltene
+    ``review``-Karten (ein Reviewer mit wartenden Reviews ist NICHT frei).
+
+    Bleibt kein Kandidat, wird explizit ``None`` geliefert — kein stiller
+    Fallback auf einen offline/belegten Agent. Der Aufrufer muss den
+    ``None``-Pfad sichtbar behandeln (Log/Return).
+
+    Fallback auf den Board Lead nur, wenn GAR KEIN Role-Kandidat existiert.
+    ``fallback_to_lead=False`` schaltet ihn ganz ab — Caller, die eine
+    SPEZIFische Rolle suchen (z.B. find_reviewer), muessen False uebergeben:
+    der Board Lead ist kein Stellvertreter fuer die Rolle, und sein stiller
+    Einsatz routet die Karte in den Approval-Inbox des Operators statt in
+    einen sichtbaren "kein solcher Agent"-Pfad (Vorfall 94fda9f9: Review-
+    Karten landeten auf Boss statt Rex, weil dieser Fallback feuerte, bevor
+    find_reviewer's eigener Name-Fallback ueberhaupt lief).
     """
     from app.scopes import AgentRole
     from sqlalchemy import func as sa_func, or_
@@ -214,38 +232,78 @@ async def find_agent_by_role(
     result = await session.exec(query)
     candidates = list(result.all())
 
-    if not candidates:
-        if not fallback_to_lead:
+    if candidates:
+        # Liveness: nur Agent mit frischem Heartbeat (Wrapper lebt).
+        alive = [a for a in candidates if _agent_is_live(a)]
+        if not alive:
+            logger.info(
+                "find_agent_by_role: %d %s-Kandidaten auf Board %s, aber keiner "
+                "lebendig (last_seen_at stale) → explizit None",
+                len(candidates), role.value, board_id,
+            )
             return None
-        # Fallback: Board Lead
-        lead_result = await session.exec(
-            select(Agent).where(
-                Agent.board_id == board_id,
-                Agent.is_board_lead == True,  # noqa: E712
-                Agent.agent_runtime.in_(NON_GATEWAY_RUNTIMES),  # type: ignore[union-attr]
+
+        if len(alive) == 1:
+            return alive[0]
+
+        # Least-Busy: in_progress + dispatched inbox + gehaltene review-Karten
+        busy_counts: dict[uuid.UUID, int] = {}
+        for agent in alive:
+            active_result = await session.exec(
+                select(sa_func.count()).select_from(Task).where(
+                    Task.assigned_agent_id == agent.id,
+                    or_(
+                        Task.status == "in_progress",
+                        (Task.status == "inbox") & (Task.dispatched_at.isnot(None)),  # type: ignore[arg-type]
+                        Task.status == "review",
+                    ),
+                )
             )
-        )
-        return lead_result.first()
+            busy_counts[agent.id] = active_result.one()
 
-    if len(candidates) == 1:
-        return candidates[0]
+        alive.sort(key=lambda a: busy_counts.get(a.id, 0))
+        return alive[0]
 
-    # Least-busy: agent with the fewest active tasks (in_progress + dispatched inbox)
-    busy_counts: dict[uuid.UUID, int] = {}
-    for agent in candidates:
-        active_result = await session.exec(
-            select(sa_func.count()).select_from(Task).where(
-                Task.assigned_agent_id == agent.id,
-                or_(
-                    Task.status == "in_progress",
-                    (Task.status == "inbox") & (Task.dispatched_at.isnot(None)),  # type: ignore[arg-type]
-                ),
-            )
-        )
-        busy_counts[agent.id] = active_result.one()
+    # Kein Role-Kandidat → Fallback: Board Lead (gleiche Filter: Runtime,
+    # Liveness, exclude). Auch hier: keiner uebrig → explizit None.
+    if not fallback_to_lead:
+        return None
+    lead_query = select(Agent).where(
+        Agent.board_id == board_id,
+        Agent.is_board_lead == True,  # noqa: E712
+        Agent.agent_runtime.in_(NON_GATEWAY_RUNTIMES),  # type: ignore[union-attr]
+    )
+    if exclude_agent_id:
+        lead_query = lead_query.where(Agent.id != exclude_agent_id)
+    lead_result = await session.exec(lead_query)
+    for lead in lead_result.all():
+        if _agent_is_live(lead):
+            return lead
+    logger.info(
+        "find_agent_by_role: kein %s-Kandidat und kein lebendiger Board Lead "
+        "auf Board %s → explizit None",
+        role.value, board_id,
+    )
+    return None
 
-    candidates.sort(key=lambda a: busy_counts.get(a.id, 0))
-    return candidates[0]
+
+def _agent_is_live(agent: "Agent") -> bool:
+    """Liveness-Check via Heartbeat (``agents.last_seen_at``).
+
+    Quelle ist dieselbe wie in task_runner._liveness_floor_seconds: ein
+    frisches ``last_seen_at`` beweist, dass der poll.sh-Wrapper (und damit
+    Container/Host) lebt. Fenster = 2x Heartbeat-Interval, min 120s.
+    ``last_seen_at is None`` → keine Daten → nicht als tot gewertet
+    (konsistent mit watchdog/session_monitor).
+    """
+    from app.services.task_runner import _liveness_floor_seconds
+    from app.utils import ensure_aware, utcnow
+
+    last_seen = getattr(agent, "last_seen_at", None)
+    if last_seen is None:
+        return True
+    seen_age = (utcnow() - ensure_aware(last_seen)).total_seconds()
+    return seen_age < _liveness_floor_seconds(agent)
 
 
 async def find_dispatch_target(
