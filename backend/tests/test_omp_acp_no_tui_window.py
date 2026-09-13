@@ -1,9 +1,9 @@
 """No ghost TUI under OMP_DRIVER=acp (fix omp-acp-no-tui-window, 13.09.2026).
 
-Live incident (Mark, 13.09.2026): an ACP-driven agent still had
+Live incident (13.09.2026): an ACP-driven agent still had
 `entrypoint.sh:start_native()` launch the native omp TUI in tmux Window 0,
 even though ACP agents run both tasks (`bridge.py run_acp_once`) and chat
-(`acp_chat.py`, Window 3) over ACP. Mark saw the idle TUI as a second "ghost"
+(`acp_chat.py`, Window 3) over ACP. The operator saw the idle TUI as a second "ghost"
 session in the Terminal view.
 
 Fix: Window 0 only launches the native TUI when `OMP_DRIVER` is unset/native.
