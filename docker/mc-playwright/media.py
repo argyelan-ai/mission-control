@@ -9,10 +9,14 @@ service.py imports VIEWPORTS + the models + the builders from here.
 from __future__ import annotations
 
 import html as _html
+import logging
 from pathlib import Path
 from typing import List, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger("mc.playwright_service.media")
 
 # Single source for viewport presets (service.py imports this).
 VIEWPORTS = {
@@ -20,6 +24,10 @@ VIEWPORTS = {
     "mobile":  {"width":  390, "height": 844},  # iPhone 13-ish
     "tablet":  {"width":  768, "height": 1024},
 }
+
+# LocalStorage-Key the MC frontend actually reads (frontend-v2/src/lib/api.ts,
+# `AUTH_TOKEN_KEY`) — read from the frontend source, not assumed.
+MC_AUTH_STORAGE_KEY = "mc_auth_token"
 
 FFMPEG_BIN = "ffmpeg"
 # DejaVu ships in the playwright jammy image; the Dockerfile additionally
@@ -529,4 +537,77 @@ def build_branded_compose_cmd(
         "-an",
         output_path,
     ]
+    return cmd
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Login / Auth Helpers (moved from service.py so they stay unit-testable
+# without playwright — see module docstring)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class LoginSpec(BaseModel):
+    """Form-basierter Login.
+
+    Flow: navigate(url) → fill(user_selector, username) → fill(pass_selector, password)
+          → click(submit_selector) → wait for URL oder Selector.
+
+    Default selectors are read from the real MC login form
+    (frontend-v2/src/app/login/page.tsx): `<input id="email" type="email">`,
+    `<input id="password" type="password">`, `<button type="submit">` — see
+    test_login.py::test_login_spec_defaults_match_mc_login_form, which pins
+    this against the frontend source so a form change trips a test instead
+    of silently reverting to today's incident (byte-identical screenshots of
+    the sign-in mask).
+    """
+    url: str = Field(description="Login-Page URL (z.B. http://caddy/login)")
+    username: str
+    password: str
+    username_selector: str = Field(
+        default='input[type="email"], input[name="email"], input[name="username"]',
+        description="CSS-Selector fuer Username/Email-Feld",
+    )
+    password_selector: str = Field(
+        default='input[type="password"]',
+        description="CSS-Selector fuer Password-Feld",
+    )
+    submit_selector: str = Field(
+        default='button[type="submit"]',
+        description="CSS-Selector fuer Submit-Button",
+    )
+    wait_for_url: str | None = Field(
+        default=None,
+        description="Regex — wartet bis URL matcht. Alternative: wait_for_selector.",
+    )
+    wait_for_selector: str | None = Field(
+        default=None,
+        description="CSS-Selector — wartet bis sichtbar. Alternative zu wait_for_url.",
+    )
+
+
+def build_storage_state(target_url: str, auth_token: str | None) -> dict | None:
+    """Baut storage_state dict fuer new_context — setzt localStorage[key]=token
+    fuer den Origin von target_url.
+
+    Wichtig: storage_state muss BEIM Context-Create uebergeben werden — das ist
+    race-frei (anders als `page.add_init_script` das bei navigation-timing
+    klemmen kann wenn Client-JS beim Hydrate localStorage schon liest).
+
+    Pure function (no Browser/Page argument) — unit-tested directly in
+    test_login.py without needing playwright installed.
+    """
+    if not auth_token:
+        return None
+    parsed = urlparse(target_url)
+    if not parsed.scheme or not parsed.netloc:
+        logger.warning("cannot build storage_state — invalid target_url: %s", target_url)
+        return None
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return {
+        "cookies": [],
+        "origins": [{
+            "origin": origin,
+            "localStorage": [{"name": MC_AUTH_STORAGE_KEY, "value": auth_token}],
+        }],
+    }
     return cmd
