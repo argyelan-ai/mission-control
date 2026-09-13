@@ -49,6 +49,133 @@ logger = logging.getLogger(__name__)
 #       * On any exception logs WARNING but does NOT block dispatch (returns True).
 #   - Otherwise: no-op (returns True — caller continues with non-code workspace).
 #
+# ── Review-Workspace (task dd4bf92c, 2026-09-13) ──────────────────────────
+# Vorbereiteter Arbeitsordner fuer Review-Karten: statt main+neuer-Branch
+# (was der allgemeine Pfad unten macht) wird der tatsaechliche PR-Stand
+# ausgecheckt. Getrennt von den Entwickler-Zweigen unten, damit die dort
+# dokumentierten Verhaltensvertraege unangetastet bleiben.
+async def _resolve_repo_for_review(
+    task: "Task", session: AsyncSession,
+) -> tuple[str, str] | None:
+    """Resolve (repo_url, repo_slug) for a review workspace.
+
+    Registry-Repo (task.repo_id, ADR-052) hat Vorrang vor dem Projekt-Pfad —
+    gleiche Praezedenz wie in den Entwickler-Zweigen unten. Gibt None zurueck
+    wenn die Karte keinen Code-Bezug hat (Phase-Review o.ae.) — kein Fehler.
+    """
+    if task.repo_id:
+        from app.models.repo import Repo as _Repo
+        registry_repo = await session.get(_Repo, task.repo_id)
+        if registry_repo is not None:
+            from app.services.repo_registry import clone_url_for
+            repo_slug = registry_repo.full_name.split("/", 1)[-1]
+            return clone_url_for(registry_repo), repo_slug
+    if task.project_id:
+        project = await session.get(Project, task.project_id)
+        if project and project.github_repo_url:
+            from app.services.git_service import slugify_project
+            return project.github_repo_url, slugify_project(project.name)
+    return None
+
+
+def _resolve_pr_number_for_review(task: "Task") -> int | None:
+    """Reads the explicit `task.pr_number` field (Boss decision, Task dd4bf92c,
+    2026-09-13, Option B) — NOT the `PR erstellt:` comment heuristic.
+
+    That comment marker (agent_git.py, Pitfall H) stays untouched for its
+    existing consumers (task_lifecycle.py::_merge_pr_if_exists,
+    agent_git.py::handle_done_pr_merge); extending it further would make it
+    broader, not more reliable — exactly what broke for Registry-Repo tasks
+    (task.repo_id) in the first place. `pr_number` is written explicitly:
+    by `handle_review_pr_creation()` when the backend creates the PR itself
+    (project_id path), or by the agent's own status->review PATCH when it
+    pushed + created the PR manually (repo_id path).
+
+    Deliberately no fallback/inference when this is None — an honest empty
+    field beats a guessed PR number that sends the reviewer to the wrong
+    state. Caller must surface the empty case visibly (no silent checkout
+    against a wrong or nonexistent PR).
+    """
+    return task.pr_number
+
+
+async def _setup_review_workspace_for_dispatch(
+    task: "Task", agent: "Agent", session: AsyncSession,
+) -> bool:
+    """Prepares a workspace checked out to the PR HEAD for a review dispatch.
+
+    Replaces the empty-of-changes workspace the general branches below would
+    otherwise produce (they always create a fresh branch off main — fine for
+    a developer starting new work, wrong for a reviewer who needs the PR's
+    actual diff). Writes the target SHA into the card so the reviewer can
+    match their review against the PR head without resolving it themselves.
+
+    Returns True if dispatch should continue, False if the task was blocked
+    (TaskComment + terminal-unassign already committed) — caller MUST return.
+    Mirrors the block-don't-silently-continue contract used by the developer
+    branches below (same incident class: 2026-04-19 silent-fallback writing
+    to the wrong repo; here: 2026-09-12 silent empty-of-PR-changes workspace).
+    """
+    if not agent.workspace_path:
+        return True  # nothing to prepare into — same no-op as the dev path
+
+    from app.services.task_lifecycle import apply_terminal_unassign
+
+    async def _block(reason: str) -> bool:
+        session.add(TaskComment(
+            task_id=task.id, author_type="system", comment_type="blocker",
+            content=(
+                "**Review-Workspace nicht vorbereitet** — Dispatch abgebrochen.\n\n"
+                f"{reason}\n\n"
+                "**Question for @Operator** — pruefen, dann Karte erneut auf "
+                "`review` setzen oder den Reviewer manuell dispatchen."
+            ),
+        ))
+        task.status = "blocked"
+        await apply_terminal_unassign(session, task, "blocked")
+        session.add(task)
+        await session.commit()
+        return False
+
+    repo_info = await _resolve_repo_for_review(task, session)
+    if repo_info is None:
+        return True  # kein Code-Bezug auf der Karte (z.B. Phase-Review)
+
+    repo_url, repo_slug = repo_info
+
+    pr_number = _resolve_pr_number_for_review(task)
+    if pr_number is None:
+        return await _block(
+            "Keine PR-Nummer auf der Karte (`task.pr_number` ist leer). "
+            "Fuer den Registry-Repo-Pfad (`task.repo_id`) muss der Entwickler "
+            "`pr_number` beim Uebergang auf `review` selbst mitschicken — der "
+            "Backend erstellt den PR dort nicht automatisch."
+        )
+
+    try:
+        from app.services.git_service import git_service
+        project_dir, head_sha = await git_service.prepare_review_checkout(
+            agent.workspace_path, repo_url, repo_slug, pr_number,
+        )
+        await git_service.setup_git_identity(project_dir, agent.name)
+    except Exception as e:
+        return await _block(f"**Fehler:** `{type(e).__name__}: {e}`\n\nPR: #{pr_number}")
+
+    task.workspace_path = project_dir
+    session.add(task)
+    _pr_line = f"PR #{pr_number}" + (f" ({task.pr_url})" if task.pr_url else "")
+    session.add(TaskComment(
+        task_id=task.id, author_type="system", comment_type="progress",
+        content=(
+            f"**Review-Workspace vorbereitet** — {_pr_line} ausgecheckt.\n"
+            f"**Ziel-SHA:** `{head_sha}`\n"
+            f"**Pfad:** `{project_dir}`"
+        ),
+    ))
+    await session.commit()
+    return True
+
+
 # Pattern S2 (lazy local imports) preserved for git_service + apply_terminal_unassign
 # to avoid module-load cycles with dispatch.py / task_lifecycle.py.
 async def setup_git_workspace_for_dispatch(
@@ -61,6 +188,13 @@ async def setup_git_workspace_for_dispatch(
     Returns True if dispatch should continue, False if the task was blocked
     (TaskComment + terminal-unassign already committed; caller MUST `return`).
     """
+    # Review-Karten (task.dispatch_intent == "review_handoff") brauchen den
+    # PR-Stand, nicht einen neuen Branch von main — eigener, fruehzeitiger
+    # Zweig, damit die Entwickler-Pfade unten unveraendert bleiben (Incident
+    # 2026-09-12: Reviewer bekam einen von PR-Aenderungen leeren Ordner).
+    if task.dispatch_intent == "review_handoff":
+        return await _setup_review_workspace_for_dispatch(task, agent, session)
+
     # Lazy import: dispatch.py contains is_backend_writable_path + _BACKEND_MOUNTED_ROOTS
     # (Pitfall D inseparable triple stays in dispatch.py per CONTEXT D-07 + ADR-025).
     from app.services.dispatch import is_backend_writable_path, _BACKEND_MOUNTED_ROOTS
