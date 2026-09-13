@@ -76,11 +76,24 @@ def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool
     Non-committing — mirrors record_task_event: the caller commits together
     with whatever else it writes (the comment / message row). Returns True iff
     this call performed the ACK, so callers can log / emit exactly once.
+
+    C2 (PR #533 Nacharbeit Runde 3, Rex review B2): `run_control is None` is
+    part of the guard for the same reason it was added to the poll/pull-claim
+    candidate queries and the phase-auto-advance selects — a lead-held card
+    (run_control=manual_hold) sits in exactly the dispatched-but-unacked shape
+    this handshake looks for (status stays "inbox", dispatched_at is already
+    set — `mc hold` only checks status, not dispatched_at). Without this
+    guard, the assigned agent's very next comment or message silently claims
+    the card the lead just held: ack_at gets set, status flips to
+    in_progress, and the active-task lock is taken — undoing the hold through
+    a channel that carries no lifecycle intent at all. The comment/message
+    itself still gets written either way; only the implicit ACK is skipped.
     """
     if not (
         task.assigned_agent_id == agent.id
         and task.ack_at is None
         and task.dispatched_at is not None
+        and task.run_control is None
     ):
         return False
 
@@ -958,6 +971,69 @@ async def system_finalize_task_done(
         )
 
 
+async def _notify_no_reviewer_found(
+    session: AsyncSession, task: Task, board_id: uuid.UUID,
+) -> None:
+    """No reviewer agent on the board: leave a visible trail instead of the
+    silent unassigned-in-review state `find_reviewer`'s deliberate None
+    (PR #504) used to produce (W6). All three callers of
+    `handle_review_handoff` — agent_task_status.py, tasks.py, and the
+    watchdog's phase-completion fallback — discarded that None with no
+    signal to anyone, so the fix lives here, in the one function all three
+    share, instead of being patched into each call site separately.
+
+    Shape chosen: a durable TaskComment (comment_type="system_notify" — an
+    internal-only type, not in ALL_COMMENT_TYPES, so no schema/API change
+    needed) plus a best-effort DM to the Board Lead, reusing the same
+    delivery primitive `_notify_lead_on_completion` already uses. A new
+    Task column/flag would need a migration and frontend wiring for one
+    boolean; the comment is visible immediately in the existing task-thread
+    UI and still lands even in the watchdog's fallback branch, which by
+    definition runs when there is no Board Lead to DM.
+    """
+    message = (
+        f"**Kein Reviewer gefunden fuer '{task.title}'.**\n\n"
+        f"Die Karte bleibt in `review`, aber es ist kein Agent mit Rolle "
+        f"`reviewer` (oder Namens-Fallback \"rex\"/\"review\") auf diesem "
+        f"Board verfuegbar. Bitte manuell einen Reviewer zuweisen oder die "
+        f"Entscheidung direkt treffen (POST .../review).\n\n"
+        f"Task-ID: {task.id}"
+    )
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        content=message,
+        comment_type="system_notify",
+    ))
+    await session.commit()
+
+    lead = (await session.exec(
+        select(Agent).where(
+            Agent.board_id == board_id,
+            Agent.is_board_lead == True,  # noqa: E712
+        )
+    )).first()
+    if lead:
+        try:
+            from app.services.messaging import ensure_dm_thread, post_message
+            lead_thread = await ensure_dm_thread(session, lead)
+            await post_message(
+                session, thread_id=lead_thread.id, sender_type="system",
+                message_type="system", body=message,
+            )
+        except Exception as e:
+            logger.warning(
+                "No-reviewer notify: DM an Lead fehlgeschlagen fuer Task %s: %s",
+                task.id, e,
+            )
+
+    await emit_event(
+        session, "task.review_unassigned",
+        f"Kein Reviewer gefunden fuer '{task.title}' — Karte bleibt unassigned in review",
+        board_id=board_id, task_id=task.id, severity="warning",
+    )
+
+
 async def handle_review_handoff(
     session: AsyncSession,
     task: Task,
@@ -994,6 +1070,7 @@ async def handle_review_handoff(
             "(offline / Autor / keine Rolle) — Task '%s' bleibt unzugewiesen",
             board_id, task.title,
         )
+        await _notify_no_reviewer_found(session, task, board_id)
         return None
 
     # Set dispatch_intent + operational controls guard

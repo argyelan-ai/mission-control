@@ -11,7 +11,7 @@ branch (`run_native_turn(cwd=_cwd, ...)`), but the ACP branch's call to
 `os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()` (== `os.getcwd()`,
 `/home/agent`, unprepared). The model then bootstrapped its own `gh repo
 clone mission-control`, which resolved the short name against the logged-in
-`gh` account (`marknx`) instead of `argyelan-ai` — two PRs (#148, #149)
+`gh` account (the operator's personal account) instead of `argyelan-ai` — two PRs (#148, #149)
 landed on the wrong GitHub org and had to be ported by hand.
 
 Style: reuses the AST/call-based conventions of test_serve_loop_wiring.py

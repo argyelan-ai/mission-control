@@ -103,9 +103,13 @@ TELEGRAM_REPORTS_CHAT_ID=123456789
 
 Then `docker compose up -d backend`. Values saved in the settings page win
 over `.env`. Approval buttons and reports are live now — they need nothing
-further. (One deliberate exception: the health watchdog
-`scripts/poll-health-check.sh` reads its Telegram credentials from `.env`
-only — it must be able to alarm you while MC itself is down.)
+further. (One deliberate exception: the two host-side health watchdogs,
+`scripts/poll-health-check.sh` and `scripts/docker-health-restart.sh`, read
+their Telegram credentials from `.env` only — they must be able to alarm you
+while MC itself is down. Both prefer `TELEGRAM_REPORTS_BOT_TOKEN`/
+`TELEGRAM_REPORTS_CHAT_ID` and fall back to `TELEGRAM_BOT_TOKEN`/
+`TELEGRAM_CHAT_ID` if the reports pair isn't set — a host that only ever
+configured the command bot still gets watchdog alerts instead of silence.)
 
 ## 5. Turn on the team-chat mirror (optional)
 

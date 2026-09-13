@@ -497,11 +497,14 @@ def test_closed_gap_wiring_is_called_not_merely_mentioned():
     )
 
 
-def test_acp_context_pct_gap_is_still_shaped_as_documented():
-    """G5 (row 16), open: serve_loop hands the heartbeater the NATIVE TUI's
-    capture_pane on both driver branches, which is why ACP never reports a
-    context%. An ACP-aware source would change this call — and then row 16
-    plus the G5 summary row must be updated in the same change."""
+def test_acp_context_pct_is_reported_via_shared_heartbeat():
+    """G5 (row 16), CLOSED by the usage_update stamp + heartbeat fallback:
+    the ACP path now reports context% through the SAME payload field on the
+    SAME heartbeat as poll.sh (no second report path — asserted end-to-end in
+    tests/test_acp_context_pct.py incl. both sabotage directions). Here we
+    pin the wiring positively: the heartbeater call stays single and keeps
+    the native capture_pane (scrape wins), the payload builder consults the
+    ACP holder, and the doc says CLOSED."""
     calls = [
         n for n in ast.walk(_serve_loop_ast())
         if isinstance(n, ast.Call)
@@ -517,11 +520,14 @@ def test_acp_context_pct_gap_is_still_shaped_as_documented():
     assert src is not None, "start_heartbeater must receive _capture_pane"
     rendered = ast.unparse(src)
     assert rendered == "tui.capture_pane", (
-        "G5 may be CLOSED — serve_loop now passes "
-        f"_capture_pane={rendered} instead of the unconditional native "
-        "tui.capture_pane. Update row 16 + the G5 summary row in "
-        "docs/dispatch-path-parity.md and replace this test with a "
-        "positive assertion on the new source."
+        "G5 wiring changed — serve_loop now passes "
+        f"_capture_pane={rendered}; re-audit row 16 (G5) and the probe "
+        "priority in tests/test_acp_context_pct.py"
+    )
+    payload_ast = ast.parse(inspect.getsource(bridge._build_heartbeat_payload))
+    assert "_get_acp_context_pct" in ast.dump(payload_ast), (
+        "G5 reopened — _build_heartbeat_payload no longer consults the ACP "
+        "usage_update holder; the ACP context% report is dead"
     )
 
 
@@ -536,13 +542,13 @@ def test_doc_gap_table_matches_exception_list():
     # an open exception, and vice versa: the doc's gap-summary status and
     # KNOWN_GAPS have to tell the same story.
     open_ids = {g for g, _s, _sc, _w in KNOWN_GAPS}
-    for gap_id in ("G2", "G3", "G4", "G7"):
+    for gap_id in ("G2", "G3", "G4", "G5", "G7"):
         assert gap_id not in open_ids, (
             f"{gap_id} is wired positively in this suite but still sits in "
             "KNOWN_GAPS — pick one"
         )
     for line in doc.splitlines():
-        for gap_id in ("G2", "G3", "G4", "G7"):
+        for gap_id in ("G2", "G3", "G4", "G5", "G7"):
             if line.startswith(f"| {gap_id}:"):
                 assert "CLOSED" in line, (
                     f"{gap_id} is pinned as closed by this suite but the doc "
