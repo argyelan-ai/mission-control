@@ -274,7 +274,7 @@ den Voice-Layer (Tonlage), die eigentliche Regel ins Denken.
 | Kurze Sätze | ein Gedanke pro Satz, keine Schachtelsätze |
 | Wirkung zuerst | erst was es für den Operator bedeutet, dann das Detail |
 | Abkürzungen auflösen | nicht „CI ist rot", sondern „die automatische Prüfung ist durchgefallen" |
-| Kennungen einbetten | nicht „534", sondern „der Pull Request 534, der LiveKit-Pin" |
+| Kennungen einbetten | nicht „534", sondern „der PR 534, der LiveKit-Pin" |
 | Lernmoment | bei etwas Wichtigem ein bis zwei Sätze, **warum** — kein Vortrag |
 
 **Die Bremse — was einfache Sprache NICHT heisst:**
