@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -2233,19 +2234,7 @@ function SettingsContent() {
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
         className="shrink-0 px-4 py-4 md:px-6"
       >
-        {/* label-sys stays untranslated: P2 mono instrument code (round-6 decision) */}
-        <div className="label-sys mb-2">System · Settings</div>
-        <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>{t("title")}</h1>
-        <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
-          {t("subtitle")}
-        </p>
-        {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
-        <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
-          <div
-            className="absolute left-0 -top-px h-[2px] w-16"
-            style={{ backgroundColor: C.accent }}
-          />
-        </div>
+        <PageHeader title={t("title")} meta={t("subtitle")} compact />
       </motion.div>
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">

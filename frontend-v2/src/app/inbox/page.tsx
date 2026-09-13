@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
 import AppShell from "@/components/layout/AppShell";
@@ -9,7 +10,7 @@ import { api } from "@/lib/api";
 import { useApprovalStream } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { notify } from "@/lib/notify";
-import { C, alpha } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -126,30 +127,16 @@ export default function InboxPage() {
     <div className="flex flex-col gap-6 max-w-2xl">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <div className="label-sys mb-2">{t("approvalsInbox")}</div>
-          <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
-            {t("title")}
-          </h1>
-          {totalCount > 0 && (
-            <p className="text-[13px] mt-1">
-              <span
-                className="font-semibold"
-                style={{
-                  color: C.warning,
-                }}
-              >
-                {totalCount}
+        <PageHeader
+          title={t("title")}
+          meta={
+            totalCount > 0 ? (
+              <span style={{ color: STATUS_TEXT.warning }}>
+                {totalCount} {t("pending")}
               </span>
-              <span className="text-[var(--color-text-secondary)]"> {t("pending")}</span>
-            </p>
-          )}
-        </div>
-        {totalCount > 0 && (
-          <Pill color={C.warning} size="md">
-            {t("openCount", { count: totalCount })}
-          </Pill>
-        )}
+            ) : undefined
+          }
+        />
       </div>
 
       {/* Review Tasks section */}

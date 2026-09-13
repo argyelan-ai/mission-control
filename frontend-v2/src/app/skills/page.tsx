@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
@@ -391,13 +392,7 @@ export default function SkillsPage() {
 
         {/* ── Header ── */}
         <div className="flex items-start justify-between mb-6 gap-4">
-          <div>
-            <div className="label-sys mb-2">System · Skills</div>
-            <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>{t("title")}</h1>
-            <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
-              {t("subtitle")}
-            </p>
-          </div>
+          <PageHeader title={t("title")} meta={t("subtitle")} />
           {activeTab === "local" && (
             <button onClick={() => refetch()}
               className="p-2 rounded-xl cursor-pointer transition-colors"

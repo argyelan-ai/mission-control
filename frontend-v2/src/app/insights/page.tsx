@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useLocale, useTranslations } from "next-intl";
 
@@ -227,21 +228,10 @@ export default function InsightsPage() {
     <AppShell>
       <div className="max-w-6xl mx-auto">
         {/* Header — v3: .label-sys Micro-Label, Clash Display Titel, Akzent-Messmarke */}
-        <div className="mb-6">
-          <div className="label-sys mb-2">{tr("headerLabel")}</div>
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-            <h1
-              className="display text-2xl sm:text-[34px] font-semibold leading-[1.05]"
-              style={{ color: "var(--color-text-primary)" }}
-            >
-              Insights
-            </h1>
-            <div className="flex items-center gap-3 shrink-0">
-              {insights?.analyzed_at && (
-                <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                  {tr("analyzedAgo", { ago: timeAgo(insights.analyzed_at, locale) })}
-                </span>
-              )}
+        <PageHeader
+          title="Insights"
+          meta={insights?.analyzed_at ? tr("analyzedAgo", { ago: timeAgo(insights.analyzed_at, locale) }) : undefined}
+          actions={
               <div className="relative">
                 <select
                   value={days}
@@ -260,16 +250,8 @@ export default function InsightsPage() {
                 </select>
                 <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
               </div>
-            </div>
-          </div>
-          {/* Messmarke: 1px-Linie mit Akzent-Segment — wie Homepage-Header */}
-          <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
-            <div
-              className="absolute left-0 -top-px h-[2px] w-16"
-              style={{ backgroundColor: C.accent }}
-            />
-          </div>
-        </div>
+          }
+        />
 
         {/* Tabs — eckig, Mono-Labels, aktiver Tab = 2px Akzent-Unterstrich.
             .tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}

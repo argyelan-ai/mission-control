@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 /**
  * Repos registry (ADR-050) — manage GitHub repos + per-repo working rules.
@@ -194,15 +195,7 @@ export default function ReposPage() {
       <div className="py-6 max-w-4xl">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
-          <div>
-            <div className="label-sys mb-2">Code · Repos</div>
-            <h1 className="display text-xl font-semibold" style={{ color: C.textPrimary }}>
-              {t("title")}
-            </h1>
-            <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
-              {t("subtitle")}
-            </p>
-          </div>
+          <PageHeader title={t("title")} meta={t("subtitle")} />
           <button
             onClick={() => setImportOpen(true)}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"

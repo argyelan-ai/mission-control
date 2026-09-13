@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -96,29 +97,11 @@ function HomePage() {
       {/* Header — v3: Clash Display Headline, Mono-Metadaten, Akzent-Messmarke.
           Mobile: kompakte einzeilige Variante (Datum in der Meta-Zeile). */}
       <motion.div custom={0} variants={sectionVariants} initial="hidden" animate="visible">
-        <div className="label-sys mb-2 flex items-center justify-between gap-3">
-          <span>{t("consoleOverview")}</span>
-          <span className="sm:hidden">{format(new Date(), "EEE, d. MMM", { locale: dateLocale })}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <h1
-            className="display text-[22px] sm:text-[34px] font-semibold leading-[1.05] truncate"
-            style={{ color: C.textPrimary }}
-          >
-            {greeting}, {displayName}
-          </h1>
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="label-sys hidden sm:block">{format(new Date(), "EEE, d. MMM yyyy", { locale: dateLocale })}</span>
-            <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
-          </div>
-        </div>
-        {/* Messmarke: 1px-Linie mit Akzent-Segment — Desktop; Mobile nur feine Linie */}
-        <div className="relative mt-3 sm:mt-4 h-px" style={{ backgroundColor: C.border }}>
-          <div
-            className="absolute left-0 -top-px h-[2px] w-16 hidden sm:block"
-            style={{ backgroundColor: C.accent }}
-          />
-        </div>
+        <PageHeader
+          title={`${greeting}, ${displayName}`}
+          meta={format(new Date(), "EEE, d. MMM yyyy", { locale: dateLocale })}
+          actions={<CreateTaskModal activeBoardId={activeBoardId} agents={agents} />}
+        />
       </motion.div>
 
       {/* Context warnings */}
