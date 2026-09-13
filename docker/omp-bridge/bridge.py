@@ -4427,7 +4427,7 @@ def _require_prepared_acp_workspace(cwd: str) -> None:
     workspace on the floor and fell back to `os.getcwd()` (`/home/agent`,
     unprepared). The model bootstrapped its own `gh repo clone
     mission-control`, which resolved the short repo name against the logged
-    in `gh` account (`marknx`) instead of `argyelan-ai` — two PRs landed on
+    in `gh` account (the operator's personal account) instead of `argyelan-ai` — two PRs landed on
     the wrong GitHub org and had to be ported by hand. `cwd` existing on
     disk is a cheap, no-false-positive signal that SOME preparation ran
     (ad-hoc tasks fall back to the always-present `/workspace` mount root,
