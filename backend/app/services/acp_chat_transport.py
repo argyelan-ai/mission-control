@@ -117,10 +117,6 @@ def headless_chat_kind(agent) -> str | None:
     return None
 
 
-def _payload_for(op: str, payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    return payload or None
-
-
 class DockerCtlTransport:
     """Steuerkanal in einen Agenten-Container, ueber den CLI-Shim.
 
@@ -146,7 +142,7 @@ class DockerCtlTransport:
         return argv
 
     async def _call(self, op: str, payload: dict[str, Any] | None = None) -> dict:
-        argv = self._argv(op, _payload_for(op, payload))
+        argv = self._argv(op, payload)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

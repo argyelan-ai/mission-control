@@ -150,7 +150,6 @@ import websockets as ws_client
 from app.config import settings
 from app.redis_client import RedisKeys, get_redis
 from app.services.acp_chat_transport import (
-    AcpChatUnreachableError,
     headless_chat_kind,
     read_acp_chat_state,
     transport_for,
