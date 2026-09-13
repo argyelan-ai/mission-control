@@ -122,3 +122,14 @@ def test_backend_echoes_names_and_ids():
     hoerbar zurueckkommen, bevor etwas passiert."""
     text = _backend()
     assert "say the recognised name or number back" in text
+
+
+def test_backend_brevity_is_default_not_hard_cap():
+    """Die 1-2-Satz-Regel und die neue Ausnahme-Klausel muessen im selben
+    Prompt stehen — sonst raet das Modell, welche Regel gewinnt, wenn ein
+    Name zurueckgespiegelt oder eine Abkuerzung ausgeschrieben werden muss."""
+    text = _backend()
+    assert "keep it short (1-2 sentences)" in text
+    assert "short is the default, not a hard cap" in text
+    assert "accuracy wins over brevity" in text
+    assert "never pad" in text
