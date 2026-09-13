@@ -648,8 +648,8 @@ services:
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
       # ADR-083: which wire api a (provider, model) pair speaks — "realtime"
-      # or "live" (OpenAI gpt-live-1 full-duplex, needs the vorab-installed
-      # LiveKit PR #7212 plugin) — is NOT a separate env var. It is derived
+      # or "live" (OpenAI gpt-live-1 full-duplex, needs the GPT-Live plugin
+      # from livekit-plugins-openai >= 1.8.1) — is NOT a separate env var. It is derived
       # from the model name by jarvis_core.voice_provider.classify_voice_api
       # (one rule, shared with the backend's GET /api/v1/agent/voice/config
       # response), whether the model comes from the MC runtime binding
