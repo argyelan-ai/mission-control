@@ -7,8 +7,11 @@ tmux 'hermes-worker' session running the Hermes binary in a watchdog loop via
 entrypoint.sh.
 
 Endpoints:
-  GET  /health  -> {"status","session","tmux_running","agent_env_present"}
-  POST /start   -> spawn tmux session if not running
+  GET  /health      -> {"status","session","tmux_running","agent_env_present",
+                        "driver","chat_daemon_running"}
+  POST /start       -> spawn tmux session (or the ACP chat daemon) if not running
+  POST /chat/<op>   -> prompt|cancel|config|state against the ACP chat daemon
+                       (HERMES_DRIVER=acp only; see scripts/hermes_acp_chat.py)
 
 Auto-loaded by ~/Library/LaunchAgents/com.mc.hermes-bridge.plist at login.
 """
@@ -36,6 +39,7 @@ from pathlib import Path
 # macht den Import in BEIDEN Faellen robust.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context_detect  # noqa: E402
+import hermes_acp_chat  # noqa: E402
 
 # Ports: 18792 = free-code-bridge, 18793 = bridge-WS, 18794 = hermes-bridge
 PORT = 18794
@@ -144,6 +148,19 @@ LAST_TASK_FILE = WORKSPACE / "logs" / "last-task-id"
 # How long the TUI needs to rotate sessions before the next paste is safe.
 RESET_SETTLE_SECONDS = float(os.environ.get("HERMES_RESET_SETTLE_SECONDS", "3"))
 
+# ── Chat over ACP (HERMES_DRIVER=acp, docs/specs/chat-over-acp.md) ───────────
+# Under this driver the bridge holds ONE long-lived `hermes acp` session
+# instead of a tmux TUI: the Sessions chat becomes Hermes' only interface, and
+# task dispatch travels the SAME session so the operator sees the work. With
+# the variable unset every path below is the untouched native one.
+#
+# How long a dispatched turn may run before the loop stops waiting for it. The
+# wait is what keeps one task per turn; on timeout the next poll simply finds
+# the daemon busy and re-offers the task.
+DISPATCH_TURN_TIMEOUT = float(os.environ.get("HERMES_DISPATCH_TURN_TIMEOUT", "3600"))
+_chat_daemon_instance: "hermes_acp_chat.ChatDaemon | None" = None
+_chat_daemon_lock = threading.Lock()
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("hermes-bridge")
 
@@ -182,6 +199,35 @@ def _unquote_env_value(raw: str) -> str:
     return raw.strip("'\"")
 
 
+def driver_is_acp() -> bool:
+    """True when this bridge drives Hermes over ACP instead of the tmux TUI."""
+    return hermes_acp_chat.is_acp()
+
+
+def chat_daemon() -> "hermes_acp_chat.ChatDaemon":
+    """The process-wide ACP chat daemon (built lazily, never started here).
+
+    The session factory re-reads agent.env on every start, so a restart picks
+    up a rotated MC_AGENT_TOKEN — the same reason entrypoint.sh re-sources the
+    file inside its watchdog loop (live incident 2026-07-12).
+    """
+    global _chat_daemon_instance
+    with _chat_daemon_lock:
+        if _chat_daemon_instance is None:
+            _chat_daemon_instance = hermes_acp_chat.ChatDaemon(_build_chat_session)
+        return _chat_daemon_instance
+
+
+def _build_chat_session():
+    return hermes_acp_chat.build_session(
+        workspace=WORKSPACE,
+        hermes_bin=HERMES_BIN,
+        env=load_env_from_file(ENV_FILE),
+        cwd=hermes_acp_chat.default_cwd(HOME_DIR),
+        root=hermes_acp_chat.repo_root(__file__),
+    )
+
+
 def is_session_running() -> bool:
     r = _sp.run([TMUX_BIN, "has-session", "-t", SESSION], capture_output=True)
     return r.returncode == 0
@@ -196,10 +242,61 @@ def capture_pane() -> str:
     return r.stdout if r.returncode == 0 else ""
 
 
+def agent_running() -> bool:
+    """Is there anything to talk TO? tmux session on the native path, the ACP
+    chat daemon under HERMES_DRIVER=acp — the gates below care about that
+    question, not about tmux specifically."""
+    if driver_is_acp():
+        return chat_daemon().running
+    return is_session_running()
+
+
+def deliver_prompt(text: str, *, wait: bool = False) -> bool:
+    """Put ONE piece of text in front of Hermes and answer honestly whether it
+    arrived.
+
+    Native: blind `send-keys` (no ack exists — callers verify via the pane).
+    ACP: the daemon's own answer IS the ack; `busy` means the turn is taken and
+    the caller must retry, never that the text was delivered. `wait` blocks
+    until the turn ends, so the dispatch loop offers exactly one task per turn.
+    """
+    if not driver_is_acp():
+        _send_to_tmux(text)
+        return True
+    daemon = chat_daemon()
+    answer = daemon.prompt(text)
+    if not answer.get("ok"):
+        log.info("deliver_prompt: chat daemon refused (%s)", answer.get("error"))
+        return False
+    if wait and not daemon.wait_idle(DISPATCH_TURN_TIMEOUT):
+        log.warning(
+            "deliver_prompt: turn still running after %ss — not waiting longer",
+            DISPATCH_TURN_TIMEOUT,
+        )
+    return True
+
+
+def _deliver_and_verify(text: str, verify) -> bool:
+    """Deliver one operator-visible line, then prove it was SUBMITTED.
+
+    The proof differs per driver and that is the whole point: the native path
+    has to grep the pane for its own paste (see _anchor_was_submitted), the ACP
+    path gets a real ok/busy answer from the daemon.
+    """
+    if driver_is_acp():
+        return deliver_prompt(text, wait=True)
+    _send_to_tmux(text)
+    return verify()
+
+
 def start_hermes_session() -> dict:
     if not ENV_FILE.exists():
         raise FileNotFoundError(f"agent.env missing at {ENV_FILE} — provision first")
     env = load_env_from_file(ENV_FILE)
+    if driver_is_acp():
+        # NO tmux TUI under this driver: chat and tasks share one ACP session,
+        # a second console would be a second brain dispatching the same work.
+        return chat_daemon().start()
     if is_session_running():
         return {"status": "already_running", "session": SESSION}
     # entrypoint.sh manages the watchdog loop + Hermes invocation. Invoke it
@@ -527,8 +624,13 @@ def msg_gate_open(*, dispatch_in_flight: bool = False) -> bool:
         return False
     if _last_dispatched_task_id is not None:
         return False
-    if not is_session_running():
+    if not agent_running():
         return False
+    if driver_is_acp():
+        # No pane to watch — and none needed: the chat daemon knows whether a
+        # turn is running. That is the honest turn boundary the pane-quiet
+        # heuristic below only approximates.
+        return not chat_daemon().busy()
     quiet = _pane_quiet_seconds(time.monotonic(), capture_pane())
     return quiet >= MSG_QUIET_SECONDS
 
@@ -623,8 +725,7 @@ def flush_msg_queue() -> None:
         tid = rest[: -len(".msg")]
         seq = int(seq_str)  # filename is zero-padded; the footer anchor is not
         body = path.read_text(encoding="utf-8")
-        _send_to_tmux(body)
-        if _verify_msg_delivered(tid, seq):
+        if _deliver_and_verify(body, lambda: _verify_msg_delivered(tid, seq)):
             _record_ack(tid, seq)
             path.unlink(missing_ok=True)
             log.info(
@@ -766,17 +867,18 @@ def deliver_messages_nudge(messages: list, *, dispatch_in_flight: bool = False) 
     epoch = int(now)
     text = build_nudge_text(global_max, epoch)
     token = f"(bis seq {global_max}, {epoch})"
-    _send_to_tmux(text)
-    time.sleep(0.5)
-    deadline = time.monotonic() + 5.0
-    delivered = False
-    while True:
-        if _nudge_token_visible(capture_pane(), token):
-            delivered = True
-            break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(0.2)
+
+    def _verify_nudge() -> bool:
+        time.sleep(0.5)
+        deadline = time.monotonic() + 5.0
+        while True:
+            if _nudge_token_visible(capture_pane(), token):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
+    delivered = _deliver_and_verify(text, _verify_nudge)
 
     if delivered:
         _nudge_state_write(seqs, now)
@@ -806,9 +908,10 @@ def deliver_messages(payload: dict, *, dispatch_in_flight: bool = False) -> None
     pending = msg_queue_files()
     if not pending:
         return
-    if not is_session_running():
+    if not agent_running():
         log.warning(
-            "deliver_messages: %d message(s) queued but tmux not running — skipping flush",
+            "deliver_messages: %d message(s) queued but the agent is not running "
+            "(tmux / chat daemon) — skipping flush",
             len(pending),
         )
         return
@@ -911,9 +1014,10 @@ def dispatch_poll_loop() -> None:
                 # iteration ("Turn-Gate ... UND kein Dispatch gerade läuft").
                 dispatch_happened_this_tick = False
                 if should_dispatch:
-                    if not is_session_running():
+                    if not agent_running():
                         log.warning(
-                            "dispatch_poll_loop: task %s available but tmux not running — calling /start",
+                            "dispatch_poll_loop: task %s available but the agent is not "
+                            "running — calling /start",
                             task["id"],
                         )
                         try:
@@ -927,19 +1031,34 @@ def dispatch_poll_loop() -> None:
                             continue
                     # Fresh context per NEW task (dispatch.py:8-18); same-task
                     # redeliveries (revision / restart) keep the context.
-                    if should_reset_session(str(task["id"]), load_last_task_id()):
+                    # NOT under the ACP driver: there the one loaded session IS
+                    # the chat history the operator reads, and `/new` would
+                    # throw it away on every task switch.
+                    if not driver_is_acp() and should_reset_session(
+                        str(task["id"]), load_last_task_id()
+                    ):
                         reset_tui_session()
                     prompt = _build_dispatch_prompt(task)
-                    _send_to_tmux(prompt)
-                    save_last_task_id(str(task["id"]))
-                    _last_dispatched_task_id = task["id"]
-                    _last_dispatched_attempt_id = task_attempt_id
-                    dispatch_happened_this_tick = True
-                    log.info(
-                        "dispatch_poll_loop: dispatched task %s (%s)",
-                        task["id"],
-                        str(task.get("title") or "?")[:60],
-                    )
+                    # ACP: through the chat session (the operator SEES the work)
+                    # and wait for the turn to end before polling again.
+                    if deliver_prompt(prompt, wait=True):
+                        save_last_task_id(str(task["id"]))
+                        _last_dispatched_task_id = task["id"]
+                        _last_dispatched_attempt_id = task_attempt_id
+                        dispatch_happened_this_tick = True
+                        log.info(
+                            "dispatch_poll_loop: dispatched task %s (%s)",
+                            task["id"],
+                            str(task.get("title") or "?")[:60],
+                        )
+                    else:
+                        # Not delivered = not dispatched: leaving the dedup
+                        # cache untouched is what re-offers the task next poll.
+                        log.warning(
+                            "dispatch_poll_loop: task %s NOT delivered (chat daemon "
+                            "busy/down) — retrying on the next poll",
+                            task["id"],
+                        )
 
                 # Bug 11 fix (2026-05-14): deliver new_comments regardless of state.
                 # Backend already filtered out the agent's own comments — no dedup
@@ -947,17 +1066,18 @@ def dispatch_poll_loop() -> None:
                 # ephemeral; no auto-start to avoid spam during boot).
                 new_comments = (payload or {}).get("new_comments") or []
                 if new_comments:
-                    if not is_session_running():
+                    if not agent_running():
                         log.warning(
-                            "dispatch_poll_loop: %d new comment(s) but tmux not running — skipping",
+                            "dispatch_poll_loop: %d new comment(s) but the agent is not "
+                            "running — skipping",
                             len(new_comments),
                         )
                     else:
                         comments_prompt = _build_comments_prompt(new_comments)
                         if comments_prompt:
-                            _send_to_tmux(comments_prompt)
+                            deliver_prompt(comments_prompt)
                             log.info(
-                                "dispatch_poll_loop: delivered %d comment(s) to tmux",
+                                "dispatch_poll_loop: delivered %d comment(s)",
                                 len(new_comments),
                             )
 
@@ -1034,7 +1154,7 @@ def heartbeat_loop() -> None:
         log.info("heartbeat_loop: POST %s every %ss", url, HEARTBEAT_INTERVAL)
         while True:
             try:
-                if is_session_running():
+                if agent_running():
                     req = urllib.request.Request(
                         url, data=_heartbeat_body(), headers=headers, method="POST"
                     )
@@ -1059,6 +1179,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json_body(self) -> dict | None:
+        """Request body as a dict. ``None`` = malformed (answered with 400);
+        an EMPTY body is a valid no-argument op (`cancel`, `state`)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path.startswith("/health"):
             self._send_json(200, {
@@ -1066,11 +1202,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "session": SESSION,
                 "tmux_running": is_session_running(),
                 "agent_env_present": ENV_FILE.exists(),
+                # Chat over ACP: which brain is driving, and is it up?
+                "driver": hermes_acp_chat.driver(),
+                "chat_daemon_running": chat_daemon().running,
             })
             return
         self._send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path.startswith("/chat/"):
+            self._handle_chat(self.path[len("/chat/"):].split("?", 1)[0])
+            return
         if self.path == "/start":
             try:
                 result = start_hermes_session()
@@ -1082,6 +1224,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/restart":
             try:
+                if driver_is_acp():
+                    # Restart the DAEMON, not a TUI that must not exist here.
+                    # The ACP session itself survives (session/load on start).
+                    self._send_json(200, {"ok": True, "restart": chat_daemon().restart()})
+                    return
                 _sp.run([TMUX_BIN, "kill-session", "-t", SESSION],
                         check=False, capture_output=True)
                 result = start_hermes_session()
@@ -1093,6 +1240,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/stop":
             try:
+                if driver_is_acp():
+                    self._send_json(200, {"ok": True, **chat_daemon().stop()})
+                    return
                 _sp.run([TMUX_BIN, "kill-session", "-t", SESSION],
                         check=False, capture_output=True)
                 self._send_json(200, {"ok": True, "stopped": SESSION})
@@ -1101,8 +1251,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not found"})
 
+    def _handle_chat(self, op: str) -> None:
+        """``POST /chat/<op>`` — the HTTP twin of the container's
+        acp_chat_ctl.py, and the only thing the backend's HttpCtlTransport
+        talks to. Status codes carry the meaning: 200 = the daemon answered
+        (``ok`` or a refusal like ``rpc_error``), 409 = busy, 502 = nobody
+        there.
+        """
+        if op not in hermes_acp_chat.ChatDaemon.OPS:
+            self._send_json(404, {"ok": False, "error": "unknown_op", "detail": op})
+            return
+        if not driver_is_acp():
+            # An honest "nobody there" — on the native path this agent has no
+            # ACP session at all, and pretending otherwise would swallow the
+            # operator's message.
+            self._send_json(502, {
+                "ok": False, "error": "unreachable",
+                "detail": f"HERMES_DRIVER={hermes_acp_chat.driver()} — no ACP chat daemon",
+            })
+            return
+        payload = self._read_json_body()
+        if payload is None:
+            self._send_json(400, {"ok": False, "error": "bad_request",
+                                  "detail": "body must be a JSON object"})
+            return
+        status, body = chat_daemon().request(op, payload)
+        self._send_json(status, body)
+
     def log_message(self, fmt, *args):  # noqa: A003
         log.info("%s - %s", self.address_string(), fmt % args)
+
+
+def _boot_chat_daemon() -> None:
+    """Start the ACP chat daemon on bridge boot. Any failure stays a LOG line
+    plus /health telling the truth — never a dead bridge, because /chat and
+    /start are exactly what the operator needs to recover."""
+    try:
+        start_hermes_session()
+    except FileNotFoundError as e:
+        log.warning("Hermes chat daemon not started: %s", e)
+    except Exception as e:  # noqa: BLE001 — a missing binary must not kill HTTP
+        log.error("Hermes chat daemon not started: %s: %s", type(e).__name__, e)
 
 
 def _handle_sigterm(signum, frame):  # noqa: ARG001
@@ -1118,10 +1307,19 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _handle_sigterm)
 
         # Try start on bridge boot — non-fatal if env missing (provisioning may run later)
-        try:
-            start_hermes_session()
-        except FileNotFoundError as e:
-            log.warning("Hermes session not started: %s", e)
+        if driver_is_acp():
+            # The ACP handshake spawns `hermes acp` and waits for
+            # initialize + session/load — seconds at best, a stuck model at
+            # worst. Off the critical path: the HTTP server must come up even
+            # when the child does not (then /health says so and /start retries).
+            threading.Thread(
+                target=_boot_chat_daemon, name="hermes-chat-boot", daemon=True
+            ).start()
+        else:
+            try:
+                start_hermes_session()
+            except FileNotFoundError as e:
+                log.warning("Hermes session not started: %s", e)
         # Phase 25-06: background dispatcher thread (daemon → dies with HTTP server)
         t = threading.Thread(target=dispatch_poll_loop, name="hermes-dispatcher", daemon=True)
         t.start()

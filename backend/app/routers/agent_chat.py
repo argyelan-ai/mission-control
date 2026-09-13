@@ -25,6 +25,7 @@ from app.database import get_session
 from app.models.agent import Agent
 from app.models.task import Task
 from app.redis_client import RedisKeys
+from app.services.acp_chat_transport import AcpChatUnreachableError
 from app.services.agent_chat_input import (
     AgentBusyError,
     AgentStartingError,
@@ -81,6 +82,20 @@ def _boss_delivery_failed(e: BossDeliveryError) -> JSONResponse:
     return JSONResponse(
         status_code=502,
         content={"reason": _BOSS_DELIVERY_FAILED, "detail": str(e)[:300]},
+    )
+
+
+# 502: der ACP-Chat-Daemon eines kopflosen Agenten hat nicht geantwortet
+# (Container weg, Socket tot, hermes-bridge aus). Bewusst NICHT dieselbe 409
+# wie eine inhaltliche Absage: "der Agent lehnt ab" und "da ist gerade
+# niemand" sind fuer den Operator zwei verschiedene Lagen.
+_ACP_UNREACHABLE = "acp_unreachable"
+
+
+def _acp_unreachable(e: AcpChatUnreachableError) -> JSONResponse:
+    return JSONResponse(
+        status_code=502,
+        content={"reason": _ACP_UNREACHABLE, "detail": str(e)[:300]},
     )
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
@@ -462,6 +477,12 @@ async def post_chat_input(
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:
         return JSONResponse(status_code=409, content=_AGENT_STARTING)
+    except AgentBusyError:
+        # Kopflose Agenten (ACP): ein zweiter Prompt waehrend eines laufenden
+        # Zugs wird abgelehnt statt eingereiht — eine Absage, keine 500.
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
 
@@ -567,6 +588,8 @@ async def post_chat_keys(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
 
@@ -618,5 +641,7 @@ async def post_chat_effort(
         )
     except EffortSwitchFailedError:
         return JSONResponse(status_code=409, content=_EFFORT_SWITCH_FAILED)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)

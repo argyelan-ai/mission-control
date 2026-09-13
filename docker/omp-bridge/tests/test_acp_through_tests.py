@@ -691,10 +691,10 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
     shape), the same full serve_loop dispatch writes NEITHER transcript NOR
     preview. Proves the assertions above can actually fail."""
     def bare_factory(*, model, max_time, permission_policy, task_id,
-                     cancel_state=None, heartbeat_fn=None,
+                     cwd=None, cancel_state=None, heartbeat_fn=None,
                      interrupt_state=None):
         def run(prompt):
-            cwd = os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
+            _cwd = cwd or os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
             # Rex review B2: the stub must forward EXACTLY what it received
             # (the real factory forwards interrupt_state too). Swallowing it
             # here would hide the same class of silent-drop the sabotage
@@ -704,7 +704,7 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
                 if bridge._RUN_ACP_ACCEPTS_INTERRUPT_STATE else {}
             )
             return bridge.run_acp_once(
-                prompt, cwd=cwd, model=model, max_time=max_time,
+                prompt, cwd=_cwd, model=model, max_time=max_time,
                 permission_policy=permission_policy, task_id=task_id,
                 cancel_state=cancel_state, heartbeat_fn=heartbeat_fn,
                 **extra,
