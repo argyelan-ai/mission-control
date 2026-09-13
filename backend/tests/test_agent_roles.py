@@ -246,11 +246,11 @@ async def test_find_agent_by_role_excludes_author(session, make_board, make_agen
 async def test_handle_review_handoff_never_selects_author(
     make_board, make_agent, make_task,
 ):
-    """End-to-End (FreeCode-Bug): Autor des PR == einziger Reviewer →
+    """End-to-End (PR-Autor-Bug, Vorfall 13.09.): Autor des PR == einziger Reviewer →
     handle_review_handoff liefert None und weist die Karte NICHT zu."""
     board = await make_board(name="Author Board", slug="author-board")
     developer = await make_agent(
-        name="FreeCode", board_id=board.id, role="reviewer", is_board_lead=False,
+        name="Pr Author", board_id=board.id, role="reviewer", is_board_lead=False,
     )
     task = await make_task(
         board_id=board.id, title="PR Review",
