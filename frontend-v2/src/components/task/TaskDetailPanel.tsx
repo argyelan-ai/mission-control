@@ -82,7 +82,7 @@ export default function TaskDetailPanel({
         className="w-[420px] max-w-[calc(100vw-2rem)] shrink-0 border-l flex flex-col overflow-hidden"
         style={{ borderColor: C.border, backgroundColor: C.bgBase }}
       >
-        <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} />
+        <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} wide={false} />
       </motion.div>
     );
   }

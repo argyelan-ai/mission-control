@@ -183,7 +183,7 @@ export function TaskGlance({
           className="mt-1 text-[11px] cursor-pointer"
           style={{ color: C.textMuted }}
         >
-          {showAllCheckpoints ? "−" : `+${all.length - 5}`}
+          {showAllCheckpoints ? t("glanceFewer") : t("glanceMore", { count: all.length - 5 })}
         </button>
       )}
     </div>

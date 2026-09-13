@@ -217,6 +217,8 @@
     "glanceQuestion": "1 Frage",
     "glanceNothingOpen": "nichts",
     "glanceNoCheckpoints": "Noch keine Checkpoints — die erste Fortschrittsnotiz des Agenten erscheint hier.",
+    "glanceMore": "+{count} weitere",
+    "glanceFewer": "Weniger zeigen",
     "changesVsBase": "Branch gegen {base}",
     "changesCommits": "{count, plural, one {# Commit} other {# Commits}}",
     "changesFiles": "{count, plural, one {# Datei} other {# Dateien}}",

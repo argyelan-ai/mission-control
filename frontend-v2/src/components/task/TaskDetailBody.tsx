@@ -20,7 +20,7 @@
  * Technical tab as collapsed groups (TechnicalTab). Nothing was removed.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, X } from "lucide-react";
@@ -48,22 +48,40 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 type Tab = "conversation" | "changes" | "results" | "technical";
 
+/** Container width from which the cockpit splits into two columns. */
+const WIDE_MIN_PX = 960;
+
 export function TaskDetailBody({
   task,
   agents,
   boardId,
   onClose,
-  wide = false,
+  wide: wideProp,
 }: {
   task: Task;
   agents: Agent[];
   boardId: string;
   onClose: () => void;
+  /** Force the two-column layout on/off. Omit to let the body measure its own
+   *  container (the /tasks split view is wide enough on a desktop). */
   wide?: boolean;
 }) {
   const t = useTranslations("tasks");
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("conversation");
+
+  // Auto-wide: measure the element we are rendered into (header's parent).
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [autoWide, setAutoWide] = useState(false);
+  useEffect(() => {
+    if (wideProp != null || typeof ResizeObserver === "undefined") return;
+    const el = headerRef.current?.parentElement;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setAutoWide(entry.contentRect.width >= WIDE_MIN_PX));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [wideProp]);
+  const wide = wideProp ?? autoWide;
   const [conversationView, setConversationView] = useState<"comments" | "thread">("comments");
   const [forceOpen, setForceOpen] = useState<TechnicalGroup | null>(null);
 
@@ -287,7 +305,7 @@ export function TaskDetailBody({
   return (
     <>
       {/* ── Header ── */}
-      <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
+      <div ref={headerRef} className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
         <div className="label-sys label-sys--dim mb-1.5">{t("taskLabel")} · {task.id.slice(0, 8)}</div>
         <div className="flex items-start gap-3">
           <h2 className="flex-1 min-w-0 text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
@@ -350,7 +368,8 @@ export function TaskDetailBody({
         {wide ? (
           <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.05fr) minmax(0, 1fr)" }}>
             <div className="min-w-0">{story}</div>
-            <div className="min-w-0 px-4 py-3" data-testid="cockpit-work" style={{ borderLeft: `1px solid ${C.border}` }}>
+            {/* Work column sticks while the story scrolls — the diff stays in view. */}
+            <div className="min-w-0 px-4 py-3 self-start sticky top-0" data-testid="cockpit-work" style={{ borderLeft: `1px solid ${C.border}` }}>
               <div className="text-[10px] font-semibold uppercase tracking-[0.07em] mb-2" style={{ color: C.textDim }}>
                 {t("tabChanges")}
               </div>
