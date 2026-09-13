@@ -709,8 +709,6 @@ export function TaskFormFields({
                 placeholder={t("titlePlaceholder")}
                 className="w-full text-[15px] outline-none px-3.5 py-3 rounded-xl transition-all"
                 style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
-                onFocus={(e) => { e.target.style.borderColor = `${alpha(C.accent, 0.4)}`; e.target.style.boxShadow = `0 0 0 3px ${alpha(C.accent, 0.1)}`; }}
-                onBlur={(e) => { e.target.style.borderColor = C.border; e.target.style.boxShadow = "none"; }}
                 disabled={disabled} />
             </div>
             <div className="flex flex-col gap-1.5 flex-1">
@@ -720,8 +718,6 @@ export function TaskFormFields({
                 onKeyDown={handleKeyDown} placeholder={descriptionPlaceholder}
                 className="w-full flex-1 text-sm outline-none px-3.5 py-3 rounded-xl resize-none transition-all"
                 style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep, minHeight: "200px" }}
-                onFocus={(e) => { e.target.style.borderColor = `${alpha(C.accent, 0.4)}`; e.target.style.boxShadow = `0 0 0 3px ${alpha(C.accent, 0.1)}`; }}
-                onBlur={(e) => { e.target.style.borderColor = C.border; e.target.style.boxShadow = "none"; }}
                 disabled={disabled} />
             </div>
             <AnimatePresence>
