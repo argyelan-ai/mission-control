@@ -591,7 +591,9 @@ def _encode_cwd(path: str) -> str:
 
 
 def session_dir(
-    agent_dir_env: str | None = None, cwd: str | None = None
+    agent_dir_env: str | None = None,
+    cwd: str | None = None,
+    sessions_root: str | Path | None = None,
 ) -> Optional[Path]:
     """The omp sessions directory for THIS bridge container, fail-closed.
 
@@ -600,17 +602,28 @@ def session_dir(
     ``~/.mc/agents/<slug>/omp-sessions`` bind mount. The cwd encoded is the
     ACP-pinned one (OMP_ACP_CWD), so an ACP run lands in its own folder
     instead of polluting a native session's directory.
+
+    ``sessions_root`` names that root DIRECTLY, for a daemon that runs on the
+    HOST and has no such mount to hide behind (the Hermes chat daemon, see
+    scripts/hermes_acp_chat.py): there the backend reads
+    ``~/.mc/agents/hermes/omp-sessions`` itself, and no value of
+    PI_CODING_AGENT_DIR can produce that name — the mount is what renames
+    ``sessions`` to ``omp-sessions``, and on the host there is no mount.
     """
-    agent_dir = agent_dir_env or os.environ.get("PI_CODING_AGENT_DIR")
-    if not agent_dir:
-        return None
+    if sessions_root is not None:
+        root = Path(sessions_root)
+    else:
+        agent_dir = agent_dir_env or os.environ.get("PI_CODING_AGENT_DIR")
+        if not agent_dir:
+            return None
+        root = Path(agent_dir) / "sessions"
     workdir = (
         cwd
         or os.environ.get("OMP_ACP_CWD")
         or os.environ.get("OMP_DEFAULT_CWD")
         or "/workspace"
     )
-    path = Path(agent_dir) / "sessions" / _encode_cwd(workdir)
+    path = root / _encode_cwd(workdir)
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError:
