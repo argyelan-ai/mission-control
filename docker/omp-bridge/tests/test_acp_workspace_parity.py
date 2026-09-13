@@ -54,7 +54,6 @@ import inspect
 import os
 import sys
 import tempfile
-import textwrap
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -163,7 +162,7 @@ def test_acp_factory_forwards_cwd_to_run_acp_once():
     )
 
 
-def _walk_body_only(nodes: list) -> "ast.Iterator":
+def _walk_body_only(nodes: list):
     """Like ast.walk, but over a list of statements — and critically does
     NOT descend into an ast.If's `.orelse` (the sibling `else:`/`elif`
     clause). Plain `ast.walk(if_node)` walks BOTH `.body` and `.orelse`,
