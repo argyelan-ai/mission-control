@@ -2626,3 +2626,206 @@ class TestPerSourceIsolation:
             select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "wont-be-inserted")
         )
         assert result.all() == []  # the failing source's event never made it in
+
+
+# ── omp full-context → delta derivation (task 90d3ec02) ────────────────────
+
+# REAL omp JSONL sequence captured from mc-agent-sparky (GLM-5.3-Flash-EXL3 on
+# Spark, session 2026-09-08T22-18-35-212Z, task acp-nacharbeit-blocker-majors).
+# Only the `content` payloads are trimmed — usage, ids, responseIds, model,
+# provider and timestamps are verbatim. Note usage.input: the FULL context is
+# re-sent on every call (21860 → 22039 → 22202) and cacheRead stays 0.
+_REAL_OMP_SEQUENCE = [
+    '{"type":"message","id":"fc8fa8f1","parentId":"7979e6e2","timestamp":"2026-09-08T22:18:53.581Z","message":{"role":"assistant","content":[{"type":"text","text":"[real content trimmed for fixture]"}],"api":"openai-completions","provider":"mc-openai","model":"GLM-5.3-Flash-EXL3","usage":{"input":21860,"output":139,"cacheRead":0,"cacheWrite":0,"totalTokens":21999,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"toolUse","timestamp":1788905916145,"responseId":"chatcmpl-8f2568763df3a2c5","duration":17405.453591999998,"ttft":12746.301214000001,"completedAt":1788905933575,"contextSnapshot":{"promptTokens":21860,"nonMessageTokens":15180,"compactionEpoch":0}}}',
+    '{"type":"message","id":"353439e5","parentId":"a03b9951","timestamp":"2026-09-08T22:18:56.814Z","message":{"role":"assistant","content":[{"type":"text","text":"[real content trimmed for fixture]"}],"api":"openai-completions","provider":"mc-openai","model":"GLM-5.3-Flash-EXL3","usage":{"input":22039,"output":79,"cacheRead":0,"cacheWrite":0,"totalTokens":22118,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"toolUse","timestamp":1788905933685,"responseId":"chatcmpl-8d1eded7dae09967","duration":3105.053127000003,"completedAt":1788905936812,"contextSnapshot":{"promptTokens":22039,"nonMessageTokens":15180,"compactionEpoch":0}}}',
+    '{"type":"message","id":"eddfc380","parentId":"82f75e98","timestamp":"2026-09-08T22:19:00.928Z","message":{"role":"assistant","content":[{"type":"text","text":"[real content trimmed for fixture]"}],"api":"openai-completions","provider":"mc-openai","model":"GLM-5.3-Flash-EXL3","usage":{"input":22202,"output":47,"cacheRead":0,"cacheWrite":0,"totalTokens":22249,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"toolUse","timestamp":1788905936821,"responseId":"chatcmpl-85881d57446fb81d","duration":4078.317042999999,"ttft":1453.1915000000008,"completedAt":1788905940924,"contextSnapshot":{"promptTokens":22202,"nonMessageTokens":15180,"compactionEpoch":0}}}',
+]
+_REAL_OMP_RAW_INPUTS = [21860, 22039, 22202]
+
+
+class TestOmpTokenDeltaDerivation:
+    """omp usage.input is FULL CONTEXT per call — harvest must store the
+    per-call delta (fresh) + re-read prefix (cache_read), Claude-style."""
+
+    def _write_session(self, tmp_path, lines, name="2026-09-08T22-18-35-212Z_01a0831a.jsonl"):
+        session_file = tmp_path / name
+        session_file.write_text("\n".join(lines) + "\n")
+        return session_file
+
+    def test_real_omp_jsonl_sequence_yields_deltas(self, tmp_path):
+        """DoD: a REAL omp JSONL sequence (3 messages) produces delta values,
+        not the full-context number, per harvested record."""
+        from app.services.token_harvester import harvest_file
+
+        session_file = self._write_session(tmp_path, _REAL_OMP_SEQUENCE)
+        records = harvest_file(str(session_file), processed_lines=0)
+
+        assert len(records) == 3
+        # msg 1: session start — everything fresh, nothing cached yet
+        assert records[0]["input_tokens"] == 21860
+        assert records[0]["cache_read_tokens"] == 0
+        # msg 2: only the 179-token growth is fresh, the 21860 prefix is a re-read
+        assert records[1]["input_tokens"] == 22039 - 21860
+        assert records[1]["cache_read_tokens"] == 21860
+        # msg 3: 163 fresh + 22039 cached
+        assert records[2]["input_tokens"] == 22202 - 22039
+        assert records[2]["cache_read_tokens"] == 22039
+
+    def test_real_omp_sequence_offset_resume_keeps_baseline(self, tmp_path):
+        """Offset resume (file grew since last harvest) must NOT restart the
+        derivation at prev=0 — earlier lines set the baseline."""
+        from app.services.token_harvester import harvest_file
+
+        session_file = self._write_session(tmp_path, _REAL_OMP_SEQUENCE)
+        # only the last line is new (2 lines already processed)
+        records = harvest_file(str(session_file), processed_lines=2)
+
+        assert len(records) == 1
+        assert records[0]["input_tokens"] == 22202 - 22039
+        assert records[0]["cache_read_tokens"] == 22039
+
+    def test_session_boundary_and_compaction_never_negative(self, tmp_path):
+        """DoD: a new session starts with a clean baseline (full input = fresh,
+        not a negative or absurd delta), and a shrinking context (compaction)
+        yields fresh=0 / cache=input instead of a negative delta."""
+        from app.services.token_harvester import harvest_file, split_omp_context
+
+        # Session A grows: 1000 → 1200. Session B starts small and shrinks.
+        session_a = self._write_session(
+            tmp_path,
+            [
+                _make_omp_line(short_id="a1", response_id="ra1", input_tokens=1000),
+                _make_omp_line(short_id="a2", response_id="ra2", input_tokens=1200),
+            ],
+            name="2026-09-09T10-00-00-000Z_session-a.jsonl",
+        )
+        session_b = self._write_session(
+            tmp_path,
+            [
+                _make_omp_line(short_id="b1", response_id="rb1", input_tokens=500),
+                _make_omp_line(short_id="b2", response_id="rb2", input_tokens=400),
+            ],
+            name="2026-09-09T11-00-00-000Z_session-b.jsonl",
+        )
+
+        recs_a = harvest_file(str(session_a), processed_lines=0)
+        assert [(r["input_tokens"], r["cache_read_tokens"]) for r in recs_a] == [
+            (1000, 0),
+            (200, 1000),
+        ]
+
+        # New file = new session: baseline resets, prev from session A cannot leak
+        recs_b = harvest_file(str(session_b), processed_lines=0)
+        assert [(r["input_tokens"], r["cache_read_tokens"]) for r in recs_b] == [
+            (500, 0),      # fresh session start — NOT 500-1200 = -700
+            (0, 400),      # compaction: context shrank → all cached, nothing fresh
+        ]
+
+        # Pure helper contract, direct: never negative, never exceeds input
+        assert split_omp_context(400, 500) == (0, 400)
+        assert split_omp_context(0, 500) == (0, 0)
+        assert split_omp_context(7000, 0) == (7000, 0)
+
+    def test_claude_records_untouched_by_omp_derivation(self, tmp_path):
+        """Claude Code lines already report delta + cache_read natively — the
+        omp derivation must not rewrite them."""
+        from app.services.token_harvester import harvest_file
+
+        session_file = tmp_path / "claude-session.jsonl"
+        session_file.write_text(
+            _make_line(uuid_="cl-1", input_tokens=100, cache_read=200) + "\n"
+            + _make_line(uuid_="cl-2", input_tokens=150, cache_read=250) + "\n"
+        )
+        records = harvest_file(str(session_file), processed_lines=0)
+        assert [(r["input_tokens"], r["cache_read_tokens"]) for r in records] == [
+            (100, 200),
+            (150, 250),
+        ]
+
+    def test_sabotage_derivation_removal_makes_sum_explode(self, tmp_path):
+        """Sabotage probe: if the delta derivation is removed (harvest stores
+        the raw full-context input 1:1 again), the summed input for one
+        session explodes by ~3600x and this test goes red."""
+        from app.services.token_harvester import harvest_file
+
+        session_file = self._write_session(tmp_path, _REAL_OMP_SEQUENCE)
+        records = harvest_file(str(session_file), processed_lines=0)
+
+        derived_sum = sum(r["input_tokens"] for r in records)
+        raw_sum = sum(_REAL_OMP_RAW_INPUTS)  # what a 1:1 harvest would store
+        assert derived_sum == 21860 + 179 + 163  # session start + growth deltas
+        assert derived_sum < raw_sum  # a 1:1 harvest stores ~3.6x more here;
+        # over a real worker day (3.396 events, Ø 81.900 input) it explodes ~100x
+
+    async def test_backfill_corrects_legacy_full_context_rows(self, tmp_path, async_db_session):
+        """DoD: the backfill rewrites legacy omp rows (full-context input,
+        cache 0) to the derived values, and running it TWICE changes nothing
+        (idempotent)."""
+        from app.services.token_harvester import backfill_omp_token_deltas
+
+        agents_dir = tmp_path / "agents"
+        session_file = agents_dir / "sparky" / "omp-sessions" / "--workspace--" / (
+            "2026-09-08T22-18-35-212Z_01a0831a.jsonl"
+        )
+        session_file.parent.mkdir(parents=True)
+        session_file.write_text("\n".join(_REAL_OMP_SEQUENCE) + "\n")
+
+        # Seed the DB the way the OLD harvester did: raw full-context input,
+        # cache_read 0, cost computed from the inflated input.
+        sess_id = "2026-09-08T22-18-35-212Z_01a0831a"
+        legacy_uuids = [
+            f"{sess_id}:chatcmpl-8f2568763df3a2c5",
+            f"{sess_id}:chatcmpl-8d1eded7dae09967",
+            f"{sess_id}:chatcmpl-85881d57446fb81d",
+        ]
+        for raw_in, uid in zip(_REAL_OMP_RAW_INPUTS, legacy_uuids):
+            async_db_session.add(
+                ModelUsageEvent(
+                    id=uuid.uuid4(),
+                    harness="sparky",
+                    model="GLM-5.3-Flash-EXL3",
+                    provider="mc-openai",
+                    session_id=sess_id,
+                    message_uuid=uid,
+                    input_tokens=raw_in,
+                    output_tokens=100,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    cost_usd=None,  # no price row → NULL, backfill must keep that
+                    ts=datetime(2026, 9, 8, 22, 18, 53, tzinfo=timezone.utc),
+                    source_file=str(session_file),
+                )
+            )
+        await async_db_session.commit()
+
+        stats1 = await backfill_omp_token_deltas(
+            async_db_session, agent_base_paths=[str(agents_dir)]
+        )
+        assert stats1["events_matched"] == 3
+        # Row 1 (session start) already matches the derived values even in the
+        # legacy schema — full context IS the correct value for the first
+        # message of a session. Only rows 2 and 3 get rewritten.
+        assert stats1["events_corrected"] == 2
+
+        rows = (await async_db_session.exec(select(ModelUsageEvent))).all()
+        by_uuid = {r.message_uuid: r for r in rows}
+        assert by_uuid[legacy_uuids[0]].input_tokens == 21860
+        assert by_uuid[legacy_uuids[0]].cache_read_tokens == 0
+        assert by_uuid[legacy_uuids[1]].input_tokens == 179
+        assert by_uuid[legacy_uuids[1]].cache_read_tokens == 21860
+        assert by_uuid[legacy_uuids[2]].input_tokens == 163
+        assert by_uuid[legacy_uuids[2]].cache_read_tokens == 22039
+
+        # Idempotency: second run corrects nothing, values unchanged.
+        stats2 = await backfill_omp_token_deltas(
+            async_db_session, agent_base_paths=[str(agents_dir)]
+        )
+        assert stats2["events_corrected"] == 0
+        rows2 = (await async_db_session.exec(select(ModelUsageEvent))).all()
+        assert {(r.message_uuid, r.input_tokens, r.cache_read_tokens) for r in rows2} == {
+            (u, i, c)
+            for u, (i, c) in zip(
+                legacy_uuids,
+                [(21860, 0), (179, 21860), (163, 22039)],
+            )
+        }
