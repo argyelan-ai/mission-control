@@ -20,6 +20,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -396,6 +397,7 @@ export function ChatView({
   onOpenPanel,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
+  const searchParams = useSearchParams();
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
@@ -445,7 +447,22 @@ export function ChatView({
   // the same way a known-no-transcript agent (Hermes/Jarvis) does — no
   // separate dead-end empty-state screen, the toggle just can't reach "chat".
   const canChat = hasTranscript && !isNoTranscriptError(stream.error);
-  const effectiveView: CenterView = canChat ? centerView : "terminal";
+  // Ein ACP-Agent (`headless_chat`) hat keinen zweiten Kopf: die TUI in
+  // tmux-Fenster 0 faehrt nichts, was der Operator hier tippt. Der Umschalter
+  // entfaellt darum — und mit ihm der gespeicherte `centerView`, der sonst
+  // einen Agenten stumm im toten Terminal parken wuerde (ein „terminal" aus
+  // einer frueheren Sitzung ueberlebt in localStorage).
+  //
+  // Der Tiefenlink bleibt: `?view=terminal` ist die bewusste Ausnahme, mit der
+  // Betrieb/Health die Konsole weiterhin erreicht (Spec
+  // docs/specs/chat-over-acp.md, Nicht-Ziele).
+  const headlessChat = !!agent?.headless_chat;
+  const terminalDeepLink = searchParams?.get("view") === "terminal";
+  const effectiveView: CenterView = !canChat
+    ? "terminal"
+    : headlessChat
+      ? (terminalDeepLink ? "terminal" : "chat")
+      : centerView;
 
   // `renderAll` is in the deps for a reason: when the deferred remainder mounts,
   // content appears ABOVE the viewport, so a scroll position left untouched
@@ -961,6 +978,7 @@ export function ChatView({
             </div>
           )}
 
+          {!headlessChat && (
           <div
             className="flex items-center rounded-md overflow-hidden"
             style={{ border: `1px solid ${C.border}` }}
@@ -987,6 +1005,7 @@ export function ChatView({
               );
             })}
           </div>
+          )}
         </div>
       </div>
 
