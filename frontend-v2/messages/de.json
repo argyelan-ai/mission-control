@@ -2733,7 +2733,9 @@
       "cornerSwitching": "wechselt",
       "cornerUnreachable": "nicht erreichbar",
       "cornerUptimeHours": "seit {h} h {m}",
-      "cornerUptimeMinutes": "seit {m} min"
+      "cornerUptimeMinutes": "seit {m} min",
+      "restartHint": "Startet das laufende Modell auf dieser Box neu.",
+      "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet."
     },
     "cockpit": {
       "modeNoDevice": "Kein Node-Agent mit dieser Box gekoppelt — die Modus-Liste ist nicht verfügbar.",
@@ -2786,7 +2788,9 @@
       "lastAttempt": "letzter Versuch {when} · {status}",
       "lastAttemptTimeOnly": "letzter Versuch {when}",
       "resultOk": "ok",
-      "resultFailed": "fehlgeschlagen"
+      "resultFailed": "fehlgeschlagen",
+      "restartHint": "Startet das laufende Modell auf dieser Box neu.",
+      "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet."
     }
   },
   "bench": {
