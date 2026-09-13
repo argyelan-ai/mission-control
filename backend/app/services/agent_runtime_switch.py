@@ -68,6 +68,15 @@ HEALTH_TIMEOUT_RESTART = 30
 # Obergrenze kostet also einen unnoetigen Rollback, eine grosszuegige nichts.
 HEALTH_TIMEOUT_RESTART_OMP = HEALTH_TIMEOUT_RECREATE
 
+# omp Window-0 readiness glyphs (ADR-049) plus the ACP sentinel (fix
+# omp-acp-no-tui-window, 13.09.2026): under OMP_DRIVER=acp Window 0 no longer
+# runs the native TUI — entrypoint.sh prints OMP_ACP_READY into a quiet shell
+# instead — so the health gate needs a second anchor. Additive, not a
+# replacement: the native TUI never prints this string, so there is no
+# false-positive risk for agents still on the native driver. One tuple, three
+# call sites (here, runtime_propagation.py x2) — no drift between them.
+OMP_READY_SIGNALS = ("╭─", "❯", "OMP_ACP_READY")
+
 # OpenAI-compatible runtime types where a `/models` probe is meaningful.
 # Cloud (Anthropic, Ollama) already ship a model_identifier from the seed.
 _PROBEABLE_RUNTIME_TYPES = {
@@ -966,7 +975,7 @@ async def switch_agent_runtime(
                     agent,
                     timeout=timeout,
                     respawn_mode=(not image_change),
-                    ready_signals=("╭─", "❯") if is_omp else None,
+                    ready_signals=OMP_READY_SIGNALS if is_omp else None,
                 )
                 if not health.get("healthy"):
                     # Unlike the restart-command failure above, this is the
