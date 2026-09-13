@@ -29,3 +29,50 @@ def test_voice_layer_has_no_absolute_silence_rule():
     """
     text = persona.build_live_voice_instructions("Mark")
     assert "Never narrate tool calls" not in text
+
+
+def _backend(**kw) -> str:
+    """Backend-Prompt in Kleinschreibung.
+
+    Die Waechter pruefen Formulierungen, nicht Typografie — ein Satzanfang
+    darf gross werden, ohne einen Test zu brechen.
+    """
+    kw.setdefault("operator_name", "Mark")
+    kw.setdefault("frontier_enabled", False)
+    return persona.build_live_delegation_instructions(**kw).lower()
+
+
+def test_backend_forbids_inventing_details():
+    """Der gemessene Fehler vom 12.09.: erfundene Anforderungen im Auftrag."""
+    text = _backend()
+    assert "never assume details" in text
+    assert "ask for clarification before action" in text
+
+
+def test_backend_has_correction_precedence():
+    """'nee, doch Reviewer' muss den ersten Namen schlagen."""
+    text = _backend()
+    assert "latest user intent overrides prior statements" in text
+
+
+def test_backend_requires_consent_before_dispatch():
+    """Nichts geht raus, bevor der Operator zugestimmt hat."""
+    text = _backend()
+    assert "do not send anything before the operator has agreed" in text
+
+
+def test_backend_forbids_unspoken_requirements():
+    """Kernregel gegen das Dazuerfinden im Auftragstext."""
+    text = _backend()
+    assert "must not contain any requirement the operator did not state" in text
+
+
+def test_backend_guards_against_double_execution():
+    """LiveKit #7230: ein Tool kann doppelt ausgefuehrt werden."""
+    text = _backend()
+    assert "never re-call the same tool in one delegation" in text
+
+
+def test_backend_forbids_premature_completion_claims():
+    text = _backend()
+    assert "never claim an action has finished before the backend confirms" in text
