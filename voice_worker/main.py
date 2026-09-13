@@ -42,12 +42,12 @@ kein Nebenlaeufer) fuer ``api="live"`` ueber OpenAIs **Live API**
 
 - "realtime" (``_build_realtime_transport``): wie bisher, OpenAI/xAI Realtime
   WebSocket ueber die livekit-Plugins — bleibt der dokumentierte Rueckweg.
-- "live" (``_build_live_transport``): ``GPTLiveModel`` aus dem noch offenen
-  LiveKit-PR #7212 (``livekit.plugins.openai.realtime.GPTLiveModel``, Stand
-  10.09.2026, SHA ``de3c5ce66058c6ab437ad41f963cbaeb39046c6d``; noch nicht auf
-  PyPI). Der REGULAERE ``voice_worker/Dockerfile``-Build installiert das
-  Vorab-Plugin per PR-SHA (siehe Dockerfile-Kommentar) — kein separates
-  Test-Image mehr.
+- "live" (``_build_live_transport``): ``GPTLiveModel``
+  (``livekit.plugins.openai.realtime.GPTLiveModel``) aus
+  ``livekit-plugins-openai``. Seit dem Merge von LiveKit-PR #7212 (10.09.2026)
+  regulaer auf PyPI ab Version 1.8.1 — der REGULAERE
+  ``voice_worker/Dockerfile``-Build zieht es ueber den normalen Versionspin in
+  ``voice_worker/requirements.txt``, kein Vorab-Install per PR-SHA mehr.
 
 Delegation: ``delegation="responses"`` — ein eigenes Backend-Responses-Modell
 (``_resolve_live_backend_model()``, Default ``gpt-5.6-luna`` — Latenz-Tuning
@@ -95,11 +95,11 @@ from jarvis_core.voice_provider import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
 
-# GPT-Live-Plugin (ADR-083) wird im regulaeren voice_worker/Dockerfile-Build
-# per PR-SHA installiert (PR #7212, noch nicht released auf PyPI). Import-
-# Fehler wird trotzdem abgefangen (z.B. ein aelteres Image ohne diesen Build-
-# Schritt), damit eine Bindung auf ``api="live"`` dann laut (statt mit einem
-# nackten ImportError-Traceback) auf ``realtime`` zurueckfaellt.
+# GPT-Live-Plugin (ADR-083) kommt aus livekit-plugins-openai >= 1.8.1, gepinnt
+# in voice_worker/requirements.txt. Import-Fehler wird trotzdem abgefangen
+# (z.B. ein aelteres Image mit einem aelteren Pin), damit eine Bindung auf
+# ``api="live"`` dann laut (statt mit einem nackten ImportError-Traceback) auf
+# ``realtime`` zurueckfaellt.
 try:
     from livekit.plugins.openai.realtime import GPTLiveModel  # type: ignore[attr-defined]
     _GPT_LIVE_AVAILABLE = True
@@ -232,7 +232,7 @@ def _build_live_transport(
     frontier_enabled: bool | None = None,
     operator_name: str | None = None,
 ):
-    """Die "live"-api: ``GPTLiveModel`` (ADR-083, vorab ueber LiveKit-PR #7212).
+    """Die "live"-api: ``GPTLiveModel`` (ADR-083, livekit-plugins-openai >= 1.8.1).
 
     ``delegation="responses"``: ein Backend-Responses-Modell fuehrt Reasoning +
     Tool-Calls, exakt wie bei ``_build_realtime_transport()`` — unsere
@@ -257,8 +257,8 @@ def _build_live_transport(
     if not _GPT_LIVE_AVAILABLE:
         raise RuntimeError(
             "voice api 'live' but GPTLiveModel is not importable — this "
-            "image does not have the vorab-installed LiveKit PR #7212 "
-            "plugin block in voice_worker/Dockerfile. Rebuild the image, or "
+            "image has an older livekit-plugins-openai than the 1.8.1 pin "
+            "in voice_worker/requirements.txt. Rebuild the image, or "
             "rebind the runtime to a 'realtime' api."
         )
     if not os.environ.get("OPENAI_API_KEY"):
