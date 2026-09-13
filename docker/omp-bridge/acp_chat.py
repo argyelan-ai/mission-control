@@ -196,8 +196,8 @@ class ChatSession:
             self._emit_error(
                 "session_reset",
                 reset_detail,
-                text="Vorherige Chat-Sitzung konnte nicht geladen werden — "
-                     "neue Sitzung gestartet (Verlauf beginnt neu).",
+                text="Previous chat session could not be loaded — "
+                     "started a new one (history starts over).",
             )
 
     def close(self) -> None:
@@ -223,7 +223,7 @@ class ChatSession:
                 # typed message is the worst possible failure here.
                 self._emit_error(
                     "busy", "a turn is already running",
-                    text="Es läuft bereits eine Antwort — bitte warten oder Stop drücken.",
+                    text="A reply is already running — wait or press Stop.",
                 )
                 return {"ok": False, "error": "busy"}
             if self._closed or self._client is None:
@@ -350,7 +350,7 @@ class ChatSession:
             self._emit_error(
                 "process_exit",
                 error_text or f"child exited during turn {turn}",
-                text="Der ACP-Prozess ist gestorben — Sitzung wird neu verbunden.",
+                text="The ACP process died — reconnecting the session.",
             )
             self._restart_child()
         else:
