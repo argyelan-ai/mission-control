@@ -1550,6 +1550,202 @@ async def agent_create_task(
     return result
 
 
+# ─────────────────────────────────────────────────────────────────────
+# C2: Board Lead queue control — hold / release / reassign
+#
+# Distinct from run/stop-resume (operations.py, user/admin-role only,
+# requires an ACTIVE run) and distinct from the blocker-approval flow
+# (approvals.py, resets status to inbox but never touches run_control).
+# Hold uses the pre-existing Task.run_control="manual_hold" value, which
+# is already wired into check_dispatch_allowed() and 10+ other dispatch
+# guards — a beantwortete Blocker-Eskalation only flips status back to
+# inbox, it never clears run_control, so a hold survives it (see the
+# run_control filter added to the /me/poll inbox-candidates query above).
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TaskHoldRequest(BaseModel):
+    reason: str
+
+
+class TaskReassignRequest(BaseModel):
+    to: str  # agent name (case-insensitive) or UUID, resolved server-side
+
+
+def _require_board_lead(agent: Agent, board_id: uuid.UUID) -> None:
+    if agent.board_id != board_id:
+        raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+    if not agent.is_board_lead:
+        raise HTTPException(
+            status_code=403,
+            detail="Nur Board Leads duerfen die Queue steuern (hold/release/reassign)",
+        )
+
+
+async def _load_task_or_404(session: AsyncSession, board_id: uuid.UUID, task_id: uuid.UUID) -> Task:
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/hold")
+async def agent_hold_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    payload: TaskHoldRequest,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    """Hold a not-yet-dispatched card so the dispatcher/poll skip it.
+
+    Only cards still sitting in `inbox` can be held — an active run is out
+    of scope here (that's Stop/Resume, admin-only, operations.py).
+    """
+    _require_board_lead(agent, board_id)
+    task = await _load_task_or_404(session, board_id, task_id)
+
+    if task.status != "inbox":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nur noch nicht dispatchte Karten (status=inbox) koennen gehalten werden, "
+                   f"aktueller Status: {task.status}",
+        )
+    if task.run_control == "stopped":
+        raise HTTPException(
+            status_code=409,
+            detail="Task ist admin-gestoppt (run_control=stopped) — Resume laeuft ueber /stop /resume, nicht mc hold",
+        )
+    if not payload.reason or not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="reason ist Pflicht und darf nicht leer sein")
+
+    task.run_control = "manual_hold"
+    task.hold_reason = payload.reason.strip()
+    task.updated_at = utcnow()
+    session.add(task)
+    await emit_event(
+        session, "task.held",
+        f"{agent.name} haelt Task '{task.title}' an: {payload.reason.strip()}",
+        board_id=board_id, task_id=task.id, agent_id=agent.id,
+        detail={"reason": payload.reason.strip(), "held_by": agent.name},
+    )
+    await session.commit()
+    await session.refresh(task)
+    return task.model_dump()
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/release")
+async def agent_release_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    """Release a card previously held via `mc hold`. Idempotent-safe: only
+    clears a hold this mechanism owns, never an admin `stopped` run."""
+    _require_board_lead(agent, board_id)
+    task = await _load_task_or_404(session, board_id, task_id)
+
+    if task.run_control != "manual_hold":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task ist nicht im Hold-Zustand (run_control={task.run_control})",
+        )
+
+    task.run_control = None
+    task.hold_reason = None
+    task.updated_at = utcnow()
+    session.add(task)
+    await emit_event(
+        session, "task.released",
+        f"{agent.name} gibt Task '{task.title}' wieder frei",
+        board_id=board_id, task_id=task.id, agent_id=agent.id,
+        detail={"released_by": agent.name},
+    )
+    await session.commit()
+    await session.refresh(task)
+
+    # Trigger re-dispatch immediately — analogous to the blocker-approval
+    # unblock path (approvals.py) so a released card doesn't just sit in
+    # inbox until the next unrelated dispatch trigger fires.
+    from app.utils import create_tracked_task
+    from app.services.dispatch import auto_dispatch_task
+    create_tracked_task(auto_dispatch_task(str(task.id), str(task.board_id)))
+
+    return task.model_dump()
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/reassign")
+async def agent_reassign_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    payload: TaskReassignRequest,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    """Hand a card (any status except done/failed) to another agent on the
+    same board. Server-side only: resolves the target, sets
+    assigned_agent_id, rotates dispatch_attempt_id and writes the
+    TaskAttemptAudit row — the caller never needs to know or supply an
+    attempt id (that's the whole point over raw PATCH assigned_agent_id,
+    which additionally isn't even in the AgentTaskUpdate schema)."""
+    _require_board_lead(agent, board_id)
+    task = await _load_task_or_404(session, board_id, task_id)
+
+    if task.status in ("done", "failed"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task ist bereits abgeschlossen (status={task.status}) — kein Reassign moeglich",
+        )
+
+    target: Agent | None = None
+    try:
+        target_uuid = uuid.UUID(payload.to)
+    except ValueError:
+        target_uuid = None
+    if target_uuid is not None:
+        candidate = await session.get(Agent, target_uuid)
+        if candidate and candidate.board_id == board_id:
+            target = candidate
+    else:
+        result = await session.exec(
+            select(Agent).where(Agent.board_id == board_id).where(Agent.name.ilike(payload.to))
+        )
+        target = result.first()
+
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Ziel-Agent '{payload.to}' nicht auf diesem Board gefunden")
+
+    old_agent_id = task.assigned_agent_id
+    old_agent_name = None
+    if old_agent_id is not None:
+        old_agent = await session.get(Agent, old_agent_id)
+        old_agent_name = old_agent.name if old_agent else str(old_agent_id)
+
+    task.assigned_agent_id = target.id
+    task.dispatched_at = None
+    task.ack_at = None
+    task.updated_at = utcnow()
+    session.add(task)
+
+    from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+    await set_dispatch_attempt_id(
+        session, task, str(uuid.uuid4()),
+        caller="board_lead_reassign",
+        reason=f"reassigned_by_{agent.name}_from_{old_agent_name}_to_{target.name}",
+    )
+
+    await emit_event(
+        session, "task.reassigned",
+        f"{agent.name} haengt Task '{task.title}' von {old_agent_name or 'niemand'} auf {target.name} um",
+        board_id=board_id, task_id=task.id, agent_id=agent.id,
+        detail={"from_agent": old_agent_name, "to_agent": target.name, "reassigned_by": agent.name},
+    )
+    await session.commit()
+    await session.refresh(task)
+    return task.model_dump()
+
+
 @router.patch("/boards/{board_id}/tasks/{task_id}")
 async def agent_update_task(
     board_id: uuid.UUID,

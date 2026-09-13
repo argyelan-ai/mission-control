@@ -3180,6 +3180,15 @@ async def agent_poll(
                 select(Task)
                 .where(Task.assigned_agent_id == agent.id)
                 .where(Task.status == "inbox")
+                # C2: a lead-held card (run_control=manual_hold) or an
+                # admin-stopped card must not be claimed via poll just
+                # because a blocker-approval reset it to status=inbox —
+                # that path clears dispatch_attempt_id/dispatched_at/ack_at
+                # but never touches run_control (approvals.py resolve_approval).
+                # Without this filter the poll-claim path below (which
+                # bypasses check_dispatch_allowed entirely) would deliver a
+                # held task straight to the agent's session.
+                .where(Task.run_control.is_(None))
                 .order_by(Task.created_at.asc())
             )
             task = None
