@@ -90,6 +90,39 @@ def task_still_reactivatable(task: Task, *, expected_status: str | None = None) 
     resume that only makes sense while the task is still blocked) — a
     caller with no single expected status (e.g. one that already checks a
     set of statuses itself) can omit it.
+
+    KNOWN CALL SITES (keep this updated — there is no structural choke
+    point that forces every "set a task back to in_progress/inbox after a
+    decision made earlier" write through this predicate, so this ledger IS
+    the mechanism the tenth site is supposed to find; grep for
+    `task_still_reactivatable` in this repo before enumerating from
+    scratch). Status as of PR #556 follow-up (2026-09-13):
+
+      GUARDED — routed through this predicate:
+      1. dispatch.redispatch_after_blocker_answer, wraps auto_dispatch_task
+      2. agent_task_status._handle_help_request_resume (7th path, PR #533)
+      3. agent_task_status._handle_callback_resume (8th path, PR #556)
+      4. routers/approvals.py resolve_approval, blocker_decision/approved
+         (PATCH /approvals/{id}) — calls #1 above
+      5. routers/approvals.py quick_resolve_confirm, blocker_decision/approved
+         (POST .../quick-resolve/confirm, Telegram URL-button path) — calls
+         #1 above
+
+      OPEN — found, not yet guarded (flagged for follow-up cards, PR #556
+      review):
+      6. task_lifecycle.reopen_parent_for_new_subtask — checks
+         `parent.status != "review"`, never run_control
+      7. routers/approvals.py visual_review rejection — sets
+         `original_task.status = "in_progress"` with no check at all
+      8. routers/approvals.py clarification_question approval — checks
+         `task.status == "blocked"`, never run_control
+      9. services/telegram_bot.py TelegramBotService._resolve_approval,
+         blocker_decision/approved — checks `task.status == "blocked"`,
+         never run_control. (Earlier PR #556 text excused this one as
+         "resumes in place, no redispatch, untouched" — wrong excuse: the
+         gap this predicate closes is reactivating a task whose ground
+         shifted underneath it, not specifically the redispatch mechanism;
+         "no redispatch" doesn't address it. See follow-up card.)
     """
     if task.run_control is not None:
         return False
