@@ -21,6 +21,7 @@ Static source-text guards, same idiom as test_hermes_entrypoint_patches.py /
 test_boss_host_entrypoint_comm_v2.py — the shell scripts here have no
 container to run tests against in CI.
 """
+import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -59,12 +60,42 @@ def test_acp_branch_prints_sentinel_and_drops_to_shell():
     shell — no native launcher, no exit (Ops still wants a live pane)."""
     txt = ENTRYPOINT.read_text()
     acp_idx = txt.index('if [ "${OMP_DRIVER:-}" = "acp" ]; then')
-    acp_block = txt[acp_idx: acp_idx + 400]
-    assert "OMP_ACP_READY" in acp_block
+    acp_block = txt[acp_idx: txt.index("    else\n", acp_idx)]
     assert "exec bash" in acp_block
     assert "LAUNCHER" not in acp_block.split("else")[0], (
         "the acp branch must not invoke the native launcher"
     )
+    assert "OMP_ACP_READY" in _acp_banner_output(acp_block)
+
+
+def _acp_send_keys_line(acp_block: str) -> str:
+    return next(l for l in acp_block.splitlines() if "send-keys" in l)
+
+
+def _acp_banner_output(acp_block: str) -> str:
+    """Run the banner command the way Window 0's shell would (minus the
+    trailing `exec bash`) and return what it prints."""
+    line = _acp_send_keys_line(acp_block)
+    cmd = line[line.index('"printf') + 1: line.rindex('" C-m')]  # the typed payload
+    cmd = cmd.replace("; exec bash", "")
+    return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
+                          check=True).stdout
+
+
+def test_sentinel_is_not_readable_from_the_typed_command_line():
+    """Review finding (#551): the ready gate substring-matches
+    `tmux capture-pane`, and the pane echoes the *typed* command before it
+    runs. If the sentinel appears contiguously in the send-keys payload, a
+    command that was typed but never executed (swallowed C-m, hung prompt)
+    already satisfies the gate — a false positive. The token must therefore
+    be split in the source (`'OMP_ACP''_READY'`) and only assembled by
+    printf at runtime."""
+    txt = ENTRYPOINT.read_text()
+    acp_idx = txt.index('if [ "${OMP_DRIVER:-}" = "acp" ]; then')
+    acp_block = txt[acp_idx: txt.index("    else\n", acp_idx)]
+    line = _acp_send_keys_line(acp_block)
+    assert "OMP_ACP_READY" not in line, "typed command echo would satisfy the gate"
+    assert "OMP_ACP_READY" in _acp_banner_output(acp_block)
 
 
 def test_recycler_skips_tui_relaunch_under_acp_driver():

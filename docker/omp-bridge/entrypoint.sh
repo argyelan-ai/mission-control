@@ -264,7 +264,12 @@ start_native() {
     # sentinel (docker_agent_sync._wait_for_window_ready / OMP_READY_SIGNALS);
     # the native TUI never prints it, so there is no false-positive risk.
     if [ "${OMP_DRIVER:-}" = "acp" ]; then
-        tmux send-keys -t "$SESSION":0 "printf '%s\n' 'OMP_ACP_READY' 'This agent runs headless over ACP (OMP_DRIVER=acp).' 'Chat and tasks go through the Sessions page — there is no TUI here.'; exec bash" C-m
+        # The token is split ('OMP_ACP''_READY') ON PURPOSE: the health gate
+        # substring-matches `tmux capture-pane`, and the pane echoes this
+        # typed command line before it runs. A contiguous token here would
+        # satisfy the gate even if the shell never executed the command
+        # (swallowed C-m, hung prompt). Only printf's OUTPUT may carry it.
+        tmux send-keys -t "$SESSION":0 "printf '%s\n' 'OMP_ACP''_READY' 'This agent runs headless over ACP (OMP_DRIVER=acp).' 'Chat and tasks go through the Sessions page — there is no TUI here.'; exec bash" C-m
     else
         tmux send-keys -t "$SESSION":0 "exec ${LAUNCHER} ${OMP_DEFAULT_CWD}" C-m
     fi
