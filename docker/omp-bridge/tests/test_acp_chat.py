@@ -533,6 +533,100 @@ def test_socket_round_trip_through_the_ctl_shim(tmp_path):
     print("PASS test_socket_round_trip_through_the_ctl_shim")
 
 
+# ── model pinning (live incident 14.09.2026, twin of #483) ──────────────────
+#
+# `omp acp` inherits the bridge environment; OPENAI_API_KEY activates omp's
+# BUILT-IN openai provider, and without an explicit selector every session
+# opens on openai/gpt-5.5 with the shim key — the first chat turn after the
+# container recreate answered "401 Incorrect API key provided: sk-noauth".
+# bridge.py (task path) pins the model since #483; the chat daemon did not.
+
+
+def test_new_session_pins_the_configured_model(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client, model="model-b")
+    sess.start()
+    assert ("set_config_option", "sid-1", "model", "model-b") in client.calls
+    model = [o for o in sess.state()["configOptions"] if o["id"] == "model"][0]
+    assert model["currentValue"] == "model-b"
+    sess.close()
+    print("PASS test_new_session_pins_the_configured_model")
+
+
+def test_session_load_re_pins_the_model(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client, model="model-b")
+    sess.start()
+    sess.close()
+
+    client2 = FakeClient(session_result=SESSION_RESULT)
+    sess2 = make_session(tmp_path, client2, model="model-b")
+    sess2.start()
+    assert ("load_session", "sid-1", str(tmp_path / "work")) in client2.calls
+    assert ("set_config_option", "sid-1", "model", "model-b") in client2.calls
+    sess2.close()
+    print("PASS test_session_load_re_pins_the_model")
+
+
+def test_no_model_means_no_pin_call(tmp_path):
+    """Hermes builds the same ChatSession without a selector (`hermes acp`
+    picks its own model) — the daemon must not send an empty pin there."""
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    assert not [c for c in client.calls if c[0] == "set_config_option"]
+    sess.close()
+    print("PASS test_no_model_means_no_pin_call")
+
+
+def test_pin_failure_is_a_chat_error_not_a_crash(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client, model="boom-model")
+    sess.start()  # must not raise — the daemon still serves state/cancel
+    lines = read_lines(sess.transcript_path)
+    errs = entries_of_type(lines, "custom_message", "chat_error")
+    assert errs and errs[0]["data"]["code"] == "rpc_error"
+    sess.close()
+    print("PASS test_pin_failure_is_a_chat_error_not_a_crash")
+
+
+def test_model_selector_precedence_matches_bridge(tmp_path):
+    """OMP_ACP_MODEL > OMP_MODEL_SELECTOR > mc-openai/<OPENAI_MODEL> — the
+    same order launch-omp.sh and bridge._acp_model_selector use."""
+    sel = acp_chat.model_selector
+    assert sel({"OMP_ACP_MODEL": "x/y", "OMP_MODEL_SELECTOR": "a/b", "OPENAI_MODEL": "m"}) == "x/y"
+    assert sel({"OMP_MODEL_SELECTOR": "a/b", "OPENAI_MODEL": "m"}) == "a/b"
+    assert sel({"OPENAI_MODEL": "m"}) == "mc-openai/m"
+    assert sel({"OMP_ACP_MODEL": "  ", "OMP_MODEL_SELECTOR": ""}) is None
+    print("PASS test_model_selector_precedence_matches_bridge")
+
+
+def test_build_session_refuses_to_start_without_a_model(tmp_path, monkeypatch=None):
+    """No selector = boot error, not a silent fallback to omp's built-in
+    catalog (ADR-054, same rule as bridge._default_model_selector)."""
+    saved = {k: os.environ.pop(k, None) for k in
+             ("OMP_ACP_MODEL", "OMP_MODEL_SELECTOR", "OPENAI_MODEL")}
+    os.environ["PI_CODING_AGENT_DIR"] = str(tmp_path / "agent")
+    os.environ["OMP_HOME"] = str(tmp_path / "omp")
+    try:
+        try:
+            acp_chat.build_session()
+        except RuntimeError as exc:
+            assert "OMP_MODEL_SELECTOR" in str(exc)
+        else:
+            raise AssertionError("build_session started without a model selector")
+        os.environ["OMP_MODEL_SELECTOR"] = "mc-openai/pinned"
+        sess = acp_chat.build_session()
+        assert sess._model == "mc-openai/pinned"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("PASS test_build_session_refuses_to_start_without_a_model")
+
+
 if __name__ == "__main__":  # standalone runner
     import tempfile
 
