@@ -26,7 +26,7 @@ def _voice(**kw) -> str:
     Case bleibt erhalten, weil die geprueften Blocklabels (z. B. "Do NOT
     delegate when:") auf exakte Schreibweise pruefen.
     """
-    kw.setdefault("operator_name", "Mark")
+    kw.setdefault("operator_name", "Alex")
     return _normalize_whitespace(persona.build_live_voice_instructions(**kw))
 
 
@@ -59,7 +59,7 @@ def _backend(**kw) -> str:
     Die Waechter pruefen Formulierungen, nicht Typografie — Zeilenumbruch und
     Gross-/Kleinschreibung duerfen sich aendern, ohne einen Test zu brechen.
     """
-    kw.setdefault("operator_name", "Mark")
+    kw.setdefault("operator_name", "Alex")
     kw.setdefault("frontier_enabled", False)
     text = persona.build_live_delegation_instructions(**kw)
     return _normalize_whitespace(text).lower()
@@ -97,8 +97,11 @@ def test_backend_guards_against_double_execution():
 
 
 def test_backend_forbids_premature_completion_claims():
+    """Befund 7: der Prompt IST das Backend — bestaetigen kann nur das
+    Tool-Ergebnis, nicht "das Backend"."""
     text = _backend()
-    assert "never claim an action has finished before the backend confirms" in text
+    assert "never claim an action has finished before the tool result" in text
+    assert "before the backend confirms" not in text
 
 
 def test_backend_requires_plain_language():
@@ -143,3 +146,80 @@ def test_backend_example_does_not_spell_out_protected_term():
     Regel selbst."""
     text = _backend()
     assert "pull request" not in text
+
+
+def test_backend_answers_from_context_instead_of_delegating():
+    """Befund 2: die sechste Kernregel — was aus dem Kontext beantwortbar ist,
+    wird beantwortet, nicht delegiert. Ohne sie zieht "always call the real
+    tool" in die Gegenrichtung."""
+    text = _backend()
+    assert "respond directly" in text
+    assert "no tool call, no delegation" in text
+
+
+def test_backend_tools_block_is_bound_to_the_procedure():
+    """Befund 1: der TOOLS-Block darf die Zustimmungspflicht nicht aufheben.
+
+    Der stille Boss-Default ("ruf ohne assignee auf") war woertlich der
+    Vorfall vom 12.09. — er muss ein ausgesprochener Vorschlag sein.
+    """
+    text = _backend()
+    assert "stay bound to taking an order" in text
+    assert "an unclear target agent is never a reason to call anyway" in text
+    assert "call without assignee (boss decides)" not in text
+
+
+def test_backend_example_has_no_angle_bracket_placeholders():
+    """Befund 8: Modelle sprechen "<Agent>" gelegentlich woertlich aus."""
+    text = _backend()
+    assert "<agent>" not in text
+    assert "<repo>" not in text
+
+
+def test_backend_abbreviation_rule_names_its_exception():
+    """Befund 10: "Abkuerzungen ausschreiben" reibt an der Schutzliste, auf
+    der PR steht — die Ausnahme muss ausdruecklich verklammert sein."""
+    text = _backend()
+    assert "spell out abbreviations the first time — except the everyday terms" in text
+
+
+def test_voice_layer_keeps_talking_while_backend_works():
+    """Befund 3: aus "rede weiter" wurde still "warte" — im echten Anruf
+    wurden 24 Sekunden Funkstille gemessen."""
+    text = _voice()
+    assert "keep talking — don't go silent" in text
+    assert "don't invent a status, a number or an outcome while waiting" in text
+
+
+def test_voice_layer_protects_agent_names_from_translation():
+    """Befund 3: die Agentennamen waren aus der Fachbegriff-Liste
+    verschwunden."""
+    text = _voice()
+    assert "agent names stay untranslated" in text
+
+
+def test_voice_layer_allows_length_for_names_and_numbers():
+    """Befund 4: die Kuerze-Ausnahme des Backends muss auch in der Stimme
+    stehen — sonst kappt sie genau die Saetze, die sie schuetzen soll."""
+    text = _voice()
+    assert "the length may stretch when you say a name, a number or a confirmation back" in text
+
+
+def test_voice_layer_has_personality_label():
+    """Die vorgeschriebene Blockstruktur verlangt vier benannte Bloecke."""
+    assert "Personality:" in _voice()
+
+
+def test_voice_layer_drops_conditions_it_cannot_judge():
+    """Befund 5: Vollstaendigkeitspruefung und Doppel-Delegations-Zaehler
+    gehoeren ins Backend bzw. in den Worker — die Stimme sieht beides nicht."""
+    text = _voice()
+    assert "missing a detail the backend would have to guess" not in text
+    assert "a delegation for this same request is already running" not in text
+
+
+def test_voice_layer_keeps_spoken_list_and_bullet_ban():
+    """Befund 9: "numbers/lists" und "never bullets" waren still verlorengegangen."""
+    text = _voice()
+    assert "numbers/lists said out loud" in text
+    assert "never bullets or a read-out document" in text
