@@ -272,8 +272,20 @@ def deliver_prompt(text: str, *, wait: bool = False) -> bool:
         return True
     daemon = chat_daemon()
     if daemon.busy():
-        if not wait or not daemon.wait_idle(DISPATCH_TURN_TIMEOUT):
+        if not wait:
             log.info("deliver_prompt: a turn is running — not offering now")
+            return False
+        # Bounded twice over: this wait, and the daemon's own prompt timeout
+        # (acp_chat prompt_timeout) after which the turn ends with an error
+        # card and the idle flag opens — a hung child cannot hold this
+        # forever. A timeout here is loud on purpose: silence would turn
+        # "noisy" into "stuck", which is the worse failure.
+        if not daemon.wait_idle(DISPATCH_TURN_TIMEOUT):
+            log.warning(
+                "deliver_prompt: turn still running after %ss — task stays on "
+                "the board, retry next poll",
+                DISPATCH_TURN_TIMEOUT,
+            )
             return False
     answer = daemon.prompt(text)
     if not answer.get("ok"):
