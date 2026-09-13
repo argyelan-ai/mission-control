@@ -315,6 +315,11 @@ export function BoxCockpit({
             onClick={() => restartMutation.mutate()}
             disabled={!runtime || restartMutation.isPending}
             data-testid="cockpit-restart"
+            title={
+              (runtime?.member_hosts ?? []).length > 0
+                ? t("restartMultiNodeHint")
+                : t("restartHint")
+            }
             className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
             style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
           >

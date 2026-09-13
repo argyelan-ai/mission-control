@@ -1581,7 +1581,15 @@ async def agent_update_task(
             f"Agent {agent.name} Update auf gestoppten Task '{task.title}' abgelehnt",
             severity="warning",
             board_id=board_id, task_id=task.id, agent_id=agent.id,
-            detail={"run_control": task.run_control, "attempted": payload.model_dump(exclude_none=True)},
+            # mode="json": AgentTaskUpdate carries uuid.UUID fields (project_id,
+            # assigned_agent_id, blocked_by_task_id). emit_event writes this dict
+            # into a JSON column and publishes it to Redis, and both serialize with
+            # a plain json.dumps — a raw UUID object raises TypeError there, which
+            # turns this deliberate 409 into a 500 (reproduced live 2026-09-13).
+            detail={
+                "run_control": task.run_control,
+                "attempted": payload.model_dump(exclude_none=True, mode="json"),
+            },
         )
         raise HTTPException(
             status_code=409,
@@ -1604,7 +1612,11 @@ async def agent_update_task(
             "expected": task.dispatch_attempt_id,
             "received": _req_attempt_id,
             "reason": "missing_header" if _header_missing else "stale_value",
-            "attempted": payload.model_dump(exclude_none=True),
+            # mode="json" — see the run_control branch above: the UUID fields of
+            # AgentTaskUpdate must reach emit_event as strings. This one dict
+            # feeds all three guard branches (stale_value 409, Phase A warning,
+            # and a missing_header event should that ever be re-enabled).
+            "attempted": payload.model_dump(exclude_none=True, mode="json"),
         }
 
         if _header_missing:
