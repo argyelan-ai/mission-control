@@ -2771,7 +2771,10 @@ class TestOmpTokenDeltaDerivation:
         session_file.write_text("\n".join(_REAL_OMP_SEQUENCE) + "\n")
 
         # Seed the DB the way the OLD harvester did: raw full-context input,
-        # cache_read 0, cost_usd NULL until the backfill recomputes it.
+        # cache_read 0, and a REAL cost_usd — match_price always finds a row
+        # (at minimum the `*` fallback from the migration seed), so legacy
+        # rows never start NULL; the legacy cost is computed from the
+        # inflated full-context input.
         sess_id = "2026-09-08T22-18-35-212Z_01a0831a"
         legacy_uuids = [
             f"{sess_id}:chatcmpl-8f2568763df3a2c5",
@@ -2806,7 +2809,7 @@ class TestOmpTokenDeltaDerivation:
                     output_tokens=100,
                     cache_read_tokens=0,
                     cache_write_tokens=0,
-                    cost_usd=None,  # legacy rows start NULL; backfill recomputes
+                    cost_usd=(raw_in * 0.6 + 100 * 2.2) / 1e6,  # LEGACY inflated cost (production shape)
                     ts=datetime(2026, 9, 8, 22, 18, 53, tzinfo=timezone.utc),
                     source_file=str(session_file),
                 )
@@ -2831,8 +2834,9 @@ class TestOmpTokenDeltaDerivation:
         assert by_uuid[legacy_uuids[2]].input_tokens == 163
         assert by_uuid[legacy_uuids[2]].cache_read_tokens == 22039
         # cost_usd pinned: recomputed from the corrected counts for rewritten
-        # rows; row 1 is never rewritten, so its legacy NULL stays.
-        assert by_uuid[legacy_uuids[0]].cost_usd is None
+        # rows; row 1 is never rewritten (the `continue` at
+        # token_harvester.py:1202 fires first), so it keeps its legacy cost.
+        assert by_uuid[legacy_uuids[0]].cost_usd == pytest.approx(0.013336)
         # (179*0.6 + 100*2.2 + 21860*0.06) / 1e6
         assert by_uuid[legacy_uuids[1]].cost_usd == pytest.approx(0.001639)
         # (163*0.6 + 100*2.2 + 22039*0.06) / 1e6
@@ -2851,3 +2855,8 @@ class TestOmpTokenDeltaDerivation:
                 [(21860, 0), (179, 21860), (163, 22039)],
             )
         }
+        # Run 2 must not touch cost_usd either — freshly pinned column.
+        by_uuid2 = {r.message_uuid: r for r in rows2}
+        assert by_uuid2[legacy_uuids[0]].cost_usd == pytest.approx(0.013336)
+        assert by_uuid2[legacy_uuids[1]].cost_usd == pytest.approx(0.001639)
+        assert by_uuid2[legacy_uuids[2]].cost_usd == pytest.approx(0.00164014)
