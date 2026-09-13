@@ -18,6 +18,16 @@
 #   bash scripts/launchd/test-docker-health-restart.sh
 #
 # Exit 0 = alle Szenarien PASS, Exit 1 = mindestens ein FAIL.
+#
+# LEKTION fuer jeden, der hier spaeter eine ECHTE Container-Sabotage ergaenzt
+# (statt der Health-Datei-Mocks unten): `kill -STOP 1` gegen den PID-1-
+# Prozess IM Container bewirkt nichts — Linux ignoriert Stopp-/Kill-Signale
+# an PID 1 aus dem eigenen Namespace. Beim Wirkbeweis von PR #546 liefen die
+# ersten zwei Sabotageversuche (Playwright, dann Chromium per PID-1-Signal)
+# deshalb ins Leere; erst das Einfrieren des socat-KINDPROZESSES im
+# cdp-browser-Container hat den Healthcheck tatsaechlich rot gemacht. Wer
+# also live statt gemockt sabotieren will: den Kindprozess treffen, nicht
+# PID 1 (bezahlte Erfahrung, nicht nochmal von vorne lernen).
 
 set -uo pipefail
 
@@ -49,6 +59,24 @@ EOF
 BROKEN_ENV_MISSING_TOKEN="$TEST_ROOT/broken-missing-token.env"
 cat > "$BROKEN_ENV_MISSING_TOKEN" <<EOF
 TELEGRAM_REPORTS_CHAT_ID=fake-test-chat
+EOF
+
+# --- .env wie sie auf dem echten Host tatsaechlich aussieht (Task 3b9d3a00):
+# TELEGRAM_REPORTS_* existiert dort gar nicht, nur die Command-Bot-Keys.
+# Beweist den Fallback-Pfad (Szenario 10), nicht nur dass der Zweig betreten
+# wird, sondern dass eine Meldung beim Mock-Telegram tatsaechlich ankommt.
+FALLBACK_ENV="$TEST_ROOT/fallback-only.env"
+cat > "$FALLBACK_ENV" <<EOF
+TELEGRAM_BOT_TOKEN=fake-fallback-token
+TELEGRAM_CHAT_ID=fake-fallback-chat
+EOF
+
+# --- .env ganz ohne jeden Telegram-Key (Gegenprobe Szenario 11): weder
+# REPORTS_* noch die Fallback-Keys sind vorhanden. Muss weiterhin LAUT
+# loggen und darf nicht abstuerzen — heutiger Zustand darf nicht verlorengehen.
+NO_TELEGRAM_KEYS_ENV="$TEST_ROOT/no-telegram-keys.env"
+cat > "$NO_TELEGRAM_KEYS_ENV" <<EOF
+SOME_OTHER_KEY=irrelevant
 EOF
 
 # --- Mock docker: ps/inspect/restart gegen $REGISTRY + $HEALTH_DIR ---------
@@ -498,6 +526,70 @@ CUR_MAX_ATTEMPTS=""
 CUR_BACKOFF=""
 CUR_DEBOUNCE=""
 CUR_HEALTHY_CLEAR=""
+echo
+
+# =============================================================================
+# Szenario 10 — Wirkbeweis Fallback: Reports-Bot-Keys fehlen komplett in der
+# .env (realer Host-Zustand, Task 3b9d3a00), nur die Command-Bot-Keys
+# TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID sind da. Der Waechter muss trotzdem
+# zustellen -- nicht nur den Code-Zweig betreten, sondern beim (Mock-)
+# Telegram mit den RICHTIGEN Werten ankommen.
+# =============================================================================
+echo "--- Szenario 10: Wirkbeweis Fallback (nur Command-Bot-Keys vorhanden) ---"
+register_container "fallback-svc" "fallback-svc-mock-1" "unhealthy"
+CUR_ALLOWLIST="fallback-svc"
+CUR_ENV_FILE="$FALLBACK_ENV"
+NOTIFY_BEFORE_S10="$(notify_count)"
+# Delta statt Absolutwert: Szenario 6 hat "kein Telegram-Alert moeglich"
+# bereits frueher in DASSELBE (kumulative) Log geschrieben.
+WARN_BEFORE_S10="$(log_line_count "kein Telegram-Alert moeglich")"
+
+run_tick >/dev/null 2>&1
+RC_S10=$?
+CUR_ALLOWLIST=""
+CUR_ENV_FILE=""
+
+assert_eq "Szenario10: Skript laeuft mit Fallback-Keys sauber durch (exit 0)" "0" "$RC_S10"
+assert_eq "Szenario10: genau 1 Meldung ueber den Fallback-Pfad zugestellt" "$((NOTIFY_BEFORE_S10 + 1))" "$(notify_count)"
+# Der letzte Curl-Aufruf ist selbst mehrzeilig (HTML-Text mit Leerzeilen) --
+# ab der LETZTEN Marker-Zeile bis Dateiende lesen, nicht `tail -n 5` (das
+# schneidet den `-d chat_id=...`-Teil ab, bevor er in Sichtweite kommt).
+LAST_MARKER_LINE=$(grep -n '^===CURL-CALL===$' "$NOTIFY_LOG" | tail -n 1 | cut -d: -f1)
+LAST_CURL_CALL=$(tail -n "+$LAST_MARKER_LINE" "$NOTIFY_LOG")
+echo "$LAST_CURL_CALL" | grep -q "botfake-fallback-token/sendMessage" \
+    && pass "Szenario10: curl-Aufruf nutzt den Fallback-TOKEN aus TELEGRAM_BOT_TOKEN" \
+    || fail "Szenario10: curl-Aufruf nutzt NICHT den erwarteten Fallback-TOKEN"
+echo "$LAST_CURL_CALL" | grep -q "chat_id=fake-fallback-chat" \
+    && pass "Szenario10: curl-Aufruf nutzt die Fallback-CHAT_ID aus TELEGRAM_CHAT_ID" \
+    || fail "Szenario10: curl-Aufruf nutzt NICHT die erwartete Fallback-CHAT_ID"
+[ "$(log_line_count "kein Telegram-Alert moeglich")" -eq "$WARN_BEFORE_S10" ] \
+    && pass "Szenario10: keine NEUE 'kein Telegram-Alert moeglich'-WARNUNG -- Fallback hat gegriffen" \
+    || fail "Szenario10: WARNUNG geloggt, obwohl Fallback-Keys vorhanden waren"
+echo
+
+# =============================================================================
+# Szenario 11 — Gegenprobe: fehlen ALLE Telegram-Keys (weder REPORTS_* noch
+# die Fallback-Keys), muss weiterhin LAUT geloggt werden und nichts darf
+# abstuerzen -- der heutige Zustand (PR #546) ist besser als stilles
+# Scheitern und darf durch den Fallback nicht verlorengehen.
+# =============================================================================
+echo "--- Szenario 11: Gegenprobe -- gar keine Telegram-Keys vorhanden ---"
+register_container "no-keys-svc" "no-keys-svc-mock-1" "unhealthy"
+CUR_ALLOWLIST="no-keys-svc"
+CUR_ENV_FILE="$NO_TELEGRAM_KEYS_ENV"
+NOTIFY_BEFORE_S11="$(notify_count)"
+
+run_tick >/dev/null 2>&1
+RC_S11=$?
+CUR_ALLOWLIST=""
+CUR_ENV_FILE=""
+
+assert_eq "Szenario11: Skript beendet sich sauber (exit 0), kein set -e Abbruch" "0" "$RC_S11"
+assert_eq "Szenario11: Restart findet trotzdem statt (unabhaengig vom Telegram-Key)" "1" "$(restart_count_for no-keys-svc-mock-1)"
+assert_eq "Szenario11: kein curl-Aufruf -- weder REPORTS_* noch Fallback-Keys vorhanden" "$NOTIFY_BEFORE_S11" "$(notify_count)"
+[ "$(log_line_count "WARNING: kein Telegram-Alert moeglich (weder TELEGRAM_REPORTS_* noch TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID")" -ge 1 ] \
+    && pass "Szenario11: WARNUNG nennt beide Kandidaten-Paare -- weiterhin laut, nicht still" \
+    || fail "Szenario11: keine (oder falsche) WARNUNG -- Gegenprobe waere stillschweigend fehlgeschlagen"
 echo
 
 # =============================================================================
