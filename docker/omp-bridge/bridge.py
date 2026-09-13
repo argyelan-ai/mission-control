@@ -2804,11 +2804,15 @@ def serve_loop(
                 def run_once(_p=prompt, _cwd=cwd) -> RunOutcome:
                     acp_cancel.requested = False  # fresh cancel per turn (Major 4)
                     interrupt_state.clear()  # fresh signal per turn
-                    # G8 loud-failure guard: an unprepared cwd must block the
-                    # card, not silently run the model in the wrong directory
-                    # (2026-09-13 incident: cwd fell back to os.getcwd(), the
-                    # model bootstrapped its own `gh repo clone` and landed on
-                    # the wrong GitHub org).
+                    # G8: `cwd` is threaded in from serve_loop above (the ACTUAL
+                    # fix for the 2026-09-13 incident, where this branch fell
+                    # back to os.getcwd()/home/agent and the model's own
+                    # `gh repo clone` landed on the wrong GitHub org). The guard
+                    # below covers a DIFFERENT, narrower failure — cwd pointing
+                    # at a directory that doesn't exist at all — and would NOT
+                    # have caught the 09-13 incident by itself (/home/agent
+                    # exists, so it passes this check). See the guard's own
+                    # docstring for what it does and doesn't cover.
                     _require_prepared_acp_workspace(_cwd)
                     return acp_run(_p)
 
@@ -4372,18 +4376,22 @@ _RUN_ACP_ACCEPTS_INTERRUPT_STATE = (
 
 def _require_prepared_acp_workspace(cwd: str) -> None:
     """Guardrail (G8, docs/dispatch-path-parity.md): refuse an ACP turn whose
-    `cwd` was never prepared, instead of silently starting the model in an
-    empty or unrelated directory.
+    `cwd` points at a directory that does not exist at all, instead of
+    silently starting the model in a missing or mistranslated path.
 
-    Incident 2026-09-13: the ACP branch dropped the backend-prepared
-    workspace on the floor and fell back to `os.getcwd()` (`/home/agent`,
-    unprepared). The model bootstrapped its own `gh repo clone
-    mission-control`, which resolved the short repo name against the logged
-    in `gh` account (`marknx`) instead of `argyelan-ai` — two PRs landed on
-    the wrong GitHub org and had to be ported by hand. `cwd` existing on
-    disk is a cheap, no-false-positive signal that SOME preparation ran
-    (ad-hoc tasks fall back to the always-present `/workspace` mount root,
-    never to a missing path) — a missing directory means the preparation
+    This is NOT what fixed the 2026-09-13 incident. That incident's `cwd`
+    fell back to `os.getcwd()` == `/home/agent`, which EXISTS — this guard
+    would have let it through unchanged. The actual fix is the `cwd`
+    threading at the call sites above (serve_loop -> _make_acp_run_factory),
+    which now passes the backend-prepared workspace instead of falling back
+    at all. This guard is a narrower, complementary check for a DIFFERENT
+    failure class: `cwd` resolving to a path that is missing outright
+    (the prepare step failed, or the host->container path translation
+    produced a dead path). `cwd` existing on disk is a cheap, no-false-
+    positive signal that SOME preparation ran (ad-hoc tasks fall back to
+    the always-present `/workspace` mount root, never to a missing path) —
+    but presence alone doesn't prove the RIGHT preparation ran, only that
+    some directory is there. A missing directory means the preparation
     step itself failed or the host->container path translation is wrong,
     either way not something to paper over by quietly proceeding.
     """

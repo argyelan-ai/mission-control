@@ -689,7 +689,19 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
     tree, 2026-09-10): with serve_loop's callsite reverted to the bare
     run_acp_once wiring (cancel + heartbeat, NO sinks — the exact pre-fix
     shape), the same full serve_loop dispatch writes NEITHER transcript NOR
-    preview. Proves the assertions above can actually fail."""
+    preview. Proves the assertions above can actually fail.
+
+    Rex review W1 (PR #547 follow-up): the three assertions below are ALSO
+    all true if `bridge.run_acp_once` is never reached at all — e.g. the G8
+    guard (`_require_prepared_acp_workspace`) aborts the turn up front
+    because `workspace_path` ("/workspace", from `_SERVE_TASK` above) does
+    not exist on this machine. That collapses the turn to a
+    "technical_problem" blocker BEFORE `bare_factory`'s `run()` ever
+    executes, and this probe reported PASSED without exercising the
+    sabotage at all (verified manually: `bridge.container_workspace_path`
+    monkeypatched to resolve to a directory that does not exist -> the OLD
+    assertions alone stayed green, `calls` held only ack+blocker). The two
+    anchors below close that: they fail loudly instead."""
     def bare_factory(*, model, max_time, permission_policy, task_id,
                      cwd=None, cancel_state=None, heartbeat_fn=None,
                      interrupt_state=None):
@@ -719,6 +731,20 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
             agent_dir = Path(td) / "agent"
             agent_dir.mkdir()
             calls, captured, written, _cancel_instances = _drive_serve_loop_acp(agent_dir)
+
+            # Positive anchors (Rex review W1) — prove the turn actually ran
+            # the bare (sink-less) factory instead of aborting before it.
+            finishes = [c for c in calls if c[0] == "finish"]
+            assert finishes, (
+                "sabotage probe never reached a finished turn -> calls="
+                f"{calls!r}. Most likely the G8 workspace guard aborted the "
+                "turn first (e.g. /workspace missing on this machine) -- "
+                "the assertions below would then pass for the wrong reason."
+            )
+            assert captured, (
+                "run_acp_once was never called (captured is empty) -> the "
+                "sabotage was never exercised"
+            )
             assert captured.get("transcript_sink") is None, list(captured)
             assert captured.get("preview_sink") is None, list(captured)
             assert not written, [str(f) for f in written]
