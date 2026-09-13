@@ -308,15 +308,39 @@ wait_for_clean_prompt() {
 
 # pane_in_interrupted_dialog TARGET — 0 (true) wenn das Pane den claude-
 # Interrupt-Dialog rendert (`Interrupted` + `What should Claude do instead?`).
-# Nur der letzte ~15 Zeilen zählen: ein alter Dialog im Scrollback (aus einem
-# früheren Turn) darf den Paste nicht dauerhaft blockieren — maßgeblich ist der
-# sichtbare untere Bildschirmbereich.
+#
+# W2 (Review PR #529, Runde 3): der Kommentar "nur die letzten ~15 Zeilen
+# zaehlen" beschrieb Scrollback-Ausschluss — auf dem Alternate Screen (claude-
+# TUI) gibt es aber KEIN Scrollback, `capture-pane -S -15` liefert nur die
+# sichtbaren ~15 der ~24 Pane-Zeilen (dieselbe Einsicht wie bei B1). Innerhalb
+# dieser 15 Zeilen konnte der Substring-Match aber trotzdem auf zitierten Text
+# im sichtbaren Verlauf ansprechen — ein Kartentext, der genau diesen Satz
+# beschreibt (dieser hier zum Beispiel), haelt das Gate faelschlich offen: auf
+# --no-fail-open (Queue) bleiben Messages liegen, solange der Text sichtbar
+# ist; auf Nudge/Dispatch kostet es nur READY_TIMEOUT_SEC (fail-open).
+#
+# Fix: enger ankern. Der Dialog rendert strukturell immer unmittelbar UEBER
+# der Composer-Box (siehe Fixture claude-24-unsubmitted.txt: Dialogtext Zeile
+# 18, Box ab Zeile 21). Mit demselben ❯/╭-Anker wie _input_field_tail_lines
+# (paste-verify.sh) wird das Suchfenster auf die Composer-Box plus
+# PASTE_DIALOG_LOOKBACK_LINES Zeilen darueber beschraenkt — genug fuer den
+# Leerzeilen-Abstand, zu knapp fuer Zitate weiter oben im Verlauf. Ohne
+# erkennbaren Anker (fremde CLI, Box ausserhalb des Bereichs) faellt es auf
+# das volle 15-Zeilen-Fenster zurueck — altes Verhalten, kein neues Risiko.
+PASTE_DIALOG_LOOKBACK_LINES="${PASTE_DIALOG_LOOKBACK_LINES:-6}"
 pane_in_interrupted_dialog() {
     local tail
     tail=$(tmux capture-pane -t "$1" -p -S -15 2>/dev/null || echo "")
     [ -n "$tail" ] || return 1
-    echo "$tail" | grep -q 'Interrupted' \
-        && echo "$tail" | grep -q 'What should Claude do instead'
+    local window="$tail"
+    if _cpo_field_anchored "$tail"; then
+        local field_lines dialog_window
+        field_lines=$(_input_field_tail_lines "$tail")
+        dialog_window=$(( field_lines + PASTE_DIALOG_LOOKBACK_LINES ))
+        window=$(printf '%s\n' "$tail" | tail -n "$dialog_window")
+    fi
+    echo "$window" | grep -q 'Interrupted' \
+        && echo "$window" | grep -q 'What should Claude do instead'
 }
 
 # Bug 10 (2026-05-13): fail-open des paste-Schritts war silent — bei Race
@@ -391,6 +415,13 @@ paste_and_submit() {
         shift
     fi
     local file="$1"
+    # W1 (Review PR #529, Runde 3): rc 2 hat auf dem --no-fail-open-Pfad zwei
+    # Bedeutungen — "Gate zu, gar nicht gepastet" (unten) und "gepastet, im
+    # Feld stehengeblieben, Karte eskaliert/blockiert" (Eskalationszweig
+    # unten). PASTE_LAST_ESCALATED disambiguiert das fuer Aufrufer wie
+    # flush_msg_queue, ohne den bestehenden rc-Vertrag zu aendern (E1/E2
+    # erwarten weiterhin rc=2 fuer die Eskalation).
+    PASTE_LAST_ESCALATED=0
     if ! wait_for_clean_prompt; then
         if $no_fail_open; then
             log "paste_and_submit --no-fail-open: kein clean-prompt nach ${READY_TIMEOUT_SEC}s — NICHT gepastet (Turn-Grenzen-Gate). Message bleibt gequeued."
@@ -475,7 +506,10 @@ paste_and_submit() {
                     "paste_and_submit Versuch ${attempt}: der Text steht sichtbar im Eingabefeld, wurde aber nicht abgesendet (classify_paste_outcome=2 auch nach dem zweiten Enter). Typische Ursache: das Submit-Enter landete in einem Dialog statt im Feld. Das Feld wurde per Escape geraeumt; der Nudge ist NICHT zugestellt."; then
                     # 2 statt 1: der Aufrufer soll wissen, dass die Karte
                     # bereits blockiert wurde und er kein Turn-State-Tracking
-                    # mehr aufsetzt.
+                    # mehr aufsetzt. PASTE_LAST_ESCALATED=1 markiert diesen
+                    # Fall zusaetzlich fuer Aufrufer, die rc 2 vom
+                    # Gate-zu-Fall (oben) unterscheiden muessen (W1).
+                    PASTE_LAST_ESCALATED=1
                     return 2
                 fi
                 # Keine Karte zugeordnet: das Escape hier selbst senden, sonst
@@ -1116,7 +1150,15 @@ flush_msg_queue() {
             _record_ack "$tid" "$seq"
             rm -f "$path"
         elif [ "$rc" -eq 2 ]; then
-            log "flush_msg_queue: Paste fuer seq $seq (thread $tid) nicht moeglich (Gate zu) — Flush gestoppt, Rest bleibt gequeued."
+            # W1 (Review PR #529, Runde 3): rc 2 bedeutet seit dem Interrupt-Gate-
+            # Fix zwei verschiedene Dinge — PASTE_LAST_ESCALATED trennt sie, sonst
+            # sagt der Log bei einer bereits eskalierten/blockierten Karte
+            # faelschlich "Gate zu" und wer das liest sucht an der falschen Stelle.
+            if [ "${PASTE_LAST_ESCALATED:-0}" = "1" ]; then
+                log "flush_msg_queue: Paste fuer seq $seq (thread $tid) wurde eskaliert — Nudge blieb im Feld stehen, Karte wurde blockiert und Feld per Escape geraeumt. Flush gestoppt, Rest bleibt gequeued."
+            else
+                log "flush_msg_queue: Paste fuer seq $seq (thread $tid) nicht moeglich (Gate zu) — Flush gestoppt, Rest bleibt gequeued."
+            fi
             return 1
         else
             log "flush_msg_queue: Paste fuer seq $seq (thread $tid) FEHLGESCHLAGEN (Verify) — Flush gestoppt, Rest bleibt gequeued, kein Ack."

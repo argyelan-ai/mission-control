@@ -280,6 +280,57 @@ if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
     fail "case P3: normal idle pane must not be flagged as interrupted dialog"
 fi
 
+# Case P4 (W2, Review PR #529, Runde 3 — Regressionsprobe): zitierter Dialogtext
+# WEIT oben im sichtbaren Verlauf (nicht unmittelbar ueber der Composer-Box),
+# Box selbst zeigt einen normalen idle-Prompt. Mit dem alten ungeankerten
+# 15-Zeilen-Fenster matcht das Zitat trotzdem und das Gate haelt faelschlich —
+# genau der Fall aus dem Review (ein Kartentext, der den Dialogsatz zitiert,
+# wie dieser hier). 15 Zeilen gesamt, damit -S -15 das ganze Fixture liefert.
+pane_p4=$(mktemp)
+{
+    echo "Aeltere Zeile im sichtbaren Verlauf"
+    echo "Kartentext-Zitat: \"Interrupted · What should Claude do instead?\" beschreibt den Dialog"
+    for i in 1 2 3 4 5 6 7 8 9 10; do echo "filler $i"; done
+    echo "────"
+    echo "❯ "
+    echo "────"
+} > "$pane_p4"
+[ "$(wc -l < "$pane_p4")" -eq 15 ] || fail "case P4: Fixture-Aufbau kaputt — erwartet 15 Zeilen, war $(wc -l < "$pane_p4")"
+export TMUX_STUB_PANE_FILE="$pane_p4"
+if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
+    fail "case P4: zitierter Dialogtext weit ueber der Composer-Box darf das Gate nicht halten — Anker fehlt oder greift nicht"
+fi
+
+# ── B2-1 (Review PR #529, Runde 3): wait_for_clean_prompt muss das Gate aus
+# pane_in_interrupted_dialog auch VERWENDEN (poll.sh:296) — P1-P3 oben pruefen
+# nur die isolierte Funktion, nicht die Verdrahtung. Faellt der Aufruf bei
+# einem spaeteren Refactor raus, matcht detect_pane_ui trotzdem im Dialog (Box-
+# Glyphs/❯ sind sichtbar) und wait_for_clean_prompt gibt faelschlich frei —
+# genau der Live-Fall vom 12.09. detect_pane_ui() ist in diesem Testfile aus
+# der (leer gestubbten) ui-detect.sh nicht verfuegbar, darum hier lokal nach.
+detect_pane_ui() { echo claude; }
+READY_TIMEOUT_SEC=1
+READY_POLL_INTERVAL_SEC=0
+
+# Case G1 (Sabotage-Probe): Pane zeigt den Interrupted-Dialog bei JEDEM Poll
+# (Stub liefert konstant denselben Inhalt) — wait_for_clean_prompt darf nicht
+# freigeben, muss nach READY_TIMEOUT_SEC mit rc 1 aufgeben. Wird die
+# Gate-Bedingung (poll.sh:296-299) entfernt, geht die Funktion sofort auf
+# detect_pane_ui durch und liefert faelschlich 0.
+export TMUX_STUB_PANE_FILE="$pane_p1"
+rc=0
+wait_for_clean_prompt || rc=$?
+[ "$rc" = "1" ] || fail "case G1: wait_for_clean_prompt muss im Interrupted-Dialog rc 1 liefern (Gate haelt), war '$rc' — pane_in_interrupted_dialog wird nicht verwendet"
+
+# Case G2: idle-Pane ohne Dialog gibt sofort frei, PANE_UI_DETECTED wird gesetzt.
+PANE_UI_DETECTED=""
+export TMUX_STUB_PANE_FILE="$pane_p3"
+rc=0
+wait_for_clean_prompt || rc=$?
+[ "$rc" = "0" ] || fail "case G2: wait_for_clean_prompt muss auf idle-Pane rc 0 liefern, war '$rc'"
+[ "$PANE_UI_DETECTED" = "claude" ] || fail "case G2: PANE_UI_DETECTED muss beim Freigeben gesetzt werden, war '$PANE_UI_DETECTED'"
+unset -f detect_pane_ui
+
 # ── Bug B3: der laute Pfad ─────────────────────────────────────────────────
 # Bleibt der Text auch nach dem zweiten Enter im Feld, darf poll.sh NICHT
 # still weitergehen. Verlangt sind zwei Dinge: Kommentar auf die Karte UND
@@ -301,6 +352,42 @@ log() { :; }
 
 msg_e1=$(mktemp)
 printf 'Weiter mit der Karte\n' > "$msg_e1"
+
+# ── B2-2 (Review PR #529, Runde 3): das zweite Enter (poll.sh:456, im
+# outcome=2-Zweig) ist der Selbstheilpfad, der den Menschen ueberfluessig
+# macht. E1/E2/E3 unten stubben classify_paste_outcome auf konstant "2" —
+# das pinnt nur die Eskalation, weder dass ueberhaupt ein zweites Enter
+# rausgeht noch der haeufigere gute Ausgang (Rettung durch das zweite Enter).
+#
+# Case E0: classify_paste_outcome liefert beim ERSTEN Aufruf "2" (im Feld,
+# nicht abgesendet), beim ZWEITEN (nach dem Rettungs-Enter) "0" — der typische
+# Rettungsfall aus poll.sh:458-461. rc muss 0 sein, report_blocker darf NICHT
+# laufen, und im Keys-Log muessen ZWEI Submits (`-H 0d`) stehen — der rc allein
+# faengt eine geloeschte Zeile 456 nicht (der zweite classify-Aufruf liefert
+# "0" unabhaengig davon, ob wirklich submitted wurde), die Submit-Anzahl schon.
+# classify_paste_outcome wird ueber `outcome=$(classify_paste_outcome ...)`
+# aufgerufen — jede Command-Substitution forkt eine Subshell, ein simpler
+# Zaehler-Var wuerde also bei jedem Aufruf wieder bei 0 starten. Zaehler
+# deshalb in einer Datei, wie BLOCKER_LOG/TMUX_KEYS_LOG es schon vormachen.
+e0_count_file=$(mktemp)
+echo 0 > "$e0_count_file"
+classify_paste_outcome() {
+    local n
+    n=$(($(cat "$e0_count_file") + 1))
+    echo "$n" > "$e0_count_file"
+    [ "$n" = "1" ] && echo 2 || echo 0
+}
+export TMUX_KEYS_LOG=$(mktemp)
+: > "$TMUX_KEYS_LOG"
+: > "$BLOCKER_LOG"
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "0" ] || fail "case E0: paste_and_submit muss nach dem rettenden zweiten Enter 0 zurueckgeben, war '$rc'"
+[ ! -s "$BLOCKER_LOG" ] || fail "case E0: der rettende Fall darf report_blocker nicht ausloesen: $(cat "$BLOCKER_LOG")"
+e0_submits=$(grep -c -- '-H 0d$' "$TMUX_KEYS_LOG" 2>/dev/null || true)
+[ "$e0_submits" = "2" ] || fail "case E0: erwartet zwei Submits (normales + rettendes zweites Enter) im Keys-Log, waren '$e0_submits': $(cat "$TMUX_KEYS_LOG")"
+unset TMUX_KEYS_LOG
+classify_paste_outcome() { echo "2"; }
 
 # Case E1: Dispatch-Pfad — die Eskalation muss die GERADE gepastete Karte
 # treffen, nicht die noch in CURRENT_TASK_ID stehende vorherige.
