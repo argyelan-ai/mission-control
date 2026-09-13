@@ -141,6 +141,12 @@ import websockets as ws_client
 
 from app.config import settings
 from app.redis_client import RedisKeys, get_redis
+from app.services.acp_chat_transport import (
+    AcpChatUnreachableError,
+    headless_chat_kind,
+    read_acp_chat_state,
+    transport_for,
+)
 from app.services.harness_catalog import (
     discover_effort_support,
     discover_model_catalog,
@@ -432,7 +438,18 @@ def _target_kind(agent) -> str:
     """Classifies the agent into a delivery channel, or raises
     ``InputNotSupportedError`` if it has none. Duck-typed on ``agent.slug`` /
     ``agent.agent_runtime`` like ``transcript_chat.resolve_transcript_dir``,
-    so tests can pass a plain stub."""
+    so tests can pass a plain stub.
+
+    ``acp-docker`` / ``acp-http`` stehen VOR den TUI-Kanaelen: ein Agent mit
+    ACP-Treiber hat keine bedienbare TUI mehr, und ein Tastendruck in sein
+    Fenster 0 liefe ins Leere (docs/specs/chat-over-acp.md). Die Regel selbst
+    steht in ``acp_chat_transport.headless_chat_kind`` — dieselbe Funktion,
+    aus der ``Agent.headless_chat`` faellt, damit UI und Sendepfad nie
+    auseinanderlaufen koennen."""
+    acp_kind = headless_chat_kind(agent)
+    if acp_kind is not None:
+        return acp_kind
+
     runtime = getattr(agent, "agent_runtime", None)
     slug = getattr(agent, "slug", None)
 
