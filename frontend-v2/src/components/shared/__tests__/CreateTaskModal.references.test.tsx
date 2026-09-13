@@ -52,7 +52,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Task with refs");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Task with refs");
 
     const file = new File(["hello"], "brief.pdf", { type: "application/pdf" });
     await userEvent.upload(screen.getByLabelText(/Add files/i), file);
@@ -70,7 +70,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Plain task");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Plain task");
 
     await userEvent.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -86,7 +86,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Task with refs");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Task with refs");
 
     const file = new File(["hello"], "brief.pdf", { type: "application/pdf" });
     await userEvent.upload(screen.getByLabelText(/Add files/i), file);
@@ -106,7 +106,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Task with refs");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Task with refs");
 
     const file = new File(["hello"], "brief.pdf", { type: "application/pdf" });
     await userEvent.upload(screen.getByLabelText(/Add files/i), file);
@@ -122,7 +122,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Plain task");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Plain task");
     await userEvent.click(screen.getByRole("button", { name: "Create task" }));
 
     await waitFor(() => expect(api.tasks.create).toHaveBeenCalled());
@@ -139,7 +139,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Task with refs");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Task with refs");
 
     const file = new File(["hello"], "huge.pdf", { type: "application/pdf" });
     await userEvent.upload(screen.getByLabelText(/Add files/i), file);
@@ -151,7 +151,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
     expect(screen.getByText(/huge\.pdf: API 413: file too large/)).toBeInTheDocument();
     expect(screen.getByText(/It has not been dispatched yet/)).toBeInTheDocument();
     // The modal stayed open — the title field is still on screen.
-    expect(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Short, clear task title")).toBeInTheDocument();
     expect(dispatchSpy).not.toHaveBeenCalled();
     // The button switched into the retry state instead of "Create task".
     expect(screen.getByRole("button", { name: "Retry uploads" })).toBeInTheDocument();
@@ -171,7 +171,7 @@ describe("CreateTaskModal — reference file upload (ADR-053)", () => {
 
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Task with refs");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Task with refs");
 
     const fileA = new File(["a"], "a.png", { type: "image/png" });
     const fileB = new File(["b"], "b.png", { type: "image/png" });

@@ -482,7 +482,7 @@ export function HostRecipeSwitcher({
               left: pos.left,
               width: pos.width,
               maxHeight: pos.maxHeight,
-              background: C.bgElevated,
+              backgroundColor: C.bgSurface,
               border: `1px solid ${C.borderActive}`,
               boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
             }}
@@ -529,8 +529,8 @@ function RecipeGroup({
   return (
     <div role="group" aria-label={label} data-testid={testId}>
       <div
-        className="flex items-baseline gap-2 px-3 pt-2.5 pb-1 text-[9px] font-medium uppercase"
-        style={{ color: C.textMuted, letterSpacing: "0.1em" }}
+        className="flex items-baseline gap-2 px-3 pt-2.5 pb-1 text-[11px] font-medium"
+        style={{ color: C.textSecondary }}
       >
         <span>{label}</span>
         <span className="tabular-nums" style={{ color: C.textDim }}>{recipes.length}</span>

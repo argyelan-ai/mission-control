@@ -35,7 +35,7 @@ describe("CreateTaskModal — skip_review body field", () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
     await userEvent.type(
-      await screen.findByPlaceholderText("Kurzer, klarer Aufgabentitel"),
+      await screen.findByPlaceholderText("Short, clear task title"),
       "Dummy task",
     );
     await userEvent.click(screen.getByRole("button", { name: "Create task" }));
@@ -51,12 +51,12 @@ describe("CreateTaskModal — skip_review body field", () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
     await userEvent.type(
-      await screen.findByPlaceholderText("Kurzer, klarer Aufgabentitel"),
+      await screen.findByPlaceholderText("Short, clear task title"),
       "Automation task",
     );
 
-    // Open "Erweitert" section to reveal the Skip review pill
-    const erweitertBtn = screen.getByRole("button", { name: /erweitert/i });
+    // Open "Advanced" section to reveal the Skip review pill
+    const erweitertBtn = screen.getByRole("button", { name: /advanced/i });
     await userEvent.click(erweitertBtn);
 
     // Now the Skip review pill should be visible

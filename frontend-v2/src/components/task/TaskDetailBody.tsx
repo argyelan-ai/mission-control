@@ -615,20 +615,24 @@ export function TaskDetailBody({
 
   return (
     <>
-      {/* ── Header ── */}
+      {/* ── Header — panel grammar: title, quiet id line, ⋯ + × ── */}
       <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <div className="label-sys label-sys--dim mb-1.5">{t("taskLabel")} · {task.id.slice(0, 8)}</div>
         <div className="flex items-start gap-3">
-          <h2 className="flex-1 min-w-0 text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
-            {task.title}
-          </h2>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
+              {task.title}
+            </h2>
+            <p className="text-xs mt-0.5 tabular-nums" style={{ color: C.textMuted }}>
+              {t("taskLabel")} · {task.id.slice(0, 8)}
+            </p>
+          </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <OverflowMenu isActive={isActive} onDelete={() => deleteMutation.mutate()} deleteLoading={deleteMutation.isPending} />
             <button
               onClick={onClose}
               aria-label={t("closeTaskDetails")}
-              className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+              className="w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
+              style={{ color: C.textSecondary }}
             >
               <X size={15} />
             </button>

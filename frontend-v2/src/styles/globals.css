@@ -160,6 +160,8 @@
   --color-on-accent: #151411;
   --color-fill: #c1beb2;
   --color-fill-soft: #8a8a8a;
+  /* Focus ring — dark: the accent; light: a grey, never black (Operator 13.09.) */
+  --color-focus: #ebe8de;
   --color-status-online: #55a964;
   --color-status-warning: #a67f3e;
   --color-status-warning-text: #b98f4d;
@@ -296,6 +298,7 @@
   --color-on-accent: #ffffff;
   --color-fill: #4a473f;
   --color-fill-soft: #8f8b80;
+  --color-focus: #8f8b80;
 
   --color-status-online: #2f7a3e;
   --color-status-warning: #8a6522;
@@ -463,7 +466,7 @@ body {
    ============================================================ */
 
 :where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }

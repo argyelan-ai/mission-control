@@ -9,7 +9,8 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { PanelHeader } from "@/components/shared/PanelShell";
 import { useTranslations } from "next-intl";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { api } from "@/lib/api";
@@ -191,30 +192,12 @@ export function AddRuntimeModal({ open, onClose }: Props) {
             className="relative w-full mx-2 rounded-t-2xl rounded-b-none sm:mx-0 sm:max-w-md sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
             style={{
-              backgroundColor: "var(--color-bg-elevated)",
+              backgroundColor: "var(--color-bg-surface)",
               border: "1px solid var(--color-border)",
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: "var(--shadow-elevated)",
             }}
           >
-            <div
-              className="flex items-center justify-between p-5 border-b shrink-0"
-              style={{ borderColor: "var(--color-border)" }}
-            >
-              <div>
-                <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  {t("title")}
-                </h2>
-                <div className="text-[11px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                  {t("subtitle")}
-                </div>
-              </div>
-              <button
-                onClick={handleClose}
-                className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer"
-              >
-                <X size={14} style={{ color: "var(--color-text-muted)" }} />
-              </button>
-            </div>
+            <PanelHeader title={t("title")} description={t("subtitle")} onClose={handleClose} closeLabel={t("close")} />
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               {/* Step 1: URL + Probe */}
