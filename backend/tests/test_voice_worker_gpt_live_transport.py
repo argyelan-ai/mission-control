@@ -238,10 +238,12 @@ def test_live_voice_instructions_short_and_style_only():
     text = build_live_voice_instructions(operator_name="Mark")
     assert "WORAUF DU REAGIERST" not in text
     assert "create_task" not in text
-    # Budget widened from ~150 to ~300 words when the naturalness/tone rules
-    # (laughter, backchannels, pitch/pace variation) were added — still a
-    # short voice-layer prompt, no tool-procedure content (asserted above).
-    assert len(text.split()) < 300
+    # Budget widened from ~150 to ~300 to now 400 words: the 300er-Budget
+    # stammt aus der Zeit vor den von OpenAI vorgeschriebenen Politik-Bloecken
+    # (Backchannel / Interruption / Delegation policy) — die Bloecke sind
+    # verbindlich, deshalb ist die alte Grenze ueberholt. Still a short
+    # voice-layer prompt, no tool-procedure content (asserted above).
+    assert len(text.split()) < 400
 
 
 def test_live_voice_instructions_no_self_introduction():

@@ -29,9 +29,3 @@ def test_voice_layer_has_no_absolute_silence_rule():
     """
     text = persona.build_live_voice_instructions("Mark")
     assert "Never narrate tool calls" not in text
-
-
-def test_voice_layer_stays_short():
-    """Verfahren gehoeren in den Backend-Layer. Der Voice-Layer bleibt schlank."""
-    text = persona.build_live_voice_instructions("Mark")
-    assert len(text.split()) < 400, "Voice-Layer waechst zu; Verfahren ins Backend"
