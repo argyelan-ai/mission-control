@@ -237,9 +237,15 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
 
     Returns os.environ.copy() merged with file contents and HOME forced to
     HOME_DIR (so the grok TUI resolves ~/.grok/auth.json on the host).
+
+    W5 (2026-09-13): MC_CONTEXT_ENV_PATH defaults to this agent's own context
+    file, set BEFORE agent.env is merged — an explicit value from the bridge
+    env or an agent.env assignment below wins over the default. Without it the
+    pane's `mc` falls back to the legacy shared /tmp/mc-context.env.
     """
     env = os.environ.copy()
     env["HOME"] = str(HOME_DIR)
+    env.setdefault("MC_CONTEXT_ENV_PATH", MC_CONTEXT_ENV_PATH)
     if not env_path.exists():
         return env
     with env_path.open() as f:
@@ -333,10 +339,17 @@ def _grok_launch_shell_cmd() -> str:
     # would silently fall back to its localhost default — correct on this host,
     # but only by accident. Export it explicitly (agent.env wins if it ever
     # carries the key) so the agent's own `mc inbox` calls are deterministic.
+    # MC_CONTEXT_ENV_PATH: same belt — deliver_task_context's set-environment
+    # (session env) does NOT survive a session restart (a new tmux session
+    # inherits the SERVER env, not the old session's), so the window shell must
+    # default-export the per-agent path itself (hermes entrypoint pattern).
+    # agent.env wins if it ever carries the key.
     grok = " ".join(shlex.quote(c) for c in _grok_launch_cmd())
     return (
         f"set -a; . {shlex.quote(str(ENV_FILE))}; set +a; "
         f': "${{MC_API_URL:=http://localhost:8000}}"; export MC_API_URL; '
+        f': "${{MC_CONTEXT_ENV_PATH:={MC_CONTEXT_ENV_PATH}}}"; '
+        f"export MC_CONTEXT_ENV_PATH; "
         f"exec {grok}"
     )
 

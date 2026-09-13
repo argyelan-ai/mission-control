@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 import threading
 import time
+import uuid
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -1324,15 +1327,136 @@ def test_write_task_context_env_is_owner_only(bridge, tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
-def test_deliver_task_context_publishes_path_into_tmux_env(bridge, tmp_path, monkeypatch):
-    """Without MC_CONTEXT_ENV_PATH in the session env, the agent's `mc` falls
-    back to the legacy /tmp file and reads a DIFFERENT file than the bridge
-    wrote — the per-agent split would silently not apply."""
-    ctx = tmp_path / "mc-context.env"
-    monkeypatch.setattr(bridge, "MC_CONTEXT_ENV_PATH", str(ctx))
-    calls: list[list[str]] = []
-    monkeypatch.setattr(bridge, "_tmux", lambda args, **kw: calls.append(list(args)))
-    bridge.deliver_task_context(
-        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"}
+def test_launch_shell_cmd_exports_context_env_path(bridge):
+    """Belt 2 (Rex B1): deliver_task_context's set-environment is session-scoped
+    and does NOT reach the already-running pane — and a RESTARTED session does
+    not inherit the old session's env at all (tmux windows inherit from the
+    SERVER). The window shell must default-export the per-agent path itself,
+    exactly like MC_API_URL above it."""
+    line = bridge._grok_launch_shell_cmd()
+    assert ": \"${MC_CONTEXT_ENV_PATH:=" in line
+    assert f": \"${{MC_CONTEXT_ENV_PATH:={bridge.MC_CONTEXT_ENV_PATH}}}\"" in line
+    assert "export MC_CONTEXT_ENV_PATH; " in line
+    # export sits between the agent.env sourcing and the exec
+    assert line.index("export MC_CONTEXT_ENV_PATH") < line.index("; exec ")
+
+
+def test_load_env_from_file_defaults_context_env_path(bridge, tmp_path, monkeypatch):
+    """Belt 1 (Rex B1, mirrors hermes-bridge.py:190): the new-session client env
+    carries the per-agent path — decisive when THIS client starts a fresh tmux
+    server. agent.env and a pre-set process env win over the default."""
+    monkeypatch.delenv("MC_CONTEXT_ENV_PATH", raising=False)
+    env = bridge.load_env_from_file(tmp_path / "missing.env")
+    assert env["MC_CONTEXT_ENV_PATH"] == bridge.MC_CONTEXT_ENV_PATH
+    agent_env = tmp_path / "agent.env"
+    agent_env.write_text("MC_CONTEXT_ENV_PATH='/custom/from-agent.env'\n")
+    env = bridge.load_env_from_file(agent_env)
+    assert env["MC_CONTEXT_ENV_PATH"] == "/custom/from-agent.env"
+    monkeypatch.setenv("MC_CONTEXT_ENV_PATH", "/custom/from-process.env")
+    env = bridge.load_env_from_file(tmp_path / "missing.env")
+    assert env["MC_CONTEXT_ENV_PATH"] == "/custom/from-process.env"
+
+
+TMUX_PRESENT = shutil.which("tmux") is not None
+requires_tmux = pytest.mark.skipif(not TMUX_PRESENT, reason="tmux binary not on PATH")
+
+
+def _pane_proc_environ(tmux_wrap: Path, session: str) -> dict[str, str]:
+    """The ENVIRONMENT OF THE PANE PROCESS — what the agent's own `mc` calls
+    (child processes) inherit. This is the level Rex's faithful probe measures;
+    `tmux show-environment` alone says nothing about the running pane."""
+    r = subprocess.run(
+        [str(tmux_wrap), "display", "-p", "-t", session, "#{pane_pid}"],
+        capture_output=True, text=True, timeout=15,
     )
-    assert ["set-environment", "-t", bridge.SESSION, "MC_CONTEXT_ENV_PATH", str(ctx)] in calls
+    assert r.returncode == 0, r.stderr
+    pid = int(r.stdout.strip())
+    raw = Path(f"/proc/{pid}/environ").read_bytes()
+    return dict(
+        line.split("=", 1)
+        for line in raw.decode(errors="replace").split("\0") if "=" in line
+    )
+
+
+def _session_env(tmux_wrap: Path, session: str, key: str) -> str | None:
+    r = subprocess.run(
+        [str(tmux_wrap), "show-environment", "-t", session, key],
+        capture_output=True, text=True, timeout=15,
+    )
+    if r.returncode != 0:
+        return None
+    out = r.stdout.strip()
+    return out[len(key) + 1:] if out.startswith(key + "=") else out
+
+
+@pytest.fixture
+def tmux_sandbox(bridge, tmp_path, monkeypatch):
+    """Real tmux on an isolated socket, a fake grok TUI, stub agent.env.
+
+    The dummy session is the load-bearing part: it guarantees the tmux SERVER
+    already runs BEFORE the bridge's new-session, so the server-global env is
+    NOT seeded from the bridge client env (belt 1 invisible) — the exact live
+    topology where Rex's probe found MC_CONTEXT_ENV_PATH unset in the pane."""
+    sock = f"mc-grok-test-{uuid.uuid4().hex[:8]}"
+    wrap = tmp_path / "tmux-wrap"
+    wrap.write_text(f"#!/bin/sh\nexec tmux -L {sock} \"$@\"\n")
+    wrap.chmod(0o755)
+    fake_grok = tmp_path / "fake-grok"
+    fake_grok.write_text("#!/bin/sh\necho '❯ ready'\nexec sleep 120\n")
+    fake_grok.chmod(0o755)
+    env_file = tmp_path / "agent.env"
+    env_file.write_text("MC_BASE_URL=http://localhost:8000\n")
+    ctx = tmp_path / ".mc" / "agents" / "grok" / "mc-context.env"
+
+    monkeypatch.setattr(bridge, "TMUX_BIN", str(wrap))
+    monkeypatch.setattr(bridge, "GROK_BIN", str(fake_grok))
+    monkeypatch.setattr(bridge, "ENV_FILE", env_file)
+    monkeypatch.setattr(bridge, "WORKSPACE", tmp_path / "workspace")
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(bridge, "SESSION", f"grok-test-{uuid.uuid4().hex[:6]}")
+    monkeypatch.setattr(bridge, "MC_CONTEXT_ENV_PATH", str(ctx))
+    # write_task_context_env binds its default path at def time — rebind it.
+    orig_write = bridge.write_task_context_env
+    monkeypatch.setattr(
+        bridge, "write_task_context_env",
+        lambda task, path=str(ctx): orig_write(task, path),
+    )
+    subprocess.run([str(wrap), "new-session", "-d", "-s", "dummy", "sleep 120"], check=True)
+    yield bridge, wrap
+    subprocess.run([str(wrap), "kill-server"], capture_output=True, timeout=15)
+
+
+@requires_tmux
+def test_deliver_task_context_path_arrives_in_the_pane(bridge, tmux_sandbox):
+    """B2 (Rex): measure ARRIVAL at the agent, not the set-environment call.
+    Faithful probe — real tmux, real pane process: after deliver_task_context
+    the pane process env (what the agent's `mc` children inherit) must carry
+    the per-agent path. On the pre-fix PR head this reads <NICHT GESETZT>: the
+    pane starts before the set-environment, and the pre-existing server ignores
+    the new-session client env."""
+    bridge, wrap = tmux_sandbox
+    assert bridge.start_grok_session()["status"] == "started"
+    bridge.deliver_task_context({"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"})
+    pane_env = _pane_proc_environ(wrap, bridge.SESSION)
+    assert pane_env.get("MC_CONTEXT_ENV_PATH") == str(bridge.MC_CONTEXT_ENV_PATH)
+    # future panes/windows of this session inherit the path too
+    assert _session_env(wrap, bridge.SESSION, "MC_CONTEXT_ENV_PATH") == str(bridge.MC_CONTEXT_ENV_PATH)
+
+
+@requires_tmux
+def test_context_env_path_survives_session_restart(bridge, tmux_sandbox):
+    """The case that makes Rex's B1 finding complete: a NEW tmux session does
+    NOT inherit the old session's set-environment values. After kill + restart
+    the fresh pane must STILL carry the per-agent path — provided by the
+    in-shell export in _grok_launch_shell_cmd (belt 2), not by session env."""
+    bridge, wrap = tmux_sandbox
+    assert bridge.start_grok_session()["status"] == "started"
+    bridge.deliver_task_context({"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"})
+    old_session = bridge.SESSION
+    assert bridge._tmux(["kill-session", "-t", old_session]).returncode == 0
+    assert bridge.is_session_running() is False
+    # restart: brand-new session on the SAME long-running server
+    assert bridge.start_grok_session()["status"] == "started"
+    bridge.deliver_task_context({"id": "t2", "board_id": "b1", "dispatch_attempt_id": "a2"})
+    pane_env = _pane_proc_environ(wrap, bridge.SESSION)
+    assert pane_env.get("MC_CONTEXT_ENV_PATH") == str(bridge.MC_CONTEXT_ENV_PATH)
