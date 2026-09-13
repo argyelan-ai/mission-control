@@ -384,6 +384,71 @@ async def _allocate_port(session: AsyncSession) -> int | None:
     return None  # All 100 ports taken
 
 
+async def redispatch_after_blocker_answer(
+    task_id: uuid.UUID,
+    board_id: uuid.UUID,
+    *,
+    expected_status: str = "inbox",
+) -> None:
+    """Guarded wrapper around auto_dispatch_task for the blocker-answer path.
+
+    Incident 2026-09-13 (card 4c9bb492 / G5): an operator resolved a
+    blocker_decision approval, which synchronously checked task.status ==
+    "blocked", set the task to "inbox" and scheduled this redispatch as a
+    decoupled background task (create_tracked_task). By the time that
+    background task actually ran, a different agent had already picked the
+    now-"inbox" card up via the normal poll path, worked it, and moved it to
+    "review" (PR #554) — auto_dispatch_task itself never re-checks the
+    task's current status/run_control before dispatching, so the stale
+    redispatch fired anyway and shoved the card back to "inbox", reassigned
+    to yet another agent, discarding the in-flight review.
+
+    The synchronous check at approval-resolution time only proves the task
+    was dispatchable AT THAT INSTANT — it says nothing about the state by
+    the time this deferred call actually executes. This wrapper re-reads
+    the task immediately before calling auto_dispatch_task and only
+    proceeds if it is still exactly where the blocker resolution left it
+    (status == expected_status, normally "inbox", and run_control is None
+    — a `mc hold` placed in the gap must also stop the redispatch, same as
+    any other hold). Any other status (review, done, waiting, in_progress,
+    blocked again, ...) or a run_control set in the meantime means someone
+    already acted on the card through a different, more current channel —
+    dispatching now would silently overwrite that. Skips visibly (log +
+    event) instead of silently doing nothing, so the discarded redispatch
+    is not invisible to whoever wonders why the operator's answer had no
+    effect.
+    """
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        task = await session.get(Task, task_id)
+        if not task:
+            return
+        if task.status != expected_status or task.run_control is not None:
+            logger.warning(
+                "Blocker-Redispatch uebersprungen: Task %s ist jetzt "
+                "status=%s run_control=%s (erwartet: status=%s, "
+                "run_control=None) — Karte wurde inzwischen anderweitig "
+                "bearbeitet.",
+                task_id, task.status, task.run_control, expected_status,
+            )
+            await emit_event(
+                session,
+                "task.blocker_redispatch_skipped",
+                f"Blocker-Redispatch uebersprungen: Task ist jetzt "
+                f"'{task.status}' (run_control={task.run_control})",
+                board_id=board_id,
+                task_id=task_id,
+                severity="warning",
+                detail={
+                    "current_status": task.status,
+                    "current_run_control": task.run_control,
+                    "expected_status": expected_status,
+                },
+            )
+            return
+
+    await auto_dispatch_task(task_id, board_id)
+
+
 async def auto_dispatch_task(
     task_id: uuid.UUID,
     board_id: uuid.UUID,
