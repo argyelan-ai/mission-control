@@ -702,3 +702,59 @@ async def test_review_safeguard_uses_corrected_status_for_pipeline_sync(client, 
 
     assert resp.status_code == 200
     mock_sync.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_user_patch_review_excludes_assigned_author(auth_client, fake_redis):
+    """UI-Pfad (User setzt review): der zugewiesene Developer (Autor des
+    Works) wird als Autor an handle_review_handoff durchgereicht und kann
+    nicht zum eigenen Reviewer werden — auch wenn er der einzige
+    Reviewer-Role-Agent ist (Warning 2, PR #148)."""
+    from app.models.agent import Agent
+    from app.models.task import Task
+
+    board_id = uuid.uuid4()
+    author_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.board import Board
+        from app.auth import generate_agent_token
+        board = Board(id=board_id, name="UI Author Board", slug="ui-author")
+        s.add(board)
+        _, token_hash = generate_agent_token()
+        author = Agent(
+            id=author_id, name="Solo Rex", role="reviewer",
+            board_id=board_id, agent_token_hash=token_hash,
+            is_board_lead=False,
+        )
+        s.add(author)
+        task = Task(
+            id=task_id, board_id=board_id, title="UI review path",
+            status="in_progress", assigned_agent_id=author_id,
+        )
+        s.add(task)
+        await s.commit()
+
+    with (
+        patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock),
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+        patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock),
+        patch("app.services.task_lifecycle.update_agent_active_task", new_callable=AsyncMock),
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/boards/{board_id}/tasks/{task_id}",
+            json={"status": "review"},
+        )
+
+    assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        updated = await s.get(Task, task_id)
+        assert updated.status == "review"
+        # Autor bleibt zugewiesen (kein Self-Review-Dispatch): die Karte ist
+        # NICHT auf den Autor als Reviewer gewechselt und hat keinen
+        # review_handoff-Intent.
+        assert updated.assigned_agent_id == author_id
+        assert updated.dispatch_intent != "review_handoff"

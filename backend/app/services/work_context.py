@@ -541,7 +541,6 @@ async def find_reviewer(
         session, board_id, AgentRole.REVIEWER,
         exclude_agent_id=exclude_agent_id, fallback_to_lead=False,
     )
-    )
     if reviewer:
         return reviewer
 
@@ -572,12 +571,9 @@ async def find_reviewer(
         name_lower = a.name.lower()
         if ("rex" in name_lower or "review" in name_lower) and _agent_is_live(a):
             return a
-    # Letzter Fallback: Board Lead — nur lebendig (Liveness wie in der
-    # Namens-Schleife oben; ein toter Lead wird nicht geliefert) und nie
-    # der Autor der Karte.
-    for a in agents:
-        if a.is_board_lead and a.id != exclude_agent_id and _agent_is_live(a):
-            return a
+    # Kein Reviewer gefunden — bewusst None, KEIN stiller Fallback auf den
+    # Board Lead (Vorfall 09dc3c11: Karte landete beim Lead statt Rex).
+    # Callers behandeln None sichtbar (z.B. task_lifecycle.handle_review_handoff).
     return None
 
 

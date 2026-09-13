@@ -303,3 +303,114 @@ async def test_find_reviewer_legacy_fallback(session, make_board, make_agent):
     result = await _find_reviewer(session, board.id)
     assert result is not None
     assert result.id == rex.id
+
+
+# ── Blocker 2: Autor-Ausschluss auf der Board-Lead-Stufe ─────────────
+
+
+@pytest.mark.asyncio
+async def test_find_agent_by_role_excludes_author_on_board_lead_fallback(
+    session, make_board, make_agent,
+):
+    """Blocker 2 (Rex, PR #148): Autor-Ausschluss gilt auch auf der
+    Board-Lead-Stufe. Kein Role-Kandidat, der Autor IST der Board Lead →
+    explizit None, nicht der Autor selbst."""
+    board = await make_board()
+    author = await make_agent(
+        name="Author Lead", role="developer", board_id=board.id,
+        is_board_lead=True,
+    )
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(
+        session, board.id, AgentRole.REVIEWER, exclude_agent_id=author.id,
+    )
+    assert result is None, (
+        "Autor (hier: Board Lead) darf nicht als eigener Reviewer fallback-selected werden"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_agent_by_role_lead_fallback_selects_other_lead(
+    session, make_board, make_agent,
+):
+    """Gegenprobe: ohne Ausschluss liefert die Lead-Stufe den (fremden)
+    Board Lead — die Stufe selbst funktioniert, nur der Autor wird
+    ausgeschlossen."""
+    board = await make_board()
+    author = await make_agent(
+        name="Author", role="developer", board_id=board.id,
+        is_board_lead=True,
+    )
+    other_lead = await make_agent(
+        name="Second Lead", role="developer", board_id=board.id,
+        is_board_lead=True,
+    )
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(
+        session, board.id, AgentRole.REVIEWER, exclude_agent_id=author.id,
+    )
+    assert result is not None
+    assert result.id == other_lead.id
+
+
+@pytest.mark.asyncio
+async def test_find_agent_by_role_lead_fallback_skips_offline_lead(
+    session, make_board, make_agent,
+):
+    """Liveness gilt auch auf der Lead-Stufe: ein Lead mit stale
+    last_seen_at wird nicht geliefert (toter Lead → explizit None)."""
+    from datetime import timedelta
+    from app.utils import utcnow
+
+    board = await make_board()
+    await make_agent(
+        name="Dead Lead", role="developer", board_id=board.id,
+        is_board_lead=True, last_seen_at=utcnow() - timedelta(hours=1),
+    )
+
+    from app.services.dispatch import find_agent_by_role
+    result = await find_agent_by_role(session, board.id, AgentRole.REVIEWER)
+    assert result is None
+
+
+# ── Blocker 3: role_count-Guard in work_context.find_reviewer ────────
+
+
+@pytest.mark.asyncio
+async def test_find_reviewer_no_legacy_fallback_when_reviewer_role_exists(
+    session, make_board, make_agent,
+):
+    """Blocker 3 (Rex, PR #148): Existiert mind. ein Agent mit
+    role='reviewer', darf der Name-basierte Legacy-Fallback NICHT feuern —
+    auch nicht, wenn der Role-Kandidat eliminiert wurde (hier: Autor-
+    Ausschluss). Ohne den Guard wuerde 'Rex reviewer stand-in' (role=None)
+    die Karte bekommen."""
+    board = await make_board()
+    author = await make_agent(name="Rex", role="reviewer", board_id=board.id)
+    # Legacy-Kandidat: 'rex' im Namen, role=None — wuerde den Guard umgehen
+    await make_agent(name="Rex reviewer stand-in", role=None, board_id=board.id)
+
+    from app.services.work_context import find_reviewer
+    result = await find_reviewer(session, board.id, exclude_agent_id=author.id)
+    assert result is None, (
+        "role_count > 0 muss zum Abbruch fuehren — der Legacy-Name-Fallback "
+        "darf eliminierte Role-Reviewer nicht wieder einwechseln"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_reviewer_legacy_fallback_still_fires_without_role_reviewer(
+    session, make_board, make_agent,
+):
+    """Gegenprobe zum Guard: kein einziger Agent mit role='reviewer' auf
+    dem Board → Legacy-Name-Fallback greift weiterhin (Vorfall 94fda9f9)."""
+    board = await make_board()
+    rex = await make_agent(name="Rex", role=None, board_id=board.id)
+    author = await make_agent(name="Cody", role="developer", board_id=board.id)
+
+    from app.services.work_context import find_reviewer
+    result = await find_reviewer(session, board.id, exclude_agent_id=author.id)
+    assert result is not None
+    assert result.id == rex.id
