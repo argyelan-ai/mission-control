@@ -558,8 +558,11 @@ async def find_reviewer(
     # No reviewer found by role or by name: return None, deliberately. Do
     # NOT fall back to the Board Lead here — that would silently route the
     # card into the operator's approval inbox instead of leaving a visible
-    # "no reviewer assigned" state that a human can act on. Callers already
-    # handle None correctly (e.g. task_lifecycle.handle_review_handoff).
+    # "no reviewer assigned" state that a human can act on.
+    # handle_review_handoff (task_lifecycle.py) is the single caller-shared
+    # place that turns this None into that visible state (a TaskComment +
+    # best-effort lead DM via _notify_no_reviewer_found, W6) — put there
+    # instead of in each of its three callers so no caller can forget it.
     return None
 
 
