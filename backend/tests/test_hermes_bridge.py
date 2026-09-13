@@ -408,6 +408,217 @@ def test_bridge_sigterm_clean_exit(bridge, caplog):
     )
 
 
+def _fake_poll_response(task_id: str, attempt_id: str) -> dict:
+    return {
+        "state": "new_task",
+        "task": {
+            "id": task_id,
+            "board_id": "22222222-2222-2222-2222-222222222222",
+            "title": "T",
+            "prompt": "DO WORK",
+            "dispatch_attempt_id": attempt_id,
+        },
+    }
+
+
+class _FakeResp:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def test_dispatch_poll_loop_skips_entirely_when_shutdown_already_set(bridge, monkeypatch, tmp_path):
+    """13.09.2026 fix, guard 1: if _shutdown_event is already set when the loop
+    (re-)enters its top, it must not poll at all — not even once."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+
+    poll_calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=10):
+        poll_calls["n"] += 1
+        # Safety bound (not the assertion itself): if the top-of-loop guard
+        # were ever missing, this stops the loop after 3 ticks instead of
+        # spinning forever with DISPATCH_POLL_INTERVAL=0.
+        if poll_calls["n"] >= 3:
+            raise SystemExit("safety-bound-tripped")
+        return _FakeResp(json.dumps(_fake_poll_response(
+            "55555555-5555-5555-5555-555555555555", "attempt-1",
+        )).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "driver_is_acp", lambda: False)
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda *a, **kw: None)
+
+    bridge._shutdown_event.set()
+    try:
+        bridge.dispatch_poll_loop()  # must return normally, no poll at all
+    except SystemExit:
+        pass  # only reachable if the top-of-loop guard is missing
+
+    assert poll_calls["n"] == 0, (
+        f"dispatch_poll_loop polled {poll_calls['n']} time(s) despite shutdown "
+        f"already requested before the loop started"
+    )
+
+
+def test_dispatch_poll_loop_skips_dispatch_when_shutdown_set_mid_poll(bridge, monkeypatch, tmp_path):
+    """13.09.2026 fix, guard 2 — the actual race window: SIGTERM arrives WHILE
+    the /me/poll network call is in flight. The poll already claimed the task
+    (state=new_task) by the time it returns, but the bridge must still refuse
+    to paste it once it notices the shutdown flag, right before dispatching."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "driver_is_acp", lambda: False)
+
+    dispatched = []
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda prompt: dispatched.append(prompt))
+
+    def fake_urlopen(req, timeout=10):
+        # Simulate: SIGTERM handler ran DURING this network call, right
+        # before the response comes back — the exact incident timing.
+        bridge._shutdown_event.set()
+        return _FakeResp(json.dumps(_fake_poll_response(
+            "33333333-3333-3333-3333-333333333333", "attempt-1",
+        )).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    bridge.dispatch_poll_loop()  # returns normally once the loop sees the flag
+
+    assert dispatched == [], (
+        f"task was dispatched even though shutdown was signaled mid-poll: {dispatched}"
+    )
+
+
+def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge, monkeypatch, tmp_path):
+    """Regression for the 13.09.2026 incident, reproduced with real threading
+    and wall-clock timestamps (mirrors the incident's own log shape):
+
+        23:38:06.895  received SIGTERM
+        23:38:06.904  dispatched task ebfc704f
+
+    Runs the REAL dispatch_poll_loop() in a background thread against a fake
+    /me/poll that always offers a FRESH dispatch_attempt_id (worst case: dedup
+    can never block a redispatch), lets a few real ticks happen, fires the
+    REAL _handle_sigterm, and asserts no dispatch timestamp falls after it.
+    """
+    import threading
+    import time as real_time
+    import signal as _sig
+
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0.02)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "driver_is_acp", lambda: False)
+
+    dispatch_ts: list[float] = []
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda prompt: dispatch_ts.append(real_time.monotonic()))
+
+    counter = {"n": 0}
+
+    def fake_urlopen(req, timeout=10):
+        counter["n"] += 1
+        return _FakeResp(json.dumps(_fake_poll_response(
+            "44444444-4444-4444-4444-444444444444", f"attempt-{counter['n']}",
+        )).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    t = threading.Thread(target=bridge.dispatch_poll_loop, name="test-hermes-dispatcher", daemon=True)
+    bridge._dispatcher_thread = t
+    t.start()
+
+    deadline = real_time.monotonic() + 2.0
+    while len(dispatch_ts) < 2 and real_time.monotonic() < deadline:
+        real_time.sleep(0.005)
+    assert len(dispatch_ts) >= 2, "fixture never dispatched — test setup is broken, not the fix"
+
+    sigterm_ts = real_time.monotonic()
+    with pytest.raises(SystemExit) as exc_info:
+        bridge._handle_sigterm(_sig.SIGTERM, None)
+    assert exc_info.value.code == 0
+
+    assert not t.is_alive(), "dispatcher thread must be stopped before the SIGTERM handler returns"
+
+    # A stray tick would show up quickly (the incident's own gap was 9ms) —
+    # but the thread is already joined-and-dead above, so this is just a
+    # documented safety margin, not the primary assertion.
+    real_time.sleep(0.1)
+
+    late = [ts for ts in dispatch_ts if ts > sigterm_ts]
+    assert not late, (
+        f"dispatch happened AFTER SIGTERM was handled ({len(late)} of {len(dispatch_ts)}) — "
+        f"this is the 13.09.2026 race (scripts/hermes-bridge.py:_handle_sigterm)"
+    )
+
+
+def test_sigterm_does_not_sever_an_already_inflight_dispatch(bridge, monkeypatch):
+    """Counter-check (Gegenprobe): a dispatch that was ALREADY in flight when
+    SIGTERM arrives must be allowed to run to completion, not killed mid-turn
+    — severing it is what would make a card's redeliverable status accidental
+    rather than guaranteed. The bridge does NOT wait unboundedly for it
+    though: the join has an upper bound (DISPATCHER_SHUTDOWN_TIMEOUT) and the
+    handler returns after it regardless of whether the thread finished.
+    """
+    import threading
+    import time as real_time
+    import signal as _sig
+
+    monkeypatch.setattr(bridge, "DISPATCHER_SHUTDOWN_TIMEOUT", 0.1)
+
+    turn_started = threading.Event()
+    turn_may_finish = threading.Event()
+    finished = {"ok": False}
+
+    def fake_inflight_turn():
+        turn_started.set()
+        turn_may_finish.wait(timeout=5)
+        finished["ok"] = True
+
+    t = threading.Thread(target=fake_inflight_turn, name="fake-inflight-dispatcher", daemon=True)
+    bridge._dispatcher_thread = t
+    t.start()
+    assert turn_started.wait(timeout=2), "fixture thread never started its 'turn'"
+
+    handler_start = real_time.monotonic()
+    with pytest.raises(SystemExit) as exc_info:
+        bridge._handle_sigterm(_sig.SIGTERM, None)
+    handler_elapsed = real_time.monotonic() - handler_start
+    assert exc_info.value.code == 0
+
+    assert handler_elapsed < 1.0, (
+        f"SIGTERM handler took {handler_elapsed:.2f}s — join must be bounded by "
+        f"DISPATCHER_SHUTDOWN_TIMEOUT (0.1s here), not wait indefinitely"
+    )
+    assert t.is_alive(), (
+        "thread should still be mid-turn after the bounded join — if it's dead, "
+        "the handler waited far longer than DISPATCHER_SHUTDOWN_TIMEOUT"
+    )
+
+    # Let the in-flight turn actually finish and confirm it ran to completion
+    # rather than being torn down mid-way by the shutdown handler.
+    turn_may_finish.set()
+    t.join(timeout=2)
+    assert finished["ok"] is True, "an already-in-flight dispatch must finish, not be severed"
+
+
 def test_bridge_dispatch_loop_outer_except_catches_unexpected(bridge, monkeypatch, caplog, tmp_path):
     """Outer try/except in dispatch_poll_loop catches errors the inner per-iteration except misses."""
     fake_env_file = tmp_path / "agent.env"
