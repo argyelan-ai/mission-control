@@ -2733,6 +2733,13 @@ def serve_loop(
                 run_once = _run_factory(task, cwd)
             elif _acp_env_driver() == "acp":
                 # ACP path (OMP_DRIVER=acp): drive `omp acp` via acp_client.
+                # G8 (docs/dispatch-path-parity.md): `cwd` above already
+                # carries the backend-prepared, host-to-container translated
+                # workspace (same value the native branch below receives via
+                # `run_native_turn(cwd=_cwd, ...)`) — it was simply never
+                # reaching this branch. Passed into the factory below so
+                # `run()` no longer falls back to `os.environ.get("OMP_ACP_CWD")
+                # or _acp_cwd_default()` (== os.getcwd(), unprepared).
                 # Interrupt ladder Stufe 1: the heartbeat control channel's
                 # InterruptState IS the cancel signal — a watcher thread flips
                 # it into `session/cancel` mid-turn (Fix 3, ACP flavour).
@@ -2788,23 +2795,31 @@ def serve_loop(
                     max_time=int(turn_deadline) if turn_deadline else 900,
                     permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                     task_id=str(task["id"]),
+                    cwd=cwd,
                     cancel_state=acp_cancel,
                     heartbeat_fn=_acp_tool_heartbeat,
                     interrupt_state=interrupt_state,
                 )
 
-                def run_once(_p=prompt) -> RunOutcome:
+                def run_once(_p=prompt, _cwd=cwd) -> RunOutcome:
                     acp_cancel.requested = False  # fresh cancel per turn (Major 4)
                     interrupt_state.clear()  # fresh signal per turn
+                    # G8 loud-failure guard: an unprepared cwd must block the
+                    # card, not silently run the model in the wrong directory
+                    # (2026-09-13 incident: cwd fell back to os.getcwd(), the
+                    # model bootstrapped its own `gh repo clone` and landed on
+                    # the wrong GitHub org).
+                    _require_prepared_acp_workspace(_cwd)
                     return acp_run(_p)
 
                 # Continue-Nudge (Fix B, ACP flavour — Review #464 Major 3):
                 # the ACP session survives a turn end, so a continueable abort
                 # can resume the SAME session with the nudge as the next prompt
                 # instead of collapsing to a blocker.
-                def continue_once(nudge: str) -> RunOutcome:
+                def continue_once(nudge: str, _cwd=cwd) -> RunOutcome:
                     acp_cancel.requested = False
                     interrupt_state.clear()
+                    _require_prepared_acp_workspace(_cwd)
                     return acp_run(nudge)
             else:
                 task_file = _task_file_for(str(task["id"]))
@@ -4355,12 +4370,40 @@ _RUN_ACP_ACCEPTS_INTERRUPT_STATE = (
 )
 
 
+def _require_prepared_acp_workspace(cwd: str) -> None:
+    """Guardrail (G8, docs/dispatch-path-parity.md): refuse an ACP turn whose
+    `cwd` was never prepared, instead of silently starting the model in an
+    empty or unrelated directory.
+
+    Incident 2026-09-13: the ACP branch dropped the backend-prepared
+    workspace on the floor and fell back to `os.getcwd()` (`/home/agent`,
+    unprepared). The model bootstrapped its own `gh repo clone
+    mission-control`, which resolved the short repo name against the logged
+    in `gh` account (`marknx`) instead of `argyelan-ai` — two PRs landed on
+    the wrong GitHub org and had to be ported by hand. `cwd` existing on
+    disk is a cheap, no-false-positive signal that SOME preparation ran
+    (ad-hoc tasks fall back to the always-present `/workspace` mount root,
+    never to a missing path) — a missing directory means the preparation
+    step itself failed or the host->container path translation is wrong,
+    either way not something to paper over by quietly proceeding.
+    """
+    if not os.path.isdir(cwd):
+        raise RuntimeError(
+            f"ACP-Workspace nicht vorbereitet: '{cwd}' existiert nicht im "
+            "Container. Dispatch/Bridge-Workspace-Vorbereitung ist "
+            "fehlgeschlagen oder der Host-Pfad wurde falsch uebersetzt — "
+            "Turn abgebrochen statt stillem Fallback auf einen "
+            "unvorbereiteten Ordner."
+        )
+
+
 def _make_acp_run_factory(
     *,
     model: Optional[str],
     max_time: int,
     permission_policy: str,
     task_id: str,
+    cwd: Optional[str] = None,
     cancel_state: Optional[ACPCancelState] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
     interrupt_state: Optional[InterruptState] = None,
@@ -4395,13 +4438,19 @@ def _make_acp_run_factory(
     on a pre-#492 base and kill every ACP turn with a TypeError. After #492
     merges (merge order: #492 first), the flag is True and the pass-through
     is unconditional.
+
+    ``cwd`` (G8, docs/dispatch-path-parity.md): serve_loop's per-task,
+    backend-prepared, host-to-container translated workspace directory —
+    the SAME value the native branch passes to ``run_native_turn``. Falls
+    back to ``OMP_ACP_CWD``/``os.getcwd()`` only when no value is given
+    (tests, replay) so old callers keep working unchanged.
     """
     import acp_chat_events
 
     cancel_state = cancel_state or ACPCancelState()
+    cwd = cwd or os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
 
     def run(prompt: str) -> RunOutcome:
-        cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
         # Sessions chat view: one JSONL transcript per ACP session, written
         # where the backend's omp chat adapter reads. A sink that resolves
         # to None (no PI_CODING_AGENT_DIR — e.g. local replay) degrades to
