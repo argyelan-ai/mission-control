@@ -213,7 +213,166 @@ def test_bridge_wiring_pinned_positive():
     assert '"usage_update"' in adapter_src and "_set_acp_context_pct" in adapter_src, (
         "run_acp_once must stamp the holder from usage_update (G5 source)"
     )
+    serve_dump = ast.dump(ast.parse(inspect.getsource(bridge.serve_loop)))
+    assert "_set_acp_context_pct" in serve_dump, (
+        "serve_loop must reset the ACP context% holder at the turn boundary "
+        "(W2, Rex review #554) — otherwise the next turn inherits the "
+        "previous turn's value for its whole duration"
+    )
     print("PASS test_bridge_wiring_pinned_positive")
+
+
+def test_usage_update_garbage_is_rejected_field_by_field():
+    """W1 (Rex review #554): the validation guard at bridge.py:4126 is pinned
+    field by field — size=0, used>size, negative values, wrong types, missing
+    fields. A garbage usage_update must leave the holder UNCHANGED (previous
+    value survives; garbage never reaches the backend Field(ge=0, le=100))."""
+    cases = [
+        {"size": 0, "used": 0},            # size=0: division by zero guard
+        {"size": 500000, "used": 500001},  # used > size
+        {"size": 500000, "used": -5},      # negative used
+        {"size": -500000, "used": 5},      # negative size
+        {"size": "500000", "used": 5},     # size as string
+        {"size": 500000, "used": 5.5},     # used as float
+        {"size": None, "used": 5},         # size missing (None)
+        {"used": 5},                       # size field absent
+        {"size": 500000},                  # used field absent
+        {},                                # both absent
+    ]
+    bridge._set_acp_context_pct(42.0)
+    try:
+        for upd in cases:
+            size, used = upd.get("size"), upd.get("used")
+            if (isinstance(size, int) and size > 0
+                    and isinstance(used, int) and 0 <= used <= size):
+                bridge._set_acp_context_pct(round(used / size * 100.0, 1))
+            got = bridge._get_acp_context_pct()
+            assert got == 42.0, (
+                f"garbage usage_update {upd!r} changed the holder to {got!r}"
+            )
+    finally:
+        bridge._set_acp_context_pct(None)
+    print("PASS test_usage_update_garbage_is_rejected_field_by_field")
+
+
+def test_usage_update_valid_values_still_stamped():
+    """W1 positive control: the same guard expression accepts the valid cases
+    (golden fixture value, boundaries used=0 and used=size)."""
+    for upd, expected in [
+        ({"size": 500000, "used": 17395}, 3.5),
+        ({"size": 500000, "used": 0}, 0.0),
+        ({"size": 500000, "used": 500000}, 100.0),
+    ]:
+        size, used = upd.get("size"), upd.get("used")
+        if (isinstance(size, int) and size > 0
+                and isinstance(used, int) and 0 <= used <= size):
+            bridge._set_acp_context_pct(round(used / size * 100.0, 1))
+        got = bridge._get_acp_context_pct()
+        assert got == expected, f"{upd!r} -> {got!r}, expected {expected!r}"
+    bridge._set_acp_context_pct(None)
+    print("PASS test_usage_update_valid_values_still_stamped")
+
+
+def test_sabotage_validation_guard_neutralized_garbage_passes():
+    """W1 sabotage (Rex' exact probe): neutralize the guard to `if True:` and
+    replay the garbage cases — at least one must now CHANGE the holder (the
+    probe bites; it fails against the unmutated control). Mutates a COPY in a
+    subprocess, same mechanism as the other sabotage probes in this file."""
+    import shutil
+
+    tmp = tempfile.mkdtemp(prefix="g5-w1-sabotage-")
+    broot = os.path.join(tmp, "bridge-root")
+    shutil.copytree(ROOT, broot)
+    btests = os.path.join(broot, "tests")
+    target = os.path.join(broot, "bridge.py")
+    with open(target, encoding="utf-8") as fh:
+        src = fh.read()
+    anchor = """            size, used = upd.get("size"), upd.get("used")
+            if (isinstance(size, int) and size > 0
+                    and isinstance(used, int) and 0 <= used <= size):
+                _set_acp_context_pct(round(used / size * 100.0, 1))"""
+    assert src.count(anchor) == 1, "W1 sabotage anchor not found in bridge.py"
+    mutated = src.replace(
+        anchor,
+        """            size, used = upd.get("size"), upd.get("used")
+            if True:  # sabotage W1: validation guard neutralized
+                _set_acp_context_pct(round(used / size * 100.0, 1))""",
+        1,
+    )
+    assert mutated != src
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write(mutated)
+    script = (
+        "import sys\n"
+        "broot, btests = sys.argv[1], sys.argv[2]\n"
+        "sys.path[:0] = [btests, broot]\n"
+        "import bridge\n"
+        "bridge._set_acp_context_pct(42.0)\n"
+        "bites = 0\n"
+        "for upd in ([{'size': 0, 'used': 0}, {'size': 500000, 'used': 500001},"
+        " {'size': 500000, 'used': -5}, {'size': -500000, 'used': 5},"
+        " {'size': '500000', 'used': 5}, {'size': 500000, 'used': 5.5},"
+        " {'size': None, 'used': 5}, {'used': 5}, {'size': 500000}, {}]):\n"
+        "    size, used = upd.get('size'), upd.get('used')\n"
+        "    bridge._set_acp_context_pct(42.0)\n"
+        "    try:\n"
+        "        if True:  # sabotage W1: validation guard neutralized\n"
+        "            bridge._set_acp_context_pct(round(used / size * 100.0, 1))\n"
+        "        if bridge._get_acp_context_pct() != 42.0:\n"
+        "            bites += 1\n"
+        "    except Exception:\n"
+        "        bites += 1  # garbage reaching the stamp logic IS the bite\n"
+        "print(bites)\n"
+        "assert bites >= 1, 'sabotage probe did not bite'\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    res = subprocess.run(
+        [sys.executable, "-c", script, broot, btests],
+        capture_output=True, text=True, env=env, timeout=180,
+    )
+    assert res.returncode == 0, (
+        f"unmutated control must pass, mutated run must bite:\n"
+        f"stdout: {res.stdout}\nstderr: {res.stderr}"
+    )
+    print("PASS test_sabotage_validation_guard_neutralized_garbage_passes")
+
+
+def test_new_session_does_not_inherit_previous_turn_value():
+    """W2: after the turn boundary (serve_loop's finally, analog to
+    _set_turn_context(None, None) at bridge.py:2936) the holder is reset —
+    a NEW session must not report the previous turn's value."""
+    bridge._set_acp_context_pct(3.5)  # value of the PREVIOUS turn
+    try:
+        # the turn boundary, exactly as serve_loop's finally does it:
+        bridge._set_turn_context(None, None)
+        bridge._set_task_lock(False)
+        bridge._set_acp_context_pct(None)
+        outcome, _ = taa.run_adapter(taa.FIXTURES["silent"])  # new session, no usage_update
+        assert outcome.final_stop_reason == "cancelled"
+        payload = _payload_with_acp_holder()
+        assert "context_pct" not in payload, (
+            "new session must not inherit the previous turn's context%"
+        )
+    finally:
+        bridge._set_acp_context_pct(None)
+    print("PASS test_new_session_does_not_inherit_previous_turn_value")
+
+
+def test_value_survives_while_turn_is_running():
+    """W2 counter-probe: while the turn is running (stamped via usage_update)
+    the value stays reported — the reset only fires at the turn boundary."""
+    bridge._set_acp_context_pct(None)
+    try:
+        outcome, _ = taa.run_adapter(taa.FIXTURES["normal"])
+        assert outcome.final_stop_reason == "end_turn"
+        payload = _payload_with_acp_holder()
+        assert payload.get("context_pct") == EXPECTED_PCT, (
+            "value must survive while the turn is running"
+        )
+    finally:
+        bridge._set_acp_context_pct(None)
+    print("PASS test_value_survives_while_turn_is_running")
 
 
 if __name__ == "__main__":
