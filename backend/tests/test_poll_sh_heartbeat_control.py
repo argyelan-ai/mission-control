@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -279,3 +281,215 @@ def test_run_task_resets_hard_interrupt_marker(tmp_path):
             context_env.write_bytes(backup)
         elif context_env.exists():
             context_env.unlink()
+
+
+# ── heartbeat() itself: the wiring, not just its two pure helpers ──────────
+#
+# Review of PR #562 (Rex, 2026-09-13, B1): the tests above only ever call
+# build_heartbeat_payload/handle_heartbeat_control directly. heartbeat() —
+# the only place the two are actually wired together in production — was
+# untested, so three one-line mutations at the call site (dropping the
+# `handle_heartbeat_control "$response"` call at poll.sh:615, passing empty
+# strings for task_id/attempt_id at poll.sh:590, and discarding the HTTP
+# response again instead of `.read()`-ing it) left all ten tests above green.
+#
+# `_HeartbeatStub` is a real loopback http.server (port 0 → kernel picks a
+# free one) that heartbeat()'s own urllib POST talks to — not a mocked
+# transport, so a passing test is a witness that task_id/attempt_id and the
+# `control` field actually cross the wire, not just that the helpers compute
+# the right thing in isolation. Assertions are made against the tmux log and
+# the received request body — the same two artifacts production reads.
+
+
+class _HeartbeatStub:
+    """Loopback backend for /api/v1/agent/me/heartbeat.
+
+    `requests` collects the decoded payloads in order; `response` is the JSON
+    served back. Binding port 0 lets the kernel assign a free port so
+    parallel pytest workers don't collide.
+    """
+
+    def __init__(self, response: dict):
+        self.requests: list[dict] = []
+        self._response = json.dumps(response).encode()
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler API
+                n = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(n).decode()
+                try:
+                    stub.requests.append(json.loads(raw))
+                except ValueError:
+                    stub.requests.append({"__unparsed__": raw})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(stub._response)))
+                self.end_headers()
+                self.wfile.write(stub._response)
+
+            def log_message(self, *a):  # keep the test run quiet
+                pass
+
+        self._srv = HTTPServer(("127.0.0.1", 0), Handler)
+
+    @property
+    def url(self) -> str:
+        return "http://127.0.0.1:%d" % self._srv.server_address[1]
+
+    def __enter__(self):
+        self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._t.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._srv.shutdown()
+        self._srv.server_close()
+        self._t.join(timeout=5)
+
+
+# scrape_context_pct lives in lib/context-detect.sh, which _make_workspace
+# stubs as an empty file — heartbeat() still calls it. Without this override
+# heartbeat() still runs to completion (no `set -e`), but spews
+# command-not-found onto stderr and muddies test failure output.
+_HB_PRELUDE = 'scrape_context_pct() { echo ""; }\n'
+
+
+def test_heartbeat_posts_task_id_while_turn_is_tracked(tmp_path):
+    """Kills M2: build_heartbeat_payload called with an empty task_id arg.
+
+    Tests the wiring, not the helper — the helper itself is already covered
+    by test_payload_includes_task_id_and_attempt_id_while_turn_active, but
+    its caller could still hand it empty strings and nothing would notice.
+    """
+    work = _make_workspace(tmp_path)
+    with _HeartbeatStub({"ok": True}) as stub:
+        res = _run(
+            work,
+            _HB_PRELUDE
+            + f'export MC_API_URL="{stub.url}"\n'
+            'CURRENT_TASK_ID="task-123"\n'
+            'LAST_DISPATCHED_ATTEMPT_ID="attempt-9"\n'
+            'heartbeat "working"\n',
+        )
+        assert res.returncode == 0, res.stderr
+        assert len(stub.requests) == 1, stub.requests
+        assert stub.requests[0] == {
+            "status": "working",
+            "task_id": "task-123",
+            "attempt_id": "attempt-9",
+        }
+
+
+def test_heartbeat_omits_task_id_when_idle(tmp_path):
+    """Gate counter-direction: while idle the payload stays byte-identical
+    to the legacy form. task_id/attempt_id are `str | None = None` on the
+    backend (agents.py:167/176) — a field that's sometimes present and
+    sometimes absent is only safe if omitting it is the documented legacy
+    path.
+    """
+    work = _make_workspace(tmp_path)
+    with _HeartbeatStub({"ok": True}) as stub:
+        res = _run(
+            work,
+            _HB_PRELUDE
+            + f'export MC_API_URL="{stub.url}"\n'
+            'CURRENT_TASK_ID=""\n'
+            'LAST_DISPATCHED_ATTEMPT_ID=""\n'
+            'heartbeat "idle"\n',
+        )
+        assert res.returncode == 0, res.stderr
+        assert stub.requests == [{"status": "idle"}]
+
+
+def test_heartbeat_acts_on_hard_control_from_the_response(tmp_path):
+    """Kills M1 AND M6 — the two lines the PR title is actually about.
+
+    M1 (wiring call removed) and M6 (response discarded again, urlopen
+    without .read()) both leave the ten pre-existing tests green because
+    none of them drives heartbeat() itself. Here both show up: without a
+    read response, or without the call, there is no Escape.
+    """
+    work = _make_workspace(tmp_path)
+    control = {"ok": True, "control": {"interrupt": "hard", "reason": "Task entzogen"}}
+    with _HeartbeatStub(control) as stub:
+        res = _run(
+            work,
+            _HB_PRELUDE
+            + f'export MC_API_URL="{stub.url}"\n'
+            'CURRENT_TASK_ID="task-123"\n'
+            'LAST_DISPATCHED_ATTEMPT_ID="attempt-9"\n'
+            'heartbeat "working"\n',
+        )
+        assert res.returncode == 0, res.stderr
+        assert _escape_count(work / "tmux.log") == 1, res.stderr
+
+
+def test_heartbeat_hard_control_escapes_once_across_cycles(tmp_path):
+    """The dedup at the real call site, not isolated on the helper.
+
+    Two consecutive 30s cycles with an unchanged `hard` response must add up
+    to exactly one Escape. poll.sh runs in every container agent — an Escape
+    per cycle would be fleet-wide sustained fire into running turns.
+    """
+    work = _make_workspace(tmp_path)
+    control = {"control": {"interrupt": "hard", "reason": "Task blocked durch Fremdakteur"}}
+    with _HeartbeatStub(control) as stub:
+        res = _run(
+            work,
+            _HB_PRELUDE
+            + f'export MC_API_URL="{stub.url}"\n'
+            'CURRENT_TASK_ID="task-123"\n'
+            'heartbeat "working"\n'
+            'heartbeat "working"\n',
+        )
+        assert res.returncode == 0, res.stderr
+        assert len(stub.requests) == 2, stub.requests
+        assert _escape_count(work / "tmux.log") == 1, res.stderr
+
+
+@pytest.mark.parametrize(
+    "response_body",
+    [
+        {"ok": True},  # no control field at all
+        {"control": {"interrupt": "soft", "reason": "Kommentare"}},  # soft = no-op
+    ],
+    ids=["no-control", "soft"],
+)
+def test_heartbeat_stays_silent_without_hard_control(tmp_path, response_body):
+    """Counter-probe to the test above: an Escape appearing when `hard` is in
+    the response is only a statement about the control field if NO Escape
+    appears without `hard`. Otherwise an Escape triggered for some unrelated
+    reason would produce the same green bar.
+    """
+    work = _make_workspace(tmp_path)
+    with _HeartbeatStub(response_body) as stub:
+        res = _run(
+            work,
+            _HB_PRELUDE
+            + f'export MC_API_URL="{stub.url}"\n'
+            'CURRENT_TASK_ID="task-123"\n'
+            'heartbeat "working"\n',
+        )
+        assert res.returncode == 0, res.stderr
+        assert len(stub.requests) == 1, stub.requests
+        assert _escape_count(work / "tmux.log") == 0
+
+
+def test_heartbeat_survives_an_unreachable_backend(tmp_path):
+    """No stub, MC_API_URL points into the void: heartbeat() must run
+    through silently (fallback payload, `|| true` on the python3 call) and
+    must not send an Escape. A network error is not an interrupt.
+    """
+    work = _make_workspace(tmp_path)
+    res = _run(
+        work,
+        _HB_PRELUDE
+        + 'export MC_API_URL="http://127.0.0.1:1"\n'
+        'CURRENT_TASK_ID="task-123"\n'
+        'heartbeat "working"\n'
+        'echo SURVIVED\n',
+    )
+    assert res.returncode == 0, res.stderr
+    assert "SURVIVED" in res.stdout
+    assert _escape_count(work / "tmux.log") == 0

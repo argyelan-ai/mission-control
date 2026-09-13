@@ -619,12 +619,21 @@ except Exception as e:
 # Feld der Heartbeat-Antwort. Der Bridge-Pfad tut das schon lange (`_on_control`,
 # bridge.py:1717); poll.sh las die Antwort bisher gar nicht.
 #
-# Nur "hard" wird gehandhabt — "soft" bleibt bewusst No-Op: das ist exakt
-# bridge.py's eigene Semantik (bridge.py:2916 — ein soft interrupt kommentiert
-# nur und laesst den Turn zu Ende laufen, gecancelt wird nur bei "hard"). Die
-# zugrundeliegenden ungelesenen Kommentare, die einen soft-Interrupt ausloesen,
-# kommen ueber den bestehenden deliver_comments/deliver_messages-Kanal an —
-# ein zusaetzliches Escape hier waere ein neuer Eingriff, keine Parity-Angleichung.
+# Nur "hard" wird gehandhabt — "soft" bleibt hier bewusst No-Op, ANDERS als
+# die Bridge, nicht als deren Spiegelung: bridge.py:3660 prueft
+# interrupt_state.fired() in jeder Turn-Runde, und fired() ist fuer "soft"
+# genauso gesetzt wie fuer "hard" (InterruptState-Docstring, bridge.py:3419-
+# 3422: "soft also ends the run"). Die Bridge cancelt den Turn also auch bei
+# "soft" ueber dieselbe Abbruchleiter (_run_interrupt_ladder, bridge.py:3453) —
+# bridge.py:2916 ist nur die Nachbearbeitung DANACH (der Nudge-Kommentar),
+# nicht der Beleg dafuer, dass "soft" den Turn am Laufen liesse. Die Bridge
+# kann sich den Abbruch leisten, weil sie dieselbe Session anschliessend mit
+# dem Nudge fortsetzt (serve_loop). poll.sh hat keinen Fortsetzungspfad: ein
+# Escape auf "soft" wuerde den Turn killen und nichts wieder aufnehmen, waere
+# also strikt schlechter als warten. Die zugrundeliegenden ungelesenen
+# Kommentare, die einen soft-Interrupt ausloesen, kommen ohnehin ueber den
+# bestehenden deliver_comments/deliver_messages-Kanal an — ein zusaetzliches
+# Escape hier waere ein neuer Eingriff, keine Parity-Angleichung.
 #
 # Idempotenz ueber LAST_HARD_INTERRUPT_TASK_ID (wie LAST_CANCELLED_TASK_ID /
 # LAST_STOPPED_TASK_ID): ein Escape pro Task, nicht pro 30s-Heartbeat-Zyklus.
