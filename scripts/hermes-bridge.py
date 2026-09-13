@@ -50,6 +50,17 @@ WORKSPACE = HOME_DIR / ".mc/agents/hermes"
 ENV_FILE = WORKSPACE / "agent.env"
 SESSION = "hermes-worker"
 ENTRYPOINT = WORKSPACE / "entrypoint.sh"
+# W5 (2026-09-13): per-agent Kontextdatei statt geteilter /tmp/mc-context.env.
+# Hermes schreibt den Context ueber die eigene `mc`-CLI (ack/recover schreiben
+# TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID, mc_cli/commands.py) — ohne eigenen
+# Pfad landeten die in der GETEILTEN /tmp-Datei und "last writer wins" färbte
+# auf fremde Karten ab (Beleg 13.09.2026: Hermes' TASK_ID=4c9bb492 auf
+# fremden Karten). Die CLI liest MC_CONTEXT_ENV_PATH (mc_cli/config.py:
+# context_env_path); ohne die Variable gilt der Legacy-/tmp-Pfad.
+# load_env_from_file injiziert den Default in JEDEN Subprozess-Env
+# (entrypoint-Spawn, tmux-Kommandos), eine explizit gesetzte Variable gewinnt.
+MC_CONTEXT_ENV_PATH = os.environ.get("MC_CONTEXT_ENV_PATH") or str(WORKSPACE / "mc-context.env")
+
 TMUX_BIN = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
 # entrypoint.sh's own stdout/stderr — including the hermes-config-patch.py
 # WARN line on a failed config.yaml sync — used to be sent to DEVNULL, so a
@@ -169,9 +180,14 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
     """Parse KEY=VALUE lines from agent.env, strip quotes, skip comments/blanks.
 
     Returns os.environ.copy() merged with file contents and HOME forced to HOME_DIR.
+
+    W5 (2026-09-13): MC_CONTEXT_ENV_PATH defaults to this agent's own context
+    file, set BEFORE agent.env is merged — an explicit value from the bridge
+    env or an agent.env assignment below wins over the default.
     """
     env = os.environ.copy()
     env["HOME"] = str(HOME_DIR)
+    env.setdefault("MC_CONTEXT_ENV_PATH", MC_CONTEXT_ENV_PATH)
     if not env_path.exists():
         return env
     with env_path.open() as f:

@@ -109,8 +109,9 @@ def _cmd_ack(args, client, cfg):
     Erfolg behandeln.
 
     Kontext-Fortschreibung (W5-E, 2026-09-11): nach dem ACK schreibt die CLI
-    TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID der GEACKTEN Karte nach
-    /tmp/mc-context.env. Ohne das arbeiteten alle nachgelagerten Verben
+    TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID der GEACKTEN Karte in die Context-
+    Datei (MC_CONTEXT_ENV_PATH, Legacy /tmp/mc-context.env). Ohne das arbeiteten
+    alle nachgelagerten Verben
     (`mc patch`, `mc comment`, …) auf der Karte aus dem ALTEN Kontext —
     gefaehrlich, weil die Stale-Pruefung des Backends nicht scheitert,
     sobald die alte Attempt-ID noch gueltig ist, sondern die FALSCHE Karte
@@ -233,24 +234,35 @@ def _cmd_ack(args, client, cfg):
     return 0
 
 
-def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> None:
-    """Schreibt /tmp/mc-context.env (poll.sh-Format, poll.sh:489).
+def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> str:
+    """Schreibt die Context-Datei (MC_CONTEXT_ENV_PATH, Legacy
+    /tmp/mc-context.env; poll.sh-Format). Gibt den Pfad zurueck.
 
     Fehler sind LAUT: schlaegt das Schreiben fehl, arbeitet der naechste
     `mc`-Call sonst still auf dem alten Kontext — genau der W5-E-Bug.
     Darum UsageError (exit != 0) statt stderr-Warnung.
+
+    W5 (2026-09-13): pro-Agent-Pfade (~/.mc/agents/<slug>/mc-context.env)
+    werden 0600 angelegt — Attempt-IDs gehoeren nicht vor die Welt. Der
+    Legacy-/tmp-Pfad bleibt wie bisher (poll.sh chmod 644).
     """
+    from .config import DEFAULT_CONTEXT_ENV_PATH, context_env_path
+
+    path = context_env_path()
     try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(f"TASK_ID={task_id}\n")
             f.write(f"BOARD_ID={board_id}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={attempt_id}\n")
+        if path != DEFAULT_CONTEXT_ENV_PATH:
+            os.chmod(path, 0o600)
     except OSError as e:
         raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            f"{path} nicht schreibbar: {e}. "
             "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
             "erst Schreibrechte fixen, dann weiterarbeiten."
         ) from e
+    return path
 
 
 def _force_close_open_checklist(client: Client, cfg: Config) -> int:
@@ -2270,23 +2282,18 @@ def _cmd_recover(args, client, cfg):
     # Context-File so schreiben dass nachfolgende mc-Calls den Header setzen
     # koennen. poll.sh schreibt diese Datei normalerweise bei new_task —
     # beim manuellen `mc recover` ausserhalb von poll.sh muss der CLI das
-    # selbst tun.
-    try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
-            f.write(f"TASK_ID={task['id']}\n")
-            f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
-            f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
-    except OSError as e:
-        raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
-            "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
-            "erst Schreibrechte fixen, dann weiterarbeiten."
-        ) from e
+    # selbst tun. W5: ueber _write_context_file (MC_CONTEXT_ENV_PATH, 0600
+    # auf Pro-Agent-Pfaden) statt hartcodiertem /tmp-Literal.
+    ctx_path = _write_context_file(
+        task_id=task["id"],
+        board_id=task.get("board_id") or "",
+        attempt_id=task.get("dispatch_attempt_id") or "",
+    )
     # Prompt auf stdout (agent liest das) — kein JSON-Wrapping
     print(f"# Recovery-Prompt fuer Task {task['id']}")
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
     print(f"# dispatch_attempt_id: {task['dispatch_attempt_id']}")
-    print(f"# Context-File: /tmp/mc-context.env aktualisiert")
+    print(f"# Context-File: {ctx_path} aktualisiert")
     # Der Prompt sagt dir WAS zu tun ist, nicht was schon besprochen wurde.
     # Genau hier — direkt nach einem Restart — braucht der Agent den Zeiger
     # auf den Gespraechsverlauf, sonst kennt er das Verb nie.
