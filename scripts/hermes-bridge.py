@@ -259,11 +259,34 @@ def deliver_prompt(text: str, *, wait: bool = False) -> bool:
     ACP: the daemon's own answer IS the ack; `busy` means the turn is taken and
     the caller must retry, never that the text was delivered. `wait` blocks
     until the turn ends, so the dispatch loop offers exactly one task per turn.
+
+    A running turn is never knocked on: every refused `prompt` lands as a red
+    `busy` card in the operator's chat (the daemon reports it there, by
+    design — that is what the composer needs). Live 13.09.2026 the poll loop
+    produced six of them during ONE chat reply. So: busy + `wait` → wait for
+    the turn to end first; busy without `wait` (or still busy after the wait)
+    → not delivered, the caller retries next poll.
     """
     if not driver_is_acp():
         _send_to_tmux(text)
         return True
     daemon = chat_daemon()
+    if daemon.busy():
+        if not wait:
+            log.info("deliver_prompt: a turn is running — not offering now")
+            return False
+        # Bounded twice over: this wait, and the daemon's own prompt timeout
+        # (acp_chat prompt_timeout) after which the turn ends with an error
+        # card and the idle flag opens — a hung child cannot hold this
+        # forever. A timeout here is loud on purpose: silence would turn
+        # "noisy" into "stuck", which is the worse failure.
+        if not daemon.wait_idle(DISPATCH_TURN_TIMEOUT):
+            log.warning(
+                "deliver_prompt: turn still running after %ss — task stays on "
+                "the board, retry next poll",
+                DISPATCH_TURN_TIMEOUT,
+            )
+            return False
     answer = daemon.prompt(text)
     if not answer.get("ok"):
         log.info("deliver_prompt: chat daemon refused (%s)", answer.get("error"))
