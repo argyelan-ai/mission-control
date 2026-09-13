@@ -718,10 +718,13 @@ services:
       - --remote-allow-origins=*
       - about:blank
     healthcheck:
-      # Probe :9223 (the socat forward consumers actually use), not :9222 —
-      # a dead forward with a live browser was exactly the failure that slipped
-      # through before. wget has no socat/curl dep and ships in alpine-chrome.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9223/json/version >/dev/null 2>&1 || exit 1"]
+      # Real CDP roundtrip (HTTP /json/version + a WS Target.getTargets call),
+      # not just HTTP — see docker/cdp-browser/healthcheck.sh for why. Incident
+      # 2026-09-13: HTTP-only stayed "healthy" for 5 days while the WebSocket
+      # path was wedged and every Playwright call hung at its 30s timeout.
+      # timeout: 10s covers the script's own worst case (3s HTTP + 5s WS = 8s)
+      # with margin, so Docker's own kill never fires before the script's.
+      test: ["CMD-SHELL", "/usr/local/bin/cdp-healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
