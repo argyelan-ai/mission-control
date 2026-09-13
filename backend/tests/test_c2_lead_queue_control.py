@@ -50,7 +50,7 @@ async def _setup(session: AsyncSession, *, task_status: str = "inbox"):
 
     worker_raw, worker_hash = generate_agent_token()
     worker = Agent(
-        name="Sparky",
+        name="Worker",
         role="developer",
         board_id=board.id,
         agent_token_hash=worker_hash,
