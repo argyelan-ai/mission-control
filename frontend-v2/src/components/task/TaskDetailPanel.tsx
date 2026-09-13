@@ -99,7 +99,7 @@ export default function TaskDetailPanel({
           aria-label="Task details"
           style={{
             maxHeight: "calc(100dvh - env(safe-area-inset-top) - 5.5rem)",
-            backgroundColor: C.bgBase,
+            backgroundColor: "var(--color-bg-surface)",
             border: `1px solid ${C.border}`,
             boxShadow: "var(--shadow-elevated)",
           }}

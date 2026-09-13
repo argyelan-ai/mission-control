@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { X, Send, Plus, Bug, Sparkles, Search as SearchIcon, AlertTriangle } from "lucide-react";
+import { Send, Plus, Bug, Sparkles, Search as SearchIcon, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -16,6 +16,8 @@ import {
 import { C as MC } from "@/components/homepage/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { alpha } from "@/lib/colors";
+import { useTranslations } from "next-intl";
+import { PanelHeader, PanelFooter } from "./PanelShell";
 
 // ── Design tokens — sourced from the shared MC palette (single source, no purple)
 const C = {
@@ -30,6 +32,7 @@ const C = {
   error: MC.error,
   warning: MC.warning,
   textPrimary: MC.textPrimary,
+  textSecondary: MC.textSecondary,
   textMuted: MC.textMuted,
 };
 
@@ -57,6 +60,7 @@ interface CreateTaskModalProps {
 }
 
 export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps) {
+  const t = useTranslations("tasks");
   const qc = useQueryClient();
 
   // Modal state
@@ -332,40 +336,28 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
               transition={{ duration: prefersReducedMotion ? 0 : 0.22, ease: [0.16, 1, 0.3, 1] }}
               className="relative w-full mx-2 rounded-t-2xl rounded-b-none sm:mx-0 sm:max-w-[880px] sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
               style={{
-                background: C.elevated,
+                backgroundColor: "var(--color-bg-surface)",
                 border: "1px solid var(--color-border)",
-                // Kein farbiger Halo mehr: unter dem hellen Akzent wäre ein
-                // 60px-Schein um den Dialog das lauteste Element der Seite,
-                // und Farbe ist hier reserviert für Status. Tiefe kommt allein
-                // aus dem Schlagschatten.
-                boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
+                // Kein farbiger Halo: Farbe ist für Status reserviert. Tiefe
+                // kommt allein aus dem Schatten-Token (hell: weich, dunkel: tief).
+                boxShadow: "var(--shadow-elevated)",
               }}
             >
-              {/* Top edge highlight */}
-              <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
 
-              {/* Header */}
-              <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
-                <div className="flex items-center gap-2">
-                  <span id="create-task-title" className="text-sm font-semibold" style={{ color: C.textPrimary }}>New task</span>
-                  {currentTemplate && (
-                    <span
-                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[9px] font-medium"
-                      style={{
-                        color: currentTemplate.color,
-                        background: `${alpha(currentTemplate.color, 0.09)}`,
-                        border: `1px solid ${alpha(currentTemplate.color, 0.2)}`,
-                      }}
-                    >
-                      <currentTemplate.icon size={9} />
+              <PanelHeader
+                titleId="create-task-title"
+                title={t("form.newTask")}
+                description={
+                  currentTemplate ? (
+                    <span className="inline-flex items-center gap-1.5" style={{ color: currentTemplate.color }}>
+                      <currentTemplate.icon size={11} />
                       {currentTemplate.label}
                     </span>
-                  )}
-                </div>
-                <button onClick={resetForm} aria-label="Close" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
-                  <X size={16} />
-                </button>
-              </div>
+                  ) : undefined
+                }
+                onClose={resetForm}
+                closeLabel={t("form.close")}
+              />
 
               {/* Reference upload banner — task already exists at this point,
                   so we keep the modal open instead of silently discarding it. */}
@@ -408,37 +400,26 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                 />
               </div>
 
-              {/* Footer */}
-              <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-                <span className="text-[10px]" style={{ color: C.textMuted }}>
-                  Cmd+Enter = create · Esc = close
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    className="px-3.5 py-1.5 text-[11px] rounded-lg cursor-pointer transition-colors"
-                    style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={(!isRetry && !payload.title.trim()) || loading}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-semibold rounded-lg cursor-pointer transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                    style={{
-                      background: `linear-gradient(135deg, ${C.accentHover}, ${C.accent})`,
-                      color: C.onAccent,
-                      // System A: kein Glow — der helle Akzent trägt selbst genug.
-                      boxShadow: "none",
-                    }}
-                  >
-                    <Send size={11} />
-                    {loading ? "..." : isRetry ? "Retry uploads" : "Create task"}
-                  </button>
-                </div>
-              </div>
+              <PanelFooter hint={t("form.footerHint")}>
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="px-3.5 py-2 text-xs rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                  style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+                >
+                  {t("cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={(!isRetry && !payload.title.trim()) || loading}
+                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg cursor-pointer transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: C.accent, color: C.onAccent }}
+                >
+                  <Send size={11} />
+                  {loading ? "…" : isRetry ? t("form.retryUploads") : t("form.createTask")}
+                </button>
+              </PanelFooter>
             </motion.div>
           </motion.div>
         )}

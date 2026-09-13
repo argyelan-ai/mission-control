@@ -101,7 +101,7 @@ describe("CreateTaskModal — Repo-Auswahl (ADR-052)", () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
 
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Ad-hoc mit Repo");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Ad-hoc mit Repo");
 
     const select = await screen.findByRole("combobox", { name: "Repository" });
     await userEvent.selectOptions(select, repo.id);
@@ -203,7 +203,7 @@ describe("CreateTaskModal — Human review default (05.07.)", () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
 
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Default review task");
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Default review task");
     await userEvent.click(screen.getByRole("button", { name: "Create task" }));
 
     await waitFor(() => expect(createSpy).toHaveBeenCalled());
@@ -217,8 +217,8 @@ describe("CreateTaskModal — Human review default (05.07.)", () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
     await openModal();
 
-    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Agent-reviewed task");
-    await userEvent.click(screen.getByRole("button", { name: /erweitert/i }));
+    await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Agent-reviewed task");
+    await userEvent.click(screen.getByRole("button", { name: /advanced/i }));
     await userEvent.click(screen.getByRole("button", { name: /human review/i }));
     await userEvent.click(screen.getByRole("button", { name: "Create task" }));
 
