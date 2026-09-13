@@ -558,6 +558,64 @@ async def test_inbox_reset_clears_hold_reason(client: AsyncClient, async_session
     )
 
 
+# ── Warning (Runde 3, Rex review W1): operator PATCH overriding a held
+# card must clear the hold, not leave it running under a lock nothing can
+# lift ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_operator_override_of_held_card_clears_run_control(
+    client: AsyncClient, async_session, auth_client
+):
+    """Warning (Rex review, Runde 3 W1): an operator PATCH that overrides a
+    held card by moving it straight from inbox to a running status (e.g.
+    in_progress) used to leave run_control=manual_hold and hold_reason in
+    place — only the inbox-reset branch cleared them. The card then ran,
+    but the assigned agent's very next status update hit the run_control
+    409 guard (agent_task_status.py) for a hold the operator had just
+    overridden and could no longer see or release (`mc release` only
+    accepts status=inbox) — a deadlock with no exit.
+
+    Overriding the lead's hold is fine — the operator is allowed to. It
+    must just not leave the card running under a lock nothing can lift.
+
+    Sabotage-Probe: removing the `elif old_status == "inbox" and
+    task.run_control == "manual_hold": ...` branch (routers/tasks.py)
+    turns this red — run_control survives the override and the agent's
+    follow-up PATCH gets 409 instead of 200.
+    """
+    board, lead, lead_token, worker, worker_token, _o, _ot, task = await _setup(async_session)
+
+    hold = await client.post(
+        f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/hold",
+        json={"reason": "Deploy-Fenster"},
+        headers={"Authorization": f"Bearer {lead_token}"},
+    )
+    assert hold.status_code == 200, hold.text
+
+    override = await auth_client.patch(
+        f"/api/v1/boards/{board.id}/tasks/{task.id}",
+        json={"status": "in_progress"},
+    )
+    assert override.status_code == 200, override.text
+    assert override.json()["run_control"] is None, (
+        "Operator-Override liess run_control=manual_hold stehen"
+    )
+    assert override.json()["hold_reason"] is None, (
+        "Operator-Override liess hold_reason als Phantom-Begruendung stehen"
+    )
+
+    # The deadlock Rex found: with run_control still stuck, ANY subsequent
+    # agent PATCH on this card — even one that touches no status at all —
+    # hits the run_control 409 guard before it can do anything else.
+    followup = await client.patch(
+        f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+        json={"description": "Weiterarbeit nach Operator-Override"},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert followup.status_code == 200, followup.text
+
+
 # ── Warning 2: reassign must release the old agent's active-task lock ──────
 
 
@@ -749,6 +807,116 @@ async def test_router_phase_auto_advance_skips_held_next_phase(auth_client, asyn
         assert refreshed.run_control == "manual_hold"
 
 
+# ── Runde 3 (Rex review B1): the fix above only proved the held phase
+# doesn't force-start — with two phases there is nothing behind the hold to
+# leapfrog to, so the underlying bug (a FILTER, not a stop-check) stayed
+# invisible. These two tests add a third phase to prove the walk actually
+# halts at the hold instead of skipping past it. ──────────────────────────
+
+
+@pytest.mark.asyncio
+@patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
+async def test_watchdog_phase_auto_advance_does_not_leapfrog_held_phase(mock_emit, session, make_board):
+    """Three phases: 1=done, 2=held, 3=inbox. Before the fix,
+    `Task.run_control.is_(None)` sat as a FILTER on the candidate query — a
+    filter removes the held row from the result set, it doesn't stop the
+    walk, so the query fell through to phase 3 and started it while phase 2
+    stayed held. The fix selects the immediate next phase by sort_order
+    first and only THEN checks run_control, so a hold stops the advance
+    instead of being skipped over.
+
+    Sabotage-Probe: reverting `if not next_phase or next_phase.run_control
+    is not None: return` back to a `Task.run_control.is_(None)` query filter
+    (watchdog/task_monitor.py, `_auto_advance_next_phase`) turns this red —
+    phase 3 flips to in_progress despite phase 2's hold.
+    """
+    from app.services.watchdog.task_monitor import TaskMonitorMixin
+    from tests.test_auto_advance_phase import _create_project, _create_phase
+
+    board = await make_board(name="Leapfrog Board", slug=f"leapfrog-{uuid.uuid4().hex[:8]}")
+    project = await _create_project(session, board.id)
+
+    phase1 = await _create_phase(session, board.id, project.id, "Phase 1", sort_order=1, status="done")
+    phase2 = await _create_phase(session, board.id, project.id, "Phase 2", sort_order=2, status="inbox")
+    phase2.run_control = "manual_hold"
+    phase2.hold_reason = "Deploy-Fenster"
+    session.add(phase2)
+    phase3 = await _create_phase(session, board.id, project.id, "Phase 3", sort_order=3, status="inbox")
+    await session.commit()
+
+    monitor = TaskMonitorMixin()
+    await monitor._auto_advance_next_phase(session, phase1)
+
+    await session.refresh(phase2)
+    await session.refresh(phase3)
+    assert phase2.status == "inbox"
+    assert phase2.run_control == "manual_hold"
+    assert phase3.status == "inbox", (
+        "Leapfrog: Phase 3 wurde gestartet, obwohl Phase 2 gehalten ist"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_phase_auto_advance_does_not_leapfrog_held_phase(auth_client, async_session):
+    """Same three-phase leapfrog as above, but the duplicate inline
+    implementation in routers/tasks.py (triggered synchronously by the PATCH
+    that sets phase 1's status to 'done').
+
+    Sabotage-Probe: reverting the post-selection check back to a
+    `Task.run_control.is_(None)` query filter (routers/tasks.py,
+    update_task) turns this red — phase 3 flips to in_progress despite
+    phase 2's hold.
+    """
+    from app.models.board import Project
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(name="Leapfrog Inline Board", slug=f"leapfrog-inline-{uuid.uuid4().hex[:8]}")
+        s.add(board)
+        await s.commit()
+        await s.refresh(board)
+
+        project = Project(board_id=board.id, name="Leapfrog Inline Project", status="active", project_type="feature")
+        s.add(project)
+        await s.commit()
+        await s.refresh(project)
+
+        phase1 = Task(
+            board_id=board.id, project_id=project.id, title="Phase 1",
+            sort_order=1, status="review", parent_task_id=None,
+        )
+        s.add(phase1)
+        phase2 = Task(
+            board_id=board.id, project_id=project.id, title="Phase 2",
+            sort_order=2, status="inbox", parent_task_id=None,
+            run_control="manual_hold", hold_reason="Deploy-Fenster",
+        )
+        s.add(phase2)
+        phase3 = Task(
+            board_id=board.id, project_id=project.id, title="Phase 3",
+            sort_order=3, status="inbox", parent_task_id=None,
+        )
+        s.add(phase3)
+        await s.commit()
+        await s.refresh(phase1)
+        await s.refresh(phase2)
+        await s.refresh(phase3)
+
+    resp = await auth_client.patch(
+        f"/api/v1/boards/{board.id}/tasks/{phase1.id}",
+        json={"status": "done"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        refreshed2 = await s.get(Task, phase2.id)
+        refreshed3 = await s.get(Task, phase3.id)
+        assert refreshed2.status == "inbox"
+        assert refreshed2.run_control == "manual_hold"
+        assert refreshed3.status == "inbox", (
+            "Leapfrog: Phase 3 wurde gestartet, obwohl Phase 2 gehalten ist"
+        )
+
+
 @pytest.mark.asyncio
 async def test_subtask_creation_does_not_ack_a_held_parent(client: AsyncClient, async_session):
     """Fourth path checked while searching for a third: creating a subtask
@@ -812,3 +980,61 @@ async def test_subtask_creation_does_not_ack_a_held_parent(client: AsyncClient, 
             "Held parent wurde ueber die Subtask-Erstellung implizit ge-ACKt"
         )
         assert refreshed_parent.run_control == "manual_hold"
+
+
+# ── Sechster Claim-Pfad (Runde 3, Rex review B2): impliziter ACK ueber den
+# Kommentar-Kanal umgeht den Hold ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_comment_does_not_implicitly_ack_a_held_dispatched_card(client: AsyncClient, async_session):
+    """Sixth claim path (Rex review, Runde 3 B2): a card pushed to a worker
+    but not yet ACKed sits at status="inbox" with dispatched_at already
+    set — the exact same shape `mc hold` accepts, since hold only checks
+    `status == "inbox"`, never `dispatched_at`. If the Board Lead holds such
+    a card and the worker then posts its first comment, `apply_ack_handshake`
+    used to see `assigned_agent_id == agent.id and ack_at is None and
+    dispatched_at is not None` — all true — and silently ACKed it: ack_at
+    set, status inbox -> in_progress, active-task lock taken. The hold that
+    was JUST applied gets undone through a channel that carries no lifecycle
+    intent at all.
+
+    Rex's Sonde: hold -> 200, Kommentar -> 201, danach status='in_progress'.
+
+    Sabotage-Probe: removing `and task.run_control is None` from the guard
+    in `apply_ack_handshake` (task_lifecycle.py) turns this red — the
+    comment flips the held card to in_progress and sets ack_at.
+    """
+    board, lead, lead_token, worker, worker_token, _o, _ot, task = await _setup(async_session)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        db_task = await s.get(Task, task.id)
+        db_task.dispatched_at = dt.datetime.now(tz=dt.timezone.utc)
+        s.add(db_task)
+        await s.commit()
+
+    hold = await client.post(
+        f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/hold",
+        json={"reason": "Deploy-Fenster — Karte soll trotz laufendem Dispatch warten"},
+        headers={"Authorization": f"Bearer {lead_token}"},
+    )
+    assert hold.status_code == 200, hold.text
+
+    comment = await client.post(
+        f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+        json={"content": "Fange an.", "comment_type": "progress"},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert comment.status_code == 201, comment.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        refreshed = await s.get(Task, task.id)
+        refreshed_worker = await s.get(Agent, worker.id)
+        assert refreshed.status == "inbox", (
+            "Kommentar hat die gehaltene Karte implizit ge-ACKt (inbox -> in_progress)"
+        )
+        assert refreshed.run_control == "manual_hold"
+        assert refreshed.ack_at is None
+        assert refreshed_worker.current_task_id is None, (
+            "Kommentar hat trotz Hold das Aktiv-Task-Lock genommen"
+        )

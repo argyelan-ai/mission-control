@@ -1480,7 +1480,24 @@ async def update_task(
             # as a phantom justification for a hold that no longer exists
             # (PR #533 Nacharbeit, Warning 1).
             task.hold_reason = None
-        elif new_status == "in_progress" and old_status != "in_progress":
+        elif old_status == "inbox" and task.run_control == "manual_hold":
+            # C2 (PR #533 Nacharbeit Runde 3, Rex review W1): an operator
+            # PATCH overriding a held card (e.g. inbox -> in_progress,
+            # bypassing `mc release`) left run_control=manual_hold and
+            # hold_reason in place. The card then ran, but every subsequent
+            # agent status update (review/blocker/...) hit the run_control
+            # 409 guard in task_lifecycle.py for a hold the operator just
+            # overrode and can no longer see — a deadlock the agent cannot
+            # escape (`mc release` only accepts status=inbox, not this
+            # card's new status). Overriding the lead's hold is fine — the
+            # operator is allowed to — it just must not leave the card
+            # running under a lock nothing can lift. Deliberately narrowed
+            # to run_control=="manual_hold": an admin "stopped" run has its
+            # own resume path (operations.py) and must not be cleared here.
+            task.run_control = None
+            task.hold_reason = None
+
+        if new_status == "in_progress" and old_status != "in_progress":
             # F2 fix (Plan 26-03): first-set-wins. Re-opens (review→in_progress,
             # blocked→in_progress) preserve the original started_at for accurate
             # Cycle Time analytics. Only set when currently NULL.
@@ -1711,21 +1728,31 @@ async def update_task(
     # Phase done → auto-advance to the next phase + project progress
     if new_status == "done" and task.parent_task_id is None and task.project_id:
         # Find and start the next phase
-        # C2 (PR #533 Nacharbeit): a lead-held next phase (run_control=
-        # manual_hold) must not be force-started here — same reasoning as
-        # the poll/pull claim-path guards. Skipping it isn't a dead end:
-        # the phase stays status="done" for its predecessor, so the
-        # watchdog's periodic _auto_advance_next_phase (task_monitor.py)
-        # re-checks and starts it on its own once the hold is released.
+        # C2 (PR #533 Nacharbeit Runde 3, Rex review B1): a lead-held next
+        # phase (run_control=manual_hold) must STOP the advance, not be
+        # skipped over. `run_control.is_(None)` used to sit as a filter on
+        # this query — a filter removes the held row from the result set,
+        # it doesn't halt the walk, so the query happily returned the next
+        # *unheld* phase after it and started that one instead (leapfrog).
+        # Worse: on a later tick with the held phase's predecessor already
+        # "done" again (it never changed), the same leapfrog re-fires for
+        # every phase behind the hold — one `mc hold` cascades the whole
+        # rest of the project into parallel in_progress. The check now runs
+        # AFTER selecting the immediate next phase by sort_order: if that
+        # phase is held, stop — don't look further. The phase stays
+        # status="inbox" until released; the watchdog's periodic
+        # _auto_advance_next_phase (task_monitor.py) then starts it on its
+        # own the first tick after release.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == task.project_id,
                 Task.parent_task_id.is_(None),  # type: ignore[attr-defined]
                 Task.status == "inbox",
-                Task.run_control.is_(None),  # type: ignore[union-attr]
                 Task.sort_order > task.sort_order,
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()
+        if next_phase and next_phase.run_control is not None:
+            next_phase = None
         if next_phase:
             from app.services.task_lifecycle import record_task_event
             await record_task_event(

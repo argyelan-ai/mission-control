@@ -665,22 +665,28 @@ class TaskMonitorMixin:
         if not completed_parent.project_id:
             return
 
-        # C2 (PR #533 Nacharbeit): mirrors the run_control guard added to
-        # tasks.py's inline phase-auto-advance — a lead-held next phase must
-        # not be force-started via this sweep either. Since this runs on
-        # every watchdog tick as long as completed_parent stays "done", the
-        # phase is picked up automatically on the first tick after release.
+        # C2 (PR #533 Nacharbeit Runde 3, Rex review B1): mirrors the fix in
+        # tasks.py's inline phase-auto-advance. `run_control.is_(None)` used
+        # to sit as a filter on this query — a filter removes the held row
+        # from the result set instead of halting the walk, so the query
+        # returned the next *unheld* phase after it and started that one
+        # (leapfrog). Since this runs on every watchdog tick as long as
+        # completed_parent stays "done", every phase behind the hold gets
+        # force-started on successive ticks — one `mc hold` cascades the
+        # rest of the project into parallel in_progress. The check now runs
+        # AFTER selecting the immediate next phase by sort_order: if that
+        # phase is held, stop — the phase stays "inbox" and is picked up
+        # automatically on the first tick after release.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == completed_parent.project_id,
                 Task.parent_task_id.is_(None),  # type: ignore[attr-defined]
                 Task.status == "inbox",
-                Task.run_control.is_(None),  # type: ignore[union-attr]
                 Task.sort_order > completed_parent.sort_order,
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()
 
-        if not next_phase:
+        if not next_phase or next_phase.run_control is not None:
             return
 
         try:
