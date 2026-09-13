@@ -111,6 +111,10 @@ class ACPClient:
         self._event_cbs: list[Callable[[dict], None]] = []
         self._permission_cb: Optional[Callable[[dict], str]] = None
         self._session_id: Optional[str] = None
+        # Full result of the last session/new or session/load — carries
+        # `configOptions` and `availableCommands`, which the chat daemon
+        # mirrors into acp-chat-state.json. new_session() returns only the id.
+        self.last_session_result: dict = {}
         self._closed = False
         self._start_error: Optional[BaseException] = None
 
@@ -355,6 +359,7 @@ class ACPClient:
         if not sid:
             raise ACPError(f"session/new returned no sessionId: {result!r}")
         self._session_id = sid
+        self.last_session_result = result
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
         # jailed to the session's realpath(cwd) — the child must never read
         # or write outside the working directory it was granted.
@@ -363,6 +368,30 @@ class ACPClient:
         except OSError:
             self._fs_jail = None
         return sid
+
+    def load_session(self, session_id: str, cwd: str,
+                     mcp_servers: Optional[list] = None,
+                     timeout: float = 60.0) -> dict:
+        """Resume a previously created session; returns the full result.
+
+        The chat daemon (acp_chat.py) calls this on restart with the id it
+        persisted, so a container/bridge restart keeps ONE chat history
+        instead of opening a fresh session per process. Raises ACPError when
+        the server does not know the id — the caller falls back to
+        session/new and reports `session_reset`.
+        """
+        result = self._request("session/load", {
+            "sessionId": session_id,
+            "cwd": cwd,
+            "mcpServers": mcp_servers or [],
+        }, timeout=timeout)
+        self._session_id = session_id
+        self.last_session_result = result
+        try:
+            self._fs_jail = os.path.realpath(cwd)
+        except OSError:
+            self._fs_jail = None
+        return result
 
     def set_config_option(self, session_id: str, key: str, value: Any,
                           timeout: float = 30.0) -> dict:

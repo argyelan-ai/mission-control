@@ -64,6 +64,13 @@ vi.mock("@/lib/api", () => ({
     },
   },
 }));
+// ChatView liest den `?view=`-Parameter selbst: bei einem Agenten ohne
+// Umschalter (headless_chat) ist der Tiefenlink die EINZIGE Tuer zum Terminal,
+// und die muss offen bleiben (Spec docs/specs/chat-over-acp.md, Nicht-Ziele).
+const navMock = vi.hoisted(() => ({ params: new URLSearchParams() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => navMock.params,
+}));
 // Die echte VoiceButton haengt an <VoiceProvider>, und der baut beim Mounten
 // einen LiveKit-Room auf — fuer einen Kopfzeilen-Test viel zu schwer. Der Stub
 // haelt genau das fest, was ChatView zu verantworten hat: dass auf dem Handy
@@ -1943,4 +1950,60 @@ describe("ChatView", () => {
     });
   });
 
+});
+
+/**
+ * Headless-Chat (ACP-Agenten, Spec docs/specs/chat-over-acp.md).
+ *
+ * Bei `headless_chat` ist der Chat die einzige Oberflaeche: der zweite
+ * Konsolen-Tab zeigt eine TUI, die den Auftrag gar nicht faehrt. Der Umschalter
+ * verschwindet darum — der Tiefenlink `?view=terminal` bleibt.
+ */
+describe("ChatView — headless chat", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+  });
+
+  it("renders no Chat/Terminal toggle for a headless agent", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
+  // Sabotage-Probe: ohne das Merkmal muss der Umschalter unveraendert dastehen.
+  it("still renders the toggle for a non-headless agent", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: false }) });
+
+    expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat" })).toBeInTheDocument();
+  });
+
+  it("forces the chat view for a headless agent even when the stored view says terminal", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }), centerView: "terminal" });
+
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
+  it("?view=terminal still opens the terminal for a headless agent", () => {
+    navMock.params = new URLSearchParams("view=terminal");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }), centerView: "chat" });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+    expect(screen.queryByText("Hallo!")).not.toBeInTheDocument();
+  });
+
+  it("a headless agent without a transcript still falls back to the terminal", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ agent: mkAgent({ headless_chat: true }), hasTranscript: false });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+  });
 });

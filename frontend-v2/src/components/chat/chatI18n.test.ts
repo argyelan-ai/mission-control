@@ -26,6 +26,9 @@ const FILES = [
   "ChatView.tsx",
   "Composer.tsx",
   "ChatOptionsSheet.tsx",
+  // Die Fehlerkarte der ACP-Agenten: sie zeigt ihren Text ausschliesslich
+  // ueber `chat.error.*` (Spec docs/specs/chat-over-acp.md).
+  "ChatErrorCard.tsx",
   "AgentCard.tsx",
   "NotificationRow.tsx",
   "chatOptions.ts",
@@ -62,4 +65,46 @@ describe("Chat-Oberfläche — keine fest verdrahteten Texte", () => {
       expect(german).toEqual([]);
     });
   }
+});
+
+/**
+ * `chat.error.*` — EN/DE-Schluesselgleichheit.
+ *
+ * Die Fehlerkarte schlaegt `chat.error.<code>` nach und faellt auf
+ * `chat.error.generic` zurueck. Fehlt ein Schluessel in nur EINEM Baum, steht
+ * auf Deutsch der rohe Punkt-Pfad im Chat (next-intl-Rueckfall) — das liest
+ * sich als kaputte Oberflaeche, nicht als englischer Rest.
+ */
+import en from "../../../messages/en.json";
+import de from "../../../messages/de.json";
+
+const ERROR_CODES = [
+  "rpc_error",
+  "provider_error",
+  "empty_turn",
+  "process_exit",
+  "busy",
+  "session_reset",
+  "generic",
+];
+
+function errorNs(tree: unknown): Record<string, unknown> {
+  const chat = (tree as Record<string, unknown>).chat as Record<string, unknown> | undefined;
+  return (chat?.error as Record<string, unknown>) ?? {};
+}
+
+describe("chat.error — EN/DE", () => {
+  it("defines every code the chat daemon can emit, in both locales", () => {
+    for (const code of ERROR_CODES) {
+      expect(typeof errorNs(en)[code], `chat.error.${code} missing in EN`).toBe("string");
+      expect(typeof errorNs(de)[code], `chat.error.${code} missing in DE`).toBe("string");
+    }
+  });
+
+  it("has an identical key set and no empty value", () => {
+    expect(Object.keys(errorNs(en)).sort()).toEqual(Object.keys(errorNs(de)).sort());
+    for (const [key, value] of Object.entries(errorNs(de))) {
+      expect(typeof value === "string" && value.trim().length > 0, `chat.error.${key} is empty`).toBe(true);
+    }
+  });
 });

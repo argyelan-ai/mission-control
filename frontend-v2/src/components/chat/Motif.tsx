@@ -32,6 +32,9 @@ export function motifForSource(kind: MessageSourceKind): MotifKind {
     case "teammate":
       return "iris";
     case "system":
+    // Eine Fehlerzeile traegt ihre eigene Karte (ChatErrorCard) und kommt hier
+    // nie an; der Zweig haelt den Schalter nur vollstaendig.
+    case "error":
       return "kern";
   }
 }

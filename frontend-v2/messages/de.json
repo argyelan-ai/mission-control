@@ -2982,6 +2982,15 @@
       "fromMc": "Mission Control",
       "expand": "Inhalt anzeigen",
       "collapse": "Inhalt ausblenden"
+    },
+    "error": {
+      "generic": "Chat-Fehler",
+      "rpc_error": "Protokollfehler",
+      "provider_error": "Fehler beim Anbieter",
+      "empty_turn": "Keine Antwort",
+      "process_exit": "Prozess beendet",
+      "busy": "Arbeitet noch",
+      "session_reset": "Sitzung neu gestartet"
     }
   }
 }
