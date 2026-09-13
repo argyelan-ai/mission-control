@@ -2771,13 +2771,28 @@ class TestOmpTokenDeltaDerivation:
         session_file.write_text("\n".join(_REAL_OMP_SEQUENCE) + "\n")
 
         # Seed the DB the way the OLD harvester did: raw full-context input,
-        # cache_read 0, cost computed from the inflated input.
+        # cache_read 0, cost_usd NULL until the backfill recomputes it.
         sess_id = "2026-09-08T22-18-35-212Z_01a0831a"
         legacy_uuids = [
             f"{sess_id}:chatcmpl-8f2568763df3a2c5",
             f"{sess_id}:chatcmpl-8d1eded7dae09967",
             f"{sess_id}:chatcmpl-85881d57446fb81d",
         ]
+        # Price row valid at event ts → the backfill must recompute cost_usd
+        # from the CORRECTED token counts (not the legacy inflated input).
+        async_db_session.add(
+            ModelPrice(
+                id=uuid.uuid4(),
+                model_pattern="GLM-5.3-Flash-EXL3",
+                input_per_mtok=0.6,
+                output_per_mtok=2.2,
+                cache_read_per_mtok=0.06,
+                cache_write_per_mtok=0.12,
+                priority=50,
+                valid_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                currency="USD",
+            )
+        )
         for raw_in, uid in zip(_REAL_OMP_RAW_INPUTS, legacy_uuids):
             async_db_session.add(
                 ModelUsageEvent(
@@ -2791,7 +2806,7 @@ class TestOmpTokenDeltaDerivation:
                     output_tokens=100,
                     cache_read_tokens=0,
                     cache_write_tokens=0,
-                    cost_usd=None,  # no price row → NULL, backfill must keep that
+                    cost_usd=None,  # legacy rows start NULL; backfill recomputes
                     ts=datetime(2026, 9, 8, 22, 18, 53, tzinfo=timezone.utc),
                     source_file=str(session_file),
                 )
@@ -2815,6 +2830,13 @@ class TestOmpTokenDeltaDerivation:
         assert by_uuid[legacy_uuids[1]].cache_read_tokens == 21860
         assert by_uuid[legacy_uuids[2]].input_tokens == 163
         assert by_uuid[legacy_uuids[2]].cache_read_tokens == 22039
+        # cost_usd pinned: recomputed from the corrected counts for rewritten
+        # rows; row 1 is never rewritten, so its legacy NULL stays.
+        assert by_uuid[legacy_uuids[0]].cost_usd is None
+        # (179*0.6 + 100*2.2 + 21860*0.06) / 1e6
+        assert by_uuid[legacy_uuids[1]].cost_usd == pytest.approx(0.001639)
+        # (163*0.6 + 100*2.2 + 22039*0.06) / 1e6
+        assert by_uuid[legacy_uuids[2]].cost_usd == pytest.approx(0.00164014)
 
         # Idempotency: second run corrects nothing, values unchanged.
         stats2 = await backfill_omp_token_deltas(
