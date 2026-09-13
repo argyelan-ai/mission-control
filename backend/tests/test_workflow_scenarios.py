@@ -389,6 +389,7 @@ async def test_self_review_prevention(client, fake_redis):
                 s, task, data["board"].id, developer=developer,
             )
 
+    assert result is None, "Self-review should be prevented"
 
 @pytest.mark.asyncio
 async def test_done_to_in_progress_triggers_rejection(client, fake_redis):
