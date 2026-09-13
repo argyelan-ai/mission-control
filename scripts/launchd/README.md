@@ -15,12 +15,14 @@ cp scripts/launchd/*.plist ~/Library/LaunchAgents/
 
 # 2. Host-Pfad fuer Helper-Scripts via Symlink an Repo binden
 mkdir -p ~/.mc
-ln -sf "$(pwd)/scripts/memory-sampler.sh"     ~/.mc/memory-sampler.sh
-ln -sf "$(pwd)/scripts/poll-health-check.sh"  ~/.mc/poll-health-check.sh
+ln -sf "$(pwd)/scripts/memory-sampler.sh"         ~/.mc/memory-sampler.sh
+ln -sf "$(pwd)/scripts/poll-health-check.sh"      ~/.mc/poll-health-check.sh
+ln -sf "$(pwd)/scripts/docker-health-restart.sh"  ~/.mc/docker-health-restart.sh
 
 # 3. launchd Agents laden
 launchctl load ~/Library/LaunchAgents/com.mc.memory-sampler.plist
 launchctl load ~/Library/LaunchAgents/com.mc.poll-health.plist
+launchctl load ~/Library/LaunchAgents/com.mc.docker-health-restart.plist
 
 # 4. (Nur falls Boss-Host noch nicht installiert) Boss-Runtime ueber separaten Installer
 scripts/install-boss-host.sh
@@ -30,7 +32,7 @@ Verifizieren:
 
 ```bash
 launchctl list | grep 'com.mc\.'
-# Sollte zeigen: com.mc.memory-sampler und com.mc.poll-health
+# Sollte zeigen: com.mc.memory-sampler, com.mc.poll-health und com.mc.docker-health-restart
 ```
 
 ## Was jeder Agent macht
@@ -52,17 +54,77 @@ launchctl list | grep 'com.mc\.'
 - **Log:** `~/.mc/poll-health.log`
 - **Context:** angelegt 2026-04-23 nach Bug C Incident — 2 Wochen Drift unbemerkt
 
+### `com.mc.docker-health-restart`
+- **Script:** `scripts/docker-health-restart.sh`
+- **Interval:** 60s
+- **Zweck:** Positivlisten-basierter Host-Waechter fuer unhealthy Docker-
+  Services (`cdp-browser`, `playwright-mcp`). Bei `unhealthy`:
+  `docker restart` mit Exponential-Backoff (120s → 240s), max. 3 Versuche,
+  danach Stopp + genau eine Telegram-Meldung. **mc-agent-\* Container werden
+  per Hard-Guard nie angefasst**, egal was in der Allowlist steht.
+- **State:** `~/.mc/docker-health-restart-state/<service>.state` (Attempts,
+  letzter Versuch, Notified-Flag, Given-up-Flag — pro Service, reset bei
+  Recovery)
+- **Log:** `~/.mc/docker-health-restart.log`
+- **Context:** angelegt 2026-09-13, nachdem der cdp-browser-Container 5 Tage
+  `healthy` meldete waehrend die WebSocket-Verbindung haengen geblieben war
+  (PR #544 behebt die Erkennung selbst — CDP/WS-Healthcheck statt nur HTTP;
+  dieser Job schliesst die verbleibende Luecke: Erkennen allein heilt nicht,
+  ohne diesen Job wuerde der Container weiter haengen bis ein Mensch
+  eingreift). Bewusst GETRENNT von `com.mc.poll-health` (andere Concern:
+  Docker-Container-Health statt Boss-Host-Log-Patterns; anderes Intervall:
+  60s statt 5min). Ein autoheal-Sidecar mit `docker.sock`-Mount wurde
+  verworfen — Vollzugriff auf den Docker-Host fuer einen haengenden Browser
+  ist unverhaeltnismaessig. Der Host-seitige Weg via launchd braucht dagegen
+  keine zusaetzlichen Container-Rechte (die Docker-Rechte liegen auf dem Host
+  ohnehin) und ist deshalb normale Infrastrukturarbeit.
+- **Zahlen-Begruendung:** 60s Intervall wie vorgegeben. 3 Versuche ueberleben
+  transiente Ausreisser ohne einen wirklich kaputten Service endlos zu
+  bearbeiten. 120s Basis-Backoff (verdoppelnd) gibt dem Healthcheck der
+  Kandidaten (bis zu ~90s Settle-Zeit: interval 30s × retries 3) eine faire
+  Chance vor dem naechsten Urteil. Genau 2 moegliche Meldungen pro Incident
+  (Start + Give-up) statt einer pro Tick — Anlass war ein anderer Vorfall mit
+  13 Wiederholungs-Meldungen in 2h.
+- **Bekannte Luecke (bewusst nicht Teil dieser Karte):** ohne diesen Job
+  reagiert HEUTE niemand automatisch auf `unhealthy` — `restart:
+  unless-stopped` in docker-compose.yml greift nur bei Prozess-Exit, nicht
+  bei einem Healthcheck-Fail. Dieser Job schliesst genau diese Luecke fuer
+  die beiden gelisteten Services.
+
 ## Stoppen / Deinstallieren
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.mc.memory-sampler.plist
 launchctl unload ~/Library/LaunchAgents/com.mc.poll-health.plist
+launchctl unload ~/Library/LaunchAgents/com.mc.docker-health-restart.plist
 rm ~/Library/LaunchAgents/com.mc.memory-sampler.plist
 rm ~/Library/LaunchAgents/com.mc.poll-health.plist
+rm ~/Library/LaunchAgents/com.mc.docker-health-restart.plist
 ```
 
-Die Scripts selbst (`scripts/memory-sampler.sh`, `scripts/poll-health-check.sh`)
-bleiben im Repo und können bei Bedarf manuell aufgerufen werden.
+Die Scripts selbst (`scripts/memory-sampler.sh`, `scripts/poll-health-check.sh`,
+`scripts/docker-health-restart.sh`) bleiben im Repo und können bei Bedarf
+manuell aufgerufen werden.
+
+## Docker-Health-Restart: Service zur Allowlist hinzufuegen
+
+`ALLOWLIST=(...)` am Kopf von `scripts/docker-health-restart.sh` ist eine
+**Positivliste** — nur was dort explizit steht, wird je automatisch
+neugestartet. Vor dem Hinzufuegen eines Service pruefen:
+
+1. Ist der Service **stateless** (kein Datenverlust bei Neustart)? Wenn nein
+   (z.B. `db`, `redis`, `qdrant`) → NICHT hinzufuegen, blind-restart riskiert
+   Datenverlust/Korruption.
+2. Hat der Service einen eigenen `healthcheck:` in `docker-compose.yml`?
+   Ohne Healthcheck liefert `docker inspect` `no-healthcheck` und der
+   Watcher tut nichts (kein falscher Alarm, aber auch kein Schutz).
+3. Ist es ein `mc-agent-*` Container? → Wird vom Hard-Guard im Script
+   ohnehin ignoriert, unabhaengig von der Allowlist. Niemals versuchen zu
+   umgehen — ein Agent mit laufendem Task darf nie automatisch neu gestartet
+   werden.
+4. `backend`/`frontend`/`caddy`/`mc-worker` laufen ueber den bestehenden
+   Deploy-Workflow mit Backup + Record (siehe TOOLS.md "Deploy the Docker
+   environment") — nicht hier duplizieren.
 
 ## launchd Refresh nach Script-Updates
 
