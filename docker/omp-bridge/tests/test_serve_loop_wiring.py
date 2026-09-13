@@ -377,16 +377,14 @@ def test_no_continue_factory_di_knob_in_serve_loop():
     second, control-less continue factory knob. The ACP branch wraps the
     CONTROLLED factory product (acp_run), the native branch mirrors run_once
     via run_native_continue — a DI knob would bypass exactly that wiring the
-    moment someone uses it. Pins: no _continue_factory param on serve_loop,
-    and the _run_factory test path binds continue_once = None (opts out of
-    Fix B, old blocker behavior)."""
-    import ast as _ast
-    import inspect as _inspect
+    moment someone uses it. Pins: no _continue_factory anywhere in serve_loop,
+    continue_once still wired.
 
-    import bridge  # lazy, like the other tests in this file
-
-    serve_src = _inspect.getsource(bridge.serve_loop)
-    dump = _ast.dump(_ast.parse(serve_src))
+    Same machinery as the rest of this file (_parse/_find_fn, bridge.py as
+    TEXT — no bridge import; Rex review #561: an `import bridge` here crashed
+    the standalone entrypoint before two existing tests ran)."""
+    serve = _find_fn(_parse(), "serve_loop")
+    dump = ast.dump(serve)
     assert "_continue_factory" not in dump, (
         "serve_loop must not define or reference a _continue_factory DI knob "
         "(M7): the real continue paths are the controlled ACP/Native "
@@ -394,8 +392,6 @@ def test_no_continue_factory_di_knob_in_serve_loop():
         "cancel_state/heartbeat/interrupt wiring"
     )
     assert "continue_once" in dump, "serve_loop must still wire continue_once"
-    # the _run_factory test path binds None (no Fix B) — guarded in
-    # drive_live_run (action 'continue' requires continue_once is not None).
     print("PASS test_no_continue_factory_di_knob_in_serve_loop")
 
 
