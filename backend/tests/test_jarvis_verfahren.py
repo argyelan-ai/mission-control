@@ -99,3 +99,26 @@ def test_backend_guards_against_double_execution():
 def test_backend_forbids_premature_completion_claims():
     text = _backend()
     assert "never claim an action has finished before the backend confirms" in text
+
+
+def test_backend_requires_plain_language():
+    text = _backend()
+    assert "plain language" in text
+    assert "spell out abbreviations" in text
+
+
+def test_backend_forbids_explaining_everyday_terms():
+    """Die Bremse gegen Belehren — Spec 4.7.
+
+    Task, Approval, Branch, Deploy, PR und Agent sind der Alltag des
+    Operators. Wer die erklaert, behandelt ihn wie einen Anfaenger.
+    """
+    text = _backend()
+    assert "never explain terms the operator uses daily" in text
+
+
+def test_backend_echoes_names_and_ids():
+    """Eigennamen werden vom Modell verstuemmelt — der erkannte Wert muss
+    hoerbar zurueckkommen, bevor etwas passiert."""
+    text = _backend()
+    assert "say the recognised name or number back" in text
