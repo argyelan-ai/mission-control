@@ -42,6 +42,7 @@ async def _setup_dispatched_task(run_control: str | None = None) -> dict:
     board_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     task_id = uuid.uuid4()
+    other_task_id = uuid.uuid4()
     attempt_id = str(uuid.uuid4())
     token_raw, token_hash = generate_agent_token()
 
@@ -63,12 +64,20 @@ async def _setup_dispatched_task(run_control: str | None = None) -> dict:
         if run_control:
             task.run_control = run_control
         s.add(task)
+        # A second, REAL task: blocked_by_task_id carries a FK to tasks.id, so
+        # the Phase A test (which lets the request through and actually applies
+        # the update) must point at a row that exists — a random UUID passes on
+        # SQLite and violates the constraint on the Postgres lane.
+        s.add(Task(
+            id=other_task_id, board_id=board_id, title="Helper", status="inbox",
+        ))
         await s.commit()
 
     return {
         "board_id": board_id,
         "agent_id": agent_id,
         "task_id": task_id,
+        "other_task_id": other_task_id,
         "attempt_id": attempt_id,
         "token": token_raw,
     }
@@ -146,7 +155,7 @@ async def test_phase_a_warning_with_uuid_field_does_not_500(client, fake_redis):
     with patch.object(app.config.settings, "enforce_dispatch_attempt_id", False):
         r = await client.patch(
             f"/api/v1/agent/boards/{data['board_id']}/tasks/{data['task_id']}",
-            json={"priority": "high", "blocked_by_task_id": str(uuid.uuid4())},
+            json={"priority": "high", "blocked_by_task_id": str(data["other_task_id"])},
             headers={
                 "Authorization": f"Bearer {data['token']}",
                 "X-Dispatch-Attempt-Id": str(uuid.uuid4()),
@@ -158,7 +167,7 @@ async def test_phase_a_warning_with_uuid_field_does_not_500(client, fake_redis):
     rows = await _events("task.stale_update_warning", data["task_id"])
     assert len(rows) == 1
     _assert_detail_json_safe(rows[0])
-    assert isinstance(rows[0].detail["attempted"]["blocked_by_task_id"], str)
+    assert rows[0].detail["attempted"]["blocked_by_task_id"] == str(data["other_task_id"])
 
 
 # ── 4. stopped task + UUID field → 409, not 500 ───────────────────────
