@@ -63,6 +63,41 @@ async def record_task_event(
     # No separate commit — caller commits together with the status update
 
 
+def task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:
+    """Shared guard for every "reactivate this task" path (auto-resume,
+    auto-ACK, redispatch, ...): may this specific call still flip the
+    task's state, or has something else already changed the ground it
+    was standing on?
+
+    Four instances of the SAME missing check have surfaced in one day
+    (2026-09-13): `_handle_help_request_resume` and `_handle_callback_resume`
+    (agent_task_status.py) resuming a held parent because they only checked
+    their own link field (blocked_by_task_id / status), never run_control;
+    the blocker-answer redispatch (services/dispatch.py) firing after the
+    card had already moved on to review through a normal poll; and the
+    review_stuck watchdog escalating on a status it never re-read (separate
+    card, not fixed here). All four are the same shape: a decision is made
+    at time T1, applied at time T2, and T2 never re-reads the precondition
+    T1 was based on. This predicate is the one thing every T2 call site
+    should run immediately before flipping state, instead of re-deriving
+    its own copy of the check (and the fifth call site forgetting it).
+
+    `run_control is not None` (mc hold / an admin stop) always blocks —
+    reactivating a held or stopped task through a side channel is exactly
+    the deadlock PR #533 closed five other paths for. `expected_status`,
+    when given, additionally requires the task to still be in the specific
+    status the caller's decision was based on (e.g. "blocked" for a
+    resume that only makes sense while the task is still blocked) — a
+    caller with no single expected status (e.g. one that already checks a
+    set of statuses itself) can omit it.
+    """
+    if task.run_control is not None:
+        return False
+    if expected_status is not None and task.status != expected_status:
+        return False
+    return True
+
+
 def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
     """Auto-ACK: the first inbound signal from the assigned agent on a
     dispatched task claims it (§3.3 handshake).

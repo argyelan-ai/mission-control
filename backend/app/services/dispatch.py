@@ -417,12 +417,19 @@ async def redispatch_after_blocker_answer(
     event) instead of silently doing nothing, so the discarded redispatch
     is not invisible to whoever wonders why the operator's answer had no
     effect.
+
+    The precondition check itself is task_lifecycle.task_still_reactivatable
+    — shared with _handle_help_request_resume and _handle_callback_resume
+    (agent_task_status.py), the two other reactivation paths carrying the
+    same "run_control never checked" gap found the same day.
     """
+    from app.services.task_lifecycle import task_still_reactivatable
+
     async with AsyncSession(engine, expire_on_commit=False) as session:
         task = await session.get(Task, task_id)
         if not task:
             return
-        if task.status != expected_status or task.run_control is not None:
+        if not task_still_reactivatable(task, expected_status=expected_status):
             logger.warning(
                 "Blocker-Redispatch uebersprungen: Task %s ist jetzt "
                 "status=%s run_control=%s (erwartet: status=%s, "
