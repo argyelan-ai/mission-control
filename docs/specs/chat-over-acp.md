@@ -17,8 +17,17 @@ For an agent whose driver is ACP, the Sessions chat is the **only** interface an
 
 ## Non-goals
 
-- Removing the native TUI from window 0 in this wave (health gate + recycler anchor on it; Boss asked for the Terminal to stay reachable until the live proof). The toggle is hidden in the UI; `?view=terminal` keeps working as a deep link.
 - Multi-turn concurrency. One turn at a time per agent chat session; a second prompt while busy is rejected with `busy` (the composer already disables send while working).
+
+Done, no longer a non-goal (fix omp-acp-no-tui-window, 13.09.2026): the native
+TUI in window 0 was removed for `OMP_DRIVER=acp` agents — Mark saw the live
+TUI as an idle "ghost" session in the Terminal view and does not want that.
+Window 0 itself still exists (Boss: keep the Terminal reachable until the
+live proof) but shows an `OMP_ACP_READY` banner + a plain shell instead of
+launching omp; the health gate and the recycler were updated to match (see
+`docker/omp-bridge/entrypoint.sh` / `omp-recycler.sh`, and
+`agent_runtime_switch.OMP_READY_SIGNALS` on the backend side). `?view=terminal`
+still works as a deep link.
 
 ## Architecture
 
@@ -83,7 +92,7 @@ Slash commands are sent as prompt text (`/usage`, `/model X`); omp executes them
 
 ### entrypoint (omp image)
 
-When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `exec python3 /opt/omp-bridge/acp_chat.py --serve`. Window 0 stays for now (see non-goals).
+When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `exec python3 /opt/omp-bridge/acp_chat.py --serve`. Window 0 still exists but no longer runs the native TUI (fix omp-acp-no-tui-window, 13.09.2026) — it prints an `OMP_ACP_READY` banner and drops to a plain shell instead.
 
 ### Backend
 
