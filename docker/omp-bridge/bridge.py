@@ -2935,15 +2935,6 @@ def serve_loop(
             finally:
                 _set_turn_context(None, None)
                 _set_task_lock(False)
-                # W2 (Rex review #554): the context% holder must not leak into
-                # the NEXT turn. Measured across all 13 rpc fixture streams:
-                # omp emits usage_update only 3x, each ~2 events before the
-                # stop result; the long streams (204/267/578 events) carry
-                # NONE — omp does not re-report mid-turn, so without this
-                # reset the heartbeat would show the previous turn's value
-                # for the whole following turn (Rex demoed exactly that:
-                # session 01a08150 kept reporting the old 3.5 %).
-                _set_acp_context_pct(None)
 
         # comm_v2: post-dispatch OR no-task idle turn boundary — deliver at
         # most one queued thread-message (paste) or a single nudge (gate
