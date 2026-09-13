@@ -980,11 +980,21 @@ async def handle_review_handoff(
             logger.info("Review-Handoff dedupe: '%s' bereits bei %s", task.title, existing_reviewer.name)
             return existing_reviewer
 
-    reviewer = await _find_reviewer(session, board_id)
+    reviewer = await _find_reviewer(
+        session, board_id,
+        # Autor-Ausschluss: der Developer, der den Review eingereicht hat,
+        # darf nie als eigener Reviewer gewaehlt werden (alle Fallback-Stufen).
+        exclude_agent_id=developer.id if developer else None,
+    )
     if not reviewer:
+        # Sichtbarer None-Pfad: kein lebendiger Reviewer-Kandidat uebrig
+        # (alle offline, belegt oder Autor). Kein stiller Fallback.
+        logger.info(
+            "Review-Handoff: kein Reviewer-Kandidat fuer Board %s "
+            "(offline / Autor / keine Rolle) — Task '%s' bleibt unzugewiesen",
+            board_id, task.title,
+        )
         return None
-    if developer and reviewer.id == developer.id:
-        return None  # Reviewer must not be the same agent
 
     # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_handoff"
