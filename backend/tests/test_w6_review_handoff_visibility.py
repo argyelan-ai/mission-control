@@ -22,6 +22,7 @@ Zwei Luecken rund um den Review-Handoff:
     zwischen Routing und Entscheid umgehaengt wird (geroutet an A, geprueft
     von B).
 """
+import datetime as dt
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -34,6 +35,7 @@ from app.models.agent import Agent
 from app.models.board import Board
 from app.models.task import Task, TaskComment
 from app.models.thread import Message
+from app.utils import utcnow
 
 from tests.conftest import test_engine
 
@@ -258,6 +260,12 @@ async def test_completion_line_names_actual_reviewer_not_passed_name():
         s.add(Task(
             id=task_id, board_id=board_id, title="Umgehaengte Review-Karte",
             status="done", assigned_agent_id=rex_id, callback_agent_id=lead_id,
+            # B1 (PR #535 Nacharbeit): jede Karte, die mit reviewed=True hier
+            # ankommt, hat in Produktion einen Entscheid-Zeitstempel
+            # (execute_review_decision setzt ihn atomar mit dem Kommentar) —
+            # ohne ihn liefe der Rundenfilter in _notify_lead_on_completion
+            # leer und faende ueberhaupt keinen Kommentar mehr.
+            review_decision="approved", review_decided_at=utcnow(),
         ))
         # Der tatsaechliche Entscheid: Rex hat approved, NICHT Hermes.
         s.add(TaskComment(
@@ -322,3 +330,209 @@ async def test_completion_line_falls_back_to_passed_name_without_review_comment(
         lead_msgs = await _lead_dm_messages(s, lead)
         assert len(lead_msgs) == 1
         assert "Approved von System" in lead_msgs[0].body
+
+
+@pytest.mark.asyncio
+async def test_round_2_patch_approval_not_attributed_to_round_1_rejecter():
+    """B1 (Rex review 09a860f6 / feedback 35be682d): the identity lookup took
+    the newest comment_type=="review" comment with no round or outcome
+    filter — comment_type="review" carries request_changes and hold
+    decisions too (execute_review_decision writes the same type for all
+    three outcomes). Round 1: Rex request_changes (a "review" comment).
+    Round 2: Hermes approves via the PATCH review->done shortcut
+    (agent_task_status.py:2362, which threads its own actor name through
+    correctly) WITHOUT writing a new "review" comment. Pre-fix, the lookup
+    still found Rex's round-1 comment and reported "Approved von Rex" —
+    Rex had rejected it. The fix anchors the lookup to
+    `TaskComment.created_at >= task.review_decided_at`, and
+    execute_review_decision/the PATCH fallback both stamp review_decided_at
+    with the CURRENT round's timestamp, so round 1's comment falls outside
+    the window once round 2's decision lands.
+
+    Sabotage-Probe: dropping the `TaskComment.created_at >= _round_start`
+    condition in `_notify_lead_on_completion` (task_lifecycle.py) turns this
+    red — it reports "Approved von Rex" again.
+    """
+    from app.services.task_lifecycle import _notify_lead_on_completion
+
+    board_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    rex_id = uuid.uuid4()
+    hermes_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="W6-Runde-2", slug=f"w6-r2-{uuid.uuid4().hex[:6]}"))
+        s.add(Agent(
+            id=lead_id, name="Lead", role="orchestrator",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            is_board_lead=True, scopes=["tasks:read"],
+        ))
+        s.add(Agent(
+            id=rex_id, name="Rex", role="reviewer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        ))
+        s.add(Agent(
+            id=hermes_id, name="Hermes", role="reviewer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        ))
+        s.add(Task(
+            id=task_id, board_id=board_id, title="Zwei-Runden-Review-Karte",
+            status="done", assigned_agent_id=hermes_id, callback_agent_id=lead_id,
+        ))
+        await s.commit()
+
+        # Runde 1: Rex lehnt ab — comment_type="review" traegt auch das.
+        round_1_at = utcnow() - dt.timedelta(hours=2)
+        s.add(TaskComment(
+            task_id=task_id, author_type="agent", author_agent_id=rex_id,
+            comment_type="review", content="not ship-ready — Blocker in foo.py:12",
+            created_at=round_1_at,
+        ))
+        task = await s.get(Task, task_id)
+        task.review_decision = "changes_requested"
+        task.review_decided_at = round_1_at
+        s.add(task)
+        await s.commit()
+
+        # Runde 2: Hermes gibt per PATCH review->done frei — KEIN neuer
+        # review-Kommentar (agent_task_status.py:1854-1857's Fallback setzt
+        # review_decision/review_decided_at selbst, ohne TaskComment).
+        round_2_at = utcnow()
+        task = await s.get(Task, task_id)
+        task.review_decision = "approved"
+        task.review_decided_at = round_2_at
+        s.add(task)
+        await s.commit()
+
+        task = await s.get(Task, task_id)
+        with patch("app.database.engine", test_engine):
+            await _notify_lead_on_completion(s, task, board_id, "Hermes", reviewed=True)
+
+        lead = await s.get(Agent, lead_id)
+        lead_msgs = await _lead_dm_messages(s, lead)
+        assert len(lead_msgs) == 1
+        assert "Approved von Hermes" in lead_msgs[0].body, (
+            f"Abschlusszeile nennt nicht den tatsaechlichen Runde-2-Freigeber Hermes: {lead_msgs[0].body!r}"
+        )
+        assert "Approved von Rex" not in lead_msgs[0].body, (
+            "Runde 1 (Rex, request_changes) wurde faelschlich als Freigeber genannt"
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_review_decision_shares_one_timestamp_for_comment_and_decision():
+    """B1, sub-fix: `execute_review_decision` must stamp `comment.created_at`
+    and `task.review_decided_at` with the SAME `utcnow()` call, not two
+    separate ones. `TaskComment(...)` (default_factory=utcnow) is always
+    constructed a few microseconds BEFORE `task.review_decided_at = utcnow()`
+    runs — with two separate calls, the round's own comment.created_at ends
+    up strictly earlier than review_decided_at, so the `>=` filter in
+    `_notify_lead_on_completion` would exclude even a same-round comment and
+    silently fall through to the passed-in name on every single decision,
+    defeating the whole comment-derived-identity mechanism (it would just
+    never fire, current call sites happen to pass the same name anyway so
+    this couldn't be seen without an intentionally wrong passed name — see
+    below).
+
+    Sabotage-Probe: reverting `execute_review_decision`'s shared `decided_at`
+    back to two separate `utcnow()` calls (task_lifecycle.py) turns this red.
+    """
+    from app.services.task_lifecycle import execute_review_decision, _notify_lead_on_completion
+
+    board_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    rex_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="W6-Shared-Stamp", slug=f"w6-ss-{uuid.uuid4().hex[:6]}"))
+        s.add(Agent(
+            id=lead_id, name="Lead", role="orchestrator",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            is_board_lead=True, scopes=["tasks:read"],
+        ))
+        rex = Agent(
+            id=rex_id, name="Rex", role="reviewer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        )
+        s.add(rex)
+        s.add(Task(
+            id=task_id, board_id=board_id, title="Frische Review-Runde",
+            status="review", assigned_agent_id=rex_id, callback_agent_id=lead_id,
+        ))
+        await s.commit()
+        await s.refresh(rex)
+
+        task = await s.get(Task, task_id)
+        with patch("app.utils.create_tracked_task"), \
+             patch("app.services.task_lifecycle.trigger_auto_memory"), \
+             patch("app.services.task_lifecycle.trigger_feedback_lesson", new_callable=AsyncMock), \
+             patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
+            await execute_review_decision(
+                s, task, board_id, "approve", "LGTM, ship it.", actor_agent=rex,
+            )
+        await s.commit()
+
+        # Simuliert einen weit entfernten Aufrufer, der (noch) einen falschen
+        # Namen durchreicht — die einzige Quelle der Wahrheit ist jetzt der
+        # gerade committete Kommentar aus DERSELBEN Runde.
+        task = await s.get(Task, task_id)
+        with patch("app.database.engine", test_engine):
+            await _notify_lead_on_completion(s, task, board_id, "Falscher-Name", reviewed=True)
+
+        lead = await s.get(Agent, lead_id)
+        lead_msgs = await _lead_dm_messages(s, lead)
+        assert len(lead_msgs) == 1
+        assert "Approved von Rex" in lead_msgs[0].body, (
+            f"Eigener Runde-1-Kommentar wurde vom Rundenfilter ausgeschlossen: {lead_msgs[0].body!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_no_reviewer_notice_survives_lead_dm_failure(make_board, make_agent, auth_client):
+    """W2 (Rex review 09a860f6): the durable system_notify comment must
+    outlive a failing best-effort DM to the Board Lead — `_notify_no_reviewer_
+    found` commits the comment BEFORE attempting the DM, wrapped so a raise
+    from `post_message` can't roll anything back or bubble up. Correctly
+    built already (per Rex's own probe); this locks the behavior in with a
+    test so a later refactor that moves the commit after the DM attempt
+    doesn't regress silently.
+
+    Sabotage-Probe: moving `await session.commit()` (task_lifecycle.py,
+    `_notify_no_reviewer_found`) to AFTER the DM try/except block turns this
+    red — 0 system_notify comments once `post_message` raises.
+    """
+    board = await make_board(name="W2 DM Failure Board", slug=f"w2-dm-fail-{uuid.uuid4().hex[:6]}")
+    lead = await make_agent(name="Lead", board_id=board.id, role="orchestrator", is_board_lead=True)
+    dev = await make_agent(name="Dev", board_id=board.id, role="developer")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        task = Task(
+            board_id=board.id, title="Probe DM-Ausfall",
+            status="in_progress", assigned_agent_id=dev.id,
+        )
+        s.add(task)
+        await s.commit()
+        await s.refresh(task)
+        task_id = task.id
+
+    with patch("app.services.messaging.post_message", side_effect=RuntimeError("DM-Transport down")), \
+         patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        resp = await auth_client.patch(
+            f"/api/v1/boards/{board.id}/tasks/{task_id}",
+            json={"status": "review"},
+        )
+    assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        refreshed = await s.get(Task, task_id)
+        assert refreshed.status == "review"
+        notices = await _system_notify_comments(s, task_id)
+        assert len(notices) == 1, (
+            "Der durable system_notify-Kommentar ueberlebt einen DM-Ausfall nicht mehr"
+        )
+        assert "Kein Reviewer gefunden" in notices[0].content

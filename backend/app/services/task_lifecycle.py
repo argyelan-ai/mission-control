@@ -613,6 +613,16 @@ async def execute_review_decision(
     old_status = task.status
     actor_name = actor_agent.name if actor_agent else "Operator"
 
+    # PR #535 Nacharbeit (B1): comment.created_at and task.review_decided_at
+    # must be the SAME timestamp, not two separate utcnow() calls. Downstream,
+    # _notify_lead_on_completion scopes its "who actually decided" lookup to
+    # `TaskComment.created_at >= task.review_decided_at` — with two distinct
+    # calls the comment (built first, default_factory=utcnow at construction
+    # time) always ends up strictly BEFORE review_decided_at (set a few lines
+    # later), so the >= filter would exclude the very comment it's meant to
+    # find.
+    decided_at = utcnow()
+
     # ── 1. Comment (always, atomic with the decision) ──────
     comment = TaskComment(
         task_id=task.id,
@@ -620,6 +630,7 @@ async def execute_review_decision(
         author_agent_id=actor_agent.id if actor_agent else None,
         comment_type="review",
         content=comment_text,
+        created_at=decided_at,
     )
     session.add(comment)
 
@@ -630,7 +641,7 @@ async def execute_review_decision(
         "hold": "hold",
     }
     task.review_decision = decision_map[decision]
-    task.review_decided_at = utcnow()
+    task.review_decided_at = decided_at
 
     # ── 3. Release the reviewer agent ──────────────────────────
     if decision in ("approve", "request_changes"):
@@ -1857,11 +1868,23 @@ async def _notify_lead_on_completion(
             #    no-review-comment cases (system auto-finalize, direct
             #    in_progress->done PATCH with no review gate at all).
             if reviewed:
+                # PR #535 Nacharbeit (B1): anchor the lookup to the CURRENT
+                # round. Without the created_at bound, a round 2 approval
+                # that never created its own "review" comment (e.g. the
+                # PATCH review->done fallback below) still finds round 1's
+                # stale comment and attributes the approval to whoever
+                # request_changes'd it back then — a regression versus the
+                # pre-PR state, which just used the passed-in actor name.
+                # execute_review_decision keeps comment.created_at and
+                # task.review_decided_at as the SAME timestamp so this
+                # >= never off-by-ones the current round's own comment out.
+                _round_start = task.review_decided_at
                 last_review_comment = (await session.exec(
                     select(TaskComment)
                     .where(
                         TaskComment.task_id == task.id,
                         TaskComment.comment_type == "review",
+                        *([TaskComment.created_at >= _round_start] if _round_start else []),
                     )
                     .order_by(TaskComment.created_at.desc())
                     .limit(1)
