@@ -394,3 +394,20 @@ def test_hermes_uses_the_omp_transcript_adapter(tmp_path, monkeypatch):
     assert adapter.resolve_transcript_dir(agent) == (
         tmp_path / ".mc/agents/hermes/omp-sessions"
     )
+
+
+async def test_agents_endpoints_expose_headless_chat(auth_client, make_agent, monkeypatch):
+    """Das Frontend versteckt den Chat/Terminal-Umschalter anhand dieses
+    Feldes — es muss in BEIDEN Antworten stehen, Liste wie Detail."""
+    from app import config
+
+    agent = await make_agent(name="Acp One", agent_runtime="cli-bridge", harness="omp")
+    monkeypatch.setattr(config.settings, "omp_acp_agent_slugs", agent.slug)
+
+    detail = await auth_client.get(f"/api/v1/agents/{agent.id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["headless_chat"] is True
+
+    listing = await auth_client.get("/api/v1/agents")
+    rows = {row["id"]: row for row in listing.json()}
+    assert rows[str(agent.id)]["headless_chat"] is True
