@@ -112,6 +112,13 @@ fi
 command -v docker >/dev/null 2>&1 && DOCKER_BIN="$(command -v docker)"
 
 # --- Telegram Reports-Bot (gleiches Pattern wie poll-health-check.sh) -------
+# Bevorzugt der separate Reports-Bot (TELEGRAM_REPORTS_*, s. docs/setup/
+# telegram.md) — eigener Chat auf dem Handy statt Vermischung mit Approvals.
+# Fehlt er auf diesem Host (haeufigster Fall: nur der Command-Bot ist in der
+# .env eingerichtet), faellt der Waechter auf TELEGRAM_BOT_TOKEN/_CHAT_ID
+# zurueck statt zu verstummen — ein Alert auf dem "falschen" Bot ist besser
+# als ein Neustart, von dem niemand erfaehrt (PR #546 Wirkbeweis: Meldung kam
+# nicht an, weil die Secrets-.env nur die Command-Bot-Keys hatte).
 REPORTS_TOKEN=""
 REPORTS_CHAT=""
 if [ -f "$ENV_FILE" ]; then
@@ -121,12 +128,16 @@ if [ -f "$ENV_FILE" ]; then
     # (Rex-Review PR #546 Blocker 1; gleiches Muster wie poll-health-check.sh).
     REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
     REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    if [ -z "$REPORTS_TOKEN" ] || [ -z "$REPORTS_CHAT" ]; then
+        REPORTS_TOKEN=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+        REPORTS_CHAT=$(grep -E '^TELEGRAM_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    fi
 fi
 
 notify() {
     local text="$1"
     if [ -z "$REPORTS_TOKEN" ] || [ -z "$REPORTS_CHAT" ]; then
-        log "WARNING: kein Telegram-Alert moeglich (TELEGRAM_REPORTS_* fehlt in $ENV_FILE) — Meldung nur geloggt: $text"
+        log "WARNING: kein Telegram-Alert moeglich (weder TELEGRAM_REPORTS_* noch TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID in $ENV_FILE) — Meldung nur geloggt: $text"
         return 0
     fi
     local response
