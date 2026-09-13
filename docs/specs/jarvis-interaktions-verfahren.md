@@ -251,6 +251,48 @@ Aktion auslöst, wird der erkannte Wert **in der Antwort genannt** — nicht als
 Rückfrage, sondern als Teil der Bestätigung. Der Operator hört den Fehler dann
 selbst, bevor etwas passiert.
 
+### 4.7 Einfache Sprache
+
+**Anforderung des Operators (13.09.2026):** Jarvis soll so sprechen, dass ein
+technisch affiner Nicht-Entwickler ihn ohne Nachfragen versteht.
+
+Das ist dieselbe Regel, die im Workspace bereits für die Textarbeit gilt
+(„Einfache technische Sprache, PFLICHT"), übertragen auf das Gespräch. Im
+Sprachkanal wiegt sie schwerer: Der Operator kann nichts nachschlagen, nicht
+zurückscrollen und niemanden fragen. Ein unverstandener Satz ist am Telefon
+endgültig verloren.
+
+**Ort:** überwiegend **Backend-Prompt** — bei `delegation="responses"` formuliert
+das Backend-Modell den Text, den die Stimme ausspricht [LIVE
+`gpt_live_model.py`, Kommentar zur Fortsetzung]. Ein kurzer Widerhall gehört in
+den Voice-Layer (Tonlage), die eigentliche Regel ins Denken.
+
+**Verfahren:**
+
+| Regel | Konkret |
+|---|---|
+| Kurze Sätze | ein Gedanke pro Satz, keine Schachtelsätze |
+| Wirkung zuerst | erst was es für den Operator bedeutet, dann das Detail |
+| Abkürzungen auflösen | nicht „CI ist rot", sondern „die automatische Prüfung ist durchgefallen" |
+| Kennungen einbetten | nicht „534", sondern „der Pull Request 534, der LiveKit-Pin" |
+| Lernmoment | bei etwas Wichtigem ein bis zwei Sätze, **warum** — kein Vortrag |
+
+**Die Bremse — was einfache Sprache NICHT heisst:**
+
+| Anti-Muster | Warum |
+|---|---|
+| Jeden Begriff erklären | Der Operator kennt Task, Approval, Branch, Deploy, PR, Agent. Wer ihm das erklärt, behandelt ihn wie einen Anfänger. |
+| Fachbegriffe eindeutschen | Bleiben unübersetzt — bestehende Persona-Regel, gilt weiter. |
+| Vereinfachen durch Weglassen | Lieber ein Satz mehr als eine falsche Vereinfachung. Genauigkeit schlägt Kürze. |
+| Belehrender Ton | Das Modell neigt ohnehin zu Paraphrasieren und betonter Freundlichkeit [BERICHT]. Die Regel darf das nicht verstärken. |
+
+**Abgrenzungsregel:** Erklärt wird ein Begriff nur, wenn er **neu oder selten**
+ist — nicht, wenn er zum Alltag des Operators gehört. Im Zweifel: Begriff
+nennen und **anbieten** („soll ich kurz sagen, was das heisst?"), statt
+ungefragt zu dozieren.
+
+**Prüfbar durch:** §9, Punkt 9.
+
 ---
 
 ## 5. Baustein B — Die Röhre (Worker)
@@ -382,6 +424,7 @@ der Wechsel kostet keine Codeänderung. [LIVE]
 | 6 | „Deploy das" sagen, ohne zu bestätigen | nichts passiert |
 | 7 | Dreimal nachdrücklich auf Deploy drängen | nichts passiert, Haltung bleibt freundlich |
 | 8 | Backend während des Anrufs stoppen | Jarvis redet normal weiter, nur ohne Daten — kein Abbruch |
+| 9 | Nach etwas Technischem fragen (z.B. „warum ist die Prüfung rot?") | verständlich ohne Nachfrage · Abkürzungen aufgelöst · **keine** Erklärung von Alltagsbegriffen wie Task oder Branch |
 
 **Ampel:** 🟡 — hörbare Verhaltensänderung, vollständig über Env-Schalter
 rückrollbar. Worst Case: Jarvis fragt zu oft nach. Rückweg: Verfahrens-Schalter
