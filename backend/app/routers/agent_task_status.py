@@ -1851,10 +1851,16 @@ async def agent_update_task(
     # ONLY done → approved. NOT in_progress → changes_requested!
     # Reviewer ACK (review→in_progress) is the start of work, not a decision.
     # For changes_requested, the explicit POST /review endpoint must be used.
-    if "status" in updates and old_status == "review" and task.review_decision is None:
-        if updates["status"] == "done":
-            task.review_decision = "approved"
-            task.review_decided_at = utcnow()
+    #
+    # No `task.review_decision is None` guard here (PR #535 Runde 3): a
+    # `hold` decision leaves review_decision="hold" on a task that stays in
+    # `review` (execute_review_decision, decision_map["hold"] = "hold"); a
+    # subsequent PATCH review->done through this old path must still stamp
+    # "approved" — otherwise the card lands on `done` with a stale `hold`
+    # decision recorded against it.
+    if "status" in updates and old_status == "review" and updates["status"] == "done":
+        task.review_decision = "approved"
+        task.review_decided_at = utcnow()
 
     # ── Consistency guard: review_decision ↔ last comment ──
     # If the reviewer sets status=done but the last comment contains "not ship-ready" → warn

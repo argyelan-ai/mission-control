@@ -1,7 +1,5 @@
 """W6 — kein stilles Liegenbleiben + Abschlusszeile nennt den echten Pruefer.
 
-Zwei Luecken rund um den Review-Handoff:
-
 (A) `find_reviewer` liefert seit PR #504 bewusst `None`, wenn kein Reviewer-
     Agent auf dem Board existiert — richtig, siehe
     test_find_reviewer_board_lead_fallback.py. Aber alle drei Aufrufer von
@@ -13,14 +11,22 @@ Zwei Luecken rund um den Review-Handoff:
     exercisen trotzdem jeden echten Aufrufer-Pfad, damit ein Refactor, der
     einen der drei umbaut, die Luecke nicht unbemerkt wieder aufreisst.
 
-(B) Die Abschlusszeile ("**Review:** Approved von X") in
-    `_notify_lead_on_completion` bekam den Namen bisher als reine Zeichen-
-    kette von weit entfernten Aufrufern durchgereicht. Reviewer und
-    task_lifecycle.py:_notify_lead_on_completion selbst zieht die Identitaet
-    jetzt aus dem tatsaechlichen Review-Kommentar (comment_type="review"),
-    nicht aus dem durchgereichten Namen — robust auch wenn eine Karte
-    zwischen Routing und Entscheid umgehaengt wird (geroutet an A, geprueft
-    von B).
+(B) PR #535 Runde 1/2 liess `_notify_lead_on_completion` die Pruefer-
+    Identitaet aus dem juengsten `comment_type="review"`-Kommentar herleiten,
+    statt den durchgereichten Namen zu nehmen — als Reaktion auf einen
+    Vorfall, bei dem die Abschlusszeile "Approved von Hermes" nannte, obwohl
+    Rex geprueft hatte. Runde 3 baut das wieder zurueck: Rex selbst hatte in
+    Runde 1 nachgewiesen, dass alle drei Aufrufer von
+    `_notify_lead_on_completion` (execute_review_decision, die generische
+    PATCH-Fallback in agent_task_status.py, system_finalize_task_done) den
+    tatsaechlich handelnden Agenten durchreichen, nie eine Zuweisung — die
+    Praemisse der Heuristik existiert nicht. Runde 2 flickte stattdessen die
+    Heuristik selbst (ein Runden-Anker ueber `review_decided_at`), obwohl
+    schon die eigene Untersuchung keinen Fehlerpfad fand. Der Vorfall vom
+    2026-09-13, der PR #535 ausgeloest hat, bleibt unerklaert — siehe den
+    entsprechenden Absatz im PR. Die Tests unten pruefen jetzt das
+    Gegenteil: die Abschlusszeile nennt IMMER den durchgereichten Namen,
+    unabhaengig davon, wer zuletzt einen Review-Kommentar geschrieben hat.
 """
 import datetime as dt
 import uuid
@@ -223,135 +229,105 @@ async def test_no_reviewer_visible_via_watchdog_phase_completion(make_board, mak
     )
 
 
-# ── Teil B: Abschlusszeile nennt den echten Pruefer, nicht die Zuweisung ──
+# ── Teil B: Abschlusszeile nennt IMMER den durchgereichten Namen ─────────
 
 
 @pytest.mark.asyncio
-async def test_completion_line_names_actual_reviewer_not_passed_name():
-    """Karte geroutet an 'Hermes' (urspruengliche Zuweisung/Name-Parameter),
-    tatsaechlich geprueft/freigegeben von 'Rex' (Autor des Review-Kommentars).
-    Die Abschlusszeile muss Rex nennen, nicht Hermes.
+async def test_completion_line_names_the_approver_after_a_request_changes_round():
+    """Konstellation (a) der Definition of Done: Rex lehnt in Runde 1 ab
+    (request_changes, ein comment_type="review"-Kommentar), Hermes gibt in
+    Runde 2 frei (Freigabe = ein zweiter comment_type="review"-Kommentar,
+    author=Hermes). Die Abschlusszeile muss Hermes nennen.
+
+    Reintroduziert man die in Runde 1/2 zurueckgebaute Herleitung aus dem
+    Review-Kommentar, besteht dieser Test WEITERHIN — Hermes' eigener
+    Kommentar ist ja der juengste. Die Herleitung faellt hier nicht auf,
+    weil ihre Praemisse (Karte wird umgehaengt) laut Rex' eigener
+    Untersuchung nie eintritt: der durchgereichte Name UND der juengste
+    Kommentar-Autor sind im echten Ablauf immer dieselbe Person. Der
+    eigentliche Beweis, dass die Herleitung weg ist, liefert die naechste
+    Konstellation unten.
     """
     from app.services.task_lifecycle import _notify_lead_on_completion
 
     board_id = uuid.uuid4()
     lead_id = uuid.uuid4()
-    hermes_id = uuid.uuid4()
     rex_id = uuid.uuid4()
+    hermes_id = uuid.uuid4()
     task_id = uuid.uuid4()
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        s.add(Board(id=board_id, name="W6-Reviewer-Identitaet", slug=f"w6-ri-{uuid.uuid4().hex[:6]}"))
+        s.add(Board(id=board_id, name="W6-Konstellation-A", slug=f"w6-ka-{uuid.uuid4().hex[:6]}"))
         s.add(Agent(
             id=lead_id, name="Lead", role="orchestrator",
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
             is_board_lead=True, scopes=["tasks:read"],
         ))
         s.add(Agent(
-            id=hermes_id, name="Hermes", role="reviewer",
-            board_id=board_id, agent_token_hash=generate_agent_token()[1],
-            scopes=["tasks:read"],
-        ))
-        s.add(Agent(
             id=rex_id, name="Rex", role="reviewer",
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
             scopes=["tasks:read"],
         ))
+        s.add(Agent(
+            id=hermes_id, name="Hermes", role="reviewer",
+            board_id=board_id, agent_token_hash=generate_agent_token()[1],
+            scopes=["tasks:read"],
+        ))
         s.add(Task(
-            id=task_id, board_id=board_id, title="Umgehaengte Review-Karte",
-            status="done", assigned_agent_id=rex_id, callback_agent_id=lead_id,
-            # B1 (PR #535 Nacharbeit): jede Karte, die mit reviewed=True hier
-            # ankommt, hat in Produktion einen Entscheid-Zeitstempel
-            # (execute_review_decision setzt ihn atomar mit dem Kommentar) —
-            # ohne ihn liefe der Rundenfilter in _notify_lead_on_completion
-            # leer und faende ueberhaupt keinen Kommentar mehr.
+            id=task_id, board_id=board_id, title="Request-Changes dann Freigabe",
+            status="done", assigned_agent_id=hermes_id, callback_agent_id=lead_id,
             review_decision="approved", review_decided_at=utcnow(),
         ))
-        # Der tatsaechliche Entscheid: Rex hat approved, NICHT Hermes.
+        # Runde 1: Rex lehnt ab.
         s.add(TaskComment(
             task_id=task_id, author_type="agent", author_agent_id=rex_id,
+            comment_type="review", content="not ship-ready — Blocker in foo.py:12",
+            created_at=utcnow() - dt.timedelta(hours=2),
+        ))
+        # Runde 2: Hermes gibt frei.
+        s.add(TaskComment(
+            task_id=task_id, author_type="agent", author_agent_id=hermes_id,
             comment_type="review", content="LGTM, approved.",
         ))
         await s.commit()
 
         task = await s.get(Task, task_id)
-        # Simuliert einen Aufrufer, der (wie im Vorfall) noch den urspruenglich
-        # gerouteten Namen durchreicht.
         with patch("app.database.engine", test_engine):
             await _notify_lead_on_completion(s, task, board_id, "Hermes")
 
         lead = await s.get(Agent, lead_id)
         lead_msgs = await _lead_dm_messages(s, lead)
         assert len(lead_msgs) == 1
-        assert "Approved von Rex" in lead_msgs[0].body, (
-            f"Abschlusszeile nennt nicht den tatsaechlichen Pruefer Rex: {lead_msgs[0].body!r}"
-        )
-        assert "Approved von Hermes" not in lead_msgs[0].body
+        assert "Approved von Hermes" in lead_msgs[0].body
+        assert "Approved von Rex" not in lead_msgs[0].body
 
 
 @pytest.mark.asyncio
-async def test_completion_line_falls_back_to_passed_name_without_review_comment():
-    """Kein Review-Kommentar vorhanden (z.B. system_finalize_task_done ohne
-    Reviewer) -> der durchgereichte Name bleibt die einzige Quelle. Deckt
-    ab, dass die neue Herleitung bestehende Faelle (siehe
-    test_root_task_callback.py::test_notify_lead_on_completion_...) nicht
-    bricht.
-    """
-    from app.services.task_lifecycle import _notify_lead_on_completion
+async def test_completion_line_names_the_approver_without_a_new_review_comment():
+    """Konstellation (b) der Definition of Done: Rex haelt in Runde 1 an
+    (`hold` — schreibt einen comment_type="review"-Kommentar). Danach
+    schliesst Hermes per PATCH review->done ab (agent_task_status.py's
+    generischer Fallback, kein neuer TaskComment). `_notify_lead_on_completion`
+    bekommt `reviewer_name="Hermes"` durchgereicht — genau der Agent, der
+    die PATCH-Anfrage gestellt hat (agent_task_status.py:2369, `agent.name`).
 
-    board_id = uuid.uuid4()
-    lead_id = uuid.uuid4()
-    worker_id = uuid.uuid4()
-    task_id = uuid.uuid4()
+    Das ist die Konstellation, an der die zurueckgebaute Herleitung
+    tatsaechlich versagt hatte: der einzige vorhandene Review-Kommentar
+    stammt von Rex (hold), `task.review_decided_at` steht noch auf Rex'
+    Hold-Zeitstempel (dieser Test aendert ihn absichtlich nicht — er prueft
+    `_notify_lead_on_completion` isoliert, unabhaengig davon, ob der
+    aufrufende PATCH-Pfad `review_decided_at` selbst aktualisiert; siehe
+    test_patch_review_to_done_after_hold_corrects_stale_review_decision
+    fuer die Datenkorrektheit dieses Feldes).
 
-    async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        s.add(Board(id=board_id, name="W6-Fallback", slug=f"w6-fb-{uuid.uuid4().hex[:6]}"))
-        s.add(Agent(
-            id=lead_id, name="Lead", role="orchestrator",
-            board_id=board_id, agent_token_hash=generate_agent_token()[1],
-            is_board_lead=True, scopes=["tasks:read"],
-        ))
-        s.add(Agent(
-            id=worker_id, name="Worker", role="developer",
-            board_id=board_id, agent_token_hash=generate_agent_token()[1],
-            scopes=["tasks:read"],
-        ))
-        s.add(Task(
-            id=task_id, board_id=board_id, title="System-Finalize ohne Review",
-            status="done", assigned_agent_id=worker_id, callback_agent_id=lead_id,
-        ))
-        await s.commit()
-
-        task = await s.get(Task, task_id)
-        with patch("app.database.engine", test_engine):
-            await _notify_lead_on_completion(s, task, board_id, "System")
-
-        lead = await s.get(Agent, lead_id)
-        lead_msgs = await _lead_dm_messages(s, lead)
-        assert len(lead_msgs) == 1
-        assert "Approved von System" in lead_msgs[0].body
-
-
-@pytest.mark.asyncio
-async def test_round_2_patch_approval_not_attributed_to_round_1_rejecter():
-    """B1 (Rex review 09a860f6 / feedback 35be682d): the identity lookup took
-    the newest comment_type=="review" comment with no round or outcome
-    filter — comment_type="review" carries request_changes and hold
-    decisions too (execute_review_decision writes the same type for all
-    three outcomes). Round 1: Rex request_changes (a "review" comment).
-    Round 2: Hermes approves via the PATCH review->done shortcut
-    (agent_task_status.py:2362, which threads its own actor name through
-    correctly) WITHOUT writing a new "review" comment. Pre-fix, the lookup
-    still found Rex's round-1 comment and reported "Approved von Rex" —
-    Rex had rejected it. The fix anchors the lookup to
-    `TaskComment.created_at >= task.review_decided_at`, and
-    execute_review_decision/the PATCH fallback both stamp review_decided_at
-    with the CURRENT round's timestamp, so round 1's comment falls outside
-    the window once round 2's decision lands.
-
-    Sabotage-Probe: dropping the `TaskComment.created_at >= _round_start`
-    condition in `_notify_lead_on_completion` (task_lifecycle.py) turns this
-    red — it reports "Approved von Rex" again.
+    Sabotage-Probe: den in Runde 1/2 entfernten Lookup-Block (Auswahl des
+    juengsten comment_type="review"-Kommentars in
+    `_notify_lead_on_completion`, task_lifecycle.py) wieder einfuegen —
+    findet Rex' Hold-Kommentar (liegt exakt auf `review_decided_at`, erfuellt
+    also auch einen `>=`-Rundenfilter) und meldet faelschlich
+    "Approved von Rex". Verifiziert lokal: mit reintroduziertem Block schlägt
+    dieser Test fehl (assert "Approved von Hermes" ... ist dann False,
+    "Approved von Rex" taucht stattdessen auf).
     """
     from app.services.task_lifecycle import _notify_lead_on_completion
 
@@ -362,7 +338,7 @@ async def test_round_2_patch_approval_not_attributed_to_round_1_rejecter():
     task_id = uuid.uuid4()
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        s.add(Board(id=board_id, name="W6-Runde-2", slug=f"w6-r2-{uuid.uuid4().hex[:6]}"))
+        s.add(Board(id=board_id, name="W6-Konstellation-B", slug=f"w6-kb-{uuid.uuid4().hex[:6]}"))
         s.add(Agent(
             id=lead_id, name="Lead", role="orchestrator",
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
@@ -378,33 +354,17 @@ async def test_round_2_patch_approval_not_attributed_to_round_1_rejecter():
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
             scopes=["tasks:read"],
         ))
+        hold_at = utcnow()
         s.add(Task(
-            id=task_id, board_id=board_id, title="Zwei-Runden-Review-Karte",
-            status="done", assigned_agent_id=hermes_id, callback_agent_id=lead_id,
+            id=task_id, board_id=board_id, title="Hold dann PATCH review->done",
+            status="done", assigned_agent_id=rex_id, callback_agent_id=lead_id,
+            review_decision="hold", review_decided_at=hold_at,
         ))
-        await s.commit()
-
-        # Runde 1: Rex lehnt ab — comment_type="review" traegt auch das.
-        round_1_at = utcnow() - dt.timedelta(hours=2)
         s.add(TaskComment(
             task_id=task_id, author_type="agent", author_agent_id=rex_id,
-            comment_type="review", content="not ship-ready — Blocker in foo.py:12",
-            created_at=round_1_at,
+            comment_type="review", content="hold — brauche mehr Kontext.",
+            created_at=hold_at,
         ))
-        task = await s.get(Task, task_id)
-        task.review_decision = "changes_requested"
-        task.review_decided_at = round_1_at
-        s.add(task)
-        await s.commit()
-
-        # Runde 2: Hermes gibt per PATCH review->done frei — KEIN neuer
-        # review-Kommentar (agent_task_status.py:1854-1857's Fallback setzt
-        # review_decision/review_decided_at selbst, ohne TaskComment).
-        round_2_at = utcnow()
-        task = await s.get(Task, task_id)
-        task.review_decision = "approved"
-        task.review_decided_at = round_2_at
-        s.add(task)
         await s.commit()
 
         task = await s.get(Task, task_id)
@@ -415,80 +375,89 @@ async def test_round_2_patch_approval_not_attributed_to_round_1_rejecter():
         lead_msgs = await _lead_dm_messages(s, lead)
         assert len(lead_msgs) == 1
         assert "Approved von Hermes" in lead_msgs[0].body, (
-            f"Abschlusszeile nennt nicht den tatsaechlichen Runde-2-Freigeber Hermes: {lead_msgs[0].body!r}"
+            f"Abschlusszeile nennt nicht den tatsaechlichen Freigeber Hermes: {lead_msgs[0].body!r}"
         )
         assert "Approved von Rex" not in lead_msgs[0].body, (
-            "Runde 1 (Rex, request_changes) wurde faelschlich als Freigeber genannt"
+            "Rex (hold, Runde 1) wurde faelschlich als Freigeber genannt"
         )
 
 
 @pytest.mark.asyncio
-async def test_execute_review_decision_shares_one_timestamp_for_comment_and_decision():
-    """B1, sub-fix: `execute_review_decision` must stamp `comment.created_at`
-    and `task.review_decided_at` with the SAME `utcnow()` call, not two
-    separate ones. `TaskComment(...)` (default_factory=utcnow) is always
-    constructed a few microseconds BEFORE `task.review_decided_at = utcnow()`
-    runs — with two separate calls, the round's own comment.created_at ends
-    up strictly earlier than review_decided_at, so the `>=` filter in
-    `_notify_lead_on_completion` would exclude even a same-round comment and
-    silently fall through to the passed-in name on every single decision,
-    defeating the whole comment-derived-identity mechanism (it would just
-    never fire, current call sites happen to pass the same name anyway so
-    this couldn't be seen without an intentionally wrong passed name — see
-    below).
+async def test_patch_review_to_done_after_hold_corrects_stale_review_decision(
+    make_board, make_agent, auth_client,
+):
+    """Eigenstaendige Datenkorrektheit (Rex' Ein-Zeilen-Fix, unabhaengig von
+    der Abschlusszeile): nach `hold` bleibt `task.review_decision="hold"`
+    auf der Karte stehen. Reine Freigabe per PATCH review->done (ohne den
+    dedizierten POST .../review-Endpunkt) muss diesen Stand trotzdem auf
+    "approved" korrigieren — die alte Fallback-Bedingung
+    (`task.review_decision is None`) griff nach einem `hold` nicht mehr,
+    weil review_decision dann schon "hold" statt None war.
 
-    Sabotage-Probe: reverting `execute_review_decision`'s shared `decided_at`
-    back to two separate `utcnow()` calls (task_lifecycle.py) turns this red.
+    Sabotage-Probe: die `and task.review_decision is None`-Bedingung in
+    agent_task_status.py wieder einfuegen — review_decision bleibt "hold"
+    und dieser Test schlaegt fehl.
     """
-    from app.services.task_lifecycle import execute_review_decision, _notify_lead_on_completion
+    from app.auth import generate_agent_token
+    from app.services.task_lifecycle import execute_review_decision
 
-    board_id = uuid.uuid4()
-    lead_id = uuid.uuid4()
-    rex_id = uuid.uuid4()
-    task_id = uuid.uuid4()
+    board = await make_board(name="W6-Stale-Decision", slug=f"w6-sd-{uuid.uuid4().hex[:6]}")
+    rex = await make_agent(name="Rex", board_id=board.id, role="reviewer")
+    hermes = await make_agent(name="Hermes", board_id=board.id, role="reviewer")
 
+    raw_token, token_hash = generate_agent_token()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        s.add(Board(id=board_id, name="W6-Shared-Stamp", slug=f"w6-ss-{uuid.uuid4().hex[:6]}"))
-        s.add(Agent(
-            id=lead_id, name="Lead", role="orchestrator",
-            board_id=board_id, agent_token_hash=generate_agent_token()[1],
-            is_board_lead=True, scopes=["tasks:read"],
-        ))
-        rex = Agent(
-            id=rex_id, name="Rex", role="reviewer",
-            board_id=board_id, agent_token_hash=generate_agent_token()[1],
-            scopes=["tasks:read"],
-        )
-        s.add(rex)
-        s.add(Task(
-            id=task_id, board_id=board_id, title="Frische Review-Runde",
-            status="review", assigned_agent_id=rex_id, callback_agent_id=lead_id,
-        ))
-        await s.commit()
-        await s.refresh(rex)
+        h = await s.get(Agent, hermes.id)
+        h.agent_token_hash = token_hash
+        h.scopes = []
+        s.add(h)
 
-        task = await s.get(Task, task_id)
-        with patch("app.utils.create_tracked_task"), \
-             patch("app.services.task_lifecycle.trigger_auto_memory"), \
-             patch("app.services.task_lifecycle.trigger_feedback_lesson", new_callable=AsyncMock), \
-             patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
+        task = Task(
+            id=uuid.uuid4(), board_id=board.id, title="W6 Hold dann PATCH-Approve",
+            status="review", assigned_agent_id=rex.id,
+        )
+        s.add(task)
+        await s.commit()
+        await s.refresh(task)
+        task_id = task.id
+
+        rex_agent = await s.get(Agent, rex.id)
+        with (
+            patch("app.utils.create_tracked_task"),
+            patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock),
+        ):
             await execute_review_decision(
-                s, task, board_id, "approve", "LGTM, ship it.", actor_agent=rex,
+                s, task, board.id, "hold", "hold — brauche mehr Kontext.",
+                actor_agent=rex_agent,
             )
         await s.commit()
 
-        # Simuliert einen weit entfernten Aufrufer, der (noch) einen falschen
-        # Namen durchreicht — die einzige Quelle der Wahrheit ist jetzt der
-        # gerade committete Kommentar aus DERSELBEN Runde.
-        task = await s.get(Task, task_id)
-        with patch("app.database.engine", test_engine):
-            await _notify_lead_on_completion(s, task, board_id, "Falscher-Name", reviewed=True)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        pre_patch = await s.get(Task, task_id)
+        assert pre_patch.review_decision == "hold"
+        stale_decided_at = pre_patch.review_decided_at
 
-        lead = await s.get(Agent, lead_id)
-        lead_msgs = await _lead_dm_messages(s, lead)
-        assert len(lead_msgs) == 1
-        assert "Approved von Rex" in lead_msgs[0].body, (
-            f"Eigener Runde-1-Kommentar wurde vom Rundenfilter ausgeschlossen: {lead_msgs[0].body!r}"
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+        patch("app.routers.agent_task_status.handle_review_pr_creation", new_callable=AsyncMock),
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task_id}",
+            json={"status": "done"},
+            headers={"Authorization": f"Bearer {raw_token}"},
+        )
+    assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        after_patch = await s.get(Task, task_id)
+        assert after_patch.status == "done"
+        assert after_patch.review_decision == "approved", (
+            f"review_decision blieb auf dem Hold-Stand: {after_patch.review_decision!r}"
+        )
+        assert after_patch.review_decided_at is not None
+        assert after_patch.review_decided_at > stale_decided_at, (
+            "review_decided_at wurde nicht auf den PATCH-Zeitpunkt aktualisiert"
         )
 
 
