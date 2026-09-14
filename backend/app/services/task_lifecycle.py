@@ -1129,6 +1129,52 @@ async def _notify_no_reviewer_found(
     )
 
 
+def review_card_would_self_dispatch(task: Task, agent: Agent | None) -> bool:
+    """True if an in_progress→review transition on `task` right now would
+    hand this ALREADY-assigned review card to a SECOND reviewer instead of
+    recording the current reviewer's decision.
+
+    Reproduction (#6e828ffc, activity_events cards c0fb45c1/fd4ac7c6,
+    14.09.2026): the reviewer of a `dispatch_intent == "review_handoff"`
+    card finishes their review turn via the generic in_progress→review
+    transition (e.g. `mc finish --review`, mirroring the verb a developer
+    uses to submit code) instead of the dedicated decision verbs (`mc
+    review approve|reject`). `handle_review_handoff`'s own dedupe (below,
+    "already assigned to a reviewer") only recognises the current
+    assignee when `existing_reviewer.role == "reviewer"` LITERALLY — but
+    `find_reviewer` (work_context.py) also matches agents via a legacy
+    name-based fallback ("rex"/"review" in the name) for agents whose
+    `role` is freetext, a state this board's own Rex has been in before
+    (see work_context.py's "Vorfall 94fda9f9" comment). For such an
+    agent the dedupe silently fails to recognise them as already
+    assigned, `_find_reviewer(exclude_agent_id=<this reviewer>)` runs a
+    fresh search that explicitly excludes them, and — since the same
+    name-fallback still has candidates — a genuinely DIFFERENT second
+    reviewer gets the card and reviews it a second time.
+
+    Blocking here, at every call site, before either PR-creation or
+    `handle_review_handoff` runs, stops the whole chain at its root
+    instead of narrowing the dedupe's role check (which would still
+    silently swallow the wrong verb rather than tell the reviewer what
+    went wrong). The Board Lead is exempt — manually routing a card to a
+    second reviewer for a deliberate second opinion is a legitimate,
+    tested lead action (#6e828ffc DoD: "kein Fix, der den Lead-Bypass
+    einschraenkt") and goes through this exact transition too.
+    """
+    if task.dispatch_intent != "review_handoff":
+        return False
+    return not (agent is not None and agent.is_board_lead)
+
+
+REVIEW_CARD_SELF_DISPATCH_DETAIL = (
+    "Diese Karte ist bereits eine Review-Zuweisung (dispatch_intent="
+    "review_handoff). `status=review` ist hier keine Abgabe, sondern "
+    "wuerde eine ZWEITE Review-Zuweisung an einen anderen Reviewer "
+    "ausloesen (siehe #6e828ffc). Nutze `mc review approve|reject` fuer "
+    "deine Entscheidung."
+)
+
+
 async def handle_review_handoff(
     session: AsyncSession,
     task: Task,
@@ -1696,6 +1742,13 @@ async def resolve_unblock_action(
         interrupting the agent.
       - Assigned agent ALIVE and idle (or already on THIS task) → "notify" —
         the existing comment-only path, delivered via poll.
+
+    W1-W3 (Rex' review of #570): all three outcomes above end in the SAME
+    dispatch-handshake reset (`ack_at` + `dispatch_attempt_id`) unless a
+    genuinely live, paused session on THIS task is in the way — see
+    `apply_unblock_notify_reset`'s docstring for the single criterion this
+    now runs on, and `redispatch_unblocked_task` / `requeue_unblocked_task`
+    for why only the "notify" branch needs the extra guard at all.
     """
     if not task.assigned_agent_id:
         return "skip"
@@ -1813,6 +1866,7 @@ async def redispatch_unblocked_task(
     (targets the same agent if it revives, falls back to lead/others per
     dispatch's own logic if it stays dead)."""
     from app.services.dispatch import auto_dispatch_task
+    from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
     from app.utils import create_tracked_task
 
     task.dispatched_at = None
@@ -1833,6 +1887,24 @@ async def redispatch_unblocked_task(
     await session.commit()
     await session.refresh(task)
 
+    # W3 (Rex' review of #570): this branch fires only when the agent is
+    # confirmed DEAD (stale/absent last_seen_at) — never a live session to
+    # protect, so the reset below is unconditional, unlike the notify
+    # branch's guard in apply_unblock_notify_reset. Without it, the OLD
+    # dispatch_attempt_id survives the whole path: auto_dispatch_task below
+    # only sets a fresh id with only_if_null=True (dispatch.py), which is a
+    # no-op on an already-non-None id. Clearing to None first — mirroring
+    # requeue_unblocked_task's clear_dispatch_attempt_id call above — lets
+    # that only_if_null write actually land. Sonde P-D (PR review): before
+    # this fix, `stale_survived=True` for this branch while the notify
+    # branch (which rotates its own id directly, since nothing downstream
+    # sets one for it) already read `stale_survived=False`.
+    await clear_dispatch_attempt_id(
+        session, task,
+        caller="redispatch_unblocked_task", reason="unblock_redispatch_agent_dead",
+    )
+    await session.refresh(task)
+
     create_tracked_task(
         auto_dispatch_task(task.id, board_id),
         name=f"unblock-redispatch:{task.id}",
@@ -1851,6 +1923,88 @@ async def redispatch_unblocked_task(
         agent_id=task.assigned_agent_id,
         severity="warning",
         detail={"reason": "assigned_agent_stale_on_unblock"},
+    )
+
+
+async def apply_unblock_notify_reset(
+    session: AsyncSession,
+    task: Task,
+    old_status: str,
+    assigned_agent_lock_before_transition: uuid.UUID | None,
+    *,
+    caller: str,
+) -> None:
+    """W1/W2 (Rex' review of PR #570): notify-branch half of the unblock
+    ladder — the third case of `resolve_unblock_action`, where the assigned
+    agent is ALIVE and either idle or already on this exact task. Shared by
+    both call sites (`routers/tasks.py`'s operator PATCH and
+    `routers/agent_task_status.py`'s lead/agent PATCH) so the criterion and
+    its rationale live in exactly one place — the duplicated copy across two
+    router files is what let W1 drift (see below).
+
+    One criterion for all three `resolve_unblock_action` branches: reset the
+    dispatch handshake (`ack_at` + `dispatch_attempt_id`) unless the
+    assigned agent might hold a genuinely live, paused session actively
+    running THIS exact task. `redispatch_unblocked_task` and
+    `requeue_unblocked_task` can never hit that unsafe case by construction
+    — the former only fires when the agent is confirmed dead; the latter
+    fires either when the agent's lock points at a DIFFERENT task, or when
+    the agent holds a second `in_progress` task while its lock still names
+    THIS one (`resolve_unblock_action`'s `other_active` check) — a
+    pre-existing corrupt two-in_progress-tasks state, unrelated to the
+    live-paused-session case this branch guards against — so both reset
+    unconditionally. This is the only branch where the ambiguity is
+    reachable: `resolve_unblock_action` returns "notify" both when the agent
+    is idle with no lock at all AND when the agent's lock points at exactly
+    this task — and the latter is indistinguishable, from here, between "a
+    genuinely live `mc ask --blocking` session that must not be double-
+    dispatched" and "a released lock nobody reset" (W2, Sonde P-B).
+
+    Criterion: reset unless `old_status == "waiting"` AND the agent's lock
+    still points at this task. `old_status == "blocked"` is always safe —
+    `mc blocked` (or a blocker escalation) always closes the turn
+    synchronously first, so there is never a live run behind it. `waiting`
+    (`mc ask --blocking`) is the only origin that CAN hold a live, paused
+    session — but only for as long as the agent's own lock
+    (`current_task_id`) still names this task; once that lock has moved on
+    or cleared, the "session" is gone and the card is just stuck (W2).
+
+    ``assigned_agent_lock_before_transition`` MUST be the agent's
+    `current_task_id` read BEFORE this same PATCH's own active-task
+    bookkeeping ran — never a value re-read at call time. Verified while
+    wiring this in (not just adopted from the review's one-liner, per the
+    card's "pruef den Vorschlag, uebernimm ihn nicht ungeprueft"):
+    `agent_task_status.py`'s `update_agent_active_task` call runs earlier in
+    the SAME request and unconditionally repoints `current_task_id` to
+    `task.id` on every →in_progress transition (see its own docstring and
+    `redispatch_unblocked_task`'s B-3 comment, which has to undo the same
+    repoint for its own branch) — by the time this function would otherwise
+    re-fetch the Agent row, "released the lock" and "still holds the lock"
+    already look identical. `routers/tasks.py`'s operator PATCH has no such
+    earlier mutation, so there the snapshot is just the live value taken at
+    the normal call site. Both callers pass a pre-transition snapshot for
+    this reason — see the capture point in each router.
+
+    W1 correction: an earlier version of this comment (both router copies)
+    claimed this "mirrors the already accepted fix in the parked branch of
+    messaging.resolve_waiting_answer". It does not — that twin discriminates
+    by *liveness* (`parked = agent is None or agent.current_task_id !=
+    task.id`, messaging.py), this discriminates by *old_status*. Same
+    effect in the overlap, different criterion; the W2 fix above closes that
+    gap by folding the twin's liveness check into this criterion too.
+    """
+    if old_status == "waiting" and assigned_agent_lock_before_transition == task.id:
+        return
+    task.ack_at = None
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+    await set_dispatch_attempt_id(
+        session, task, str(uuid.uuid4()),
+        caller=caller,
+        reason="unblock_notify_stale_attempt",
+        only_if_null=False,
     )
 
 

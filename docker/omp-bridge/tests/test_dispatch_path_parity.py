@@ -142,25 +142,27 @@ def _file_text(path: str) -> str:
 
 
 KNOWN_GAPS = [
-    # G1 (PR #519, OPEN): the heartbeat soft-check has no author filter and
-    # no cursor seed, so a missing cursor row makes the agent's OWN
-    # blocker/handoff comments read as unread. Backend-side, so the symbol is
-    # pinned against agents.py, not serve_loop. `last_signalled_comment_id`
-    # is the column #519 introduces — when that branch merges this entry goes
-    # stale and this test fails, prompting the doc + exception cleanup.
-    ("G1", "last_signalled_comment_id", "backend",
-     "no separate signal watermark and no author filter: _upsert_cursor has "
-     "exactly one caller (the poll handler), so a low-polling path runs "
-     "without a row and every historic comment reads as unread"),
-    # G6: poll.sh's heartbeat payload carries status(+context_pct) only. A
-    # fix has to put the task id into that payload before the backend can
-    # resolve a control task for it, so `task_id` is the arriving symbol.
-    ("G6", "task_id", "poll_heartbeat",
-     "poll.sh's heartbeat sends neither task_id nor a control read, so "
-     "operator interrupts arrive only via the next poll state"),
-    ("G6", "control", "poll_heartbeat",
-     "same payload: nothing reads a `control` directive back out of the "
-     "heartbeat response on the poll.sh path"),
+    # G1 CLOSED (#519, `fix/heartbeat-own-comments-cursor`): the row below
+    # is gone. `_collect_heartbeat_control` now filters the agent's own
+    # comments out of `soft_unread` unconditionally, and maintains its own
+    # `AgentTaskCommentCursor.last_signalled_comment_id` watermark (seeded
+    # from the dispatch boundary on the first beat, migration
+    # 0198_heartbeat_signalled_cursor) — no longer coupled to `/me/poll`'s
+    # single `_upsert_cursor` call site. See docs/dispatch-path-parity.md
+    # row 3 and the G1 gap-summary row.
+    # G6 CLOSED (#562, `fix/g6-poll-sh-heartbeat-control`): both rows below
+    # are gone. poll.sh's heartbeat now sends task_id/attempt_id
+    # (build_heartbeat_payload, poll.sh:550, gated on CURRENT_TASK_ID) and
+    # reads the response's `control` field (handle_heartbeat_control,
+    # poll.sh:644, wired at the end of heartbeat(), poll.sh:615) — see
+    # docs/dispatch-path-parity.md rows 8/9 and the G6 gap-summary row.
+    # Note: the `task_id` absence-check never actually went stale here (the
+    # literal string `task_id` still doesn't appear in heartbeat()'s own
+    # body — the value travels through the uppercase $CURRENT_TASK_ID shell
+    # var into the build_heartbeat_payload HELPER, a separate function this
+    # scope doesn't cover); only the `control` row tripped
+    # test_known_gaps_reference_real_symbols. Removed together anyway since
+    # the gap they jointly described is functionally closed either way.
 ]
 
 POLL_SH = os.path.join(REPO_ROOT, "docker", "shared", "poll.sh")

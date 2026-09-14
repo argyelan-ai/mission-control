@@ -36,6 +36,12 @@ set -eu
 export PYTHONPATH="/opt/omp-bridge${PYTHONPATH:+:$PYTHONPATH}"
 
 SESSION="${AGENT_NAME:-omp-agent}"
+
+# Graceful shutdown (docker/shared/sigforward.sh): trap TERM/INT, forward to
+# the tmux windows, bounded wait, exit 143. Without a handler the kernel never
+# delivers TERM to PID 1 and every `docker stop` ends in SIGKILL (Exit 137).
+. /opt/omp-bridge/sigforward.sh
+
 BRIDGE=/opt/omp-bridge/bridge.py
 HOOK_FILE=/opt/omp-bridge/turn-end-hook.mjs
 LAUNCHER=/opt/omp-bridge/launch-omp.sh
@@ -297,5 +303,7 @@ while true; do
         echo "[entrypoint] tmux session gone — recreating"
         start_native
     fi
-    sleep 30
+    # mc_sleep_wait, NOT bare `sleep 30` — a foreground external sleep defers
+    # the TERM trap until it completes (30s > 20s stop_grace_period).
+    mc_sleep_wait 30
 done

@@ -296,9 +296,30 @@ wait_for_clean_prompt() {
     # Nudge-Pfad blockiert die Karte vorher.
     local deadline
     deadline=$(( $(date +%s) + READY_TIMEOUT_SEC ))
+    # Fall 4 (14.09.2026): pro Aufruf hoechstens EIN Wegdrueck-Versuch je
+    # Dialogtyp — sonst koennte ein Dialog, der aus anderem Grund stehen
+    # bleibt (z.B. echter Ratings-Dialog der auf eine Person wartet), poll.sh
+    # in eine Dauerschleife aus Tastendruecken schicken. Bleibt er trotzdem
+    # stehen, greift danach dasselbe fail-open + Eskalation wie bisher.
+    local survey_dismissed=false
+    local picker_dismissed=false
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local ui
         if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
+        if ! $survey_dismissed && pane_in_survey_dialog "${SESSION_NAME}:0"; then
+            log "wait_for_clean_prompt: Feedback-Umfrage-Dialog erkannt — sende '0' (Dismiss), kein Enter (koennte sonst eine Bewertung abschicken)."
+            tmux send-keys -t "${SESSION_NAME}:0" "0" 2>/dev/null || true
+            survey_dismissed=true
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
+        if ! $picker_dismissed && pane_in_model_picker "${SESSION_NAME}:0"; then
+            log "wait_for_clean_prompt: Modell-Picker erkannt — sende Enter (Standard bestaetigen), analog wait_for_agent_healthy."
+            tmux_submit "${SESSION_NAME}:0"
+            picker_dismissed=true
             sleep "$READY_POLL_INTERVAL_SEC"
             continue
         fi
@@ -333,7 +354,16 @@ wait_for_clean_prompt() {
 # erkennbaren Anker (fremde CLI, Box ausserhalb des Bereichs) faellt es auf
 # das volle 15-Zeilen-Fenster zurueck — altes Verhalten, kein neues Risiko.
 PASTE_DIALOG_LOOKBACK_LINES="${PASTE_DIALOG_LOOKBACK_LINES:-6}"
-pane_in_interrupted_dialog() {
+
+# _dialog_lookback_window TARGET — gemeinsame Grundlage fuer alle drei
+# pane_in_*_dialog-Erkenner unten: derselbe Anker/Fallback-Ausschnitt
+# (Composer-Box plus PASTE_DIALOG_LOOKBACK_LINES Zeilen darueber, oder das
+# volle 15-Zeilen-Fenster ohne erkennbaren Anker) wie die urspruengliche
+# pane_in_interrupted_dialog vor diesem Refactor (Fall 4, 2026-09-14) — nur
+# einmal geschrieben, damit ein neuer Dialogtyp nicht seine eigene, womoeglich
+# abweichende Fensterlogik mitbringt. Gibt rc 1 zurueck wenn das Pane leer
+# ist (keine echte tmux-Session) — Aufrufer behandeln das wie "kein Dialog".
+_dialog_lookback_window() {
     local tail
     tail=$(tmux capture-pane -t "$1" -p -S -15 2>/dev/null || echo "")
     [ -n "$tail" ] || return 1
@@ -344,8 +374,43 @@ pane_in_interrupted_dialog() {
         dialog_window=$(( field_lines + PASTE_DIALOG_LOOKBACK_LINES ))
         window=$(printf '%s\n' "$tail" | tail -n "$dialog_window")
     fi
+    printf '%s\n' "$window"
+    return 0
+}
+
+pane_in_interrupted_dialog() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
     echo "$window" | grep -q 'Interrupted' \
         && echo "$window" | grep -q 'What should Claude do instead'
+}
+
+# pane_in_survey_dialog TARGET — Fall 4 (14.09.2026, live bei Rex gefunden):
+# Claude Code zeigt gelegentlich einen Feedback-Umfrage-Dialog
+# ("1: Bad   2: Fine   3: Good   0: Dismiss"). Er belegt das Eingabefeld genau
+# wie der Interrupted-Dialog — ein generisches Enter waere aber falsch: es
+# koennte "1: Bad" als Bewertung abschicken statt den Dialog nur wegzudruecken.
+# Deshalb eigene Erkennung + eigene, sichere Aktion (dismiss_known_dialog
+# unten sendet "0", nicht Enter).
+pane_in_survey_dialog() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
+    echo "$window" | grep -q '0: Dismiss' \
+        && echo "$window" | grep -qE '[1-3]: (Bad|Fine|Good)'
+}
+
+# pane_in_model_picker TARGET — derselbe Mechanismus wie der Modell-Picker,
+# den wait_for_agent_healthy/_wait_for_window_ready (backend/app/services/
+# docker_agent_sync.py:849) beim Container-Start schon abfaengt: openclaude
+# zeigt "Enter to confirm" wenn der Endpoint mehrere Modelle anbietet. Dort
+# wird das beim Boot einmalig abgefangen — dieselbe Situation kann aber auch
+# MITTEN im Betrieb auftauchen (Modellwechsel-Nudge, Recovery), wo poll.sh
+# bisher keinen Blick dafuer hatte. Bewusst dasselbe Muster (Text erkennen,
+# Enter bestaetigt den Default) statt eines zweiten, unabhaengigen Wegs.
+pane_in_model_picker() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
+    echo "$window" | grep -q 'Enter to confirm'
 }
 
 # Bug 10 (2026-05-13): fail-open des paste-Schritts war silent — bei Race
@@ -495,6 +560,37 @@ paste_and_submit() {
             if [ "$outcome" = "0" ]; then
                 log "paste_and_submit: zweites Enter hat den Nudge abgesendet (Versuch ${attempt})."
                 return 0
+            fi
+            if [ "$outcome" = "2" ]; then
+                # Fall 4 (14.09.2026, live bei Rex): das zweite Enter kann
+                # selbst einen bekannten Dialog (Feedback-Umfrage,
+                # Modell-Picker) ausloesen oder aufdecken, statt den Nudge
+                # abzusenden — der verdeckt das Feld genauso wie der
+                # Interrupted-Dialog. Ein DRITTES blindes Enter waere hier
+                # aber falsch (die Umfrage wuerde "1: Bad" als Bewertung
+                # werten statt sie zu schliessen). Deshalb: einmal auf einen
+                # bekannten Dialogtyp pruefen und mit dessen SICHEREM Tastendruck
+                # reagieren (nie ein pauschales Enter), erst danach neu
+                # klassifizieren. Kein Treffer: faellt unveraendert in die
+                # bestehende Eskalation unten durch.
+                local dialog_kind=""
+                if pane_in_survey_dialog "${SESSION_NAME}:0"; then
+                    dialog_kind="Umfrage-Dialog"
+                    log "WARNING: paste_and_submit Versuch ${attempt}: Feedback-Umfrage-Dialog verdeckt das Eingabefeld — sende '0' (Dismiss), dritter Versuch."
+                    tmux send-keys -t "${SESSION_NAME}:0" "0" 2>/dev/null || true
+                elif pane_in_model_picker "${SESSION_NAME}:0"; then
+                    dialog_kind="Modell-Picker"
+                    log "WARNING: paste_and_submit Versuch ${attempt}: Modell-Picker verdeckt das Eingabefeld — sende Enter (Standard bestaetigen), dritter Versuch."
+                    tmux_submit "${SESSION_NAME}:0"
+                fi
+                if [ -n "$dialog_kind" ]; then
+                    sleep "$PASTE_VERIFY_DELAY_SEC"
+                    outcome=$(classify_paste_outcome "$file")
+                    if [ "$outcome" = "0" ]; then
+                        log "paste_and_submit: ${dialog_kind} weggedrueckt — dritter Versuch hat den Nudge abgesendet (Versuch ${attempt})."
+                        return 0
+                    fi
+                fi
             fi
             if [ "$outcome" = "2" ]; then
                 log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. Eskalation: Kommentar auf die Karte plus Status blocked (Lead-Triage). NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
@@ -744,6 +840,27 @@ run_task() {
     task_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task']['id'])")
     board_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('board_id') or '')" 2>/dev/null || echo "")
     attempt_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('dispatch_attempt_id') or '')" 2>/dev/null || echo "")
+
+    # Guard 1 (client-side twin of the backend's Guard 2 — erledigte/fremde
+    # Karte incident, 14.09.2026, see scripts/hermes-bridge.py
+    # _task_is_dispatchable_for_me for the sibling implementation). The
+    # backend (agents.py _task_still_dispatchable) is what's actually
+    # supposed to prevent a done/foreign card from ever reaching
+    # state=new_task — this is defense in depth for whatever slips past it.
+    # Missing fields (older backend without assigned_agent_id/my_agent_id)
+    # fail OPEN — this must never become the reason a legit dispatch drops.
+    local task_status task_assigned_agent_id my_agent_id
+    task_status=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('status') or '')" 2>/dev/null || echo "")
+    task_assigned_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('assigned_agent_id') or '')" 2>/dev/null || echo "")
+    my_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('my_agent_id') or '')" 2>/dev/null || echo "")
+    if [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; then
+        log "GUARD 1: Task $task_id hat status=$task_status — Dispatch verweigert (erledigte Karte)"
+        return
+    fi
+    if [ -n "$my_agent_id" ] && [ -n "$task_assigned_agent_id" ] && [ "$my_agent_id" != "$task_assigned_agent_id" ]; then
+        log "GUARD 1: Task $task_id ist assigned_agent_id=$task_assigned_agent_id, ich bin $my_agent_id — Dispatch verweigert (fremde Karte)"
+        return
+    fi
 
     log "Task erhalten: $task_id"
 
@@ -1421,7 +1538,14 @@ rm -f "$TASK_LOCK_FILE" 2>/dev/null || true
 reset_turn_signal
 # Lockfile bei sauberem Exit raeumen. SIGKILL kann trap nicht abfangen —
 # recycler.sh prueft deshalb zusaetzlich ob poll.sh noch laeuft (pgrep).
-trap 'rm -f "$TASK_LOCK_FILE"' EXIT TERM INT
+#
+# TERM/INT bekommen ein eigenes trap MIT exit: seit die Entrypoints TERM an die
+# tmux-Fenster weiterleiten (sigforward.sh), sieht poll.sh das Signal wirklich —
+# ohne `exit` liefe der Handler weiter und poll.sh pochte als Zombie im toten
+# Container weiter. exit 143 = 128+SIGTERM; der EXIT-trap raeumt danach nochmal
+# (idempotent), ohne den Code zu veraendern.
+trap 'rm -f "$TASK_LOCK_FILE"' EXIT
+trap 'rm -f "$TASK_LOCK_FILE"; exit 143' TERM INT
 
 log "Gestartet. Polle $MC_API_URL alle ${POLL_INTERVAL}s..."
 
