@@ -16,6 +16,14 @@ class Config:
     task_id: str | None
     board_id: str | None
     dispatch_attempt_id: str | None
+    context_task_id: str | None = None
+
+    def __post_init__(self) -> None:
+        # Attempt-Header und Task-Kontext gehoeren zusammen: der Header in
+        # dispatch_attempt_id wurde vom Dispatch der Karte context_task_id
+        # ausgestellt. Ohne explizite Angabe ist das die aktuelle task_id.
+        if self.context_task_id is None:
+            object.__setattr__(self, "context_task_id", self.task_id)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -72,6 +80,12 @@ class Config:
         accept the task-id as a positional argument (Boss live-bug 2026-04-25:
         `mc ack <task-id>` warf 'unrecognized arguments' weil das CLI nur
         env-vars unterstuetzte). Immutable dataclass → replace pattern.
+
+        context_task_id bleibt unangetastet: es bezeichnet die Karte, zu der
+        der aktuell GEHALTENE dispatch_attempt_id-Header gehoert. Erst ein
+        erfolgreicher Kontextwechsel (ack/recover) schreibt beides zusammen
+        fort — genau die Kopplung, mit der _cmd_ack/_cmd_recover zwischen
+        "fremde Karte heilen" und "eigene Karte neu dispatcht" trennen.
         """
         from dataclasses import replace
         return replace(self, task_id=task_id)

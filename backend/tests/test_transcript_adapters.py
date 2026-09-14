@@ -44,13 +44,25 @@ def test_claude_agent_gets_the_claude_adapter():
 
 @pytest.mark.parametrize(
     "agent",
-    [None, _Agent(harness=None), _Agent(harness="kimi"), _Agent(harness="hermes"), object()],
+    [None, _Agent(harness=None), _Agent(harness="kimi"), object()],
 )
 def test_unknown_harness_falls_back_to_claude(agent):
     """Kein Privacy-Loch: der Claude-Adapter entscheidet danach selbst, ob
     dieser Agent ueberhaupt ein Transkript hat. Ein fremder Harness ohne
-    eigenen Adapter landet im selben Zustand wie vor dem Register."""
+    eigenen Adapter landet im selben Zustand wie vor dem Register.
+
+    ``hermes`` stand hier bis 13.09.2026 mit in der Liste — seit „Chat over
+    ACP" hat es einen eigenen Eintrag (den omp-Adapter, gleiches Format,
+    s. ``test_hermes_shares_the_omp_adapter``)."""
     assert adapter_for(agent).name == "claude"
+
+
+def test_hermes_shares_the_omp_adapter():
+    """Der Hermes-Chat-Daemon schreibt dasselbe omp-Transkriptformat
+    (docs/specs/chat-over-acp.md). Ohne diesen Eintrag waere der host+hermes-
+    Zweig in ``omp_chat.resolve_transcript_dir`` toter Code: der
+    History-Endpunkt fragt immer ueber ``adapter_for``."""
+    assert adapter_for(_Agent(slug="hermes", harness="hermes")).name == "omp"
 
 
 def test_claude_parser_factory_is_stateless():

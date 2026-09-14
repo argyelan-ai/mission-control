@@ -598,6 +598,24 @@ class TelegramBotService:
                     "bitte im Board pruefen."
                 ),
             )
+        elif resolved == "task_held":
+            # Distinct from task_conflict (W2, PR #563 review): the task's
+            # status hasn't changed at all here — it's still "blocked",
+            # exactly as when the button was tapped. The card is held via
+            # run_control (mc hold / stop_task_run), not stale.
+            await self.answer_callback_query(
+                callback_id,
+                "Approval geloest, Karte ist aber gestoppt/gehalten — "
+                "erst im Board freigeben, dann erneut entblocken.",
+            )
+            await self.update_resolved_telegram(
+                approval_id,
+                "approved" if action == "approve" else "rejected",
+                resolver_note=(
+                    "Karte ist gestoppt/gehalten (run_control) — erst im "
+                    "Board freigeben, dann erneut entblocken."
+                ),
+            )
         else:
             await self.answer_callback_query(callback_id, "Bereits erledigt.")
 
@@ -606,12 +624,16 @@ class TelegramBotService:
 
         Returns "resolved" (approval + task write both succeeded),
         "already_resolved" (approval wasn't pending — legitimate double-click
-        or already handled elsewhere), or "task_conflict" (approval WAS
+        or already handled elsewhere), "task_conflict" (approval WAS
         resolved, but the blocker-decision task write lost the
         lock_and_set() race — PR #478 review, M5: the approval commits
         before the task write, so a 409 there must not raise past this
         method uncaught; the caller still needs to know the task-side write
-        didn't happen).
+        didn't happen), or "task_held" (approval WAS resolved, but the task
+        is no longer reactivatable per task_still_reactivatable —
+        run_control is set, e.g. stopped/held; unlike "task_conflict" the
+        status hasn't changed, so callers need a distinct message — W2,
+        PR #563 review).
         """
         from fastapi import HTTPException
         from sqlmodel.ext.asyncio.session import AsyncSession
@@ -619,6 +641,7 @@ class TelegramBotService:
         from app.models.approval import Approval
         from app.models.task import Task, TaskComment
         from app.services.activity import emit_event
+        from app.services.task_lifecycle import task_still_reactivatable
         from app.services.task_state import lock_and_set
         from app.utils import utcnow
 
@@ -636,13 +659,33 @@ class TelegramBotService:
             await session.commit()
 
             task_conflict = False
+            task_held = False
 
             # Blocker decision: unblock/fail the task
             if approval.action_type == "blocker_decision" and approval.task_id:
                 task = await session.get(Task, approval.task_id)
                 if task and task.status == "blocked":
                     try:
-                        if status == "approved":
+                        if status == "approved" and not task_still_reactivatable(
+                            task, expected_status="blocked"
+                        ):
+                            # 9th reactivation path (task_lifecycle.task_still_reactivatable
+                            # ledger): this only checked task.status == "blocked" above,
+                            # never run_control — a task held/stopped via stop_task_run
+                            # while blocked got reactivated anyway. Same shape as the
+                            # three call sites already routed through this guard.
+                            # Distinct from task_conflict (W2, PR #563 review): the
+                            # status here hasn't changed at all, so the "status changed
+                            # in the meantime" message would point Mark at the wrong
+                            # thing — he needs to know the card is held, not stale.
+                            logger.warning(
+                                "Telegram approval %s resolved but task %s is no "
+                                "longer reactivatable (run_control=%s, status=%s) — "
+                                "skipping in_progress write.",
+                                approval_id, task.id, task.run_control, task.status,
+                            )
+                            task_held = True
+                        elif status == "approved":
                             task, _ = await lock_and_set(session, task.id, "in_progress", actor="user")
                             task.updated_at = utcnow()
                             session.add(task)
@@ -689,10 +732,19 @@ class TelegramBotService:
                 f"Approval {status} via Telegram: {approval.description}",
                 board_id=approval.board_id,
                 agent_id=approval.agent_id,
-                detail={"status": status, "source": "telegram", "task_conflict": task_conflict},
+                detail={
+                    "status": status,
+                    "source": "telegram",
+                    "task_conflict": task_conflict,
+                    "task_held": task_held,
+                },
             )
 
-        return "task_conflict" if task_conflict else "resolved"
+        if task_conflict:
+            return "task_conflict"
+        if task_held:
+            return "task_held"
+        return "resolved"
 
 
 def _escape_html(text: str) -> str:
