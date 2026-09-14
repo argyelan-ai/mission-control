@@ -1123,6 +1123,52 @@ async def _notify_no_reviewer_found(
     )
 
 
+def review_card_would_self_dispatch(task: Task, agent: Agent | None) -> bool:
+    """True if an in_progress→review transition on `task` right now would
+    hand this ALREADY-assigned review card to a SECOND reviewer instead of
+    recording the current reviewer's decision.
+
+    Reproduction (#6e828ffc, activity_events cards c0fb45c1/fd4ac7c6,
+    14.09.2026): the reviewer of a `dispatch_intent == "review_handoff"`
+    card finishes their review turn via the generic in_progress→review
+    transition (e.g. `mc finish --review`, mirroring the verb a developer
+    uses to submit code) instead of the dedicated decision verbs (`mc
+    review approve|reject`). `handle_review_handoff`'s own dedupe (below,
+    "already assigned to a reviewer") only recognises the current
+    assignee when `existing_reviewer.role == "reviewer"` LITERALLY — but
+    `find_reviewer` (work_context.py) also matches agents via a legacy
+    name-based fallback ("rex"/"review" in the name) for agents whose
+    `role` is freetext, a state this board's own Rex has been in before
+    (see work_context.py's "Vorfall 94fda9f9" comment). For such an
+    agent the dedupe silently fails to recognise them as already
+    assigned, `_find_reviewer(exclude_agent_id=<this reviewer>)` runs a
+    fresh search that explicitly excludes them, and — since the same
+    name-fallback still has candidates — a genuinely DIFFERENT second
+    reviewer gets the card and reviews it a second time.
+
+    Blocking here, at every call site, before either PR-creation or
+    `handle_review_handoff` runs, stops the whole chain at its root
+    instead of narrowing the dedupe's role check (which would still
+    silently swallow the wrong verb rather than tell the reviewer what
+    went wrong). The Board Lead is exempt — manually routing a card to a
+    second reviewer for a deliberate second opinion is a legitimate,
+    tested lead action (#6e828ffc DoD: "kein Fix, der den Lead-Bypass
+    einschraenkt") and goes through this exact transition too.
+    """
+    if task.dispatch_intent != "review_handoff":
+        return False
+    return not (agent is not None and agent.is_board_lead)
+
+
+REVIEW_CARD_SELF_DISPATCH_DETAIL = (
+    "Diese Karte ist bereits eine Review-Zuweisung (dispatch_intent="
+    "review_handoff). `status=review` ist hier keine Abgabe, sondern "
+    "wuerde eine ZWEITE Review-Zuweisung an einen anderen Reviewer "
+    "ausloesen (siehe #6e828ffc). Nutze `mc review approve|reject` fuer "
+    "deine Entscheidung."
+)
+
+
 async def handle_review_handoff(
     session: AsyncSession,
     task: Task,

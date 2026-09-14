@@ -2808,6 +2808,11 @@ async def agent_update_task(
         # CRITICAL call order: PR creation MUST happen BEFORE handle_review_handoff
         # (Pitfall H: marker comment written before reviewer is notified).
         if new_status == "review" and old_status == "in_progress":
+            from app.services.task_lifecycle import (
+                review_card_would_self_dispatch, REVIEW_CARD_SELF_DISPATCH_DETAIL,
+            )
+            if review_card_would_self_dispatch(task, agent):
+                raise HTTPException(409, REVIEW_CARD_SELF_DISPATCH_DETAIL)
             await handle_review_pr_creation(session, task, agent)
             if not getattr(task, "human_review_required", None):
                 from app.services.task_lifecycle import handle_review_handoff
