@@ -90,6 +90,34 @@ jobs:
       - name: Run Postgres-only tests
         run: pytest -x --tb=short -q -m postgres
 
+  omp-bridge:
+    name: omp-bridge Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # tests/test_acp_through_tests.py imports app.services.omp_chat — the
+      # bridge's own suite reaches into the backend package for that one
+      # shared parser, so backend's deps must be importable too (PR #547
+      # follow-up W3: this lane didn't exist before, so the 6 new
+      # test_acp_workspace_parity.py tests + the sabotage probes in
+      # test_acp_through_tests.py never ran in CI at all).
+      - name: Install backend dependencies (tests import app.services.omp_chat)
+        working-directory: backend
+        run: pip install -e ".[test]"
+
+      - name: Run omp-bridge tests
+        working-directory: docker/omp-bridge
+        env:
+          # entrypoint.sh renders this at container boot; the test suite
+          # needs it too (_acp_model_selector fails loud without it, ADR-054).
+          OPENAI_MODEL: ci-test-model
+        run: python3 -m pytest tests/ -q
+
   frontend-v2:
     name: Frontend Checks
     runs-on: ubuntu-latest
