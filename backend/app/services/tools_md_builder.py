@@ -84,6 +84,36 @@ curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/agents" \\
 
 Response: list with id, name, role, is_board_lead per agent.""")
 
+            parts.append("""## Read activity events (board-wide, aggregatable)
+
+Answers questions a per-task view can't: "how often did event X happen in the
+last N days, and what followed?" Read-only, always scoped to your own board —
+you never see another board's events, even if you pass its board_id.
+
+```
+curl -s "$MC_API_URL/api/v1/agent/me/activity-events?event_type=task.blocked,task.stuck&since=2026-09-01T00:00:00Z" \\
+  -H "Authorization: Bearer $MC_AGENT_TOKEN"
+```
+
+Filters (all optional, combinable): `event_type` (comma-separated list),
+`since`/`until` (ISO timestamps — default window: last 7 days), `board_id`
+(must equal your own — anything else is a 403), `agent_id`, `task_id`.
+`limit` defaults to 50, capped at 200 per page; page further back with
+`before=<next_cursor>` from the previous response. The queryable window is
+capped at 90 days regardless of `since` — the response's `window.clamped`
+tells you if that kicked in.
+
+For "how often", don't page through raw rows — use the aggregating form:
+
+```
+curl -s "$MC_API_URL/api/v1/agent/me/activity-events/summary?event_type=task.blocked" \\
+  -H "Authorization: Bearer $MC_AGENT_TOKEN"
+```
+
+Same filters/window as above, minus pagination. Returns
+`{"buckets": [{"day", "event_type", "count"}, ...], "truncated": bool}` —
+count per event_type per day, capped at 500 buckets.""")
+
         if _has(Scope.TASKS_CREATE):
             if is_board_lead:
                 # Board Lead gets project management + orchestrator section

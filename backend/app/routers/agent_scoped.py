@@ -64,7 +64,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
@@ -2343,6 +2343,247 @@ async def agent_read_own_thread(
         "latest_seq": latest_seq,
         "my_acked_seq": cursor.last_acked_seq if cursor is not None else 0,
         "budget_truncated": budget_truncated,
+    }
+
+
+# ── Activity Events (read-only, aggregatable) ───────────────────────────────
+# Board Task bfba0507 (2026-09-14): before this, an agent could only see
+# ActivityEvent rows scoped to ONE task (via the operator-only timeline
+# endpoint in tasks.py). "How often did event X happen in the last 7 days,
+# and what followed?" was unanswerable without a human running psql on the
+# host. These two endpoints give agents a scoped, capped, paginated read
+# path over the same table.
+
+ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS = 7
+ACTIVITY_EVENTS_MAX_WINDOW_DAYS = 90
+ACTIVITY_EVENTS_DEFAULT_LIMIT = 50
+ACTIVITY_EVENTS_MAX_LIMIT = 200
+ACTIVITY_EVENTS_SUMMARY_CAP = 500
+
+
+def _activity_events_window(since: datetime | None, until: datetime | None) -> tuple[datetime, datetime, bool]:
+    """Resolves the (since, until) filter pair, tz-normalizes both, and clamps
+    the span to ACTIVITY_EVENTS_MAX_WINDOW_DAYS. Returns (start, end, clamped).
+
+    Default window (no `since` given): last ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS
+    days — named per DoD ("Standardfenster ... benannt"). The clamp protects
+    against a caller passing an ancient `since` and forcing a full-table scan;
+    it silently narrows rather than erroring, mirroring the `truncated` flag
+    pattern used by the task timeline endpoint (tasks.py get_task_timeline).
+    """
+    now = utcnow()
+    end = until if until is not None else now
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = since if since is not None else end - timedelta(days=ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+
+    max_span = timedelta(days=ACTIVITY_EVENTS_MAX_WINDOW_DAYS)
+    clamped = False
+    if end - start > max_span:
+        start = end - max_span
+        clamped = True
+    return start, end, clamped
+
+
+def _activity_events_event_types(event_type: str | None) -> list[str] | None:
+    if not event_type:
+        return None
+    types = [t.strip() for t in event_type.split(",") if t.strip()]
+    return types or None
+
+
+@router.get("/me/activity-events")
+async def agent_list_activity_events(
+    event_type: str | None = Query(None, description="Single type or comma-separated list, e.g. 'task.blocked,task.stuck'"),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    board_id: uuid.UUID | None = Query(None),
+    agent_id: uuid.UUID | None = Query(None),
+    task_id: uuid.UUID | None = Query(None),
+    before: str | None = Query(None, description="Pagination cursor from a previous page's next_cursor"),
+    limit: int = Query(ACTIVITY_EVENTS_DEFAULT_LIMIT, ge=1, le=ACTIVITY_EVENTS_MAX_LIMIT),
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """List activity_events, scoped to the calling agent's own board.
+
+    Read-only counterpart to the operator-only task timeline
+    (tasks.py get_task_timeline) — but board-wide and filterable/paginated
+    instead of per-task, so an agent can answer "how often did X happen"
+    without a human pulling it from psql.
+
+    Scope: the tragende Bedingung — results are ALWAYS filtered to
+    `agent.board_id`, matching the single-board-scope pattern used by every
+    other `/boards/{board_id}/...` agent endpoint (e.g. `agent_get_board`).
+    A `board_id` filter may be passed for clarity/audit but MUST equal the
+    agent's own board — anything else is a 403, never a silent narrowing.
+    An agent with no board (`agent.board_id is None`) only ever sees events
+    with `board_id IS NULL` (global/system events), never another board's.
+
+    Pagination: cursor-based (created_at, id) descending, same shape as
+    `/me/thread`'s before_seq — `before` is the opaque `next_cursor` a
+    previous page returned. Default window is the last
+    ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS days, capped at
+    ACTIVITY_EVENTS_MAX_WINDOW_DAYS; page size defaults to
+    ACTIVITY_EVENTS_DEFAULT_LIMIT, capped at ACTIVITY_EVENTS_MAX_LIMIT.
+    """
+    from app.models.activity import ActivityEvent
+
+    if board_id is not None and board_id != agent.board_id:
+        raise HTTPException(status_code=403, detail="Access to this board is not permitted")
+
+    window_start, window_end, clamped = _activity_events_window(since, until)
+
+    stmt = select(ActivityEvent).where(
+        ActivityEvent.board_id == agent.board_id,
+        ActivityEvent.created_at >= window_start,
+        ActivityEvent.created_at <= window_end,
+    )
+
+    types = _activity_events_event_types(event_type)
+    if types is not None:
+        stmt = stmt.where(ActivityEvent.event_type.in_(types))  # type: ignore[union-attr]
+    if agent_id is not None:
+        stmt = stmt.where(ActivityEvent.agent_id == agent_id)
+    if task_id is not None:
+        stmt = stmt.where(ActivityEvent.task_id == task_id)
+
+    if before:
+        try:
+            before_ts_raw, before_id_raw = before.split("|", 1)
+            before_ts = datetime.fromisoformat(before_ts_raw)
+            if before_ts.tzinfo is None:
+                before_ts = before_ts.replace(tzinfo=timezone.utc)
+            before_id = uuid.UUID(before_id_raw)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid cursor")
+        stmt = stmt.where(
+            or_(
+                ActivityEvent.created_at < before_ts,
+                and_(ActivityEvent.created_at == before_ts, ActivityEvent.id < before_id),
+            )
+        )
+
+    stmt = stmt.order_by(ActivityEvent.created_at.desc(), ActivityEvent.id.desc()).limit(limit + 1)
+    result = await session.exec(stmt)
+    rows = list(result.all())
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    next_cursor = None
+    if has_more and rows:
+        last = rows[-1]
+        next_cursor = f"{last.created_at.isoformat()}|{last.id}"
+
+    row_agent_ids = {e.agent_id for e in rows if e.agent_id}
+    agent_name_map: dict[uuid.UUID, str] = {}
+    if row_agent_ids:
+        agents_result = await session.exec(select(Agent).where(Agent.id.in_(row_agent_ids)))  # type: ignore[arg-type]
+        agent_name_map = {a.id: a.name for a in agents_result.all()}
+
+    return {
+        "events": [
+            {
+                "id": str(e.id),
+                "event_type": e.event_type,
+                "board_id": str(e.board_id) if e.board_id else None,
+                "task_id": str(e.task_id) if e.task_id else None,
+                "agent_id": str(e.agent_id) if e.agent_id else None,
+                "agent_name": agent_name_map.get(e.agent_id) if e.agent_id else None,
+                "title": e.title,
+                "detail": e.detail,
+                "severity": e.severity,
+                "created_at": e.created_at,
+            }
+            for e in rows
+        ],
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "limit": limit,
+        "window": {"since": window_start, "until": window_end, "clamped": clamped},
+    }
+
+
+@router.get("/me/activity-events/summary")
+async def agent_activity_events_summary(
+    event_type: str | None = Query(None, description="Single type or comma-separated list"),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    board_id: uuid.UUID | None = Query(None),
+    agent_id: uuid.UUID | None = Query(None),
+    task_id: uuid.UUID | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Aggregating counterpart to /me/activity-events: count per
+    (event_type, day) instead of raw rows — the shape for "how often did
+    event X happen in the last N days" without pulling potentially
+    thousands of rows through an agent's context window.
+
+    Chose count-per-event_type-per-day over a flat per-event_type total
+    because the DoD's own example question ("wie oft ... in den letzten 7
+    Tagen, und was folgte darauf") is inherently about a TREND, not a single
+    number — a flat total can't show "spiked on Tuesday" or feed a
+    week-over-week comparison, and collapsing to per-day here costs nothing
+    (the raw list endpoint above still answers the "then what happened"
+    half, event by event, once a day/type combination looks interesting).
+
+    Uses `func.date(...)` (not `date_trunc`, which is Postgres-only) — same
+    portability fix already applied in routers/system.py:498
+    (costs_timeseries) for SQLite-vs-Postgres test/prod parity.
+
+    Same board scope, same window default/clamp as the list endpoint.
+    Bucket count is capped at ACTIVITY_EVENTS_SUMMARY_CAP; `truncated`
+    signals the cap was hit (identical convention to the list endpoint's
+    `has_more` / the task timeline's `truncated`).
+    """
+    from sqlalchemy import func
+
+    from app.models.activity import ActivityEvent
+
+    if board_id is not None and board_id != agent.board_id:
+        raise HTTPException(status_code=403, detail="Access to this board is not permitted")
+
+    window_start, window_end, clamped = _activity_events_window(since, until)
+
+    day_expr = func.date(ActivityEvent.created_at)
+
+    stmt = (
+        select(day_expr.label("day"), ActivityEvent.event_type, func.count().label("count"))
+        .where(
+            ActivityEvent.board_id == agent.board_id,
+            ActivityEvent.created_at >= window_start,
+            ActivityEvent.created_at <= window_end,
+        )
+        .group_by(day_expr, ActivityEvent.event_type)
+        .order_by(day_expr.desc(), func.count().desc())
+    )
+
+    types = _activity_events_event_types(event_type)
+    if types is not None:
+        stmt = stmt.where(ActivityEvent.event_type.in_(types))  # type: ignore[union-attr]
+    if agent_id is not None:
+        stmt = stmt.where(ActivityEvent.agent_id == agent_id)
+    if task_id is not None:
+        stmt = stmt.where(ActivityEvent.task_id == task_id)
+
+    stmt = stmt.limit(ACTIVITY_EVENTS_SUMMARY_CAP + 1)
+    result = await session.exec(stmt)
+    rows = list(result.all())
+
+    truncated = len(rows) > ACTIVITY_EVENTS_SUMMARY_CAP
+    rows = rows[:ACTIVITY_EVENTS_SUMMARY_CAP]
+
+    return {
+        "buckets": [
+            {"day": str(row.day), "event_type": row.event_type, "count": row.count}
+            for row in rows
+        ],
+        "truncated": truncated,
+        "window": {"since": window_start, "until": window_end, "clamped": clamped},
     }
 
 
