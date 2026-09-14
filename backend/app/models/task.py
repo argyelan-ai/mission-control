@@ -181,6 +181,16 @@ class Task(SQLModel, table=True):
     # Delegation contract — structured required fields per task type
     delegation_type: str | None = None     # code_change | visual_proof | credential_bound | review
     branch_name: str | None = None         # e.g. "feature/format-duration"
+    # Explicit PR reference (Task dd4bf92c, 2026-09-13): set automatically by
+    # handle_review_pr_creation() when the backend creates the PR itself
+    # (project_id path), or by the agent's own status->review PATCH when it
+    # pushed + created the PR manually (repo_id/Registry-Repo path — the
+    # backend has no automatic push/PR-create there). Deliberately separate
+    # from the `PR erstellt:` TaskComment marker (agent_git.py, Pitfall H) —
+    # that heuristic stays untouched; this is the reliable field the review-
+    # dispatch workspace prep reads instead of scraping comments.
+    pr_number: int | None = None
+    pr_url: str | None = None
     # use_alter=True: breaks the tasks↔task_deliverables FK cycle for SQLAlchemy INSERT ordering
     triggered_by_deliverable_id: uuid.UUID | None = Field(
         default=None,

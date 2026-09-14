@@ -646,6 +646,13 @@ class AgentTaskUpdate(BaseModel):
     blocker_question: str | None = None     # Konkrete Frage an den Operator
     # Callback wait (Boss pattern): points to the subtask being waited on
     blocked_by_task_id: uuid.UUID | None = None
+    # Explicit PR reference (Task dd4bf92c, 2026-09-13): agents on the
+    # Registry-Repo path (task.repo_id) push + create the PR themselves —
+    # the backend has no automatic hook there. Pass this alongside
+    # status=review so the review-dispatch workspace prep can check out the
+    # right PR instead of leaving the reviewer to fetch it by hand.
+    pr_number: int | None = None
+    pr_url: str | None = None
 
 
 class ReviewDecisionBody(BaseModel):
