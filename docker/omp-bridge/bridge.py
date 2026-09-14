@@ -2831,7 +2831,7 @@ def serve_loop(
                     max_time=int(turn_deadline) if turn_deadline else 900,
                     permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                     task_id=str(task["id"]),
-                    cwd=cwd,
+                    # SABOTAGE PROBE (#555 lane): cwd kwarg removed
                     cancel_state=acp_cancel,
                     heartbeat_fn=_acp_tool_heartbeat,
                     interrupt_state=interrupt_state,
