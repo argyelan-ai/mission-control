@@ -1700,6 +1700,38 @@ async def update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    if old_status == "blocked":
+                        # Incident 2026-09-14 (61 min Stillstand): `blocked`
+                        # heisst IMMER "der Turn ist bereits beendet" — der
+                        # Agent hat `mc blocked` selbst aufgerufen (oder eine
+                        # Blocker-Eskalation hat es fuer ihn getan), beides
+                        # schliesst den Turn synchron ab. Anders als bei
+                        # `waiting` (mc ask --blocking: "Session bleibt
+                        # bestehen") gibt es hier also nie einen echten
+                        # laufenden Zug, den ein Reset doppelt starten
+                        # koennte. Ohne diesen Reset bleiben `ack_at` (oben
+                        # gerade frisch gestempelt) UND die alte
+                        # `dispatch_attempt_id` stehen: `ack_at` haelt
+                        # agents.py's Orphan-Check (_maybe_redispatch_orphaned_run)
+                        # ein volles poll_orphan_run_threshold_seconds-Fenster
+                        # lang fuer "lebend", und selbst danach traegt die
+                        # neu zugestellte Karte noch die ALTE attempt_id —
+                        # genau das, was bridge.py's eigenes Dispatch-Dedup
+                        # (last_attempt_id) als "schon erledigt" verwirft.
+                        # Mirrors den bereits akzeptierten Fix fuer denselben
+                        # Fehlerklasse im "parked"-Zweig der Antwort-Resume
+                        # (messaging.py resolve_waiting_answer).
+                        from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+                        task.ack_at = None
+                        session.add(task)
+                        await session.commit()
+                        await session.refresh(task)
+                        await set_dispatch_attempt_id(
+                            session, task, str(uuid.uuid4()),
+                            caller="unblock_notify",
+                            reason="unblock_notify_blocked_stale_attempt",
+                            only_if_null=False,
+                        )
                     _verb = "entblockt" if old_status == "blocked" else "fortgesetzt (war zurueckgestellt)"
                     msg = (
                         f"UNBLOCKED: Dein Task \"{task.title}\" wurde {_verb}.\n\n"
