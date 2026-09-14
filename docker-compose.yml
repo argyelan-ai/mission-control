@@ -37,6 +37,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). AOF is on
+    # (--appendonly yes --appendfsync everysec): on SIGTERM redis-server finishes
+    # writing to the AOF file and closes it cleanly; on SIGKILL that in-flight
+    # write — and the clean close — is lost. 30s is generous headroom for that
+    # flush, not a full minute like db: there's no checkpoint/WAL replay to wait
+    # out, just a bounded fsync.
+    stop_grace_period: 30s
     logging: *default-logging
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     volumes:
@@ -537,6 +544,13 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). qdrant is
+    # the vector store behind Vault and Memory (mc_qdrant_data holds the
+    # storage segments). On SIGKILL it can't close those segments cleanly,
+    # forcing crash-recovery on the next start. 60s, same as db: aligned by
+    # role (persistent storage engine, not a cache), not by measurement —
+    # nobody has isolated-tested qdrant's own shutdown path yet.
+    stop_grace_period: 60s
     logging: *default-logging
     ports:
       - "127.0.0.1:6333:6333"
