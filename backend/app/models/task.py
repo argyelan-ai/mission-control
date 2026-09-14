@@ -133,6 +133,7 @@ class Task(SQLModel, table=True):
 
     # Operational Controls
     run_control: str | None = None  # null | manual_hold | stopped
+    hold_reason: str | None = None  # free text set by mc hold, cleared by mc release
     dispatch_intent: str = Field(default="root")  # root | subtask | review_handoff | review_rework | manual_redispatch
     dispatch_attempt_id: str | None = None  # UUID per dispatch attempt, validates agent updates
 

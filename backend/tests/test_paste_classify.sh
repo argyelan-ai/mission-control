@@ -40,27 +40,45 @@ cat > "$TMUX_STUB_DIR/tmux" <<'STUB'
 #!/usr/bin/env bash
 # Stub tmux: hands back $TMUX_STUB_PANE_FILE for capture-pane (honoring the
 # -S -N history window like real tmux), records send-keys in $TMUX_KEYS_LOG.
+#
+# Fall 4 (14.09.2026): TMUX_STUB_DISMISS_KEY/_MARKER/_AFTER_FILE model a real
+# vorher/nachher — as long as no send-keys call has contained
+# TMUX_STUB_DISMISS_KEY, capture-pane serves TMUX_STUB_PANE_FILE (the dialog);
+# the FIRST send-keys call whose args contain that string drops a marker file,
+# and every capture-pane call from then on serves TMUX_STUB_PANE_FILE_AFTER
+# (the dialog gone) instead — regardless of how many capture-pane calls
+# happened in between. Trigger-based rather than call-counted: a test must not
+# depend on exactly how many probes classify_paste_outcome/wait_for_clean_prompt
+# happen to make per iteration. All three unset (default): falls back to the
+# static TMUX_STUB_PANE_FILE, byte-identical to before this fix.
 if [ "${1:-}" = "capture-pane" ]; then
-    # Honor the -S -N history window like real tmux: emit only the last N
-    # lines. Without this, a scrolled-out dialog at the top of the fixture
-    # would still be "visible" and case P2 could not test tail-window logic.
     stub_win=""
     stub_prev=""
     for stub_a in "$@"; do
         if [ "$stub_prev" = "-S" ]; then stub_win="${stub_a#-}"; fi
         stub_prev="$stub_a"
     done
-    if [ -n "${TMUX_STUB_PANE_FILE:-}" ] && [ -f "$TMUX_STUB_PANE_FILE" ]; then
+    stub_pane_file="${TMUX_STUB_PANE_FILE:-}"
+    if [ -n "${TMUX_STUB_DISMISS_MARKER:-}" ] && [ -f "$TMUX_STUB_DISMISS_MARKER" ] \
+       && [ -n "${TMUX_STUB_PANE_FILE_AFTER:-}" ]; then
+        stub_pane_file="$TMUX_STUB_PANE_FILE_AFTER"
+    fi
+    if [ -n "$stub_pane_file" ] && [ -f "$stub_pane_file" ]; then
         if [ -n "$stub_win" ]; then
-            tail -n "$stub_win" "$TMUX_STUB_PANE_FILE"
+            tail -n "$stub_win" "$stub_pane_file"
         else
-            cat "$TMUX_STUB_PANE_FILE"
+            cat "$stub_pane_file"
         fi
     fi
     exit 0
 fi
 if [ "${1:-}" = "send-keys" ]; then
     [ -n "${TMUX_KEYS_LOG:-}" ] && echo "send-keys $*" >> "$TMUX_KEYS_LOG"
+    if [ -n "${TMUX_STUB_DISMISS_KEY:-}" ] && [ -n "${TMUX_STUB_DISMISS_MARKER:-}" ]; then
+        for stub_a in "$@"; do
+            [ "$stub_a" = "$TMUX_STUB_DISMISS_KEY" ] && : > "$TMUX_STUB_DISMISS_MARKER"
+        done
+    fi
     exit 0
 fi
 exit 0
@@ -301,6 +319,75 @@ if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
     fail "case P4: zitierter Dialogtext weit ueber der Composer-Box darf das Gate nicht halten — Anker fehlt oder greift nicht"
 fi
 
+# ── Fall 4 (14.09.2026, live bei Rex): pane_in_survey_dialog / pane_in_model_picker ──
+# Feedback-Umfrage ("1: Bad  2: Fine  3: Good  0: Dismiss") und Modell-Picker
+# ("Enter to confirm") verdecken das Eingabefeld genauso wie der Interrupted-
+# Dialog, brauchen aber eine ANDERE, sichere Reaktion (siehe paste_and_submit
+# unten) statt eines blinden Enters. Fixtures sind aus derselben 24-Zeilen-
+# Skelettform wie claude-24-{submitted,unsubmitted}.txt gebaut (echte Box-
+# Struktur, kein Fuelltext) — eine ECHTE Aufzeichnung des Umfrage-Dialogs lag
+# beim Bau dieses Fixes nicht vor (kein Zugriff auf Rex' Container), der
+# Wortlaut stammt 1:1 aus der Karten-Beobachtung vom 14.09.2026.
+
+# Case S1: Umfrage-Dialog im Composer-Fenster wird erkannt.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-survey.txt"
+if ! pane_in_survey_dialog "${SESSION_NAME}:0"; then
+    fail "case S1: Umfrage-Dialog (1: Bad .. 0: Dismiss) muss erkannt werden"
+fi
+
+# Case S2: normales, abgesendetes Pane (kein Dialog) darf nicht matchen.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+if pane_in_survey_dialog "${SESSION_NAME}:0"; then
+    fail "case S2: abgesendetes Pane ohne Dialog darf pane_in_survey_dialog nicht triggern"
+fi
+
+# Case S3 (Regressionsprobe wie P4): Umfrage-Text WEIT oben im Verlauf zitiert,
+# Box zeigt normalen idle-Prompt — darf nicht matchen, sonst haelt ein
+# Kartentext, der diesen Satz zitiert (z.B. dieser hier), das Gate faelschlich.
+pane_s3=$(mktemp)
+{
+    echo "Kartentext-Zitat: \"1: Bad   2: Fine   3: Good   0: Dismiss\" beschreibt den Dialog"
+    for i in 1 2 3 4 5 6 7 8 9 10 11; do echo "filler $i"; done
+    echo "────"
+    echo "❯ "
+    echo "────"
+} > "$pane_s3"
+[ "$(wc -l < "$pane_s3")" -eq 15 ] || fail "case S3: Fixture-Aufbau kaputt — erwartet 15 Zeilen, war $(wc -l < "$pane_s3")"
+export TMUX_STUB_PANE_FILE="$pane_s3"
+if pane_in_survey_dialog "${SESSION_NAME}:0"; then
+    fail "case S3: zitierter Umfrage-Text weit ueber der Composer-Box darf nicht matchen"
+fi
+
+# Case S4 (Sabotage-Probe): nur EINER der beiden Anker ("0: Dismiss") ohne den
+# anderen ("N: Bad/Fine/Good") darf NICHT genuegen — sonst wuerde jede
+# unrelated "0: irgendwas"-Zeile (z.B. ein Menue-Eintrag) faelschlich als
+# Umfrage gelten. Haelt diese Probe nicht, misst S1 nur einen einzelnen losen
+# String statt der Dialogform.
+pane_s4=$(mktemp)
+{
+    for i in 1 2 3 4 5 6 7 8 9 10; do echo "filler $i"; done
+    echo "0: Dismiss dieses Panels (unrelated Menue, keine Umfrage)"
+    echo "────"
+    echo "❯ "
+    echo "────"
+} > "$pane_s4"
+export TMUX_STUB_PANE_FILE="$pane_s4"
+if pane_in_survey_dialog "${SESSION_NAME}:0"; then
+    fail "case S4: '0: Dismiss' allein (ohne 1:/2:/3:-Optionszeile) darf nicht als Umfrage gelten"
+fi
+
+# Case M1: Modell-Picker ("Enter to confirm") im Composer-Fenster erkannt.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-model-picker.txt"
+if ! pane_in_model_picker "${SESSION_NAME}:0"; then
+    fail "case M1: Modell-Picker (Enter to confirm) muss erkannt werden"
+fi
+
+# Case M2: normales Pane ohne Picker darf nicht matchen.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+if pane_in_model_picker "${SESSION_NAME}:0"; then
+    fail "case M2: abgesendetes Pane ohne Picker darf pane_in_model_picker nicht triggern"
+fi
+
 # ── B2-1 (Review PR #529, Runde 3): wait_for_clean_prompt muss das Gate aus
 # pane_in_interrupted_dialog auch VERWENDEN (poll.sh:296) — P1-P3 oben pruefen
 # nur die isolierte Funktion, nicht die Verdrahtung. Faellt der Aufruf bei
@@ -329,6 +416,62 @@ rc=0
 wait_for_clean_prompt || rc=$?
 [ "$rc" = "0" ] || fail "case G2: wait_for_clean_prompt muss auf idle-Pane rc 0 liefern, war '$rc'"
 [ "$PANE_UI_DETECTED" = "claude" ] || fail "case G2: PANE_UI_DETECTED muss beim Freigeben gesetzt werden, war '$PANE_UI_DETECTED'"
+
+# ── Fall 4: wait_for_clean_prompt drueckt bekannte Dialoge weg, statt nur zu
+# warten oder blind fail-open zu pasten. Beweis am ECHTEN Pane-Zustand
+# vorher/nachher (nicht nur am Rueckgabewert): vor dem Dismiss zeigt
+# capture-pane den Dialog, danach den geraeumten idle-Prompt — siehe
+# TMUX_STUB_DISMISS_KEY/_MARKER/_AFTER_FILE im Stub oben.
+
+# Case G3: Umfrage-Dialog — Gate wartet NICHT nur, sondern sendet '0'
+# (Dismiss), dann setzt sich frei sobald das Pane danach idle zeigt.
+TMUX_STUB_DISMISS_MARKER=$(mktemp -u)
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-survey.txt"
+export TMUX_STUB_PANE_FILE_AFTER="$FIX_DIR/claude-24-idle-after-dismiss.txt"
+export TMUX_STUB_DISMISS_KEY="0"
+export TMUX_STUB_DISMISS_MARKER
+export TMUX_KEYS_LOG=$(mktemp)
+: > "$TMUX_KEYS_LOG"
+READY_TIMEOUT_SEC=3
+PANE_UI_DETECTED=""
+# Vorher: der Stub muss wirklich den Dialog zeigen (Testaufbau pruefen, nicht
+# nur das Verhalten der Funktion).
+pane_before=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S -15)
+echo "$pane_before" | grep -q '0: Dismiss' \
+    || fail "case G3: Testaufbau kaputt — Stub zeigt den Umfrage-Dialog nicht als 'vorher'"
+rc=0
+wait_for_clean_prompt || rc=$?
+[ "$rc" = "0" ] || fail "case G3: wait_for_clean_prompt muss nach dem Dismiss freigeben, war rc='$rc'"
+grep -qE '^send-keys .* 0$' "$TMUX_KEYS_LOG" \
+    || fail "case G3: '0' (Dismiss) wurde nicht gesendet: $(cat "$TMUX_KEYS_LOG")"
+# Nachher: das Pane, das die Funktion zuletzt gesehen hat, zeigt keinen
+# Dialog mehr — der eigentliche Vorher/Nachher-Beweis.
+pane_after=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S -15)
+echo "$pane_after" | grep -q '0: Dismiss' \
+    && fail "case G3: Pane zeigt den Umfrage-Dialog IMMER NOCH, obwohl wait_for_clean_prompt rc=0 meldet — vorher/nachher widersprechen sich"
+unset TMUX_KEYS_LOG TMUX_STUB_DISMISS_KEY TMUX_STUB_DISMISS_MARKER TMUX_STUB_PANE_FILE_AFTER
+
+# Case G4: Modell-Picker — dieselbe Zusicherung, andere Taste (Enter/-H 0d).
+TMUX_STUB_DISMISS_MARKER=$(mktemp -u)
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-model-picker.txt"
+export TMUX_STUB_PANE_FILE_AFTER="$FIX_DIR/claude-24-idle-after-dismiss.txt"
+export TMUX_STUB_DISMISS_KEY="0d"
+export TMUX_STUB_DISMISS_MARKER
+export TMUX_KEYS_LOG=$(mktemp)
+: > "$TMUX_KEYS_LOG"
+READY_TIMEOUT_SEC=3
+PANE_UI_DETECTED=""
+rc=0
+wait_for_clean_prompt || rc=$?
+[ "$rc" = "0" ] || fail "case G4: wait_for_clean_prompt muss nach dem Modell-Picker-Dismiss freigeben, war rc='$rc'"
+grep -q -- '-H 0d$' "$TMUX_KEYS_LOG" \
+    || fail "case G4: Enter (Standard bestaetigen) wurde nicht gesendet: $(cat "$TMUX_KEYS_LOG")"
+pane_after_m=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S -15)
+echo "$pane_after_m" | grep -q 'Enter to confirm' \
+    && fail "case G4: Pane zeigt den Modell-Picker IMMER NOCH, obwohl wait_for_clean_prompt rc=0 meldet"
+unset TMUX_KEYS_LOG TMUX_STUB_DISMISS_KEY TMUX_STUB_DISMISS_MARKER TMUX_STUB_PANE_FILE_AFTER
+READY_TIMEOUT_SEC=1
+
 unset -f detect_pane_ui
 
 # ── Bug B3: der laute Pfad ─────────────────────────────────────────────────
@@ -433,6 +576,77 @@ paste_and_submit "$msg_e1" || rc=$?
 [ ! -s "$BLOCKER_LOG" ] || fail "case E3: ohne Karte darf report_blocker nicht laufen: $(cat "$BLOCKER_LOG")"
 grep -q 'Escape' "$TMUX_KEYS_LOG" \
     || fail "case E3: ohne Karte muss das Feld trotzdem per Escape geraeumt werden — sonst haengt sich der naechste Paste an den stehengebliebenen Text: $(cat "$TMUX_KEYS_LOG")"
+unset TMUX_KEYS_LOG
+
+# ── Fall 4: paste_and_submit "dritter Versuch" — bekannten Dialog wegdruecken
+# statt eskalieren (bzw. bei UNBEKANNTEM Zustand weiterhin eskalieren). Alle
+# drei Faelle teilen sich denselben stateful classify_paste_outcome-Mock wie
+# E0 oben: 1./2. Aufruf "2" (im Feld haengengeblieben), 3. Aufruf (nur erreicht
+# wenn ein Dialog erkannt wurde) "0".
+
+# Case D1: Umfrage-Dialog — Dismiss ist '0', KEIN drittes Enter.
+d1_count=$(mktemp); echo 0 > "$d1_count"
+classify_paste_outcome() {
+    local n; n=$(($(cat "$d1_count") + 1)); echo "$n" > "$d1_count"
+    [ "$n" -le 2 ] && echo 2 || echo 0
+}
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-survey.txt"
+export TMUX_KEYS_LOG=$(mktemp); : > "$TMUX_KEYS_LOG"
+: > "$BLOCKER_LOG"
+CURRENT_TASK_ID="task-d1"; CURRENT_BOARD_ID="board-d1"
+PASTE_ESCALATION_TASK_ID=""; PASTE_ESCALATION_BOARD_ID=""
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "0" ] || fail "case D1: Umfrage-Dismiss haette den Nudge absenden muessen, rc='$rc'"
+[ ! -s "$BLOCKER_LOG" ] || fail "case D1: der rettende Umfrage-Fall darf report_blocker nicht ausloesen: $(cat "$BLOCKER_LOG")"
+grep -qE '^send-keys .* 0$' "$TMUX_KEYS_LOG" \
+    || fail "case D1: '0' (Dismiss) wurde beim dritten Versuch nicht gesendet: $(cat "$TMUX_KEYS_LOG")"
+d1_enters=$(grep -c -- '-H 0d$' "$TMUX_KEYS_LOG" 2>/dev/null || true)
+[ "$d1_enters" = "2" ] || fail "case D1: erwartet genau zwei Enter (Original + rettendes zweites) — der Dismiss selbst ist KEIN Enter, waren '$d1_enters': $(cat "$TMUX_KEYS_LOG")"
+unset TMUX_KEYS_LOG
+
+# Case D2: Modell-Picker — Dismiss ist Enter (Standard bestaetigen), also ein
+# DRITTES '-H 0d' zusaetzlich zu den beiden normalen Submits.
+d2_count=$(mktemp); echo 0 > "$d2_count"
+classify_paste_outcome() {
+    local n; n=$(($(cat "$d2_count") + 1)); echo "$n" > "$d2_count"
+    [ "$n" -le 2 ] && echo 2 || echo 0
+}
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-model-picker.txt"
+export TMUX_KEYS_LOG=$(mktemp); : > "$TMUX_KEYS_LOG"
+: > "$BLOCKER_LOG"
+CURRENT_TASK_ID="task-d2"; CURRENT_BOARD_ID="board-d2"
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "0" ] || fail "case D2: Modell-Picker-Dismiss haette den Nudge absenden muessen, rc='$rc'"
+[ ! -s "$BLOCKER_LOG" ] || fail "case D2: der rettende Modell-Picker-Fall darf report_blocker nicht ausloesen: $(cat "$BLOCKER_LOG")"
+d2_enters=$(grep -c -- '-H 0d$' "$TMUX_KEYS_LOG" 2>/dev/null || true)
+[ "$d2_enters" = "3" ] || fail "case D2: erwartet drei Submits (Original + rettendes zweites + Modell-Picker-Bestaetigung), waren '$d2_enters': $(cat "$TMUX_KEYS_LOG")"
+unset TMUX_KEYS_LOG
+
+# Case D3 (Sabotage-/Regressionsprobe): OHNE erkennbaren Dialog darf der neue
+# Code NICHT eingreifen — die bestehende Eskalation (Kommentar + blocked) muss
+# unveraendert feuern, kein '0' und kein drittes Enter. classify_paste_outcome
+# bricht selbst ab, wenn es ein drittes Mal aufgerufen wird — das waere nur
+# der Fall, wenn der neue Code faelschlich einen Dialog "erkannt" haette.
+d3_count=$(mktemp); echo 0 > "$d3_count"
+classify_paste_outcome() {
+    local n; n=$(($(cat "$d3_count") + 1)); echo "$n" > "$d3_count"
+    [ "$n" -le 2 ] || fail "case D3: classify_paste_outcome ein drittes Mal aufgerufen — der neue Code hat faelschlich einen Dialog erkannt, obwohl das Pane keinen zeigt"
+    echo 2
+}
+export TMUX_STUB_PANE_FILE="$pane_c3"  # "totally unrelated pane content" (Case C3) — kein Dialog, kein Composer-Anker
+export TMUX_KEYS_LOG=$(mktemp); : > "$TMUX_KEYS_LOG"
+: > "$BLOCKER_LOG"
+PASTE_ESCALATION_TASK_ID="task-d3"; PASTE_ESCALATION_BOARD_ID="board-d3"
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "2" ] || fail "case D3: ohne erkennbaren Dialog muss weiterhin eskaliert werden (rc 2), war '$rc'"
+grep -q "task=task-d3" "$BLOCKER_LOG" || fail "case D3: Eskalation ist ausgeblieben: $(cat "$BLOCKER_LOG")"
+grep -qE '^send-keys .* 0$' "$TMUX_KEYS_LOG" \
+    && fail "case D3: faelschlich ein '0' (Dismiss) gesendet, obwohl kein Umfrage-Dialog im Pane steht: $(cat "$TMUX_KEYS_LOG")"
+d3_enters=$(grep -c -- '-H 0d$' "$TMUX_KEYS_LOG" 2>/dev/null || true)
+[ "$d3_enters" = "2" ] || fail "case D3: erwartet weiterhin genau zwei Enter (kein zusaetzlicher Modell-Picker-Enter), waren '$d3_enters': $(cat "$TMUX_KEYS_LOG")"
 unset TMUX_KEYS_LOG
 
 # ── W1: die Quellenkennung muss die Lead-Triage erreichen ──────────────────

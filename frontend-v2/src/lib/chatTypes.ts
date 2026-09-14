@@ -12,7 +12,11 @@
  *  `inbox` = ueber MC zugestellte Nachricht, `teammate` = Rueckmeldung eines
  *  Subagenten/einer anderen Sitzung, `system` = Meldung des Harness selbst.
  *  `title` ist nur beim Auftrag gefuellt (aus der ungekuerzten Datei). */
-export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system";
+/*  `error` = eine Stoerung des Chat-Daemons selbst (ACP, siehe
+ *  docs/specs/chat-over-acp.md). Sie steht als Transkript-Zeile im Verlauf,
+ *  weil ein Fehler, den nur das Log kennt, fuer den Operator nicht
+ *  stattgefunden hat — der Code liegt dann in `MessageEvent.error`. */
+export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system" | "error";
 
 export interface MessageSource {
   kind: MessageSourceKind;
@@ -37,6 +41,18 @@ export interface MessageEvent {
   /** Nur bei `role: "teammate"`: die Herkunft, sofern der Parser sie sicher
    *  kennt. `null`/fehlend = keine Behauptung, die Zeile bleibt schlicht. */
   source?: MessageSource | null;
+  /** Nur bei `source.kind === "error"`: was schiefging. `code` ist eine der
+   *  Marken des Chat-Daemons (`rpc_error`, `provider_error`, `empty_turn`,
+   *  `process_exit`, `busy`, `session_reset`) und waehlt den Text der Karte;
+   *  ein unbekannter Code faellt auf den Sammelbegriff zurueck, statt die
+   *  Meldung zu verschlucken. `detail` ist der Wortlaut der Quelle und darf
+   *  fehlen — dann traegt `text` die Erklaerung. */
+  error?: ChatErrorInfo | null;
+}
+
+export interface ChatErrorInfo {
+  code: string;
+  detail?: string | null;
 }
 
 export interface ToolEvent {

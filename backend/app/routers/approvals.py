@@ -398,11 +398,18 @@ async def resolve_approval(
                 await session.commit()
                 logger.info("Task %s unblocked → inbox for re-dispatch (note: %s)", task.id, note[:50])
 
-                # Trigger re-dispatch immediately (same as the initial dispatch)
-                from app.services.dispatch import auto_dispatch_task
+                # Trigger re-dispatch immediately (same as the initial dispatch).
+                # Guarded (not a bare auto_dispatch_task call): this fires as a
+                # decoupled background task, so by the time it actually runs the
+                # card may already have been picked up and moved on through the
+                # normal poll path (incident 2026-09-13, card 4c9bb492/G5) —
+                # redispatch_after_blocker_answer re-checks status/run_control
+                # immediately before dispatching instead of trusting this stale
+                # snapshot.
+                from app.services.dispatch import redispatch_after_blocker_answer
                 from app.utils import create_tracked_task
                 create_tracked_task(
-                    auto_dispatch_task(str(task.id), str(task.board_id))
+                    redispatch_after_blocker_answer(task.id, task.board_id)
                 )
             elif payload.status == "rejected":
                 # The operator wants to cancel the task
@@ -951,10 +958,14 @@ async def quick_resolve_confirm(
                 await session.commit()
                 logger.info("Task %s unblocked via Telegram → inbox for re-dispatch", task.id)
 
-                from app.services.dispatch import auto_dispatch_task
+                # Guarded — see redispatch_after_blocker_answer's docstring
+                # (same race as the PATCH-based resolve above: the actual
+                # dispatch fires as a decoupled background task and must not
+                # trust this now-stale snapshot).
+                from app.services.dispatch import redispatch_after_blocker_answer
                 from app.utils import create_tracked_task
                 create_tracked_task(
-                    auto_dispatch_task(str(task.id), str(task.board_id))
+                    redispatch_after_blocker_answer(task.id, task.board_id)
                 )
             elif status == "rejected":
                 task, _ = await lock_and_set(session, task.id, "failed", actor="operator")
