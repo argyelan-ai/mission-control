@@ -68,7 +68,7 @@ async def test_operator_override_stops_running_reviewer_turn(
         assert t.status == "done"
         assert t.run_control == "stopped"
         from app.routers.agents import _heartbeat_control
-        control = _heartbeat_control(t, reviewer.id, [], None)
+        control = _heartbeat_control(t, reviewer.id, [])
         assert control == {
             "interrupt": "hard",
             "reason": "run_control=stopped (Stop durch Operator)",
@@ -131,6 +131,33 @@ async def test_operator_override_with_no_reviewer_is_noop(make_board, make_agent
 
 
 @pytest.mark.asyncio
+async def test_operator_override_skips_non_reviewer_worker(
+    make_board, make_agent, make_task,
+):
+    """Role gate: a card held by an assigned NON-reviewer worker agent is
+    never stop-flagged — only a dedicated reviewer agent can be mid-turn on
+    a review card, so the override must not touch worker-held cards."""
+    board = await make_board(name="Worker Board", slug="worker-board")
+    worker = await make_agent(name="Worker-Override", board_id=board.id, role="worker")
+    task = await make_task(
+        board_id=board.id, title="Worker Held Review",
+        status="review", assigned_agent_id=worker.id,
+    )
+
+    await _decide(task, board.id, "approve", "Operator entscheidet selbst.")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        assert t.status == "done"
+        # No stop flag, no override comment: the worker's turn is untouched.
+        assert t.run_control is None
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == task.id)
+        )).all()
+        assert not [c for c in comments if "Operator-Override" in c.content]
+
+
+@pytest.mark.asyncio
 async def test_operator_override_on_request_changes_keeps_flow(
     make_board, make_agent, make_task,
 ):
@@ -174,7 +201,7 @@ async def test_operator_override_on_request_changes_keeps_flow(
         assert t.status == "inbox"
         assert t.run_control == "stopped"
         from app.routers.agents import _heartbeat_control
-        control = _heartbeat_control(t, reviewer.id, [], None)
+        control = _heartbeat_control(t, reviewer.id, [])
         assert control is not None and control["interrupt"] == "hard"
         comments = (await s.exec(
             select(TaskComment).where(TaskComment.task_id == task.id)
