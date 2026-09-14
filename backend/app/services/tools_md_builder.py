@@ -289,7 +289,19 @@ text, `##` prefix) and at least {REFLECTION_MIN_CHARS} characters total — a on
 "done." is rejected. `mc finish --force` closes any still-open checklist items first
 (auto-marks them done) instead of blocking the pre-flight check; use `mc checklist skip
 <id> --reason "..."` beforehand instead if an item is genuinely out of your role rather
-than actually finished.""")
+than actually finished.
+
+Work finished but a human still has to decide something? Close the card anyway and take
+the question with you — never leave a finished card open with a "waiting for X" comment:
+
+```bash
+mc finish --needs-decision "Rollout tonight, or after Monday's release?" "<reflection>"
+```
+
+Same close, same reflection duty; the question additionally goes out as an open question
+in the card's thread (it reaches the operator and survives the card closing) and as a
+`needs_decision` comment on the card, so it stays findable there. An empty question is
+rejected. Whatever follows from the answer is a NEW card.""")
 
             # Register deliverable
             parts.append(f"""## Register deliverable (result artifact)
