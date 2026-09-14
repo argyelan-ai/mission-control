@@ -17,15 +17,22 @@ backfilling (a NULL here just means "the heartbeat hasn't signalled anything
 yet for this row", the same safe-start meaning ``last_seen_comment_id`` NULL
 already carries).
 
-Revision ID: 0197_heartbeat_signalled_cursor
-Revises: 0196_runtime_supports_vision
+Revision ID: 0198_heartbeat_signalled_cursor
+Revises: 0197_task_hold_reason
+
+Renamed from 0197 (PR #519 Rex review round 3, B-2): `0197_task_hold_reason`
+landed on `main` with the same `down_revision = 0196_runtime_supports_vision`
+while this PR was open — two heads on the merged tree. Re-chained onto that
+head; `alembic heads` must be re-verified after merge, since #493
+(`0197_context_tokens_nullable`) and #538 (also targeting 0198) are open at
+the same time and race for the next number.
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "0197_heartbeat_signalled_cursor"
-down_revision = "0196_runtime_supports_vision"
+revision = "0198_heartbeat_signalled_cursor"
+down_revision = "0197_task_hold_reason"
 branch_labels = None
 depends_on = None
 

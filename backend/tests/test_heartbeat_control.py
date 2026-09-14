@@ -79,6 +79,7 @@ async def _add_comment(
     author_agent_id: uuid.UUID | None = None,
     comment_type: str = "message",
     content: str = "note",
+    created_at: dt.datetime | None = None,
 ):
     c = TaskComment(
         task_id=task.id,
@@ -87,6 +88,8 @@ async def _add_comment(
         comment_type=comment_type,
         content=content,
     )
+    if created_at is not None:
+        c.created_at = created_at
     session.add(c)
     await session.commit()
     await session.refresh(c)
@@ -532,7 +535,15 @@ async def test_heartbeat_missing_cursor_seeds_past_foreign_comment_without_flagg
     reverted to `unseen = all_comments` and the suite stayed green — every
     other missing-cursor test here uses the agent's own comment as the
     pre-beat state, so filter (a) alone masked (b) (PR #519 Rex review,
-    round 2, B2)."""
+    round 2, B2).
+
+    Backdated to before `dispatched_at` (B-1, PR #519 Rex review round 3):
+    the missing-cursor fallback now compares against the dispatch boundary,
+    not an unconditional `[]` — a comment genuinely predating dispatch (as
+    this one claims to, "already there before the first beat") must be
+    created BEFORE `dispatched_at` for that claim to hold under the new
+    comparison. See `test_heartbeat_missing_cursor_seeds_foreign_comment_after_dispatch_flags_soft`
+    for the mirror case where the same setup happens AFTER dispatch."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, task, token = await _agent_with_task(s)
         lead_raw, lead_hash = generate_agent_token()
@@ -546,6 +557,7 @@ async def test_heartbeat_missing_cursor_seeds_past_foreign_comment_without_flagg
         foreign_comment = await _add_comment(
             s, task, author_type="agent", author_agent_id=lead.id,
             comment_type="blocker", content="Vor dem ersten Beat schon da",
+            created_at=task.dispatched_at - dt.timedelta(minutes=5),
         )
         assert await _cursor_row(s, agent.id, task.id) is None
 
@@ -723,3 +735,198 @@ async def test_heartbeat_beat_does_not_swallow_poll_delivery_with_prior_cursor(c
     poll = await _poll(client, token)
     contents = [c["content"] for c in poll.json()["new_comments"]]
     assert contents == ["STOPP — bitte pruefen"]
+
+
+# ── B-1 round 3 (PR #519 Rex review round 3) — the seed swallowed a signal
+# that arrived AFTER dispatch on a card that had zero comments at dispatch
+# time. The missing-cursor branch used to hardcode `unseen = []`; a comment
+# posted while that branch was still active (no cursor persisted yet, since
+# the ack-write only ever ran once `all_comments` was non-empty) landed
+# straight in that `[]` and was seeded away in the very same beat, without
+# ever being signalled. Rex's probes P1/P2/P3 below, unchanged in intent.
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_zero_comments_then_first_handoff_flags_soft(
+    client: AsyncClient,
+):
+    """P1 (Rex review round 3): fresh card, 0 comments, 3 clean beats, THEN
+    the first-ever comment on the card — a lead handoff. Before the fix:
+    `control: None` (swallowed). After: `soft`."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        assert await _cursor_row(s, agent.id, task.id) is None
+
+    for _ in range(3):
+        beat = await _heartbeat(client, token)
+        assert "control" not in beat.json()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="handoff", content="Bitte noch Scope Y mitnehmen",
+        )
+
+    beat = await _heartbeat(client, token)
+    assert beat.json()["control"]["interrupt"] == "soft"
+
+    # Ack: the same comment does not re-trigger a beat later.
+    again = await _heartbeat(client, token)
+    assert "control" not in again.json()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_zero_comments_then_first_user_blocker_flags_soft(
+    client: AsyncClient,
+):
+    """P2 (Rex review round 3): same as P1, but the first-ever comment is a
+    user-authored `blocker` instead of a lead `handoff`."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        assert await _cursor_row(s, agent.id, task.id) is None
+
+    for _ in range(3):
+        beat = await _heartbeat(client, token)
+        assert "control" not in beat.json()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await _add_comment(
+            s, task, author_type="user",
+            comment_type="blocker", content="Stopp, bitte anders loesen",
+        )
+
+    beat = await _heartbeat(client, token)
+    assert beat.json()["control"]["interrupt"] == "soft"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_seeds_foreign_comment_after_dispatch_flags_soft(
+    client: AsyncClient,
+):
+    """P3 (Rex review round 3): the dispatch prompt DID carry history (a
+    comment predating `dispatched_at`), but a NEW foreign handoff lands
+    after dispatch and before the first beat. The pre-dispatch history must
+    stay quiet (mirrors
+    `test_heartbeat_missing_cursor_seeds_past_foreign_comment_without_flagging`)
+    while the genuinely new comment must still soft-interrupt on the very
+    first beat — the seed must not treat "no cursor yet" as "everything up
+    to now is old news"."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        await _add_comment(
+            s, task, author_type="user", comment_type="message",
+            content="Alte Historie, schon im Dispatch-Prompt",
+            created_at=task.dispatched_at - dt.timedelta(minutes=5),
+        )
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="handoff", content="Neu, nach dem Dispatch",
+        )
+        assert await _cursor_row(s, agent.id, task.id) is None
+
+    beat = await _heartbeat(client, token)
+    assert beat.json()["control"]["interrupt"] == "soft"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_legacy_task_without_dispatched_at_stays_quiet(
+    client: AsyncClient,
+):
+    """Legacy safety net: a row predating the `dispatched_at` column (still
+    possible on old, long-running tasks) has no boundary to compare
+    against — falls back to the old `[]` behavior rather than guessing, so
+    it never floods a legacy task with its entire history at once."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        task.dispatched_at = None
+        s.add(task)
+        await s.commit()
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="handoff", content="Kein dispatched_at auf dieser Karte",
+        )
+
+    beat = await _heartbeat(client, token)
+    assert "control" not in beat.json()
+
+
+# ── W-1 (PR #519 Rex review round 3) — the ack-guard must compare against
+# the SIGNAL watermark, not the delivery watermark. Sabotaging
+# `all_comments[-1].id != cursor.last_signalled_comment_id` into
+# `... != cursor.last_seen_comment_id` slipped past the whole suite: if
+# `last_seen_comment_id` already sits on the tail (a real prior poll
+# delivery) while `last_signalled_comment_id` lags behind, the mutated
+# guard never writes — the signal watermark is stuck forever and the soft
+# interrupt fires on every single beat instead of once.
+
+@pytest.mark.asyncio
+async def test_heartbeat_ack_guard_advances_signal_watermark_not_delivery_watermark(
+    client: AsyncClient,
+):
+    """Cursor row where `last_seen_comment_id` (poll's delivery watermark)
+    already sits on the tail comment, but `last_signalled_comment_id` (the
+    heartbeat's own watermark) lags behind on an earlier comment. The tail
+    is a foreign handoff the heartbeat has not signalled yet. First beat:
+    soft (tail is unseen relative to the signal watermark) AND the ack-write
+    must advance `last_signalled_comment_id` to the tail. Second and third
+    beat: quiet — the guard comparing against the wrong field would leave
+    the signal watermark stuck and repeat `soft` forever."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s)
+        first = await _add_comment(
+            s, task, author_type="agent", author_agent_id=agent.id,
+            comment_type="progress", content="checkpoint",
+        )
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        tail = await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="handoff", content="Bitte pruefen",
+        )
+        from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
+        s.add(AgentTaskCommentCursor(
+            agent_id=agent.id, task_id=task.id,
+            last_seen_comment_id=tail.id,  # poll already delivered up to tail
+            last_signalled_comment_id=first.id,  # heartbeat watermark lags
+        ))
+        await s.commit()
+
+    first_beat = await _heartbeat(client, token)
+    assert first_beat.json()["control"]["interrupt"] == "soft"
+
+    second_beat = await _heartbeat(client, token)
+    assert "control" not in second_beat.json(), (
+        "Soft-Interrupt wiederholt sich endlos"
+    )
+
+    third_beat = await _heartbeat(client, token)
+    assert "control" not in third_beat.json()

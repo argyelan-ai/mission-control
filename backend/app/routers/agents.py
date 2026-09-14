@@ -3742,14 +3742,12 @@ def _heartbeat_control(
     active_task,
     agent_id,
     blocked_episode_comments: list,
-    comment_cursor_id,
 ):
     """Pure decision core of the heartbeat control channel (unit-testable).
 
     active_task: the agent's in_progress task row (or None).
     blocked_episode_comments: comments on the active task created at-or-after
     blocked_at (the caller slices; keeps this function DB-free).
-    comment_cursor_id: the agent's last-seen comment id (None = nothing seen).
     """
     if active_task is None:
         return None
@@ -3848,11 +3846,18 @@ async def _collect_heartbeat_control(session, agent, active_task):
       - A comment authored by the agent itself is never an unread message
         TO itself — filtered out of `soft_unread` regardless of the cursor.
       - No signal-cursor row yet does NOT mean "every historic comment is
-        unseen". The dispatch prompt already carried that full history
-        (mirrors the bridge's own `delivery.drop_comments()` at dispatch)
-        — so the first beat seeds the watermark to the current tail and
-        reports nothing new, instead of re-flagging the agent's own past
-        blocker/handoff comment on every single beat forever.
+        unseen", but it also must NOT mean "nothing is unseen" — the
+        dispatch prompt only carried comments that existed as of
+        `active_task.dispatched_at` (mirrors the bridge's own
+        `delivery.drop_comments()` at dispatch). With no persisted
+        watermark yet, "unseen" is therefore everything created AFTER
+        `dispatched_at`, not an unconditional `[]` — the latter swallowed
+        the very first real comment posted after a fresh dispatch (B-1, PR
+        #519 Rex review round 3: `all_comments` only starts existing once
+        that first comment lands, so `[]` silently ate it before the seed
+        ever had a real id to seed to). Once the seed write below has run
+        once, later beats switch to the ID-based lookup against the
+        persisted watermark.
 
     Any failure in the decision itself returns None, so the heartbeat
     response stays legacy-shaped; a failure while persisting the watermark
@@ -3906,21 +3911,34 @@ async def _collect_heartbeat_control(session, agent, active_task):
             )
             unseen = all_comments[idx + 1:] if idx >= 0 else all_comments
         else:
-            unseen = []
+            # No persisted watermark yet — fall back to the dispatch
+            # boundary instead of an unconditional `[]` (B-1, PR #519 Rex
+            # review round 3). `dispatched_at` is None only for legacy rows
+            # predating that column; keep the old (safe) behavior there.
+            dispatch_boundary = _aware(getattr(active_task, "dispatched_at", None))
+            unseen = (
+                []
+                if dispatch_boundary is None
+                else [
+                    c for c in all_comments
+                    if _aware(c.created_at) > dispatch_boundary
+                ]
+            )
         soft_unread = [
             c for c in unseen
             if c.comment_type in _HEARTBEAT_CONTROL_COMMENT_TYPES
-            # An agent never counts as an unread sender to itself.
+            # An agent never counts as an unread sender to itself. `c` is a
+            # real TaskComment row straight from the query above, so both
+            # fields are always present (models/task.py) — a getattr default
+            # here would silently keep filtering after a rename instead of
+            # raising (nit, PR #519 Rex review round 3).
             and not (
-                getattr(c, "author_type", "") == "agent"
-                and getattr(c, "author_agent_id", None) == agent.id
+                c.author_type == "agent"
+                and c.author_agent_id == agent.id
             )
         ]
 
-        control = _heartbeat_control(
-            active_task, agent.id, episode,
-            cursor.last_signalled_comment_id if cursor else None,
-        )
+        control = _heartbeat_control(active_task, agent.id, episode)
         if control is None and soft_unread:
             control = {
                 "interrupt": "soft",
