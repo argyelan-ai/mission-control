@@ -57,7 +57,7 @@ from app.utils import utcnow
 logger = logging.getLogger("mc.agent_runtime_switch")
 
 LOCK_TTL_SECONDS = 120
-HEALTH_TIMEOUT_RECREATE = 90
+HEALTH_TIMEOUT_RECREATE = 180
 HEALTH_TIMEOUT_RESTART = 30
 # Live-Befund 05.09.2026: der omp-TUI braucht nach einem Neustart laenger als
 # 30 s, bis die Prompt-Glyphen in Fenster 0 stehen — zwei Wechsel scheiterten
@@ -66,6 +66,15 @@ HEALTH_TIMEOUT_RESTART = 30
 # endet, sobald die Glyphen erscheinen (_wait_for_window_ready pollt alle
 # poll_interval Sekunden); die Frist ist nur die Obergrenze. Eine zu kurze
 # Obergrenze kostet also einen unnoetigen Rollback, eine grosszuegige nichts.
+#
+# Live-Befund 14.09.2026: derselbe Effekt bei einem Image-Wechsel (nicht nur
+# Neustart) — Marks Wechsel von Rex (Claude Opus 5 → GLM-5.3 Flash, Harness
+# omp) scheiterte zweimal mit "timeout after 90s — window not ready":
+# 14:16:42 UTC 99968 ms, 14:33:01 UTC 99380 ms. Reproduzierbar rund 99,5 s —
+# der zweite Versuch (Image bereits lokal vorhanden) widerlegt die Annahme,
+# ein gecachtes Image sei schneller startklar. Obergrenze auf 180 s erhoeht;
+# HEALTH_TIMEOUT_RESTART_OMP haengt an dieser Konstante und zieht automatisch
+# mit — kein separater Eingriff dort noetig.
 HEALTH_TIMEOUT_RESTART_OMP = HEALTH_TIMEOUT_RECREATE
 
 # omp Window-0 readiness glyphs (ADR-049) plus the ACP sentinel (fix
@@ -730,6 +739,7 @@ async def switch_agent_runtime(
 
     snapshot_old_runtime_id = agent.runtime_id
     snapshot_old_harness = agent.harness
+    snapshot_old_model = agent.model
     await publish_switch_progress(agent.id, "rendering")
 
     try:
@@ -984,7 +994,10 @@ async def switch_agent_runtime(
                     # that is evidence the new runtime itself is broken, so
                     # rolling back to the last known-good binding stays the
                     # right call. Behaviour intentionally unchanged.
-                    await _rollback(session, agent, snapshot_old_runtime_id, image_change, old_harness=snapshot_old_harness)
+                    await _rollback(
+                        session, agent, snapshot_old_runtime_id, image_change,
+                        old_harness=snapshot_old_harness, old_model=snapshot_old_model,
+                    )
                     await _emit_failure_event(
                         session, agent, old_runtime, new_runtime,
                         reason=f"health check failed: {health.get('reason')}",
@@ -1069,6 +1082,7 @@ async def _rollback(
     image_change: bool,
     *,
     old_harness: str | None = None,
+    old_model: str | None = None,
 ) -> None:
     """Restore DB + files + image overlay + container to the pre-switch state.
 
@@ -1080,6 +1094,15 @@ async def _rollback(
     harness cannot live without a binding, we keep the attempted binding
     (a runtime that failed its health check still beats a container that
     cannot start) and say so loudly.
+
+    Vorfund 14.09.2026: agent.model blieb bisher auf dem Zielmodell stehen,
+    obwohl runtime_id/harness zurueckgesetzt wurden — Beleg war Rex, dessen
+    DB-Zeile nach einem gescheiterten Wechsel `model = GLM-5.3-Flash-EXL3`
+    zeigte, waehrend die Bindung wieder auf `anthropic-claude-opus-5` lief.
+    old_model wird deshalb genau wie old_runtime_id behandelt: nur
+    zurueckgeschrieben, wenn die Bindung selbst zurueckgeschrieben wird
+    (kept_binding_id is None) — im kept-binding-Fall bleibt das neue Modell
+    absichtlich stehen, weil auch die neue runtime_id absichtlich stehen bleibt.
     """
     from app.services.harness_compat import derive_harness, requires_runtime_binding
 
@@ -1100,6 +1123,7 @@ async def _rollback(
     try:
         if kept_binding_id is None:
             agent.runtime_id = old_runtime_id
+            agent.model = old_model
         agent.harness = old_harness
         agent.updated_at = utcnow()
         session.add(agent)
