@@ -1996,6 +1996,22 @@ async def agent_update_task(
 
     old_status = task.status
 
+    # W2 (Rex' review of #570): snapshot the assigned agent's active-task
+    # lock BEFORE update_agent_active_task's unconditional repoint further
+    # down in this function runs. By the time the unblock-notify block
+    # executes, current_task_id already reads task.id regardless of what it
+    # held before — that repoint is exactly what
+    # redispatch_unblocked_task's B-3 fix and requeue_unblocked_task's own
+    # comment describe having to UNDO for their branches. Reading it fresh
+    # at notify time would make a released lock (W2, Sonde P-B) and a
+    # genuinely live paused session (P4) indistinguishable. See
+    # task_lifecycle.apply_unblock_notify_reset's docstring.
+    _assigned_agent_lock_before_transition: uuid.UUID | None = None
+    if task.assigned_agent_id:
+        _pre_transition_assignee = await session.get(Agent, task.assigned_agent_id)
+        if _pre_transition_assignee is not None:
+            _assigned_agent_lock_before_transition = _pre_transition_assignee.current_task_id
+
     # ── Reassignment (assigned_agent_id) — permission + application ──
     # Bug 2026-09-09: the field used to be silently discarded by the schema
     # (200 without effect). Now: only Board Leads may reassign — a worker
@@ -3002,37 +3018,20 @@ async def agent_update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
-                    if old_status == "blocked":
-                        # Incident 2026-09-14 (61 min Stillstand) — identischer
-                        # Zwilling zum Operator-Pfad (routers/tasks.py). `blocked`
-                        # heisst immer "Turn schon beendet" (der Agent hat
-                        # `mc blocked` selbst aufgerufen, das schliesst den Turn
-                        # synchron ab) — anders als `waiting` (mc ask --blocking:
-                        # "Session bleibt bestehen") gibt es hier nie einen
-                        # echten laufenden Zug, den ein Reset doppelt starten
-                        # koennte. Ohne diesen Reset bleiben `ack_at` (line
-                        # ~2398 stampft es nur, wenn NULL — nach einem
-                        # gescheiterten Lauf ist es das nicht) und die alte
-                        # `dispatch_attempt_id` stehen: agents.py's Orphan-Check
-                        # (_maybe_redispatch_orphaned_run) haelt den Lauf ueber
-                        # das ganze poll_orphan_run_threshold_seconds-Fenster
-                        # fuer "lebend", und selbst danach traegt die neu
-                        # zugestellte Karte noch die ALTE attempt_id — genau
-                        # das, was bridge.py's Dispatch-Dedup (last_attempt_id)
-                        # als "schon erledigt" verwirft. Mirrors den bereits
-                        # akzeptierten Fix im "parked"-Zweig der Antwort-Resume
-                        # (messaging.py resolve_waiting_answer).
-                        from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
-                        task.ack_at = None
-                        session.add(task)
-                        await session.commit()
-                        await session.refresh(task)
-                        await set_dispatch_attempt_id(
-                            session, task, str(uuid.uuid4()),
-                            caller="unblock_notify",
-                            reason="unblock_notify_blocked_stale_attempt",
-                            only_if_null=False,
-                        )
+                    # W1/W2 (Rex' review of #570): identischer Zwilling zum
+                    # Operator-Pfad (routers/tasks.py) — das gemeinsame
+                    # Kriterium fuer alle drei resolve_unblock_action-Zweige
+                    # lebt jetzt in task_lifecycle.apply_unblock_notify_reset
+                    # (siehe dessen Docstring fuer die volle Begruendung und
+                    # die W1-Korrektur). Der Lock-Snapshot stammt bewusst von
+                    # VOR update_agent_active_task's Repoint oben in dieser
+                    # Funktion, nicht von `target.current_task_id` jetzt.
+                    from app.services.task_lifecycle import apply_unblock_notify_reset
+                    await apply_unblock_notify_reset(
+                        session, task, old_status,
+                        _assigned_agent_lock_before_transition,
+                        caller="unblock_notify_agent_task_status_router",
+                    )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
                         .where(TaskComment.task_id == task.id)
