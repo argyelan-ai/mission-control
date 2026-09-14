@@ -378,17 +378,18 @@ async def test_self_review_prevention(client, fake_redis):
         task_status="review", task_assigned_to="developer", with_reviewer=False,
     )
 
-    with patch("app.routers.agent_scoped._find_reviewer", new_callable=AsyncMock, return_value=data["developer"]):
-        with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
-            async with AsyncSession(test_engine, expire_on_commit=False) as s:
-                task = await s.get(data["task"].__class__, data["task"].id)
-                developer = await s.get(data["developer"].__class__, data["developer"].id)
-                result = await handle_review_handoff(
-                    s, task, data["board"].id, developer=developer,
-                )
+    # Kein _find_reviewer-Mock: der Autor-Ausschluss steckt JETZT in der
+    # echten Auswahl (dispatch.find_agent_by_role exclude_agent_id) — genau
+    # die soll dieser Test ueben.
+    with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            task = await s.get(data["task"].__class__, data["task"].id)
+            developer = await s.get(data["developer"].__class__, data["developer"].id)
+            result = await handle_review_handoff(
+                s, task, data["board"].id, developer=developer,
+            )
 
     assert result is None, "Self-review should be prevented"
-
 
 @pytest.mark.asyncio
 async def test_done_to_in_progress_triggers_rejection(client, fake_redis):
@@ -551,8 +552,9 @@ async def test_operator_can_close_failed_task_as_done(client, fake_redis):
 @pytest.mark.asyncio
 async def test_operator_failed_to_review_still_blocked(client, fake_redis):
     """The operator widening is scoped to done/aborted — failed→review stays
-    invalid (400) so the cleanup path can't smuggle a failed task back into
-    the review lane."""
+    invalid: 409 with a structured detail (PR #478 review, B2 Nebenbefund —
+    was a bare 400 before), so the cleanup path can't smuggle a failed task
+    back into the review lane."""
     from fastapi import HTTPException
     from app.routers.tasks import _enforce_board_rules
     from app.models.board import Board
@@ -569,7 +571,9 @@ async def test_operator_failed_to_review_still_blocked(client, fake_redis):
 
         with pytest.raises(HTTPException) as exc:
             await _enforce_board_rules(s, board_id, task, "review", agent=None)
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
+        assert exc.value.detail["current_status"] == "failed"
+        assert exc.value.detail["expected"] == "review"
 
 
 @pytest.mark.asyncio
@@ -698,3 +702,59 @@ async def test_review_safeguard_uses_corrected_status_for_pipeline_sync(client, 
 
     assert resp.status_code == 200
     mock_sync.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_user_patch_review_excludes_assigned_author(auth_client, fake_redis):
+    """UI-Pfad (User setzt review): der zugewiesene Developer (Autor des
+    Works) wird als Autor an handle_review_handoff durchgereicht und kann
+    nicht zum eigenen Reviewer werden — auch wenn er der einzige
+    Reviewer-Role-Agent ist (Warning 2, PR #148)."""
+    from app.models.agent import Agent
+    from app.models.task import Task
+
+    board_id = uuid.uuid4()
+    author_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.board import Board
+        from app.auth import generate_agent_token
+        board = Board(id=board_id, name="UI Author Board", slug="ui-author")
+        s.add(board)
+        _, token_hash = generate_agent_token()
+        author = Agent(
+            id=author_id, name="Solo Rex", role="reviewer",
+            board_id=board_id, agent_token_hash=token_hash,
+            is_board_lead=False,
+        )
+        s.add(author)
+        task = Task(
+            id=task_id, board_id=board_id, title="UI review path",
+            status="in_progress", assigned_agent_id=author_id,
+        )
+        s.add(task)
+        await s.commit()
+
+    with (
+        patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock),
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+        patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock),
+        patch("app.services.task_lifecycle.update_agent_active_task", new_callable=AsyncMock),
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/boards/{board_id}/tasks/{task_id}",
+            json={"status": "review"},
+        )
+
+    assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        updated = await s.get(Task, task_id)
+        assert updated.status == "review"
+        # Autor bleibt zugewiesen (kein Self-Review-Dispatch): die Karte ist
+        # NICHT auf den Autor als Reviewer gewechselt und hat keinen
+        # review_handoff-Intent.
+        assert updated.assigned_agent_id == author_id
+        assert updated.dispatch_intent != "review_handoff"

@@ -392,6 +392,54 @@ async def get_operator() -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+async def voice_config() -> dict[str, Any] | None:
+    """GET /api/v1/agent/voice/config — welcher Sprach-Anbieter gebunden ist (ADR-082).
+
+    Wird pro Anruf VOR dem Aufbau des Realtime-Modells gerufen (siehe
+    voice_worker/main.py::entrypoint) — nur so wirkt ein Runtime-Wechsel in MC
+    ohne Container-Neustart. Fail-soft: liefert None statt zu raisen, damit
+    ``jarvis_core.voice_provider.resolve_voice_choice`` auf die Env-Defaults
+    zurueckfaellt und Jarvis auch bei Backend-Ausfall sprechfaehig bleibt.
+    Kurzer Timeout (3s) — ein haengender Call darf den Session-Start nicht
+    verzoegern.
+    """
+    try:
+        resp = await _client.get("/api/v1/agent/voice/config", timeout=3.0)
+        if resp.status_code != 200:
+            logger.warning("voice_config fetch failed: HTTP %s", resp.status_code)
+            return None
+        return resp.json()
+    except Exception as e:  # noqa: BLE001 — fail-soft, Jarvis darf nicht verstummen
+        logger.warning("voice_config fetch failed: %s", e)
+        return None
+
+
+async def report_voice_unsupported(provider: str, model: str | None, api: str) -> None:
+    """POST /api/v1/agent/voice/unsupported-model — macht einen stillen
+    Fehlschlag laut (ADR-082 Follow-up).
+
+    Gerufen wenn die gebundene Runtime eine API nennt (z.B. "live" — OpenAIs
+    Live API, disjunkt von Realtime), die DIESES Worker-Image nicht bauen
+    kann. Der Aufrufer faellt selbst auf seine Env-Defaults zurueck (Jarvis
+    darf nie verstummen) — dieser Call sorgt nur dafuer, dass die Drift in
+    MCs Activity-Feed sichtbar wird, statt dass ein falscher Endpoint einfach
+    beim Verbindungsaufbau scheitert.
+
+    Fail-soft wie jeder andere Call hier: ein fehlschlagender Melde-Call darf
+    den Fallback nicht zusaetzlich verzoegern oder blockieren.
+    """
+    try:
+        resp = await _client.post(
+            "/api/v1/agent/voice/unsupported-model",
+            json={"provider": provider, "model": model, "api": api},
+            timeout=3.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("report_voice_unsupported failed: HTTP %s", resp.status_code)
+    except Exception as e:  # noqa: BLE001 — fail-soft, darf den Fallback nicht blockieren
+        logger.warning("report_voice_unsupported failed: %s", e)
+
+
 async def vault_briefing() -> dict[str, Any]:
     """Fetch pre-session briefing JSON from MC backend.
 

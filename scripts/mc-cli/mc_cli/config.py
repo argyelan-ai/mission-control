@@ -9,6 +9,19 @@ import os
 from dataclasses import dataclass
 
 
+def context_file_path() -> str:
+    """Path to the dispatch context file poll.sh writes on every dispatch.
+
+    Overridable via MC_CONTEXT_FILE so tests can redirect it to a tmp_path
+    instead of touching the real, host-shared /tmp/mc-context.env (2026-09-14
+    incident: a test run left placeholder IDs in the real file, breaking
+    every other agent on the host). Default is unchanged — resolved fresh on
+    every call, not cached, so the env var takes effect even if set after
+    module import.
+    """
+    return os.environ.get("MC_CONTEXT_FILE", "/tmp/mc-context.env")
+
+
 @dataclass(frozen=True)
 class Config:
     api_url: str
@@ -16,6 +29,14 @@ class Config:
     task_id: str | None
     board_id: str | None
     dispatch_attempt_id: str | None
+    context_task_id: str | None = None
+
+    def __post_init__(self) -> None:
+        # Attempt-Header und Task-Kontext gehoeren zusammen: der Header in
+        # dispatch_attempt_id wurde vom Dispatch der Karte context_task_id
+        # ausgestellt. Ohne explizite Angabe ist das die aktuelle task_id.
+        if self.context_task_id is None:
+            object.__setattr__(self, "context_task_id", self.task_id)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -25,7 +46,7 @@ class Config:
         # by tmux set-environment but hasn't propagated yet. poll.sh writes
         # the file on every dispatch; see docker/mc-claude-agent/poll.sh.
         file_ctx: dict[str, str] = {}
-        ctx_path = "/tmp/mc-context.env"
+        ctx_path = context_file_path()
         if os.path.isfile(ctx_path):
             try:
                 with open(ctx_path, encoding="utf-8") as f:
@@ -72,6 +93,12 @@ class Config:
         accept the task-id as a positional argument (Boss live-bug 2026-04-25:
         `mc ack <task-id>` warf 'unrecognized arguments' weil das CLI nur
         env-vars unterstuetzte). Immutable dataclass → replace pattern.
+
+        context_task_id bleibt unangetastet: es bezeichnet die Karte, zu der
+        der aktuell GEHALTENE dispatch_attempt_id-Header gehoert. Erst ein
+        erfolgreicher Kontextwechsel (ack/recover) schreibt beides zusammen
+        fort — genau die Kopplung, mit der _cmd_ack/_cmd_recover zwischen
+        "fremde Karte heilen" und "eigene Karte neu dispatcht" trennen.
         """
         from dataclasses import replace
         return replace(self, task_id=task_id)

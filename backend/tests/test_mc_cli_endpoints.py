@@ -45,6 +45,7 @@ SKIP_CLI: dict[str, str] = {
     # NOTE: POST /boards/{board_id}/tasks/{task_id}/review is now CLI-mapped
     # via `mc approve` / `mc reject` (B3) — no longer a SKIP entry.
     "PATCH /boards/{board_id}/tasks/{task_id}/report-back": "Board-Lead-only report-back contract",
+    "DELETE /boards/{board_id}/tasks/{task_id}/checklist/{item_id}": "Board-Lead-only cleanup; workers use `mc checklist done/skip`",
     "POST /boards/{board_id}/tasks/{task_id}/checkpoint": "deprecated in A4 — use `mc checklist` + `mc comment progress`",
     # Board-level writes handled via other channels.
     "POST /boards/{board_id}/approvals": "approvals go via `mc question` (clarification) or API directly",
@@ -57,6 +58,11 @@ SKIP_CLI: dict[str, str] = {
     "POST /discord/send": "bot bridge, not part of task lifecycle",
     # Streaming / heartbeat — handled by poll.sh, not agent-triggered.
     "POST /heartbeat": "poll.sh sends this, not the agent",
+    # Voice (ADR-082/follow-up) — Jarvis-only, called by voice_worker's
+    # jarvis_core.mc_client, not a worker agent driving `mc` in a task loop.
+    # No mc-CLI verb makes sense for a single-agent voice-binding refusal
+    # report.
+    "POST /voice/unsupported-model": "Jarvis-only voice-worker self-report, no mc-CLI verb",
     # Config self-edit — handled by the operator via UI; Henry uses dedicated path.
     "PUT /config/soul_md": "config edits go via provisioning, not agent",
     "GET /config/soul_md": "debug-only, not part of worker lifecycle",

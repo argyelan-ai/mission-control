@@ -282,6 +282,20 @@ class Agent(SQLModel, table=True):
 
         return runtime_switch_availability(self)[1]
 
+    # Chat over ACP (docs/specs/chat-over-acp.md): dieser Agent hat KEINE
+    # bedienbare TUI — der Sessions-Chat ist seine einzige Oberflaeche, und
+    # das Frontend rendert den Chat/Terminal-Umschalter gar nicht erst.
+    # Gleiche Bauart und gleicher Grund wie ``runtime_switchable`` oben: die
+    # Regel steht EINMAL in der Funktion, die auch der Sendepfad
+    # (``agent_chat_input._target_kind``) benutzt — das UI liest sie, es
+    # leitet sie nicht neu her.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def headless_chat(self) -> bool:
+        from app.services.acp_chat_transport import headless_chat_kind
+
+        return headless_chat_kind(self) is not None
+
 
 @event.listens_for(Agent, "before_insert")
 def _agent_fill_slug(mapper, connection, target: "Agent") -> None:

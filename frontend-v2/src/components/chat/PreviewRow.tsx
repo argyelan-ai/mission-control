@@ -25,12 +25,20 @@ export function PreviewRow({ preview }: { preview: PreviewEvent }) {
         <Radio size={11} className="animate-pulse" aria-hidden="true" />
         <span>{t("livePreview")}</span>
       </div>
-      <pre
-        className="font-mono text-[12.5px] leading-[1.55] max-w-[76ch] min-w-0 whitespace-pre-wrap break-words m-0"
-        style={{ color: C.textSecondary }}
+      {/* Gedeckelt (Befund 10.09.2026 "bewegt sich zu viel"): der Block
+          waechst nur bis ~8 Zeilen und zeigt dann das ENDE des Textes — wie
+          eine Zeile, die mitlaeuft, nicht wie ein Blatt, das sich entrollt. */}
+      <div
+        data-testid="preview-clamp"
+        className="flex flex-col justify-end overflow-hidden max-h-[calc(8*1.55*12.5px)]"
       >
-        {preview.text}
-      </pre>
+        <pre
+          className="font-mono text-[12.5px] leading-[1.55] max-w-[76ch] min-w-0 whitespace-pre-wrap break-words m-0"
+          style={{ color: C.textSecondary }}
+        >
+          {preview.text}
+        </pre>
+      </div>
     </div>
   );
 }

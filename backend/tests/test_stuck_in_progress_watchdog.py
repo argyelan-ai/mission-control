@@ -231,6 +231,77 @@ async def test_blocks_silent_abort(fake_redis, make_board, make_agent, make_task
 
 
 @pytest.mark.asyncio
+async def test_blocks_silent_abort_409_rolls_back_agent_mutation(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """M4 (PR #478 review): before the fix, apply_terminal_unassign()
+    mutated `agent` in-memory (current_task_id=None, run_state='blocked')
+    BEFORE lock_and_set() ran, without committing. If lock_and_set() then
+    409s (lost race — another writer moved the task first), that pending
+    agent mutation survived to the sweep's next commit — the agent ended up
+    with run_state='blocked' and no task, a zombie state no log line
+    explains. Fix: reorder so lock_and_set() runs first and
+    apply_terminal_unassign() only on success — a 409 then never touches
+    `agent` at all, nothing to undo. (A session.rollback() before `continue`
+    was the other option Rex suggested and was tried first, but it expires
+    every object the sweep's SELECT already loaded, not just `agent` — the
+    next candidate's plain attribute access then needs a synchronous
+    lazy-reload that crashes with MissingGreenlet outside the async
+    greenlet context. The reorder sidesteps that entirely.)
+
+    Needs a SECOND, non-racing candidate in the same sweep to reproduce:
+    with only one candidate, the session simply closes uncommitted after
+    the 409 and the dirty mutation never reaches the DB either way (both
+    with and without the fix) — a single-candidate test would pass for the
+    wrong reason. Task B's genuine block + commit is what would flush task
+    A's still-dirty agent mutation along with it if the reorder were
+    missing (same session, same unit of work) — reproducing exactly what
+    Rex's review describes: "wird beim naechsten session.commit() derselben
+    Schleife mitgeschrieben.\""""
+    from fastapi import HTTPException
+    from app.services.task_state import lock_and_set as real_lock_and_set
+
+    _ba, agent_a, task_a = await _make_stuck_setup(make_board, make_agent, make_task)
+    _bb, agent_b, task_b = await _make_stuck_setup(make_board, make_agent, make_task)
+
+    async with _session() as s:
+        await _run_check(fake_redis, s)  # tick 1 for both = nudge
+
+    t1a = await _reload_task(task_a.id)
+    t1b = await _reload_task(task_b.id)
+    assert t1a.status == "in_progress" and t1b.status == "in_progress"
+
+    async def _flaky(session, task_id, to, *, actor):
+        if task_id == task_a.id:
+            raise HTTPException(status_code=409, detail="Ungueltiger Statuswechsel (simuliert)")
+        return await real_lock_and_set(session, task_id, to, actor=actor)
+
+    with patch("app.services.task_runner.lock_and_set", side_effect=_flaky):
+        async with _session() as s:
+            await _run_check(fake_redis, s)  # tick 2: A loses the race, B blocks
+
+    lost = await _reload_task(task_a.id)
+    assert lost.status == "in_progress", "A lost the race -- untouched, retried next tick"
+
+    blocked = await _reload_task(task_b.id)
+    assert blocked.status == "blocked", "sweep must continue past A's 409 and still block B"
+
+    a = await _reload_agent(agent_a.id)
+    assert a.current_task_id == task_a.id, (
+        "apply_terminal_unassign()'s mutation on agent A must be rolled back "
+        "on A's 409 -- agent A must still hold the task it is actually still "
+        "assigned to, not have been swept up into B's commit"
+    )
+    assert a.run_state != "blocked", (
+        "agent A must not be left run_state='blocked' with no corresponding "
+        "blocked task (zombie state, M4)"
+    )
+
+    approvals_a = await _pending_blocker_approvals(task_a.id)
+    assert approvals_a == [], "no Approval should be created for A's lost race"
+
+
+@pytest.mark.asyncio
 async def test_first_tick_nudges_not_blocks(fake_redis, make_board, make_agent, make_task):
     """Tick 1 posts a nudge comment and leaves the task in_progress."""
     from sqlmodel import select

@@ -24,6 +24,7 @@ from app.redis_client import RedisKeys
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.sse import broadcast, make_sse_response
+from app.services.task_state import lock_and_set
 
 
 # Single Source of Truth — imported from task_status.py
@@ -68,9 +69,21 @@ async def _enforce_board_rules(
     if new_status not in allowed:
         from_label = STATUS_LABELS.get(current, current)
         to_label = STATUS_LABELS.get(new_status, new_status)
+        # 409 + structured dict, not 400 + prose (PR #478 review, B2
+        # Nebenbefund): this is the same "invalid_transition" shape
+        # lock_and_set() raises, so a client going through either write path
+        # (this operator PATCH, or the lock_and_set() call sites) can tell
+        # "lost a race / attempted an invalid transition" apart from a real
+        # error the same way — see task_state.py's docstring on incident #477.
         raise HTTPException(
-            status_code=400,
-            detail=f"Ungültiger Status-Übergang: {from_label} → {to_label}",
+            status_code=409,
+            detail={
+                "error": "invalid_transition",
+                "current_status": current,
+                "expected": new_status,
+                "allowed": sorted(allowed),
+                "message": f"Ungültiger Status-Übergang: {from_label} → {to_label}",
+            },
         )
 
     # Rule 2: parent/child integrity — parent must not become done while children are open
@@ -1422,12 +1435,25 @@ async def update_task(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    old_status = task.status
-    old_assigned = task.assigned_agent_id
     updates = payload.model_dump(exclude_none=True)
 
     if "task_type" in updates and updates["task_type"] not in ("story", "bug", "revision", "chore"):
         raise HTTPException(status_code=422, detail=f"Invalid task_type: {updates['task_type']}")
+
+    # Re-fetch under lock_task() before reading old_status / validating: task
+    # was loaded above only for the 404 check, and a concurrent writer may
+    # have committed a status change since. Without this, old_status and
+    # _enforce_board_rules() below validate against a stale identity-map
+    # copy (PR #478 review, B1/B2) — same bug, this endpoint's write path.
+    if "status" in updates:
+        from app.services.task_state import lock_task
+        locked_task = await lock_task(session, task_id)
+        if locked_task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = locked_task
+
+    old_status = task.status
+    old_assigned = task.assigned_agent_id
 
     # Check board rules before status is changed
     if "status" in updates:
@@ -1448,7 +1474,41 @@ async def update_task(
             # the task gets dispatched again, the agent works, but isn't
             # allowed to switch to review -> deadlock.
             task.run_control = None
-        elif new_status == "in_progress" and old_status != "in_progress":
+            # hold_reason is free text set by mc hold (agent_task_status.py)
+            # and normally cleared by mc release. A direct PATCH status=inbox
+            # bypasses that verb, so without this the reason string survives
+            # as a phantom justification for a hold that no longer exists
+            # (PR #533 Nacharbeit, Warning 1).
+            task.hold_reason = None
+        elif old_status == "inbox" and task.run_control == "manual_hold":
+            # C2 (PR #533 Nacharbeit Runde 3, Rex review W1): an operator
+            # PATCH overriding a held card (e.g. inbox -> in_progress,
+            # bypassing `mc release`) left run_control=manual_hold and
+            # hold_reason in place. The card then ran, but every subsequent
+            # agent status update (review/blocker/...) hit the run_control
+            # 409 guard in task_lifecycle.py for a hold the operator just
+            # overrode and can no longer see — a deadlock the agent cannot
+            # escape (`mc release` only accepts status=inbox, not this
+            # card's new status). Overriding the lead's hold is fine — the
+            # operator is allowed to — it just must not leave the card
+            # running under a lock nothing can lift. The check reads
+            # run_control=="manual_hold" specifically, not "not None" —
+            # not as a deliberate exclusion of "stopped" among two live
+            # possibilities, but because "stopped" structurally can't reach
+            # this branch at all: stop_task_run (operations.py) always sets
+            # status="blocked" together with run_control="stopped", so a
+            # stopped task never has old_status=="inbox" for this elif to
+            # see in the first place. Only mc hold (agent-scoped, on an
+            # inbox card) produces the inbox+manual_hold combination this
+            # branch exists for. Nit (PR #533 Nacharbeit, review card
+            # 041bee7c): an earlier version of this comment framed the
+            # narrowing as a deliberate choice to defer to operations.py's
+            # own resume path for "stopped" — that implied a live case this
+            # elif was choosing not to touch, when in fact none exists.
+            task.run_control = None
+            task.hold_reason = None
+
+        if new_status == "in_progress" and old_status != "in_progress":
             # F2 fix (Plan 26-03): first-set-wins. Re-opens (review→in_progress,
             # blocked→in_progress) preserve the original started_at for accurate
             # Cycle Time analytics. Only set when currently NULL.
@@ -1584,7 +1644,15 @@ async def update_task(
         # is the reviewer, no Rex dispatch (mirrors agent_task_status.py).
         if new_status == "review" and old_status == "in_progress":
             if not getattr(task, "human_review_required", None):
-                await handle_review_handoff(session, task, board_id)
+                # Autor-Ausschluss auch auf dem UI-Pfad: der der Karte
+                # zugewiesene Developer (Autor des eingereichten Works)
+                # darf nicht zum eigenen Reviewer werden. Kein assignment
+                # → kein bekannter Autor → None ist korrekt.
+                _author = (
+                    await session.get(Agent, task.assigned_agent_id)
+                    if task.assigned_agent_id else None
+                )
+                await handle_review_handoff(session, task, board_id, developer=_author)
             else:
                 from app.services.task_lifecycle import handle_human_review_handoff
                 await handle_human_review_handoff(session, task, board_id)
@@ -1632,6 +1700,18 @@ async def update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    # W1/W2 (Rex' review of #570): one shared criterion for
+                    # all three resolve_unblock_action branches now lives in
+                    # task_lifecycle.apply_unblock_notify_reset — see its
+                    # docstring for the full rationale and the W1 correction.
+                    # This operator PATCH never touches current_task_id
+                    # itself, so the live value read on `target` above is
+                    # already the pre-transition snapshot the helper needs.
+                    from app.services.task_lifecycle import apply_unblock_notify_reset
+                    await apply_unblock_notify_reset(
+                        session, task, old_status, target.current_task_id,
+                        caller="unblock_notify_tasks_router",
+                    )
                     _verb = "entblockt" if old_status == "blocked" else "fortgesetzt (war zurueckgestellt)"
                     msg = (
                         f"UNBLOCKED: Dein Task \"{task.title}\" wurde {_verb}.\n\n"
@@ -1679,6 +1759,21 @@ async def update_task(
     # Phase done → auto-advance to the next phase + project progress
     if new_status == "done" and task.parent_task_id is None and task.project_id:
         # Find and start the next phase
+        # C2 (PR #533 Nacharbeit Runde 3, Rex review B1): a lead-held next
+        # phase (run_control=manual_hold) must STOP the advance, not be
+        # skipped over. `run_control.is_(None)` used to sit as a filter on
+        # this query — a filter removes the held row from the result set,
+        # it doesn't halt the walk, so the query happily returned the next
+        # *unheld* phase after it and started that one instead (leapfrog).
+        # Worse: on a later tick with the held phase's predecessor already
+        # "done" again (it never changed), the same leapfrog re-fires for
+        # every phase behind the hold — one `mc hold` cascades the whole
+        # rest of the project into parallel in_progress. The check now runs
+        # AFTER selecting the immediate next phase by sort_order: if that
+        # phase is held, stop — don't look further. The phase stays
+        # status="inbox" until released; the watchdog's periodic
+        # _auto_advance_next_phase (task_monitor.py) then starts it on its
+        # own the first tick after release.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == task.project_id,
@@ -1687,13 +1782,15 @@ async def update_task(
                 Task.sort_order > task.sort_order,
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()
+        if next_phase and next_phase.run_control is not None:
+            next_phase = None
         if next_phase:
             from app.services.task_lifecycle import record_task_event
             await record_task_event(
                 session, next_phase.id, "inbox", "in_progress",
                 changed_by="system", reason="phase_auto_advance",
             )
-            next_phase.status = "in_progress"
+            next_phase, _ = await lock_and_set(session, next_phase.id, "in_progress", actor="system")
             # F2 fix (Plan 26-03): first-set-wins on started_at.
             if next_phase.started_at is None:
                 next_phase.started_at = utcnow()
@@ -2429,11 +2526,8 @@ async def post_thread_message(
     from app.services.messaging import (
         answer_clears_awaiting,
         ensure_task_thread,
-        open_questions,
         post_message,
     )
-    from app.services.task_lifecycle import record_task_event
-    from app.task_status import TaskStatus, is_valid_transition
 
     task = await session.get(Task, task_id)
     if not task:
@@ -2458,86 +2552,8 @@ async def post_thread_message(
         # no open blocking question remains, transition back to in_progress
         # explicitly (VALID_TRANSITIONS + event) — open non-blocking questions
         # never gate the resume. Parking via dispatch-death is Task 9's concern.
-        if task.status == TaskStatus.WAITING:
-            remaining = await open_questions(session, thread_id=thread.id)
-            blocking_open = [q for q in remaining if (q.question_meta or {}).get("blocking")]
-            if not blocking_open and is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
-                agent = None
-                agent_name = "Agent"
-                if task.assigned_agent_id:
-                    agent = await session.get(Agent, task.assigned_agent_id)
-                    if agent:
-                        agent_name = agent.name
-                await record_task_event(
-                    session, task.id, task.status, TaskStatus.IN_PROGRESS,
-                    changed_by="user", reason="answer_received",
-                )
-                task.status = TaskStatus.IN_PROGRESS
-
-                # Parked/absent detection (Task 9): if the agent was released
-                # while the task waited (waiting-timeout park, or the agent
-                # simply moved on), its current_task_id no longer points here.
-                # Then the live poll can't carry the answer — re-deliver via the
-                # dispatch path with a BOUNDED resume recap instead of assuming
-                # a live session.
-                parked = agent is None or agent.current_task_id != task.id
-
-                if parked:
-                    from app.services.task_context_builder import build_waiting_resume_recap
-                    from app.models.task import TaskComment
-                    from app.utils import create_tracked_task
-
-                    task.dispatched_at = None
-                    task.ack_at = None
-                    session.add(task)
-                    await session.commit()
-                    await session.refresh(task)
-
-                    recap = await build_waiting_resume_recap(session, task)
-                    # Durable in the timeline. comment_type="recovery_recap" is
-                    # NOT one of the types build_recovery_context truncates+surfaces,
-                    # so it won't produce a mangled duplicate — the FULL recap
-                    # reaches the prompt via extra_recovery_context below.
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        comment_type="recovery_recap",
-                        content=recap,
-                    ))
-                    await session.commit()
-
-                    await post_message(
-                        session,
-                        thread_id=thread.id,
-                        sender_type="system",
-                        message_type="system",
-                        body=f"▶ Antwort erhalten — {agent_name} wird neu eingelastet",
-                    )
-                    # Clear the park suppression so a later re-park is possible.
-                    try:
-                        from app.redis_client import get_redis
-                        _redis = await get_redis()
-                        await _redis.delete(f"mc:task:{task.id}:waiting_parked")
-                    except Exception:
-                        pass
-                    create_tracked_task(
-                        auto_dispatch_task(
-                            task.id, task.board_id, extra_recovery_context=recap,
-                        )
-                    )
-                else:
-                    session.add(task)
-                    await session.commit()
-                    await session.refresh(task)
-
-                    await post_message(
-                        session,
-                        thread_id=thread.id,
-                        sender_type="system",
-                        message_type="system",
-                        body=f"▶ Antwort erhalten — {agent_name} macht weiter",
-                    )
-
+        from app.services.messaging import resume_task_after_answer
+        await resume_task_after_answer(session, task, thread, changed_by="user")
     return {
         "message_id": str(message.id),
         "thread_id": str(thread.id),
@@ -2822,6 +2838,48 @@ async def mark_thread_read(
     elif payload.last_read_seq > cursor.last_read_seq:
         cursor.last_read_seq = payload.last_read_seq
     await session.commit()
+
+
+
+# ── Checklist item delete (Bug 2026-09-09) ──────────────────────────────────
+# Until now checklist items could only be marked done/skipped — a parked
+# (inbox) task with open items could never be closed honestly, and marking
+# foreign items done falsifies the history. DELETE removes the item and
+# recomputes the denormalized counters.
+
+@router.delete("/boards/{board_id}/tasks/{task_id}/checklist/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_checklist_item(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    item_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """User deletes a single checklist item (UI: clean up a replaced task)."""
+    from app.models.checklist import TaskChecklistItem
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+
+    item = await session.get(TaskChecklistItem, item_id)
+    if not item or item.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Checklist-Item nicht gefunden")
+
+    await session.delete(item)
+    await session.flush()
+
+    # Recalculate counters from DB (post-flush, so the delete is visible)
+    result = await session.exec(
+        select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
+    )
+    all_items = result.all()
+    task.checklist_total = len(all_items)
+    task.checklist_done = sum(1 for i in all_items if i.status == "done")
+    session.add(task)
+
+    await session.commit()
+    return None
 
 
 # ── Comments ─────────────────────────────────────────────────────────────────

@@ -63,7 +63,8 @@ def test_waiting_to_done_not_allowed():
 @pytest.mark.asyncio
 async def test_inbox_to_waiting_rejected_via_patch_endpoint(auth_client, fake_redis, make_board, make_task):
     """End-to-end: the operator PATCH endpoint enforces the same guard
-    (_enforce_board_rules -> VALID_TRANSITIONS) and returns 400, not a raw
+    (_enforce_board_rules -> VALID_TRANSITIONS) and returns 409 with a
+    structured detail (PR #478 review, B2 Nebenbefund), not a raw
     500 from an unhandled DB error."""
     board = await make_board(name="Waiting Guard Board", slug=f"wg-{uuid.uuid4().hex[:6]}")
     task = await make_task(board_id=board.id, title="Fresh inbox task", status="inbox")
@@ -72,8 +73,10 @@ async def test_inbox_to_waiting_rejected_via_patch_endpoint(auth_client, fake_re
         f"/api/v1/boards/{board.id}/tasks/{task.id}",
         json={"status": "waiting"},
     )
-    assert resp.status_code == 400, resp.text
-    assert "Status-" in resp.text or "waiting" in resp.text.lower()
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict), f"detail must be structured, got {type(detail)}"
+    assert "Status-" in detail["message"] or "waiting" in detail["message"].lower()
 
 
 @pytest.mark.asyncio

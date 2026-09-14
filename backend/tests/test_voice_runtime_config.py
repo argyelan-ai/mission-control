@@ -1,0 +1,254 @@
+"""Jarvis' voice provider is a runtime binding, like every other agent (ADR-082).
+
+Why these tests exist:
+
+    Before this, WHICH provider Jarvis spoke to lived only in the voice-worker's
+    container env. Changing it meant editing docker-compose and rebuilding, and
+    nothing in MC showed the current state. Registering Jarvis in HOST_ADAPTERS
+    (ADR-064's host-in-place switch machinery) closes that gap.
+
+The load-bearing property is that a voice runtime is NOT an openai runtime.
+Both talk to api.openai.com, but the wire protocol is the realtime speech
+socket, not chat completions. If the classification ever fell through to
+"openai", every openai-speaking CLI harness (openclaude, omp, hermes) would
+suddenly look compatible with Jarvis' voice rows and the picker would offer
+nonsense bindings.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.models.agent import Agent
+from app.models.runtime import Runtime
+from app.services.harness_compat import VOICE_RUNTIME_TYPES, is_compatible, runtime_protocol
+from app.services.runtime_naming import CURATED_RUNTIME_TYPES
+from tests.conftest import test_engine
+
+SEED_PATH = Path(__file__).resolve().parents[1] / "config" / "runtimes.json"
+
+
+def _seed_rows() -> list[dict]:
+    return json.loads(SEED_PATH.read_text())
+
+
+def _rt(runtime_type: str, slug: str = "probe", **kw) -> Runtime:
+    kw.setdefault("display_name", "Probe")
+    kw.setdefault("model_identifier", "some-model")
+    kw.setdefault("endpoint", "https://api.example.test")
+    return Runtime(slug=slug, runtime_type=runtime_type, **kw)
+
+
+# ── Protocol classification ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("runtime_type", sorted(VOICE_RUNTIME_TYPES))
+def test_voice_runtime_types_map_to_the_voice_protocol(runtime_type: str):
+    assert runtime_protocol(_rt(runtime_type)) == "voice"
+
+
+def test_jarvis_accepts_voice_runtimes():
+    for runtime_type in VOICE_RUNTIME_TYPES:
+        assert is_compatible("jarvis", _rt(runtime_type)) is True
+
+
+@pytest.mark.parametrize("harness", ["claude", "openclaude", "omp", "hermes", "grok", "kimi"])
+def test_no_cli_harness_may_bind_a_voice_runtime(harness: str):
+    """The regression this guards: voice_openai falling through to "openai".
+
+    openclaude/omp/hermes all speak the openai protocol. If the voice check
+    were removed (or placed after the _OPENAI_TYPES check), voice_openai would
+    classify as "openai" and every one of them would report compatible.
+    """
+    assert is_compatible(harness, _rt("voice_openai")) is False
+    assert is_compatible(harness, _rt("voice_xai")) is False
+
+
+def test_jarvis_may_not_bind_a_chat_runtime():
+    """The reverse direction — Jarvis is not a CLI and cannot run a chat model."""
+    assert is_compatible("jarvis", _rt("vllm_docker")) is False
+    assert is_compatible("jarvis", _rt("cloud")) is False
+    assert is_compatible("jarvis", _rt("grok")) is False
+
+
+# ── Seed rows (fresh-install / OSS self-host parity) ───────────────────────
+
+
+def test_seed_carries_one_row_per_voice_runtime_type():
+    """Without a seed row, the provider is selectable in code but a fresh
+    install (no hand-created DB row, unlike this dev environment's live DB)
+    would leave Jarvis with nothing to bind."""
+    by_type = {r["runtime_type"]: r for r in _seed_rows() if r["runtime_type"] in VOICE_RUNTIME_TYPES}
+    assert set(by_type) == set(VOICE_RUNTIME_TYPES)
+
+
+@pytest.mark.parametrize("runtime_type", sorted(VOICE_RUNTIME_TYPES))
+def test_voice_seed_rows_carry_a_model_identifier(runtime_type: str):
+    """Empty model_identifier makes the switch probe the live endpoint.
+
+    ensure_runtime_model_identifier() reaches out to the runtime's endpoint to
+    discover a model when the row has none. For api.openai.com/api.x.ai that
+    is a network call on every switch — slow, and it fails closed without a
+    key.
+    """
+    row = next(r for r in _seed_rows() if r["runtime_type"] == runtime_type)
+    assert (row.get("model_identifier") or "").strip()
+
+
+@pytest.mark.parametrize("runtime_type", sorted(VOICE_RUNTIME_TYPES))
+def test_voice_display_names_are_protected_from_the_naming_rule(runtime_type: str):
+    """api.openai.com/api.x.ai are known provider hosts — without curation the
+    seeder would silently derive a "GPT Realtime 2.1 (OpenAI)"-shaped name
+    from model_identifier, and the picker would show two rows that read like
+    chat models rather than voice arms."""
+    assert runtime_type in CURATED_RUNTIME_TYPES
+
+
+def test_voice_seed_rows_are_single_instance():
+    """The same guard grok-cloud/kimi-cloud use, and for the same reason: the
+    switch service hard-blocks binding a single_instance runtime unless the
+    agent switches in place (host + adapter). Jarvis is host-in-place, so the
+    block never applies to him — but it keeps every cli-bridge agent away
+    from these rows without a single extra check."""
+    for row in _seed_rows():
+        if row["runtime_type"] in VOICE_RUNTIME_TYPES:
+            assert row.get("single_instance") is True, row["id"]
+
+
+# ── The adapter: Jarvis becomes switchable, but nothing is written ─────────
+
+
+def test_jarvis_is_switchable_as_a_host_agent():
+    """The whole point of registering the adapter.
+
+    Explicit rather than relying on the parametrised sweep in
+    test_runtime_switchable_field.py: that one iterates HOST_ADAPTERS, so it
+    would still pass if "jarvis" were never added. This one fails.
+
+    agent_runtime must be passed explicitly — the Agent default is cli-bridge,
+    and a cli-bridge agent is switchable for entirely different reasons, which
+    would make this a green test that proves nothing.
+    """
+    from app.services.host_harness_adapter import HOST_ADAPTERS, is_host_inplace
+
+    assert "jarvis" in HOST_ADAPTERS
+    agent = Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+
+    assert agent.runtime_switchable is True
+    assert agent.runtime_switch_blocked_reason is None
+    assert is_host_inplace(agent) is True
+
+
+@pytest.mark.asyncio
+async def test_switching_a_voice_runtime_writes_no_agent_env(tmp_path, monkeypatch):
+    """A voice switch must not touch the filesystem.
+
+    sync_host_agent_model() writes the provider model into the host agent's
+    agent.env. For voice that file does not exist and must not be created:
+    writing one would put an OPENAI_BASE_URL next to Jarvis' token for a
+    process that never reads it — the ADR-056 Finding 5 shape of accident.
+    """
+    from app.services import host_harness_adapter as hha
+
+    monkeypatch.setattr(hha, "_home_host", lambda: tmp_path, raising=False)
+    monkeypatch.setattr(
+        "app.services.agent_bootstrap._home_host", lambda: tmp_path, raising=False
+    )
+
+    agent = Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+    runtime = _rt("voice_openai", slug="voice-openai")
+
+    await hha.sync_host_agent_model(agent, runtime, session=None)
+
+    assert not (tmp_path / ".mc" / "agents" / "jarvis" / "agent.env").exists()
+    assert list(tmp_path.rglob("agent.env")) == []
+
+
+@pytest.mark.asyncio
+async def test_reload_does_not_restart_anything():
+    """Restarting the voice container mid-call would hang up on Mark.
+
+    The no-op is the design (the worker re-reads per call), so it is asserted
+    rather than left implicit.
+    """
+    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+    result = await HOST_ADAPTERS["jarvis"].reload(
+        Agent(name="Jarvis", slug="jarvis", agent_runtime="host", harness="jarvis")
+    )
+
+    assert result["ok"] is True
+    assert result["restarted"] is False
+    assert result["note"].strip()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_refuses_with_a_useful_message():
+    """MC does not provision Jarvis — compose does. The refusal must say so,
+    and must not read like the switch is broken."""
+    from fastapi import HTTPException
+
+    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+    with pytest.raises(HTTPException) as excinfo:
+        await HOST_ADAPTERS["jarvis"].bootstrap(None, Agent(name="Jarvis", slug="jarvis"), None)
+
+    assert excinfo.value.status_code == 422
+    assert "compose" in str(excinfo.value.detail).lower()
+
+
+# ── The switch service: a voice runtime belongs ONLY to jarvis ─────────────
+
+
+@pytest.fixture(autouse=True)
+def _patched_redis_for_switch(fake_redis):
+    """Same shape as test_agent_runtime_switch.py's autouse fixture — the
+    switch service's lock/unlock calls need a working (fake) redis even
+    though this module's one switch test never gets far enough to restart
+    anything."""
+    async def _async_get_redis():
+        return fake_redis
+    with patch("app.services.agent_runtime_switch.get_redis", _async_get_redis), \
+         patch("app.services.sse.get_redis", _async_get_redis), \
+         patch("app.redis_client.get_redis", _async_get_redis):
+        yield fake_redis
+
+
+@pytest.mark.asyncio
+async def test_switch_service_refuses_a_voice_runtime_for_a_non_jarvis_host_agent():
+    """Belt and braces on top of is_compatible(): derive_harness() returns None
+    for a voice runtime type (like it does for grok/kimi), so a harness-less
+    agent would otherwise slide through the compatibility check silently and
+    fail loud only on its first real call.
+
+    Uses a host+hermes agent (not cli-bridge) specifically: hermes has a
+    registered adapter, so ``is_host_inplace`` is True and the earlier
+    single_instance hard-block (which voice runtimes also carry) is skipped —
+    exactly the path that would otherwise let a voice runtime slip through to
+    a non-Jarvis host harness.
+    """
+    from app.services.agent_runtime_switch import RuntimeIncompatibleError, switch_agent_runtime
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        runtime = _rt("voice_openai", slug="voice-openai-guard-test", single_instance=True)
+        session.add(runtime)
+        agent = Agent(
+            name="NotJarvis", slug="not-jarvis", agent_runtime="host", harness="hermes",
+        )
+        session.add(agent)
+        await session.commit()
+        await session.refresh(runtime)
+        await session.refresh(agent)
+
+        with pytest.raises(RuntimeIncompatibleError) as excinfo:
+            await switch_agent_runtime(
+                session=session,
+                agent=agent,
+                new_runtime_id=runtime.id,
+                new_harness=None,
+            )
+    assert "jarvis" in str(excinfo.value).lower()

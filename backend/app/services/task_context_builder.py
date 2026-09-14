@@ -16,6 +16,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 
+from sqlalchemy import and_, func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -43,10 +44,19 @@ logger = logging.getLogger(__name__)
 #         abort dispatch — same as original `return` in auto_dispatch_task).
 #       * Success path tries worktree-isolation; on worktree failure falls back
 #         to a branch checkout in the main repo. Sets task.workspace_path.
-#   - Project absent + agent.workspace_path set: ad-hoc git workspace path.
+#   - Project absent + agent.workspace_path set + agent.requires_git_workflow:
+#       * ad-hoc git workspace, repo resolved via
+#         repo_registry.resolve_adhoc_repo_target (task.repo_id → board
+#         default → shared mc-workspace scratch repo — never "no repo").
 #       * Worktree → branch fallback identical to project path.
-#       * On any exception logs WARNING but does NOT block dispatch (returns True).
-#   - Otherwise: no-op (returns True — caller continues with non-code workspace).
+#       * Changed 2026-09-14 (task af914128): on any exception now applies
+#         the SAME hard-fail contract as the project path (blocker comment +
+#         blocked + terminal-unassign, returns False) — the old silent
+#         WARNING-and-continue left git-requiring agents dispatched into a
+#         non-git directory, which is exactly what caused the incident.
+#   - Project absent + agent.requires_git_workflow=False (or no
+#     agent.workspace_path): no-op here (returns True) — caller continues
+#     with the Phase-C non-code workspace.
 #
 # Pattern S2 (lazy local imports) preserved for git_service + apply_terminal_unassign
 # to avoid module-load cycles with dispatch.py / task_lifecycle.py.
@@ -84,8 +94,9 @@ async def setup_git_workspace_for_dispatch(
                         f"'{agent.workspace_path}' ist nicht backend-mounted."
                     )
                 repo_slug = registry_repo.full_name.split("/", 1)[-1]
+                repo_url = clone_url_for(registry_repo)
                 main_repo = await git_service.ensure_workspace(
-                    agent.workspace_path, clone_url_for(registry_repo), repo_slug,
+                    agent.workspace_path, repo_url, repo_slug,
                 )
                 task_slug = slugify_project(task.title)
                 try:
@@ -99,6 +110,13 @@ async def setup_git_workspace_for_dispatch(
                     await git_service.create_task_branch(main_repo, task_slug)
                     task.workspace_path = main_repo
                 await git_service.setup_git_identity(git_project_dir, agent.name)
+                # MC pre-push guard (PR #584 review W3): the cli-bridge twin
+                # pins the expected remote for every clone it creates; the
+                # central path did not, leaving these clones fail-open
+                # (docker/mc-agent-base/lib/mc-pre-push.sh:33 lets a push
+                # through when the marker is missing).
+                from app.services.cli_bridge_runner import _write_expected_remote
+                _write_expected_remote(git_project_dir, repo_url)
                 session.add(task)
                 await session.commit()
                 return True
@@ -175,6 +193,11 @@ async def setup_git_workspace_for_dispatch(
                 await git_service.setup_git_identity(
                     git_project_dir, agent.name,
                 )
+                # MC pre-push guard (PR #584 review W3): see the repo_id
+                # branch above for the rationale — the cli-bridge twin
+                # already pins this for every clone it creates.
+                from app.services.cli_bridge_runner import _write_expected_remote
+                _write_expected_remote(git_project_dir, project.github_repo_url)
                 session.add(task)
                 await session.commit()
         except Exception as e:
@@ -236,14 +259,17 @@ async def setup_git_workspace_for_dispatch(
             session.add(blocker)
             await session.commit()
             return False
-    elif agent.workspace_path:
-        # Ad-hoc task without a project → own repo or mc-workspace
+    elif agent.workspace_path and getattr(agent, "requires_git_workflow", True):
+        # Ad-hoc task without a project, git-requiring agent → prepared
+        # clone (task af914128, "Ad-hoc-Karten ohne Projekt bekommen kein
+        # Repo"). Gated on requires_git_workflow — already the
+        # authoritative per-agent "does this agent's output belong in git"
+        # flag (see dispatch_message_builder.py's git_section selection) —
+        # rather than a new opt-in tag an operator would have to remember
+        # to set per card. Non-coder ad-hoc tasks (Research/Writing) skip
+        # this branch entirely and get the Phase-C plain workspace below.
         try:
-            from app.services.git_service import (
-                ADHOC_REPO,
-                git_service,
-                slugify_project,
-            )
+            from app.services.git_service import git_service, slugify_project
             from app.services.github_config import require_github_owner
 
             if task.use_separate_repo:
@@ -267,12 +293,11 @@ async def setup_git_workspace_for_dispatch(
                 except Exception:
                     logger.warning("Task-Repo-Registrierung fehlgeschlagen", exc_info=True)
             else:
-                # Shared mc-workspace repo (previous behavior).
-                # Fail loud instead of a silent warning fallback for a missing owner.
-                _owner = await require_github_owner(session)
-                repo_url = f"https://github.com/{_owner}/{ADHOC_REPO}.git"
-                repo_slug = ADHOC_REPO
-                await git_service.ensure_adhoc_repo()
+                # Precedence: task.repo_id (Maske) → board.default_project_id
+                # → shared mc-workspace scratch repo. Never "no repo" — see
+                # repo_registry.resolve_adhoc_repo_target docstring.
+                from app.services.repo_registry import resolve_adhoc_repo_target
+                repo_url, repo_slug = await resolve_adhoc_repo_target(session, task)
 
             main_repo = await git_service.ensure_workspace(
                 agent.workspace_path, repo_url, repo_slug,
@@ -294,10 +319,43 @@ async def setup_git_workspace_for_dispatch(
             await git_service.setup_git_identity(
                 git_project_dir, agent.name,
             )
+            # MC pre-push guard (PR #584 review W3): these are exactly the
+            # ad-hoc clones that newly exist because of this PR — without
+            # this marker they had no wrong-remote protection at all (the
+            # cli-bridge twin already writes it for its own ad-hoc clones).
+            from app.services.cli_bridge_runner import _write_expected_remote
+            _write_expected_remote(git_project_dir, repo_url)
             session.add(task)
             await session.commit()
         except Exception as e:
-            logger.warning("Ad-hoc git workspace setup fehlgeschlagen: %s", e)
+            # Same hard-fail contract as the project-with-repo branch above:
+            # a git-requiring ad-hoc task must never dispatch into a
+            # workspace with no repo at all — that silence is exactly what
+            # let an agent self-clone the wrong `gh repo clone <shortname>`
+            # result on 2026-09-14 (incident, task af914128).
+            logger.error(
+                "Ad-hoc git workspace setup failed for task %s: %s", task.id, e,
+            )
+            from app.models.task import TaskComment
+            from app.services.task_lifecycle import apply_terminal_unassign
+            blocker = TaskComment(
+                task_id=task.id,
+                author_type="system",
+                comment_type="blocker",
+                content=(
+                    "**Workspace-Setup fehlgeschlagen** — Dispatch abgebrochen.\n\n"
+                    f"**Fehler:** `{type(e).__name__}: {e}`\n\n"
+                    "Ad-hoc-Task ohne Projekt — Repo-Aufloesung (repo_id / "
+                    "Board-Default / mc-workspace) schlug fehl.\n\n"
+                    "**Question for @Operator** — Repo-Zugriff bzw. Board-Default pruefen?"
+                ),
+            )
+            task.status = "blocked"
+            await apply_terminal_unassign(session, task, "blocked")
+            session.add(task)
+            session.add(blocker)
+            await session.commit()
+            return False
 
     return True
 
@@ -339,6 +397,96 @@ async def _ensure_task_workspace(
         )
         return None
     return base
+
+
+def _is_within(path: str, root: str) -> bool:
+    """True if `path` is `root` itself or lives somewhere underneath it.
+
+    Pure path-string comparison (normalized, no realpath/symlink
+    resolution) — task.workspace_path and agent.workspace_path are both
+    backend-local paths we constructed ourselves, never user input.
+    """
+    norm_path = os.path.normpath(path)
+    norm_root = os.path.normpath(root)
+    return norm_path == norm_root or norm_path.startswith(norm_root + os.sep)
+
+
+def _needs_non_code_workspace(
+    task_workspace_path: str | None,
+    agent_workspace_path: str | None,
+) -> bool:
+    """Whether Phase-C should (re)create the non-code task workspace for
+    `agent_workspace_path`.
+
+    True for a regular first dispatch (task.workspace_path unset) — original
+    behavior, untouched. Also true when task.workspace_path is SET but points
+    outside the target agent's own workspace tree: a reassign/handoff that
+    left it pointing at the OLD agent's layout (incident 2026-09-13, PR #568
+    B1 — the old guard `if not task.workspace_path` only ever checked the
+    "unset" half, never the "stale/foreign" half).
+
+    False — a genuine no-op, nothing to (re)provision — when task.workspace_path
+    already lives under agent_workspace_path (same agent reassigned to itself,
+    or step 1's git/worktree setup already placed it there), or when the
+    target agent has no workspace_path at all to compare against (existing
+    behavior for that case is unchanged by this function).
+    """
+    if not task_workspace_path:
+        return True
+    if not agent_workspace_path:
+        return False
+    return not _is_within(task_workspace_path, agent_workspace_path)
+
+
+async def prepare_agent_workspace_for_task(
+    task: "Task",
+    agent: "Agent",
+    session: AsyncSession,
+) -> bool:
+    """Full workspace preparation for `agent` on `task` — the same two-step
+    sequence `dispatch.auto_dispatch_task` runs on every first dispatch
+    (git/worktree setup via setup_git_workspace_for_dispatch, then the
+    Phase-C non-code fallback via _ensure_task_workspace if that left
+    task.workspace_path unset or pointing at a different agent's tree).
+    `auto_dispatch_task` itself calls this function (no longer a separate
+    copy — PR #568 B2) and then runs one further, agent-independent step
+    of its own (port allocation) that isn't part of this shared sequence.
+
+    Reused by every path that (re)points `assigned_agent_id` at a new agent
+    outside a normal dispatch cycle — the dedicated reassign endpoint, the
+    generic assigned_agent_id PATCH branch, and the self-review escalation
+    to the Board Lead — so a card handed to a new agent gets the identical
+    preparation a fresh dispatch would have given it. Incident 2026-09-13:
+    `mc reassign` rotated the attempt id and wrote the audit row but never
+    touched task.workspace_path, so the receiving agent's ACP guard
+    (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refused
+    the turn — the directory the old assignment had prepared (or nothing,
+    if it had none) was never re-prepared for the new one. PR #568 fixed
+    this only for the "nothing" half (task.workspace_path unset); the
+    "old assignment's directory is still there and gets handed to the new
+    agent unchanged" half was a no-op until B1 (see _needs_non_code_workspace).
+
+    Returns True if the caller should proceed (workspace ready, or a
+    genuine no-op — e.g. the target agent has no workspace_path to build a
+    Phase-C path from, or task.workspace_path already lives under the
+    target agent's own tree). Note this is NOT "host agents never have a
+    workspace_path" — Hermes (a host agent) has one (alembic 0095); the
+    no-op depends on the actual value, not on agent_runtime. Returns False
+    if the task was blocked (setup_git_workspace_for_dispatch already
+    posted the blocker comment, set status=blocked and unassigned it — same
+    hard-fail contract a normal dispatch uses, no silent fallback).
+    """
+    if not await setup_git_workspace_for_dispatch(task, agent, session):
+        return False
+    if _needs_non_code_workspace(task.workspace_path, agent.workspace_path):
+        project = await session.get(Project, task.project_id) if task.project_id else None
+        task_ws = await _ensure_task_workspace(task.id, project, agent.workspace_path)
+        if task_ws:
+            task.workspace_path = task_ws
+            session.add(task)
+            await session.commit()
+            logger.info("Task %s: Non-Code-Workspace erstellt: %s", task.id, task_ws)
+    return True
 
 
 MAX_REFERENCE_FILES_IN_BRIEF = 15  # Directive-Grösse schützen (ADR-053)
@@ -817,6 +965,51 @@ async def _load_dispatch_context(
 
 WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 9)
 
+# W0.3: bounds for the Operator-/Lead-Anweisungen block in build_recovery_context.
+OPERATOR_LEAD_COMMENT_LIMIT = 3
+# Nacharbeit-2 PR #489 (Operator-Review, 2026-09-10): 250/900 waren zu knapp
+# bemessen — der Vorfall, der W0.3 ausgeloest hat, war eine sechsteilige
+# Nacharbeits-Anweisung von rund 2000 Zeichen; bei 250 Zeichen pro Kommentar
+# kam davon nur Schritt 1 und die Haelfte von Schritt 2 an. Der Cap loeste das
+# Problem "Anweisung kommt nicht an" also nicht, er verschob es nur. Der Platz
+# dafuer kommt aus PROGRESS_COMMENT_LIMIT (5 -> 3) und CHECKLIST_OPEN_ITEM_LIMIT
+# (unbegrenzt -> max 10 offene Items) — siehe Messung in `docs/` bzw. PR-Text.
+OPERATOR_LEAD_MAX_CHARS = 1800
+# Nacharbeit-3 PR #489 (Operator-Review, 2026-09-10): der gleiche Pro-Kommentar-
+# Cap fuer alle drei Kommentare war der eigentliche Fehler, nicht der
+# Gesamt-Cap. 3 x 800 = 2400 Rohzeichen gegen 1800 Gesamt-Cap kann rechnerisch
+# nie aufgehen — der Gesamt-Cap griff dadurch strukturell immer statt als
+# Notnetz (siehe der jetzt veraltete Messwert in
+# test_recovery_context_heavy_scenario_measured_for_pr_text). Die drei
+# Anweisungen sind aber nicht gleich wichtig: die juengste ist fast immer die,
+# auf die es ankommt, die beiden aelteren sind nur Kontext. Deshalb ungleiche
+# Verteilung statt eines gleichen Caps:
+OPERATOR_LEAD_LATEST_MAX_CHARS = 1200  # juengster Operator-/Lead-Kommentar
+OPERATOR_LEAD_OLDER_MAX_CHARS = 250  # die beiden aelteren Kommentare
+# 1200 + 250 + 250 = 1700 Rohtext + Kopfzeilen bleibt unter dem 1800er
+# Gesamt-Cap — der Block traegt damit den Fall, fuer den er gebaut wurde,
+# ohne dass der Gesamt-Cap den Cap-Loop ueberschreibt.
+#
+# Bekannte Grenze (Nacharbeit-4 PR #489, Nit): "juengster" heisst hier strikt
+# `created_at`, nicht Wichtigkeit. Schreibt der Operator erst eine lange
+# Anweisung und danach ein kurzes "danke", wird das "danke" zur juengsten
+# und die lange Anweisung faellt auf den 250er-Cap. Realer Ablauf, kein
+# Kunstfall. Keine Aenderung hier — jede Alternative braeuchte Semantik
+# (Wichtigkeit, Anweisung vs. Bestaetigung), die dieser Kontext-Bauer nicht
+# hat. Bewusst als bekannte Grenze dokumentiert, damit sie nicht neu entdeckt
+# werden muss.
+
+# Nacharbeit-2 PR #489: Fortschritts-Block von 5 auf 3 Kommentare, um Platz
+# fuer den hoeheren Anweisungs-Cap oben freizumachen.
+PROGRESS_COMMENT_LIMIT = 3
+
+# Nacharbeit-2 PR #489: die Checkliste war im Recovery-Kontext unbegrenzt —
+# bei 40 Eintraegen (erledigte eingeschlossen) sprengte sie den Kontext, ohne
+# dass ein Cap das je gebremst haette. Erledigte Eintraege gehoeren nicht in
+# einen Recovery-Prompt (der Agent soll nicht neu anfangen, nicht die
+# Historie lesen); nur offene Items zaehlen, davon maximal so viele.
+CHECKLIST_OPEN_ITEM_LIMIT = 10
+
 
 async def build_waiting_resume_recap(session: AsyncSession, task: Task) -> str:
     """Bounded recap for resuming a task that was parked while `waiting`.
@@ -885,7 +1078,7 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
     from app.models.agent import Agent
     from app.models.checklist import TaskChecklistItem
 
-    # Comments — last 5 relevant lifecycle entries, chronological.
+    # Comments — last PROGRESS_COMMENT_LIMIT relevant lifecycle entries, chronological.
     relevant_types = ("progress", "blocker", "feedback", "resolution")
     result = await session.exec(
         select(TaskComment)
@@ -894,20 +1087,104 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             TaskComment.comment_type.in_(relevant_types),  # type: ignore[union-attr]
         )
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
-        .limit(5)
+        .limit(PROGRESS_COMMENT_LIMIT)
     )
     comments = list(result.all())
     comments.sort(key=lambda c: c.created_at)
 
-    # Checklist items — ordered, flagged for first-pending.
+    # W0.3: Operator-/Lead-Anweisungen — eigener Bucket, andere Semantik als
+    # relevant_types oben (das sind Worker-Fortschrittsmeldungen). `message`
+    # ist der Kanal, den der Operator fuer freien Text benutzt; `handoff` ist
+    # der Wake-Kanal, den ein Lead nutzt, um einem bereits zugewiesenen
+    # Worker eine Anweisung zu geben (comment_types.py:33). Beide fielen
+    # bisher komplett aus dem Recovery-Kontext, weil relevant_types sie nicht
+    # kannte — Incident 2026-09-09: eine Nacharbeits-Anweisung erreichte einen
+    # Kollegen deswegen dreimal nicht.
+    #
+    # author_type=="system" ist bewusst ausgeschlossen: das sind keine von
+    # Mensch oder Lead geschriebenen Anweisungen, sondern automatische Notizen
+    # die zufaellig denselben comment_type tragen — z.B. der System-`handoff`
+    # beim Human-Review-Uebergang (task_lifecycle.py, request_human_review)
+    # oder der System-`message`-Callback bei Subtask-Abschluss
+    # (agent_task_status.py). `message` ist zusaetzlich auf author_type=="user"
+    # eingeschraenkt (nicht nur "!= system"), weil Worker-Agents "message" als
+    # formlosen Peer-Kommentar benutzen koennen, der keine Anweisung ist;
+    # `handoff` dagegen ist per Definition immer ein Wake-Signal von Operator
+    # oder Lead, deshalb reicht dort "!= system".
+    operator_lead_filter = or_(
+        and_(
+            TaskComment.comment_type == "message",  # type: ignore[union-attr]
+            TaskComment.author_type == "user",  # type: ignore[union-attr]
+        ),
+        and_(
+            TaskComment.comment_type == "handoff",  # type: ignore[union-attr]
+            TaskComment.author_type != "system",  # type: ignore[union-attr]
+        ),
+    )
+    ol_result = await session.exec(
+        select(TaskComment)
+        .where(TaskComment.task_id == task.id, operator_lead_filter)
+        .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        .limit(OPERATOR_LEAD_COMMENT_LIMIT)
+    )
+    operator_comments = list(ol_result.all())
+    operator_comments.sort(key=lambda c: c.created_at)
+
+    # Operator-/Lead-Block vorab zusammenbauen (Per-Kommentar-Cap, siehe unten)
+    # — `rendered_operator_comments` ist die Menge, die tatsaechlich im Prompt
+    # landet. Anders als die alte Alles-oder-nichts-Schleife wird hier kein
+    # Kommentar mehr komplett fallengelassen (nur der Text pro Kommentar
+    # gekuerzt), deshalb bleibt das immer == operator_comments. Trotzdem wird
+    # shown_count explizit aus dieser Menge gebildet statt aus der Rohliste —
+    # M2 (Nacharbeit PR #489): der alte Code zaehlte `operator_comments` VOR
+    # dem Cap-Loop, der Loop selbst droppte danach noch welche -> Postfach-
+    # Zeile und tatsaechlich gezeigte Kommentare liefen auseinander (6
+    # Kommentare -> 2 gezeigt, aber "3 weitere" gemeldet, einer verschwand
+    # spurlos). Damit das nicht wieder passieren kann, falls hier jemals
+    # wieder eine Drop-Logik einzieht, ist die Zaehlung strikt an das
+    # gebunden, was tatsaechlich gerendert wird.
+    rendered_operator_comments = operator_comments
+
+    # Postfach-Hinweis: wie viele relevante Kommentare (beide Buckets
+    # zusammen) es insgesamt gibt vs. was hier tatsaechlich gezeigt wird —
+    # der Agent soll wissen, dass es mehr gibt, auch wenn es nicht ungekuerzt
+    # in den Prompt passt.
+    count_result = await session.exec(
+        select(func.count()).where(  # type: ignore[arg-type]
+            TaskComment.task_id == task.id,
+            or_(
+                TaskComment.comment_type.in_(relevant_types),  # type: ignore[union-attr]
+                operator_lead_filter,
+            ),
+        )
+    )
+    total_relevant_count = count_result.one()
+    shown_count = len(comments) + len(rendered_operator_comments)
+    unread_count = max(0, total_relevant_count - shown_count)
+
+    # Checklist items — ordered, nur offene (Nacharbeit-2 PR #489: erledigte
+    # Eintraege gehoeren nicht in einen Recovery-Prompt, der Rest war
+    # unbegrenzt und sprengte bei grossen Checklisten den Kontext). Die erste
+    # offene Position bekommt weiterhin den HIER-WEITERMACHEN-Marker — da nur
+    # offene Items uebrig bleiben, ist das automatisch die erste der Liste.
     items_result = await session.exec(
         select(TaskChecklistItem)
         .where(TaskChecklistItem.task_id == task.id)
         .order_by(TaskChecklistItem.sort_order)  # type: ignore[union-attr]
     )
-    items = list(items_result.all())
+    all_items = list(items_result.all())
+    open_items = [i for i in all_items if i.status in ("pending", "in_progress")]
+    shown_items = open_items[:CHECKLIST_OPEN_ITEM_LIMIT]
+    hidden_open_count = len(open_items) - len(shown_items)
+    # B6 (Nacharbeit-4 PR #489): erledigte (bzw. blocked/skipped) Items werden
+    # oben komplett aus `open_items` herausgefiltert und tauchten bisher in
+    # keiner Zaehlung mehr auf — bei 28 erledigten/12 offenen stand ueber die
+    # 28 kein Wort. `done_count` erfasst alles, was nicht offen ist, und wird
+    # unten in der Hinweiszeile genannt, damit der Agent weiss, dass es sie
+    # gibt, auch wenn sie hier nicht einzeln aufgelistet werden.
+    done_count = len(all_items) - len(open_items)
 
-    if not comments and not items:
+    if not comments and not open_items and not operator_comments and not done_count:
         return None
 
     parts: list[str] = [
@@ -917,16 +1194,94 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
         "fort oder beim letzten `progress`-Eintrag. Kein Re-Doing.",
     ]
 
-    if items:
+    if unread_count > 0:
+        # M3 (Nacharbeit PR #489): der Text versprach "N weitere Kommentare",
+        # gezaehlt wird aber nur relevant_types + operator_lead_filter — bei
+        # Kommentaren wie `reflection`/`report_back`/`escalate_to_operator`/
+        # `checkpoint` bleibt unread_count 0, obwohl welche existieren, und es
+        # erscheint gar keine Zeile. Die Zaehlung ist bewusst so (siehe oben),
+        # nur der Wortlaut hat mehr versprochen als er hielt — praezisiert auf
+        # genau das, was gezaehlt wird.
+        parts.append(
+            f"\n**Postfach:** {unread_count} weitere Anweisungen/"
+            f"Fortschrittseintraege nicht in diesem Kontext -> "
+            f"`mc task-get {task.id}`"
+        )
+
+    # Nacharbeit-2 PR #489: Anweisungen zuerst — was der Agent tun soll, steht
+    # oben, nicht hinter Checkliste und Fortschritt begraben.
+    if rendered_operator_comments:
+        # B1-Fix (Nacharbeit PR #489): kein Kommentar wird mehr komplett
+        # fallengelassen (das alte Alles-oder-nichts liess bei genau einem
+        # uebrigen Kommentar den Gesamt-Cap gaenzlich ins Leere laufen — ein
+        # einzelner 20000-Zeichen-Kommentar ergab 20423 Zeichen Kontext).
+        # Stattdessen: jeder Kommentar wird einzeln gekuerzt, mit sichtbarem
+        # Marker (gleiches Idiom wie _load_feedback() oben).
+        #
+        # Nacharbeit-3 PR #489: der Cap ist nicht mehr fuer alle Kommentare
+        # gleich. `rendered_operator_comments` ist aufsteigend nach
+        # created_at sortiert (oldest -> newest), der letzte Eintrag ist also
+        # immer der juengste — der bekommt OPERATOR_LEAD_LATEST_MAX_CHARS
+        # (1200), die aelteren nur OPERATOR_LEAD_OLDER_MAX_CHARS (250). Der
+        # Block ist damit hart durch OPERATOR_LEAD_LATEST_MAX_CHARS +
+        # (OPERATOR_LEAD_COMMENT_LIMIT - 1) * OPERATOR_LEAD_OLDER_MAX_CHARS
+        # begrenzt.
+        #
+        # Gekuerzt ist in Ordnung, stillschweigend gekuerzt nicht (Korrektur
+        # der DoD) — der Marker traegt deshalb zusaetzlich zum sichtbaren
+        # `[...gekuerzt]` einen ausdruecklichen Verweis, wo der Rest steht.
+        block_lines = []
+        any_truncated = False
+        last_idx = len(rendered_operator_comments) - 1
+        for idx, c in enumerate(rendered_operator_comments):
+            ts = c.created_at.strftime("%H:%M") if c.created_at else "?"
+            who = "Operator" if c.author_type == "user" else "Lead"
+            content = c.content.strip()
+            per_item_cap = (
+                OPERATOR_LEAD_LATEST_MAX_CHARS if idx == last_idx
+                else OPERATOR_LEAD_OLDER_MAX_CHARS
+            )
+            if len(content) > per_item_cap:
+                content = (
+                    content[:per_item_cap]
+                    + f"\n[...gekuerzt] (Rest: `mc task-get {task.id}`)"
+                )
+                any_truncated = True
+            block_lines.append(f"[{who}/{c.comment_type} @ {ts}]\n{content}")
+        block_text = "\n\n".join(block_lines)
+
+        # Sicherheitsnetz falls OPERATOR_LEAD_COMMENT_LIMIT jemals erhoeht
+        # wird: haerter Gesamt-Cap, kuerzt aber nur das Blockende, droppt
+        # keinen einzelnen Kommentar.
+        if len(block_text) > OPERATOR_LEAD_MAX_CHARS:
+            block_text = (
+                block_text[:OPERATOR_LEAD_MAX_CHARS]
+                + f"\n[...gekuerzt] (Rest: `mc task-get {task.id}`)"
+            )
+            any_truncated = True
+
+        header = "\n### Operator-/Lead-Anweisungen"
+        header += " (gekuerzt bei Bedarf)" if any_truncated else " (ungekuerzt)"
+        parts.append(header)
+        parts.append(block_text)
+
+    if shown_items or done_count > 0:
         parts.append("\n### Deine Checkliste")
-        _found_first_pending = False
-        for item in items:
-            mark = "[x]" if item.status == "done" else "[ ]"
-            hint = ""
-            if item.status in ("pending", "in_progress") and not _found_first_pending:
-                hint = " ← **HIER WEITERMACHEN**"
-                _found_first_pending = True
-            parts.append(f"- {mark} {item.title}{hint}")
+        for i, item in enumerate(shown_items):
+            hint = " ← **HIER WEITERMACHEN**" if i == 0 else ""
+            parts.append(f"- [ ] {item.title}{hint}")
+        if hidden_open_count > 0 or done_count > 0:
+            # B6 (Nacharbeit-4 PR #489): vorher nur "N weitere" fuer verdeckte
+            # OFFENE Items — erledigte kamen in keiner Zaehlung vor. Jetzt
+            # werden beide genannt, auch wenn nur eine der beiden Zahlen > 0
+            # ist (z.B. alle offenen Items passen rein, aber es gibt
+            # erledigte, die trotzdem sichtbar bleiben muessen).
+            note_parts = []
+            if hidden_open_count > 0:
+                note_parts.append(f"{hidden_open_count} weitere offene")
+            if done_count > 0:
+                note_parts.append(f"{done_count} erledigte")
+            parts.append(f"- ... und {', '.join(note_parts)} (`mc task-get {task.id}`)")
 
     if comments:
         parts.append("\n### Letzter Fortschritt")
@@ -940,7 +1295,19 @@ async def build_recovery_context(session: AsyncSession, task: Task) -> str | Non
             }.get(c.comment_type, c.comment_type)
             # Truncate long comments in the recap — agent can fetch full via
             # `mc comment list` if needed.
-            snippet = c.content.strip().splitlines()[0][:180]
+            #
+            # B7 (Nacharbeit-4 PR #489): genau der Ursprungsbug dieses PRs
+            # (erste Zeile, 180 Zeichen, ohne Marker) — nur hier im
+            # Fortschritts- statt im Anweisungs-Block. 180 Zeichen sind fuer
+            # einen Statuseintrag in Ordnung, aber gekuerzt muss sichtbar
+            # sein — gleicher Marker/Verweis wie im Anweisungs-Block oben.
+            full_content = c.content.strip()
+            content_lines = full_content.splitlines()
+            first_line = content_lines[0] if content_lines else ""
+            snippet = first_line[:180]
+            truncated = len(content_lines) > 1 or len(first_line) > 180
+            if truncated:
+                snippet += f" [...gekuerzt] (Rest: `mc task-get {task.id}`)"
             parts.append(f"[{label} @ {ts}] {snippet}")
 
     # Workspace hint — Task.workspace_path is authoritative (Bundle 4),

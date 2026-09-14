@@ -49,11 +49,29 @@ async def run_task_review_hooks(session: Any, task: Any) -> bool:
     """Run all task_review_hooks; first True wins. Log errors, never propagate."""
     import logging
 
+    from fastapi import HTTPException
+
     logger = logging.getLogger("mc.verticals.hooks")
     for hook in task_review_hooks:
         try:
             if await hook(session, task):
                 return True
+        except HTTPException as e:
+            if e.status_code == 409:
+                # A hook (e.g. system_finalize_task_done) lost a
+                # lock_and_set() race — expected/retryable, not a hook bug
+                # (PR #478 review, m9). logger.exception() below would make
+                # this indistinguishable from a genuine broken hook; this
+                # branch keeps the same "not handled, fall back to the
+                # normal human-review flow" behavior but says honestly what
+                # happened.
+                logger.info(
+                    "task_review hook %s lost a lock_and_set() race for "
+                    "task %s (409) — falling back to normal review flow",
+                    getattr(hook, "__name__", hook), getattr(task, "id", task),
+                )
+            else:
+                logger.exception("task_review hook %s failed", getattr(hook, "__name__", hook))
         except Exception:
             logger.exception("task_review hook %s failed", getattr(hook, "__name__", hook))
     return False

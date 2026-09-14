@@ -257,7 +257,9 @@ async def test_task_events_endpoint(auth_client, make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_invalid_transition_rejected(auth_client, make_board, make_task):
-    """Invalid transition inbox→done is rejected with 400."""
+    """Invalid transition inbox→done is rejected with 409 + structured
+    detail (PR #478 review, B2 Nebenbefund: matches lock_and_set()'s
+    invalid_transition shape instead of a bare 400 prose string)."""
     board = await make_board()
     task = await make_task(board.id, status="inbox")
 
@@ -266,8 +268,13 @@ async def test_invalid_transition_rejected(auth_client, make_board, make_task):
             f"/api/v1/boards/{board.id}/tasks/{task.id}",
             json={"status": "done"},
         )
-    assert resp.status_code == 400
-    assert "Ungültiger Status-Übergang" in resp.json()["detail"]
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict), f"detail must be structured, got {type(detail)}"
+    assert detail["error"] == "invalid_transition"
+    assert detail["current_status"] == "inbox"
+    assert detail["expected"] == "done"
+    assert "Ungültiger Status-Übergang" in detail["message"]
 
 
 @pytest.mark.asyncio

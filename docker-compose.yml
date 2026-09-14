@@ -11,6 +11,12 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Docker Desktop defaults StopTimeout to 1s when a service doesn't set
+    # this explicitly (measured, not assumed — see architecture session
+    # 2026-09-14). Postgres under SIGKILL never runs a clean checkpoint, it
+    # just crash-recovers on the next start. 60s gives it real headroom to
+    # shut down cleanly on every `docker stop`/recreate.
+    stop_grace_period: 60s
     logging: *default-logging
     volumes:
       - mc_postgres_data:/var/lib/postgresql/data
@@ -31,6 +37,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). AOF is on
+    # (--appendonly yes --appendfsync everysec): on SIGTERM redis-server finishes
+    # writing to the AOF file and closes it cleanly; on SIGKILL that in-flight
+    # write — and the clean close — is lost. 30s is generous headroom for that
+    # flush, not a full minute like db: there's no checkpoint/WAL replay to wait
+    # out, just a bounded fsync.
+    stop_grace_period: 30s
     logging: *default-logging
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     volumes:
@@ -79,6 +92,10 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/caddy (1s without this line) —
+    # 20s gives in-flight requests and the FastAPI shutdown hooks room to
+    # finish instead of a hard SIGKILL mid-request.
+    stop_grace_period: 20s
     logging: *default-logging
     networks:
       - default
@@ -91,6 +108,16 @@ services:
       docker-socket-proxy:
         condition: service_started
     environment:
+      # Architektur E Teil 2: Hintergrund-Dienste (Scheduler/Watchdog/Task-
+      # Runner/Telegram-/Slack-Inbound/Vault-Watcher) laufen IM mc-worker-
+      # Container unten — die API bleibt schlank und beantwortet nur Requests.
+      # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
+      # bleibt True (Rueckweg fuer compose-freie Installs).
+      ENABLE_BACKGROUND_SERVICES: "false"
+      # Konsument ist backend/app/routers/browser_live.py — ein Router, also
+      # der API-Prozess. War auf main gesetzt und wurde beim Teil-2-Umbau
+      # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
+      # wiederhergestellt, Flag-Zeile darueber ergaenzt, nicht ersetzt.
       CDP_BROWSER_URL: http://172.30.99.10:9223
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -169,6 +196,14 @@ services:
       # Schalter fuer die Operator-Proxy-Endpoints. Leer => Jarvis bleibt bei
       # der neutralen Anrede, Proxy-Endpoints antworten 503.
       JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
+      # Sprach-Stimme je Anbieter (ADR-082): resolve_voice_config() liest diese
+      # zwei Variablen aus der Backend-Env, NICHT aus der voice-worker-Env — die
+      # Bindung entscheidet WELCHER Anbieter aktiv ist, die Stimme ist dessen
+      # eigene Einstellung. Getrennt weil die Stimmnamen pro Anbieter disjunkt
+      # sind ("marin" bei OpenAI, "ara" bei xAI) — eine geteilte Variable
+      # zerlegte den jeweils inaktiven Arm.
+      VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
+      VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
       # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
       MC_BACKEND_URL: http://localhost:8000
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
@@ -188,6 +223,11 @@ services:
       # (comma-separated). Without this passthrough the .env key never
       # reaches the backend container (same trap as STT_BASE_URL above).
       OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      RECOVERY_TIER2_SKIP_AGENT_SLUGS: ${RECOVERY_TIER2_SKIP_AGENT_SLUGS:-}
+      # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
+      # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
+      # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
+      HERMES_DRIVER: ${HERMES_DRIVER:-native}
       GH_TOKEN: ${GH_TOKEN:-}
       # Kill-switch: false = legacy single-session dispatch (see ADR-002).
       # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.
@@ -318,6 +358,164 @@ services:
       timeout: 5s
       retries: 3
 
+  # Architektur E Teil 2: eigener Hintergrund-Dienst-Container. Gleiches
+  # Image wie die API (backend), aber Einstiegspunkt `python -m app.worker`
+  # statt uvicorn — kein HTTP-Port, dafuer Scheduler/Watchdog/Task-Runner/
+  # Telegram-/Slack-Inbound/Vault-Watcher/-Compactor/Lint-Cron.
+  # Genau EIN Prozess mit ENABLE_BACKGROUND_SERVICES=true (hier); die API
+  # oben laeuft mit false. Siehe ~/.claude/skills/mc-deploy/SKILL.md.
+  mc-worker:
+    image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
+    build: ./backend
+    # Worker haengt an der API: Seeds/Migrationen (docker-entrypoint.sh) und
+    # der Settings-Patchlauf (channel/ai-provider overrides) sollen zuerst
+    # gelaufen sein, bevor der Worker dieselben idempotenten Seeds anstoesst.
+    entrypoint: ["/docker-entrypoint.sh"]
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    # W4 (11.09.2026, Incident Deploy #504): Docker default is 10s. The
+    # worker's SIGTERM handler awaits stop_vault_services() + 17
+    # sequential service .stop() calls (app/worker.py, app/background.py)
+    # before SchedulerService.stop() — the last of the chain — can delete
+    # its Redis lock. Under 10s that chain didn't finish before SIGKILL,
+    # so the lock only healed via its 120s TTL. 30s gives the shutdown
+    # chain realistic headroom; per-service duration is now logged
+    # (app/background.py:_timed_stop) so a future slow step is visible
+    # instead of just "scheduler lock stuck again".
+    stop_grace_period: 30s
+    logging: *default-logging
+    depends_on:
+      backend:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    environment:
+      ENABLE_BACKGROUND_SERVICES: "true"
+      # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
+      # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
+      # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen
+      # genau die Invariante, die der entrypoint-Kommentar behauptet
+      # ("genau ein Backend-Container").
+      MC_SKIP_MIGRATIONS: "1"
+      # Identische Env wie backend (dieselbe settings-Factory, dieselben
+      # Overrides) — jede Abweichung driftet API- und Worker-Sicht auseinander.
+      # AUSNAHME CDP_BROWSER_URL (Rex-Review PR #500, Blocker B4): der einzige
+      # Konsument (routers/browser_live.py) laeuft im API-Prozess; der Worker
+      # haengt nur am default-Netz (kein cdpnet), die fixe cdpnet-IP
+      # 172.30.99.10 waere hier unerreichbar. Bewusst nicht kopiert.
+      DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      AUTH_MODE: local
+      LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_CATEGORY_ID: ${DISCORD_CATEGORY_ID:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_REPORTS_BOT_TOKEN: ${TELEGRAM_REPORTS_BOT_TOKEN:-}
+      TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
+      TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
+      CHAT_CHANNELS: ${CHAT_CHANNELS:-}
+      SLACK_TEAM_CHAT_ENABLED: ${SLACK_TEAM_CHAT_ENABLED:-false}
+      SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
+      SLACK_REPORTS_CHANNEL: ${SLACK_REPORTS_CHANNEL:-}
+      SLACK_FILE_INGEST_MAX_BYTES: ${SLACK_FILE_INGEST_MAX_BYTES:-26214400}
+      SLACK_APPROVALS_CHANNEL: ${SLACK_APPROVALS_CHANNEL:-}
+      JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
+      JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
+      STT_BASE_URL: ${STT_BASE_URL:-}
+      STT_MODEL: ${STT_MODEL:-}
+      INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:-}
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+      JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
+      JARVIS_BRIEFING_ENABLED: ${JARVIS_BRIEFING_ENABLED:-false}
+      JARVIS_BRIEFING_HOUR: ${JARVIS_BRIEFING_HOUR:-06:30}
+      JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
+      VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
+      VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
+      MC_BACKEND_URL: http://backend:8000
+      MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
+      MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
+      OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
+      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
+      HOST_SSH_USER: ${HOST_SSH_USER:-}
+      PUBLIC_HOST: ${PUBLIC_HOST:-}
+      EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
+      OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      RECOVERY_TIER2_SKIP_AGENT_SLUGS: ${RECOVERY_TIER2_SKIP_AGENT_SLUGS:-}
+      # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
+      # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
+      # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
+      HERMES_DRIVER: ${HERMES_DRIVER:-native}
+      GH_TOKEN: ${GH_TOKEN:-}
+      USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
+      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
+      SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-}
+      SPARK_EMBEDDING_MODEL: ${SPARK_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      AI_EMBEDDINGS_PROVIDER: ${AI_EMBEDDINGS_PROVIDER:-spark}
+      AI_EMBEDDINGS_URL: ${AI_EMBEDDINGS_URL:-}
+      AI_EMBEDDINGS_MODEL: ${AI_EMBEDDINGS_MODEL:-}
+      AI_EMBEDDINGS_CLOUD_URL: ${AI_EMBEDDINGS_CLOUD_URL:-}
+      AI_EMBEDDINGS_CLOUD_MODEL: ${AI_EMBEDDINGS_CLOUD_MODEL:-}
+      AI_INSIGHTS_PROVIDER: ${AI_INSIGHTS_PROVIDER:-spark}
+      AI_INSIGHTS_MODEL: ${AI_INSIGHTS_MODEL:-}
+      SPARK_LLM_URL: ${SPARK_LLM_URL:-http://192.0.2.10:8000/v1}
+      DGX_SSH_HOST: ${DGX_SSH_HOST:-}
+      DGX_SSH_USER: ${DGX_SSH_USER:-}
+      DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
+      ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
+      ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
+      ENVIRONMENT: production
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      HOME_HOST: ${HOME}
+      MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
+      MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
+      HOST_UID: ${HOST_UID:-502}
+      MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
+      MC_AGENTS_ROOT: ${HOME}/.mc/agents
+    volumes:
+      - ${HOME}/.mc:${HOME}/.mc
+      - ${HOME}/.mc/deliverables:/deliverables:ro
+      - mc_shared_deliverables:/shared-deliverables
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp
+      - ./backend/templates:/app/templates:ro
+      - ./docker:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker:rw
+      - ./docker-compose.yml:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker-compose.yml:ro
+      - ./.env:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/.env:ro
+      - ./jarvis_core:/app/jarvis_core:ro
+      - ./scripts/node-agent:/app/scripts/node-agent:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Kein HTTP-Port: Lifeness via Herzschlag-Datei (siehe mc-deploy SKILL.md
+    # + app/worker.py _heartbeat_loop). Der alte os.kill(1, 0)-Check war eine
+    # Tautologie (PID 1 = der Worker selbst, konnte nie fehlschlagen) — der
+    # Check meldet jetzt unhealthy, wenn der Ereignis-Loop haengt/stirbt und
+    # /tmp/mc-worker.alive aelter als 90 s wird.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os, time; os.path.exists('/tmp/mc-worker.alive') and time.time() - os.path.getmtime('/tmp/mc-worker.alive') < 90 or exit(1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
   frontend:
     # Prebuilt-Image nutzt die Default-Brand ("Mission.Control"); eigene
     # NEXT_PUBLIC_BRAND braucht einen lokalen Build (Build-Arg wird gebacken).
@@ -348,6 +546,13 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). qdrant is
+    # the vector store behind Vault and Memory (mc_qdrant_data holds the
+    # storage segments). On SIGKILL it can't close those segments cleanly,
+    # forcing crash-recovery on the next start. 60s, same as db: aligned by
+    # role (persistent storage engine, not a cache), not by measurement —
+    # nobody has isolated-tested qdrant's own shutdown path yet.
+    stop_grace_period: 60s
     logging: *default-logging
     ports:
       - "127.0.0.1:6333:6333"
@@ -365,6 +570,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/backend (1s without this line) —
+    # 10s lets Caddy drain in-flight connections gracefully on stop/reload.
+    stop_grace_period: 10s
     logging: *default-logging
     depends_on:
       - frontend
@@ -476,6 +684,24 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
+      # ADR-083: which wire api a (provider, model) pair speaks — "realtime"
+      # or "live" (OpenAI gpt-live-1 full-duplex, needs the GPT-Live plugin
+      # from livekit-plugins-openai >= 1.8.1) — is NOT a separate env var. It is derived
+      # from the model name by jarvis_core.voice_provider.classify_voice_api
+      # (one rule, shared with the backend's GET /api/v1/agent/voice/config
+      # response), whether the model comes from the MC runtime binding
+      # (ADR-082, normal case) or from VOICE_MODEL above (env fallback when
+      # MC delivers nothing). An earlier version of this PR had a separate
+      # VOICE_API var here — dropped as redundant with classify_voice_api,
+      # which already covers the "VOICE_MODEL=gpt-live-1 but nothing marks
+      # it as live" case that var existed for.
+      #
+      # Backend Responses model for GPT-Live delegation (api=live only),
+      # separate from JARVIS_FRONTIER_MODEL below — Full-Duplex needs fast
+      # answers, ask_frontier is allowed to think slowly. Default (unset)
+      # falls back to gpt-5.6-luna (OpenAI's own GPT-Live "Fast mode"
+      # default) — see voice_worker/main.py::_resolve_live_backend_model().
+      JARVIS_LIVE_BACKEND_MODEL: ${JARVIS_LIVE_BACKEND_MODEL:-}
       # Jarvis Intelligence (ADR-062): frontier model + gate for the ask_frontier
       # tool (off by default → not offered in the voice tool schema).
       JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
@@ -484,7 +710,13 @@ services:
       # Siehe Backend-Service: Anzeigename des Operators + Proxy-Schalter.
       JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
       MC_BACKEND_URL: http://backend:8000
+      # Env-Fallback, wenn MC keine Runtime-Bindung liefert (Backend down,
+      # Agent unbounden) — jarvis_core.voice_provider faellt dann hierauf
+      # zurueck statt zu verstummen (ADR-082). VOICE_VOICE_ID bleibt der
+      # legacy provider-agnostische Fallback (galt frueher fuer beide Arme).
       VOICE_VOICE_ID: ${VOICE_VOICE_ID:-}
+      VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
+      VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
 
   # Dedicated CDP-exposing Chromium for the agent browser workflow. Replaces
   # playwright-mcp's internal browser so MC can attach a SECOND CDP session to
@@ -515,12 +747,20 @@ services:
       - --remote-allow-origins=*
       - about:blank
     healthcheck:
-      # Probe :9223 (the socat forward consumers actually use), not :9222 —
-      # a dead forward with a live browser was exactly the failure that slipped
-      # through before. wget has no socat/curl dep and ships in alpine-chrome.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9223/json/version >/dev/null 2>&1 || exit 1"]
+      # Real CDP roundtrip (HTTP /json/version + a WS Target.getTargets call),
+      # not just HTTP — see docker/cdp-browser/healthcheck.sh for why. Incident
+      # 2026-09-13: HTTP-only stayed "healthy" for 5 days while the WebSocket
+      # path was wedged and every Playwright call hung at its 30s timeout.
+      # timeout: 10s covers the script's own worst case (3s HTTP + 5s WS = 8s)
+      # with margin, so Docker's own kill never fires before the script's.
+      # start_period: 30s — the check now does two real round-trips instead
+      # of one HTTP GET, so it's more likely to catch Chromium still coming
+      # up right after container start. Cheap insurance against that being
+      # mistaken for the wedge this check exists to find.
+      test: ["CMD-SHELL", "/usr/local/bin/cdp-healthcheck.sh"]
       interval: 30s
       timeout: 10s
+      start_period: 30s
       retries: 3
 
   playwright-mcp:

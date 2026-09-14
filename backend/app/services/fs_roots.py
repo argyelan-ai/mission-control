@@ -19,10 +19,29 @@ the Files API.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
+
+
+def attachments_root() -> str:
+    """Phase 5 MSY-03: HOME_HOST resolver for the attachments directory.
+
+    NEVER ``expanduser('~')`` standalone (memory feedback rule
+    ``feedback_home_host_pattern.md``). The chain is:
+    ``HOME_HOST`` env-var (set on Docker containers via the host-side
+    docker-compose mount) → ``HOME`` env-var → ``expanduser('~')`` last
+    resort. Returns ``${HOME_HOST}/.mc/attachments``.
+
+    Lives here (not in app.routers.memory) so non-API modules can use it
+    without importing a router (Rex-Review PR #500: the worker process must
+    not load app.routers.* at all — obsidian_export pulled the memory
+    router into the worker import graph).
+    """
+    home_host = os.environ.get("HOME_HOST") or os.environ.get("HOME") or os.path.expanduser("~")
+    return f"{home_host}/.mc/attachments"
 
 
 def mc_home() -> Path:

@@ -1,6 +1,7 @@
 """Tests for GitService — git operations for agent projects."""
 import pytest
 
+from app.services import git_service as git_service_module
 from app.services.git_service import GitService, slugify_project, slugify_workspace_slug
 
 
@@ -23,6 +24,38 @@ async def test_run_cmd_raises_on_failure():
     gs = GitService()
     with pytest.raises(RuntimeError, match="Git command failed"):
         await gs._run_cmd("false")
+
+
+@pytest.mark.asyncio
+async def test_ensure_git_auth_safe_directory_idempotent(tmp_path, monkeypatch):
+    """Bug: git_service.py:76 used `config --add`, which appends a new
+    `directory = *` line to ~/.gitconfig on every call that isn't deduped by
+    the in-memory token-hash cache — i.e. on every container/process restart.
+    `--replace-all` must leave exactly one line no matter how often the
+    underlying git command actually runs."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+
+    class _FakeGithubConfig:
+        token = "fake-token-for-test"
+
+    async def _fake_resolve_github_config(*_args, **_kwargs):
+        return _FakeGithubConfig()
+
+    monkeypatch.setattr(
+        git_service_module, "resolve_github_config", _fake_resolve_github_config
+    )
+
+    gs = GitService()
+    await gs._ensure_git_auth()
+    # Reset the dedup cache to simulate a second process invoking
+    # _ensure_git_auth against the same (bind-mounted) ~/.gitconfig — this is
+    # exactly what happens across container restarts in production.
+    gs._auth_token_hash = None
+    await gs._ensure_git_auth()
+
+    gitconfig = (tmp_path / ".gitconfig").read_text()
+    assert gitconfig.count("directory = *") == 1
 
 
 def test_slugify_workspace_slug():

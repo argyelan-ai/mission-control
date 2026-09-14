@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select, or_, and_
 
@@ -44,6 +44,7 @@ from app.models.approval import Approval
 from app.models.board import Board, Project
 from app.models.task import Task, TaskComment, TaskDependency
 from app.services.activity import emit_event
+from app.services.task_state import lock_and_set
 from app.services.work_context import (
     enforce_board_rules_agent as _enforce_board_rules_agent,
     VALID_BLOCKER_TYPES,
@@ -90,6 +91,16 @@ async def _handle_help_request_resume(session: AsyncSession, subtask):
 
     parent = await session.get(Task, subtask.parent_task_id)
     if not parent or parent.blocked_by_task_id != subtask.id:
+        return
+    # C2 (PR #533 Nacharbeit, 7th claim path): a held parent (mc hold) must
+    # stay held even though its blocking help-subtask just finished — the
+    # Board Lead's hold is a deliberate, separate lifecycle intent that this
+    # auto-resume carries no signal about. `mc release` is the only way out.
+    # Shared guard (task_lifecycle.task_still_reactivatable) — same check
+    # _handle_callback_resume and dispatch.redispatch_after_blocker_answer
+    # use, so the next reactivation path doesn't have to reinvent it.
+    from app.services.task_lifecycle import task_still_reactivatable
+    if not task_still_reactivatable(parent):
         return
 
     parent.status = "in_progress"
@@ -155,6 +166,20 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
             candidate is not None
             and candidate.status == "blocked"
             and candidate.blocked_by_task_id is None
+            # B2 (Rex-Review PR #510, 11.09.2026): this fallback was designed
+            # for ONE scenario — the delegating agent's OWN active task
+            # (agent.current_task_id) forgot to set blocked_by_task_id, so we
+            # rediscover it via parent_task_id. In that scenario
+            # candidate.assigned_agent_id == the delegator == callback_agent_id
+            # by construction. `--parent` (W5-F) broke that invariant: it can
+            # set parent_task_id + callback_agent_id on a FOREIGN card nobody
+            # ever confirmed the delegator owns — this fallback then "resumed"
+            # a blocked card that belongs to someone else entirely, contrary
+            # to the PR's own claim that an explicit --parent is "never
+            # auto-blocked/resumed". Requiring the candidate to actually be
+            # assigned to the callback agent restores the original invariant
+            # and excludes exactly the --parent-on-a-foreign-card case.
+            and candidate.assigned_agent_id == subtask.callback_agent_id
         ):
             from app.models.approval import Approval
             pending_approval = (
@@ -186,8 +211,17 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
             await _deliver_root_callback(session, subtask)
         return
 
+    from app.services.task_lifecycle import task_still_reactivatable
     for parent in parents:
-        if parent.status != "blocked":
+        # 8th claim path (Rex, PR #533 counter-check, 2026-09-13): this only
+        # checked status=="blocked" — never run_control. A parent stopped via
+        # `stop_task_run` while in_progress lands at exactly this fallback's
+        # precondition (status="blocked", blocked_by_task_id=None,
+        # assigned_agent_id retained), so a callback firing afterwards
+        # silently resumed a run the operator had explicitly stopped. Unlike
+        # the 7th path, `mc release` does NOT undo this — it only accepts
+        # run_control=="manual_hold" — so the operator has no way back out.
+        if not task_still_reactivatable(parent, expected_status="blocked"):
             continue
         parent.status = "in_progress"
         parent.blocked_by_task_id = None
@@ -585,11 +619,22 @@ class AgentTaskCreate(BaseModel):
 
 
 class AgentTaskUpdate(BaseModel):
+    # fail-closed (matches nodes.py / vault.py policy): an unknown key in the
+    # PATCH body is a typo or injection attempt, never a harmless extra —
+    # 422 instead of a silent 200 that changes nothing (bug 2026-09-09 class).
+    model_config = ConfigDict(extra="forbid")
     title: str | None = None
     description: str | None = None
     status: str | None = None
     priority: str | None = None
     project_id: uuid.UUID | None = None
+    # Bug 2026-09-09: assigned_agent_id used to be silently discarded here —
+    # Pydantic dropped the unknown field, the PATCH answered 200 and the
+    # reassignment never happened (same class as Bug 4, 13.05.2026: missing
+    # comment_type in CommentCreate). Declared so the field reaches the
+    # handler; application + permission check live in agent_update_task.
+    # Mirrors TaskUpdate in routers/tasks.py (the Board-Lead endpoint).
+    assigned_agent_id: uuid.UUID | None = None
     # Structured blocker (optional — only relevant for status: blocked)
     blocker_type: str | None = None       # missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
     blocker_description: str | None = None  # What is the problem?
@@ -705,10 +750,17 @@ async def get_next_task(
 
     # 2. Zugewiesene inbox-Tasks laden
     # dispatch_phase guard: tasks with "planning" are NOT available (must be promoted first)
+    # C2 (PR #533 Nacharbeit): same guard as the poll-claim path (agents.py
+    # candidates query) — a lead-held card (run_control=manual_hold) or an
+    # admin-stopped card must not be claimed here either. This endpoint
+    # bypasses check_dispatch_allowed entirely (it calls lock_and_set()
+    # directly below), so without this filter it was a second, undocumented
+    # door around the hold.
     candidates = (await session.exec(
         select(Task).where(
             Task.assigned_agent_id == agent.id,
             Task.status == "inbox",
+            Task.run_control.is_(None),  # type: ignore[union-attr]
             or_(
                 Task.dispatch_phase.is_(None),  # type: ignore[union-attr]
                 Task.dispatch_phase == "ready",
@@ -729,7 +781,24 @@ async def get_next_task(
             continue
 
         # Task aktivieren
-        task.status = "in_progress"
+        # M6 (PR #478 review): a lost lock_and_set() race here means another
+        # poller grabbed this exact candidate between our SELECT and the
+        # locked re-read — precisely the race this endpoint exists to
+        # arbitrate. Before this fix a 409 aborted the whole candidate loop
+        # (and the request), leaving this agent with no task even though
+        # other candidates were still available; catch it and try the next
+        # one instead, same as the watchdog sites already do.
+        try:
+            task, _ = await lock_and_set(session, task.id, "in_progress", actor=agent.name)
+        except HTTPException as e:
+            if e.status_code == 409:
+                logger.info(
+                    "get_next_task: '%s' lost the lock_and_set() race for "
+                    "task '%s' — trying next candidate",
+                    agent.name, task.title[:60],
+                )
+                continue
+            raise
         # F2 fix (Plan 26-03): first-set-wins on started_at — preserves
         # original "work began" timestamp on re-opens. Pull-dispatch normally
         # picks fresh inbox tasks (started_at=NULL), but re-queued tasks may
@@ -1488,8 +1557,13 @@ async def agent_create_task(
     if payload.parent_task_id:
         parent = await session.get(Task, payload.parent_task_id)
         if (parent and parent.status == "inbox"
+                and parent.run_control is None
+                # C2 (PR #533 Nacharbeit): a held parent (mc hold, e.g. the
+                # Board Lead holding its own root task) must stay held —
+                # spawning a subtask under it must not silently start it
+                # via this side door. `mc release` is the only way out.
                 and parent.assigned_agent_id == agent.id):
-            parent.status = "in_progress"
+            parent, _ = await lock_and_set(session, parent.id, "in_progress", actor=agent.name)
             # F2 fix (Plan 26-03): first-set-wins on started_at.
             if parent.started_at is None:
                 parent.started_at = utcnow()
@@ -1505,6 +1579,242 @@ async def agent_create_task(
     if dispatch_info:
         result["dispatch"] = dispatch_info
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# C2: Board Lead queue control — hold / release / reassign
+#
+# Distinct from run/stop-resume (operations.py, user/admin-role only,
+# requires an ACTIVE run) and distinct from the blocker-approval flow
+# (approvals.py, resets status to inbox but never touches run_control).
+# Hold uses the pre-existing Task.run_control="manual_hold" value, which
+# is already wired into check_dispatch_allowed() and 10+ other dispatch
+# guards — a beantwortete Blocker-Eskalation only flips status back to
+# inbox, it never clears run_control, so a hold survives it (see the
+# run_control filter added to the /me/poll inbox-candidates query above).
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TaskHoldRequest(BaseModel):
+    reason: str
+
+
+class TaskReassignRequest(BaseModel):
+    to: str  # agent name (case-insensitive) or UUID, resolved server-side
+
+
+def _require_board_lead(agent: Agent, board_id: uuid.UUID) -> None:
+    if agent.board_id != board_id:
+        raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+    if not agent.is_board_lead:
+        raise HTTPException(
+            status_code=403,
+            detail="Nur Board Leads duerfen die Queue steuern (hold/release/reassign)",
+        )
+
+
+async def _load_task_or_404(session: AsyncSession, board_id: uuid.UUID, task_id: uuid.UUID) -> Task:
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/hold")
+async def agent_hold_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    payload: TaskHoldRequest,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    """Hold a not-yet-dispatched card so the dispatcher/poll skip it.
+
+    Only cards still sitting in `inbox` can be held — an active run is out
+    of scope here (that's Stop/Resume, admin-only, operations.py).
+    """
+    _require_board_lead(agent, board_id)
+    task = await _load_task_or_404(session, board_id, task_id)
+
+    if task.status != "inbox":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nur noch nicht dispatchte Karten (status=inbox) koennen gehalten werden, "
+                   f"aktueller Status: {task.status}",
+        )
+    if task.run_control == "stopped":
+        raise HTTPException(
+            status_code=409,
+            detail="Task ist admin-gestoppt (run_control=stopped) — Resume laeuft ueber /stop /resume, nicht mc hold",
+        )
+    if not payload.reason or not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="reason ist Pflicht und darf nicht leer sein")
+
+    task.run_control = "manual_hold"
+    task.hold_reason = payload.reason.strip()
+    task.updated_at = utcnow()
+    session.add(task)
+    await emit_event(
+        session, "task.held",
+        f"{agent.name} haelt Task '{task.title}' an: {payload.reason.strip()}",
+        board_id=board_id, task_id=task.id, agent_id=agent.id,
+        detail={"reason": payload.reason.strip(), "held_by": agent.name},
+    )
+    await session.commit()
+    await session.refresh(task)
+    return task.model_dump()
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/release")
+async def agent_release_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    """Release a card previously held via `mc hold`. Idempotent-safe: only
+    clears a hold this mechanism owns, never an admin `stopped` run."""
+    _require_board_lead(agent, board_id)
+    task = await _load_task_or_404(session, board_id, task_id)
+
+    if task.run_control != "manual_hold":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task ist nicht im Hold-Zustand (run_control={task.run_control})",
+        )
+
+    task.run_control = None
+    task.hold_reason = None
+    task.updated_at = utcnow()
+    session.add(task)
+    await emit_event(
+        session, "task.released",
+        f"{agent.name} gibt Task '{task.title}' wieder frei",
+        board_id=board_id, task_id=task.id, agent_id=agent.id,
+        detail={"released_by": agent.name},
+    )
+    await session.commit()
+    await session.refresh(task)
+
+    # Trigger re-dispatch immediately — analogous to the blocker-approval
+    # unblock path (approvals.py) so a released card doesn't just sit in
+    # inbox until the next unrelated dispatch trigger fires.
+    from app.utils import create_tracked_task
+    from app.services.dispatch import auto_dispatch_task
+    create_tracked_task(auto_dispatch_task(str(task.id), str(task.board_id)))
+
+    return task.model_dump()
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/reassign")
+async def agent_reassign_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    payload: TaskReassignRequest,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+):
+    """Hand a card (any status except done/failed) to another agent on the
+    same board. Server-side only: resolves the target, sets
+    assigned_agent_id, rotates dispatch_attempt_id and writes the
+    TaskAttemptAudit row — the caller never needs to know or supply an
+    attempt id (that's the whole point over raw PATCH assigned_agent_id,
+    which additionally isn't even in the AgentTaskUpdate schema)."""
+    _require_board_lead(agent, board_id)
+    task = await _load_task_or_404(session, board_id, task_id)
+
+    if task.status in ("done", "failed"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task ist bereits abgeschlossen (status={task.status}) — kein Reassign moeglich",
+        )
+
+    target: Agent | None = None
+    try:
+        target_uuid = uuid.UUID(payload.to)
+    except ValueError:
+        target_uuid = None
+    if target_uuid is not None:
+        candidate = await session.get(Agent, target_uuid)
+        if candidate and candidate.board_id == board_id:
+            target = candidate
+    else:
+        # C2 (PR #533 Nacharbeit, Warning 3): this is meant to be an exact,
+        # case-insensitive name match, not a substring search — ilike()
+        # against a raw, unescaped payload.to treats '%' and '_' as SQL
+        # wildcards. `--to "%"` matched the first agent row on the board.
+        # func.lower() equality has no wildcard semantics, so it needs no
+        # escaping at all.
+        from sqlalchemy import func as _sa_func
+        result = await session.exec(
+            select(Agent)
+            .where(Agent.board_id == board_id)
+            .where(_sa_func.lower(Agent.name) == payload.to.strip().lower())
+        )
+        target = result.first()
+
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Ziel-Agent '{payload.to}' nicht auf diesem Board gefunden")
+
+    old_agent_id = task.assigned_agent_id
+    old_agent_name = None
+    if old_agent_id is not None:
+        old_agent = await session.get(Agent, old_agent_id)
+        old_agent_name = old_agent.name if old_agent else str(old_agent_id)
+        # C2 (PR #533 Nacharbeit, Warning 2): the old agent's active-task
+        # lock must follow the card away. Left dangling, dispatch.py's Guard
+        # 1 (`best_agent.current_task_id`) keeps queuing every future push
+        # for the old agent behind a task it no longer owns — silently, with
+        # no error and no expiry, since nothing else ever clears that field.
+        if old_agent is not None and old_agent.current_task_id == task.id:
+            old_agent.current_task_id = None
+            session.add(old_agent)
+
+    task.assigned_agent_id = target.id
+    task.dispatched_at = None
+    task.ack_at = None
+    task.updated_at = utcnow()
+    session.add(task)
+
+    from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+    await set_dispatch_attempt_id(
+        session, task, str(uuid.uuid4()),
+        caller="board_lead_reassign",
+        reason=f"reassigned_by_{agent.name}_from_{old_agent_name}_to_{target.name}",
+    )
+
+    await emit_event(
+        session, "task.reassigned",
+        f"{agent.name} haengt Task '{task.title}' von {old_agent_name or 'niemand'} auf {target.name} um",
+        board_id=board_id, task_id=task.id, agent_id=agent.id,
+        detail={"from_agent": old_agent_name, "to_agent": target.name, "reassigned_by": agent.name},
+    )
+    await session.commit()
+    await session.refresh(task)
+
+    # Prepare the new assignee's workspace — mirrors every other assignment
+    # path that dispatches via auto_dispatch_task (first dispatch,
+    # handle_review_handoff, handle_test_handoff, handle_review_rejection).
+    # Without this, task.workspace_path keeps pointing at (or stays None
+    # from) the OLD agent's layout, and the receiving agent's ACP guard
+    # (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refuses
+    # the turn — Incident 2026-09-13, Host-Agent -> Container-Agent
+    # reassign. PR #568 review (B1): "no-ops for agents without
+    # workspace_path" is NOT the same as "no-ops for host agents" — Hermes
+    # (a host agent) HAS one (alembic 0095) and gets a real Phase-C
+    # workspace here too. The actual no-op condition is
+    # _needs_non_code_workspace(): task.workspace_path already unset-and-
+    # nothing-to-build-from, or already scoped under the TARGET agent's own
+    # tree (e.g. a same-agent no-op reassign) — not "is this a host agent".
+    from app.services.task_context_builder import prepare_agent_workspace_for_task
+    if not await prepare_agent_workspace_for_task(task, target, session):
+        # Blocked: task_context_builder already posted a blocker comment,
+        # set status=blocked and unassigned the task — reflect that back.
+        await session.refresh(task)
+        return task.model_dump()
+
+    await session.refresh(task)
+    return task.model_dump()
 
 
 @router.patch("/boards/{board_id}/tasks/{task_id}")
@@ -1538,7 +1848,15 @@ async def agent_update_task(
             f"Agent {agent.name} Update auf gestoppten Task '{task.title}' abgelehnt",
             severity="warning",
             board_id=board_id, task_id=task.id, agent_id=agent.id,
-            detail={"run_control": task.run_control, "attempted": payload.model_dump(exclude_none=True)},
+            # mode="json": AgentTaskUpdate carries uuid.UUID fields (project_id,
+            # assigned_agent_id, blocked_by_task_id). emit_event writes this dict
+            # into a JSON column and publishes it to Redis, and both serialize with
+            # a plain json.dumps — a raw UUID object raises TypeError there, which
+            # turns this deliberate 409 into a 500 (reproduced live 2026-09-13).
+            detail={
+                "run_control": task.run_control,
+                "attempted": payload.model_dump(exclude_none=True, mode="json"),
+            },
         )
         raise HTTPException(
             status_code=409,
@@ -1561,7 +1879,11 @@ async def agent_update_task(
             "expected": task.dispatch_attempt_id,
             "received": _req_attempt_id,
             "reason": "missing_header" if _header_missing else "stale_value",
-            "attempted": payload.model_dump(exclude_none=True),
+            # mode="json" — see the run_control branch above: the UUID fields of
+            # AgentTaskUpdate must reach emit_event as strings. This one dict
+            # feeds all three guard branches (stale_value 409, Phase A warning,
+            # and a missing_header event should that ever be re-enabled).
+            "attempted": payload.model_dump(exclude_none=True, mode="json"),
         }
 
         if _header_missing:
@@ -1638,8 +1960,117 @@ async def agent_update_task(
                 detail="Agent darf nur eigene Tasks aendern",
             )
 
-    old_status = task.status
     updates = payload.model_dump(exclude_none=True)
+
+    # Re-fetch under lock_task() before reading old_status / validating: task
+    # was loaded above only for the ownership/run-control/dispatch-attempt
+    # guards, and a concurrent writer (e.g. the watchdog, another PATCH) may
+    # have committed a status change since. Without this, old_status and
+    # _enforce_board_rules_agent() below validate against a stale
+    # identity-map copy (PR #478 review, B1/B2) — same bug, this endpoint's
+    # write path (the one behind `mc ack`/`mc review`/`mc done`/`mc finish`).
+    # Does not cover the whole request: see task_state.py's module docstring
+    # for the intermediate-commit caveat (blocker-approval resolution,
+    # report-back auto-draft, and — further down in this function — the
+    # reassignment block's own commit via clear_dispatch_attempt_id(), which
+    # releases Postgres's FOR UPDATE at COMMIT just like the others).
+    #
+    # Must run BEFORE the reassignment block below: `_old_assigned` there
+    # (:1721) reads `task.assigned_agent_id` off this same object, and that
+    # read drives the "did the assignee actually change?" branch. Read from
+    # the pre-lock identity-map copy instead of the freshly-locked row, it
+    # can be stale because the DB row has simply moved since `task` was
+    # loaded:
+    #   DB=B, this object still says A, PATCH targets B: B != A (stale) ->
+    #     full dispatch-cycle reset applied to a task already delivered to
+    #     B — kills that running dispatch
+    #   DB=B, this object still says A, PATCH targets A: A == A (stale) ->
+    #     treated as a no-op, updates.pop()s the field -> silent 200 with no
+    #     effect, the bug class #482 closed
+    if "status" in updates:
+        from app.services.task_state import lock_task
+        locked_task = await lock_task(session, task_id)
+        if locked_task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = locked_task
+
+    old_status = task.status
+
+    # W2 (Rex' review of #570): snapshot the assigned agent's active-task
+    # lock BEFORE update_agent_active_task's unconditional repoint further
+    # down in this function runs. By the time the unblock-notify block
+    # executes, current_task_id already reads task.id regardless of what it
+    # held before — that repoint is exactly what
+    # redispatch_unblocked_task's B-3 fix and requeue_unblocked_task's own
+    # comment describe having to UNDO for their branches. Reading it fresh
+    # at notify time would make a released lock (W2, Sonde P-B) and a
+    # genuinely live paused session (P4) indistinguishable. See
+    # task_lifecycle.apply_unblock_notify_reset's docstring.
+    _assigned_agent_lock_before_transition: uuid.UUID | None = None
+    if task.assigned_agent_id:
+        _pre_transition_assignee = await session.get(Agent, task.assigned_agent_id)
+        if _pre_transition_assignee is not None:
+            _assigned_agent_lock_before_transition = _pre_transition_assignee.current_task_id
+
+    # ── Reassignment (assigned_agent_id) — permission + application ──
+    # Bug 2026-09-09: the field used to be silently discarded by the schema
+    # (200 without effect). Now: only Board Leads may reassign — a worker
+    # reassigning foreign/own tasks around the operator is not a thing the
+    # dispatch model wants (mirrors the ownership philosophy above; the
+    # Board-Lead endpoint routers/tasks.py:TaskUpdate has no extra guard
+    # because user auth is already the operator).
+    # Set below when this PATCH actually moves assigned_agent_id to a new,
+    # non-None agent — used at the end of the function to prepare that
+    # agent's workspace (same gap/fix as the dedicated reassign endpoint
+    # above; see the comment there for the incident this closes).
+    _reassign_target_agent: Agent | None = None
+    if "assigned_agent_id" in updates:
+        if not agent.is_board_lead:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "assigned_agent_id aendern duerfen nur Board-Leads. "
+                    "Wende dich an den Operator / Board-Lead."
+                ),
+            )
+        _new_assignee = updates["assigned_agent_id"]
+        if _new_assignee is not None:
+            _assignee = await session.get(Agent, _new_assignee)
+            if _assignee is None or _assignee.board_id != board_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="assigned_agent_id: Agent existiert nicht oder gehoert nicht zu diesem Board.",
+                )
+        _old_assigned = task.assigned_agent_id
+        if _new_assignee != _old_assigned:
+            # Same reset semantics as the Board-Lead PATCH (routers/tasks.py):
+            # new agent = new dispatch cycle.
+            task.dispatched_at = None
+            task.ack_at = None
+            task.dispatch_intent = "manual_redispatch"
+            from app.services.task_lifecycle import clear_spawn_tracking
+            clear_spawn_tracking(task)
+            from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+            await clear_dispatch_attempt_id(
+                session, task,
+                caller="agent_patch_reassign", reason="manual_reassign",
+            )
+            task.assigned_agent_id = _new_assignee
+            updates.pop("assigned_agent_id", None)  # applied; skip generic setattr
+            if _new_assignee is not None:
+                _reassign_target_agent = _assignee
+            await emit_event(
+                session, "task.reassigned",
+                f"Task '{task.title}' neu zugewiesen durch Lead {agent.name}",
+                severity="info",
+                board_id=board_id, task_id=task.id, agent_id=agent.id,
+                detail={"old_agent_id": str(_old_assigned) if _old_assigned else None,
+                        "new_agent_id": str(_new_assignee) if _new_assignee else None},
+            )
+        else:
+            # Same value — nothing to reset, but still skip generic setattr so
+            # the dispatched-cycle fields above are not bypassed for a no-op.
+            updates.pop("assigned_agent_id", None)
 
     # ── Review safeguard: detect contradiction ──────────────────────────
     # If the reviewer sets "in_progress" but its last comment says "Approved"
@@ -1710,10 +2141,16 @@ async def agent_update_task(
     # ONLY done → approved. NOT in_progress → changes_requested!
     # Reviewer ACK (review→in_progress) is the start of work, not a decision.
     # For changes_requested, the explicit POST /review endpoint must be used.
-    if "status" in updates and old_status == "review" and task.review_decision is None:
-        if updates["status"] == "done":
-            task.review_decision = "approved"
-            task.review_decided_at = utcnow()
+    #
+    # No `task.review_decision is None` guard here (PR #535 Runde 3): a
+    # `hold` decision leaves review_decision="hold" on a task that stays in
+    # `review` (execute_review_decision, decision_map["hold"] = "hold"); a
+    # subsequent PATCH review->done through this old path must still stamp
+    # "approved" — otherwise the card lands on `done` with a stale `hold`
+    # decision recorded against it.
+    if "status" in updates and old_status == "review" and updates["status"] == "done":
+        task.review_decision = "approved"
+        task.review_decided_at = utcnow()
 
     # ── Consistency guard: review_decision ↔ last comment ──
     # If the reviewer sets status=done but the last comment contains "not ship-ready" → warn
@@ -2371,6 +2808,11 @@ async def agent_update_task(
         # CRITICAL call order: PR creation MUST happen BEFORE handle_review_handoff
         # (Pitfall H: marker comment written before reviewer is notified).
         if new_status == "review" and old_status == "in_progress":
+            from app.services.task_lifecycle import (
+                review_card_would_self_dispatch, REVIEW_CARD_SELF_DISPATCH_DETAIL,
+            )
+            if review_card_would_self_dispatch(task, agent):
+                raise HTTPException(409, REVIEW_CARD_SELF_DISPATCH_DETAIL)
             await handle_review_pr_creation(session, task, agent)
             if not getattr(task, "human_review_required", None):
                 from app.services.task_lifecycle import handle_review_handoff
@@ -2581,6 +3023,20 @@ async def agent_update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    # W1/W2 (Rex' review of #570): identischer Zwilling zum
+                    # Operator-Pfad (routers/tasks.py) — das gemeinsame
+                    # Kriterium fuer alle drei resolve_unblock_action-Zweige
+                    # lebt jetzt in task_lifecycle.apply_unblock_notify_reset
+                    # (siehe dessen Docstring fuer die volle Begruendung und
+                    # die W1-Korrektur). Der Lock-Snapshot stammt bewusst von
+                    # VOR update_agent_active_task's Repoint oben in dieser
+                    # Funktion, nicht von `target.current_task_id` jetzt.
+                    from app.services.task_lifecycle import apply_unblock_notify_reset
+                    await apply_unblock_notify_reset(
+                        session, task, old_status,
+                        _assigned_agent_lock_before_transition,
+                        caller="unblock_notify_agent_task_status_router",
+                    )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
                         .where(TaskComment.task_id == task.id)
@@ -2616,6 +3072,22 @@ async def agent_update_task(
                             "recovery-comment cooldown already claimed",
                             task.id,
                         )
+
+    # Prepare the new assignee's workspace (twin of the dedicated reassign
+    # endpoint's fix above) — a plain PATCH assigned_agent_id never went
+    # through auto_dispatch_task either, so it left the same gap.
+    if _reassign_target_agent is not None:
+        from app.services.task_context_builder import prepare_agent_workspace_for_task
+        if not await prepare_agent_workspace_for_task(task, _reassign_target_agent, session):
+            # Blocked: task_context_builder already posted a blocker comment,
+            # set status=blocked and unassigned the task — reflect that back
+            # instead of returning as if the reassignment succeeded (PR #584
+            # review W2: this branch used to ignore the return value, so a
+            # workspace-setup failure here left the response looking like a
+            # normal successful reassignment).
+            await session.refresh(task)
+            return task
+        await session.refresh(task)
 
     return task
 

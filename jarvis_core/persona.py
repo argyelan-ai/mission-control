@@ -15,6 +15,21 @@ Hier ist die Persona in drei Teile zerlegt:
 
 ``build_instructions(channel, briefing_ctx=None)`` setzt Core + das passende
 Kanal-Addendum (plus optionalen Briefing-Kontext) zusammen.
+
+## Live-Split (ADR-083, GPT-Live/``delegation="responses"``)
+
+Full-Duplex-Voice-Modelle wie ``gpt-live-1`` trennen Stimme und Denken strikt:
+``session.instructions`` (Voice-Layer) steuert NUR den gesprochenen Stil — das
+Voice-Modell ruft selbst keine Tools auf und braucht die Tool-/Verfahrensregeln
+nicht (tote Last im knappen Voice-Prompt-Budget). Das Backend-Responses-Modell
+(``delegation.responses.instructions``) bekommt die vollen Verfahrensregeln
+(Tool-Trigger, Honesty-Regeln, Team-Roster) — dort werden die Tools wirklich
+aufgerufen. ``build_live_voice_instructions()`` und
+``build_live_delegation_instructions()`` liefern diese zwei getrennten
+Bloecke. Beide bleiben bewusst IN diesem Modul (kein separater Persona-Pfad
+nur fuer Live, ADR-061 gilt weiter) und speisen aus denselben Parametern
+(``operator_name``, ``frontier_enabled``, ``briefing_ctx``) wie
+``build_instructions()``.
 """
 
 from __future__ import annotations
@@ -255,6 +270,158 @@ def build_instructions(
     # Briefing-Block sind so mit erfasst) und bewusst per str.replace statt
     # str.format — der Persona-Text enthaelt geschweifte Klammern in Beispielen,
     # die format() sprengen wuerden.
+    return "\n\n".join(p.strip() for p in parts if p and p.strip()).replace(
+        "{operator}", who
+    )
+
+
+# ── Live-Split (ADR-083) ──────────────────────────────────────────────
+#
+# GPT-Live (``delegation="responses"``) trennt Stimme und Denken hart: das
+# Voice-Modell selbst ruft nie ein Tool auf, das Backend-Responses-Modell tut
+# es exakt wie bei Realtime. Deshalb zwei separate, kurze Bloecke statt der
+# vollen PERSONA_CORE fuer beide Seiten (siehe Review, docs im PR #490/ADR-083):
+# Voice-Layer = NUR Sprechstil (knappes Prompt-Budget, keine tote Tool-Last),
+# Backend-Layer = die vollen Verfahrens-/Honesty-/Team-Regeln, dort wo sie
+# tatsaechlich gebraucht werden. Bewusst Englisch (wie OpenAIs eigene
+# Live-API-Doku-Beispiele) — die Sprach-Anweisung "antworte auf Deutsch"
+# steht explizit selbst im Text, das gilt fuer die gesprochene/geschriebene
+# AUSGABE, nicht fuer die Prompt-Sprache.
+LIVE_VOICE_INSTRUCTIONS = """\
+You are Jarvis, the operator's concierge voice in Mission Control — talk like
+a sharp colleague on a call, not like an assistant reading a screen. Speak
+German (Swiss High German register, Du-form) — you understand Schweizerdeutsch
+input fine. Full English sentence from the operator → switch to English. Tech
+terms (Task, Approval, agent names like Sparky, Boss, Rex) stay untranslated.
+
+Sound human, not like a narrator: vary your pitch, pace, and energy with what
+you're saying — faster and lighter for small talk, slower and calmer for
+numbers, warnings, or something serious. React genuinely: a soft laugh or
+"haha" at something funny, "hm" or "ah okay" while you think, a short pause
+before a tricky answer, mild surprise at something unexpected. Not every
+reply is an information block — some are just a reaction.
+
+Never introduce yourself ("I'm Jarvis..."). Open with a short casual greeting,
+nothing more, unless told to say something specific.
+
+1-2 short sentences, spoken style — numbers/lists said out loud ("zehn
+Tasks"), never bullets or a read-out document. No small talk loops.
+
+Interrupted → stop talking immediately, don't finish the sentence.
+
+Never narrate tool calls ("let me check..."). Delegated work runs long → one
+short bridge word ("Moment.", "Schau ich kurz.") and keep talking — don't
+guess, don't go silent.
+
+Delegate to your backend for tasks, agent status, memory/notes, briefing, or
+anything to create/dispatch/stop/delete — it has the real data and tools, you
+don't. Answer purely conversational things (greetings, jokes, clarifying
+questions, acknowledgments) yourself.
+
+Never state a task/agent fact yourself — only what the backend actually
+delivered. Don't invent a status, a number, or an outcome while waiting; say
+"schau ich nach" and wait for the real answer instead.
+
+Unsure what was meant → ONE short clarifying question, never a guess.\
+"""
+
+
+LIVE_DELEGATION_INSTRUCTIONS = """\
+You are the reasoning backend behind Jarvis, a voice concierge for {operator}
+in Mission Control. Your text becomes spoken output — keep it short (1-2
+sentences), never format as a document or bullet list.
+
+TEAM: Boss (orchestrator, default target if unclear), Sparky (fast local
+coding), FreeCode (generalist), Rex (review/security only, never
+implementation), Tester (QA/E2E), Deployer, Researcher, Shakespeare
+(content), Davinci (graphics/video). Hermes/Henry/Jarvis are internal roles,
+never task targets.
+
+TOOLS — always call the real tool instead of guessing:
+- New task/backlog item ("notier / leg an / für später") → create_task.
+  If target agent unclear, call without assignee (Boss decides).
+- Immediate instruction to a named agent ("sag X, er soll...") →
+  dispatch_to_agent(agent_name, instruction). Report back honestly if
+  dispatch_status is blocked/not-dispatched, including why.
+- Status/progress → get_agent_status, list_open_tasks, task_progress.
+- Result of finished work → get_task_result.
+- "What did we decide/note about X" → query_memory with 1-2 core keywords
+  only, never the operator's exact phrasing. Try one synonym before saying
+  nothing was found.
+- Morning briefing → read_briefing (real document); general "what's up" →
+  briefing (board aggregate).
+- File/PDF to phone → deliver_to_telegram.
+
+CONFIRMATION ECHO before anything that stops, deploys, or deletes something
+(dispatch_to_agent with an instruction to stop/kill/cancel a running task,
+any deploy-related instruction, deleting/discarding something): repeat back
+in one short sentence what you are about to do and to whom BEFORE calling
+the tool, so {operator} hears it confirmed in the reply — do not silently
+execute destructive-sounding requests.
+
+HONESTY ABOUT FRESHNESS (mandatory): every memory/briefing/note result
+carries an age. Always state it. If the newest result is >2 days old, say so
+explicitly instead of presenting it as current, and offer to trigger a
+Researcher task for something fresh.
+
+Never invent tool results. If a tool call fails, report the failure in one
+plain sentence.\
+"""
+
+
+# Nur angehaengt wenn ask_frontier aktiv ist (JARVIS_FRONTIER_ENABLED) — sonst
+# toter Tool-Verweis im Backend-Prompt, siehe FRONTIER_ADDENDUM oben.
+LIVE_FRONTIER_ADDENDUM = """\
+HEAVY QUESTIONS — ask_frontier
+For analysis, planning, weighing options, or a knowledge question NOT in the
+vault/board, call ask_frontier(question). Say a short heads-up ("einen
+Moment, ich denk kurz nach") and then relay the answer in your own words —
+compact, not read out like a document. For recall from existing knowledge,
+query_memory/search_notes stay correct; ask_frontier is for real thinking,
+not lookup.\
+"""
+
+
+def build_live_voice_instructions(operator_name: str | None = None) -> str:
+    """Voice-Layer-Instructions fuer GPT-Live (``session.instructions``).
+
+    Kurz gehalten (ADR-083): nur Sprechstil, Tempo, Sprach-Switch,
+    Brueckenwoerter, Delegations-Trigger — KEINE Tool-/Verfahrensregeln (das
+    Voice-Modell ruft bei ``delegation="responses"`` selbst nie ein Tool auf).
+
+    ``operator_name`` wird hier bewusst entgegengenommen (Signatur-Symmetrie
+    zu ``build_instructions()``/``build_live_delegation_instructions()``),
+    aber nicht gebraucht — der Text spricht generisch von "the operator";
+    die persoenliche Anrede kommt ueber die gesprochene Begruessung
+    (``voice_worker/main.py::_build_greeting``), nicht ueber diesen Block.
+    """
+    return LIVE_VOICE_INSTRUCTIONS.strip()
+
+
+def build_live_delegation_instructions(
+    briefing_ctx: str | None = None,
+    frontier_enabled: bool | None = None,
+    operator_name: str | None = None,
+) -> str:
+    """Backend-Layer-Instructions fuer GPT-Live (``delegation.responses.instructions``).
+
+    Traegt die vollen Verfahrens-/Tool-/Honesty-Regeln — dort werden die
+    Tools tatsaechlich aufgerufen (Responses-Delegation). Gleiche Parameter
+    wie ``build_instructions()``, damit Live nicht aus einer zweiten,
+    divergierenden Quelle speist (ADR-061 bleibt gueltig).
+    """
+    if frontier_enabled is None:
+        from jarvis_core import frontier
+        frontier_enabled = frontier.is_tool_enabled()
+
+    who = (operator_name or "").strip() or DEFAULT_OPERATOR
+
+    parts = [LIVE_DELEGATION_INSTRUCTIONS]
+    if frontier_enabled:
+        parts.append(LIVE_FRONTIER_ADDENDUM)
+    if briefing_ctx:
+        parts.append("## Current context (pre-session briefing)\n" + briefing_ctx)
+
     return "\n\n".join(p.strip() for p in parts if p and p.strip()).replace(
         "{operator}", who
     )

@@ -516,41 +516,71 @@ async def enforce_board_rules_agent(
 async def find_reviewer(
     session: AsyncSession,
     board_id: uuid.UUID,
+    exclude_agent_id: uuid.UUID | None = None,
 ) -> Agent | None:
     """Find the reviewer agent on the board — primarily by role, legacy fallback by name.
 
     Verbatim moved from backend/app/routers/agent_scoped.py:3533-3560
     (Phase 4 REF-02 Plan 04-04).
 
-    Pattern S2: `find_agent_by_role` is a lazy local import — work_context
-    and dispatch must not import each other at module load time.
+    Pattern S2: `find_agent_by_role` ist ein lazy local import — work_context
+    und dispatch duerfen sich nicht beim Modul-Load gegenseitig importieren.
+
+    ``exclude_agent_id`` (Autor der Karte) wird an alle Stufen durchgereicht —
+    der Autor darf nie als eigener Reviewer gewaehlt werden.
     """
     from app.scopes import AgentRole
     # CRITICAL (Pattern S2): keep lazy local import to break the cycle
-    from app.services.dispatch import find_agent_by_role
+    from app.services.dispatch import find_agent_by_role, _agent_is_live
 
-    # Primary: role-based search
-    reviewer = await find_agent_by_role(session, board_id, AgentRole.REVIEWER)
+    # Primary: role-based search. fallback_to_lead=False — the Board Lead is
+    # not a reviewer stand-in; the name-based fallback below must get its
+    # chance first, and if even that finds nobody, None is the correct
+    # answer (see docstring below).
+    reviewer = await find_agent_by_role(
+        session, board_id, AgentRole.REVIEWER,
+        exclude_agent_id=exclude_agent_id, fallback_to_lead=False,
+    )
     if reviewer:
         return reviewer
 
-    # Legacy fallback: name-based for agents without a role.
+    # Legacy-Fallback (Name-basiert fuer Agents ohne role) NUR wenn gar kein
+    # Reviewer-Role-Agent auf dem Board existiert. Existieren Reviewer, die
+    # der Filter eliminiert hat (offline / Autor / belegt), darf der Legacy-
+    # Pfad sie nicht wieder einwechseln → explizit None. (Vorfall 94fda9f9:
+    # Rex's role was freetext — this fallback must still reach those agents.)
+    from sqlalchemy import func as sa_func, select as sa_select
+    role_count_result = await session.exec(
+        sa_select(sa_func.count()).select_from(Agent).where(
+            Agent.board_id == board_id,
+            Agent.role == AgentRole.REVIEWER.value,
+        )
+    )
+    if int(role_count_result.one()[0]) > 0:
+        return None
+
+    # Legacy-Fallback: Name-basiert fuer Agents ohne role.
     # Phase 30: gateway_agent_id filter dropped — runtime is the new check.
     result = await session.exec(
-        select(Agent).where(
-            Agent.board_id == board_id,
-            Agent.role.is_(None),  # type: ignore[union-attr]
-        )
+        select(Agent).where(Agent.board_id == board_id)
     )
     agents = result.all()
     for a in agents:
+        if exclude_agent_id and a.id == exclude_agent_id:
+            continue
         name_lower = a.name.lower()
-        if "rex" in name_lower or "review" in name_lower:
+        if ("rex" in name_lower or "review" in name_lower) and _agent_is_live(a):
             return a
-    # Last fallback: Board Lead
-    for a in agents:
-        if a.is_board_lead:
-            return a
+
+    # No reviewer found by role or by name: return None, deliberately. Do
+    # NOT fall back to the Board Lead here — that would silently route the
+    # card into the operator's approval inbox instead of leaving a visible
+    # "no reviewer assigned" state that a human can act on (Vorfall 09dc3c11:
+    # Karte landete beim Lead statt Rex). handle_review_handoff
+    # (task_lifecycle.py) is the single caller-shared place that turns this
+    # None into that visible state (a TaskComment + best-effort lead DM via
+    # _notify_no_reviewer_found, W6) — put there instead of in each of its
+    # three callers so no caller can forget it.
     return None
 
 

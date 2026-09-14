@@ -60,8 +60,42 @@ _RUNTIME_ENV_PREFIXES = ("OMP_", "OPENAI_", "PI_CODING_AGENT_DIR", "MC_AGENT_TOK
 for _key in [k for k in os.environ if k.startswith(_RUNTIME_ENV_PREFIXES)]:
     os.environ.pop(_key, None)
 
+# ── Postgres test lane (W0.2, 10.09.2026) ────────────────────────────────
+# MC_TEST_DATABASE_URL=postgresql+asyncpg://... switches the suite from the
+# SQLite in-memory engine to a real Postgres whose schema was applied by
+# `alembic upgrade head`. What the lane adds (review #486, measured): drift
+# on the DATABASE side — a missing or outdated plpgsql trigger
+# `validate_task_transition` (migration 0159) and real row locks / two real
+# transactions — which the SQLite lane structurally cannot see and passes
+# green. Drift on the Python side is caught by both lanes. Tests that need
+# the Postgres guarantees carry `@pytest.mark.postgres` and are skipped on
+# the SQLite lane. The lane TRUNCATEs all tables → the DB name must contain
+# "test" (guard below).
+_PG_TEST_URL = os.environ.get("MC_TEST_DATABASE_URL", "").strip()
+POSTGRES_LANE = _PG_TEST_URL.startswith("postgresql")
+
+
+def _assert_test_database(url: str) -> None:
+    """Refuse to run the Postgres lane against anything that is not clearly a
+    TEST database. The lane TRUNCATEs every model table before each test
+    (review #486 W1: one passed test emptied a filled `boards` table) — a
+    developer who points MC_TEST_DATABASE_URL at their DATABASE_URL would
+    wipe `mission_control`. Rule: the database NAME (last path segment) must
+    contain "test". CI uses `.../test`."""
+    from urllib.parse import urlparse
+    name = (urlparse(url).path or "").rsplit("/", 1)[-1].lower()
+    if "test" not in name:
+        raise RuntimeError(
+            f"MC_TEST_DATABASE_URL points at database {name!r} — the Postgres lane "
+            "TRUNCATEs every table; the database name must contain 'test'."
+        )
+
+
+if POSTGRES_LANE:
+    _assert_test_database(_PG_TEST_URL)
+
 app.config.settings = app.config.Settings(
-    database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+    database_url=_PG_TEST_URL or "postgresql+asyncpg://test:test@localhost:5432/test",
     redis_url="redis://fake",
     jwt_secret_key="test-secret-key-for-testing",
     local_auth_token="",
@@ -102,12 +136,19 @@ import app.models.agent_task_comment_cursor  # noqa: F401
 
 # ── Test engine (SQLite in-memory, StaticPool = all connections share one DB) ──
 
-test_engine = create_async_engine(
-    "sqlite+aiosqlite://",
-    echo=False,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+if POSTGRES_LANE:
+    # NullPool: every AsyncSession gets its OWN connection, so two sessions in
+    # one test really are two transactions (row locks + identity-map traps
+    # only show up that way — a shared pool makes them look harmless).
+    from sqlalchemy.pool import NullPool
+    test_engine = create_async_engine(_PG_TEST_URL, echo=False, poolclass=NullPool)
+else:
+    test_engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        echo=False,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
 
 # SQLite: do NOT enable foreign keys.
 # Reason: SQLAlchemy ORM only orders INSERTs via relationship() definitions,
@@ -117,14 +158,100 @@ test_engine = create_async_engine(
 
 # ── Database fixtures ─────────────────────────────────────────────────────
 
+async def _empty_all_tables(conn) -> None:
+    from sqlalchemy import text as _text
+    for table in reversed(SQLModel.metadata.sorted_tables):
+        await conn.execute(_text(f'DELETE FROM "{table.name}"'))
+
+
+# Schema fingerprint of the SQLite engine right after create_all — one row
+# per table with its CREATE statement, so COLUMNS count, not just table
+# presence. Review #488 B1: a migration test seeds `ALTER TABLE … ADD COLUMN`
+# and aborts on purpose; `DELETE` names no columns, so the OperationalError
+# rescue never fired and the next test saw the drifted schema ("duplicate
+# column name"). The fingerprint is compared before EVERY test (one cheap
+# query) and any drift — dropped table, added/removed column, changed
+# constraint — triggers a full drop_all + create_all.
+_PRISTINE_FINGERPRINT: dict = {"value": None}
+
+
+async def _schema_fingerprint(conn) -> tuple:
+    from sqlalchemy import text as _text
+    rows = await conn.execute(_text(
+        "SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ))
+    return tuple((r[0], r[1]) for r in rows)
+
+
+async def _rebuild_schema(conn) -> None:
+    await conn.run_sync(SQLModel.metadata.drop_all)
+    await conn.run_sync(SQLModel.metadata.create_all)
+    _PRISTINE_FINGERPRINT["value"] = await _schema_fingerprint(conn)
+
+
+async def _ensure_pristine_schema(conn) -> bool:
+    """Rebuild the schema if it drifted from the pristine fingerprint.
+    Returns True when a rebuild happened (tests use this as the oracle)."""
+    if _PRISTINE_FINGERPRINT["value"] is None:
+        await _rebuild_schema(conn)
+        return True
+    if await _schema_fingerprint(conn) != _PRISTINE_FINGERPRINT["value"]:
+        await _rebuild_schema(conn)
+        return True
+    return False
+
+
 @pytest.fixture(autouse=True)
 async def setup_db():
-    """Before each test: create tables. Afterward: drop everything."""
+    """Give every test an empty database — without rebuilding the schema.
+
+    Until 10.09.2026 this fixture ran create_all + drop_all around EVERY test:
+    78 CREATE TABLEs plus 78 DROPs per test, each crossing aiosqlite's thread
+    boundary — measured at ~78 ms per test (PR #316), i.e. most of the
+    22-minute CI job spent building a schema that never changes. Now the
+    schema is created once per engine (lazily, on the first test of each
+    xdist worker) and every test starts by deleting the rows (~8 ms). The
+    isolation is unchanged: empty tables at start, cleanup happens BEFORE the
+    test so a crashed predecessor cannot poison its successor.
+
+    Isolation of the SCHEMA (review #488 B1): the migration tests replay real
+    Alembic steps against this engine — they drop tables and ADD COLUMNs and
+    some abort on purpose mid-way. Before every test a schema fingerprint
+    (sqlite_master: tables + indexes + their CREATE sql) is compared with the
+    pristine one; any drift triggers drop_all + create_all. Only paid when
+    something actually changed.
+
+    Postgres lane: the schema comes from Alembic (triggers included) and is
+    never dropped; isolation is a TRUNCATE of every model table."""
+    from sqlalchemy.exc import OperationalError
+    if POSTGRES_LANE:
+        from sqlalchemy import text as _text
+        names = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
+        async with test_engine.begin() as conn:
+            await conn.execute(_text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
+        yield
+        return
     async with test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await _ensure_pristine_schema(conn)
+        try:
+            await _empty_all_tables(conn)
+        except OperationalError:
+            # belt and braces: a table vanished between fingerprint and DELETE
+            await _rebuild_schema(conn)
+            await _empty_all_tables(conn)
     yield
-    async with test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
+
+
+def pytest_collection_modifyitems(config, items):
+    """`postgres`-marked tests only run on the Postgres lane; everything else
+    runs on both (the SQLite lane stays byte-identical when the env is unset)."""
+    if POSTGRES_LANE:
+        return
+    skip = pytest.mark.skip(reason="needs the Postgres test lane (MC_TEST_DATABASE_URL)")
+    for item in items:
+        if "postgres" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

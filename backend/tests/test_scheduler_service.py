@@ -278,13 +278,21 @@ class TestSchedulerLockLifecycle:
 
     Guards against the 2026-05-19 regression: a stuck Redis lock permanently
     blocked boot, the scheduler never started, and daily jobs didn't run.
+
+    W4 (11.09.2026): extended for owner-id compare-and-delete/-expire and
+    heartbeat-based stale-lock takeover — see scheduler.py module docstring
+    for the incident (Deploy #504: the old worker's stop() never ran before
+    SIGKILL, and an unconditional DEL could have ripped the lock out from
+    under a worker that had since taken over).
     """
 
     @pytest.mark.asyncio
     async def test_acquire_lock_succeeds_first_try(self):
-        from app.services.scheduler import SchedulerService
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import LOCK_TTL_SECONDS, SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "owner-a"
         mock_redis = AsyncMock()
         mock_redis.set = AsyncMock(return_value=True)
 
@@ -292,51 +300,129 @@ class TestSchedulerLockLifecycle:
             result = await svc._acquire_lock()
 
         assert result is True
-        # Lock acquire with nx=True + short TTL
-        call_kwargs = mock_redis.set.call_args.kwargs
-        assert call_kwargs["nx"] is True
-        from app.services.scheduler import LOCK_TTL_SECONDS
-        assert call_kwargs["ex"] == LOCK_TTL_SECONDS
-        # Single attempt — no sleep
-        assert mock_redis.set.call_count == 1
+        # Lock acquire: our owner id as the value, nx=True + short TTL —
+        # not the old constant "1", so stop()/refresh can later tell their
+        # own lock apart from someone else's.
+        lock_call = mock_redis.set.call_args_list[0]
+        assert lock_call.args == (RedisKeys.scheduler_lock(), "owner-a")
+        assert lock_call.kwargs["nx"] is True
+        assert lock_call.kwargs["ex"] == LOCK_TTL_SECONDS
+        # Heartbeat is written right away too, so a competing acquirer
+        # never sees "lock held, no heartbeat" for a lock we just won.
+        heartbeat_call = mock_redis.set.call_args_list[1]
+        assert heartbeat_call.args == (RedisKeys.scheduler_lock_heartbeat(), "owner-a")
+        assert mock_redis.set.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_acquire_lock_retries_then_succeeds(self):
-        """Lock initially held → 3 retries → succeeds."""
+    async def test_acquire_lock_retries_then_succeeds(self, fake_redis):
+        """Lock initially held by a live owner (heartbeat present) → 3 retries
+        (never stealing, since the heartbeat never lapses) → the other
+        worker's lock frees up on the 4th attempt → succeeds."""
+        from app.redis_client import RedisKeys
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
-        mock_redis = AsyncMock()
-        # 3x None (= held), then True
-        mock_redis.set = AsyncMock(side_effect=[None, None, None, True])
+        svc._owner_id = "owner-a"
 
-        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)), \
+        await fake_redis.set(RedisKeys.scheduler_lock(), "other-owner", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "other-owner", ex=15)
+
+        sleep_calls = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal sleep_calls
+            sleep_calls += 1
+            if sleep_calls == 3:
+                # The other worker releases the lock right before our 4th try.
+                await fake_redis.delete(RedisKeys.scheduler_lock())
+                await fake_redis.delete(RedisKeys.scheduler_lock_heartbeat())
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            result = await svc._acquire_lock()
+
+        assert result is True
+        assert sleep_calls == 3
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-a"
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_gives_up_after_max_attempts(self, fake_redis):
+        """Lock stays held by a live owner (heartbeat never lapses) → False
+        after MAX_ATTEMPTS tries — the foreign lock is left untouched."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import (
+            LOCK_ACQUIRE_MAX_ATTEMPTS,
+            SchedulerService,
+        )
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "owner-a"
+
+        await fake_redis.set(RedisKeys.scheduler_lock(), "other-owner", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "other-owner", ex=15)
+
+        sleep_calls = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal sleep_calls
+            sleep_calls += 1
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            result = await svc._acquire_lock()
+
+        assert result is False
+        assert sleep_calls == LOCK_ACQUIRE_MAX_ATTEMPTS
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "other-owner"
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_steals_when_heartbeat_missing(self, fake_redis):
+        """A lock whose owner stopped heartbeating (died without running
+        stop() — crash/OOM/SIGKILL) is stolen on the FIRST attempt: no
+        waiting through LOCK_ACQUIRE_RETRY_DELAY_SECONDS or LOCK_TTL_SECONDS.
+
+        This is the "Uebernahme bei fehlendem Heartbeat mit kurzem Timeout"
+        requirement — it bounds worker-restart downtime to roughly
+        LOCK_HEARTBEAT_TTL_SECONDS instead of the full 120s lock TTL.
+        """
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        # Old owner's lock entry is still there (TTL not yet up) but it
+        # never wrote a heartbeat again — no heartbeat key at all.
+        await fake_redis.set(RedisKeys.scheduler_lock(), "dead-owner", ex=120)
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "new-owner"
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
              patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()) as mock_sleep:
             result = await svc._acquire_lock()
 
         assert result is True
-        assert mock_redis.set.call_count == 4
-        # 3 sleeps between the 4 attempts
-        assert mock_sleep.call_count == 3
+        assert mock_sleep.call_count == 0  # stolen on the very first attempt
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "new-owner"
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "new-owner"
 
     @pytest.mark.asyncio
-    async def test_acquire_lock_gives_up_after_max_attempts(self):
-        """Lock stays held → False after MAX_ATTEMPTS tries."""
-        from app.services.scheduler import (
-            SchedulerService,
-            LOCK_ACQUIRE_MAX_ATTEMPTS,
-        )
+    async def test_acquire_lock_does_not_steal_when_heartbeat_present(self, fake_redis):
+        """A lock with a live heartbeat is left alone — normal retry/backoff applies."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        await fake_redis.set(RedisKeys.scheduler_lock(), "alive-owner", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "alive-owner", ex=15)
 
         svc = SchedulerService.__new__(SchedulerService)
-        mock_redis = AsyncMock()
-        mock_redis.set = AsyncMock(return_value=None)  # always held
+        svc._owner_id = "new-owner"
 
-        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)), \
-             patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()):
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()), \
+             patch("app.services.scheduler.LOCK_ACQUIRE_MAX_ATTEMPTS", 1):
             result = await svc._acquire_lock()
 
         assert result is False
-        assert mock_redis.set.call_count == LOCK_ACQUIRE_MAX_ATTEMPTS
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "alive-owner"
 
     @pytest.mark.asyncio
     async def test_start_skips_when_lock_unavailable(self):
@@ -347,6 +433,7 @@ class TestSchedulerLockLifecycle:
         svc._scheduler = MagicMock()
         svc._running = False
         svc._refresh_task = None
+        svc._heartbeat_task = None
 
         with patch.object(svc, "_acquire_lock", new=AsyncMock(return_value=False)):
             await svc.start()
@@ -354,22 +441,24 @@ class TestSchedulerLockLifecycle:
         assert svc._running is False
         svc._scheduler.start.assert_not_called()
         assert svc._refresh_task is None
+        assert svc._heartbeat_task is None
 
     @pytest.mark.asyncio
     async def test_start_launches_refresh_task_on_success(self):
-        """Lock acquired → APScheduler started + refresh task running."""
+        """Lock acquired → APScheduler started + refresh AND heartbeat tasks running."""
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
         svc._scheduler = MagicMock()
         svc._running = False
         svc._refresh_task = None
+        svc._heartbeat_task = None
 
-        fake_task = MagicMock()
+        fake_tasks = [MagicMock(), MagicMock()]
 
         def fake_create_tracked_task(coro):
             coro.close()  # cleanly close the unscheduled coroutine → no warning
-            return fake_task
+            return fake_tasks.pop(0)
 
         with patch.object(svc, "_acquire_lock", new=AsyncMock(return_value=True)), \
              patch.object(svc, "_load_jobs_from_db", new=AsyncMock()) as mock_load, \
@@ -382,83 +471,198 @@ class TestSchedulerLockLifecycle:
         assert svc._running is True
         svc._scheduler.start.assert_called_once()
         mock_load.assert_awaited_once()
-        mock_create_task.assert_called_once()
-        assert svc._refresh_task is fake_task
+        assert mock_create_task.call_count == 2
+        assert svc._refresh_task is not None
+        assert svc._heartbeat_task is not None
 
     @pytest.mark.asyncio
-    async def test_stop_cancels_refresh_task_and_deletes_lock(self):
+    async def test_stop_deletes_lock_immediately_not_via_ttl(self, fake_redis):
+        """DoD: after stop(), the lock is gone from Redis right away — not
+        because a 120s TTL happened to expire. cancel()/shutdown() run, and
+        the compare-and-delete executes unconditionally and synchronously
+        (no sleep anywhere in the path), which is what actually bounds this
+        to well under 10s in production, not just in this test."""
+        import time as _time
+
+        from app.redis_client import RedisKeys
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
         svc._scheduler = MagicMock()
         svc._running = True
+        svc._owner_id = "owner-a"
+        svc._refresh_task = MagicMock()
+        svc._heartbeat_task = MagicMock()
 
-        fake_task = MagicMock()
-        svc._refresh_task = fake_task
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-a", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "owner-a", ex=15)
 
-        mock_redis = AsyncMock()
-        mock_redis.delete = AsyncMock(return_value=1)
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)):
+            started = _time.monotonic()
+            await svc.stop()
+            elapsed = _time.monotonic() - started
 
-        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)):
+        assert elapsed < 10
+        assert await fake_redis.exists(RedisKeys.scheduler_lock()) == 0
+        assert await fake_redis.exists(RedisKeys.scheduler_lock_heartbeat()) == 0
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_refresh_task_and_deletes_lock(self, fake_redis):
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._scheduler = MagicMock()
+        svc._running = True
+        svc._owner_id = "owner-a"
+
+        fake_refresh_task = MagicMock()
+        fake_heartbeat_task = MagicMock()
+        svc._refresh_task = fake_refresh_task
+        svc._heartbeat_task = fake_heartbeat_task
+
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-a", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "owner-a", ex=15)
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)):
             await svc.stop()
 
         assert svc._running is False
-        fake_task.cancel.assert_called_once()
+        fake_refresh_task.cancel.assert_called_once()
+        fake_heartbeat_task.cancel.assert_called_once()
         assert svc._refresh_task is None
+        assert svc._heartbeat_task is None
         svc._scheduler.shutdown.assert_called_once()
-        mock_redis.delete.assert_awaited_once()
+        assert await fake_redis.exists(RedisKeys.scheduler_lock()) == 0
+        assert await fake_redis.exists(RedisKeys.scheduler_lock_heartbeat()) == 0
 
     @pytest.mark.asyncio
-    async def test_refresh_loop_calls_expire_until_stopped(self):
-        """Refresh loop calls EXPIRE repeatedly and stops cleanly at _running=False."""
-        import asyncio as _asyncio
-        from app.services.scheduler import SchedulerService, LOCK_TTL_SECONDS
+    async def test_stop_does_not_delete_foreign_lock(self, fake_redis):
+        """The core regression fix: an old worker's late stop() (it was
+        itself killed mid-shutdown before, or is simply slow) must NOT
+        delete a lock a NEWER worker has since acquired — 11.09.2026
+        incident. Before this fix stop() did an unconditional DEL."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        old_worker = SchedulerService.__new__(SchedulerService)
+        old_worker._scheduler = MagicMock()
+        old_worker._running = True
+        old_worker._owner_id = "old-owner"
+        old_worker._refresh_task = MagicMock()
+        old_worker._heartbeat_task = MagicMock()
+
+        # A new worker has since taken over — its owner id is in Redis now.
+        await fake_redis.set(RedisKeys.scheduler_lock(), "new-owner", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "new-owner", ex=15)
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)):
+            await old_worker.stop()
+
+        # The foreign lock (and its heartbeat) must survive untouched.
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "new-owner"
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "new-owner"
+        # Bookkeeping still happens locally — the old worker still believes
+        # it's stopped, it just didn't get to erase anyone else's state.
+        assert old_worker._running is False
+
+    @pytest.mark.asyncio
+    async def test_compare_and_expire_skips_when_not_owner(self, fake_redis):
+        """Refresh must not extend a lock's TTL once it's no longer ours —
+        the other half of the 'expire nur bei eigenem Lock' requirement."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import LOCK_TTL_SECONDS, SchedulerService
+
+        await fake_redis.set(RedisKeys.scheduler_lock(), "someone-else", ex=LOCK_TTL_SECONDS)
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "owner-a"
+
+        result = await svc._compare_and_expire(
+            fake_redis, RedisKeys.scheduler_lock(), LOCK_TTL_SECONDS
+        )
+
+        assert result is False
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "someone-else"
+
+    @pytest.mark.asyncio
+    async def test_refresh_loop_calls_expire_until_stopped(self, fake_redis):
+        """Refresh loop extends the lock's TTL repeatedly (compare-and-expire,
+        only while we're still the owner) and stops cleanly at _running=False."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import LOCK_TTL_SECONDS, SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
         svc._running = True
+        svc._owner_id = "owner-a"
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-a", ex=LOCK_TTL_SECONDS)
 
-        mock_redis = AsyncMock()
-        expire_calls: list = []
+        tick_count = 0
 
-        async def fake_expire(key, ttl):
-            expire_calls.append((key, ttl))
-            if len(expire_calls) >= 2:
+        async def fake_sleep(_seconds):
+            nonlocal tick_count
+            tick_count += 1
+            if tick_count >= 2:
                 svc._running = False  # end loop after 2 refreshes
 
-        mock_redis.expire = AsyncMock(side_effect=fake_expire)
-
-        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)), \
-             patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()):
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
             await svc._refresh_lock_loop()
 
-        assert len(expire_calls) == 2
-        for _key, ttl in expire_calls:
-            assert ttl == LOCK_TTL_SECONDS
+        assert tick_count == 2
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-a"
+        assert await fake_redis.ttl(RedisKeys.scheduler_lock()) > 0
 
     @pytest.mark.asyncio
     async def test_refresh_loop_survives_transient_redis_error(self):
-        """If Redis briefly fails, the loop logs it and retries on the next tick."""
+        """If the refresh briefly fails, the loop logs it and retries on the next tick."""
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
         svc._running = True
+        svc._owner_id = "owner-a"
 
-        mock_redis = AsyncMock()
         call_log: list = []
 
-        async def flaky_expire(key, ttl):
-            call_log.append(ttl)
+        async def flaky_compare_and_expire(_redis, _key, _ttl):
+            call_log.append(1)
             if len(call_log) == 1:
                 raise RuntimeError("redis hiccup")
             svc._running = False  # second call ends the loop
+            return True
 
-        mock_redis.expire = AsyncMock(side_effect=flaky_expire)
-
-        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)), \
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=AsyncMock())), \
+             patch.object(svc, "_compare_and_expire", new=flaky_compare_and_expire), \
              patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()):
             await svc._refresh_lock_loop()  # darf NICHT raisen
 
         assert len(call_log) == 2
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_loop_refreshes_until_stopped(self, fake_redis):
+        """Heartbeat loop keeps writing the heartbeat key on its own (tight)
+        cadence, independent of the main lock refresh loop."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._running = True
+        svc._owner_id = "owner-a"
+
+        tick_count = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal tick_count
+            tick_count += 1
+            if tick_count >= 3:
+                svc._running = False
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            await svc._heartbeat_loop()
+
+        assert tick_count == 3
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "owner-a"
 
 
 @pytest.mark.asyncio

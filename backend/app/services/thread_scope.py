@@ -85,8 +85,28 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
         )
     )
     group_pairs = [(th, None) for th in group_res.all()]
+    # Offene Fragen AN den Lead (`mc ask --to boss`, Vorfall 10.09.2026): ein
+    # Worker fragt auf dem Thread SEINER Karte; der Lead haelt nur den
+    # Eltern-Task und sah den Thread nie — die Frage verschwand lautlos, der
+    # Worker wartete eine Runde und entschied dann allein. Ein Board-Lead
+    # nimmt deshalb zusaetzlich an jedem Task-Thread seines Boards teil, auf
+    # dem eine noch offene Frage mit to="boss" liegt (Teilnahme = Zustellung
+    # per Poll/Inbox UND Antwortrecht via thread_agent_may_write_to).
+    # Second tuple entry is None ON PURPOSE (review #496 B1): with the task
+    # attached, a done/failed card would fast-forward the fresh cursor past
+    # the open question — exactly the incident's end state (worker asks, gets
+    # nothing, finishes alone, lead's first poll delivers nothing).
+    lead_pairs: list = []
+    if agent.is_board_lead and agent.board_id is not None:
+        starts = await lead_question_start_seqs(agent, session)
+        ask_thread_ids = set(starts.keys()) - set(tasks_by_thread.keys())
+        if ask_thread_ids:
+            lead_threads = await session.exec(
+                select(Thread).where(Thread.id.in_(ask_thread_ids))  # type: ignore[union-attr]
+            )
+            lead_pairs = [(th, None) for th in lead_threads.all()]
     if not tasks_by_thread:
-        return dm_pairs + group_pairs
+        return dm_pairs + group_pairs + lead_pairs
     threads_res = await session.exec(
         select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
     )
@@ -94,7 +114,45 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
         [(th, tasks_by_thread[th.id]) for th in threads_res.all()]
         + dm_pairs
         + group_pairs
+        + lead_pairs
     )
+
+
+# How many messages before an open question the lead gets as context.
+LEAD_QUESTION_CONTEXT_LINES = 3
+
+
+async def lead_question_start_seqs(agent: Agent, session: AsyncSession) -> dict:
+    """``{thread_id: seq}`` — for a board lead, every task thread of its board
+    that carries a still-open question addressed to "boss", mapped to the seq
+    of the OLDEST such question. Used twice: to add the thread to the lead's
+    scope (message_threads_for_agent) and to start the lead's first cursor
+    right BEFORE the question (agents.py) — not at 0, which would replay the
+    whole card history into the lead's context (review #496 W1: 7 messages
+    for one question, unbounded), and not at max, which would swallow it.
+    """
+    if not agent.is_board_lead or agent.board_id is None:
+        return {}
+    from app.services.messaging import open_questions
+    pending = await open_questions(session, to="boss")
+    if not pending:
+        return {}
+    by_thread: dict = {}
+    for q in pending:
+        cur = by_thread.get(q.thread_id)
+        if cur is None or q.seq < cur:
+            by_thread[q.thread_id] = q.seq
+    board_tasks = await session.exec(
+        select(Task).where(
+            Task.thread_id.in_(list(by_thread.keys())),  # type: ignore[union-attr]
+            Task.board_id == agent.board_id,
+        )
+    )
+    on_board = {t.thread_id for t in board_tasks.all()}
+    # Delivery starts a few lines BEFORE the question so the lead sees what
+    # the worker was doing (review #496 nit): 3 lines of context, never the
+    # whole card history (W1).
+    return {tid: max(1, seq - LEAD_QUESTION_CONTEXT_LINES) for tid, seq in by_thread.items() if tid in on_board}
 
 
 async def thread_agent_may_write_to(
@@ -109,4 +167,15 @@ async def thread_agent_may_write_to(
     for thread, _task in await message_threads_for_agent(agent, session):
         if thread.id == thread_id:
             return thread
+    # Board lead (review #496 B3): the WRITE right must not hang on an open
+    # question — the lead's first "moment, schaue ich" post closed the question
+    # implicitly and thereby removed the thread from its own scope; the real
+    # answer then got 404. A lead may write into any task thread of its board;
+    # delivery (poll/inbox) stays coupled to open questions.
+    if agent.is_board_lead and agent.board_id is not None:
+        thread = await session.get(Thread, thread_id)
+        if thread is not None and thread.task_id is not None and thread.closed_at is None:
+            task = await session.get(Task, thread.task_id)
+            if task is not None and task.board_id == agent.board_id:
+                return thread
     return None

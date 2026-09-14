@@ -51,6 +51,7 @@ export function ActionBar({
   hostName,
   servingName,
   runtimeId,
+  multiNode = false,
   variant = "normal",
   onOpenCockpit,
 }: {
@@ -58,6 +59,10 @@ export function ActionBar({
   hostName: string | null;
   servingName: string | null;
   runtimeId: string;
+  /** Verbund (die Runtime spannt mehr als eine Box, `member_hosts` nicht leer):
+   *  der Neustart nimmt beide Boxen mit — der Knopf sagt das im Tooltip, damit
+   *  niemand einen Neustart "nur am Head" erwartet (Vorfall 12.09.2026). */
+  multiNode?: boolean;
   /** "trouble" = Störung (Spec §2 Zone 4): primär wird "Restart now", zweite
    *  Reihe "Other model" + Stop. */
   variant?: "normal" | "trouble";
@@ -143,6 +148,7 @@ export function ActionBar({
             onClick={() => restartMutation.mutate()}
             disabled={restartMutation.isPending}
             data-testid="restart-now"
+            title={multiNode ? t("restartMultiNodeHint") : t("restartHint")}
             className="text-xs font-medium px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
             style={{ background: C.accent, color: C.onAccent }}
           >
