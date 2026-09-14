@@ -39,7 +39,10 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
         data-testid="chat-error-card"
         data-code={code}
         className="rounded-lg px-2.5 py-2"
-        style={{ border: `1px solid ${C.error}`, background: C.bgElevated }}
+        // Longhand statt Kurzform: jsdom/cssstyle verwirft `border: ...`, sobald
+        // der Wert ein CSS-Custom-Property (var(...)) enthaelt (ADR-084 macht
+        // C.error genau dazu) — die Kurzform kam testbar nicht mehr durch.
+        style={{ borderWidth: 1, borderStyle: "solid", borderColor: C.error, background: C.bgElevated }}
       >
         <div className="flex items-center gap-2">
           <AlertTriangle size={14} style={{ color: STATUS_TEXT.error }} aria-hidden="true" />
