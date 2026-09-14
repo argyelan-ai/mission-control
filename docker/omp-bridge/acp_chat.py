@@ -41,7 +41,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -108,9 +108,15 @@ class ChatSession:
         permission_policy: Optional[str] = None,
         prompt_timeout: float = 3600.0,
         task_id: str = "",
+        model: Optional[str] = None,
     ):
         self._client_factory = client_factory
         self._cwd = str(cwd)
+        # The fully-qualified `<provider>/<model>` every session is pinned
+        # to right after session/new AND session/load (see _pin_model).
+        # None = the agent binary picks (Hermes: `hermes acp` has its own
+        # model config, there is nothing to pin).
+        self._model = (model or "").strip() or None
         self._state_dir = Path(state_dir)
         self._sessions_dir = Path(sessions_dir)
         self._driver = driver
@@ -189,6 +195,7 @@ class ChatSession:
             self._sessions_dir, self._session_id
         )
         self._absorb_session_result(getattr(client, "last_session_result", None))
+        self._pin_model()
         self._write_persisted()
         if reset_detail:
             # The operator loses the old history here — that is an EVENT,
@@ -199,6 +206,22 @@ class ChatSession:
                 text="Previous chat session could not be loaded — "
                      "started a new one (history starts over).",
             )
+
+    def _pin_model(self) -> None:
+        """Pin the session to the MC model (twin of bridge.py's #483 fix).
+
+        `omp acp` inherits the bridge environment; OPENAI_API_KEY activates
+        omp's BUILT-IN openai provider, and without an explicit selector a
+        fresh session opens on openai/gpt-5.5 with the shim key — live
+        14.09.2026 the first chat turn after a container recreate answered
+        "401 Incorrect API key provided: sk-noauth". launch-omp.sh always
+        passes --model, bridge.py sets it per task session; the chat daemon
+        has to do the same on every session/new and session/load. A refused
+        pin is a chat-visible error, not a crash: the daemon still serves
+        state/cancel, and the operator sees WHY in the chat."""
+        if not self._model:
+            return
+        self.config("model", self._model)
 
     def close(self) -> None:
         with self._lock:
@@ -677,10 +700,34 @@ def request(socket_path: str, payload: dict, timeout: float = 30.0) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def model_selector(env: "Mapping[str, str]") -> Optional[str]:
+    """OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR (entrypoint-
+    rendered) > mc-openai/<OPENAI_MODEL> — the same precedence as
+    launch-omp.sh and bridge._acp_model_selector, so chat and task sessions
+    of one agent can never drift onto different models. None when nothing
+    is set (the caller decides whether that is a boot error)."""
+    for key in ("OMP_ACP_MODEL", "OMP_MODEL_SELECTOR"):
+        value = (env.get(key) or "").strip()
+        if value:
+            return value
+    openai_model = (env.get("OPENAI_MODEL") or "").strip()
+    return f"mc-openai/{openai_model}" if openai_model else None
+
+
 def build_session() -> ChatSession:
     """The production wiring: an `omp acp` child on the pinned ACP cwd, with
     the transcript written where the backend's chat reader tails it."""
     cwd = default_cwd()
+    model = model_selector(os.environ)
+    if model is None:
+        # No baked-in default: a missing model is a boot error, not a silent
+        # fallback to omp's built-in provider catalog (ADR-054, as in
+        # bridge._default_model_selector).
+        raise RuntimeError(
+            "OMP_MODEL_SELECTOR / OPENAI_MODEL not set — entrypoint must "
+            "render models.yml first; refusing to open a chat session on "
+            "omp's built-in default model"
+        )
     sessions_dir = acp_chat_events.session_dir(cwd=cwd)
     if sessions_dir is None:
         raise RuntimeError(
@@ -694,6 +741,7 @@ def build_session() -> ChatSession:
         state_dir=state_dir,
         sessions_dir=sessions_dir,
         driver="omp",
+        model=model,
     )
 
 
@@ -717,7 +765,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     server = ChatSocketServer(session, args.socket or default_socket_path())
     sys.stderr.write(
         f"[acp-chat] ready: session={session.state()['sessionId']} "
-        f"socket={server.path} transcript={session.transcript_path}\n"
+        f"model={session._model} socket={server.path} "
+        f"transcript={session.transcript_path}\n"
     )
     try:
         server.serve_forever()
