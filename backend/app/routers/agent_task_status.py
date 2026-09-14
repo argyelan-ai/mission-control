@@ -96,7 +96,11 @@ async def _handle_help_request_resume(session: AsyncSession, subtask):
     # stay held even though its blocking help-subtask just finished — the
     # Board Lead's hold is a deliberate, separate lifecycle intent that this
     # auto-resume carries no signal about. `mc release` is the only way out.
-    if parent.run_control is not None:
+    # Shared guard (task_lifecycle.task_still_reactivatable) — same check
+    # _handle_callback_resume and dispatch.redispatch_after_blocker_answer
+    # use, so the next reactivation path doesn't have to reinvent it.
+    from app.services.task_lifecycle import task_still_reactivatable
+    if not task_still_reactivatable(parent):
         return
 
     parent.status = "in_progress"
@@ -207,8 +211,17 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
             await _deliver_root_callback(session, subtask)
         return
 
+    from app.services.task_lifecycle import task_still_reactivatable
     for parent in parents:
-        if parent.status != "blocked":
+        # 8th claim path (Rex, PR #533 counter-check, 2026-09-13): this only
+        # checked status=="blocked" — never run_control. A parent stopped via
+        # `stop_task_run` while in_progress lands at exactly this fallback's
+        # precondition (status="blocked", blocked_by_task_id=None,
+        # assigned_agent_id retained), so a callback firing afterwards
+        # silently resumed a run the operator had explicitly stopped. Unlike
+        # the 7th path, `mc release` does NOT undo this — it only accepts
+        # run_control=="manual_hold" — so the operator has no way back out.
+        if not task_still_reactivatable(parent, expected_status="blocked"):
             continue
         parent.status = "in_progress"
         parent.blocked_by_task_id = None
