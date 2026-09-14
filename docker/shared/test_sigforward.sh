@@ -24,6 +24,16 @@
 # exit code 143 = 128+SIGTERM, 130 = 128+SIGINT.
 set -uo pipefail
 
+# Socket isolation (review blocker on the port PR): this script drives real
+# `tmux kill-server` calls. Run on the DEFAULT socket inside an agent container
+# it kills the tmux server that hosts the agent's own session (that is how the
+# original card lost its session twice, ~6 min after dispatch = at test time).
+# Every tmux call below — and every one inside sigforward.sh — must therefore
+# hit a private server: unset an inherited $TMUX and point TMUX_TMPDIR at a
+# throwaway dir, so `kill-server` can only ever kill the test server.
+unset TMUX
+export TMUX_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/sigforward-test.XXXXXX")"
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SIGFORWARD="${SIGFORWARD_BIN:-$HERE/sigforward.sh}"
 
@@ -35,11 +45,25 @@ fail() { echo "FAIL: $*"; FAIL=$((FAIL + 1)); }
 
 SESSION=""
 DRIVER=""
+DRIVERS=()
 PANEPID=""
 
 cleanup() {
-    [ -n "${DRIVER:-}" ] && kill "$DRIVER" 2>/dev/null
+    # The driver's own TERM trap runs `tmux kill-server` asynchronously. WAIT
+    # for it before touching the private dir: if the dir is gone by the time
+    # that call runs, tmux falls back to the DEFAULT server and kills THAT
+    # (measured 2026-09-14 on the host: race lost -> 14 foreign sessions gone).
+    # ALL drivers, not just the last one: the "bounded" test leaves a driver
+    # whose TERM handler is still waiting out MC_STOP_GRACE on an immortal pane;
+    # its trailing `tmux kill-server` would otherwise land after the rm below.
+    for _d in "${DRIVERS[@]:-}"; do [ -n "$_d" ] && kill -TERM "$_d" 2>/dev/null; done
+    wait 2>/dev/null
+    # kill-server FIRST, then remove the private dir. Reversed, tmux finds no
+    # socket under $TMUX_TMPDIR and silently falls back to the DEFAULT server
+    # (/tmp/tmux-<uid>/default) — which is exactly the host/agent server this
+    # isolation exists to protect (measured 2026-09-14: 14 host sessions gone).
     tmux kill-server 2>/dev/null
+    rm -rf "$TMUX_TMPDIR" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -86,6 +110,7 @@ start_driver() {
         while :; do mc_sleep_wait 30; done
     ) &
     DRIVER=$!
+    DRIVERS+=("$DRIVER")
     sleep 0.5 # let the traps install
 }
 
