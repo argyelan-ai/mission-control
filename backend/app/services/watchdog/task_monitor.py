@@ -49,6 +49,17 @@ _SILENT_CARD_OPEN_CHILD = frozenset({
 })
 
 
+# Silent-mailbox watchdog (report-only, same family as silent-card above,
+# one grain coarser). An agent with >= 1 card in `inbox` and none in
+# `in_progress` for this long looks busy to a lead reading queue *length*
+# but is not working at all. A `waiting`/`blocked` card for the same agent
+# is deliberate wait, not silence, and excludes the report (see
+# _check_silent_mailbox).
+SILENT_MAILBOX_THRESHOLD_MINUTES = 15
+_SILENT_MAILBOX_DELIBERATE_WAIT = frozenset({"waiting", "blocked"})
+_SILENT_MAILBOX_MARKER = "STILLE SCHLANGE"
+
+
 def _dt_max(*values: datetime | None) -> datetime | None:
     """Return the latest timezone-aware instant, ignoring Nones."""
     aware = [ensure_aware(v) for v in values if v is not None]
@@ -1564,6 +1575,284 @@ class TaskMonitorMixin:
             task.started_at,
             *child_times,
         )
+    async def _check_silent_mailbox(self, session: AsyncSession) -> None:
+        """Report agents whose mailbox has queued work but nobody pulling it.
+
+        A card sitting in `inbox` next to zero `in_progress` cards for the
+        same agent, for SILENT_MAILBOX_THRESHOLD_MINUTES, looks like normal
+        load to a lead reading queue *length* (several inbox cards) — but
+        the agent is not working on anything. Report-only, one notify per
+        silent episode, to the Board Lead. Never touches status.
+
+        Incident (2026-09-14): Hermes sat 100 minutes with four inbox cards
+        and zero in_progress (cause: a hung ACP session elsewhere — not this
+        watchdog's job to find, only to report the state). Nobody was told:
+        a silent agent by definition reports nothing, and a lead reading
+        queue length sees four waiting cards and reads that as load, not
+        as a dead mailbox. Found only by a random routine sweep.
+
+        Twin check (grepped, not assumed):
+        - ``_check_stuck_in_progress`` (task_runner.py) filters
+          ``Task.status == "in_progress"``. With in_progress == 0 for the
+          agent, its query has zero rows for this agent — structurally
+          cannot see or report this state.
+        - ``_check_dispatch_ack`` / ``_handle_dispatch_pending``
+          (task_runner.py) filters ``Task.status == "inbox"`` and CAN
+          escalate an individual never-dispatched card after
+          DISPATCH_PENDING_TIMEOUT_MINUTES (=15, coincidentally the same
+          number) — but per card, to the operator via an Approval, not per
+          mailbox to the Board Lead. It has no notion of "this agent's
+          in_progress count is 0": a normally-busy agent with one card
+          in_progress and three more queued behind it can trip that same
+          15-minute clock on the queued three, which is normal backlog, not
+          a dead mailbox. That path also goes silent the moment
+          ``dispatched_at`` gets set (ack-timeout branch takes over with a
+          different, agent-runtime-specific timeout) or the dispatch
+          readiness gate keeps re-touching the task without reporting
+          anything (``_check_undispatched_tasks``'s silent
+          ``continue`` on a not-ready runtime). Net: real overlap risk on
+          individual never-dispatched cards, but no coverage at all for the
+          aggregate "whole mailbox is dead" signal this rule reports —
+          that gap is exactly the incident.
+
+        Placed directly after ``_check_silent_cards`` in the tick: same
+        report-only, DB-based dedup design (#518), one grain coarser (per
+        agent mailbox instead of per card).
+
+        False-positive guards (each covered by its own test):
+        - No cards at all → the agent never enters the candidate set
+          (inbox count is 0 for them).
+        - Just finished a card, hasn't pulled the next one yet → the
+          mailbox's last-activity includes the agent's most recent
+          ``completed_at`` across ALL their cards, not just the current
+          inbox ones, so finishing something resets the silence clock even
+          if the still-queued card itself looks old.
+        - A `waiting` or `blocked` card for the same agent → deliberate
+          wait, excluded explicitly, regardless of how long the inbox card
+          has sat.
+
+        Episode boundary: the agent picking up a card (in_progress > 0) or
+        the queue going empty (inbox == 0) each remove the agent from the
+        candidate set on the very next tick — no separate end-of-episode
+        bookkeeping needed, the guard clause IS the boundary. A restart
+        that causes either resets the same way. Re-silencing after real
+        activity requires a fresh SILENT_MAILBOX_THRESHOLD_MINUTES, exactly
+        like the #518 per-card dedup.
+        """
+        from app.models.board import Board
+
+        result = await session.exec(
+            select(Task)
+            .join(Board, Board.id == Task.board_id)
+            .where(
+                Task.status == "inbox",
+                Task.assigned_agent_id.isnot(None),  # type: ignore[arg-type]
+                Board.is_archived == False,  # noqa: E712
+            )
+        )
+        inbox_candidates = list(result.all())
+        if not inbox_candidates:
+            return
+
+        now = utcnow()
+        threshold = timedelta(minutes=SILENT_MAILBOX_THRESHOLD_MINUTES)
+
+        # Group by (agent, board) — an agent's mailbox is scoped to the
+        # board its queued cards live on.
+        grouped: dict[tuple, list[Task]] = {}
+        for t in inbox_candidates:
+            key = (t.assigned_agent_id, t.board_id)
+            grouped.setdefault(key, []).append(t)
+
+        for (agent_id, board_id), inbox_tasks in grouped.items():
+            # A card an operator explicitly paused/stopped isn't "queued
+            # work the agent should have pulled" — don't count it.
+            active_inbox = [
+                t for t in inbox_tasks
+                if t.run_control not in ("stopped", "manual_hold")
+            ]
+            if not active_inbox:
+                continue
+
+            agent = await session.get(Agent, agent_id)
+            if not agent:
+                continue
+            if getattr(agent, "operational_mode", "active") == "paused":
+                continue
+
+            other_result = await session.exec(
+                select(Task.status).where(
+                    Task.assigned_agent_id == agent_id,
+                    Task.board_id == board_id,
+                    Task.status.in_(("in_progress",) + tuple(_SILENT_MAILBOX_DELIBERATE_WAIT)),  # type: ignore[union-attr]
+                )
+            )
+            other_statuses = set(other_result.all())
+            if "in_progress" in other_statuses:
+                continue  # agent took a card — not silent
+            if other_statuses & _SILENT_MAILBOX_DELIBERATE_WAIT:
+                continue  # waiting/blocked card — deliberate wait, not silence
+
+            last_activity = await self._silent_mailbox_last_activity_at(
+                session, agent, board_id, active_inbox,
+            )
+            silent_for = now - last_activity
+            if silent_for < threshold:
+                continue
+
+            # Dedup on TaskComment (DB, not a Redis TTL — #518's reasoning:
+            # a TTL is what stacked identical reminders overnight there).
+            # Scoped to agent+board and this rule's own marker text, NOT a
+            # single anchor task's id — the anchor (oldest active inbox
+            # card) can rotate between ticks as cards get added/removed.
+            last_notify_result = await session.exec(
+                select(TaskComment)
+                .join(Task, Task.id == TaskComment.task_id)  # type: ignore[arg-type]
+                .where(
+                    Task.assigned_agent_id == agent_id,
+                    Task.board_id == board_id,
+                    TaskComment.comment_type == "watchdog_notify",
+                    TaskComment.content.like(f"{_SILENT_MAILBOX_MARKER}%"),  # type: ignore[union-attr]
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )
+            last_notify = last_notify_result.first()
+            if (
+                last_notify is not None
+                and last_notify.created_at is not None
+                and ensure_aware(last_notify.created_at) >= last_activity
+            ):
+                continue  # same silent episode, already reported
+
+            lead_result = await session.exec(
+                select(Agent).where(
+                    Agent.board_id == board_id,
+                    Agent.is_board_lead == True,  # noqa: E712
+                )
+            )
+            lead = lead_result.first()
+            if lead is None:
+                logger.debug(
+                    "Silent mailbox for agent '%s' has no Board Lead — skip",
+                    agent.name,
+                )
+                continue
+
+            minutes_silent = int(silent_for.total_seconds() / 60)
+            anchor = min(
+                active_inbox,
+                key=lambda t: ensure_aware(t.created_at) if t.created_at else now,
+            )
+
+            msg = (
+                f"{_SILENT_MAILBOX_MARKER}: {agent.name} steht seit {minutes_silent}min "
+                f"mit {len(active_inbox)} Karte(n) in `inbox` und keiner in "
+                f"`in_progress`.\n\n"
+                f"**Board-Lead {lead.name}:** bitte pruefen. "
+                f"Der Waechter aendert den Status NICHT.\n\n"
+                f"Agent: {agent.name}\n"
+                f"Karten in inbox: {len(active_inbox)}\n"
+                f"Letzte echte Aktivitaet: vor {minutes_silent}min\n"
+                f"Wenn du nicht reagierst, greift die bestehende Operator-Eskalation."
+            )
+            session.add(TaskComment(
+                task_id=anchor.id,
+                author_type="system",
+                content=msg,
+                comment_type="watchdog_notify",
+            ))
+            await session.commit()
+
+            try:
+                await emit_event(
+                    session,
+                    "task.silent_mailbox",
+                    f"Stille Schlange: {agent.name} — {len(active_inbox)} inbox, "
+                    f"0 in_progress ({minutes_silent}min) -> Lead {lead.name}",
+                    board_id=board_id,
+                    task_id=anchor.id,
+                    agent_id=agent.id,
+                    severity="warning",
+                    detail={
+                        "agent_name": agent.name,
+                        "inbox_count": len(active_inbox),
+                        "minutes_silent": minutes_silent,
+                        "lead_id": str(lead.id),
+                        "source": "silent_mailbox_watchdog",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — notify already persisted
+                logger.debug("silent_mailbox event emit failed: %s", e)
+
+            logger.info(
+                "Silent mailbox reported to lead %s: agent=%s inbox=%d (%dmin)",
+                lead.name, agent.name, len(active_inbox), minutes_silent,
+            )
+
+    async def _silent_mailbox_last_activity_at(
+        self,
+        session: AsyncSession,
+        agent: Agent,
+        board_id: "uuid.UUID",
+        inbox_tasks: list[Task],
+    ) -> datetime:
+        """Latest real activity for this agent's mailbox (not heartbeats).
+
+        Deliberately mirrors ``_silent_card_last_activity_at``'s exclusion
+        of heartbeats: ``last_seen_at`` (wrapper alive) is NOT counted —
+        the wrapper-alive/mailbox-dead split is exactly the incident this
+        rule exists for.
+
+        Counts:
+        - the agent's most recent non-system comment on ANY of their cards
+          on this board (not just the current inbox ones — a comment left
+          on a just-finished card is still evidence the agent was just
+          active)
+        - the agent's most recent ``completed_at`` across ALL their cards
+          on this board (finishing a card resets the clock even though the
+          next one still sits, untouched, in inbox)
+        - ``agent.last_task_activity_at`` (a turn happened, anywhere)
+        - the oldest CURRENT inbox card's ``created_at`` as a floor — that
+          specific card proves the queue has been non-empty at least that
+          long, even with no other signal
+        """
+        comment_result = await session.exec(
+            select(TaskComment)
+            .join(Task, Task.id == TaskComment.task_id)  # type: ignore[arg-type]
+            .where(
+                Task.assigned_agent_id == agent.id,
+                Task.board_id == board_id,
+                TaskComment.author_type != "system",
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+        last_comment = comment_result.first()
+
+        last_completed = (await session.exec(
+            select(Task.completed_at)
+            .where(
+                Task.assigned_agent_id == agent.id,
+                Task.board_id == board_id,
+                Task.completed_at.isnot(None),  # type: ignore[union-attr]
+            )
+            .order_by(Task.completed_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+
+        oldest_inbox_created = min(
+            (ensure_aware(t.created_at) for t in inbox_tasks if t.created_at is not None),
+            default=None,
+        )
+
+        return _dt_max(
+            agent.last_task_activity_at,
+            last_comment.created_at if last_comment else None,
+            last_completed,
+            oldest_inbox_created,
+        ) or utcnow()
+
 
     async def _lead_reacted_after(
         self,
