@@ -255,6 +255,134 @@ async def test_unblock_with_busy_agent_requeues_without_interrupt(client: AsyncC
 
 
 @pytest.mark.asyncio
+async def test_unblock_notify_resets_ack_and_rotates_attempt_id_so_poll_redelivers(
+    client: AsyncClient, async_session
+):
+    """Incident 2026-09-14 (61 min Stillstand): a failed ACP run leaves the
+    task `blocked` with its old ack_at/dispatch_attempt_id still on the row.
+    The fresh/idle-agent ("notify") unblock used to only post a TaskComment —
+    poll's own liveness gate (`ack_at is not None`) then reported `working`
+    with no task for a full `poll_orphan_run_threshold_seconds` window, and
+    even once that window lapsed the redelivered card still carried the OLD
+    attempt_id, which the bridge's own dispatch-dedup (last_attempt_id)
+    treats as already handled.
+
+    Fix: the notify branch now resets ack_at to None and rotates
+    dispatch_attempt_id for a `blocked` origin, exactly like the already
+    accepted "parked" fix in messaging.resolve_waiting_answer. Proven
+    end-to-end here: right after unblock, the assigned agent's very next
+    `/me/poll` must deliver `state: new_task` with a FRESH attempt_id — the
+    actual repro of "Lauf scheitert -> Unblock -> neuer Lauf startet"."""
+    fresh_seen = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=10)
+    board, lead, target, lead_token, task = await _setup(async_session, target_last_seen=fresh_seen)
+    # `_setup` leaves dispatch_attempt_id unset (None) — same as every other
+    # test in this file. Seeding a non-None "stale" id here would trip the
+    # agent-scoped PATCH's own X-Dispatch-Attempt-Id staleness guard for the
+    # Lead's unrelated request (a separate, pre-existing contract, out of
+    # scope for this fix) — None -> non-None already proves the rotation the
+    # fix adds; the operator-path test below additionally proves an already
+    # non-None stale id gets replaced, not just first-assigned.
+    old_attempt_id = task.dispatch_attempt_id
+    assert old_attempt_id is None
+
+    with patch(
+        "app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock
+    ) as mock_dispatch:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "in_progress"},
+            headers={"Authorization": f"Bearer {lead_token}"},
+        )
+        assert resp.status_code == 200, resp.text
+    mock_dispatch.assert_not_called()  # notify path — no full redispatch
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        refreshed = await s.get(Task, task.id)
+        assert refreshed.ack_at is None, "ack_at must be cleared so poll re-delivers the prompt"
+        assert refreshed.dispatch_attempt_id != old_attempt_id, (
+            "dispatch_attempt_id must rotate — else the redelivered prompt is deduped as "
+            "'already handled' by the bridge's own last_attempt_id guard"
+        )
+
+    target_raw_token = None
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        # _setup only returns the lead's raw token; mint a fresh one for the
+        # assigned target agent (Sparky) so we can poll as the actual worker.
+        t = await s.get(Agent, target.id)
+        raw, token_hash = generate_agent_token()
+        t.agent_token_hash = token_hash
+        s.add(t)
+        await s.commit()
+        target_raw_token = raw
+
+    with patch(
+        "app.services.dispatch.build_agent_task_prompt",
+        new_callable=AsyncMock,
+        return_value="prompt text",
+    ):
+        poll_resp = await client.get(
+            "/api/v1/agent/me/poll",
+            headers={"Authorization": f"Bearer {target_raw_token}"},
+        )
+    assert poll_resp.status_code == 200, poll_resp.text
+    poll_body = poll_resp.json()
+    assert poll_body["state"] == "new_task", (
+        f"unblock must cause the very next poll to redeliver the task, got: {poll_body}"
+    )
+    assert poll_body["task"]["id"] == str(task.id)
+    delivered_attempt_id = poll_body["task"]["dispatch_attempt_id"]
+    assert delivered_attempt_id != old_attempt_id, (
+        "redelivered task must carry a NEW attempt_id — a bridge deduping on "
+        "the old one would silently swallow this redispatch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unblock_notify_on_waiting_task_does_not_touch_ack_or_attempt_id(
+    client: AsyncClient, async_session
+):
+    """Gegenprobe (guardrail): `waiting` (e.g. a live `mc ask --blocking`
+    session, "Session bleibt bestehen — same session, no re-dispatch") must
+    NOT get the blocked-only ack/attempt reset — that session may still be
+    genuinely alive, and resetting ack_at/dispatch_attempt_id here would risk
+    a second, competing dispatch racing the one already in flight."""
+    fresh_seen = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=10)
+    board, lead, target, lead_token, task = await _setup(async_session, target_last_seen=fresh_seen)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        pre = await s.get(Task, task.id)
+        pre.status = "waiting"
+        pre.dispatch_attempt_id = str(uuid.uuid4())
+        s.add(pre)
+        await s.commit()
+        old_ack_at = pre.ack_at
+        old_attempt_id = pre.dispatch_attempt_id
+
+    with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock) as mock_dispatch:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "in_progress"},
+            headers={
+                "Authorization": f"Bearer {lead_token}",
+                "X-Dispatch-Attempt-Id": old_attempt_id,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+    mock_dispatch.assert_not_called()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        refreshed = await s.get(Task, task.id)
+        assert refreshed.ack_at is not None
+        assert refreshed.ack_at.replace(tzinfo=None) == old_ack_at.replace(tzinfo=None), (
+            "waiting must keep its ack_at untouched (no reset)"
+        )
+        assert refreshed.dispatch_attempt_id == old_attempt_id, (
+            "waiting must NOT rotate dispatch_attempt_id — a genuinely live paused "
+            "session must not be redispatched a second time"
+        )
+
+
+@pytest.mark.asyncio
 async def test_redispatch_clears_stale_current_task_pointer(client: AsyncClient, async_session):
     """Review fix B-3: when the dead-agent redispatch path fires and the
     agent's current_task_id still points at the task being redispatched,
