@@ -58,7 +58,7 @@ async def try_claim_recovery_comment_cooldown(redis: aioredis.Redis, task_id: st
 # - WatchdogService: tick 30s, self-accepted round budget = lock TTL
 #   `ex=interval * 3` = 90s (watchdog/core.py:99)
 # - TaskRunnerService: tick 60s, lock TTL `ex=interval` = 60s
-#   (task_runner.py:390); 6 of 12 gate sites live on this loop
+#   (task_runner.py:390); 7 of 12 gate sites live on this loop
 # - Poll-orphan redispatch: HTTP poll path, no tick at all
 # A claim of 30s (one watchdog tick) would expire mid-round whenever a
 # watchdog round runs longer than 30s (which both lock budgets explicitly
@@ -93,6 +93,11 @@ async def try_claim_heal(redis: aioredis.Redis, task_id: str) -> bool:
     their own module/tests already patch — task_runner.py and
     task_monitor.py both hold a local ``redis`` from an earlier
     ``await get_redis()`` in the same function.
+
+    Failure semantics: if Redis is unreachable, the claim fails and the
+    healing action is skipped (fail-closed). A missed heal in one round is
+    recoverable — the card stays sick and the next round retries; a
+    duplicated heal (zombie train) is not.
     """
     claimed = await redis.set(
         RedisKeys.task_heal_claim(task_id),

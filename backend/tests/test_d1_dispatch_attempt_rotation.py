@@ -228,3 +228,78 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
             )
         )).all()
     assert len(approvals) == 1
+
+
+@pytest.mark.asyncio
+async def test_rotation_does_not_burn_heal_claim_when_already_rotated(fake_redis, make_board, make_agent, make_task):
+    """W-3(a): the mc:heal claim is taken AFTER the local rotated-key dedup.
+
+    When this dispatch window is already rotated, the rotation heals nothing —
+    it must not consume the one-heal-per-round claim, or it blocks a real
+    healer on this card for a full HEAL_DEDUP_TTL (90s).
+    """
+    from app.services.task_runner import task_runner
+    from app.models.task import Task
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    board = await make_board()
+    agent = await make_agent(
+        name="Sparky", board_id=board.id, agent_runtime="host",
+scopes=["tasks:read", "tasks:write", "heartbeat"],
+    )
+
+    three_min_ago = _now() - timedelta(minutes=3)
+    original_attempt = str(uuid.uuid4())
+    task = await make_task(
+        board_id=board.id, status="inbox",
+        assigned_agent_id=agent.id, dispatched_at=three_min_ago,
+        dispatch_attempt_id=original_attempt,
+    )
+
+    # Marker already set (previous rotation in this dispatch window)
+    await fake_redis.set(f"mc:task:{task.id}:attempt_rotated", "1")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        rotated = await task_runner._maybe_rotate_dispatch_attempt(
+            s, await s.get(Task, task.id), agent,
+            minutes_since_dispatch=3.0, redis=fake_redis, ack_timeout=5.0,
+        )
+    assert rotated is False
+
+    # The claim was NOT burned: the heal key is still free for a real healer.
+    from app.redis_client import RedisKeys
+    assert await fake_redis.get(RedisKeys.task_heal_claim(str(task.id))) is None
+
+
+@pytest.mark.asyncio
+async def test_rotation_takes_heal_claim_when_actually_rotating(fake_redis, make_board, make_agent, make_task):
+    """Counter-proof: when the rotation DOES heal, it claims mc:heal."""
+    from app.services.task_runner import task_runner
+    from app.models.task import Task
+    from app.redis_client import RedisKeys
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    board = await make_board()
+    agent = await make_agent(
+        name="Sparky", board_id=board.id, agent_runtime="host",
+scopes=["tasks:read", "tasks:write", "heartbeat"],
+    )
+
+    three_min_ago = _now() - timedelta(minutes=3)
+    original_attempt = str(uuid.uuid4())
+    task = await make_task(
+        board_id=board.id, status="inbox",
+        assigned_agent_id=agent.id, dispatched_at=three_min_ago,
+        dispatch_attempt_id=original_attempt,
+    )
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            rotated = await task_runner._maybe_rotate_dispatch_attempt(
+                s, await s.get(Task, task.id), agent,
+                minutes_since_dispatch=3.0, redis=fake_redis, ack_timeout=5.0,
+            )
+    assert rotated is True
+    assert await fake_redis.get(RedisKeys.task_heal_claim(str(task.id))) == "1"
