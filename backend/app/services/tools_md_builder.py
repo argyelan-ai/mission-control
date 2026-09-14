@@ -84,6 +84,38 @@ curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/agents" \\
 
 Response: list with id, name, role, is_board_lead per agent.""")
 
+            parts.append("""## Read activity events (board-wide, aggregatable)
+
+Answers questions a per-task view can't: "how often did event X happen in the
+last N days, and what followed?" Read-only, always scoped to your own board —
+you never see another board's events, even if you pass its board_id.
+
+```
+curl -s "$MC_API_URL/api/v1/agent/me/activity-events?event_type=task.blocked,task.stuck&since=2026-09-01T00:00:00Z" \\
+  -H "Authorization: Bearer $MC_AGENT_TOKEN"
+```
+
+Filters (all optional, combinable): `event_type` (comma-separated list),
+`since`/`until` (ISO timestamps — default window: last 7 days), `board_id`
+(must equal your own — anything else is a 403), `agent_id`, `task_id`.
+`limit` defaults to 50, capped at 200 per page; page further back with
+`before=<next_cursor>` from the previous response. The queryable SPAN
+(`until` minus `since`) is capped at 90 days — shifting `since`/`until`
+together still reaches arbitrarily old events, the cap only bounds how
+wide a single request's window may be, not how far back it may sit; the
+response's `window.clamped` tells you if the span was narrowed.
+
+For "how often", don't page through raw rows — use the aggregating form:
+
+```
+curl -s "$MC_API_URL/api/v1/agent/me/activity-events/summary?event_type=task.blocked" \\
+  -H "Authorization: Bearer $MC_AGENT_TOKEN"
+```
+
+Same filters/window as above, minus pagination. Returns
+`{"buckets": [{"day", "event_type", "count"}, ...], "truncated": bool}` —
+count per event_type per day, capped at 500 buckets.""")
+
         if _has(Scope.TASKS_CREATE):
             if is_board_lead:
                 # Board Lead gets project management + orchestrator section
@@ -289,7 +321,19 @@ text, `##` prefix) and at least {REFLECTION_MIN_CHARS} characters total — a on
 "done." is rejected. `mc finish --force` closes any still-open checklist items first
 (auto-marks them done) instead of blocking the pre-flight check; use `mc checklist skip
 <id> --reason "..."` beforehand instead if an item is genuinely out of your role rather
-than actually finished.""")
+than actually finished.
+
+Work finished but a human still has to decide something? Close the card anyway and take
+the question with you — never leave a finished card open with a "waiting for X" comment:
+
+```bash
+mc finish --needs-decision "Rollout tonight, or after Monday's release?" "<reflection>"
+```
+
+Same close, same reflection duty; the question additionally goes out as an open question
+in the card's thread (it reaches the operator and survives the card closing) and as a
+`needs_decision` comment on the card, so it stays findable there. An empty question is
+rejected. Whatever follows from the answer is a NEW card.""")
 
             # Register deliverable
             parts.append(f"""## Register deliverable (result artifact)

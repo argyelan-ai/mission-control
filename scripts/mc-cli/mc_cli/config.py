@@ -9,6 +9,19 @@ import os
 from dataclasses import dataclass
 
 
+def context_file_path() -> str:
+    """Path to the dispatch context file poll.sh writes on every dispatch.
+
+    Overridable via MC_CONTEXT_FILE so tests can redirect it to a tmp_path
+    instead of touching the real, host-shared /tmp/mc-context.env (2026-09-14
+    incident: a test run left placeholder IDs in the real file, breaking
+    every other agent on the host). Default is unchanged — resolved fresh on
+    every call, not cached, so the env var takes effect even if set after
+    module import.
+    """
+    return os.environ.get("MC_CONTEXT_FILE", "/tmp/mc-context.env")
+
+
 @dataclass(frozen=True)
 class Config:
     api_url: str
@@ -33,7 +46,7 @@ class Config:
         # by tmux set-environment but hasn't propagated yet. poll.sh writes
         # the file on every dispatch; see docker/mc-claude-agent/poll.sh.
         file_ctx: dict[str, str] = {}
-        ctx_path = "/tmp/mc-context.env"
+        ctx_path = context_file_path()
         if os.path.isfile(ctx_path):
             try:
                 with open(ctx_path, encoding="utf-8") as f:
