@@ -579,6 +579,11 @@ class AgentTaskCreate(BaseModel):
     parent_task_id: uuid.UUID | None = None
     assigned_agent_id: uuid.UUID | None = None  # Explicit agent assignment (for orchestrator)
     depends_on: list[uuid.UUID] = []  # Task IDs this task waits on
+    # Registry-Repo-Bindung (ADR-052) am agenten-seitigen Create — bisher
+    # konnte ein Board Lead das nur ueber die Operator-Route setzen. UUID
+    # oder Name-Slug ("owner/name" bzw. nur "name"); Aufloesung + Aktiv-Check
+    # server-seitig, siehe app.services.repo_registry.resolve_repo_ref.
+    repo_id: str | None = None
     is_auto_created: bool = True
     auto_reason: str | None = None
     # Pre-dispatch gating (Phase 1) — agent input on work items is overridden server-side
@@ -1284,7 +1289,22 @@ async def agent_create_task(
                 ),
             )
 
-    task_data = payload.model_dump(exclude={"assigned_agent_id", "depends_on", "credentials", "source_task_id", "callback_agent_id"})
+    # Registry-Repo-Bindung (ADR-052): gleiche Haerte wie die Operator-Route
+    # (routers/tasks.py create_task) — ein unbekanntes oder deaktiviertes
+    # Repo lehnt ab, statt das Feld still zu ignorieren.
+    resolved_repo_id: uuid.UUID | None = None
+    if payload.repo_id:
+        from app.services.repo_registry import resolve_repo_ref
+        chosen_repo = await resolve_repo_ref(session, payload.repo_id)
+        if not chosen_repo or not chosen_repo.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id verweist auf kein aktives Registry-Repo",
+            )
+        resolved_repo_id = chosen_repo.id
+
+    task_data = payload.model_dump(exclude={"assigned_agent_id", "depends_on", "credentials", "source_task_id", "callback_agent_id", "repo_id"})
+    task_data["repo_id"] = resolved_repo_id
     # phase_id and triggered_by_deliverable_id are automatically included via model_dump
 
     # Set source_task_id separately (not in exclude because it's an FK)

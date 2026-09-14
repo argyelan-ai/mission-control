@@ -1739,6 +1739,8 @@ def _cmd_delegate(args, client, cfg):
         body["origin_thread_id"] = args.origin_thread
     if getattr(args, "parent", None):
         body["parent_task_id"] = args.parent
+    if getattr(args, "repo", None):
+        body["repo_id"] = args.repo
 
     resp = client.request(
         "POST",
@@ -1793,6 +1795,18 @@ def _add_delegate_args(p):
             "eigenen aktiven anhaengen willst. Ohne --parent UND ohne aktive Karte "
             "entsteht eine Wurzelkarte ohne Parent/Callback (die Antwort weist "
             "darauf explizit hin)."
+        ),
+    )
+    p.add_argument(
+        "--repo",
+        metavar="SLUG_OR_UUID",
+        help=(
+            "Registry-Repo fuer die neue Karte binden (ADR-052) — UUID oder "
+            "Name-Slug ('owner/name' oder nur 'name'). Aufloesung + Aktiv-Check "
+            "passiert server-seitig; ein unbekanntes oder deaktiviertes Repo "
+            "lehnt der Server ab. Jede Karte, die unsere eigene Codebasis "
+            "anfasst, sollte das setzen — ohne Bindung landet ein Ad-hoc-Task "
+            "(kein Projekt) im gemeinsamen Ad-hoc-Repo."
         ),
     )
 

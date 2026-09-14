@@ -6,6 +6,7 @@ repo row, so every existing clone/PR/merge flow keeps working unchanged.
 """
 
 import logging
+import uuid as _uuid
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -73,6 +74,32 @@ async def upsert_repo(
         )
     session.add(repo)
     return repo
+
+
+async def resolve_repo_ref(session: AsyncSession, ref: str) -> Repo | None:
+    """Resolve a caller-supplied repo reference to its registry row.
+
+    Accepts either the repo's UUID or a name slug (`full_name` or just the
+    part after the last "/") — agent callers (ADR-052 agent-side binding)
+    rarely know the UUID by heart, only the CLI/board-lead's own account has
+    a UI dropdown that resolves it for them. Returns None on no match; does
+    NOT check `is_active` — callers decide what an inactive match means.
+    """
+    ref = ref.strip()
+    try:
+        repo_uuid = _uuid.UUID(ref)
+    except ValueError:
+        repo_uuid = None
+    if repo_uuid is not None:
+        return await session.get(Repo, repo_uuid)
+    exact = await get_repo_by_full_name(session, ref)
+    if exact:
+        return exact
+    result = await session.exec(select(Repo))
+    for candidate in result.all():
+        if candidate.full_name.rsplit("/", 1)[-1] == ref:
+            return candidate
+    return None
 
 
 async def resolve_repo_for_project(
