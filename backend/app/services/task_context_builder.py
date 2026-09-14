@@ -342,6 +342,45 @@ async def _ensure_task_workspace(
     return base
 
 
+def _is_within(path: str, root: str) -> bool:
+    """True if `path` is `root` itself or lives somewhere underneath it.
+
+    Pure path-string comparison (normalized, no realpath/symlink
+    resolution) — task.workspace_path and agent.workspace_path are both
+    backend-local paths we constructed ourselves, never user input.
+    """
+    norm_path = os.path.normpath(path)
+    norm_root = os.path.normpath(root)
+    return norm_path == norm_root or norm_path.startswith(norm_root + os.sep)
+
+
+def _needs_non_code_workspace(
+    task_workspace_path: str | None,
+    agent_workspace_path: str | None,
+) -> bool:
+    """Whether Phase-C should (re)create the non-code task workspace for
+    `agent_workspace_path`.
+
+    True for a regular first dispatch (task.workspace_path unset) — original
+    behavior, untouched. Also true when task.workspace_path is SET but points
+    outside the target agent's own workspace tree: a reassign/handoff that
+    left it pointing at the OLD agent's layout (incident 2026-09-13, PR #568
+    B1 — the old guard `if not task.workspace_path` only ever checked the
+    "unset" half, never the "stale/foreign" half).
+
+    False — a genuine no-op, nothing to (re)provision — when task.workspace_path
+    already lives under agent_workspace_path (same agent reassigned to itself,
+    or step 1's git/worktree setup already placed it there), or when the
+    target agent has no workspace_path at all to compare against (existing
+    behavior for that case is unchanged by this function).
+    """
+    if not task_workspace_path:
+        return True
+    if not agent_workspace_path:
+        return False
+    return not _is_within(task_workspace_path, agent_workspace_path)
+
+
 async def prepare_agent_workspace_for_task(
     task: "Task",
     agent: "Agent",
@@ -351,7 +390,10 @@ async def prepare_agent_workspace_for_task(
     sequence `dispatch.auto_dispatch_task` runs on every first dispatch
     (git/worktree setup via setup_git_workspace_for_dispatch, then the
     Phase-C non-code fallback via _ensure_task_workspace if that left
-    task.workspace_path unset).
+    task.workspace_path unset or pointing at a different agent's tree).
+    `auto_dispatch_task` itself calls this function (no longer a separate
+    copy — PR #568 B2) and then runs one further, agent-independent step
+    of its own (port allocation) that isn't part of this shared sequence.
 
     Reused by every path that (re)points `assigned_agent_id` at a new agent
     outside a normal dispatch cycle — the dedicated reassign endpoint, the
@@ -362,25 +404,31 @@ async def prepare_agent_workspace_for_task(
     touched task.workspace_path, so the receiving agent's ACP guard
     (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refused
     the turn — the directory the old assignment had prepared (or nothing,
-    if it had none) was never re-prepared for the new one.
+    if it had none) was never re-prepared for the new one. PR #568 fixed
+    this only for the "nothing" half (task.workspace_path unset); the
+    "old assignment's directory is still there and gets handed to the new
+    agent unchanged" half was a no-op until B1 (see _needs_non_code_workspace).
 
     Returns True if the caller should proceed (workspace ready, or a
-    genuine no-op — e.g. the target agent has no workspace_path, as for a
-    host agent like Hermes: setup_git_workspace_for_dispatch's own guards
-    already skip git work for that case). Returns False if the task was
-    blocked (setup_git_workspace_for_dispatch already posted the blocker
-    comment, set status=blocked and unassigned it — same hard-fail
-    contract a normal dispatch uses, no silent fallback).
+    genuine no-op — e.g. the target agent has no workspace_path to build a
+    Phase-C path from, or task.workspace_path already lives under the
+    target agent's own tree). Note this is NOT "host agents never have a
+    workspace_path" — Hermes (a host agent) has one (alembic 0095); the
+    no-op depends on the actual value, not on agent_runtime. Returns False
+    if the task was blocked (setup_git_workspace_for_dispatch already
+    posted the blocker comment, set status=blocked and unassigned it — same
+    hard-fail contract a normal dispatch uses, no silent fallback).
     """
     if not await setup_git_workspace_for_dispatch(task, agent, session):
         return False
-    if not task.workspace_path:
+    if _needs_non_code_workspace(task.workspace_path, agent.workspace_path):
         project = await session.get(Project, task.project_id) if task.project_id else None
         task_ws = await _ensure_task_workspace(task.id, project, agent.workspace_path)
         if task_ws:
             task.workspace_path = task_ws
             session.add(task)
             await session.commit()
+            logger.info("Task %s: Non-Code-Workspace erstellt: %s", task.id, task_ws)
     return True
 
 

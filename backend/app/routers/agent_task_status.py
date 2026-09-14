@@ -1793,14 +1793,19 @@ async def agent_reassign_task(
     await session.refresh(task)
 
     # Prepare the new assignee's workspace — mirrors every other assignment
-    # path (auto_dispatch_task's first dispatch, handle_review_handoff,
-    # release). Without this, task.workspace_path keeps pointing at (or
-    # stays None from) the OLD agent's layout, and the receiving agent's ACP
-    # guard (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py)
-    # refuses the turn — Incident 2026-09-13, Host-Agent -> Container-Agent
-    # reassign. prepare_agent_workspace_for_task no-ops for agents without
-    # workspace_path (host agents like Hermes), so a Container -> Host
-    # reassign stays a no-op here too.
+    # path that dispatches via auto_dispatch_task (first dispatch,
+    # handle_review_handoff, handle_test_handoff, handle_review_rejection).
+    # Without this, task.workspace_path keeps pointing at (or stays None
+    # from) the OLD agent's layout, and the receiving agent's ACP guard
+    # (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refuses
+    # the turn — Incident 2026-09-13, Host-Agent -> Container-Agent
+    # reassign. PR #568 review (B1): "no-ops for agents without
+    # workspace_path" is NOT the same as "no-ops for host agents" — Hermes
+    # (a host agent) HAS one (alembic 0095) and gets a real Phase-C
+    # workspace here too. The actual no-op condition is
+    # _needs_non_code_workspace(): task.workspace_path already unset-and-
+    # nothing-to-build-from, or already scoped under the TARGET agent's own
+    # tree (e.g. a same-agent no-op reassign) — not "is this a host agent".
     from app.services.task_context_builder import prepare_agent_workspace_for_task
     if not await prepare_agent_workspace_for_task(task, target, session):
         # Blocked: task_context_builder already posted a blocker comment,
