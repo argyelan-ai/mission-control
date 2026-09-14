@@ -63,6 +63,75 @@ async def record_task_event(
     # No separate commit — caller commits together with the status update
 
 
+def task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:
+    """Shared guard for every "reactivate this task" path (auto-resume,
+    auto-ACK, redispatch, ...): may this specific call still flip the
+    task's state, or has something else already changed the ground it
+    was standing on?
+
+    Four instances of the SAME missing check have surfaced in one day
+    (2026-09-13): `_handle_help_request_resume` and `_handle_callback_resume`
+    (agent_task_status.py) resuming a held parent because they only checked
+    their own link field (blocked_by_task_id / status), never run_control;
+    the blocker-answer redispatch (services/dispatch.py) firing after the
+    card had already moved on to review through a normal poll; and the
+    review_stuck watchdog escalating on a status it never re-read (separate
+    card, not fixed here). All four are the same shape: a decision is made
+    at time T1, applied at time T2, and T2 never re-reads the precondition
+    T1 was based on. This predicate is the one thing every T2 call site
+    should run immediately before flipping state, instead of re-deriving
+    its own copy of the check (and the fifth call site forgetting it).
+
+    `run_control is not None` (mc hold / an admin stop) always blocks —
+    reactivating a held or stopped task through a side channel is exactly
+    the deadlock PR #533 closed five other paths for. `expected_status`,
+    when given, additionally requires the task to still be in the specific
+    status the caller's decision was based on (e.g. "blocked" for a
+    resume that only makes sense while the task is still blocked) — a
+    caller with no single expected status (e.g. one that already checks a
+    set of statuses itself) can omit it.
+
+    KNOWN CALL SITES (keep this updated — there is no structural choke
+    point that forces every "set a task back to in_progress/inbox after a
+    decision made earlier" write through this predicate, so this ledger IS
+    the mechanism the tenth site is supposed to find; grep for
+    `task_still_reactivatable` in this repo before enumerating from
+    scratch). Status as of the 9th-path follow-up card (2026-09-13):
+
+      GUARDED — routed through this predicate:
+      1. dispatch.redispatch_after_blocker_answer, wraps auto_dispatch_task
+      2. agent_task_status._handle_help_request_resume (7th path, PR #533)
+      3. agent_task_status._handle_callback_resume (8th path, PR #556)
+      4. routers/approvals.py resolve_approval, blocker_decision/approved
+         (PATCH /approvals/{id}) — calls #1 above
+      5. routers/approvals.py quick_resolve_confirm, blocker_decision/approved
+         (POST .../quick-resolve/confirm, Telegram URL-button path) — calls
+         #1 above
+      9. services/telegram_bot.py TelegramBotService._resolve_approval,
+         blocker_decision/approved (follow-up to PR #556) — previously
+         checked only `task.status == "blocked"`, never run_control.
+         (Earlier PR #556 text excused this one as "resumes in place, no
+         redispatch, untouched" — wrong excuse: the gap this predicate
+         closes is reactivating a task whose ground shifted underneath it,
+         not specifically the redispatch mechanism; "no redispatch"
+         doesn't address it.)
+
+      OPEN — found, not yet guarded (flagged for follow-up cards, PR #556
+      review):
+      6. task_lifecycle.reopen_parent_for_new_subtask — checks
+         `parent.status != "review"`, never run_control
+      7. routers/approvals.py visual_review rejection — sets
+         `original_task.status = "in_progress"` with no check at all
+      8. routers/approvals.py clarification_question approval — checks
+         `task.status == "blocked"`, never run_control
+    """
+    if task.run_control is not None:
+        return False
+    if expected_status is not None and task.status != expected_status:
+        return False
+    return True
+
+
 def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
     """Auto-ACK: the first inbound signal from the assigned agent on a
     dispatched task claims it (§3.3 handshake).
@@ -590,6 +659,12 @@ async def execute_review_decision(
                         board_id=board_id, task_id=task.id, agent_id=actor_agent.id,
                         severity="warning",
                     )
+                    # Same class of gap as the reassign endpoints: reassigning
+                    # to the Board Lead here never went through
+                    # auto_dispatch_task, so the Board Lead's workspace was
+                    # never prepared for this task/branch.
+                    from app.services.task_context_builder import prepare_agent_workspace_for_task
+                    await prepare_agent_workspace_for_task(task, _board_lead, session)
                     return  # Return without approve — Board Lead must decide
                 else:
                     raise HTTPException(
@@ -863,6 +938,20 @@ async def execute_review_decision(
     task.updated_at = utcnow()
     session.add(task)
     await session.commit()
+
+    # W1 fix (PR #558 follow-up): this review path sets task.status directly
+    # and never goes through the generic PATCH handlers (routers/tasks.py,
+    # routers/agent_task_status.py) where cleanup_obsolete_approvals is
+    # normally wired to updates["status"] — so a pending review_stuck (or
+    # blocker_decision/clarification_question/spawn_timeout/
+    # dispatch_escalation) approval on this task would sit as a zombie in
+    # the operator's inbox until the next watchdog reconciliation tick
+    # (~30s). task.status here already reflects the final state for every
+    # branch above (done/user_test/blocked-on-E2E for approve, whatever
+    # handle_review_rejection landed on for request_changes, unchanged
+    # "review" for hold), so one call after the commit covers all of them.
+    from app.services.approval_cleanup import cleanup_obsolete_approvals
+    await cleanup_obsolete_approvals(session, task.id, task.status, board_id)
 
 
 async def system_finalize_task_done(

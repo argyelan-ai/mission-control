@@ -372,12 +372,38 @@ def test_task_id_reaches_run_acp_once_from_serve_loop():
     print("PASS test_task_id_reaches_run_acp_once_from_serve_loop")
 
 
+def test_no_continue_factory_di_knob_in_serve_loop():
+    """M7 (Rex architecture session 2026-09-12): serve_loop must NOT carry a
+    second, control-less continue factory knob. The ACP branch wraps the
+    CONTROLLED factory product (acp_run), the native branch mirrors run_once
+    via run_native_continue — a DI knob would bypass exactly that wiring the
+    moment someone uses it. Pins: no _continue_factory anywhere in serve_loop,
+    continue_once still wired.
+
+    Same machinery as the rest of this file (_parse/_find_fn, bridge.py as
+    TEXT — no bridge import; Rex review #561: an `import bridge` here crashed
+    the standalone entrypoint before two existing tests ran)."""
+    serve = _find_fn(_parse(), "serve_loop")
+    dump = ast.dump(serve)
+    assert "_continue_factory" not in dump, (
+        "serve_loop must not define or reference a _continue_factory DI knob "
+        "(M7): the real continue paths are the controlled ACP/Native "
+        "closures defined inside serve_loop, a second factory would bypass "
+        "cancel_state/heartbeat/interrupt wiring"
+    )
+    assert "continue_once" in dump, "serve_loop must still wire continue_once"
+    print("PASS test_no_continue_factory_di_knob_in_serve_loop")
+
+
 if __name__ == "__main__":
     test_every_run_acp_once_param_is_production_wired()
     test_factory_forwards_what_serve_loop_passes()
     test_serve_loop_calls_the_factory_result()
     test_no_bare_run_acp_once_call_in_serve_loop()
     test_factory_does_not_create_private_cancel_state_when_serve_wires_one()
+    test_no_continue_factory_di_knob_in_serve_loop()
     test_interrupt_state_flows_to_run_acp_once()
     test_task_id_reaches_run_acp_once_from_serve_loop()
     print("ALL WIRING TESTS PASS")
+
+

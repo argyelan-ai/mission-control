@@ -96,7 +96,11 @@ async def _handle_help_request_resume(session: AsyncSession, subtask):
     # stay held even though its blocking help-subtask just finished — the
     # Board Lead's hold is a deliberate, separate lifecycle intent that this
     # auto-resume carries no signal about. `mc release` is the only way out.
-    if parent.run_control is not None:
+    # Shared guard (task_lifecycle.task_still_reactivatable) — same check
+    # _handle_callback_resume and dispatch.redispatch_after_blocker_answer
+    # use, so the next reactivation path doesn't have to reinvent it.
+    from app.services.task_lifecycle import task_still_reactivatable
+    if not task_still_reactivatable(parent):
         return
 
     parent.status = "in_progress"
@@ -207,8 +211,17 @@ async def _handle_callback_resume(session: AsyncSession, subtask):
             await _deliver_root_callback(session, subtask)
         return
 
+    from app.services.task_lifecycle import task_still_reactivatable
     for parent in parents:
-        if parent.status != "blocked":
+        # 8th claim path (Rex, PR #533 counter-check, 2026-09-13): this only
+        # checked status=="blocked" — never run_control. A parent stopped via
+        # `stop_task_run` while in_progress lands at exactly this fallback's
+        # precondition (status="blocked", blocked_by_task_id=None,
+        # assigned_agent_id retained), so a callback firing afterwards
+        # silently resumed a run the operator had explicitly stopped. Unlike
+        # the 7th path, `mc release` does NOT undo this — it only accepts
+        # run_control=="manual_hold" — so the operator has no way back out.
+        if not task_still_reactivatable(parent, expected_status="blocked"):
             continue
         parent.status = "in_progress"
         parent.blocked_by_task_id = None
@@ -1778,6 +1791,29 @@ async def agent_reassign_task(
     )
     await session.commit()
     await session.refresh(task)
+
+    # Prepare the new assignee's workspace — mirrors every other assignment
+    # path that dispatches via auto_dispatch_task (first dispatch,
+    # handle_review_handoff, handle_test_handoff, handle_review_rejection).
+    # Without this, task.workspace_path keeps pointing at (or stays None
+    # from) the OLD agent's layout, and the receiving agent's ACP guard
+    # (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refuses
+    # the turn — Incident 2026-09-13, Host-Agent -> Container-Agent
+    # reassign. PR #568 review (B1): "no-ops for agents without
+    # workspace_path" is NOT the same as "no-ops for host agents" — Hermes
+    # (a host agent) HAS one (alembic 0095) and gets a real Phase-C
+    # workspace here too. The actual no-op condition is
+    # _needs_non_code_workspace(): task.workspace_path already unset-and-
+    # nothing-to-build-from, or already scoped under the TARGET agent's own
+    # tree (e.g. a same-agent no-op reassign) — not "is this a host agent".
+    from app.services.task_context_builder import prepare_agent_workspace_for_task
+    if not await prepare_agent_workspace_for_task(task, target, session):
+        # Blocked: task_context_builder already posted a blocker comment,
+        # set status=blocked and unassigned the task — reflect that back.
+        await session.refresh(task)
+        return task.model_dump()
+
+    await session.refresh(task)
     return task.model_dump()
 
 
@@ -1967,6 +2003,11 @@ async def agent_update_task(
     # dispatch model wants (mirrors the ownership philosophy above; the
     # Board-Lead endpoint routers/tasks.py:TaskUpdate has no extra guard
     # because user auth is already the operator).
+    # Set below when this PATCH actually moves assigned_agent_id to a new,
+    # non-None agent — used at the end of the function to prepare that
+    # agent's workspace (same gap/fix as the dedicated reassign endpoint
+    # above; see the comment there for the incident this closes).
+    _reassign_target_agent: Agent | None = None
     if "assigned_agent_id" in updates:
         if not agent.is_board_lead:
             raise HTTPException(
@@ -2000,6 +2041,8 @@ async def agent_update_task(
             )
             task.assigned_agent_id = _new_assignee
             updates.pop("assigned_agent_id", None)  # applied; skip generic setattr
+            if _new_assignee is not None:
+                _reassign_target_agent = _assignee
             await emit_event(
                 session, "task.reassigned",
                 f"Task '{task.title}' neu zugewiesen durch Lead {agent.name}",
@@ -2959,6 +3002,37 @@ async def agent_update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    if old_status == "blocked":
+                        # Incident 2026-09-14 (61 min Stillstand) — identischer
+                        # Zwilling zum Operator-Pfad (routers/tasks.py). `blocked`
+                        # heisst immer "Turn schon beendet" (der Agent hat
+                        # `mc blocked` selbst aufgerufen, das schliesst den Turn
+                        # synchron ab) — anders als `waiting` (mc ask --blocking:
+                        # "Session bleibt bestehen") gibt es hier nie einen
+                        # echten laufenden Zug, den ein Reset doppelt starten
+                        # koennte. Ohne diesen Reset bleiben `ack_at` (line
+                        # ~2398 stampft es nur, wenn NULL — nach einem
+                        # gescheiterten Lauf ist es das nicht) und die alte
+                        # `dispatch_attempt_id` stehen: agents.py's Orphan-Check
+                        # (_maybe_redispatch_orphaned_run) haelt den Lauf ueber
+                        # das ganze poll_orphan_run_threshold_seconds-Fenster
+                        # fuer "lebend", und selbst danach traegt die neu
+                        # zugestellte Karte noch die ALTE attempt_id — genau
+                        # das, was bridge.py's Dispatch-Dedup (last_attempt_id)
+                        # als "schon erledigt" verwirft. Mirrors den bereits
+                        # akzeptierten Fix im "parked"-Zweig der Antwort-Resume
+                        # (messaging.py resolve_waiting_answer).
+                        from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+                        task.ack_at = None
+                        session.add(task)
+                        await session.commit()
+                        await session.refresh(task)
+                        await set_dispatch_attempt_id(
+                            session, task, str(uuid.uuid4()),
+                            caller="unblock_notify",
+                            reason="unblock_notify_blocked_stale_attempt",
+                            only_if_null=False,
+                        )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
                         .where(TaskComment.task_id == task.id)
@@ -2994,6 +3068,14 @@ async def agent_update_task(
                             "recovery-comment cooldown already claimed",
                             task.id,
                         )
+
+    # Prepare the new assignee's workspace (twin of the dedicated reassign
+    # endpoint's fix above) — a plain PATCH assigned_agent_id never went
+    # through auto_dispatch_task either, so it left the same gap.
+    if _reassign_target_agent is not None:
+        from app.services.task_context_builder import prepare_agent_workspace_for_task
+        await prepare_agent_workspace_for_task(task, _reassign_target_agent, session)
+        await session.refresh(task)
 
     return task
 

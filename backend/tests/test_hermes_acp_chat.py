@@ -65,6 +65,9 @@ class FakeSession:
         self.started = 0
         self.waited: list[float] = []
         self._busy = busy
+        #: A running turn that ENDS while the caller waits (the live case);
+        #: False = it never ends within the wait (timeout).
+        self.idle_after_wait = True
 
     def start(self):
         self.started += 1
@@ -91,7 +94,9 @@ class FakeSession:
 
     def wait_idle(self, timeout=30.0):
         self.waited.append(timeout)
-        return True
+        if self.idle_after_wait:
+            self._busy = False
+        return not self._busy
 
 
 def _daemon(bridge, session):
@@ -320,10 +325,13 @@ def _run_one_poll(bridge, monkeypatch, tmp_path, payload):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-    def stop(_seconds):
+    def stop(*_a, **_kw):
         raise _StopLoop()
 
-    monkeypatch.setattr(bridge.time, "sleep", stop)
+    # dispatch_poll_loop's end-of-iteration wait is _shutdown_event.wait(...),
+    # not time.sleep() (13.09.2026 SIGTERM-shutdown fix) — that's the call
+    # that must raise to end the loop after one iteration.
+    monkeypatch.setattr(bridge._shutdown_event, "wait", stop)
     with pytest.raises(_StopLoop):
         bridge.dispatch_poll_loop()
 
@@ -355,15 +363,38 @@ def test_dispatch_under_acp_goes_through_the_chat_session(
     assert bridge._last_dispatched_task_id == "task-1"
 
 
-def test_dispatch_under_acp_retries_while_busy(bridge, monkeypatch, tmp_path):
-    """A rejected prompt is NOT a dispatch — the task must stay redeliverable."""
+def test_dispatch_under_acp_waits_for_a_running_turn_instead_of_knocking(
+    bridge, monkeypatch, tmp_path
+):
+    """Live 13.09.2026: while a chat turn ran, the loop offered the task every
+    poll (5 s) and every refusal wrote a red `busy` card into the operator's
+    chat — six of them for one reply. The daemon knows when the turn ends
+    (wait_idle); the loop must wait there, then deliver exactly once."""
     monkeypatch.setenv("HERMES_DRIVER", "acp")
-    session = FakeSession(busy=True)
+    session = FakeSession(busy=True)  # a chat turn is running; ends on wait
     monkeypatch.setattr(bridge, "chat_daemon", lambda: _daemon(bridge, session))
 
     _run_one_poll(bridge, monkeypatch, tmp_path, _TASK_PAYLOAD)
 
-    assert session.prompts, "the prompt was attempted"
+    assert session.waited, "the loop must wait for the running turn first"
+    assert len(session.prompts) == 1, "delivered once, after the turn — no refused knock"
+    assert bridge._last_dispatched_task_id == "task-1"
+
+
+def test_dispatch_under_acp_stays_redeliverable_when_the_turn_never_ends(
+    bridge, monkeypatch, tmp_path
+):
+    """A turn that outlives the wait is NOT a dispatch: no prompt is sent
+    (no `busy` card), the task stays on the board for the next poll."""
+    monkeypatch.setenv("HERMES_DRIVER", "acp")
+    session = FakeSession(busy=True)
+    session.idle_after_wait = False
+    monkeypatch.setattr(bridge, "chat_daemon", lambda: _daemon(bridge, session))
+
+    _run_one_poll(bridge, monkeypatch, tmp_path, _TASK_PAYLOAD)
+
+    assert session.waited
+    assert session.prompts == [], "a busy daemon is never knocked on"
     assert bridge._last_dispatched_task_id is None
 
 

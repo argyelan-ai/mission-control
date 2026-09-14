@@ -2081,8 +2081,14 @@ class _MsgDelivery:
         nudge_msg_file: Optional[str] = None,
         remind_seconds: float = NUDGE_REMIND_SECONDS,
         log: Optional[Callable[[str], None]] = None,
+        acp_prompt: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.ctrl = controller
+        # Under OMP_DRIVER=acp there is no native TUI in Window 0 (fix
+        # omp-acp-no-tui-window) — every inject_file() paste would fail
+        # forever. serve_loop hands in a sender that prompts the chat daemon
+        # (acp_chat.py --serve) instead; None keeps the native paste path.
+        self._acp_prompt = acp_prompt
         self.signal_file = signal_file
         self.queue_dir = queue_dir
         self.ack_dir = ack_dir
@@ -2137,6 +2143,21 @@ class _MsgDelivery:
                     and obj.get("stopReason") in ("stop", "error", "aborted")):
                 return True
         return False
+
+    def _acp_send(self, text: str, what: str) -> bool:
+        """ACP delivery of a wake-up text: one `prompt` to the chat daemon.
+        The daemon serialises its own turns (`busy` → False → retried on the
+        next poll), so unlike the native path we take NO recycler lock and
+        set NO awaiting offset — the native turn-end hook signal never fires
+        under ACP and would hold the gate shut forever. Never raises."""
+        try:
+            ok = bool(self._acp_prompt(text))
+        except Exception as e:  # noqa: BLE001 — a dead socket must not kill the poll loop
+            self.log(f"{what}: ACP-Zustellung fehlgeschlagen (swallowed): {type(e).__name__}: {e}")
+            return False
+        if not ok:
+            self.log(f"{what}: ACP-Zustellung fehlgeschlagen (busy/unreachable) — Retry beim naechsten Poll.")
+        return ok
 
     def _acquire_msg_lock(self) -> None:
         """Hold the recycler task lock for the duration of a message turn."""
@@ -2318,6 +2339,17 @@ class _MsgDelivery:
         text = build_comment_nudge_text(self._pending_comments)
         if self._withdrawn_notice:
             text = self._withdrawn_notice + (("\n" + text) if self._pending_comments else "")
+        if self._acp_prompt is not None:
+            if self._acp_send(text, "comments"):
+                delivered = dict(self._pending_comments)
+                self._pending_comments.clear()
+                self._withdrawn_notice = None
+                self.log(
+                    "comments: Wecker per ACP zugestellt fuer "
+                    + ", ".join(f"{tid[:8]}({n})" for tid, n in delivered.items())
+                    + " — Agent liest via 'mc task-get'."
+                )
+            return
         try:
             parent = os.path.dirname(self.nudge_msg_file)
             if parent:
@@ -2400,6 +2432,16 @@ class _MsgDelivery:
             identity = _identity_block(self.home_dir)
             if identity:
                 text = f"{identity}\n\n---\n\n{text}"
+        if self._acp_prompt is not None:
+            if self._acp_send(text, "nudge"):
+                self._card_pending = False
+                _nudge_state_write(self.nudge_state_file, seqs, now)
+                self._withdrawn_notice = None
+                self.log(
+                    f"nudge: per ACP zugestellt (bis seq {global_max}) — "
+                    f"Agent holt Inhalt via 'mc inbox'."
+                )
+            return
         try:
             parent = os.path.dirname(self.nudge_msg_file)
             if parent:
@@ -2438,6 +2480,32 @@ class _MsgDelivery:
 _LAST_ON_CONTROL: list = []  # test seam: the live serve_loop control callback
 
 
+def _make_acp_chat_prompt(
+    socket_path: Optional[str] = None, *, timeout: float = 10.0,
+) -> Callable[[str], bool]:
+    """Wake-up sender for OMP_DRIVER=acp: one ``{"op":"prompt"}`` request to
+    the chat daemon's Unix socket (docs/specs/chat-over-acp.md, control
+    protocol). Returns True on ``{"ok":true}``; False on ``busy``, a missing /
+    dead socket or garbage — never raises (the caller retries next poll)."""
+    import acp_chat  # local sibling module, same as acp_chat_ctl.py
+
+    path = socket_path or acp_chat.default_socket_path()
+
+    def _send(text: str) -> bool:
+        try:
+            resp = acp_chat.request(path, {"op": "prompt", "text": text}, timeout=timeout)
+        except (OSError, ValueError) as e:
+            sys.stderr.write(f"[serve] acp nudge: daemon unreachable ({path}): {e}\n")
+            return False
+        if not isinstance(resp, dict) or not resp.get("ok"):
+            err = resp.get("error") if isinstance(resp, dict) else "bad response"
+            sys.stderr.write(f"[serve] acp nudge: rejected ({err})\n")
+            return False
+        return True
+
+    return _send
+
+
 def serve_loop(
     *,
     poll_interval: float = 5.0,
@@ -2446,7 +2514,6 @@ def serve_loop(
     _recovery_fn: Optional[Callable[[], Optional[dict]]] = None,
     _lifecycle_factory: Optional[Callable[[dict], MCLifecycle]] = None,
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
-    _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
     _context_env_path: str = MC_CONTEXT_ENV_PATH,
     _msg_queue_dir: Optional[str] = None,
@@ -2456,6 +2523,7 @@ def serve_loop(
     _nudge_msg_file: Optional[str] = None,
     _child_alive_fn: Optional[Callable[[], bool]] = None,
     _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
+    _acp_prompt: Optional[Callable[[str], bool]] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -2563,10 +2631,21 @@ def serve_loop(
                 "respawn), leaving the lock and skipping startup recovery\n"
             )
 
+    # Comment / thread-message wake-ups: native agents paste into Window 0;
+    # ACP agents have no TUI there, so the wake-up goes to the chat daemon.
+    # The seam is honoured only under the ACP driver — a native fleet member
+    # must keep pasting even if a sender were handed in. (Compared via a local
+    # on purpose: test_acp_workspace_parity anchors the task branch below on
+    # the literal `_acp_env_driver() == "acp"` call form.)
+    acp_prompt: Optional[Callable[[str], bool]] = None
+    wakeup_driver = _acp_env_driver()
+    if wakeup_driver == "acp":
+        acp_prompt = _acp_prompt if _acp_prompt is not None else _make_acp_chat_prompt()
     delivery = _MsgDelivery(
         tui, signal_file=signal_file, queue_dir=msg_queue_dir,
         ack_dir=msg_ack_dir, task_lock_path=task_lock_path,
         nudge_state_file=nudge_state_file, nudge_msg_file=nudge_msg_file,
+        acp_prompt=acp_prompt,
     )
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)
@@ -2763,8 +2842,17 @@ def serve_loop(
                     board_id=task.get("board_id"), attempt_id=task.get("dispatch_attempt_id"),
                 )
 
-            continue_once: Optional[Callable[[str], RunOutcome]] = _continue_factory(task, cwd) \
-                if _continue_factory is not None else None
+            # M7 (Rex architecture session 2026-09-12): this used to be a
+            # second, control-less factory knob (_continue_factory DI param).
+            # The ACP branch below defines continue_once as a thin wrapper
+            # around the CONTROLLED factory product (acp_run from
+            # _make_acp_run_factory: cancel_state, heartbeat, interrupt_state,
+            # sinks), the native branch mirrors run_once via
+            # run_native_continue — the knob had NO caller repo-wide and would
+            # have bypassed that wiring when ever used. Removed; the only
+            # path that still needs the name is the _run_factory test path,
+            # which intentionally opts OUT of Fix B (continue -> blocker).
+            continue_once: Optional[Callable[[str], RunOutcome]] = None
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
             elif _acp_env_driver() == "acp":
@@ -2787,6 +2875,24 @@ def serve_loop(
                 acp_cancel = ACPCancelState()
                 _acp_control_sink.clear()
                 _acp_control_sink.append(acp_cancel)
+                # G5 context-holder reset at the SESSION change (task
+                # 1556064c): a new task must not inherit the previous
+                # session's context% (#554), but the value must survive every
+                # turn WITHIN the task — so the reset fires ONCE per pickup
+                # here, NOT at on_session_id: run_acp_once opens a NEW ACP
+                # session for every attempt (continue-nudges and retries
+                # included), so a reset there is the per-turn reset #560
+                # measured as broken (the value is restamped only 2 events
+                # before turn end vs a 30 s heartbeater). Stamping 0.0 — not
+                # None — makes the heartbeater REPORT the reset (a fresh
+                # session has used ~0 of the window); under the receiver's
+                # "no context_pct = no news" semantics (agents.py, unchanged)
+                # a None reset would keep the previous session's % on display
+                # until the new session's first usage_update. Absent still
+                # means "no news", so the Claude scrape path keeps its
+                # last value on a transient scrape miss instead of
+                # flickering empty.
+                _set_acp_context_pct(0.0)
 
                 # Model selector parity with the native launcher (incident
                 # 09.09.2026, first ACP live probe): `omp acp` inherits the

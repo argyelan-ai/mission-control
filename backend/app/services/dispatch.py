@@ -33,7 +33,7 @@ from app.config import settings
 from app.database import engine
 from app.models.agent import Agent
 from app.scopes import AgentRole
-from app.models.board import Board, Project
+from app.models.board import Board
 from app.utils import utcnow
 from app.models.task import Task, TaskDependency
 from app.services.activity import emit_event
@@ -384,6 +384,78 @@ async def _allocate_port(session: AsyncSession) -> int | None:
     return None  # All 100 ports taken
 
 
+async def redispatch_after_blocker_answer(
+    task_id: uuid.UUID,
+    board_id: uuid.UUID,
+    *,
+    expected_status: str = "inbox",
+) -> None:
+    """Guarded wrapper around auto_dispatch_task for the blocker-answer path.
+
+    Incident 2026-09-13 (card 4c9bb492 / G5): an operator resolved a
+    blocker_decision approval, which synchronously checked task.status ==
+    "blocked", set the task to "inbox" and scheduled this redispatch as a
+    decoupled background task (create_tracked_task). By the time that
+    background task actually ran, a different agent had already picked the
+    now-"inbox" card up via the normal poll path, worked it, and moved it to
+    "review" (PR #554) — auto_dispatch_task itself never re-checks the
+    task's current status/run_control before dispatching, so the stale
+    redispatch fired anyway and shoved the card back to "inbox", reassigned
+    to yet another agent, discarding the in-flight review.
+
+    The synchronous check at approval-resolution time only proves the task
+    was dispatchable AT THAT INSTANT — it says nothing about the state by
+    the time this deferred call actually executes. This wrapper re-reads
+    the task immediately before calling auto_dispatch_task and only
+    proceeds if it is still exactly where the blocker resolution left it
+    (status == expected_status, normally "inbox", and run_control is None
+    — a `mc hold` placed in the gap must also stop the redispatch, same as
+    any other hold). Any other status (review, done, waiting, in_progress,
+    blocked again, ...) or a run_control set in the meantime means someone
+    already acted on the card through a different, more current channel —
+    dispatching now would silently overwrite that. Skips visibly (log +
+    event) instead of silently doing nothing, so the discarded redispatch
+    is not invisible to whoever wonders why the operator's answer had no
+    effect.
+
+    The precondition check itself is task_lifecycle.task_still_reactivatable
+    — shared with _handle_help_request_resume and _handle_callback_resume
+    (agent_task_status.py), the two other reactivation paths carrying the
+    same "run_control never checked" gap found the same day.
+    """
+    from app.services.task_lifecycle import task_still_reactivatable
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        task = await session.get(Task, task_id)
+        if not task:
+            return
+        if not task_still_reactivatable(task, expected_status=expected_status):
+            logger.warning(
+                "Blocker-Redispatch uebersprungen: Task %s ist jetzt "
+                "status=%s run_control=%s (erwartet: status=%s, "
+                "run_control=None) — Karte wurde inzwischen anderweitig "
+                "bearbeitet.",
+                task_id, task.status, task.run_control, expected_status,
+            )
+            await emit_event(
+                session,
+                "task.blocker_redispatch_skipped",
+                f"Blocker-Redispatch uebersprungen: Task ist jetzt "
+                f"'{task.status}' (run_control={task.run_control})",
+                board_id=board_id,
+                task_id=task_id,
+                severity="warning",
+                detail={
+                    "current_status": task.status,
+                    "current_run_control": task.run_control,
+                    "expected_status": expected_status,
+                },
+            )
+            return
+
+    await auto_dispatch_task(task_id, board_id)
+
+
 async def auto_dispatch_task(
     task_id: uuid.UUID,
     board_id: uuid.UUID,
@@ -489,27 +561,28 @@ async def auto_dispatch_task(
                 session.add(task)
                 await session.commit()
 
-            # ── Git Workspace Setup + Worktree Isolation (Bundle 4) ──
-            # Extracted to task_context_builder.setup_git_workspace_for_dispatch
-            # (REF-01 Step 3). Returns False if the task was blocked
+            # ── Git Workspace Setup + Non-Code Phase-C (Bundle 4 / PR #568 B2) ──
+            # Both steps live in task_context_builder.prepare_agent_workspace_for_task
+            # now — this used to be an inline copy of the same two steps, which is
+            # exactly why the reassign/handoff callers of that shared function (the
+            # dedicated reassign endpoint, the assigned_agent_id PATCH branch, the
+            # self-review escalation) drifted from this one the moment either half
+            # got a fix without a matching edit here (PR #568 review, B2). Calling
+            # the shared function instead of duplicating it means every fix to it
+            # — including B1 (stale/foreign task.workspace_path after a reassign) —
+            # automatically applies to every first dispatch too, not just to the
+            # non-dispatch handoff paths. Returns False if the task was blocked
             # (TaskComment + terminal-unassign already committed) — caller MUST
             # return; on success/no-op returns True.
-            from app.services.task_context_builder import setup_git_workspace_for_dispatch
-            if not await setup_git_workspace_for_dispatch(task, best_agent, session):
+            from app.services.task_context_builder import prepare_agent_workspace_for_task
+            if not await prepare_agent_workspace_for_task(task, best_agent, session):
                 return
 
-            # Phase C (T-1): also create workspace for non-code tasks
-            if not task.workspace_path:
-                _proj = await session.get(Project, task.project_id) if task.project_id else None
-                _agent_ws = best_agent.workspace_path if best_agent else None
-                _task_ws = await _ensure_task_workspace(task.id, _proj, _agent_ws)
-                if _task_ws:
-                    task.workspace_path = _task_ws
-                    session.add(task)
-                    await session.commit()
-                    logger.info("Task %s: Non-Code-Workspace erstellt: %s", task.id, _task_ws)
-
             # ── Port Allocation ──────────────────────────────────────
+            # Agent-independent and idempotent (guarded by `if not task.workspace_port`)
+            # — deliberately NOT part of prepare_agent_workspace_for_task's shared
+            # sequence, so the reassign/handoff callers above don't reallocate a
+            # port a running task already has (PR #568 review N2).
             if not task.workspace_port:
                 task.workspace_port = await _allocate_port(session)
                 if task.workspace_port:
