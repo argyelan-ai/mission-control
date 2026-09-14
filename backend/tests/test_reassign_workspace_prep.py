@@ -231,6 +231,43 @@ async def test_patch_same_assignee_does_not_trigger_workspace_prep(
     mock_prep.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_patch_assigned_agent_id_blocks_on_workspace_setup_failure(
+    client: AsyncClient, async_session,
+):
+    """PR #584 review W2: this branch used to ignore `prepare_agent_
+    workspace_for_task`'s return value entirely and always returned the
+    task as-is — task_context_builder had already set status=blocked +
+    terminal-unassigned on failure, but the PATCH response still looked
+    like a clean reassignment. Mirrors
+    `test_reassign_endpoint_blocks_on_workspace_setup_failure` for the
+    generic PATCH assigned_agent_id path."""
+    (board, lead, lead_token, old_agent, _, new_agent, _, task) = (
+        await _setup_board_with_agents(async_session, task_status="inbox")
+    )
+
+    async def _fail(task_obj, agent_obj, session):
+        task_obj.status = "blocked"
+        session.add(task_obj)
+        await session.commit()
+        return False
+
+    with patch(
+        "app.services.task_context_builder.prepare_agent_workspace_for_task",
+        new=AsyncMock(side_effect=_fail),
+    ):
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"assigned_agent_id": str(new_agent.id)},
+            headers={"Authorization": f"Bearer {lead_token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "blocked", (
+        "response must reflect the real blocked state, not report the "
+        "reassignment as successful"
+    )
+
+
 # ── Wiring: self-review escalation to Board Lead ─────────────────────────
 
 

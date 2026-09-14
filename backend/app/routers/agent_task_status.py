@@ -3078,7 +3078,15 @@ async def agent_update_task(
     # through auto_dispatch_task either, so it left the same gap.
     if _reassign_target_agent is not None:
         from app.services.task_context_builder import prepare_agent_workspace_for_task
-        await prepare_agent_workspace_for_task(task, _reassign_target_agent, session)
+        if not await prepare_agent_workspace_for_task(task, _reassign_target_agent, session):
+            # Blocked: task_context_builder already posted a blocker comment,
+            # set status=blocked and unassigned the task — reflect that back
+            # instead of returning as if the reassignment succeeded (PR #584
+            # review W2: this branch used to ignore the return value, so a
+            # workspace-setup failure here left the response looking like a
+            # normal successful reassignment).
+            await session.refresh(task)
+            return task
         await session.refresh(task)
 
     return task

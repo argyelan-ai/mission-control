@@ -32,7 +32,19 @@ async def dispatch_to_claude_code(
     Returns True if the process was started successfully.
     """
     prompt = _build_claude_code_prompt(task, agent, message)
-    workspace = agent.workspace_path or str(Path(settings.home_host) / "Workspace")
+    # PR #584 review W4: this used to read `agent.workspace_path` only,
+    # discarding the git worktree / Phase-C dir that
+    # `task_context_builder.prepare_agent_workspace_for_task` already
+    # prepared and wrote into `task.workspace_path` earlier in the same
+    # dispatch (dispatch.py -> dispatch_delivery._deliver_dispatch ->
+    # here). `task.workspace_path` wins when the central prep set one;
+    # the two fallbacks only cover a claude-code agent dispatched outside
+    # that path (task.workspace_path still unset).
+    workspace = (
+        task.workspace_path
+        or agent.workspace_path
+        or str(Path(settings.home_host) / "Workspace")
+    )
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -127,7 +139,7 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}/comm
 ```
 
 ## Rules
-- Work in the workspace: {agent.workspace_path or str(Path(settings.home_host) / "Workspace")}
+- Work in the workspace: {task.workspace_path or agent.workspace_path or str(Path(settings.home_host) / "Workspace")}
 - Git: feature branches, never directly on main
 - Report ACK IMMEDIATELY, then work autonomously
 - If blocked: set status to "blocked" + a blocker comment

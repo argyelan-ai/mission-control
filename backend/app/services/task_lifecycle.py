@@ -715,6 +715,18 @@ async def execute_review_decision(
                     task.assigned_agent_id = _board_lead.id
                     session.add(task)
                     await session.commit()
+                    # Same class of gap as the reassign endpoints: reassigning
+                    # to the Board Lead here never went through
+                    # auto_dispatch_task, so the Board Lead's workspace was
+                    # never prepared for this task/branch. Run this BEFORE
+                    # logging/emitting the escalation (PR #584 review W2): a
+                    # failure here re-blocks + terminal-unassigns the task via
+                    # task_context_builder's own hard-fail contract, which
+                    # would contradict "eskaliert an Board Lead" if that were
+                    # logged/emitted first regardless of the outcome.
+                    from app.services.task_context_builder import prepare_agent_workspace_for_task
+                    if not await prepare_agent_workspace_for_task(task, _board_lead, session):
+                        return  # Blocked: blocker comment + terminal-unassign already committed
                     logger.info(
                         "Self-review blocked: %s → eskaliert an Board Lead %s",
                         actor_agent.name, _board_lead.name,
@@ -725,12 +737,6 @@ async def execute_review_decision(
                         board_id=board_id, task_id=task.id, agent_id=actor_agent.id,
                         severity="warning",
                     )
-                    # Same class of gap as the reassign endpoints: reassigning
-                    # to the Board Lead here never went through
-                    # auto_dispatch_task, so the Board Lead's workspace was
-                    # never prepared for this task/branch.
-                    from app.services.task_context_builder import prepare_agent_workspace_for_task
-                    await prepare_agent_workspace_for_task(task, _board_lead, session)
                     return  # Return without approve — Board Lead must decide
                 else:
                     raise HTTPException(

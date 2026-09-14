@@ -3157,6 +3157,25 @@ so it cannot kill the session you are working in:
 - Run test suites from a fresh checkout of current `origin/main`, never from
   the working tree that holds your own running configuration.
 
+### An empty or unfamiliar workspace is a blocker, not an invitation to self-clone (HARD RULE, 2026-09-14)
+
+If your working directory has no `.git`, or `git remote -v` shows a repo
+you don't recognize: **stop and `mc blocked`** — do NOT run `gh repo clone
+<name>` yourself. `gh repo clone <name>` (short name, no org prefix)
+resolves against the **logged-in `gh` account**, not necessarily the org
+the project actually lives in. Twice now that has landed an agent in a
+stale personal-account mirror with **no shared git history with `main`**
+(incident 2026-09-13, incident 2026-09-14/task af914128) — an hour of work
+in that checkout is unmergeable no matter where the remote points
+afterwards, because there is no common ancestor to diff or rebase against.
+
+The backend is supposed to prepare your workspace before you're dispatched
+— if it's missing or empty, that preparation failed, and cloning over it
+yourself only hides the failure instead of fixing it. If you must clone
+by hand as a one-off (e.g. debugging outside a task), **always use the full
+`https://github.com/<org>/<repo>.git` form** — never the bare repo name —
+and say in your blocker/progress comment which URL you used and why.
+
 ## Startup Check — `mc recover` first (ADR-024)
 
 **If you just started up fresh** (container restart, crash recovery,
