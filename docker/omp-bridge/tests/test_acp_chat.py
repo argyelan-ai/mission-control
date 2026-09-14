@@ -237,6 +237,159 @@ def test_second_prompt_while_busy_is_rejected_as_busy(tmp_path):
     print("PASS test_second_prompt_while_busy_is_rejected_as_busy")
 
 
+# ── 2b. close() mid-turn (hermes-bridge POST /restart, dcaf687a) ────────────
+#
+# Live 14.09.2026: `/restart` under HERMES_DRIVER=acp is
+# `ChatDaemon.restart()` = stop() (closes the OLD session) + start() (builds
+# a brand new one). ACPClient.close() force-wakes the pending `session/prompt`
+# RPC wait (`_wake_all()`) BEFORE the real child is confirmed dead — so
+# `client.prompt()` on the worker thread returns a fake "successful" empty
+# result instead of raising. Nothing in `_run_turn()`'s tail checked
+# `self._closed`, so the ORPHANED session (the daemon already swapped in a
+# different one) carried on as if its turn had genuinely finished: if
+# `_client_alive()` happened to see the process as dead by then, it called
+# `_restart_child()` — spawning yet ANOTHER real child process nobody will
+# ever close — and then `_write_state()` / `_write_persisted()` wrote to the
+# EXACT SAME workspace-scoped files (`sessions_dir`/`state_dir` are keyed by
+# cwd, not by session object) the new, active session was writing to,
+# clobbering its sessionId. That is "restart said 200 but the old turn is
+# somehow still shaping what happens" — not a literal immortal process, but
+# an immortal SESSION OBJECT whose worker thread keeps acting after close().
+
+
+class _DeadAfterCloseProc:
+    """Stand-in for `subprocess.Popen`: alive until close() marks it dead —
+    mirrors a real child that only actually exits once ACPClient.close()
+    finishes killing it."""
+
+    def __init__(self):
+        self.dead = False
+
+    def poll(self):
+        return None if not self.dead else 1
+
+
+class _RestartRaceClient:
+    """FakeClient variant that models ACPClient.close()'s real race: a
+    blocked prompt() is force-released by close() (like `_wake_all()`) with
+    an empty, non-error result — NOT a raised exception — and `_proc.poll()`
+    reports the child as dead once close() has run (the realistic case: the
+    close() call's terminate()/kill() sequence wins the race easily against
+    a worker thread that was blocked for a while)."""
+
+    def __init__(self, session_result):
+        self.last_session_result = dict(session_result)
+        self._session_result = session_result
+        self._proc = _DeadAfterCloseProc()
+        self._released = threading.Event()
+        self.closed = False
+        self.calls: list[tuple] = []
+        self._events: list = []
+
+    def on_event(self, cb):
+        self._events.append(cb)
+
+    def on_permission(self, cb):
+        pass
+
+    def _ensure_process(self):
+        self.calls.append(("_ensure_process",))
+
+    def initialize(self, timeout=30.0):
+        return {}
+
+    def new_session(self, cwd, mcp_servers=None, timeout=60.0):
+        self.calls.append(("new_session", cwd))
+        self.last_session_result = dict(self._session_result)
+        return self._session_result.get("sessionId", "sid-new")
+
+    def load_session(self, session_id, cwd, mcp_servers=None, timeout=60.0):
+        self.calls.append(("load_session", session_id, cwd))
+        self.last_session_result = dict(self._session_result)
+        return self.last_session_result
+
+    def set_config_option(self, session_id, key, value, timeout=30.0):
+        return {}
+
+    def prompt(self, session_id, text, timeout=600.0):
+        self.calls.append(("prompt", session_id, text))
+        # Blocks until close() force-releases it — exactly like a real
+        # `_request()` parked on `pend.event.wait()` when `_wake_all()` fires.
+        self._released.wait(timeout=10)
+        return acp_client.PromptResult(stopReason="", usage=None)
+
+    def cancel(self, session_id=None):
+        pass
+
+    def close(self, timeout=5.0):
+        self.closed = True
+        self._proc.dead = True
+        self._released.set()
+
+
+def test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state(tmp_path):
+    """A `/restart` that closes a session WHILE its turn is stuck must retire
+    that turn outright — no self-heal respawn, no state-file write from the
+    now-irrelevant session (dcaf687a-6d40-4bcf-b494-bdfed37208d6)."""
+    made_clients: list[_RestartRaceClient] = []
+
+    def factory():
+        c = _RestartRaceClient(SESSION_RESULT)
+        made_clients.append(c)
+        return c
+
+    state_dir = tmp_path / "state"
+    sessions_dir = tmp_path / "sessions"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    sess = acp_chat.ChatSession(
+        client_factory=factory,
+        cwd=str(tmp_path / "work"),
+        state_dir=state_dir,
+        sessions_dir=sessions_dir,
+        driver="hermes",
+    )
+    sess.start()
+    assert len(made_clients) == 1
+
+    assert sess.prompt("hang me")["ok"] is True
+    deadline = time.time() + 3
+    while not sess.state()["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+    assert sess.state()["busy"] is True
+
+    state_before = sess.state_file.read_text() if sess.state_file.exists() else None
+    persist_before = sess.persist_file.read_text() if sess.persist_file.exists() else None
+
+    # This is the `/restart` moment: the daemon closes THIS session (and, in
+    # production, immediately starts a brand new one — irrelevant here, the
+    # defect lives entirely in what the OLD session's worker thread does to
+    # itself and to shared files after being told it is retired).
+    sess.close()
+
+    assert sess.wait_idle(timeout=5), "close() must release a turn stuck on the dead client"
+    assert sess.state()["busy"] is False
+
+    # Give the worker thread a moment past close() — the bug window.
+    time.sleep(0.3)
+
+    assert len(made_clients) == 1, (
+        "close() must not let the turn's worker thread self-heal via "
+        "_restart_child() and spawn a second, permanently orphaned client/process"
+    )
+    state_after = sess.state_file.read_text() if sess.state_file.exists() else None
+    persist_after = sess.persist_file.read_text() if sess.persist_file.exists() else None
+    assert state_after == state_before, (
+        "a closed session must not keep writing acp-chat-state.json — that "
+        "path is shared with whatever session /restart put in its place"
+    )
+    assert persist_after == persist_before, (
+        "a closed session must not keep writing the persisted sessionId — "
+        "shared with the replacement session from /restart"
+    )
+    print("PASS test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state")
+
+
 # ── 3. cancel is not an error ───────────────────────────────────────────────
 
 
@@ -531,6 +684,100 @@ def test_socket_round_trip_through_the_ctl_shim(tmp_path):
     code, body = ctl("state")
     assert code == 3 and body == {"ok": False, "error": "unreachable"}
     print("PASS test_socket_round_trip_through_the_ctl_shim")
+
+
+# ── model pinning (live incident 14.09.2026, twin of #483) ──────────────────
+#
+# `omp acp` inherits the bridge environment; OPENAI_API_KEY activates omp's
+# BUILT-IN openai provider, and without an explicit selector every session
+# opens on openai/gpt-5.5 with the shim key — the first chat turn after the
+# container recreate answered "401 Incorrect API key provided: sk-noauth".
+# bridge.py (task path) pins the model since #483; the chat daemon did not.
+
+
+def test_new_session_pins_the_configured_model(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client, model="model-b")
+    sess.start()
+    assert ("set_config_option", "sid-1", "model", "model-b") in client.calls
+    model = [o for o in sess.state()["configOptions"] if o["id"] == "model"][0]
+    assert model["currentValue"] == "model-b"
+    sess.close()
+    print("PASS test_new_session_pins_the_configured_model")
+
+
+def test_session_load_re_pins_the_model(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client, model="model-b")
+    sess.start()
+    sess.close()
+
+    client2 = FakeClient(session_result=SESSION_RESULT)
+    sess2 = make_session(tmp_path, client2, model="model-b")
+    sess2.start()
+    assert ("load_session", "sid-1", str(tmp_path / "work")) in client2.calls
+    assert ("set_config_option", "sid-1", "model", "model-b") in client2.calls
+    sess2.close()
+    print("PASS test_session_load_re_pins_the_model")
+
+
+def test_no_model_means_no_pin_call(tmp_path):
+    """Hermes builds the same ChatSession without a selector (`hermes acp`
+    picks its own model) — the daemon must not send an empty pin there."""
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    assert not [c for c in client.calls if c[0] == "set_config_option"]
+    sess.close()
+    print("PASS test_no_model_means_no_pin_call")
+
+
+def test_pin_failure_is_a_chat_error_not_a_crash(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client, model="boom-model")
+    sess.start()  # must not raise — the daemon still serves state/cancel
+    lines = read_lines(sess.transcript_path)
+    errs = entries_of_type(lines, "custom_message", "chat_error")
+    assert errs and errs[0]["data"]["code"] == "rpc_error"
+    sess.close()
+    print("PASS test_pin_failure_is_a_chat_error_not_a_crash")
+
+
+def test_model_selector_precedence_matches_bridge(tmp_path):
+    """OMP_ACP_MODEL > OMP_MODEL_SELECTOR > mc-openai/<OPENAI_MODEL> — the
+    same order launch-omp.sh and bridge._acp_model_selector use."""
+    sel = acp_chat.model_selector
+    assert sel({"OMP_ACP_MODEL": "x/y", "OMP_MODEL_SELECTOR": "a/b", "OPENAI_MODEL": "m"}) == "x/y"
+    assert sel({"OMP_MODEL_SELECTOR": "a/b", "OPENAI_MODEL": "m"}) == "a/b"
+    assert sel({"OPENAI_MODEL": "m"}) == "mc-openai/m"
+    assert sel({"OMP_ACP_MODEL": "  ", "OMP_MODEL_SELECTOR": ""}) is None
+    print("PASS test_model_selector_precedence_matches_bridge")
+
+
+def test_build_session_refuses_to_start_without_a_model(tmp_path, monkeypatch=None):
+    """No selector = boot error, not a silent fallback to omp's built-in
+    catalog (ADR-054, same rule as bridge._default_model_selector)."""
+    saved = {k: os.environ.pop(k, None) for k in
+             ("OMP_ACP_MODEL", "OMP_MODEL_SELECTOR", "OPENAI_MODEL")}
+    os.environ["PI_CODING_AGENT_DIR"] = str(tmp_path / "agent")
+    os.environ["OMP_HOME"] = str(tmp_path / "omp")
+    try:
+        try:
+            acp_chat.build_session()
+        except RuntimeError as exc:
+            assert "OMP_MODEL_SELECTOR" in str(exc)
+        else:
+            raise AssertionError("build_session started without a model selector")
+        os.environ["OMP_MODEL_SELECTOR"] = "mc-openai/pinned"
+        sess = acp_chat.build_session()
+        assert sess._model == "mc-openai/pinned"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("PASS test_build_session_refuses_to_start_without_a_model")
 
 
 if __name__ == "__main__":  # standalone runner

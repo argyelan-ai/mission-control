@@ -72,6 +72,36 @@ _last_dispatched_task_id: str | None = None  # Idempotency cache (module-scoped)
 # idle/cancelled/stopped, not on same-task revision.
 _last_dispatched_attempt_id: str | None = None
 
+# Shutdown coordination (13.09.2026 incident): the dispatcher thread must stop
+# offering NEW dispatches before the process actually exits. Without this, a
+# SIGTERM arriving while dispatch_poll_loop() is asleep (or mid-poll) races
+# the interpreter's teardown of daemon threads — the old process dispatched a
+# task 9ms after logging "received SIGTERM" because nothing ever told the
+# thread to stop. `_shutdown_event` is checked at the top of every loop tick,
+# used to interrupt the poll-interval sleep instantly, and re-checked right
+# before the dispatch call (the actual race window: after a poll response
+# already offered a task, before it gets pasted in). `_dispatcher_thread` lets
+# the SIGTERM handler join it with a bound — see DISPATCHER_SHUTDOWN_TIMEOUT.
+# Scope, deliberately: this gate only covers the task-dispatch paste. The same
+# loop tick's `deliver_prompt(comments_prompt)` and `deliver_messages(...)`
+# calls stay ungated — comments are already ACK'd server-side at poll time
+# regardless of delivery, and messages are only ACK'd after a successful
+# pane-quiet verify, so neither can produce the redeliverable/duplicate state
+# a bare task-dispatch race would.
+_shutdown_event = threading.Event()
+_dispatcher_thread: "threading.Thread | None" = None
+# Upper bound for how long SIGTERM waits for the dispatcher thread to stop.
+# Sized to comfortably cover the poll loop's own network timeout (urlopen
+# timeout=10s below) plus margin — NOT to cover an already-in-flight
+# deliver_prompt(wait=True), which can legitimately block for up to
+# DISPATCH_TURN_TIMEOUT (3600s) waiting out a running turn. That turn was
+# dispatched BEFORE the shutdown signal, so it is not the race this guards
+# against; forcing SIGTERM to wait minutes for it would trade one incident
+# for a slow-shutdown one. If the thread is still alive after this timeout,
+# the handler logs a warning and exits anyway — the daemon thread dies with
+# the process, same as today's behavior for any thread still busy at exit.
+DISPATCHER_SHUTDOWN_TIMEOUT = float(os.environ.get("HERMES_DISPATCHER_SHUTDOWN_TIMEOUT", "15"))
+
 # ── Interaction Model 2.0 (comm_v2): Turn-Grenzen-Gate fuer Thread-Messages ──
 # Twin of docker/shared/poll.sh's build_acked_seq_param/queue_or_deliver/
 # msg_gate_open/flush_msg_queue/_record_ack/deliver_messages. Backend is
@@ -958,8 +988,10 @@ def dispatch_poll_loop() -> None:
       - state=new_task → claim the task + return {task: {id, board_id, title, prompt, ...}}
       - state=working|idle|cancelled|stopped → no task dispatch needed
       - `new_comments` (any state) → batch of User-/System-Comments since last poll
-    Note: /me/poll is a CLAIM endpoint (sets ack_at + status=in_progress on
-    inbox tasks). The MC-built `task.prompt` already contains the full
+    Note: /me/poll only sets dispatched_at on inbox tasks — status stays
+    "inbox" and ack_at stays NULL until the agent's own PATCH
+    status:in_progress lands (that PATCH is the actual ACK, see
+    agents.py:3230). The MC-built `task.prompt` already contains the full
     dispatch context — we wrap it with a Hermes-specific header for the pane.
 
     Bug 11 fix (2026-05-14): also delivers `new_comments` to the tmux session
@@ -991,6 +1023,9 @@ def dispatch_poll_loop() -> None:
         import urllib.request
 
         while True:
+            if _shutdown_event.is_set():
+                log.info("dispatch_poll_loop: shutdown requested — stopping poll loop")
+                break
             try:
                 # comm_v2: attach acked_seq=<urlencoded JSON {thread_id: seq}>
                 # so the backend knows what's already been delivered. Empty
@@ -1032,6 +1067,28 @@ def dispatch_poll_loop() -> None:
                         or task_attempt_id != (_last_dispatched_attempt_id or "")
                     )
                 )
+                # 13.09.2026 race: the poll above already claimed the task
+                # (state=new_task sets dispatched_at server-side; status
+                # stays "inbox", ack_at stays NULL) BEFORE we decide whether
+                # to paste it. If SIGTERM arrived while that request was in
+                # flight, do NOT paste it now — it stays undelivered, still
+                # "inbox". Skipping here is deliberate, not accidental.
+                # Redelivery does not come from the claim itself — it comes
+                # from two independent paths: (1) the next poll of the
+                # freshly restarted process finds an empty
+                # _last_dispatched_task_id cache and dispatches again; (2) if
+                # the process is slow to come back, the watchdog's
+                # _check_dispatch_ack (task_runner.py:567, filters on
+                # status == "inbox") fires the ACK-timeout ladder at
+                # ack_timeout/2 and rotates dispatch_attempt_id, forcing a
+                # fresh delivery.
+                if should_dispatch and _shutdown_event.is_set():
+                    log.info(
+                        "dispatch_poll_loop: shutdown in flight — skipping dispatch of "
+                        "task %s (stays undelivered/in_progress, redeliverable)",
+                        task["id"],
+                    )
+                    should_dispatch = False
                 # Also gates comm_v2 message delivery below: never interleave a
                 # task-dispatch paste with a message-queue flush in the same
                 # iteration ("Turn-Gate ... UND kein Dispatch gerade läuft").
@@ -1118,7 +1175,13 @@ def dispatch_poll_loop() -> None:
                     log.warning("dispatch_poll_loop: HTTP %s — %s", e.code, e.reason)
             except Exception as e:
                 log.warning("dispatch_poll_loop: poll error: %s", type(e).__name__)
-            time.sleep(DISPATCH_POLL_INTERVAL)
+            # Event.wait() is time.sleep() that returns EARLY (True) the
+            # instant _shutdown_event is set, instead of finishing out the
+            # full interval — so a SIGTERM during the idle gap between polls
+            # is noticed immediately, not up to DISPATCH_POLL_INTERVAL late.
+            if _shutdown_event.wait(DISPATCH_POLL_INTERVAL):
+                log.info("dispatch_poll_loop: shutdown requested — stopping poll loop")
+                break
     except Exception as e:
         log.exception("[fatal] dispatch_poll_loop crashed: %s", e)
         raise
@@ -1318,11 +1381,34 @@ def _boot_chat_daemon() -> None:
 
 
 def _handle_sigterm(signum, frame):  # noqa: ARG001
-    log.info("[shutdown] received SIGTERM, exiting cleanly")
+    """Stop the dispatcher thread FIRST, then exit — in that order.
+
+    13.09.2026 incident: the old handler exited immediately, and the
+    hermes-dispatcher daemon thread (asleep or mid-poll) got to run one more
+    tick before the interpreter actually tore it down, dispatching a task
+    9ms after this log line. Setting _shutdown_event and joining the thread
+    (bounded — see DISPATCHER_SHUTDOWN_TIMEOUT) closes that window: the
+    thread either stops on its own before the join times out, or — if it's
+    genuinely mid-turn on a dispatch that already happened before this
+    signal — we stop waiting after the bound and exit anyway, exactly as
+    before for any thread still busy at process exit.
+    """
+    log.info("[shutdown] received SIGTERM, stopping dispatcher before exit")
+    _shutdown_event.set()
+    if _dispatcher_thread is not None and _dispatcher_thread.is_alive():
+        _dispatcher_thread.join(timeout=DISPATCHER_SHUTDOWN_TIMEOUT)
+        if _dispatcher_thread.is_alive():
+            log.warning(
+                "[shutdown] dispatcher thread still running after %ss (likely "
+                "waiting out a turn dispatched before SIGTERM) — exiting anyway",
+                DISPATCHER_SHUTDOWN_TIMEOUT,
+            )
+    log.info("[shutdown] dispatcher stopped, exiting cleanly")
     sys.exit(0)
 
 
 def main() -> None:
+    global _dispatcher_thread
     try:
         # Phase 26 / Plan 26-05: SIGTERM handler — distinguishes graceful exit
         # from crash so launchd KeepAlive:true doesn't restart on user-initiated
@@ -1345,6 +1431,7 @@ def main() -> None:
                 log.warning("Hermes session not started: %s", e)
         # Phase 25-06: background dispatcher thread (daemon → dies with HTTP server)
         t = threading.Thread(target=dispatch_poll_loop, name="hermes-dispatcher", daemon=True)
+        _dispatcher_thread = t
         t.start()
         log.info("hermes-dispatcher thread started (poll every %ss)", DISPATCH_POLL_INTERVAL)
         # Steady liveness heartbeat so Hermes stays on the Sessions page while idle.
