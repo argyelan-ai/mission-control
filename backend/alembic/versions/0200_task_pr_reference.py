@@ -25,14 +25,14 @@ ist ein Rebase von `down_revision` auf `0197_task_hold_reason` der normale,
 erwartete Schritt (Alembic-Merge zweier Branches vom selben Head), keine
 Kollision zweier gleich benannter Revisionen.
 
-Revision ID: 0198_task_pr_reference
-Revises: 0196_runtime_supports_vision
+Revision ID: 0200_task_pr_reference
+Revises: 0199_context_tokens_nullable
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0198_task_pr_reference"
-down_revision = "0196_runtime_supports_vision"
+revision = "0200_task_pr_reference"
+down_revision = "0199_context_tokens_nullable"
 branch_labels = None
 depends_on = None
 
