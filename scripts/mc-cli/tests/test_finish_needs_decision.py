@@ -232,9 +232,45 @@ def test_failing_ask_aborts_before_reflection():
 
 
 def test_retry_after_reflection_does_not_duplicate_the_question():
-    """Ehrlicher Retry-Pfad: die Reflexion wird NACH der Frage gepostet, also
-    beweist eine frische eigene Reflexion, dass die Frage schon raus ist.
-    Der zweite `mc finish` darf nur noch den Status setzen."""
+    """Ehrlicher Retry-Pfad: eine vorherige `--needs-decision`-Runde ist bis
+    zur Reflexion gekommen (also haengt bereits ein passender
+    `needs_decision`-Kommentar AN der Karte — der belastbare Marker, nicht
+    nur die frische Reflexion) und dann am PATCH gescheitert. Der zweite
+    `mc finish --needs-decision` darf nur noch den Status setzen."""
+    recent = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=30)).isoformat()
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task()),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", [
+            {
+                "comment_type": "needs_decision",
+                "author_type": "agent",
+                "author_agent_id": AGENT_ID,
+                "created_at": recent,
+                "content": f"**Frage an den Operator**\n{QUESTION}\n",
+            },
+            {
+                "comment_type": "reflection",
+                "author_type": "agent",
+                "author_agent_id": AGENT_ID,
+                "created_at": recent,
+            },
+        ]),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_finish(_Args(needs_decision=QUESTION), client, cfg)
+    assert rc == 0
+    assert not _posts(client), "kein zweiter ask, kein zweiter Kommentar"
+
+
+def test_recent_reflection_from_other_source_still_sends_the_question():
+    """Gegenfall zum ehrlichen Retry (Review-Befund PR #528, erster Zweig):
+    die letzte Reflexion im Dedup-Fenster kam NICHT aus einem vorherigen
+    `--needs-decision`-Lauf (z.B. separates `mc comment reflection` oder ein
+    `mc finish`-Versuch ohne die Flagge) — es haengt noch KEIN
+    `needs_decision`-Kommentar mit dieser Frage an der Karte. Die Frage muss
+    trotzdem raus; nur die zweite Reflexion bleibt weiterhin aus."""
     recent = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=30)).isoformat()
     cfg = _mock_cfg()
     client = _mock_client([
@@ -246,19 +282,86 @@ def test_retry_after_reflection_does_not_duplicate_the_question():
             "author_agent_id": AGENT_ID,
             "created_at": recent,
         }]),
+        ("POST", "/tasks/current/ask", {"message_id": "m1", "thread_id": "t1"}),
+        ("POST", "/comments", {"id": "c-question"}),
         ("PATCH", "/tasks/", {"status": "done"}),
     ])
     rc = commands._cmd_finish(_Args(needs_decision=QUESTION), client, cfg)
     assert rc == 0
-    assert not _posts(client), "kein zweiter ask, kein zweiter Kommentar"
+
+    posts = _posts(client)
+    assert len(posts) == 2, "Frage geht raus, aber keine zweite Reflexion (Dedup haelt weiter)"
+    assert posts[0]["path"].endswith("/tasks/current/ask")
+    assert posts[1]["path"].endswith("/comments")
+    assert posts[1]["body"]["comment_type"] == "needs_decision"
+    assert client.calls[-1]["method"] == "PATCH"
 
 
-def test_already_closed_card_posts_nothing():
+# ── Zweiter Zweig: Karte steht bereits im Zielstatus (skip_patch) ──────────
+
+
+def test_already_closed_card_with_question_already_posted_is_noop():
+    """Genuiner Idempotenz-Fall: Karte ist schon fertig UND die Frage haengt
+    bereits an ihr (needs_decision-Kommentar existiert) — reiner No-Op."""
     cfg = _mock_cfg()
-    client = _mock_client([("GET", "/detail", _task(status="done"))])
+    client = _mock_client([
+        ("GET", "/detail", _task(status="done")),
+        ("GET", "/comments", [{
+            "comment_type": "needs_decision",
+            "content": f"**Frage an den Operator**\n{QUESTION}\n",
+        }]),
+    ])
     rc = commands._cmd_finish(_Args(needs_decision=QUESTION), client, cfg)
     assert rc == 0
     assert not any(c["method"] in ("POST", "PATCH") for c in client.calls)
+
+
+def test_already_closed_card_without_question_surfaces_delivery_failure():
+    """Zweiter Zweig aus dem Review-Befund: die Karte ist schon im
+    Zielstatus, aber die Frage wurde NIE gestellt (kein needs_decision-
+    Kommentar vorhanden). Das darf nicht lautlos bleiben — die Karte laesst
+    sich nicht nochmal schliessen, aber der Versand-Versuch UND ein
+    Fehlschlag (typischerweise 409, weil `agent.current_task_id` nach dem
+    Abschluss schon geraeumt ist) muessen sichtbar sein statt rc=0 vorzutaeuschen."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task(status="done")),
+        ("GET", "/comments", []),
+        ("POST", "/tasks/current/ask", RuntimeError("HTTP 409: Kein aktiver Task")),
+    ])
+    with pytest.raises(RuntimeError):
+        commands._cmd_finish(_Args(needs_decision=QUESTION), client, cfg)
+    assert not any(c["method"] == "PATCH" for c in client.calls)
+
+
+def test_already_closed_card_without_question_delivers_when_ask_still_resolves():
+    """Gleicher Ausgangspunkt wie oben, aber der ask-Call gelingt trotzdem
+    (z.B. `agent.current_task_id` zeigt noch auf die Karte) — die Frage geht
+    sauber raus, kein PATCH mehr noetig."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task(status="done")),
+        ("GET", "/comments", []),
+        ("POST", "/tasks/current/ask", {"message_id": "m1", "thread_id": "t1"}),
+        ("POST", "/comments", {"id": "c-question"}),
+    ])
+    rc = commands._cmd_finish(_Args(needs_decision=QUESTION), client, cfg)
+    assert rc == 0
+    posts = _posts(client)
+    assert len(posts) == 2
+    assert posts[1]["body"]["comment_type"] == "needs_decision"
+    assert not any(c["method"] == "PATCH" for c in client.calls)
+
+
+def test_already_closed_card_without_flag_still_pure_noop():
+    """Regressionsschutz: OHNE --needs-decision bleibt der skip_patch-Pfad
+    exakt wie vorher — ein einziges GET, sonst nichts. Der zusaetzliche
+    Comments-Read passiert NUR, wenn tatsaechlich eine Frage im Spiel ist."""
+    cfg = _mock_cfg()
+    client = _mock_client([("GET", "/detail", _task(status="done"))])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    assert len(client.calls) == 1
 
 
 def test_open_checklist_blocks_before_the_question_goes_out():

@@ -815,12 +815,7 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
 
     # 4. Idempotenz: kürzliche reflection vom gleichen Agent → skip POST.
     # Verhindert dupe-comments wenn der Agent in einem Retry-Loop landet.
-    try:
-        comments = client.request("GET", f"{base}/comments") or []
-        if isinstance(comments, dict):
-            comments = comments.get("comments") or []
-    except Exception:
-        comments = []
+    comments = _fetch_task_comments(client, base)
     own_recent_reflection = _has_recent_self_reflection(
         comments, agent_id=task.get("assigned_agent_id"),
         window_s=_REFLECTION_DEDUP_WINDOW_S,
@@ -831,7 +826,22 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
         "skip_patch": False,
         "recent_reflection": own_recent_reflection,
         "target_status": target_status,
+        "comments": comments,
     }
+
+
+def _fetch_task_comments(client: Client, base: str) -> list:
+    """GET {base}/comments, tolerant gegen Lesefehler — ein fehlgeschlagener
+    Read darf einen Preflight nicht mit einer Exception abbrechen (siehe
+    ursprüngliche Kommentar-Idempotenz oben: lieber ein gelegentliches
+    Duplicate als ein blockierter Abschluss)."""
+    try:
+        comments = client.request("GET", f"{base}/comments") or []
+        if isinstance(comments, dict):
+            comments = comments.get("comments") or []
+    except Exception:
+        comments = []
+    return comments
 
 
 def _has_recent_self_reflection(comments, agent_id, window_s) -> bool:
@@ -916,6 +926,35 @@ def _validate_decision_question(raw: str) -> str:
     return question
 
 
+def _needs_decision_already_posted(comments, question: str) -> bool:
+    """Der belastbare Marker fuer 'Frage ist schon draussen': ein
+    `needs_decision`-Kommentar AN DER KARTE, der genau diese Frage enthaelt.
+
+    Review-Befund PR #528: der Versand hing vorher an `should_post_comment`
+    (dem Reflexions-Dedup) bzw. am `skip_patch`-Kurzschluss (Karte schon im
+    Zielstatus) — beides sagt nichts darueber aus, ob DIESE Frage je gestellt
+    wurde. Eine fremde/separate Reflexion im 300s-Fenster liess die Frage
+    lautlos verpuffen; die Sache selbst (der Kommentar) ist der einzige
+    Marker, der nicht taeuscht.
+    """
+    for c in comments:
+        if c.get("comment_type") != "needs_decision":
+            continue
+        if question in (c.get("content") or ""):
+            return True
+    return False
+
+
+def _send_decision_question_if_new(client: Client, cfg, comments, question: str) -> bool:
+    """Sendet die Frage nur, wenn noch kein passender `needs_decision`-
+    Kommentar auf der Karte haengt. Gibt zurueck, ob in DIESEM Aufruf
+    tatsaechlich gesendet wurde (fuer die PATCH-Fail-Fehlermeldung unten)."""
+    if _needs_decision_already_posted(comments, question):
+        return False
+    _post_decision_question(client, cfg, question)
+    return True
+
+
 def _post_decision_question(client: Client, cfg, question: str) -> None:
     """Die Frage auf beide Wege legen: Operator-Thread und Karte.
 
@@ -997,18 +1036,34 @@ def _cmd_finish(args, client, cfg):
     # human_review_required) — ab hier IMMER den adjustierten Wert nutzen.
     target_status = pre.get("target_status", target_status)
 
+    # Die Frage haengt an einer EIGENEN Bedingung (existiert bereits ein
+    # `needs_decision`-Kommentar mit genau dieser Frage?), nicht am
+    # Reflexions-Dedup und nicht am `skip_patch`-Kurzschluss — Review-Befund
+    # PR #528: beide vorherigen Gates konnten die Frage lautlos schlucken,
+    # waehrend die Karte trotzdem schliesst. Laeuft VOR dem skip_patch-Return
+    # und VOR der Reflexion, damit die Reihenfolge (ask → Karten-Kommentar →
+    # Reflexion → PATCH) fuer den Fall erhalten bleibt, in dem beides noch
+    # aussteht.
+    if decision_question:
+        if pre.get("skip_patch"):
+            # Preflight ist hier frueh zurueckgekehrt (kein PATCH noetig) und
+            # hat darum noch keine Comments geholt — extra Read, NUR wenn
+            # tatsaechlich eine Frage im Spiel ist (sonst bleibt der reine
+            # No-Op-Pfad unveraendert: ein GET, sonst nichts).
+            _, _, base = _agent_base(cfg)
+            comments_for_question = _fetch_task_comments(client, base)
+        else:
+            comments_for_question = pre.get("comments", [])
+        _send_decision_question_if_new(client, cfg, comments_for_question, decision_question)
+
     if pre.get("skip_patch"):
-        # Task ist schon im Ziel-Status — beides skipped, klares Signal.
+        # Task ist schon im Ziel-Status — PATCH und Reflexion bleiben aus,
+        # klares Signal. Die Frage (falls noetig) ist oben bereits raus.
         print(f"# Task ist bereits in Status '{target_status}', nichts zu tun")
         return 0
 
     if pre["should_post_comment"]:
         board_id, task_id = cfg.require_task_context()
-        # Frage VOR der Reflexion: damit macht eine frische eigene Reflexion im
-        # Dedup-Fenster den Beweis, dass die Frage schon raus ist — ein Retry
-        # nach fehlgeschlagenem PATCH postet sie darum kein zweites Mal.
-        if decision_question:
-            _post_decision_question(client, cfg, decision_question)
         client.request(
             "POST",
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
@@ -1027,15 +1082,22 @@ def _cmd_finish(args, client, cfg):
     except Exception as exc:
         # Comment ist ggf. schon im Audit-Trail. Klare Message zum recovery
         # statt nacktem HTTP-Stacktrace, damit der Agent weiss was zu tun ist.
+        extra = (
+            "\n# Die Frage ist bereits gestellt (Thread + Karten-Kommentar) — "
+            "NICHT erneut `--needs-decision` aufrufen."
+            if decision_question else ""
+        )
         if pre["should_post_comment"]:
-            extra = (
-                "\n# Die Frage ist bereits gestellt (Thread + Karten-Kommentar) — "
-                "NICHT erneut `--needs-decision` aufrufen."
-                if decision_question else ""
-            )
             print(
                 f"# Reflexion wurde gepostet, aber Status-PATCH fehlgeschlagen: {exc}\n"
                 f"# Retry NUR den Status (kein neuer Comment) mit:\n"
+                f"#   mc {'review' if target_status == 'review' else 'done'}{extra}",
+                file=sys.stderr,
+            )
+        elif decision_question:
+            print(
+                f"# Status-PATCH fehlgeschlagen: {exc}\n"
+                f"# Retry NUR den Status mit:\n"
                 f"#   mc {'review' if target_status == 'review' else 'done'}{extra}",
                 file=sys.stderr,
             )
