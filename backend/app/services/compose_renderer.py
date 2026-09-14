@@ -616,6 +616,18 @@ def _strip_agents_env_file(body_lines: list[str]) -> list[str]:
     return body
 
 
+_ANCHOR_DECL_RE = re.compile(
+    r"^\s*x-(?P<aname>[a-z0-9_-]+):\s*&(?P<aanchor>[a-z0-9_-]+)\s*$"
+)
+
+# Grace period for every agent anchor (#573 — measured, see the comment next
+# to stop_grace_period in docker-compose.agents.example.yml). All four
+# harnesses get the same value; a per-anchor split isn't needed today, but
+# keeping this a single named constant (rather than a literal in the loop
+# below) is what a future split would touch.
+_ANCHOR_STOP_GRACE_PERIOD = "20s"
+
+
 def _anchor_images(content: str) -> dict[str, str]:
     """Map ``anchor name → the image it declares`` from the file itself.
 
@@ -629,9 +641,7 @@ def _anchor_images(content: str) -> dict[str, str]:
     n = len(lines)
     images: dict[str, str] = {}
     for j, line in enumerate(lines):
-        decl = re.match(
-            r"^\s*x-(?P<aname>[a-z0-9_-]+):\s*&(?P<aanchor>[a-z0-9_-]+)\s*$", line
-        )
+        decl = _ANCHOR_DECL_RE.match(line)
         if not decl:
             continue
         # Look ahead for `  image: ...` within the anchor block.
@@ -641,6 +651,62 @@ def _anchor_images(content: str) -> dict[str, str]:
                 images[decl.group("aanchor")] = m.group(1).strip('"\'')
                 break
     return images
+
+
+def _ensure_anchor_stop_grace_period(content: str) -> str:
+    """Backfill ``stop_grace_period: 20s`` into every agent anchor block
+    (``x-*-agent-base: &...``) that doesn't already declare it.
+
+    #573 added the key to docker-compose.agents.example.yml, but
+    ``_rewrite_compose`` deliberately leaves anchor BLOCKS untouched (see its
+    docstring) — it only ever edits per-service bodies. None of the four call
+    sites that write a private ``docker-compose.agents.yml`` (runtime-switch,
+    agent create/delete, provisioning) touch an anchor body either. A private
+    file written before #573 — which is every operator's file, since it's
+    gitignored and created once by setup.sh — therefore keeps a stale,
+    key-less anchor forever, no matter how many times it gets re-rendered.
+    Every agent inheriting that anchor via ``<<: *anchor`` gets Docker
+    Desktop's 1s StopTimeout default and dies by SIGKILL on every stop —
+    measured live, including containers freshly recreated from the #573
+    image (the image changed, the already-written compose FILE did not).
+
+    Idempotent: an anchor that already declares stop_grace_period (any
+    value) is left untouched — a deliberate per-anchor override survives
+    re-rendering, same "insert only if absent" contract as every other
+    ``_ensure_*`` helper in this module (vault, references, msg-delivery,
+    per-agent env overrides).
+    """
+    lines = content.splitlines(keepends=False)
+    n = len(lines)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        line = lines[i]
+        out.append(line)
+        if not _ANCHOR_DECL_RE.match(line):
+            i += 1
+            continue
+        i += 1
+        body: list[str] = []
+        while i < n:
+            cur = lines[i]
+            if not cur.strip() or not cur.startswith(" "):
+                break
+            body.append(cur)
+            i += 1
+        if not any(
+            re.match(r"^\s*stop_grace_period:\s*\S", b) for b in body
+        ):
+            insert_at = len(body)
+            for idx, b in enumerate(body):
+                if re.match(r"^\s*restart:\s*\S", b):
+                    insert_at = idx + 1
+                    break
+            body.insert(
+                insert_at, f"  stop_grace_period: {_ANCHOR_STOP_GRACE_PERIOD}"
+            )
+        out.extend(body)
+    return "\n".join(out)
 
 
 def _rewrite_compose(
@@ -664,12 +730,20 @@ def _rewrite_compose(
       Existing entries are detected and not duplicated (insert-only;
       removal is out of scope — agents that lose the scope keep entries
       until the file is regenerated from scratch).
-    - Anchor blocks themselves are untouched — they remain the static base.
+    - Anchor blocks are otherwise untouched — they remain the static base.
+      The one exception is ``stop_grace_period`` backfill (see
+      ``_ensure_anchor_stop_grace_period``), which patches an anchor's BODY
+      in place when the key is missing entirely; it never touches a value
+      the anchor already declares.
     - Indentation: 4 spaces (matches the existing file).
 
     Idempotent: rerunning produces the same output.
     """
     vault_writers = vault_writers or set()
+    # Anchor-level backfill (#573 follow-up) — runs before the per-service
+    # loop below so a stale private file's anchors converge on every render,
+    # not just ones that happen to add/change a service.
+    content = _ensure_anchor_stop_grace_period(content)
     lines = content.splitlines(keepends=False)
     out: list[str] = []
     i = 0
