@@ -87,8 +87,9 @@ BRANCH_FILES: Dict[str, str] = {
 M_MODEL = Mechanism(
     "model_pinning",
     "Model pinning - never let the runtime fall back to an unpinned model",
-    "#566/#483: unpinned sessions opened on openai/gpt-5.5 with the shim key "
-    "and died 401 in operation after a container recreate.",
+    "#566/#483: unpinned sessions opened on omp's built-in openai provider "
+    "(unpinned default model) with the shim key and died 401 in operation "
+    "after a container recreate.",
     "model selector wired at session/invocation start",
 )
 M_AUTH = Mechanism(
