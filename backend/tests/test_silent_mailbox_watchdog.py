@@ -159,6 +159,48 @@ async def test_second_tick_does_not_restack(make_board, make_agent, make_task):
     assert len(notes) == 1, "exactly one notify per silent episode, not a stack"
 
 
+@pytest.mark.asyncio
+async def test_silent_card_check_cannot_see_the_dead_mailbox(
+    make_board, make_agent, make_task,
+):
+    """The #575 gap proof, both guards side by side (incident 2026-09-14:
+    an agent sat >2h with five inbox cards, zero in_progress, on idle).
+
+    ``_check_silent_cards`` selects ``SILENT_CARD_STATUSES`` =
+    ``("in_progress", "waiting")`` — with the agent's cards all in
+    ``inbox`` its candidate set is EMPTY, so the state is structurally
+    invisible to it. Only the mailbox check reports — and exactly once.
+    """
+    now = utcnow()
+    past = now - timedelta(minutes=20)
+    board, lead, worker = await _setup_board_and_lead(make_board, make_agent)
+    for i in range(5):
+        await make_task(
+            board_id=board.id,
+            title=f"Queued {i}",
+            status="inbox",
+            assigned_agent_id=worker.id,
+            created_at=past,
+        )
+
+    async with _session() as s:
+        from app.services.watchdog.core import WatchdogService
+
+        with patch("app.services.watchdog.task_monitor.emit_event",
+                   new_callable=AsyncMock):
+            svc = WatchdogService()
+            await svc._check_silent_cards(s)
+            await svc._check_silent_mailbox(s)
+
+    notes = await _all_notify_comments()
+    assert not any("STILLE KARTE" in n.content for n in notes), (
+        "_check_silent_cards must NOT report the inbox-only state"
+    )
+    assert len(notes) == 1, "the mailbox guard reports, exactly once"
+    assert "STILLE SCHLANGE" in notes[0].content
+    assert lead.name in notes[0].content
+
+
 # ── False-positive guards (DoD) ────────────────────────────────────────────
 
 
