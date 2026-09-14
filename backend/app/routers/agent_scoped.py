@@ -2363,13 +2363,25 @@ ACTIVITY_EVENTS_SUMMARY_CAP = 500
 
 def _activity_events_window(since: datetime | None, until: datetime | None) -> tuple[datetime, datetime, bool]:
     """Resolves the (since, until) filter pair, tz-normalizes both, and clamps
-    the span to ACTIVITY_EVENTS_MAX_WINDOW_DAYS. Returns (start, end, clamped).
+    the SPAN between them to ACTIVITY_EVENTS_MAX_WINDOW_DAYS. Returns
+    (start, end, clamped).
 
     Default window (no `since` given): last ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS
-    days — named per DoD ("Standardfenster ... benannt"). The clamp protects
-    against a caller passing an ancient `since` and forcing a full-table scan;
-    it silently narrows rather than erroring, mirroring the `truncated` flag
-    pattern used by the task timeline endpoint (tasks.py get_task_timeline).
+    days — named per DoD ("Standardfenster ... benannt"). The clamp bounds
+    the SPAN of a single request, protecting against an unbounded row scan;
+    it does NOT bound how far into the past that span may sit — shifting
+    `since` and `until` together equally still returns arbitrarily old
+    events with `clamped=False` (W4, PR #588 review). That's fine here: the
+    endpoint is board-scoped and read-only, so the cap bounds response size,
+    not access — but earlier wording here and in TOOLS.md ("capped at 90
+    days regardless of `since`") overclaimed an age limit this clamp never
+    enforced. It silently narrows the span rather than erroring, mirroring
+    the `truncated` flag pattern used by the task timeline endpoint
+    (tasks.py get_task_timeline).
+
+    Raises 422 if both `since` and `until` are given and `until` is before
+    `since` (N1, PR #588 review) — previously this combination silently
+    produced an empty result instead of signalling the caller's mistake.
     """
     now = utcnow()
     end = until if until is not None else now
@@ -2378,6 +2390,9 @@ def _activity_events_window(since: datetime | None, until: datetime | None) -> t
     start = since if since is not None else end - timedelta(days=ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS)
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
+
+    if since is not None and until is not None and end < start:
+        raise HTTPException(status_code=422, detail="`until` must not be before `since`")
 
     max_span = timedelta(days=ACTIVITY_EVENTS_MAX_WINDOW_DAYS)
     clamped = False
@@ -2534,6 +2549,13 @@ async def agent_activity_events_summary(
     Uses `func.date(...)` (not `date_trunc`, which is Postgres-only) — same
     portability fix already applied in routers/system.py:498
     (costs_timeseries) for SQLite-vs-Postgres test/prod parity.
+
+    Note (N3, PR #588 review): on Postgres, `func.date()` converts the
+    `timestamptz` operand to the *session* timezone before truncating to a
+    date; SQLite just takes the stored value as-is. Moot today (the
+    `postgres:16-alpine` test/prod image runs with no `TZ` set, i.e. UTC),
+    but a later non-UTC session timezone would silently shift bucket day
+    boundaries between the two engines.
 
     Same board scope, same window default/clamp as the list endpoint.
     Bucket count is capped at ACTIVITY_EVENTS_SUMMARY_CAP; `truncated`

@@ -99,9 +99,11 @@ Filters (all optional, combinable): `event_type` (comma-separated list),
 `since`/`until` (ISO timestamps — default window: last 7 days), `board_id`
 (must equal your own — anything else is a 403), `agent_id`, `task_id`.
 `limit` defaults to 50, capped at 200 per page; page further back with
-`before=<next_cursor>` from the previous response. The queryable window is
-capped at 90 days regardless of `since` — the response's `window.clamped`
-tells you if that kicked in.
+`before=<next_cursor>` from the previous response. The queryable SPAN
+(`until` minus `since`) is capped at 90 days — shifting `since`/`until`
+together still reaches arbitrarily old events, the cap only bounds how
+wide a single request's window may be, not how far back it may sit; the
+response's `window.clamped` tells you if the span was narrowed.
 
 For "how often", don't page through raw rows — use the aggregating form:
 
