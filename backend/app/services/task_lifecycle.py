@@ -1895,8 +1895,12 @@ async def apply_unblock_notify_reset(
     assigned agent might hold a genuinely live, paused session actively
     running THIS exact task. `redispatch_unblocked_task` and
     `requeue_unblocked_task` can never hit that unsafe case by construction
-    — the former only fires when the agent is confirmed dead, the latter
-    only when the agent's lock points at a DIFFERENT task — so both reset
+    — the former only fires when the agent is confirmed dead; the latter
+    fires either when the agent's lock points at a DIFFERENT task, or when
+    the agent holds a second `in_progress` task while its lock still names
+    THIS one (`resolve_unblock_action`'s `other_active` check) — a
+    pre-existing corrupt two-in_progress-tasks state, unrelated to the
+    live-paused-session case this branch guards against — so both reset
     unconditionally. This is the only branch where the ambiguity is
     reachable: `resolve_unblock_action` returns "notify" both when the agent
     is idle with no lock at all AND when the agent's lock points at exactly
