@@ -342,6 +342,48 @@ async def _ensure_task_workspace(
     return base
 
 
+async def prepare_agent_workspace_for_task(
+    task: "Task",
+    agent: "Agent",
+    session: AsyncSession,
+) -> bool:
+    """Full workspace preparation for `agent` on `task` — the same two-step
+    sequence `dispatch.auto_dispatch_task` runs on every first dispatch
+    (git/worktree setup via setup_git_workspace_for_dispatch, then the
+    Phase-C non-code fallback via _ensure_task_workspace if that left
+    task.workspace_path unset).
+
+    Reused by every path that (re)points `assigned_agent_id` at a new agent
+    outside a normal dispatch cycle — the dedicated reassign endpoint, the
+    generic assigned_agent_id PATCH branch, and the self-review escalation
+    to the Board Lead — so a card handed to a new agent gets the identical
+    preparation a fresh dispatch would have given it. Incident 2026-09-13:
+    `mc reassign` rotated the attempt id and wrote the audit row but never
+    touched task.workspace_path, so the receiving agent's ACP guard
+    (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refused
+    the turn — the directory the old assignment had prepared (or nothing,
+    if it had none) was never re-prepared for the new one.
+
+    Returns True if the caller should proceed (workspace ready, or a
+    genuine no-op — e.g. the target agent has no workspace_path, as for a
+    host agent like Hermes: setup_git_workspace_for_dispatch's own guards
+    already skip git work for that case). Returns False if the task was
+    blocked (setup_git_workspace_for_dispatch already posted the blocker
+    comment, set status=blocked and unassigned it — same hard-fail
+    contract a normal dispatch uses, no silent fallback).
+    """
+    if not await setup_git_workspace_for_dispatch(task, agent, session):
+        return False
+    if not task.workspace_path:
+        project = await session.get(Project, task.project_id) if task.project_id else None
+        task_ws = await _ensure_task_workspace(task.id, project, agent.workspace_path)
+        if task_ws:
+            task.workspace_path = task_ws
+            session.add(task)
+            await session.commit()
+    return True
+
+
 MAX_REFERENCE_FILES_IN_BRIEF = 15  # Directive-Grösse schützen (ADR-053)
 
 

@@ -1791,6 +1791,24 @@ async def agent_reassign_task(
     )
     await session.commit()
     await session.refresh(task)
+
+    # Prepare the new assignee's workspace — mirrors every other assignment
+    # path (auto_dispatch_task's first dispatch, handle_review_handoff,
+    # release). Without this, task.workspace_path keeps pointing at (or
+    # stays None from) the OLD agent's layout, and the receiving agent's ACP
+    # guard (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py)
+    # refuses the turn — Incident 2026-09-13, Host-Agent -> Container-Agent
+    # reassign. prepare_agent_workspace_for_task no-ops for agents without
+    # workspace_path (host agents like Hermes), so a Container -> Host
+    # reassign stays a no-op here too.
+    from app.services.task_context_builder import prepare_agent_workspace_for_task
+    if not await prepare_agent_workspace_for_task(task, target, session):
+        # Blocked: task_context_builder already posted a blocker comment,
+        # set status=blocked and unassigned the task — reflect that back.
+        await session.refresh(task)
+        return task.model_dump()
+
+    await session.refresh(task)
     return task.model_dump()
 
 
@@ -1980,6 +1998,11 @@ async def agent_update_task(
     # dispatch model wants (mirrors the ownership philosophy above; the
     # Board-Lead endpoint routers/tasks.py:TaskUpdate has no extra guard
     # because user auth is already the operator).
+    # Set below when this PATCH actually moves assigned_agent_id to a new,
+    # non-None agent — used at the end of the function to prepare that
+    # agent's workspace (same gap/fix as the dedicated reassign endpoint
+    # above; see the comment there for the incident this closes).
+    _reassign_target_agent: Agent | None = None
     if "assigned_agent_id" in updates:
         if not agent.is_board_lead:
             raise HTTPException(
@@ -2013,6 +2036,8 @@ async def agent_update_task(
             )
             task.assigned_agent_id = _new_assignee
             updates.pop("assigned_agent_id", None)  # applied; skip generic setattr
+            if _new_assignee is not None:
+                _reassign_target_agent = _assignee
             await emit_event(
                 session, "task.reassigned",
                 f"Task '{task.title}' neu zugewiesen durch Lead {agent.name}",
@@ -3007,6 +3032,14 @@ async def agent_update_task(
                             "recovery-comment cooldown already claimed",
                             task.id,
                         )
+
+    # Prepare the new assignee's workspace (twin of the dedicated reassign
+    # endpoint's fix above) — a plain PATCH assigned_agent_id never went
+    # through auto_dispatch_task either, so it left the same gap.
+    if _reassign_target_agent is not None:
+        from app.services.task_context_builder import prepare_agent_workspace_for_task
+        await prepare_agent_workspace_for_task(task, _reassign_target_agent, session)
+        await session.refresh(task)
 
     return task
 
