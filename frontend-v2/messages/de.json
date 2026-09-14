@@ -426,6 +426,11 @@
     "pending": "ausstehend",
     "openCount": "{count} offen",
     "tasksForReview": "Aufgaben zum Review ({count})",
+    "agentReviewsCount": "{count, plural, one {1 Review beim Agenten} other {# Reviews bei Agenten}}",
+    "decideYourself": "Selbst entscheiden",
+    "agentReviewOnHold": "zurückgestellt",
+    "agentReviewing": "{agent} prüft",
+    "selfReviewStall": "Kein Handoff erfolgt — wartet auf Lead ({agent})",
     "approvalsCount": "Freigaben ({count})",
     "awaitingReview": "{count, plural, one {1 Aufgabe wartet noch auf Review} other {# Aufgaben warten noch auf Review}}",
     "allClear": "Alles erledigt",
@@ -2729,7 +2734,9 @@
       "cornerSwitching": "wechselt",
       "cornerUnreachable": "nicht erreichbar",
       "cornerUptimeHours": "seit {h} h {m}",
-      "cornerUptimeMinutes": "seit {m} min"
+      "cornerUptimeMinutes": "seit {m} min",
+      "restartHint": "Startet das laufende Modell auf dieser Box neu.",
+      "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet."
     },
     "cockpit": {
       "modeNoDevice": "Kein Node-Agent mit dieser Box gekoppelt — die Modus-Liste ist nicht verfügbar.",
@@ -2782,7 +2789,9 @@
       "lastAttempt": "letzter Versuch {when} · {status}",
       "lastAttemptTimeOnly": "letzter Versuch {when}",
       "resultOk": "ok",
-      "resultFailed": "fehlgeschlagen"
+      "resultFailed": "fehlgeschlagen",
+      "restartHint": "Startet das laufende Modell auf dieser Box neu.",
+      "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet."
     }
   },
   "bench": {
@@ -2974,6 +2983,15 @@
       "fromMc": "Mission Control",
       "expand": "Inhalt anzeigen",
       "collapse": "Inhalt ausblenden"
+    },
+    "error": {
+      "generic": "Chat-Fehler",
+      "rpc_error": "Protokollfehler",
+      "provider_error": "Fehler beim Anbieter",
+      "empty_turn": "Keine Antwort",
+      "process_exit": "Prozess beendet",
+      "busy": "Arbeitet noch",
+      "session_reset": "Sitzung neu gestartet"
     }
   }
 }

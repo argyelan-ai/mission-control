@@ -38,6 +38,13 @@ source "$POLL_LIB_DIR/ui-detect.sh"
 # shellcheck source=lib/context-detect.sh
 source "$POLL_LIB_DIR/context-detect.sh"
 # Cached runtime-UI of tmux Window 0. Set by wait_for_clean_prompt() on every
+# Karte, auf die paste_and_submit eskaliert, wenn ein Paste unabgesendet im
+# Eingabefeld haengenbleibt. Leer => CURRENT_TASK_ID/CURRENT_BOARD_ID. Nur der
+# Dispatch-Pfad setzt sie, weil CURRENT_TASK_ID dort noch die VORHERIGE Karte
+# haelt.
+PASTE_ESCALATION_TASK_ID=""
+PASTE_ESCALATION_BOARD_ID=""
+
 # successful detect, used by paste_and_submit() to decide whether to send the
 # `\e[201~` end-marker. Empty until first detection — paste_and_submit treats
 # empty as "send marker" (safe default for claude-cli majority).
@@ -75,6 +82,11 @@ STAGNATION_THRESHOLD="${STAGNATION_THRESHOLD:-36}"   # 36 * POLL_INTERVAL (5s) =
 # einen Blocker postet sobald die Threshold erreicht ist. Wird beim Wechsel
 # zu einer neuen CURRENT_TASK_ID resettet.
 LAST_BLOCKED_TASK_ID=""
+# G6 idempotency (dispatch-path-parity.md Zeile 31/32): ein Escape pro Task
+# fuer einen HARD-Interrupt aus dem Heartbeat-Control-Kanal, nicht pro
+# 30s-Heartbeat-Zyklus. Wird beim Wechsel zu einer neuen CURRENT_TASK_ID
+# resettet (siehe run_task()), analog zu LAST_BLOCKED_TASK_ID.
+LAST_HARD_INTERRUPT_TASK_ID=""
 # Lockfile: poll.sh schreibt dieses File sobald ein Task aktiv ist.
 # recycler.sh prueft es vor idle-Kill — verhindert Recycle mitten im Task.
 # Stale-Lock-Schutz: recycler prueft ob poll.sh noch laeuft (pgrep).
@@ -259,10 +271,37 @@ wait_for_clean_prompt() {
     # Bug 14 fix (2026-05-13): bei jedem positiven Match wird die globale
     # PANE_UI_DETECTED gesetzt, damit paste_and_submit weiss ob es den
     # Bracketed-Paste-End-Marker schicken darf (claude) oder nicht (openclaude).
+    #
+    # Interrupt-Gate fix (2026-09-12): nach einem User-Interrupt (Esc) zeigt die
+    # TUI den Dialog `Interrupted · What should Claude do instead?`. Die Box-
+    # Glyphs / `❯` sind darin SICHTBAR, detect_pane_ui matcht also weiterhin —
+    # das alte Gate veroeffnete den Paste zu frueh, der Submit-Enter ging in den
+    # Dialog statt ins Eingabefeld, und der Nudge blieb unabgeschickt stehen
+    # (vier Live-Faelle am 2026-09-12). Ein Pane im Interrupted-Dialog ist KEIN
+    # clean prompt: solange der Dialog sichtbar ist, pollen wir weiter.
+    #
+    # W3 (Review PR #529) — wer loest den Dialog auf? Bewusst NICHT dieses Gate.
+    # Aufgeloest wird er (a) vom naechsten erfolgreich abgesendeten Paste — der
+    # Dialog-Composer nimmt den Text an, und der Zweit-Enter-Pfad in
+    # paste_and_submit faengt ab, wenn das erste Enter im Dialog verschluckt
+    # wurde, (b) vom Escape in report_blocker auf dem Eskalationspfad, (c) vom
+    # Menschen, der interrupted hat. Ein Escape hier waere falsch: das Gate
+    # laeuft vor JEDEM Paste, und ein blindes Escape wuerde einen legitim
+    # laufenden Zug abbrechen.
+    # Folge fuer die Queue: nur flush_msg_queue (--no-fail-open) haelt strikt
+    # und laesst die Message gequeued; Nudge- und Dispatch-Pfad pasten nach
+    # READY_TIMEOUT_SEC fail-open, und deren Ergebnis wird jetzt korrekt
+    # klassifiziert und notfalls laut eskaliert. Ein dauerhaft stehender Dialog
+    # staut also die Queue, bleibt aber nicht still — die Eskalation auf dem
+    # Nudge-Pfad blockiert die Karte vorher.
     local deadline
     deadline=$(( $(date +%s) + READY_TIMEOUT_SEC ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local ui
+        if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
         if ui=$(detect_pane_ui "${SESSION_NAME}:0"); then
             PANE_UI_DETECTED="$ui"
             return 0
@@ -270,6 +309,43 @@ wait_for_clean_prompt() {
         sleep "$READY_POLL_INTERVAL_SEC"
     done
     return 1
+}
+
+# pane_in_interrupted_dialog TARGET — 0 (true) wenn das Pane den claude-
+# Interrupt-Dialog rendert (`Interrupted` + `What should Claude do instead?`).
+#
+# W2 (Review PR #529, Runde 3): der Kommentar "nur die letzten ~15 Zeilen
+# zaehlen" beschrieb Scrollback-Ausschluss — auf dem Alternate Screen (claude-
+# TUI) gibt es aber KEIN Scrollback, `capture-pane -S -15` liefert nur die
+# sichtbaren ~15 der ~24 Pane-Zeilen (dieselbe Einsicht wie bei B1). Innerhalb
+# dieser 15 Zeilen konnte der Substring-Match aber trotzdem auf zitierten Text
+# im sichtbaren Verlauf ansprechen — ein Kartentext, der genau diesen Satz
+# beschreibt (dieser hier zum Beispiel), haelt das Gate faelschlich offen: auf
+# --no-fail-open (Queue) bleiben Messages liegen, solange der Text sichtbar
+# ist; auf Nudge/Dispatch kostet es nur READY_TIMEOUT_SEC (fail-open).
+#
+# Fix: enger ankern. Der Dialog rendert strukturell immer unmittelbar UEBER
+# der Composer-Box (siehe Fixture claude-24-unsubmitted.txt: Dialogtext Zeile
+# 18, Box ab Zeile 21). Mit demselben ❯/╭-Anker wie _input_field_tail_lines
+# (paste-verify.sh) wird das Suchfenster auf die Composer-Box plus
+# PASTE_DIALOG_LOOKBACK_LINES Zeilen darueber beschraenkt — genug fuer den
+# Leerzeilen-Abstand, zu knapp fuer Zitate weiter oben im Verlauf. Ohne
+# erkennbaren Anker (fremde CLI, Box ausserhalb des Bereichs) faellt es auf
+# das volle 15-Zeilen-Fenster zurueck — altes Verhalten, kein neues Risiko.
+PASTE_DIALOG_LOOKBACK_LINES="${PASTE_DIALOG_LOOKBACK_LINES:-6}"
+pane_in_interrupted_dialog() {
+    local tail
+    tail=$(tmux capture-pane -t "$1" -p -S -15 2>/dev/null || echo "")
+    [ -n "$tail" ] || return 1
+    local window="$tail"
+    if _cpo_field_anchored "$tail"; then
+        local field_lines dialog_window
+        field_lines=$(_input_field_tail_lines "$tail")
+        dialog_window=$(( field_lines + PASTE_DIALOG_LOOKBACK_LINES ))
+        window=$(printf '%s\n' "$tail" | tail -n "$dialog_window")
+    fi
+    echo "$window" | grep -q 'Interrupted' \
+        && echo "$window" | grep -q 'What should Claude do instead'
 }
 
 # Bug 10 (2026-05-13): fail-open des paste-Schritts war silent — bei Race
@@ -290,6 +366,49 @@ PASTE_MAX_ATTEMPTS="${PASTE_MAX_ATTEMPTS:-2}"
 # shellcheck source=lib/paste-verify.sh
 source "$POLL_LIB_DIR/paste-verify.sh"
 
+# escalate_unsubmitted_nudge TASK_ID BOARD_ID DETAIL — der laute Pfad.
+#
+# Wenn der Text nach dem zweiten Enter IMMER NOCH unabgesendet im Eingabefeld
+# steht, ist der Agent gewedged: der naechste Paste wuerde sich an den Rest im
+# Feld anhaengen, und der laufende Zug startet nie. Genau hier hat am
+# 12.09.2026 viermal ein Mensch von Hand Enter gedrueckt, weil poll.sh den
+# Fehlschlag nur ins Log geschrieben hat — sichtbar fuer niemanden.
+#
+# "Laut" heisst deshalb zwei Dinge, nicht eins:
+#   1. Kommentar auf die Karte (comment_type=blocker) mit der exakten Diagnose.
+#   2. Status blocked — erst die Statusflanke startet die Lead-Triage
+#      (blocker_triage.py). Ein Blocker-Kommentar allein pingt niemanden.
+# Beides macht report_blocker bereits; das Escape darin raeumt zusaetzlich den
+# haengengebliebenen Text aus dem Eingabefeld, damit der naechste Dispatch
+# nicht auf einem verschmutzten Feld landet.
+#
+# Ohne bekannte Karte (Dispatch vor dem ersten Task, Nudge ohne aktiven Task)
+# bleibt nur das ERROR-Log — dann gibt es keine Karte, auf die man schreiben
+# koennte. Still weitergegangen wird trotzdem nie: der Aufrufer gibt 2 zurueck.
+escalate_unsubmitted_nudge() {
+    local task_id="$1"
+    local board_id="$2"
+    local detail="$3"
+    if [ -z "$task_id" ] || [ -z "$board_id" ]; then
+        log "ERROR: Nudge steht unabgesendet im Eingabefeld und es ist KEINE Karte zugeordnet (task_id='${task_id}', board_id='${board_id}') — keine Eskalation moeglich, nur dieses Log. Manueller Eingriff noetig."
+        return 1
+    fi
+    local prev_task="$CURRENT_TASK_ID" prev_board="$CURRENT_BOARD_ID"
+    CURRENT_TASK_ID="$task_id"
+    CURRENT_BOARD_ID="$board_id"
+    report_blocker "$task_id" \
+        "Nudge blieb unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt" \
+        "$detail" \
+        "poll.sh paste_and_submit"
+    # report_blocker leert CURRENT_TASK_ID/BOARD_ID absichtlich. War vorher eine
+    # ANDERE Karte aktiv, stellen wir die nicht wieder her — sie waere jetzt
+    # falsch; war es dieselbe, muss sie geleert bleiben.
+    if [ -n "$prev_task" ] && [ "$prev_task" != "$task_id" ]; then
+        log "WARNING: escalate_unsubmitted_nudge hat Karte $task_id blockiert, vorher aktiv war $prev_task ($prev_board) — Turn-State-Tracking ist zurueckgesetzt."
+    fi
+    return 0
+}
+
 paste_and_submit() {
     # Optionaler erster Parameter --no-fail-open: statt nach READY_TIMEOUT_SEC
     # trotzdem zu pasten (fail-open), wird mit Return-Code 2 abgebrochen. Nutzt
@@ -301,6 +420,13 @@ paste_and_submit() {
         shift
     fi
     local file="$1"
+    # W1 (Review PR #529, Runde 3): rc 2 hat auf dem --no-fail-open-Pfad zwei
+    # Bedeutungen — "Gate zu, gar nicht gepastet" (unten) und "gepastet, im
+    # Feld stehengeblieben, Karte eskaliert/blockiert" (Eskalationszweig
+    # unten). PASTE_LAST_ESCALATED disambiguiert das fuer Aufrufer wie
+    # flush_msg_queue, ohne den bestehenden rc-Vertrag zu aendern (E1/E2
+    # erwarten weiterhin rc=2 fuer die Eskalation).
+    PASTE_LAST_ESCALATED=0
     if ! wait_for_clean_prompt; then
         if $no_fail_open; then
             log "paste_and_submit --no-fail-open: kein clean-prompt nach ${READY_TIMEOUT_SEC}s — NICHT gepastet (Turn-Grenzen-Gate). Message bleibt gequeued."
@@ -340,23 +466,108 @@ paste_and_submit() {
             sleep 0.2
         fi
         tmux_submit "${SESSION_NAME}:0"
-        # Post-Paste-Verify (Bug 10 fix). Wir warten kurz und prueffen ob die
-        # Eingabe in den Pane gerendert wurde. Wenn nicht: retry.
+        # Post-Paste-Verify (Bug 10 fix). Wir warten kurz und klassifizieren das
+        # Ergebnis DREI-WEG (Interrupt-Gate fix 2026-09-12):
+        #   0 = abgesendet  (Fingerprint im Scrollback ODER Feld leer)
+        #   2 = im Feld, nicht abgesendet (Fingerprint nur im Input-Feld-Tail)
+        #   1 = gar nicht angekommen (Fingerprint nirgends)
+        # Die alten Meldungen verschwiegen Fall 2 ("Fingerprint nicht sichtbar"),
+        # obwohl der Text sichtbar im Feld stand — wer das las, suchte an der
+        # falschen Stelle.
         sleep "$PASTE_VERIFY_DELAY_SEC"
-        if verify_paste_landed "$file"; then
+        local outcome
+        outcome=$(classify_paste_outcome "$file")
+        if [ "$outcome" = "0" ]; then
             if [ "$attempt" -gt 1 ]; then
                 log "paste_and_submit erfolgreich auf Versuch ${attempt}."
             fi
             return 0
         fi
-        if [ "$attempt" -lt "$PASTE_MAX_ATTEMPTS" ]; then
-            log "WARNING: paste_and_submit Versuch ${attempt}: Fingerprint nicht im Pane sichtbar — Retry in ${PASTE_RETRY_DELAY_SEC}s."
+        if [ "$outcome" = "2" ]; then
+            # Text steht sichtbar im Eingabefeld, das Enter ging woanders hin
+            # (klassisch: in den Interrupted-Dialog). EIN zweites Enter nach-
+            # schieben, bevor wir aufgeben — das ist der vorgesehene Selbstheil-
+            # pfand, kein stiller Fehlschlag.
+            log "WARNING: paste_and_submit Versuch ${attempt}: Text steht im Eingabefeld, aber wurde NICHT abgesendet — zweites Enter."
+            tmux_submit "${SESSION_NAME}:0"
+            sleep "$PASTE_VERIFY_DELAY_SEC"
+            outcome=$(classify_paste_outcome "$file")
+            if [ "$outcome" = "0" ]; then
+                log "paste_and_submit: zweites Enter hat den Nudge abgesendet (Versuch ${attempt})."
+                return 0
+            fi
+            if [ "$outcome" = "2" ]; then
+                log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. Eskalation: Kommentar auf die Karte plus Status blocked (Lead-Triage). NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
+                # W2 (Review PR #529): rc auswerten. Ohne zugeordnete Karte
+                # macht escalate_unsubmitted_nudge NICHTS — kein Kommentar,
+                # kein blocked, und auch kein Escape, weil das in
+                # report_blocker steckt. Ein pauschales `return 2` liess den
+                # Aufrufer dann "Karte wurde blockiert und an den Lead
+                # gemeldet" loggen, obwohl niemand etwas erfahren hat: wieder
+                # eine Meldung, die nicht beschreibt was passiert ist.
+                if escalate_unsubmitted_nudge \
+                    "${PASTE_ESCALATION_TASK_ID:-$CURRENT_TASK_ID}" \
+                    "${PASTE_ESCALATION_BOARD_ID:-$CURRENT_BOARD_ID}" \
+                    "paste_and_submit Versuch ${attempt}: der Text steht sichtbar im Eingabefeld, wurde aber nicht abgesendet (classify_paste_outcome=2 auch nach dem zweiten Enter). Typische Ursache: das Submit-Enter landete in einem Dialog statt im Feld. Das Feld wurde per Escape geraeumt; der Nudge ist NICHT zugestellt."; then
+                    # 2 statt 1: der Aufrufer soll wissen, dass die Karte
+                    # bereits blockiert wurde und er kein Turn-State-Tracking
+                    # mehr aufsetzt. PASTE_LAST_ESCALATED=1 markiert diesen
+                    # Fall zusaetzlich fuer Aufrufer, die rc 2 vom
+                    # Gate-zu-Fall (oben) unterscheiden muessen (W1).
+                    PASTE_LAST_ESCALATED=1
+                    return 2
+                fi
+                # Keine Karte zugeordnet: das Escape hier selbst senden, sonst
+                # bleibt der unabgesendete Text im Feld stehen und der naechste
+                # Paste haengt sich daran. rc 1 = "nicht zugestellt, NICHTS
+                # eskaliert" — der Aufrufer darf keine Blockade behaupten.
+                tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+                log "ERROR: paste_and_submit (Versuch ${attempt}): Nudge steht unabgesendet im Feld UND es ist keine Karte zugeordnet — Feld per Escape geraeumt, aber es wurde NICHTS eskaliert. Nur dieses Log. Manueller Eingriff noetig."
+                return 1
+            fi
+            # outcome=1 nach zweitem Enter: Feld leer geworden, aber Fingerprint
+            # nicht im Scrollback — als Nicht-Angekommen melden und normal retry.
+            log "WARNING: paste_and_submit Versuch ${attempt}: Feld nach zweitem Enter leer, aber Fingerprint nicht im Verlauf — behandle als nicht angekommen."
+        elif [ "$attempt" -lt "$PASTE_MAX_ATTEMPTS" ]; then
+            log "WARNING: paste_and_submit Versuch ${attempt}: Eingabe ist NICHT im claude-Pane angekommen (Fingerprint nirgends sichtbar) — Retry in ${PASTE_RETRY_DELAY_SEC}s."
             sleep "$PASTE_RETRY_DELAY_SEC"
         fi
         attempt=$((attempt + 1))
     done
-    log "ERROR: paste_and_submit FAILED nach ${PASTE_MAX_ATTEMPTS} Versuchen — Eingabe ist NICHT im claude-Pane gelandet. Task stuck. Manueller Eingriff (Status-Flip oder tmux send-keys) noetig."
+    log "ERROR: paste_and_submit FAILED nach ${PASTE_MAX_ATTEMPTS} Versuchen — Eingabe ist NICHT im claude-Pane gelandet (weder abgesendet noch sichtbar im Feld). Task stuck. Manueller Eingriff (Status-Flip oder tmux send-keys) noetig."
     return 1
+}
+
+# build_heartbeat_payload STATUS CTX_PCT TASK_ID ATTEMPT_ID — reines JSON-Encoding,
+# keine Netzwerk-Seiteneffekte (testbar ohne Mock, analog zu build_acked_seq_param).
+#
+# G6 (dispatch-path-parity.md #31/#32): der Bridge-Pfad meldet im Heartbeat
+# WELCHER Task/Attempt gerade laeuft (_build_heartbeat_payload, bridge.py) —
+# poll.sh tat das nie. task_id/attempt_id werden nur mitgeschickt wenn TASK_ID
+# nicht leer ist (Aufrufer gated das ueber CURRENT_TASK_ID — von run_task()
+# gesetzt, von cancel_task()/stop_task_session() geleert; spiegelt bridge.py's
+# turn_ctx-Gate).
+build_heartbeat_payload() {
+    local status="$1" ctx_pct="$2" task_id="$3" attempt_id="$4"
+    # Pass values via env-vars statt f-string-Interpolation — defense against
+    # shell-metachar injection if pane_title is ever attacker-controlled
+    # (T-06-03-01).
+    STATUS="$status" CTX_PCT="$ctx_pct" TASK_ID="$task_id" ATTEMPT_ID="$attempt_id" python3 -c "
+import json, os
+payload = {'status': os.environ.get('STATUS', 'idle')}
+ctx = os.environ.get('CTX_PCT', '').strip()
+if ctx.isdigit():
+    val = int(ctx)
+    if 0 <= val <= 100:
+        payload['context_pct'] = float(val)
+task_id = os.environ.get('TASK_ID', '').strip()
+if task_id:
+    payload['task_id'] = task_id
+    attempt_id = os.environ.get('ATTEMPT_ID', '').strip()
+    if attempt_id:
+        payload['attempt_id'] = attempt_id
+print(json.dumps(payload))
+"
 }
 
 heartbeat() {
@@ -375,18 +586,17 @@ heartbeat() {
     if [ -z "$ctx_pct" ]; then
         ctx_pct=$(scrape_context_pct "$(tmux capture-pane -t "${SESSION_NAME}:0" -p 2>/dev/null | tail -10 || true)")
     fi
-    # Pass scraped value via env-var (CTX_PCT) instead of f-string interpolation
-    # — defense against shell-metachar injection if pane_title is ever attacker-
-    # controlled (T-06-03-01).
-    CTX_PCT="$ctx_pct" STATUS="$status" python3 -c "
+    local payload
+    payload=$(build_heartbeat_payload "$status" "$ctx_pct" "$CURRENT_TASK_ID" "$LAST_DISPATCHED_ATTEMPT_ID" 2>/dev/null || true)
+    [ -n "$payload" ] || payload="{\"status\":\"${status}\"}"
+    # G6 (dispatch-path-parity.md #31/#32): die Antwort wurde bisher komplett
+    # verworfen (Backend-Feld `control`, gesetzt von `_collect_heartbeat_control`/
+    # `_withdrawn_task_reason`, agents.py:3798/3767, nie gelesen). Jetzt wird sie
+    # eingelesen und an handle_heartbeat_control uebergeben.
+    local response
+    response=$(PAYLOAD="$payload" python3 -c "
 import json, urllib.request, os, sys
-payload = {'status': os.environ.get('STATUS', 'idle')}
-ctx = os.environ.get('CTX_PCT', '').strip()
-if ctx.isdigit():
-    val = int(ctx)
-    if 0 <= val <= 100:
-        payload['context_pct'] = float(val)
-data = json.dumps(payload).encode()
+data = os.environ['PAYLOAD'].encode()
 req = urllib.request.Request(
     os.environ['MC_API_URL'] + '/api/v1/agent/me/heartbeat',
     data=data,
@@ -397,10 +607,67 @@ req = urllib.request.Request(
     method='POST'
 )
 try:
-    urllib.request.urlopen(req, timeout=5)
+    body = urllib.request.urlopen(req, timeout=5).read()
+    sys.stdout.write(body.decode('utf-8', 'replace'))
 except Exception as e:
     print(f'Heartbeat failed: {e}', file=sys.stderr)
-" 2>/dev/null || true
+" 2>/dev/null || true)
+    handle_heartbeat_control "$response"
+}
+
+# handle_heartbeat_control RESPONSE_JSON — G6 fix: reagiert auf das `control`-
+# Feld der Heartbeat-Antwort. Der Bridge-Pfad tut das schon lange (`_on_control`,
+# bridge.py:1717); poll.sh las die Antwort bisher gar nicht.
+#
+# Nur "hard" wird gehandhabt — "soft" bleibt hier bewusst No-Op, ANDERS als
+# die Bridge, nicht als deren Spiegelung: bridge.py:3660 prueft
+# interrupt_state.fired() in jeder Turn-Runde, und fired() ist fuer "soft"
+# genauso gesetzt wie fuer "hard" (InterruptState-Docstring, bridge.py:3419-
+# 3422: "soft also ends the run"). Die Bridge cancelt den Turn also auch bei
+# "soft" ueber dieselbe Abbruchleiter (_run_interrupt_ladder, bridge.py:3453) —
+# bridge.py:2916 ist nur die Nachbearbeitung DANACH (der Nudge-Kommentar),
+# nicht der Beleg dafuer, dass "soft" den Turn am Laufen liesse. Die Bridge
+# kann sich den Abbruch leisten, weil sie dieselbe Session anschliessend mit
+# dem Nudge fortsetzt (serve_loop). poll.sh hat keinen Fortsetzungspfad: ein
+# Escape auf "soft" wuerde den Turn killen und nichts wieder aufnehmen, waere
+# also strikt schlechter als warten. Die zugrundeliegenden ungelesenen
+# Kommentare, die einen soft-Interrupt ausloesen, kommen ohnehin ueber den
+# bestehenden deliver_comments/deliver_messages-Kanal an — ein zusaetzliches
+# Escape hier waere ein neuer Eingriff, keine Parity-Angleichung.
+#
+# Idempotenz ueber LAST_HARD_INTERRUPT_TASK_ID (wie LAST_CANCELLED_TASK_ID /
+# LAST_STOPPED_TASK_ID): ein Escape pro Task, nicht pro 30s-Heartbeat-Zyklus.
+# Absichtlich KEIN /clear und KEIN CURRENT_TASK_ID-Reset hier — das bleibt
+# Sache der bestehenden state=cancelled/stopped-Pfade (naechster Poll, <=5s),
+# die den vollen Session-Reset samt Backend-Semantik schon korrekt handhaben.
+# Dieser Pfad schickt NUR das sonst fehlende, sofortige Escape.
+handle_heartbeat_control() {
+    local response="$1"
+    [ -n "$response" ] || return 0
+    local interrupt
+    interrupt=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('control', {}).get('interrupt', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    [ "$interrupt" = "hard" ] || return 0
+    local key="${CURRENT_TASK_ID:-none}"
+    if [ "$key" = "$LAST_HARD_INTERRUPT_TASK_ID" ]; then
+        return 0
+    fi
+    local reason
+    reason=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('control', {}).get('reason', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    log "WARNING: Heartbeat-Control meldet HARD-Interrupt (Task ${CURRENT_TASK_ID:-unbekannt}): ${reason:-kein Grund uebermittelt} — sende Escape."
+    tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+    LAST_HARD_INTERRUPT_TASK_ID="$key"
 }
 
 # build_acked_seq_param — serialisiert ACKED_SEQ (thread_id → hoechstes
@@ -477,6 +744,27 @@ run_task() {
     task_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task']['id'])")
     board_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('board_id') or '')" 2>/dev/null || echo "")
     attempt_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('dispatch_attempt_id') or '')" 2>/dev/null || echo "")
+
+    # Guard 1 (client-side twin of the backend's Guard 2 — erledigte/fremde
+    # Karte incident, 14.09.2026, see scripts/hermes-bridge.py
+    # _task_is_dispatchable_for_me for the sibling implementation). The
+    # backend (agents.py _task_still_dispatchable) is what's actually
+    # supposed to prevent a done/foreign card from ever reaching
+    # state=new_task — this is defense in depth for whatever slips past it.
+    # Missing fields (older backend without assigned_agent_id/my_agent_id)
+    # fail OPEN — this must never become the reason a legit dispatch drops.
+    local task_status task_assigned_agent_id my_agent_id
+    task_status=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('status') or '')" 2>/dev/null || echo "")
+    task_assigned_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('assigned_agent_id') or '')" 2>/dev/null || echo "")
+    my_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('my_agent_id') or '')" 2>/dev/null || echo "")
+    if [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; then
+        log "GUARD 1: Task $task_id hat status=$task_status — Dispatch verweigert (erledigte Karte)"
+        return
+    fi
+    if [ -n "$my_agent_id" ] && [ -n "$task_assigned_agent_id" ] && [ "$my_agent_id" != "$task_assigned_agent_id" ]; then
+        log "GUARD 1: Task $task_id ist assigned_agent_id=$task_assigned_agent_id, ich bin $my_agent_id — Dispatch verweigert (fremde Karte)"
+        return
+    fi
 
     log "Task erhalten: $task_id"
 
@@ -620,7 +908,24 @@ except Exception:
     # Task doch lief. Jetzt: Return-Code explicit handlen — bei Fehler nur
     # WARN-Log, kein poll.sh exit. Der Task bleibt assigned + in_progress,
     # claude meldet sich entweder selbst oder der Operator sieht den Task stuck.
-    if ! paste_and_submit "$TASK_PROMPT_FILE"; then
+    # Die Eskalation in paste_and_submit braucht die Karte, die GERADE gepastet
+    # wird — CURRENT_TASK_ID zeigt hier noch auf die vorherige (es wird erst
+    # unten gesetzt). Ohne diese beiden Variablen wuerde ein Fehlschlag die
+    # falsche Karte blockieren.
+    PASTE_ESCALATION_TASK_ID="$task_id"
+    PASTE_ESCALATION_BOARD_ID="$board_id"
+    local paste_rc=0
+    paste_and_submit "$TASK_PROMPT_FILE" || paste_rc=$?
+    PASTE_ESCALATION_TASK_ID=""
+    PASTE_ESCALATION_BOARD_ID=""
+    if [ "$paste_rc" = "2" ]; then
+        # Karte ist bereits blockiert + Feld geraeumt (escalate_unsubmitted_nudge).
+        # Kein Turn-State-Tracking aufsetzen — sonst wuerde die eben blockierte
+        # Karte unten als "working" wieder aktiv gesetzt.
+        log "Task $task_id: Prompt blieb unabgesendet im Eingabefeld — Karte wurde blockiert und an den Lead gemeldet. Kein Turn-State-Tracking."
+        return
+    fi
+    if [ "$paste_rc" != "0" ]; then
         log "WARNING: paste_and_submit returnte non-zero fuer Task $task_id — claude koennte den Prompt verzoegert verarbeiten oder Task ist stuck. Kein poll.sh exit, Task bleibt in_progress."
     else
         log "Task $task_id (attempt ${attempt_id:-unbekannt}) an claude gesendet (fire-and-forget)"
@@ -638,6 +943,10 @@ except Exception:
     # Task starten — sonst werden false-positive Blocker im naechsten Task
     # auch nicht mehr gemeldet wenn der WIRKLICH stagnations-blocked ist.
     LAST_BLOCKED_TASK_ID=""
+    # G6: gleiches Prinzip fuer den Heartbeat-Control-Dedup — ein neuer
+    # Task-Dispatch darf nicht durch das Escape-Dedup einer VORHERIGEN Karte
+    # unterdrueckt werden.
+    LAST_HARD_INTERRUPT_TASK_ID=""
     # Kein Warten auf Completion — claude meldet sich selbst via MC API.
 }
 
@@ -698,18 +1007,23 @@ report_blocker() {
     local task_id="$1"
     local reason="$2"
     local error_detail="${3:-no error detail captured}"
+    # Quellenkennung im Kommentar. Default = der alte Wortlaut, damit die
+    # beiden turn-state-Aufrufer unveraendert bleiben; der Nudge-Pfad
+    # (escalate_unsubmitted_nudge) setzt seine eigene, damit der Lead auf den
+    # ersten Blick sieht, dass es NICHT die turn-state-Erkennung war.
+    local source_label="${4:-poll.sh turn-state}"
     log "Blocker erkannt auf Task $task_id: $reason"
 
     # Blocker-Kommentar via Python (sichere JSON-Encoding mit Newlines/Quotes)
     if [ -n "$CURRENT_BOARD_ID" ]; then
-        POLL_REASON="$reason" POLL_ERROR="$error_detail" \
+        POLL_REASON="$reason" POLL_ERROR="$error_detail" POLL_SOURCE="$source_label" \
         POLL_URL="$MC_API_URL/api/v1/agent/boards/$CURRENT_BOARD_ID/tasks/$task_id/comments" \
         POLL_TOKEN="$MC_TOKEN" python3 -c "
 import json, os, urllib.request
 reason = os.environ['POLL_REASON']
 err = os.environ['POLL_ERROR']
 body = {
-    'content': f'**Automatisch erkannt (poll.sh turn-state):** {reason}\n\n\`\`\`\n{err}\n\`\`\`',
+    'content': f'**Automatisch erkannt ({os.environ[\"POLL_SOURCE\"]}):** {reason}\n\n\`\`\`\n{err}\n\`\`\`',
     'comment_type': 'blocker',
 }
 req = urllib.request.Request(
@@ -732,14 +1046,18 @@ except Exception as e:
     # Felder → HTTP 422 + Task bleibt in_progress → Watchdog stale-loop
     # alle 60min (recovery_started Discord-spam). Daher senden wir hier
     # einen vollstaendigen Body mit blocker_type='technical_problem'.
-    POLL_REASON="$reason" POLL_ERROR="$error_detail" \
+    # W1 (Review PR #529): POLL_SOURCE gehoert AUCH hierher. Die
+    # blocker_question ist das Feld, das die Lead-Triage liest — stand dort
+    # fest verdrahtet "turn-state auto-detection", sagte sie bei einem
+    # Nudge-Blocker das Gegenteil von dem, wofuer das Label gebaut wurde.
+    POLL_REASON="$reason" POLL_ERROR="$error_detail" POLL_SOURCE="$source_label" \
     POLL_URL="$MC_API_URL/api/v1/agent/me/tasks/$task_id" \
     POLL_TOKEN="$MC_TOKEN" python3 -c "
 import json, os, urllib.request
 body = {
     'status': 'blocked',
     'blocker_type': 'technical_problem',
-    'blocker_question': f'Agent stalled — poll.sh turn-state auto-detection: {os.environ[\"POLL_REASON\"]}',
+    'blocker_question': f'Agent stalled — {os.environ[\"POLL_SOURCE\"]}: {os.environ[\"POLL_REASON\"]}',
     'blocker_description': os.environ['POLL_ERROR'][:300],
 }
 req = urllib.request.Request(
@@ -950,7 +1268,15 @@ flush_msg_queue() {
             _record_ack "$tid" "$seq"
             rm -f "$path"
         elif [ "$rc" -eq 2 ]; then
-            log "flush_msg_queue: Paste fuer seq $seq (thread $tid) nicht moeglich (Gate zu) — Flush gestoppt, Rest bleibt gequeued."
+            # W1 (Review PR #529, Runde 3): rc 2 bedeutet seit dem Interrupt-Gate-
+            # Fix zwei verschiedene Dinge — PASTE_LAST_ESCALATED trennt sie, sonst
+            # sagt der Log bei einer bereits eskalierten/blockierten Karte
+            # faelschlich "Gate zu" und wer das liest sucht an der falschen Stelle.
+            if [ "${PASTE_LAST_ESCALATED:-0}" = "1" ]; then
+                log "flush_msg_queue: Paste fuer seq $seq (thread $tid) wurde eskaliert — Nudge blieb im Feld stehen, Karte wurde blockiert und Feld per Escape geraeumt. Flush gestoppt, Rest bleibt gequeued."
+            else
+                log "flush_msg_queue: Paste fuer seq $seq (thread $tid) nicht moeglich (Gate zu) — Flush gestoppt, Rest bleibt gequeued."
+            fi
             return 1
         else
             log "flush_msg_queue: Paste fuer seq $seq (thread $tid) FEHLGESCHLAGEN (Verify) — Flush gestoppt, Rest bleibt gequeued, kein Ack."

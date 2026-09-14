@@ -142,6 +142,7 @@ def _parse_claude_line(d: dict[str, Any]) -> dict[str, Any] | None:
         "cwd": d.get("cwd", ""),
         "git_branch": d.get("gitBranch"),
         "model": model,
+        "harness": "claude",
         "input_tokens": usage.get("input_tokens", 0) or 0,
         "output_tokens": usage.get("output_tokens", 0) or 0,
         "cache_read_tokens": cache_read,
@@ -218,6 +219,7 @@ def _parse_omp_line(d: dict[str, Any], session_id: str | None) -> dict[str, Any]
         "cwd": d.get("cwd", ""),
         "git_branch": d.get("gitBranch"),
         "model": model,
+        "harness": "omp",
         "provider": message.get("provider") or d.get("provider"),
         "input_tokens": usage.get("input", 0) or 0,
         "output_tokens": usage.get("output", 0) or 0,
@@ -233,6 +235,29 @@ def _derive_omp_session_id(path: str) -> str:
     ``_parse_omp_line``; Claude Code lines carry their own sessionId field
     and ignore this."""
     return Path(path).stem
+
+
+def split_omp_context(input_tokens: int, prev_input_tokens: int) -> tuple[int, int]:
+    """Splits one omp ``usage.input`` reading into (fresh_input, cache_read).
+
+    omp (OpenAI-completions convention) reports the ENTIRE prompt — the full
+    conversation context — as ``usage.input`` on every call, with the cached
+    prefix as an unreported subset (``cacheRead`` stays 0 on local vLLM).
+    Claude Code, in contrast, reports the cached prefix as
+    ``cache_read_input_tokens`` and only the delta as ``input_tokens``.
+    Harvesting omp's number 1:1 made an omp worker look ~100x more expensive
+    than a Claude worker on the Insights page.
+
+    Session-sequence derivation (one JSONL file == one omp session, records
+    in file order):
+        fresh_input = max(0, input - input_prev)
+        cache_read  = min(input, input_prev)
+    The first message of a session (prev=0) is all fresh. A shrinking context
+    (compaction) yields fresh=0 / cache=input — never a negative delta.
+    """
+    fresh = max(0, input_tokens - prev_input_tokens)
+    cached = min(input_tokens, prev_input_tokens)
+    return fresh, cached
 
 
 def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
@@ -257,6 +282,11 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     # Die Header-Position ist NICHT fix (real: `title`-Zeile zuerst, session
     # meist Zeile 2) → jede Zeile per Substring-Guard pruefen.
     header_cwd = ""
+    # omp usage.input is FULL CONTEXT per call (see split_omp_context) — the
+    # delta derivation needs the running previous reading across the whole
+    # session, INCLUDING lines before the offset-resume point (they set the
+    # baseline for the first emitted record).
+    omp_prev_input = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -272,13 +302,20 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                             header_cwd = head.get("cwd") or ""
                     except (json.JSONDecodeError, ValueError):
                         pass
+                rec = parse_transcript_line(line, session_id=session_id)
+                if rec is None:
+                    continue
+                if rec.get("harness") == "omp":
+                    raw_input = rec["input_tokens"]
+                    fresh, cached = split_omp_context(raw_input, omp_prev_input)
+                    rec["input_tokens"] = fresh
+                    rec["cache_read_tokens"] = cached
+                    omp_prev_input = raw_input
                 if i < processed_lines:
                     continue
-                rec = parse_transcript_line(line, session_id=session_id)
-                if rec is not None:
-                    if not rec.get("cwd"):
-                        rec["cwd"] = header_cwd
-                    records.append(rec)
+                if not rec.get("cwd"):
+                    rec["cwd"] = header_cwd
+                records.append(rec)
     except OSError as e:
         logger.warning("harvest_file(%s): OS error: %s", path, e)
     return records
@@ -1094,6 +1131,88 @@ def _count_lines(path: str) -> int:
             return sum(1 for _ in f)
     except OSError:
         return 0
+
+
+async def backfill_omp_token_deltas(
+    session: AsyncSession,
+    *,
+    agent_base_paths: list[str] | None = None,
+    all_prices: list[ModelPrice] | None = None,
+    commit: bool = True,
+) -> dict[str, int]:
+    """One-time correction pass for omp events harvested with FULL-CONTEXT
+    ``usage.input`` values (pre split_omp_context data).
+
+    Re-derives fresh_input/cache_read per omp session from the JSONL source
+    files (the source of truth — same derivation as harvest_file) and UPDATEs
+    the matching model_usage_events rows, including a cost_usd recompute from
+    the corrected token counts.
+
+    Idempotent: the derived values are a pure function of the file contents,
+    so a second run finds every row already correct and corrects 0 events.
+    Only omp sessions (``*/omp-sessions/**/*.jsonl`` under the agent base
+    paths) are touched — Claude/Grok/Hermes events are never rewritten.
+    """
+    from app.config import settings as app_settings
+
+    if agent_base_paths is None:
+        harvest_paths = getattr(app_settings, "token_harvest_paths", ["~/.mc/agents"])
+        agent_base_paths = [_expand_harvest_path(p) for p in harvest_paths]
+    if all_prices is None:
+        prices_result = await session.exec(select(ModelPrice))
+        all_prices = list(prices_result.all())
+
+    stats = {"files_scanned": 0, "events_matched": 0, "events_corrected": 0}
+    for base_str in agent_base_paths:
+        base = Path(base_str)
+        if not base.exists():
+            continue
+        for jsonl_path in sorted(base.glob("*/omp-sessions/**/*.jsonl")):
+            stats["files_scanned"] += 1
+            for rec in harvest_file(str(jsonl_path), 0):
+                row_result = await session.exec(
+                    select(
+                        ModelUsageEvent.id,
+                        ModelUsageEvent.input_tokens,
+                        ModelUsageEvent.cache_read_tokens,
+                        ModelUsageEvent.output_tokens,
+                        ModelUsageEvent.cache_write_tokens,
+                        ModelUsageEvent.model,
+                        ModelUsageEvent.ts,
+                    ).where(ModelUsageEvent.message_uuid == rec["uuid"])
+                )
+                row = row_result.first()
+                if row is None:
+                    continue
+                stats["events_matched"] += 1
+                event_id, cur_in, cur_cache, out, cache_w, model, ts = row
+                if cur_in == rec["input_tokens"] and cur_cache == rec["cache_read_tokens"]:
+                    continue  # already correct → idempotent no-op
+                price_info = match_price(model, ts, all_prices)
+                cost_usd = (
+                    _compute_cost_usd(
+                        price_info,
+                        rec["input_tokens"],
+                        out,
+                        rec["cache_read_tokens"],
+                        cache_w,
+                    )
+                    if price_info is not None
+                    else None
+                )
+                await session.exec(
+                    update(ModelUsageEvent)
+                    .where(ModelUsageEvent.id == event_id)
+                    .values(
+                        input_tokens=rec["input_tokens"],
+                        cache_read_tokens=rec["cache_read_tokens"],
+                        cost_usd=cost_usd,
+                    )
+                )
+                stats["events_corrected"] += 1
+    if commit:
+        await session.commit()
+    return stats
 
 
 async def _process_grok_file(

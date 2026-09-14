@@ -235,9 +235,27 @@ async def test_incident_replay_zero_operator_approvals(client: AsyncClient, fake
             },
         )
         assert r.status_code in (200, 201), r.text
+        # Akt 4's Lead-Unblock (blocked -> in_progress) rotiert seither
+        # dispatch_attempt_id unbedingt (task_lifecycle.apply_unblock_notify_reset
+        # / dieser PR) — vorher blieb das Feld fuer diese Karte die ganze
+        # Kette durch None, das PATCH unten lief also ohne Header. Jetzt
+        # steht ein echter Wert auf der Zeile, und der Guard verlangt ihn
+        # zurecht: ein realer Coder (via mc-CLI) haette exakt diesen Wert
+        # aus /tmp/mc-context.env geschickt. Der Ablauf bleibt derselbe —
+        # nur der simulierte Aufrufer liest jetzt den aktuellen Stand,
+        # statt ihn zu ignorieren.
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            code_before_done = await s.get(Task, code.id)
         r = await client.patch(
             f"/api/v1/agent/boards/{board_id}/tasks/{code.id}",
-            headers={"Authorization": f"Bearer {tokens['Coder']}"},
+            headers={
+                "Authorization": f"Bearer {tokens['Coder']}",
+                **(
+                    {"X-Dispatch-Attempt-Id": code_before_done.dispatch_attempt_id}
+                    if code_before_done.dispatch_attempt_id
+                    else {}
+                ),
+            },
             json={"status": "done"},
         )
         assert r.status_code == 200, r.text

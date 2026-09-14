@@ -370,6 +370,8 @@ async def list_agents(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    from app.scopes import normalize_agent_role
+
     query = select(Agent)
     if board_id and not include_unassigned:
         query = query.where(Agent.board_id == board_id)
@@ -382,7 +384,16 @@ async def list_agents(
         query = query.where(Agent.archived_at.is_(None))
     query = query.order_by(Agent.name)
     result = await session.exec(query)
-    return result.all()
+    agents = result.all()
+    # W1 (PR #514 Rex review): `role` can be freetext (setattr in PATCH bypasses
+    # the model's validator — see scopes.normalize_agent_role docstring). The
+    # frontend's strict `role === "reviewer"` check needs a value it can trust,
+    # so add the canonical form here instead of duplicating the enum-matching
+    # heuristic in TypeScript. Raw `role` stays untouched for display purposes.
+    return [
+        {**a.model_dump(), "role_canonical": normalize_agent_role(a.role)}
+        for a in agents
+    ]
 
 
 @router.get("/agents/stream")
@@ -2871,6 +2882,20 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
     return out
 
 
+def _task_still_dispatchable(task: Task, agent: Agent) -> bool:
+    """Guard 2 (erledigte/fremde Karte, 14.09.2026 incident): the last check
+    before ANY `state=new_task` response leaves this function. Every SQL
+    query upstream in agent_poll already whitelists non-terminal statuses,
+    but the Python `task`/`active` object they produce can go stale across
+    an `await` (grace-window board lookup, dependencies_met, the orphan
+    helper's own commit+refresh) if a concurrent request finishes or
+    reassigns the SAME card in that window. Callers MUST refresh `task`
+    from the DB immediately before calling this — checking a stale in-memory
+    attribute defeats the whole point.
+    """
+    return task.status not in ("done", "failed") and task.assigned_agent_id == agent.id
+
+
 async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, task: Task) -> dict | None:
     """Fix 2 (Poll-Luecke, 07.09.2026 incident): detect an ORPHANED RUN.
 
@@ -2949,6 +2974,20 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     session.add(task)
     await session.commit()
     await session.refresh(task)
+
+    # Guard 2: the "in_progress" the caller saw before invoking this helper
+    # can be stale by now — a concurrent request may have finished or
+    # reassigned this exact card while try_claim_heal/commit were in flight.
+    # Redispatching it here would hand a done/foreign card a fresh prompt.
+    if not _task_still_dispatchable(task, agent):
+        logger.warning(
+            "Poll-orphan redispatch aborted for task %s — status/assignee "
+            "changed underneath us (status=%s, assigned_agent_id=%s, "
+            "agent=%s). Reporting idle instead of new_task.",
+            task.id, task.status, task.assigned_agent_id, agent.id,
+        )
+        return {"state": "idle"}
+
     await set_dispatch_attempt_id(
         session, task, str(uuid.uuid4()),
         caller="agent_poll", reason="poll_orphan_run",
@@ -2996,6 +3035,10 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
             "id": str(task.id),
             "title": task.title,
             "status": task.status,
+            # Guard 1 (client-side twin, hermes-bridge.py / poll.sh): lets the
+            # bridge cross-check against its own agent id (poll response's
+            # top-level "my_agent_id") before pasting a dispatch.
+            "assigned_agent_id": str(task.assigned_agent_id) if task.assigned_agent_id else None,
             "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
             "ack_at": task.ack_at.isoformat() if task.ack_at else None,
             "board_id": str(task.board_id) if task.board_id else None,
@@ -3037,7 +3080,11 @@ async def agent_poll(
     # comm_v2 pilot (Task 11 adds the flag): deliver Thread messages via the
     # two-stage cursor alongside the untouched comment path. `_poll_extra` is
     # spread into every return so non-pilot agents are byte-identical to before.
-    _poll_extra: dict = {"new_comments": new_comments}
+    # `my_agent_id` (Guard 1, erledigte/fremde Karte incident): lets the
+    # bridge/poll.sh cross-check a delivered task's `assigned_agent_id`
+    # against its own identity before pasting a dispatch, without needing
+    # any new provisioning/env plumbing.
+    _poll_extra: dict = {"new_comments": new_comments, "my_agent_id": str(agent.id)}
     if getattr(agent, "comm_v2", False):
         acked: dict[str, int] = {}
         if acked_seq:
@@ -3219,6 +3266,15 @@ async def agent_poll(
                 select(Task)
                 .where(Task.assigned_agent_id == agent.id)
                 .where(Task.status == "inbox")
+                # C2: a lead-held card (run_control=manual_hold) or an
+                # admin-stopped card must not be claimed via poll just
+                # because a blocker-approval reset it to status=inbox —
+                # that path clears dispatch_attempt_id/dispatched_at/ack_at
+                # but never touches run_control (approvals.py resolve_approval).
+                # Without this filter the poll-claim path below (which
+                # bypasses check_dispatch_allowed entirely) would deliver a
+                # held task straight to the agent's session.
+                .where(Task.run_control.is_(None))
                 .order_by(Task.created_at.asc())
             )
             task = None
@@ -3246,6 +3302,22 @@ async def agent_poll(
                     }
 
     if task is None:
+        return {"state": "idle", **_poll_extra}
+
+    # Guard 2 (erledigte/fremde Karte, 14.09.2026 incident): `task` was
+    # selected by a query several `await`s ago (dependencies_met per
+    # candidate, the blocked grace-window board lookup, ...) — refresh it
+    # from the DB right before deciding to dispatch so a concurrent
+    # completion/reassignment in that window can't slip a done/foreign card
+    # through as state=new_task. Cheap: single-row fetch by PK, already in
+    # the session identity map.
+    await session.refresh(task)
+    if not _task_still_dispatchable(task, agent):
+        logger.warning(
+            "agent_poll: refusing to dispatch stale task %s to agent %s "
+            "(status=%s, assigned_agent_id=%s) — card changed underneath us",
+            task.id, agent.id, task.status, task.assigned_agent_id,
+        )
         return {"state": "idle", **_poll_extra}
 
     # 3. Claim the task. Two paths:
@@ -3356,6 +3428,10 @@ async def agent_poll(
             # the agent's own PATCH sets it to in_progress. Consumers must
             # trust `state` for delivery semantics, `status` for lifecycle.
             "status": task.status,
+            # Guard 1 (client-side twin, hermes-bridge.py / poll.sh): lets the
+            # bridge cross-check against its own agent id (poll response's
+            # top-level "my_agent_id") before pasting a dispatch.
+            "assigned_agent_id": str(task.assigned_agent_id) if task.assigned_agent_id else None,
             # F3 fix (Plan 26-02): expose dispatched_at + ack_at so downstream
             # consumers (bridge, tests) can observe the spread.
             "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
