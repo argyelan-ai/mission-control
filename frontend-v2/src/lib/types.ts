@@ -613,6 +613,11 @@ export interface Agent {
   board_id: string | null;
   name: string;
   role: string | null;
+  // Canonical form of `role`, resolved server-side (case/whitespace-insensitive
+  // match against the AgentRole enum; null when `role` doesn't match any known
+  // role — e.g. freetext). `GET /api/v1/agents` only; use this for strict role
+  // comparisons instead of the raw `role` string (see lib/reviewRouting.ts).
+  role_canonical: string | null;
   emoji: string | null;
   status: AgentStatus;
   model: string | null;

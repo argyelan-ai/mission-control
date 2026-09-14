@@ -38,8 +38,8 @@ vi.mock("@/lib/store", () => ({
 
 import InboxPage from "../page";
 
-const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
-const dev: Agent = { id: "agent-dev", name: "Delta", role: "developer" } as unknown as Agent;
+const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer", role_canonical: "reviewer" } as unknown as Agent;
+const dev: Agent = { id: "agent-dev", name: "Delta", role: "developer", role_canonical: "developer" } as unknown as Agent;
 
 function mkTask(o: Partial<Task> = {}): Task {
   return {
