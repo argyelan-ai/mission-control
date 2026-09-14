@@ -38,6 +38,17 @@ from app.services.dispatch import auto_dispatch_task
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 from app.services.task_state import lock_and_set
 
+# W-busy (#25efd77c): grace window for a heal claimed while the agent's last
+# reported heartbeat status was "working". See _maybe_rotate_dispatch_attempt
+# for the full rationale — short version: a paste sent while the agent is
+# mid-Zug can land inside that running turn and get silently absorbed, so a
+# busy heal gets a short retry window instead of the normal
+# one-heal-per-dispatch-window lock. Two task-runner ticks' worth of buffer
+# (default interval 60s, see TaskRunnerService.__init__) gives a genuinely
+# just-delivered paste time to be picked up and ACK'd before we'd consider
+# rotating again.
+BUSY_HEAL_RETRY_TTL_SEC = 120
+
 logger = logging.getLogger("mc.task_runner")
 
 # Thresholds (in minutes)
@@ -681,8 +692,28 @@ class TaskRunnerService:
         attempt_id than the one it last pasted on its next tick → triggers a
         fresh paste path without human intervention.
 
-        Dedup via Redis: only 1 rotation per `(task_id, original_attempt_id)`.
-        TTL = full ack_timeout so no endless rotation happens.
+        Dedup via Redis: normally only 1 rotation per `(task_id,
+        original_attempt_id)`, TTL = full ack_timeout, so no endless rotation
+        happens.
+
+        W-busy (#25efd77c) exception: poll.sh's dispatch paste is fail-open
+        (docker/shared/poll.sh paste_and_submit) — if the agent's pty is
+        already busy with an unrelated running turn ("Zug") when poll.sh
+        pastes the rotated attempt, the paste can land INSIDE that turn and
+        get silently absorbed. The agent never sees a fresh prompt, never
+        ACKs, and — since a rotation had already happened — the normal
+        full-ack_timeout lock below would then strand the card with no
+        further self-heal until the full ack_timeout escalates to a human
+        (reproduced: activity_events 14.09.2026, card healed at 05:32,
+        stayed unacked until a manual poll.sh restart at 06:50). Detect this
+        via the agent's last reported heartbeat status: if it was "working"
+        at THIS heal, use a short retry TTL (BUSY_HEAL_RETRY_TTL_SEC)
+        instead of the full window, so the next task-runner tick can retry
+        once the busy Zug plausibly cleared. If the agent was idle (the
+        normal case — nothing already running, the paste has every chance
+        to land cleanly), the full single-heal-per-window lock applies
+        unchanged, so a genuinely-delivered paste is never re-rotated
+        (double-dispatch protection, unchanged from before this fix).
 
         Returns: True if rotated, False if skipped (still too early or already rotated).
         """
@@ -714,7 +745,11 @@ class TaskRunnerService:
             caller="d1_silent_retry",
             reason=f"no_ack_after_{int(minutes_since_dispatch)}min",
         )
-        await redis.set(rotated_key, "1", ex=int(ack_timeout * 60))
+        agent_was_busy = agent.status == "working"
+        rotated_key_ttl = (
+            BUSY_HEAL_RETRY_TTL_SEC if agent_was_busy else int(ack_timeout * 60)
+        )
+        await redis.set(rotated_key, "1", ex=rotated_key_ttl)
 
         await emit_event(
             session,
@@ -729,12 +764,15 @@ class TaskRunnerService:
                 "new_attempt_id": new_attempt_id,
                 "minutes_since_dispatch": int(minutes_since_dispatch),
                 "rotation_threshold_min": int(rotation_threshold),
+                "agent_was_busy": agent_was_busy,
+                "rotated_key_ttl_sec": rotated_key_ttl,
             },
         )
         logger.warning(
-            "D-1 silent retry: '%s' — %s hat nicht ACK'd nach %dmin (threshold=%dmin), neue attempt_id %s",
+            "D-1 silent retry: '%s' — %s hat nicht ACK'd nach %dmin (threshold=%dmin), "
+            "neue attempt_id %s (agent_was_busy=%s, retry_ttl=%ds)",
             task.title[:60], agent.name, int(minutes_since_dispatch),
-            int(rotation_threshold), new_attempt_id[:8],
+            int(rotation_threshold), new_attempt_id[:8], agent_was_busy, rotated_key_ttl,
         )
         return True
 
