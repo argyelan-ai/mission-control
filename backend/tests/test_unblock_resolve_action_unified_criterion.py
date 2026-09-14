@@ -65,7 +65,7 @@ async def _setup(
 
     target_raw, target_hash = generate_agent_token()
     target = Agent(
-        name="Sparky",
+        name="Worker",
         role="developer",
         board_id=board.id,
         agent_token_hash=target_hash,
@@ -303,7 +303,7 @@ async def test_operator_unblock_from_waiting_with_released_lock_resets_and_redel
 
     _, target_hash = generate_agent_token()
     target = Agent(
-        name="Sparky",
+        name="Worker",
         role="developer",
         board_id=board.id,
         agent_token_hash=target_hash,
