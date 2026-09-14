@@ -51,6 +51,16 @@
 x-claude-agent-base: &claude-agent-base
   image: "${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}mc-claude-agent:${MC_AGENT_IMAGE_TAG:-latest}"
   restart: unless-stopped
+  # Docker Desktop defaults StopTimeout to 1s when unset (measured, not
+  # assumed — architecture session 2026-09-14). 20s alone doesn't save a
+  # graceful shutdown yet — entrypoint.sh has no SIGTERM trap, so PID 1
+  # still never sees the signal and the container still dies via SIGKILL,
+  # just later: measured on an isolated PID-1-without-trap container,
+  # StopTimeout=20 → 20.12s elapsed (ExitCode 137) vs. StopTimeout=1 →
+  # 1.07s elapsed (ExitCode 137). The grace period works, it just buys a
+  # later SIGKILL instead of a clean shutdown until the trap lands. That
+  # trap is a separate, already-filed card; the two ship together.
+  stop_grace_period: 20s
   networks:
     - mission-control_default
   # env_file laedt docker/.env.shared IMMER — auch bei ad-hoc `docker compose
@@ -66,6 +76,7 @@ x-claude-agent-base: &claude-agent-base
 x-openclaude-agent-base: &openclaude-agent-base
   image: "${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}mc-agent-base:${MC_AGENT_IMAGE_TAG:-latest}"
   restart: unless-stopped
+  stop_grace_period: 20s  # same Docker-Desktop-default gap, see claude-agent-base above
   networks:
     - mission-control_default
   # docker/.env.shared brings TAVILY_API_KEY (used by openclaude 0.7+ built-in
@@ -89,6 +100,7 @@ x-openclaude-agent-base: &openclaude-agent-base
 x-omp-agent-base: &omp-agent-base
   image: mc-omp-agent:latest
   restart: unless-stopped
+  stop_grace_period: 20s  # same Docker-Desktop-default gap, see claude-agent-base above
   networks:
     - mission-control_default
   env_file:
@@ -100,6 +112,7 @@ x-omp-agent-base: &omp-agent-base
 x-kimi-agent-base: &kimi-agent-base
   image: mc-kimi-agent:latest
   restart: unless-stopped
+  stop_grace_period: 20s  # same Docker-Desktop-default gap, see claude-agent-base above
   networks:
     - mission-control_default
   env_file:
