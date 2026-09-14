@@ -44,10 +44,19 @@ logger = logging.getLogger(__name__)
 #         abort dispatch — same as original `return` in auto_dispatch_task).
 #       * Success path tries worktree-isolation; on worktree failure falls back
 #         to a branch checkout in the main repo. Sets task.workspace_path.
-#   - Project absent + agent.workspace_path set: ad-hoc git workspace path.
+#   - Project absent + agent.workspace_path set + agent.requires_git_workflow:
+#       * ad-hoc git workspace, repo resolved via
+#         repo_registry.resolve_adhoc_repo_target (task.repo_id → board
+#         default → shared mc-workspace scratch repo — never "no repo").
 #       * Worktree → branch fallback identical to project path.
-#       * On any exception logs WARNING but does NOT block dispatch (returns True).
-#   - Otherwise: no-op (returns True — caller continues with non-code workspace).
+#       * Changed 2026-09-14 (task af914128): on any exception now applies
+#         the SAME hard-fail contract as the project path (blocker comment +
+#         blocked + terminal-unassign, returns False) — the old silent
+#         WARNING-and-continue left git-requiring agents dispatched into a
+#         non-git directory, which is exactly what caused the incident.
+#   - Project absent + agent.requires_git_workflow=False (or no
+#     agent.workspace_path): no-op here (returns True) — caller continues
+#     with the Phase-C non-code workspace.
 #
 # Pattern S2 (lazy local imports) preserved for git_service + apply_terminal_unassign
 # to avoid module-load cycles with dispatch.py / task_lifecycle.py.
@@ -237,14 +246,17 @@ async def setup_git_workspace_for_dispatch(
             session.add(blocker)
             await session.commit()
             return False
-    elif agent.workspace_path:
-        # Ad-hoc task without a project → own repo or mc-workspace
+    elif agent.workspace_path and getattr(agent, "requires_git_workflow", True):
+        # Ad-hoc task without a project, git-requiring agent → prepared
+        # clone (task af914128, "Ad-hoc-Karten ohne Projekt bekommen kein
+        # Repo"). Gated on requires_git_workflow — already the
+        # authoritative per-agent "does this agent's output belong in git"
+        # flag (see dispatch_message_builder.py's git_section selection) —
+        # rather than a new opt-in tag an operator would have to remember
+        # to set per card. Non-coder ad-hoc tasks (Research/Writing) skip
+        # this branch entirely and get the Phase-C plain workspace below.
         try:
-            from app.services.git_service import (
-                ADHOC_REPO,
-                git_service,
-                slugify_project,
-            )
+            from app.services.git_service import git_service, slugify_project
             from app.services.github_config import require_github_owner
 
             if task.use_separate_repo:
@@ -268,12 +280,11 @@ async def setup_git_workspace_for_dispatch(
                 except Exception:
                     logger.warning("Task-Repo-Registrierung fehlgeschlagen", exc_info=True)
             else:
-                # Shared mc-workspace repo (previous behavior).
-                # Fail loud instead of a silent warning fallback for a missing owner.
-                _owner = await require_github_owner(session)
-                repo_url = f"https://github.com/{_owner}/{ADHOC_REPO}.git"
-                repo_slug = ADHOC_REPO
-                await git_service.ensure_adhoc_repo()
+                # Precedence: task.repo_id (Maske) → board.default_project_id
+                # → shared mc-workspace scratch repo. Never "no repo" — see
+                # repo_registry.resolve_adhoc_repo_target docstring.
+                from app.services.repo_registry import resolve_adhoc_repo_target
+                repo_url, repo_slug = await resolve_adhoc_repo_target(session, task)
 
             main_repo = await git_service.ensure_workspace(
                 agent.workspace_path, repo_url, repo_slug,
@@ -298,7 +309,34 @@ async def setup_git_workspace_for_dispatch(
             session.add(task)
             await session.commit()
         except Exception as e:
-            logger.warning("Ad-hoc git workspace setup fehlgeschlagen: %s", e)
+            # Same hard-fail contract as the project-with-repo branch above:
+            # a git-requiring ad-hoc task must never dispatch into a
+            # workspace with no repo at all — that silence is exactly what
+            # let an agent self-clone the wrong `gh repo clone <shortname>`
+            # result on 2026-09-14 (incident, task af914128).
+            logger.error(
+                "Ad-hoc git workspace setup failed for task %s: %s", task.id, e,
+            )
+            from app.models.task import TaskComment
+            from app.services.task_lifecycle import apply_terminal_unassign
+            blocker = TaskComment(
+                task_id=task.id,
+                author_type="system",
+                comment_type="blocker",
+                content=(
+                    "**Workspace-Setup fehlgeschlagen** — Dispatch abgebrochen.\n\n"
+                    f"**Fehler:** `{type(e).__name__}: {e}`\n\n"
+                    "Ad-hoc-Task ohne Projekt — Repo-Aufloesung (repo_id / "
+                    "Board-Default / mc-workspace) schlug fehl.\n\n"
+                    "**Question for @Operator** — Repo-Zugriff bzw. Board-Default pruefen?"
+                ),
+            )
+            task.status = "blocked"
+            await apply_terminal_unassign(session, task, "blocked")
+            session.add(task)
+            session.add(blocker)
+            await session.commit()
+            return False
 
     return True
 
