@@ -325,10 +325,13 @@ def _run_one_poll(bridge, monkeypatch, tmp_path, payload):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-    def stop(_seconds):
+    def stop(*_a, **_kw):
         raise _StopLoop()
 
-    monkeypatch.setattr(bridge.time, "sleep", stop)
+    # dispatch_poll_loop's end-of-iteration wait is _shutdown_event.wait(...),
+    # not time.sleep() (13.09.2026 SIGTERM-shutdown fix) — that's the call
+    # that must raise to end the loop after one iteration.
+    monkeypatch.setattr(bridge._shutdown_event, "wait", stop)
     with pytest.raises(_StopLoop):
         bridge.dispatch_poll_loop()
 
