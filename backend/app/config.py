@@ -201,6 +201,14 @@ class Settings(BaseSettings):
     # agent names deliberately live in deployment config, not in code.
     omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
 
+    # Which driver the host-side hermes bridge runs (scripts/hermes-bridge.py).
+    # "native" (default) = the bridge drives a hermes TUI in tmux and the
+    # Sessions page has no chat for it at all; "acp" = the bridge runs the ACP
+    # chat daemon and the Sessions chat becomes Hermes' ONLY interface
+    # (docs/specs/chat-over-acp.md). Read by acp_chat_transport.headless_chat_kind
+    # — deployment config, same reasoning as OMP_ACP_AGENT_SLUGS above.
+    hermes_driver: str = "native"  # native | acp
+
     # Secrets encryption (Fernet key for MC-managed secrets)
     secrets_encryption_key: str = ""
 

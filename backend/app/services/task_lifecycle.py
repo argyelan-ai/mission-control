@@ -63,6 +63,75 @@ async def record_task_event(
     # No separate commit — caller commits together with the status update
 
 
+def task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:
+    """Shared guard for every "reactivate this task" path (auto-resume,
+    auto-ACK, redispatch, ...): may this specific call still flip the
+    task's state, or has something else already changed the ground it
+    was standing on?
+
+    Four instances of the SAME missing check have surfaced in one day
+    (2026-09-13): `_handle_help_request_resume` and `_handle_callback_resume`
+    (agent_task_status.py) resuming a held parent because they only checked
+    their own link field (blocked_by_task_id / status), never run_control;
+    the blocker-answer redispatch (services/dispatch.py) firing after the
+    card had already moved on to review through a normal poll; and the
+    review_stuck watchdog escalating on a status it never re-read (separate
+    card, not fixed here). All four are the same shape: a decision is made
+    at time T1, applied at time T2, and T2 never re-reads the precondition
+    T1 was based on. This predicate is the one thing every T2 call site
+    should run immediately before flipping state, instead of re-deriving
+    its own copy of the check (and the fifth call site forgetting it).
+
+    `run_control is not None` (mc hold / an admin stop) always blocks —
+    reactivating a held or stopped task through a side channel is exactly
+    the deadlock PR #533 closed five other paths for. `expected_status`,
+    when given, additionally requires the task to still be in the specific
+    status the caller's decision was based on (e.g. "blocked" for a
+    resume that only makes sense while the task is still blocked) — a
+    caller with no single expected status (e.g. one that already checks a
+    set of statuses itself) can omit it.
+
+    KNOWN CALL SITES (keep this updated — there is no structural choke
+    point that forces every "set a task back to in_progress/inbox after a
+    decision made earlier" write through this predicate, so this ledger IS
+    the mechanism the tenth site is supposed to find; grep for
+    `task_still_reactivatable` in this repo before enumerating from
+    scratch). Status as of the 9th-path follow-up card (2026-09-13):
+
+      GUARDED — routed through this predicate:
+      1. dispatch.redispatch_after_blocker_answer, wraps auto_dispatch_task
+      2. agent_task_status._handle_help_request_resume (7th path, PR #533)
+      3. agent_task_status._handle_callback_resume (8th path, PR #556)
+      4. routers/approvals.py resolve_approval, blocker_decision/approved
+         (PATCH /approvals/{id}) — calls #1 above
+      5. routers/approvals.py quick_resolve_confirm, blocker_decision/approved
+         (POST .../quick-resolve/confirm, Telegram URL-button path) — calls
+         #1 above
+      9. services/telegram_bot.py TelegramBotService._resolve_approval,
+         blocker_decision/approved (follow-up to PR #556) — previously
+         checked only `task.status == "blocked"`, never run_control.
+         (Earlier PR #556 text excused this one as "resumes in place, no
+         redispatch, untouched" — wrong excuse: the gap this predicate
+         closes is reactivating a task whose ground shifted underneath it,
+         not specifically the redispatch mechanism; "no redispatch"
+         doesn't address it.)
+
+      OPEN — found, not yet guarded (flagged for follow-up cards, PR #556
+      review):
+      6. task_lifecycle.reopen_parent_for_new_subtask — checks
+         `parent.status != "review"`, never run_control
+      7. routers/approvals.py visual_review rejection — sets
+         `original_task.status = "in_progress"` with no check at all
+      8. routers/approvals.py clarification_question approval — checks
+         `task.status == "blocked"`, never run_control
+    """
+    if task.run_control is not None:
+        return False
+    if expected_status is not None and task.status != expected_status:
+        return False
+    return True
+
+
 def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
     """Auto-ACK: the first inbound signal from the assigned agent on a
     dispatched task claims it (§3.3 handshake).
@@ -76,11 +145,24 @@ def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool
     Non-committing — mirrors record_task_event: the caller commits together
     with whatever else it writes (the comment / message row). Returns True iff
     this call performed the ACK, so callers can log / emit exactly once.
+
+    C2 (PR #533 Nacharbeit Runde 3, Rex review B2): `run_control is None` is
+    part of the guard for the same reason it was added to the poll/pull-claim
+    candidate queries and the phase-auto-advance selects — a lead-held card
+    (run_control=manual_hold) sits in exactly the dispatched-but-unacked shape
+    this handshake looks for (status stays "inbox", dispatched_at is already
+    set — `mc hold` only checks status, not dispatched_at). Without this
+    guard, the assigned agent's very next comment or message silently claims
+    the card the lead just held: ack_at gets set, status flips to
+    in_progress, and the active-task lock is taken — undoing the hold through
+    a channel that carries no lifecycle intent at all. The comment/message
+    itself still gets written either way; only the implicit ACK is skipped.
     """
     if not (
         task.assigned_agent_id == agent.id
         and task.ack_at is None
         and task.dispatched_at is not None
+        and task.run_control is None
     ):
         return False
 
@@ -577,6 +659,12 @@ async def execute_review_decision(
                         board_id=board_id, task_id=task.id, agent_id=actor_agent.id,
                         severity="warning",
                     )
+                    # Same class of gap as the reassign endpoints: reassigning
+                    # to the Board Lead here never went through
+                    # auto_dispatch_task, so the Board Lead's workspace was
+                    # never prepared for this task/branch.
+                    from app.services.task_context_builder import prepare_agent_workspace_for_task
+                    await prepare_agent_workspace_for_task(task, _board_lead, session)
                     return  # Return without approve — Board Lead must decide
                 else:
                     raise HTTPException(
@@ -851,6 +939,20 @@ async def execute_review_decision(
     session.add(task)
     await session.commit()
 
+    # W1 fix (PR #558 follow-up): this review path sets task.status directly
+    # and never goes through the generic PATCH handlers (routers/tasks.py,
+    # routers/agent_task_status.py) where cleanup_obsolete_approvals is
+    # normally wired to updates["status"] — so a pending review_stuck (or
+    # blocker_decision/clarification_question/spawn_timeout/
+    # dispatch_escalation) approval on this task would sit as a zombie in
+    # the operator's inbox until the next watchdog reconciliation tick
+    # (~30s). task.status here already reflects the final state for every
+    # branch above (done/user_test/blocked-on-E2E for approve, whatever
+    # handle_review_rejection landed on for request_changes, unchanged
+    # "review" for hold), so one call after the commit covers all of them.
+    from app.services.approval_cleanup import cleanup_obsolete_approvals
+    await cleanup_obsolete_approvals(session, task.id, task.status, board_id)
+
 
 async def system_finalize_task_done(
     session: AsyncSession,
@@ -958,6 +1060,69 @@ async def system_finalize_task_done(
         )
 
 
+async def _notify_no_reviewer_found(
+    session: AsyncSession, task: Task, board_id: uuid.UUID,
+) -> None:
+    """No reviewer agent on the board: leave a visible trail instead of the
+    silent unassigned-in-review state `find_reviewer`'s deliberate None
+    (PR #504) used to produce (W6). All three callers of
+    `handle_review_handoff` — agent_task_status.py, tasks.py, and the
+    watchdog's phase-completion fallback — discarded that None with no
+    signal to anyone, so the fix lives here, in the one function all three
+    share, instead of being patched into each call site separately.
+
+    Shape chosen: a durable TaskComment (comment_type="system_notify" — an
+    internal-only type, not in ALL_COMMENT_TYPES, so no schema/API change
+    needed) plus a best-effort DM to the Board Lead, reusing the same
+    delivery primitive `_notify_lead_on_completion` already uses. A new
+    Task column/flag would need a migration and frontend wiring for one
+    boolean; the comment is visible immediately in the existing task-thread
+    UI and still lands even in the watchdog's fallback branch, which by
+    definition runs when there is no Board Lead to DM.
+    """
+    message = (
+        f"**Kein Reviewer gefunden fuer '{task.title}'.**\n\n"
+        f"Die Karte bleibt in `review`, aber es ist kein Agent mit Rolle "
+        f"`reviewer` (oder Namens-Fallback \"rex\"/\"review\") auf diesem "
+        f"Board verfuegbar. Bitte manuell einen Reviewer zuweisen oder die "
+        f"Entscheidung direkt treffen (POST .../review).\n\n"
+        f"Task-ID: {task.id}"
+    )
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        content=message,
+        comment_type="system_notify",
+    ))
+    await session.commit()
+
+    lead = (await session.exec(
+        select(Agent).where(
+            Agent.board_id == board_id,
+            Agent.is_board_lead == True,  # noqa: E712
+        )
+    )).first()
+    if lead:
+        try:
+            from app.services.messaging import ensure_dm_thread, post_message
+            lead_thread = await ensure_dm_thread(session, lead)
+            await post_message(
+                session, thread_id=lead_thread.id, sender_type="system",
+                message_type="system", body=message,
+            )
+        except Exception as e:
+            logger.warning(
+                "No-reviewer notify: DM an Lead fehlgeschlagen fuer Task %s: %s",
+                task.id, e,
+            )
+
+    await emit_event(
+        session, "task.review_unassigned",
+        f"Kein Reviewer gefunden fuer '{task.title}' — Karte bleibt unassigned in review",
+        board_id=board_id, task_id=task.id, severity="warning",
+    )
+
+
 async def handle_review_handoff(
     session: AsyncSession,
     task: Task,
@@ -980,11 +1145,22 @@ async def handle_review_handoff(
             logger.info("Review-Handoff dedupe: '%s' bereits bei %s", task.title, existing_reviewer.name)
             return existing_reviewer
 
-    reviewer = await _find_reviewer(session, board_id)
+    reviewer = await _find_reviewer(
+        session, board_id,
+        # Autor-Ausschluss: der Developer, der den Review eingereicht hat,
+        # darf nie als eigener Reviewer gewaehlt werden (alle Fallback-Stufen).
+        exclude_agent_id=developer.id if developer else None,
+    )
     if not reviewer:
+        # Sichtbarer None-Pfad: kein lebendiger Reviewer-Kandidat uebrig
+        # (alle offline, belegt oder Autor). Kein stiller Fallback.
+        logger.info(
+            "Review-Handoff: kein Reviewer-Kandidat fuer Board %s "
+            "(offline / Autor / keine Rolle) — Task '%s' bleibt unzugewiesen",
+            board_id, task.title,
+        )
+        await _notify_no_reviewer_found(session, task, board_id)
         return None
-    if developer and reviewer.id == developer.id:
-        return None  # Reviewer must not be the same agent
 
     # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_handoff"

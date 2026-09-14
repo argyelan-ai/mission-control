@@ -59,13 +59,22 @@ if [ ! -f "$POLL_LOG" ]; then
     exit 0  # Kein Fail — vielleicht ist Boss grade nicht aufgesetzt
 fi
 
-# Token + Chat-ID aus .env ziehen (nur diese zwei Keys — keine anderen leaken)
+# Token + Chat-ID aus .env ziehen (nur diese Keys — keine anderen leaken).
+# Bevorzugt der separate Reports-Bot (TELEGRAM_REPORTS_*, s. docs/setup/
+# telegram.md); fehlt er auf diesem Host (haeufigster Fall: nur der Command-
+# Bot ist eingerichtet), faellt der Waechter auf TELEGRAM_BOT_TOKEN/_CHAT_ID
+# zurueck statt zu verstummen — gleiche Begruendung wie in
+# docker-health-restart.sh notify().
 # shellcheck disable=SC1090
 REPORTS_TOKEN=""
 REPORTS_CHAT=""
 if [ -f "$ENV_FILE" ]; then
-    REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
-    REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+    REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    if [ -z "$REPORTS_TOKEN" ] || [ -z "$REPORTS_CHAT" ]; then
+        REPORTS_TOKEN=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+        REPORTS_CHAT=$(grep -E '^TELEGRAM_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    fi
 fi
 
 SLACK_WEBHOOK=""

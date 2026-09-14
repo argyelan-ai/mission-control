@@ -803,6 +803,12 @@ async def _wait_for_window_ready(
     `bridge.py --serve` prints once its poll loop is up. The default glyphs
     (`$ `, `> `) can appear in bridge.py log output and would false-positive,
     so omp must match the sentinel ONLY.
+
+    Callers pass `agent_runtime_switch.OMP_READY_SIGNALS` for omp agents —
+    the TUI prompt glyphs plus `OMP_ACP_READY`, the sentinel entrypoint.sh
+    prints into Window 0 under `OMP_DRIVER=acp` (fix omp-acp-no-tui-window,
+    13.09.2026) now that Window 0 no longer runs the native TUI for ACP
+    agents. Additive and safe: the native TUI never prints that string.
     """
     import asyncio
     import subprocess
