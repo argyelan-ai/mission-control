@@ -42,10 +42,14 @@ describe("Chat-Fehlerkarte", () => {
   it("carries the danger border from the Signal palette", () => {
     render(<ChatMessage ev={mkError()} />);
 
-    // jsdom expandiert die Kurzform `border` nicht zurueck — geprueft wird
-    // die Farbe, und die muss aus der Signal-Palette kommen, nicht aus einem
+    // jsdom's getComputedStyle() tries to really resolve border-color (anders als
+    // z.B. `color`) und faellt ohne geladenes Stylesheet fuer die Custom Property
+    // auf Schwarz zurueck (ADR-084 macht C.error zu var(--color-status-error)) —
+    // toHaveStyle({ borderColor }) saehe dann Schwarz statt der Signal-Farbe.
+    // Der spezifizierte (nicht der berechnete) Wert ist deshalb der verlaessliche
+    // Weg, dass die Farbe aus der Signal-Palette kommt, nicht aus einem
     // handgemalten Rot.
-    expect(screen.getByTestId("chat-error-card")).toHaveStyle({ borderColor: C.error });
+    expect(screen.getByTestId("chat-error-card").style.borderColor).toBe(C.error);
   });
 
   it("shows the translated code chip and the detail below it", () => {
