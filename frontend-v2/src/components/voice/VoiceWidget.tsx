@@ -651,7 +651,7 @@ function VoiceDrawer({
                 className="flex items-center justify-center w-10 h-10 rounded-full transition-all cursor-pointer hover:scale-105 active:scale-95"
                 style={{
                   background: muted ? `${alpha(C.error, 0.12)}` : "var(--color-bg-hover)",
-                  border: `1px solid ${muted ? `${alpha(C.error, 0.3)}` : "rgba(255,255,255,0.06)"}`,
+                  border: `1px solid ${muted ? `${alpha(C.error, 0.3)}` : C.borderSubtle}`,
                   color: muted ? C.error : "var(--color-text-primary)",
                 }}
                 aria-label={muted ? "Enable microphone" : "Mute"}

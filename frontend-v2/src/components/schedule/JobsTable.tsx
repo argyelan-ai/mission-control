@@ -330,7 +330,7 @@ function BulkBtn({
       onClick={onClick}
       className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition"
       style={{
-        borderColor: danger ? `${alpha(C.error, 0.35)}` : "rgba(255,255,255,0.1)",
+        borderColor: danger ? `${alpha(C.error, 0.35)}` : C.border,
         background: danger ? `${alpha(C.error, 0.1)}` : C.borderSubtle,
         color: danger ? STATUS_TEXT.error : C.textPrimary,
       }}

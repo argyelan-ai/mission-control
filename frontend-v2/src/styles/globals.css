@@ -283,6 +283,7 @@
   --color-text-secondary: #4e4b44;
   --color-text-muted: #6f6b62;
   --color-text-body: #1b1a17;
+  --color-text: #1b1a17; /* alias used by a few components */
   --color-text-dim: #b0aca2;
   --color-border-subtle: rgba(27, 26, 23, 0.05);
   --color-border: rgba(27, 26, 23, 0.08);
@@ -290,6 +291,7 @@
   --color-border-accent: rgba(27, 26, 23, 0.3);
 
   --color-accent: #1b1a17;
+  --color-accent-light: #000000; /* hover/selected tone — darker, not lighter: light theme strengthens away from paper */
   --color-accent-subtle: rgba(27, 26, 23, 0.08);
   --color-accent-hover: #000000;
   --color-accent-deep: #4a473f;
@@ -297,11 +299,17 @@
   --color-fill: #4a473f;
   --color-fill-soft: #8f8b80;
 
-  --color-status-online: #2f7a3e;
+  --color-online: #2b7039;
+  --color-error: #b93a34;
+  --color-warning: #8a6522;
+  --color-info: #2f63a0;
+  --color-status-online: #2b7039; /* lifted off #2f7a3e: 4.97:1 on bg-elevated #ece9e1 (AA) — see STATUS_TEXT note */
   --color-status-warning: #8a6522;
   --color-status-warning-text: #7a5a1f;
   --color-status-error: #b93a34;
+  --color-status-error-text: #b93a34; /* 4.66:1 on bg-elevated — AA */
   --color-status-info: #2f63a0;
+  --color-status-info-text: #2f63a0; /* 5.07:1 on bg-elevated — AA */
   --color-status-offline: #c9c5bb;
 
   --color-term: #15140f;
@@ -324,12 +332,18 @@
   --color-p2-amb: #1b1a17;
   --color-p2-amb-d: #4a473f;
   --color-p2-inv: #ffffff;
-  --color-p2-ok: #2f7a3e;
+  --color-p2-ok: #2b7039;
   --color-p2-wrn: #8a6522;
   --color-p2-err: #b93a34;
 
   --shadow-card: 0 1px 2px rgba(27, 26, 23, 0.04), 0 8px 24px rgba(27, 26, 23, 0.06);
   --shadow-elevated: 0 2px 6px rgba(27, 26, 23, 0.06), 0 16px 40px rgba(27, 26, 23, 0.1);
+
+  /* Status-Flächen/Ränder — abgeleitet aus den Light-Statusfarben (12%/38% Deckkraft) */
+  --color-warning-subtle: rgba(138, 101, 34, 0.12);
+  --color-error-subtle: rgba(185, 58, 52, 0.12);
+  --color-border-warning: rgba(138, 101, 34, 0.38);
+  --color-border-error: rgba(185, 58, 52, 0.38);
 }
 
 :root {

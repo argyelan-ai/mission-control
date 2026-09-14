@@ -136,7 +136,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
           disabled={!isValid || isSubmitting}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
           style={{
-            background: isValid ? `${alpha(C.info, 0.15)}` : "rgba(255, 255, 255, 0.03)",
+            background: isValid ? `${alpha(C.info, 0.15)}` : alpha(C.textPrimary, 0.03),
             color: isValid ? STATUS_TEXT.info : C.textMuted,
             border: `1px solid ${isValid ? `${alpha(C.info, 0.3)}` : C.border}`,
           }}
