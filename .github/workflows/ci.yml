@@ -169,6 +169,33 @@ jobs:
       - name: Build frontend-v2 image
         run: docker build -t mc-frontend-v2-test ./frontend-v2
 
+      # PR #544 review (W1): this image was never built in CI, so the one
+      # line that could make the container PERMANENTLY unhealthy
+      # (`RUN apk add --no-cache socat websocat`) had never actually run —
+      # a healthcheck failing on a missing binary is worse than the bug it
+      # looks for. Runner is ubuntu-latest (x86_64); websocat ships in the
+      # Alpine v3.19 community repo for x86_64 (and aarch64, for the arm64
+      # hosts this image also runs on in production — not exercised here).
+      # NOTE: this proves the Dockerfile builds, not that this exact image
+      # is the one running in production (that's built on arm64 hardware
+      # and gets its own runtime/sabotage verification at rollout) — the
+      # PR's review thread flagged conflating "CI green" with "runtime
+      # proof" as exactly the kind of gap that let W1 slip through unnoticed.
+      - name: Build cdp-browser image
+        run: docker build -t mc-cdp-browser-test ./docker/cdp-browser
+
+      # Sabotage tests for the healthcheck's WS leg against a mock CDP
+      # server (real websocat, real alpine/busybox — same runtime class as
+      # the image above) — see docker/cdp-browser/test_healthcheck.sh.
+      - name: cdp-browser healthcheck sabotage tests
+        run: |
+          docker run --rm \
+            -v "$PWD/docker/cdp-browser:/t:ro" \
+            alpine:3.19 sh -c '
+              apk add --no-cache bash websocat python3 >/dev/null &&
+              bash /t/test_healthcheck.sh
+            '
+
       # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
       # The fixtures in test_context_detect.sh catch most regressions on any
       # grep; this step exists for the NARROW class of divergences that only

@@ -91,6 +91,8 @@ RUN chmod +x /home/agent/.mc-cli/mc \
 COPY bridge.py            /opt/omp-bridge/bridge.py
 COPY acp_client.py        /opt/omp-bridge/acp_client.py
 COPY acp_chat_events.py   /opt/omp-bridge/acp_chat_events.py
+COPY acp_chat.py          /opt/omp-bridge/acp_chat.py
+COPY acp_chat_ctl.py      /opt/omp-bridge/acp_chat_ctl.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
 COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh

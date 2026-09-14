@@ -17,6 +17,16 @@
 #
 # The task-active lock (bridge.py holds it around each run) is the single
 # arbiter: an absent TUI during a task is the bridge's problem, not ours.
+#
+# Under OMP_DRIVER=acp (fix omp-acp-no-tui-window, 13.09.2026) Window 0 never
+# runs the TUI at all — entrypoint.sh puts a static OMP_ACP_READY banner shell
+# there instead. `tui_alive` is then always false, so responsibility 2 would
+# otherwise fire every IDLE_CHECK_INTERVAL and stomp the banner with the
+# native launcher. OMP_DRIVER is exported into this window's environment via
+# `tmux set-environment -g` in entrypoint.sh — verified live (tmux 3.6a,
+# 13.09.2026): both `new-window` and `respawn-window` inherit the tmux global
+# environment into the spawned process, so `${OMP_DRIVER:-}` below reads it
+# directly, no extra plumbing needed.
 set -eu
 
 SESSION="${AGENT_NAME:-omp-agent}"
@@ -28,6 +38,7 @@ TASK_LOCK_FILE="${OMP_TASK_LOCK_FILE:-/home/agent/.task-active.lock}"
 IDLE_CHECK_INTERVAL="${RECYCLER_IDLE_INTERVAL:-30}"
 RSS_LIMIT_MB="${RECYCLER_RSS_LIMIT_MB:-1500}"    # respawn bridge.py above this RSS
 RECYCLER_ENABLED="${AGENT_RECYCLER_ENABLED:-true}"
+ACP_DRIVER="${OMP_DRIVER:-}"                     # "acp" -> Window 0 has no TUI to relaunch
 
 bridge_alive() { pgrep -f "$BRIDGE_PROC" >/dev/null 2>&1; }
 tui_alive()    { pgrep -f "$TUI_PROC"    >/dev/null 2>&1; }
@@ -59,7 +70,11 @@ while true; do
             respawn_bridge
         elif ! task_active; then
             # Idle: safe to touch Window 0. During a task the bridge owns it.
-            if ! tui_alive; then
+            # Under OMP_DRIVER=acp Window 0 has no TUI to begin with (it's a
+            # static OMP_ACP_READY banner shell) — `tui_alive` is always
+            # false there, so this branch is disabled outright rather than
+            # respawning the native launcher over the banner every tick.
+            if [ "$ACP_DRIVER" != "acp" ] && ! tui_alive; then
                 relaunch_tui
             else
                 rss=$(bridge_rss_mb)

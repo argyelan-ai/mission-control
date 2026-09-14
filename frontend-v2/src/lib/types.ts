@@ -687,6 +687,12 @@ export interface Agent {
   // when `runtime_switchable` is false.
   runtime_switchable: boolean;
   runtime_switch_blocked_reason: string | null;
+  // Derived by the backend (models/agent.py computed field): this agent is
+  // driven over ACP, so its chat IS the session — the native TUI in tmux
+  // window 0 runs nothing the operator sends. The Chat/Terminal toggle is not
+  // rendered for such an agent; `?view=terminal` stays as a deep link.
+  // Absent on older backends = not headless.
+  headless_chat?: boolean;
   created_at: string;
   updated_at: string;
 }
