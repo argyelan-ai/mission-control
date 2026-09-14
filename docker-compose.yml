@@ -11,6 +11,12 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Docker Desktop defaults StopTimeout to 1s when a service doesn't set
+    # this explicitly (measured, not assumed — see architecture session
+    # 2026-09-14). Postgres under SIGKILL never runs a clean checkpoint, it
+    # just crash-recovers on the next start. 60s gives it real headroom to
+    # shut down cleanly on every `docker stop`/recreate.
+    stop_grace_period: 60s
     logging: *default-logging
     volumes:
       - mc_postgres_data:/var/lib/postgresql/data
@@ -79,6 +85,10 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/caddy (1s without this line) —
+    # 20s gives in-flight requests and the FastAPI shutdown hooks room to
+    # finish instead of a hard SIGKILL mid-request.
+    stop_grace_period: 20s
     logging: *default-logging
     networks:
       - default
@@ -544,6 +554,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/backend (1s without this line) —
+    # 10s lets Caddy drain in-flight connections gracefully on stop/reload.
+    stop_grace_period: 10s
     logging: *default-logging
     depends_on:
       - frontend
