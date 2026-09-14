@@ -590,6 +590,23 @@ def _encode_cwd(path: str) -> str:
     return "--" + name.replace("/", "-") + "--"
 
 
+def _profile_agent_dir() -> Optional[str]:
+    """``$OMP_HOME/profiles/<OMP_PROFILE>/agent`` when a profile is set, else None.
+
+    With OMP_PROFILE set, omp keeps its agent dir (sessions, models.yml, DBs)
+    under the profile — regardless of PI_CODING_AGENT_DIR, which the image
+    still points at the profile-less ``$OMP_HOME/agent``. The compose bind
+    mount (``~/.mc/agents/<slug>/omp-sessions``) targets the PROFILE tree, so
+    only files written there reach the backend. Live finding 14.09.2026:
+    acp-chat-state.json landed in the unmounted tree and the effort switch
+    answered 409 input_not_supported although the daemon was healthy."""
+    profile = os.environ.get("OMP_PROFILE")
+    home = os.environ.get("OMP_HOME")
+    if not profile or not home:
+        return None
+    return str(Path(home) / "profiles" / profile / "agent")
+
+
 def session_dir(
     agent_dir_env: str | None = None,
     cwd: str | None = None,
@@ -613,7 +630,7 @@ def session_dir(
     if sessions_root is not None:
         root = Path(sessions_root)
     else:
-        agent_dir = agent_dir_env or os.environ.get("PI_CODING_AGENT_DIR")
+        agent_dir = agent_dir_env or _profile_agent_dir() or os.environ.get("PI_CODING_AGENT_DIR")
         if not agent_dir:
             return None
         root = Path(agent_dir) / "sessions"
