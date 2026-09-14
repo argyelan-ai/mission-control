@@ -48,8 +48,12 @@ x-claude-agent-base: &claude-agent-base
   # Docker Desktop defaults StopTimeout to 1s when unset (measured, not
   # assumed — architecture session 2026-09-14). 20s alone doesn't save a
   # graceful shutdown yet — entrypoint.sh has no SIGTERM trap, so PID 1
-  # still never sees the signal and the container still dies via SIGKILL
-  # in ~1s. That trap is a separate, already-filed card; the two ship together.
+  # still never sees the signal and the container still dies via SIGKILL,
+  # just later: measured on an isolated PID-1-without-trap container,
+  # StopTimeout=20 → 20.12s elapsed (ExitCode 137) vs. StopTimeout=1 →
+  # 1.07s elapsed (ExitCode 137). The grace period works, it just buys a
+  # later SIGKILL instead of a clean shutdown until the trap lands. That
+  # trap is a separate, already-filed card; the two ship together.
   stop_grace_period: 20s
   networks:
     - mission-control_default
