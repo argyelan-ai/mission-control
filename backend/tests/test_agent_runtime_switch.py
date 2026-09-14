@@ -25,6 +25,7 @@ from app.models.activity import ActivityEvent
 from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.services.agent_runtime_switch import (
+    HEALTH_TIMEOUT_RECREATE,
     AgentBusyError,
     AgentNotSwitchableError,
     RuntimeIncompatibleError,
@@ -329,6 +330,56 @@ async def test_health_check_failure_triggers_rollback(async_session):
     assert any(e.event_type == "agent.runtime_switch_failed" for e in events)
 
 
+# ── 8b. Health failure → rollback also restores agent.model ────────────────
+#
+# Vorfund 14.09.2026: _rollback setzte runtime_id + harness zurueck, aber
+# nicht agent.model — Rex blieb nach einem gescheiterten Wechsel mit
+# model=GLM-5.3-Flash-EXL3 in der DB stehen, waehrend die Bindung wieder auf
+# anthropic-claude-opus-5 zeigte. Sabotage-Probe (manuell verifiziert, nicht
+# Teil des Testlaufs): mit `agent.model = old_model` in _rollback wieder
+# entfernt wird genau diese Assertion rot — runtime_id/harness bleiben gruen,
+# weil die anschliessen.
+
+
+@pytest.mark.asyncio
+async def test_health_check_failure_rollback_restores_model(async_session):
+    rt_old = await _mk_runtime(async_session, slug="anthropic-claude-old", runtime_type="anthropic_api")
+    rt_new = await _mk_runtime(async_session, slug="new-oc", runtime_type="vllm_docker")  # cross-image (slug-based)
+    agent = await _mk_agent(async_session, runtime_id=rt_old.id, cli_plugins=[])
+    agent.model = "anthropic-claude-opus-5"
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+    original_runtime_id = agent.runtime_id
+    original_harness = agent.harness
+    original_model = agent.model
+    assert rt_new.model_identifier != original_model  # sanity: the switch must actually change it
+
+    mid_flight_model: dict = {}
+
+    async def fake_health(agent_arg, **kwargs):
+        # Called after the DB write but before rollback — proves the
+        # rollback below undoes a real write, not a no-op.
+        await async_session.refresh(agent_arg)
+        mid_flight_model["value"] = agent_arg.model
+        return {"healthy": False, "reason": "timeout"}
+
+    with patch("app.services.agent_runtime_switch.sync_docker_agent_files", AsyncMock(return_value={})), \
+         patch("app.services.agent_runtime_switch.restart_docker_agent_container", side_effect=lambda a, **k: {"status": "recreated", "container": "x", "mode": "recreate"}), \
+         patch("app.services.agent_runtime_switch.wait_for_agent_healthy", side_effect=fake_health), \
+         patch("app.services.agent_runtime_switch.write_compose_agents", AsyncMock(return_value={"changed": "true"})):
+        with pytest.raises(SwitchHealthCheckFailed):
+            await switch_agent_runtime(async_session, agent, rt_new.id)
+
+    assert mid_flight_model["value"] == rt_new.model_identifier
+
+    await async_session.refresh(agent)
+    # Rollback must undo all three — model is the field that regressed.
+    assert agent.runtime_id == original_runtime_id
+    assert agent.harness == original_harness
+    assert agent.model == original_model
+
+
 # ── 9. Concurrent switch → lock timeout ────────────────────────────────────
 
 
@@ -584,8 +635,8 @@ async def test_cross_image_switch_no_respawn(async_session):
 @pytest.mark.asyncio
 async def test_respawn_mode_used_for_health_check(async_session):
     """D-12: wait_for_agent_healthy must receive respawn_mode=True for
-    same-image switches with timeout=30, respawn_mode=False with timeout=90
-    (HEALTH_TIMEOUT_RECREATE) for cross-image switches."""
+    same-image switches with timeout=30, respawn_mode=False with
+    timeout=HEALTH_TIMEOUT_RECREATE for cross-image switches."""
     # Same-image case
     rt_old = await _mk_runtime(async_session, slug="same-old", runtime_type="lmstudio")
     rt_new_same = await _mk_runtime(async_session, slug="same-new", runtime_type="lmstudio")
@@ -620,4 +671,50 @@ async def test_respawn_mode_used_for_health_check(async_session):
     cross_health.assert_awaited_once()
     cross_kwargs = cross_health.call_args.kwargs
     assert cross_kwargs.get("respawn_mode") is False
-    assert cross_kwargs.get("timeout") == 90  # HEALTH_TIMEOUT_RECREATE
+    assert cross_kwargs.get("timeout") == HEALTH_TIMEOUT_RECREATE == 180
+
+
+# ── 19. HEALTH_TIMEOUT_RECREATE ceiling: signal between 90s and 180s ───────
+#
+# Live-Befund 14.09.2026: Marks Wechsel von Rex (Claude Opus 5 → GLM-5.3
+# Flash, Harness omp) scheiterte zweimal an der alten 90s-Obergrenze, mit dem
+# Bereitschaftszeichen ~99.5s nach Start — nach 90s, aber weit vor einer
+# grosszuegigeren Grenze. Dieser Test treibt die echte Polling-Schleife
+# (_wait_for_window_ready) mit einer gemockten Uhr, statt die Konstante nur
+# abzulesen: ein Bereitschaftszeichen, das erst bei simulierten ~100s
+# erscheint, muss mit HEALTH_TIMEOUT_RECREATE (180s) noch als gesund gelten —
+# mit der alten 90s-Grenze waere exakt das gescheitert.
+
+
+@pytest.mark.asyncio
+async def test_health_timeout_recreate_accepts_signal_between_90_and_180s(async_session):
+    from app.services import docker_agent_sync
+
+    agent = await _mk_agent(async_session, cli_plugins=[])
+
+    fake_clock = {"t": 0.0}
+
+    def fake_time():
+        return fake_clock["t"]
+
+    async def fake_sleep(seconds):
+        fake_clock["t"] += seconds
+
+    def fake_run(cmd, **kwargs):
+        class _Result:
+            pass
+        result = _Result()
+        # Ready glyph only appears once the simulated clock passes 100s —
+        # inside the new 180s ceiling, but past the old 90s one.
+        result.stdout = "╭─ ready ─╮\n❯ " if fake_clock["t"] >= 100 else "booting...\n"
+        return result
+
+    with patch("time.time", fake_time), \
+         patch("asyncio.sleep", fake_sleep), \
+         patch("subprocess.run", fake_run):
+        result = await docker_agent_sync._wait_for_window_ready(
+            agent, timeout=HEALTH_TIMEOUT_RECREATE, poll_interval=3.0,
+        )
+
+    assert result["healthy"] is True
+    assert 90 < fake_clock["t"] < 180

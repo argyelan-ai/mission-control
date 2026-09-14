@@ -430,6 +430,7 @@
     "decideYourself": "Selbst entscheiden",
     "agentReviewOnHold": "zurückgestellt",
     "agentReviewing": "{agent} prüft",
+    "selfReviewStall": "Kein Handoff erfolgt — wartet auf Lead ({agent})",
     "approvalsCount": "Freigaben ({count})",
     "awaitingReview": "{count, plural, one {1 Aufgabe wartet noch auf Review} other {# Aufgaben warten noch auf Review}}",
     "allClear": "Alles erledigt",
@@ -2994,6 +2995,15 @@
       "fromMc": "Mission Control",
       "expand": "Inhalt anzeigen",
       "collapse": "Inhalt ausblenden"
+    },
+    "error": {
+      "generic": "Chat-Fehler",
+      "rpc_error": "Protokollfehler",
+      "provider_error": "Fehler beim Anbieter",
+      "empty_turn": "Keine Antwort",
+      "process_exit": "Prozess beendet",
+      "busy": "Arbeitet noch",
+      "session_reset": "Sitzung neu gestartet"
     }
   }
 }

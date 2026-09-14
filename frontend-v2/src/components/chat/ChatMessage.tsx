@@ -6,6 +6,7 @@ import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
+import { ChatErrorCard } from "./ChatErrorCard";
 import { EventCard } from "./EventCard";
 import type { MessageEvent } from "@/lib/chatTypes";
 
@@ -83,6 +84,12 @@ export function ChatMessage({
   // hat (Operator-Befund 19.08.2026: "ganz komische sachen"). Sie bekommt
   // darum eine eigene, ruhige Zeile: erkennbar fremd, ohne den Verlauf zu
   // dominieren.
+  // Eine Stoerung des Chat-Daemons ist keine Rueckmeldung, sondern ein
+  // Zustand — sie bekommt die eigene, rote Karte statt des neutralen
+  // Streifens (Spec docs/specs/chat-over-acp.md).
+  if (ev.role === "teammate" && ev.source?.kind === "error") {
+    return <ChatErrorCard ev={ev} />;
+  }
   if (ev.role === "teammate" && ev.source) {
     return <EventCard ev={ev} source={ev.source} live={live} />;
   }

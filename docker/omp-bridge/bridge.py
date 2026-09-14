@@ -1620,6 +1620,31 @@ def _get_turn_context() -> Optional[dict]:
         return dict(_TURN_CONTEXT) if _TURN_CONTEXT else None
 
 
+# G5 (path-parity audit #521): the ACP path has no TUI pane, so the
+# capture_pane scrape in _build_heartbeat_payload reads an empty/foreign tmux
+# pane and ACP agents never reported a context%. The adapter stamps the latest
+# usage_update-derived percent (omp's own context-window numbers, size/used)
+# into this holder; _build_heartbeat_payload reports it through the SAME
+# payload field (context_pct) on the SAME endpoint the Claude path uses
+# (poll.sh heartbeat -> POST /me/heartbeat; backend receiver
+# backend/app/routers/agents.py AgentHeartbeat.context_pct, Field(ge=0,
+# le=100)). No second field, no second endpoint — the existing display works
+# without frontend changes. Module-global read mirrors _get_turn_context.
+_ACP_CONTEXT_PCT: Optional[float] = None
+_ACP_CONTEXT_PCT_LOCK = threading.Lock()
+
+
+def _set_acp_context_pct(pct: Optional[float]) -> None:
+    global _ACP_CONTEXT_PCT
+    with _ACP_CONTEXT_PCT_LOCK:
+        _ACP_CONTEXT_PCT = pct
+
+
+def _get_acp_context_pct() -> Optional[float]:
+    with _ACP_CONTEXT_PCT_LOCK:
+        return _ACP_CONTEXT_PCT
+
+
 def _build_heartbeat_payload(
     status: str, capture_pane: Optional[Callable[[], str]]
 ) -> dict:
@@ -1651,6 +1676,17 @@ def _build_heartbeat_payload(
                 payload["context_pct"] = float(pct)
         except Exception:  # noqa: BLE001 — scrape darf heartbeat nie reissen
             pass
+    # G5 (parity audit #521): the ACP path has no TUI pane — on
+    # OMP_DRIVER=acp the scrape above reads an empty/foreign pane and yields
+    # nothing. Fill the gap from the adapter's usage_update-stamped holder,
+    # reporting through the SAME context_pct field on the SAME heartbeat the
+    # Claude path uses (poll.sh heartbeat() is the template). A scrape hit
+    # still wins, so native/Claude behaviour is byte-identical; the holder is
+    # only consulted when the scrape produced nothing.
+    if "context_pct" not in payload:
+        acp_pct = _get_acp_context_pct()
+        if acp_pct is not None:
+            payload["context_pct"] = float(acp_pct)
     return payload
 
 
@@ -2045,8 +2081,14 @@ class _MsgDelivery:
         nudge_msg_file: Optional[str] = None,
         remind_seconds: float = NUDGE_REMIND_SECONDS,
         log: Optional[Callable[[str], None]] = None,
+        acp_prompt: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.ctrl = controller
+        # Under OMP_DRIVER=acp there is no native TUI in Window 0 (fix
+        # omp-acp-no-tui-window) — every inject_file() paste would fail
+        # forever. serve_loop hands in a sender that prompts the chat daemon
+        # (acp_chat.py --serve) instead; None keeps the native paste path.
+        self._acp_prompt = acp_prompt
         self.signal_file = signal_file
         self.queue_dir = queue_dir
         self.ack_dir = ack_dir
@@ -2101,6 +2143,21 @@ class _MsgDelivery:
                     and obj.get("stopReason") in ("stop", "error", "aborted")):
                 return True
         return False
+
+    def _acp_send(self, text: str, what: str) -> bool:
+        """ACP delivery of a wake-up text: one `prompt` to the chat daemon.
+        The daemon serialises its own turns (`busy` → False → retried on the
+        next poll), so unlike the native path we take NO recycler lock and
+        set NO awaiting offset — the native turn-end hook signal never fires
+        under ACP and would hold the gate shut forever. Never raises."""
+        try:
+            ok = bool(self._acp_prompt(text))
+        except Exception as e:  # noqa: BLE001 — a dead socket must not kill the poll loop
+            self.log(f"{what}: ACP-Zustellung fehlgeschlagen (swallowed): {type(e).__name__}: {e}")
+            return False
+        if not ok:
+            self.log(f"{what}: ACP-Zustellung fehlgeschlagen (busy/unreachable) — Retry beim naechsten Poll.")
+        return ok
 
     def _acquire_msg_lock(self) -> None:
         """Hold the recycler task lock for the duration of a message turn."""
@@ -2282,6 +2339,17 @@ class _MsgDelivery:
         text = build_comment_nudge_text(self._pending_comments)
         if self._withdrawn_notice:
             text = self._withdrawn_notice + (("\n" + text) if self._pending_comments else "")
+        if self._acp_prompt is not None:
+            if self._acp_send(text, "comments"):
+                delivered = dict(self._pending_comments)
+                self._pending_comments.clear()
+                self._withdrawn_notice = None
+                self.log(
+                    "comments: Wecker per ACP zugestellt fuer "
+                    + ", ".join(f"{tid[:8]}({n})" for tid, n in delivered.items())
+                    + " — Agent liest via 'mc task-get'."
+                )
+            return
         try:
             parent = os.path.dirname(self.nudge_msg_file)
             if parent:
@@ -2364,6 +2432,16 @@ class _MsgDelivery:
             identity = _identity_block(self.home_dir)
             if identity:
                 text = f"{identity}\n\n---\n\n{text}"
+        if self._acp_prompt is not None:
+            if self._acp_send(text, "nudge"):
+                self._card_pending = False
+                _nudge_state_write(self.nudge_state_file, seqs, now)
+                self._withdrawn_notice = None
+                self.log(
+                    f"nudge: per ACP zugestellt (bis seq {global_max}) — "
+                    f"Agent holt Inhalt via 'mc inbox'."
+                )
+            return
         try:
             parent = os.path.dirname(self.nudge_msg_file)
             if parent:
@@ -2402,6 +2480,32 @@ class _MsgDelivery:
 _LAST_ON_CONTROL: list = []  # test seam: the live serve_loop control callback
 
 
+def _make_acp_chat_prompt(
+    socket_path: Optional[str] = None, *, timeout: float = 10.0,
+) -> Callable[[str], bool]:
+    """Wake-up sender for OMP_DRIVER=acp: one ``{"op":"prompt"}`` request to
+    the chat daemon's Unix socket (docs/specs/chat-over-acp.md, control
+    protocol). Returns True on ``{"ok":true}``; False on ``busy``, a missing /
+    dead socket or garbage — never raises (the caller retries next poll)."""
+    import acp_chat  # local sibling module, same as acp_chat_ctl.py
+
+    path = socket_path or acp_chat.default_socket_path()
+
+    def _send(text: str) -> bool:
+        try:
+            resp = acp_chat.request(path, {"op": "prompt", "text": text}, timeout=timeout)
+        except (OSError, ValueError) as e:
+            sys.stderr.write(f"[serve] acp nudge: daemon unreachable ({path}): {e}\n")
+            return False
+        if not isinstance(resp, dict) or not resp.get("ok"):
+            err = resp.get("error") if isinstance(resp, dict) else "bad response"
+            sys.stderr.write(f"[serve] acp nudge: rejected ({err})\n")
+            return False
+        return True
+
+    return _send
+
+
 def serve_loop(
     *,
     poll_interval: float = 5.0,
@@ -2410,7 +2514,6 @@ def serve_loop(
     _recovery_fn: Optional[Callable[[], Optional[dict]]] = None,
     _lifecycle_factory: Optional[Callable[[dict], MCLifecycle]] = None,
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
-    _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
     _context_env_path: str = MC_CONTEXT_ENV_PATH,
     _msg_queue_dir: Optional[str] = None,
@@ -2420,6 +2523,7 @@ def serve_loop(
     _nudge_msg_file: Optional[str] = None,
     _child_alive_fn: Optional[Callable[[], bool]] = None,
     _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
+    _acp_prompt: Optional[Callable[[str], bool]] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -2527,10 +2631,21 @@ def serve_loop(
                 "respawn), leaving the lock and skipping startup recovery\n"
             )
 
+    # Comment / thread-message wake-ups: native agents paste into Window 0;
+    # ACP agents have no TUI there, so the wake-up goes to the chat daemon.
+    # The seam is honoured only under the ACP driver — a native fleet member
+    # must keep pasting even if a sender were handed in. (Compared via a local
+    # on purpose: test_acp_workspace_parity anchors the task branch below on
+    # the literal `_acp_env_driver() == "acp"` call form.)
+    acp_prompt: Optional[Callable[[str], bool]] = None
+    wakeup_driver = _acp_env_driver()
+    if wakeup_driver == "acp":
+        acp_prompt = _acp_prompt if _acp_prompt is not None else _make_acp_chat_prompt()
     delivery = _MsgDelivery(
         tui, signal_file=signal_file, queue_dir=msg_queue_dir,
         ack_dir=msg_ack_dir, task_lock_path=task_lock_path,
         nudge_state_file=nudge_state_file, nudge_msg_file=nudge_msg_file,
+        acp_prompt=acp_prompt,
     )
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)
@@ -2727,12 +2842,28 @@ def serve_loop(
                     board_id=task.get("board_id"), attempt_id=task.get("dispatch_attempt_id"),
                 )
 
-            continue_once: Optional[Callable[[str], RunOutcome]] = _continue_factory(task, cwd) \
-                if _continue_factory is not None else None
+            # M7 (Rex architecture session 2026-09-12): this used to be a
+            # second, control-less factory knob (_continue_factory DI param).
+            # The ACP branch below defines continue_once as a thin wrapper
+            # around the CONTROLLED factory product (acp_run from
+            # _make_acp_run_factory: cancel_state, heartbeat, interrupt_state,
+            # sinks), the native branch mirrors run_once via
+            # run_native_continue — the knob had NO caller repo-wide and would
+            # have bypassed that wiring when ever used. Removed; the only
+            # path that still needs the name is the _run_factory test path,
+            # which intentionally opts OUT of Fix B (continue -> blocker).
+            continue_once: Optional[Callable[[str], RunOutcome]] = None
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
             elif _acp_env_driver() == "acp":
                 # ACP path (OMP_DRIVER=acp): drive `omp acp` via acp_client.
+                # G8 (docs/dispatch-path-parity.md): `cwd` above already
+                # carries the backend-prepared, host-to-container translated
+                # workspace (same value the native branch below receives via
+                # `run_native_turn(cwd=_cwd, ...)`) — it was simply never
+                # reaching this branch. Passed into the factory below so
+                # `run()` no longer falls back to `os.environ.get("OMP_ACP_CWD")
+                # or _acp_cwd_default()` (== os.getcwd(), unprepared).
                 # Interrupt ladder Stufe 1: the heartbeat control channel's
                 # InterruptState IS the cancel signal — a watcher thread flips
                 # it into `session/cancel` mid-turn (Fix 3, ACP flavour).
@@ -2744,6 +2875,24 @@ def serve_loop(
                 acp_cancel = ACPCancelState()
                 _acp_control_sink.clear()
                 _acp_control_sink.append(acp_cancel)
+                # G5 context-holder reset at the SESSION change (task
+                # 1556064c): a new task must not inherit the previous
+                # session's context% (#554), but the value must survive every
+                # turn WITHIN the task — so the reset fires ONCE per pickup
+                # here, NOT at on_session_id: run_acp_once opens a NEW ACP
+                # session for every attempt (continue-nudges and retries
+                # included), so a reset there is the per-turn reset #560
+                # measured as broken (the value is restamped only 2 events
+                # before turn end vs a 30 s heartbeater). Stamping 0.0 — not
+                # None — makes the heartbeater REPORT the reset (a fresh
+                # session has used ~0 of the window); under the receiver's
+                # "no context_pct = no news" semantics (agents.py, unchanged)
+                # a None reset would keep the previous session's % on display
+                # until the new session's first usage_update. Absent still
+                # means "no news", so the Claude scrape path keeps its
+                # last value on a transient scrape miss instead of
+                # flickering empty.
+                _set_acp_context_pct(0.0)
 
                 # Model selector parity with the native launcher (incident
                 # 09.09.2026, first ACP live probe): `omp acp` inherits the
@@ -2788,23 +2937,35 @@ def serve_loop(
                     max_time=int(turn_deadline) if turn_deadline else 900,
                     permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                     task_id=str(task["id"]),
+                    cwd=cwd,
                     cancel_state=acp_cancel,
                     heartbeat_fn=_acp_tool_heartbeat,
                     interrupt_state=interrupt_state,
                 )
 
-                def run_once(_p=prompt) -> RunOutcome:
+                def run_once(_p=prompt, _cwd=cwd) -> RunOutcome:
                     acp_cancel.requested = False  # fresh cancel per turn (Major 4)
                     interrupt_state.clear()  # fresh signal per turn
+                    # G8: `cwd` is threaded in from serve_loop above (the ACTUAL
+                    # fix for the 2026-09-13 incident, where this branch fell
+                    # back to os.getcwd()/home/agent and the model's own
+                    # `gh repo clone` landed on the wrong GitHub org). The guard
+                    # below covers a DIFFERENT, narrower failure — cwd pointing
+                    # at a directory that doesn't exist at all — and would NOT
+                    # have caught the 09-13 incident by itself (/home/agent
+                    # exists, so it passes this check). See the guard's own
+                    # docstring for what it does and doesn't cover.
+                    _require_prepared_acp_workspace(_cwd)
                     return acp_run(_p)
 
                 # Continue-Nudge (Fix B, ACP flavour — Review #464 Major 3):
                 # the ACP session survives a turn end, so a continueable abort
                 # can resume the SAME session with the nudge as the next prompt
                 # instead of collapsing to a blocker.
-                def continue_once(nudge: str) -> RunOutcome:
+                def continue_once(nudge: str, _cwd=cwd) -> RunOutcome:
                     acp_cancel.requested = False
                     interrupt_state.clear()
+                    _require_prepared_acp_workspace(_cwd)
                     return acp_run(nudge)
             else:
                 task_file = _task_file_for(str(task["id"]))
@@ -4063,6 +4224,18 @@ def run_acp_once(
             if str((upd.get("status") or "")).lower() in ("failed", "error"):
                 tool_error_flags[0] = True
             _heartbeat()
+        elif su == "usage_update":
+            # G5 (parity audit #521): omp reports the context window here —
+            # size = window in tokens, used = tokens in use (same numbers the
+            # chat mapper stamps onto the final assistant line). Stamp the
+            # shared holder so the existing heartbeater reports context_pct;
+            # validation mirrors acp_chat_events (ints, size>0) plus the
+            # poll.sh sanitize rule (0-100) — garbage never reaches the
+            # backend Field(ge=0, le=100). Best-effort: never kills the run.
+            size, used = upd.get("size"), upd.get("used")
+            if (isinstance(size, int) and size > 0
+                    and isinstance(used, int) and 0 <= used <= size):
+                _set_acp_context_pct(round(used / size * 100.0, 1))
         # Sessions chat stream: mapping is deliberately SEPARATE from the
         # classification bookkeeping above. Preview flushes go to their OWN
         # channel (the sibling preview file via emit_preview) — never the
@@ -4355,12 +4528,50 @@ _RUN_ACP_ACCEPTS_INTERRUPT_STATE = (
 )
 
 
+def _require_prepared_acp_workspace(cwd: str) -> None:
+    """Guardrail (G8, docs/dispatch-path-parity.md): refuse an ACP turn whose
+    `cwd` points at a directory that does not exist at all, instead of
+    silently starting the model in a missing or mistranslated path.
+
+    Incident 2026-09-13: the ACP branch dropped the backend-prepared
+    workspace on the floor and fell back to `os.getcwd()` (`/home/agent`,
+    unprepared). The model bootstrapped its own `gh repo clone
+    mission-control`, which resolved the short repo name against the logged
+    in `gh` account (the operator's personal account) instead of `argyelan-ai` — two PRs landed on
+    the wrong GitHub org and had to be ported by hand.
+
+    This guard is NOT what fixed that incident. `os.getcwd()` == `/home/agent`
+    EXISTS — this guard would have let it through unchanged. The actual fix
+    is the `cwd` threading at the call sites above (serve_loop ->
+    _make_acp_run_factory), which now passes the backend-prepared workspace
+    instead of falling back at all. This guard is a narrower, complementary
+    check for a DIFFERENT failure class: `cwd` resolving to a path that is
+    missing outright (the prepare step failed, or the host->container path
+    translation produced a dead path). `cwd` existing on disk is a cheap,
+    no-false-positive signal that SOME preparation ran (ad-hoc tasks fall
+    back to the always-present `/workspace` mount root, never to a missing
+    path) — but presence alone doesn't prove the RIGHT preparation ran, only
+    that some directory is there. A missing directory means the preparation
+    step itself failed or the host->container path translation is wrong,
+    either way not something to paper over by quietly proceeding.
+    """
+    if not os.path.isdir(cwd):
+        raise RuntimeError(
+            f"ACP-Workspace nicht vorbereitet: '{cwd}' existiert nicht im "
+            "Container. Dispatch/Bridge-Workspace-Vorbereitung ist "
+            "fehlgeschlagen oder der Host-Pfad wurde falsch uebersetzt — "
+            "Turn abgebrochen statt stillem Fallback auf einen "
+            "unvorbereiteten Ordner."
+        )
+
+
 def _make_acp_run_factory(
     *,
     model: Optional[str],
     max_time: int,
     permission_policy: str,
     task_id: str,
+    cwd: Optional[str] = None,
     cancel_state: Optional[ACPCancelState] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
     interrupt_state: Optional[InterruptState] = None,
@@ -4395,13 +4606,19 @@ def _make_acp_run_factory(
     on a pre-#492 base and kill every ACP turn with a TypeError. After #492
     merges (merge order: #492 first), the flag is True and the pass-through
     is unconditional.
+
+    ``cwd`` (G8, docs/dispatch-path-parity.md): serve_loop's per-task,
+    backend-prepared, host-to-container translated workspace directory —
+    the SAME value the native branch passes to ``run_native_turn``. Falls
+    back to ``OMP_ACP_CWD``/``os.getcwd()`` only when no value is given
+    (tests, replay) so old callers keep working unchanged.
     """
     import acp_chat_events
 
     cancel_state = cancel_state or ACPCancelState()
+    cwd = cwd or os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
 
     def run(prompt: str) -> RunOutcome:
-        cwd = os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
         # Sessions chat view: one JSONL transcript per ACP session, written
         # where the backend's omp chat adapter reads. A sink that resolves
         # to None (no PI_CODING_AGENT_DIR — e.g. local replay) degrades to

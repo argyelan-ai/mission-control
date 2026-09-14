@@ -142,25 +142,27 @@ def _file_text(path: str) -> str:
 
 
 KNOWN_GAPS = [
-    # G1 (PR #519, OPEN): the heartbeat soft-check has no author filter and
-    # no cursor seed, so a missing cursor row makes the agent's OWN
-    # blocker/handoff comments read as unread. Backend-side, so the symbol is
-    # pinned against agents.py, not serve_loop. `last_signalled_comment_id`
-    # is the column #519 introduces — when that branch merges this entry goes
-    # stale and this test fails, prompting the doc + exception cleanup.
-    ("G1", "last_signalled_comment_id", "backend",
-     "no separate signal watermark and no author filter: _upsert_cursor has "
-     "exactly one caller (the poll handler), so a low-polling path runs "
-     "without a row and every historic comment reads as unread"),
-    # G6: poll.sh's heartbeat payload carries status(+context_pct) only. A
-    # fix has to put the task id into that payload before the backend can
-    # resolve a control task for it, so `task_id` is the arriving symbol.
-    ("G6", "task_id", "poll_heartbeat",
-     "poll.sh's heartbeat sends neither task_id nor a control read, so "
-     "operator interrupts arrive only via the next poll state"),
-    ("G6", "control", "poll_heartbeat",
-     "same payload: nothing reads a `control` directive back out of the "
-     "heartbeat response on the poll.sh path"),
+    # G1 CLOSED (#519, `fix/heartbeat-own-comments-cursor`): the row below
+    # is gone. `_collect_heartbeat_control` now filters the agent's own
+    # comments out of `soft_unread` unconditionally, and maintains its own
+    # `AgentTaskCommentCursor.last_signalled_comment_id` watermark (seeded
+    # from the dispatch boundary on the first beat, migration
+    # 0198_heartbeat_signalled_cursor) — no longer coupled to `/me/poll`'s
+    # single `_upsert_cursor` call site. See docs/dispatch-path-parity.md
+    # row 3 and the G1 gap-summary row.
+    # G6 CLOSED (#562, `fix/g6-poll-sh-heartbeat-control`): both rows below
+    # are gone. poll.sh's heartbeat now sends task_id/attempt_id
+    # (build_heartbeat_payload, poll.sh:550, gated on CURRENT_TASK_ID) and
+    # reads the response's `control` field (handle_heartbeat_control,
+    # poll.sh:644, wired at the end of heartbeat(), poll.sh:615) — see
+    # docs/dispatch-path-parity.md rows 8/9 and the G6 gap-summary row.
+    # Note: the `task_id` absence-check never actually went stale here (the
+    # literal string `task_id` still doesn't appear in heartbeat()'s own
+    # body — the value travels through the uppercase $CURRENT_TASK_ID shell
+    # var into the build_heartbeat_payload HELPER, a separate function this
+    # scope doesn't cover); only the `control` row tripped
+    # test_known_gaps_reference_real_symbols. Removed together anyway since
+    # the gap they jointly described is functionally closed either way.
 ]
 
 POLL_SH = os.path.join(REPO_ROOT, "docker", "shared", "poll.sh")
@@ -497,11 +499,14 @@ def test_closed_gap_wiring_is_called_not_merely_mentioned():
     )
 
 
-def test_acp_context_pct_gap_is_still_shaped_as_documented():
-    """G5 (row 16), open: serve_loop hands the heartbeater the NATIVE TUI's
-    capture_pane on both driver branches, which is why ACP never reports a
-    context%. An ACP-aware source would change this call — and then row 16
-    plus the G5 summary row must be updated in the same change."""
+def test_acp_context_pct_is_reported_via_shared_heartbeat():
+    """G5 (row 16), CLOSED by the usage_update stamp + heartbeat fallback:
+    the ACP path now reports context% through the SAME payload field on the
+    SAME heartbeat as poll.sh (no second report path — asserted end-to-end in
+    tests/test_acp_context_pct.py incl. both sabotage directions). Here we
+    pin the wiring positively: the heartbeater call stays single and keeps
+    the native capture_pane (scrape wins), the payload builder consults the
+    ACP holder, and the doc says CLOSED."""
     calls = [
         n for n in ast.walk(_serve_loop_ast())
         if isinstance(n, ast.Call)
@@ -517,11 +522,14 @@ def test_acp_context_pct_gap_is_still_shaped_as_documented():
     assert src is not None, "start_heartbeater must receive _capture_pane"
     rendered = ast.unparse(src)
     assert rendered == "tui.capture_pane", (
-        "G5 may be CLOSED — serve_loop now passes "
-        f"_capture_pane={rendered} instead of the unconditional native "
-        "tui.capture_pane. Update row 16 + the G5 summary row in "
-        "docs/dispatch-path-parity.md and replace this test with a "
-        "positive assertion on the new source."
+        "G5 wiring changed — serve_loop now passes "
+        f"_capture_pane={rendered}; re-audit row 16 (G5) and the probe "
+        "priority in tests/test_acp_context_pct.py"
+    )
+    payload_ast = ast.parse(inspect.getsource(bridge._build_heartbeat_payload))
+    assert "_get_acp_context_pct" in ast.dump(payload_ast), (
+        "G5 reopened — _build_heartbeat_payload no longer consults the ACP "
+        "usage_update holder; the ACP context% report is dead"
     )
 
 
@@ -536,13 +544,13 @@ def test_doc_gap_table_matches_exception_list():
     # an open exception, and vice versa: the doc's gap-summary status and
     # KNOWN_GAPS have to tell the same story.
     open_ids = {g for g, _s, _sc, _w in KNOWN_GAPS}
-    for gap_id in ("G2", "G3", "G4", "G7"):
+    for gap_id in ("G2", "G3", "G4", "G5", "G7"):
         assert gap_id not in open_ids, (
             f"{gap_id} is wired positively in this suite but still sits in "
             "KNOWN_GAPS — pick one"
         )
     for line in doc.splitlines():
-        for gap_id in ("G2", "G3", "G4", "G7"):
+        for gap_id in ("G2", "G3", "G4", "G5", "G7"):
             if line.startswith(f"| {gap_id}:"):
                 assert "CLOSED" in line, (
                     f"{gap_id} is pinned as closed by this suite but the doc "

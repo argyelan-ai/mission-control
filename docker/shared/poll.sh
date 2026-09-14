@@ -82,6 +82,11 @@ STAGNATION_THRESHOLD="${STAGNATION_THRESHOLD:-36}"   # 36 * POLL_INTERVAL (5s) =
 # einen Blocker postet sobald die Threshold erreicht ist. Wird beim Wechsel
 # zu einer neuen CURRENT_TASK_ID resettet.
 LAST_BLOCKED_TASK_ID=""
+# G6 idempotency (dispatch-path-parity.md Zeile 31/32): ein Escape pro Task
+# fuer einen HARD-Interrupt aus dem Heartbeat-Control-Kanal, nicht pro
+# 30s-Heartbeat-Zyklus. Wird beim Wechsel zu einer neuen CURRENT_TASK_ID
+# resettet (siehe run_task()), analog zu LAST_BLOCKED_TASK_ID.
+LAST_HARD_INTERRUPT_TASK_ID=""
 # Lockfile: poll.sh schreibt dieses File sobald ein Task aktiv ist.
 # recycler.sh prueft es vor idle-Kill — verhindert Recycle mitten im Task.
 # Stale-Lock-Schutz: recycler prueft ob poll.sh noch laeuft (pgrep).
@@ -291,9 +296,30 @@ wait_for_clean_prompt() {
     # Nudge-Pfad blockiert die Karte vorher.
     local deadline
     deadline=$(( $(date +%s) + READY_TIMEOUT_SEC ))
+    # Fall 4 (14.09.2026): pro Aufruf hoechstens EIN Wegdrueck-Versuch je
+    # Dialogtyp — sonst koennte ein Dialog, der aus anderem Grund stehen
+    # bleibt (z.B. echter Ratings-Dialog der auf eine Person wartet), poll.sh
+    # in eine Dauerschleife aus Tastendruecken schicken. Bleibt er trotzdem
+    # stehen, greift danach dasselbe fail-open + Eskalation wie bisher.
+    local survey_dismissed=false
+    local picker_dismissed=false
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local ui
         if pane_in_interrupted_dialog "${SESSION_NAME}:0"; then
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
+        if ! $survey_dismissed && pane_in_survey_dialog "${SESSION_NAME}:0"; then
+            log "wait_for_clean_prompt: Feedback-Umfrage-Dialog erkannt — sende '0' (Dismiss), kein Enter (koennte sonst eine Bewertung abschicken)."
+            tmux send-keys -t "${SESSION_NAME}:0" "0" 2>/dev/null || true
+            survey_dismissed=true
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
+        if ! $picker_dismissed && pane_in_model_picker "${SESSION_NAME}:0"; then
+            log "wait_for_clean_prompt: Modell-Picker erkannt — sende Enter (Standard bestaetigen), analog wait_for_agent_healthy."
+            tmux_submit "${SESSION_NAME}:0"
+            picker_dismissed=true
             sleep "$READY_POLL_INTERVAL_SEC"
             continue
         fi
@@ -328,7 +354,16 @@ wait_for_clean_prompt() {
 # erkennbaren Anker (fremde CLI, Box ausserhalb des Bereichs) faellt es auf
 # das volle 15-Zeilen-Fenster zurueck — altes Verhalten, kein neues Risiko.
 PASTE_DIALOG_LOOKBACK_LINES="${PASTE_DIALOG_LOOKBACK_LINES:-6}"
-pane_in_interrupted_dialog() {
+
+# _dialog_lookback_window TARGET — gemeinsame Grundlage fuer alle drei
+# pane_in_*_dialog-Erkenner unten: derselbe Anker/Fallback-Ausschnitt
+# (Composer-Box plus PASTE_DIALOG_LOOKBACK_LINES Zeilen darueber, oder das
+# volle 15-Zeilen-Fenster ohne erkennbaren Anker) wie die urspruengliche
+# pane_in_interrupted_dialog vor diesem Refactor (Fall 4, 2026-09-14) — nur
+# einmal geschrieben, damit ein neuer Dialogtyp nicht seine eigene, womoeglich
+# abweichende Fensterlogik mitbringt. Gibt rc 1 zurueck wenn das Pane leer
+# ist (keine echte tmux-Session) — Aufrufer behandeln das wie "kein Dialog".
+_dialog_lookback_window() {
     local tail
     tail=$(tmux capture-pane -t "$1" -p -S -15 2>/dev/null || echo "")
     [ -n "$tail" ] || return 1
@@ -339,8 +374,43 @@ pane_in_interrupted_dialog() {
         dialog_window=$(( field_lines + PASTE_DIALOG_LOOKBACK_LINES ))
         window=$(printf '%s\n' "$tail" | tail -n "$dialog_window")
     fi
+    printf '%s\n' "$window"
+    return 0
+}
+
+pane_in_interrupted_dialog() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
     echo "$window" | grep -q 'Interrupted' \
         && echo "$window" | grep -q 'What should Claude do instead'
+}
+
+# pane_in_survey_dialog TARGET — Fall 4 (14.09.2026, live bei Rex gefunden):
+# Claude Code zeigt gelegentlich einen Feedback-Umfrage-Dialog
+# ("1: Bad   2: Fine   3: Good   0: Dismiss"). Er belegt das Eingabefeld genau
+# wie der Interrupted-Dialog — ein generisches Enter waere aber falsch: es
+# koennte "1: Bad" als Bewertung abschicken statt den Dialog nur wegzudruecken.
+# Deshalb eigene Erkennung + eigene, sichere Aktion (dismiss_known_dialog
+# unten sendet "0", nicht Enter).
+pane_in_survey_dialog() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
+    echo "$window" | grep -q '0: Dismiss' \
+        && echo "$window" | grep -qE '[1-3]: (Bad|Fine|Good)'
+}
+
+# pane_in_model_picker TARGET — derselbe Mechanismus wie der Modell-Picker,
+# den wait_for_agent_healthy/_wait_for_window_ready (backend/app/services/
+# docker_agent_sync.py:849) beim Container-Start schon abfaengt: openclaude
+# zeigt "Enter to confirm" wenn der Endpoint mehrere Modelle anbietet. Dort
+# wird das beim Boot einmalig abgefangen — dieselbe Situation kann aber auch
+# MITTEN im Betrieb auftauchen (Modellwechsel-Nudge, Recovery), wo poll.sh
+# bisher keinen Blick dafuer hatte. Bewusst dasselbe Muster (Text erkennen,
+# Enter bestaetigt den Default) statt eines zweiten, unabhaengigen Wegs.
+pane_in_model_picker() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
+    echo "$window" | grep -q 'Enter to confirm'
 }
 
 # Bug 10 (2026-05-13): fail-open des paste-Schritts war silent — bei Race
@@ -492,6 +562,37 @@ paste_and_submit() {
                 return 0
             fi
             if [ "$outcome" = "2" ]; then
+                # Fall 4 (14.09.2026, live bei Rex): das zweite Enter kann
+                # selbst einen bekannten Dialog (Feedback-Umfrage,
+                # Modell-Picker) ausloesen oder aufdecken, statt den Nudge
+                # abzusenden — der verdeckt das Feld genauso wie der
+                # Interrupted-Dialog. Ein DRITTES blindes Enter waere hier
+                # aber falsch (die Umfrage wuerde "1: Bad" als Bewertung
+                # werten statt sie zu schliessen). Deshalb: einmal auf einen
+                # bekannten Dialogtyp pruefen und mit dessen SICHEREM Tastendruck
+                # reagieren (nie ein pauschales Enter), erst danach neu
+                # klassifizieren. Kein Treffer: faellt unveraendert in die
+                # bestehende Eskalation unten durch.
+                local dialog_kind=""
+                if pane_in_survey_dialog "${SESSION_NAME}:0"; then
+                    dialog_kind="Umfrage-Dialog"
+                    log "WARNING: paste_and_submit Versuch ${attempt}: Feedback-Umfrage-Dialog verdeckt das Eingabefeld — sende '0' (Dismiss), dritter Versuch."
+                    tmux send-keys -t "${SESSION_NAME}:0" "0" 2>/dev/null || true
+                elif pane_in_model_picker "${SESSION_NAME}:0"; then
+                    dialog_kind="Modell-Picker"
+                    log "WARNING: paste_and_submit Versuch ${attempt}: Modell-Picker verdeckt das Eingabefeld — sende Enter (Standard bestaetigen), dritter Versuch."
+                    tmux_submit "${SESSION_NAME}:0"
+                fi
+                if [ -n "$dialog_kind" ]; then
+                    sleep "$PASTE_VERIFY_DELAY_SEC"
+                    outcome=$(classify_paste_outcome "$file")
+                    if [ "$outcome" = "0" ]; then
+                        log "paste_and_submit: ${dialog_kind} weggedrueckt — dritter Versuch hat den Nudge abgesendet (Versuch ${attempt})."
+                        return 0
+                    fi
+                fi
+            fi
+            if [ "$outcome" = "2" ]; then
                 log "ERROR: paste_and_submit FAILED (Versuch ${attempt}): Nudge steht WEITERHIN unabgesendet im Eingabefeld — auch das zweite Enter hat ihn nicht losgeschickt. Eskalation: Kommentar auf die Karte plus Status blocked (Lead-Triage). NIEMALS still weitergehen — ein stiller Fehlschlag hier kostet Stunden."
                 # W2 (Review PR #529): rc auswerten. Ohne zugeordnete Karte
                 # macht escalate_unsubmitted_nudge NICHTS — kein Kommentar,
@@ -533,6 +634,38 @@ paste_and_submit() {
     return 1
 }
 
+# build_heartbeat_payload STATUS CTX_PCT TASK_ID ATTEMPT_ID — reines JSON-Encoding,
+# keine Netzwerk-Seiteneffekte (testbar ohne Mock, analog zu build_acked_seq_param).
+#
+# G6 (dispatch-path-parity.md #31/#32): der Bridge-Pfad meldet im Heartbeat
+# WELCHER Task/Attempt gerade laeuft (_build_heartbeat_payload, bridge.py) —
+# poll.sh tat das nie. task_id/attempt_id werden nur mitgeschickt wenn TASK_ID
+# nicht leer ist (Aufrufer gated das ueber CURRENT_TASK_ID — von run_task()
+# gesetzt, von cancel_task()/stop_task_session() geleert; spiegelt bridge.py's
+# turn_ctx-Gate).
+build_heartbeat_payload() {
+    local status="$1" ctx_pct="$2" task_id="$3" attempt_id="$4"
+    # Pass values via env-vars statt f-string-Interpolation — defense against
+    # shell-metachar injection if pane_title is ever attacker-controlled
+    # (T-06-03-01).
+    STATUS="$status" CTX_PCT="$ctx_pct" TASK_ID="$task_id" ATTEMPT_ID="$attempt_id" python3 -c "
+import json, os
+payload = {'status': os.environ.get('STATUS', 'idle')}
+ctx = os.environ.get('CTX_PCT', '').strip()
+if ctx.isdigit():
+    val = int(ctx)
+    if 0 <= val <= 100:
+        payload['context_pct'] = float(val)
+task_id = os.environ.get('TASK_ID', '').strip()
+if task_id:
+    payload['task_id'] = task_id
+    attempt_id = os.environ.get('ATTEMPT_ID', '').strip()
+    if attempt_id:
+        payload['attempt_id'] = attempt_id
+print(json.dumps(payload))
+"
+}
+
 heartbeat() {
     local status="${1:-idle}"
     # CTX-01 (Phase 6) + CTX-01-Nachzug (2026-08-09): scrape ctx% from the
@@ -549,18 +682,17 @@ heartbeat() {
     if [ -z "$ctx_pct" ]; then
         ctx_pct=$(scrape_context_pct "$(tmux capture-pane -t "${SESSION_NAME}:0" -p 2>/dev/null | tail -10 || true)")
     fi
-    # Pass scraped value via env-var (CTX_PCT) instead of f-string interpolation
-    # — defense against shell-metachar injection if pane_title is ever attacker-
-    # controlled (T-06-03-01).
-    CTX_PCT="$ctx_pct" STATUS="$status" python3 -c "
+    local payload
+    payload=$(build_heartbeat_payload "$status" "$ctx_pct" "$CURRENT_TASK_ID" "$LAST_DISPATCHED_ATTEMPT_ID" 2>/dev/null || true)
+    [ -n "$payload" ] || payload="{\"status\":\"${status}\"}"
+    # G6 (dispatch-path-parity.md #31/#32): die Antwort wurde bisher komplett
+    # verworfen (Backend-Feld `control`, gesetzt von `_collect_heartbeat_control`/
+    # `_withdrawn_task_reason`, agents.py:3798/3767, nie gelesen). Jetzt wird sie
+    # eingelesen und an handle_heartbeat_control uebergeben.
+    local response
+    response=$(PAYLOAD="$payload" python3 -c "
 import json, urllib.request, os, sys
-payload = {'status': os.environ.get('STATUS', 'idle')}
-ctx = os.environ.get('CTX_PCT', '').strip()
-if ctx.isdigit():
-    val = int(ctx)
-    if 0 <= val <= 100:
-        payload['context_pct'] = float(val)
-data = json.dumps(payload).encode()
+data = os.environ['PAYLOAD'].encode()
 req = urllib.request.Request(
     os.environ['MC_API_URL'] + '/api/v1/agent/me/heartbeat',
     data=data,
@@ -571,10 +703,67 @@ req = urllib.request.Request(
     method='POST'
 )
 try:
-    urllib.request.urlopen(req, timeout=5)
+    body = urllib.request.urlopen(req, timeout=5).read()
+    sys.stdout.write(body.decode('utf-8', 'replace'))
 except Exception as e:
     print(f'Heartbeat failed: {e}', file=sys.stderr)
-" 2>/dev/null || true
+" 2>/dev/null || true)
+    handle_heartbeat_control "$response"
+}
+
+# handle_heartbeat_control RESPONSE_JSON — G6 fix: reagiert auf das `control`-
+# Feld der Heartbeat-Antwort. Der Bridge-Pfad tut das schon lange (`_on_control`,
+# bridge.py:1717); poll.sh las die Antwort bisher gar nicht.
+#
+# Nur "hard" wird gehandhabt — "soft" bleibt hier bewusst No-Op, ANDERS als
+# die Bridge, nicht als deren Spiegelung: bridge.py:3660 prueft
+# interrupt_state.fired() in jeder Turn-Runde, und fired() ist fuer "soft"
+# genauso gesetzt wie fuer "hard" (InterruptState-Docstring, bridge.py:3419-
+# 3422: "soft also ends the run"). Die Bridge cancelt den Turn also auch bei
+# "soft" ueber dieselbe Abbruchleiter (_run_interrupt_ladder, bridge.py:3453) —
+# bridge.py:2916 ist nur die Nachbearbeitung DANACH (der Nudge-Kommentar),
+# nicht der Beleg dafuer, dass "soft" den Turn am Laufen liesse. Die Bridge
+# kann sich den Abbruch leisten, weil sie dieselbe Session anschliessend mit
+# dem Nudge fortsetzt (serve_loop). poll.sh hat keinen Fortsetzungspfad: ein
+# Escape auf "soft" wuerde den Turn killen und nichts wieder aufnehmen, waere
+# also strikt schlechter als warten. Die zugrundeliegenden ungelesenen
+# Kommentare, die einen soft-Interrupt ausloesen, kommen ohnehin ueber den
+# bestehenden deliver_comments/deliver_messages-Kanal an — ein zusaetzliches
+# Escape hier waere ein neuer Eingriff, keine Parity-Angleichung.
+#
+# Idempotenz ueber LAST_HARD_INTERRUPT_TASK_ID (wie LAST_CANCELLED_TASK_ID /
+# LAST_STOPPED_TASK_ID): ein Escape pro Task, nicht pro 30s-Heartbeat-Zyklus.
+# Absichtlich KEIN /clear und KEIN CURRENT_TASK_ID-Reset hier — das bleibt
+# Sache der bestehenden state=cancelled/stopped-Pfade (naechster Poll, <=5s),
+# die den vollen Session-Reset samt Backend-Semantik schon korrekt handhaben.
+# Dieser Pfad schickt NUR das sonst fehlende, sofortige Escape.
+handle_heartbeat_control() {
+    local response="$1"
+    [ -n "$response" ] || return 0
+    local interrupt
+    interrupt=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('control', {}).get('interrupt', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    [ "$interrupt" = "hard" ] || return 0
+    local key="${CURRENT_TASK_ID:-none}"
+    if [ "$key" = "$LAST_HARD_INTERRUPT_TASK_ID" ]; then
+        return 0
+    fi
+    local reason
+    reason=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('control', {}).get('reason', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    log "WARNING: Heartbeat-Control meldet HARD-Interrupt (Task ${CURRENT_TASK_ID:-unbekannt}): ${reason:-kein Grund uebermittelt} — sende Escape."
+    tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+    LAST_HARD_INTERRUPT_TASK_ID="$key"
 }
 
 # build_acked_seq_param — serialisiert ACKED_SEQ (thread_id → hoechstes
@@ -651,6 +840,27 @@ run_task() {
     task_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task']['id'])")
     board_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('board_id') or '')" 2>/dev/null || echo "")
     attempt_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('dispatch_attempt_id') or '')" 2>/dev/null || echo "")
+
+    # Guard 1 (client-side twin of the backend's Guard 2 — erledigte/fremde
+    # Karte incident, 14.09.2026, see scripts/hermes-bridge.py
+    # _task_is_dispatchable_for_me for the sibling implementation). The
+    # backend (agents.py _task_still_dispatchable) is what's actually
+    # supposed to prevent a done/foreign card from ever reaching
+    # state=new_task — this is defense in depth for whatever slips past it.
+    # Missing fields (older backend without assigned_agent_id/my_agent_id)
+    # fail OPEN — this must never become the reason a legit dispatch drops.
+    local task_status task_assigned_agent_id my_agent_id
+    task_status=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('status') or '')" 2>/dev/null || echo "")
+    task_assigned_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('assigned_agent_id') or '')" 2>/dev/null || echo "")
+    my_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('my_agent_id') or '')" 2>/dev/null || echo "")
+    if [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; then
+        log "GUARD 1: Task $task_id hat status=$task_status — Dispatch verweigert (erledigte Karte)"
+        return
+    fi
+    if [ -n "$my_agent_id" ] && [ -n "$task_assigned_agent_id" ] && [ "$my_agent_id" != "$task_assigned_agent_id" ]; then
+        log "GUARD 1: Task $task_id ist assigned_agent_id=$task_assigned_agent_id, ich bin $my_agent_id — Dispatch verweigert (fremde Karte)"
+        return
+    fi
 
     log "Task erhalten: $task_id"
 
@@ -829,6 +1039,10 @@ except Exception:
     # Task starten — sonst werden false-positive Blocker im naechsten Task
     # auch nicht mehr gemeldet wenn der WIRKLICH stagnations-blocked ist.
     LAST_BLOCKED_TASK_ID=""
+    # G6: gleiches Prinzip fuer den Heartbeat-Control-Dedup — ein neuer
+    # Task-Dispatch darf nicht durch das Escape-Dedup einer VORHERIGEN Karte
+    # unterdrueckt werden.
+    LAST_HARD_INTERRUPT_TASK_ID=""
     # Kein Warten auf Completion — claude meldet sich selbst via MC API.
 }
 
@@ -1324,7 +1538,14 @@ rm -f "$TASK_LOCK_FILE" 2>/dev/null || true
 reset_turn_signal
 # Lockfile bei sauberem Exit raeumen. SIGKILL kann trap nicht abfangen —
 # recycler.sh prueft deshalb zusaetzlich ob poll.sh noch laeuft (pgrep).
-trap 'rm -f "$TASK_LOCK_FILE"' EXIT TERM INT
+#
+# TERM/INT bekommen ein eigenes trap MIT exit: seit die Entrypoints TERM an die
+# tmux-Fenster weiterleiten (sigforward.sh), sieht poll.sh das Signal wirklich —
+# ohne `exit` liefe der Handler weiter und poll.sh pochte als Zombie im toten
+# Container weiter. exit 143 = 128+SIGTERM; der EXIT-trap raeumt danach nochmal
+# (idempotent), ohne den Code zu veraendern.
+trap 'rm -f "$TASK_LOCK_FILE"' EXIT
+trap 'rm -f "$TASK_LOCK_FILE"; exit 143' TERM INT
 
 log "Gestartet. Polle $MC_API_URL alle ${POLL_INTERVAL}s..."
 

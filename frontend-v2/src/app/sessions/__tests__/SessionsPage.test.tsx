@@ -154,6 +154,7 @@ function mkAgent(
     board_id: null,
     name: "Agent One",
     role: null,
+    role_canonical: null,
     emoji: null,
     status: "idle",
     model: null,
@@ -454,6 +455,22 @@ describe("SessionsPage — center view (Chat/Terminal) wiring and hasTranscript 
 
     await waitFor(() =>
       expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("false")
+    );
+  });
+
+  // Ein Agent mit `headless_chat` faehrt ueber ACP und schreibt in dieselbe
+  // omp-Transkript-Ablage (Spec docs/specs/chat-over-acp.md) — der Chat ist
+  // dort die EINZIGE Oberflaeche. Faengt ihn die Host-Regel als
+  // „kein Transkript" ab, steht er stumm im Terminal, das nichts faehrt.
+  it("passes hasTranscript=true for a headless (ACP) host agent", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "acp-one", agent_runtime: "host", slug: "acp-one", headless_chat: true }),
+    ]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("true")
     );
   });
 
