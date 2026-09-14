@@ -9,6 +9,17 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://mc:password@localhost:5432/mission_control"
+    # Pool exhaustion guard (incident 2026-09-14: 29/30 connections pinned in
+    # open transactions → whole API unresponsive). pool_timeout bounds how
+    # long a request WAITS for a free connection before failing fast (503)
+    # instead of piling up behind a leak. 5s ≫ any healthy checkout wait
+    # (see database.py docstring for the sizing math), ≪ the 8s client
+    # timeout observed during the incident.
+    db_pool_timeout: float = 5.0
+    # Observability: a request whose session holds a pool connection longer
+    # than this is logged with endpoint + duration at return time — the
+    # "old transactions are a leak" signature, visible without psql.
+    db_session_hold_warn_seconds: float = 10.0
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
