@@ -200,6 +200,12 @@ class Settings(BaseSettings):
     # switched to the ACP protocol path. Comma-separated list from .env —
     # agent names deliberately live in deployment config, not in code.
     omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
+    # Recovery Tier 2 (process restart) opt-out — deployment config like
+    # OMP_ACP_AGENT_SLUGS (ADR-081). Slugs listed here are NEVER restarted by
+    # the tiered recovery; ACP agents (omp_acp_agents()) are skipped implicitly.
+    # Measured 2026-09-14: for ACP agents the restart kills the running turn
+    # (/restart, PR #574) and produced phantom deliveries + double reviews.
+    recovery_tier2_skip_agent_slugs: str = ""
 
     # Which driver the host-side hermes bridge runs (scripts/hermes-bridge.py).
     # "native" (default) = the bridge drives a hermes TUI in tmux and the
@@ -646,6 +652,20 @@ def omp_acp_agents(s: Settings | None = None) -> set[str]:
     """
     s = s or settings
     return {u.strip() for u in s.omp_acp_agent_slugs.split(",") if u.strip()}
+
+
+def recovery_tier2_skip_agents(s: Settings | None = None) -> set[str]:
+    """Agent slugs for which tiered recovery must NOT run Tier 2 (restart).
+
+    Union of RECOVERY_TIER2_SKIP_AGENT_SLUGS (explicit opt-out, e.g. a host
+    agent whose bridge runs a driver the backend cannot see) and
+    omp_acp_agents() (every ACP agent — a restart kills its running turn).
+    Deployment config, deliberately not code; empty default keeps today's
+    behaviour for a fleet without ACP agents.
+    """
+    s = s or settings
+    explicit = {u.strip() for u in s.recovery_tier2_skip_agent_slugs.split(",") if u.strip()}
+    return explicit | omp_acp_agents(s)
 
 
 def effective_host_ssh_user() -> str:

@@ -1127,7 +1127,38 @@ class TaskRunnerService:
         # ── Tier 2: Process restart per runtime ──────────────────────
         runtime = getattr(agent, "agent_runtime", "openclaw")
         tier2_ok = False
-        if runtime == "docker":
+        # Option B (Mark, 2026-09-14): no process restart for ACP agents and
+        # explicitly opted-out slugs. Measured over 7 days: Tier 2 failed in
+        # 48 % of runs and, for ACP agents, the restart itself killed the
+        # running turn (double review, phantom delivery). Tier 3 (resume =
+        # re-dispatch over the agent's own delivery path) and Tier 4
+        # (operator notification) still run — a truly hung ACP agent is
+        # therefore REPORTED, not restarted, until the liveness-based
+        # restart (option A) replaces this branch.
+        from app.config import recovery_tier2_skip_agents
+        from app.services.fs_service import agent_slug as _agent_slug
+        _slug = _agent_slug(agent) or ""
+        _tier2_skip = _slug in recovery_tier2_skip_agents()
+        if _tier2_skip:
+            logger.info(
+                "Tier 2 (restart) skipped for %s (slug=%s): ACP/opt-out agent — "
+                "restart would kill the running turn", agent.name, _slug,
+            )
+            await emit_event(
+                session,
+                "agent.recovery_tier_complete",
+                f"{agent.name}: Tier 2 uebersprungen — ACP-/Opt-out-Agent, kein Prozess-Neustart",
+                severity="info",
+                agent_id=agent.id, board_id=task.board_id, task_id=task.id,
+                detail={
+                    "tier": 2,
+                    "tier_name": "restart",
+                    "result": "skipped",
+                    "reason": "acp_or_optout_agent",
+                    "runtime": runtime,
+                },
+            )
+        elif runtime == "docker":
             try:
                 from app.services.docker_agent_sync import restart_docker_agent_container
                 # Sync function — wrap in to_thread to keep watchdog loop happy
@@ -1149,19 +1180,20 @@ class TaskRunnerService:
                 agent.name, runtime,
             )
 
-        await emit_event(
-            session,
-            "agent.recovery_tier_complete",
-            f"{agent.name}: Tier 2 {'ok' if tier2_ok else ('fehlgeschlagen' if runtime in ('docker', 'host') else 'uebersprungen')} — Restart ({runtime})",
-            severity="info" if tier2_ok else ("warning" if runtime in ("docker", "host") else "info"),
-            agent_id=agent.id, board_id=task.board_id, task_id=task.id,
-            detail={
-                "tier": 2,
-                "tier_name": "restart",
-                "runtime": runtime,
-                "result": "ok" if tier2_ok else ("failed" if runtime in ("docker", "host") else "skipped"),
-            },
-        )
+        if not _tier2_skip:
+            await emit_event(
+              session,
+              "agent.recovery_tier_complete",
+              f"{agent.name}: Tier 2 {'ok' if tier2_ok else ('fehlgeschlagen' if runtime in ('docker', 'host') else 'uebersprungen')} — Restart ({runtime})",
+              severity="info" if tier2_ok else ("warning" if runtime in ("docker", "host") else "info"),
+              agent_id=agent.id, board_id=task.board_id, task_id=task.id,
+              detail={
+                  "tier": 2,
+                  "tier_name": "restart",
+                  "runtime": runtime,
+                  "result": "ok" if tier2_ok else ("failed" if runtime in ("docker", "host") else "skipped"),
+              },
+            )
 
         # 30s wait between Tier 2 (restart) and Tier 3 (resume) — let the
         # container come up before sending the recap (D-17). Skip wait if
