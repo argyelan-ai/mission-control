@@ -91,6 +91,8 @@ RUN chmod +x /home/agent/.mc-cli/mc \
 COPY bridge.py            /opt/omp-bridge/bridge.py
 COPY acp_client.py        /opt/omp-bridge/acp_client.py
 COPY acp_chat_events.py   /opt/omp-bridge/acp_chat_events.py
+COPY acp_chat.py          /opt/omp-bridge/acp_chat.py
+COPY acp_chat_ctl.py      /opt/omp-bridge/acp_chat_ctl.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
 COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
@@ -101,10 +103,11 @@ COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
 # ZUSÄTZLICH als Symlink in PATH: `docker exec` startet keine Login-Shell und
 # löst nur absolute Pfade oder PATH-Einträge auf.
 COPY render-omp-config.sh /opt/omp-bridge/render-omp-config.sh
+COPY sigforward.sh        /opt/omp-bridge/sigforward.sh
 COPY entrypoint.sh        /usr/local/bin/entrypoint.sh
 COPY omp-recycler.sh      /usr/local/bin/omp-recycler.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/omp-recycler.sh \
-        /opt/omp-bridge/launch-omp.sh /opt/omp-bridge/render-omp-config.sh \
+        /opt/omp-bridge/sigforward.sh /opt/omp-bridge/launch-omp.sh /opt/omp-bridge/render-omp-config.sh \
     && ln -sf /opt/omp-bridge/launch-omp.sh /usr/local/bin/launch-omp.sh \
     && ln -sf /opt/omp-bridge/render-omp-config.sh /usr/local/bin/render-omp-config.sh
 

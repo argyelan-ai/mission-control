@@ -135,9 +135,21 @@ def resolve_transcript_dir(agent) -> Path | None:
     slug = getattr(agent, "slug", None)
     if not slug:
         return None
-    if getattr(agent, "agent_runtime", None) != "cli-bridge":
+    runtime = getattr(agent, "agent_runtime", None)
+    harness = getattr(agent, "harness", None)
+
+    # Zweiter erlaubter Fall seit „Chat over ACP" (docs/specs/chat-over-acp.md):
+    # der Hermes-Chat-Daemon laeuft auf dem HOST, schreibt aber exakt dasselbe
+    # omp-Transkriptformat in dieselbe Ordnerform. Damit liest die ganze
+    # Leser-/Vorschau-/Rollover-Kette unveraendert weiter — ein zweites Format
+    # waere reine Doppelarbeit. Das Tor bleibt eng: host + harness „hermes",
+    # nichts anderes.
+    if runtime == "host" and harness == "hermes":
+        return _host_home() / ".mc" / "agents" / slug / _SESSIONS_DIRNAME
+
+    if runtime != "cli-bridge":
         return None
-    if getattr(agent, "harness", None) != HARNESS:
+    if harness != HARNESS:
         return None
     return _host_home() / ".mc" / "agents" / slug / _SESSIONS_DIRNAME
 
@@ -755,6 +767,28 @@ class OmpLineParser:
                     "ts": ts,
                     "text": content[:_RESULT_TRUNCATE_LEN],
                     "source": "acp",
+                }
+            ]
+        if custom_type == "chat_error":
+            # Chat over ACP: der Chat-Daemon hat keinen anderen Weg, einen
+            # Fehler sichtbar zu machen — er schreibt ihn als eigene Zeile ins
+            # Transkript (Boss' Bedingung: „Fehler muessen als sichtbares
+            # Ereignis im Chat landen"). Eigene Quelle ``error`` + Code, damit
+            # das Frontend eine rote Karte daraus baut, statt den Fehler unter
+            # den uebrigen Systemhinweisen verschwinden zu lassen.
+            data = d.get("data") if isinstance(d.get("data"), dict) else {}
+            return [
+                {
+                    "kind": "message",
+                    "uuid": entry_id,
+                    "ts": ts,
+                    "role": "teammate",
+                    "teammate": custom_type,
+                    "source": {"kind": "error", "title": custom_type},
+                    "error": {"code": data.get("code"), "detail": data.get("detail")},
+                    "text": content[:_RESULT_TRUNCATE_LEN],
+                    "model": None,
+                    "sidechain": False,
                 }
             ]
         return [

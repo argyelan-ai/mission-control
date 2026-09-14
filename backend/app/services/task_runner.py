@@ -38,6 +38,17 @@ from app.services.dispatch import auto_dispatch_task
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 from app.services.task_state import lock_and_set
 
+# W-busy (#25efd77c): grace window for a heal claimed while the agent's last
+# reported heartbeat status was "working". See _maybe_rotate_dispatch_attempt
+# for the full rationale — short version: a paste sent while the agent is
+# mid-Zug can land inside that running turn and get silently absorbed, so a
+# busy heal gets a short retry window instead of the normal
+# one-heal-per-dispatch-window lock. Two task-runner ticks' worth of buffer
+# (default interval 60s, see TaskRunnerService.__init__) gives a genuinely
+# just-delivered paste time to be picked up and ACK'd before we'd consider
+# rotating again.
+BUSY_HEAL_RETRY_TTL_SEC = 120
+
 logger = logging.getLogger("mc.task_runner")
 
 # Thresholds (in minutes)
@@ -681,8 +692,28 @@ class TaskRunnerService:
         attempt_id than the one it last pasted on its next tick → triggers a
         fresh paste path without human intervention.
 
-        Dedup via Redis: only 1 rotation per `(task_id, original_attempt_id)`.
-        TTL = full ack_timeout so no endless rotation happens.
+        Dedup via Redis: normally only 1 rotation per `(task_id,
+        original_attempt_id)`, TTL = full ack_timeout, so no endless rotation
+        happens.
+
+        W-busy (#25efd77c) exception: poll.sh's dispatch paste is fail-open
+        (docker/shared/poll.sh paste_and_submit) — if the agent's pty is
+        already busy with an unrelated running turn ("Zug") when poll.sh
+        pastes the rotated attempt, the paste can land INSIDE that turn and
+        get silently absorbed. The agent never sees a fresh prompt, never
+        ACKs, and — since a rotation had already happened — the normal
+        full-ack_timeout lock below would then strand the card with no
+        further self-heal until the full ack_timeout escalates to a human
+        (reproduced: activity_events 14.09.2026, card healed at 05:32,
+        stayed unacked until a manual poll.sh restart at 06:50). Detect this
+        via the agent's last reported heartbeat status: if it was "working"
+        at THIS heal, use a short retry TTL (BUSY_HEAL_RETRY_TTL_SEC)
+        instead of the full window, so the next task-runner tick can retry
+        once the busy Zug plausibly cleared. If the agent was idle (the
+        normal case — nothing already running, the paste has every chance
+        to land cleanly), the full single-heal-per-window lock applies
+        unchanged, so a genuinely-delivered paste is never re-rotated
+        (double-dispatch protection, unchanged from before this fix).
 
         Returns: True if rotated, False if skipped (still too early or already rotated).
         """
@@ -714,7 +745,11 @@ class TaskRunnerService:
             caller="d1_silent_retry",
             reason=f"no_ack_after_{int(minutes_since_dispatch)}min",
         )
-        await redis.set(rotated_key, "1", ex=int(ack_timeout * 60))
+        agent_was_busy = agent.status == "working"
+        rotated_key_ttl = (
+            BUSY_HEAL_RETRY_TTL_SEC if agent_was_busy else int(ack_timeout * 60)
+        )
+        await redis.set(rotated_key, "1", ex=rotated_key_ttl)
 
         await emit_event(
             session,
@@ -729,12 +764,15 @@ class TaskRunnerService:
                 "new_attempt_id": new_attempt_id,
                 "minutes_since_dispatch": int(minutes_since_dispatch),
                 "rotation_threshold_min": int(rotation_threshold),
+                "agent_was_busy": agent_was_busy,
+                "rotated_key_ttl_sec": rotated_key_ttl,
             },
         )
         logger.warning(
-            "D-1 silent retry: '%s' — %s hat nicht ACK'd nach %dmin (threshold=%dmin), neue attempt_id %s",
+            "D-1 silent retry: '%s' — %s hat nicht ACK'd nach %dmin (threshold=%dmin), "
+            "neue attempt_id %s (agent_was_busy=%s, retry_ttl=%ds)",
             task.title[:60], agent.name, int(minutes_since_dispatch),
-            int(rotation_threshold), new_attempt_id[:8],
+            int(rotation_threshold), new_attempt_id[:8], agent_was_busy, rotated_key_ttl,
         )
         return True
 
@@ -1139,6 +1177,7 @@ class TaskRunnerService:
         # it off to the poll-loop. We also capture the structured recovery recap
         # as a TaskComment so it's durable + visible in the task timeline.
         tier3_ok = False
+        tier3_timed_out = False
         try:
             from app.services.task_context_builder import build_recovery_context
             from app.redis_client import try_claim_recovery_comment_cooldown
@@ -1209,6 +1248,7 @@ class TaskRunnerService:
                     timeout=TIER3_DISPATCH_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
+                tier3_timed_out = True
                 logger.warning(
                     "Tier 3 (resume) dispatch timed out after %ss for %s on task %s",
                     TIER3_DISPATCH_TIMEOUT_SECONDS, agent.name, task.id,
@@ -1230,10 +1270,24 @@ class TaskRunnerService:
             return True
 
         # ── Tier 4: Notify operator (auto-Discord via severity=error) ────
+        # Nit (incident 2026-09-14): a Tier-3 TIMEOUT is not the same claim as
+        # a Tier-3 FAILURE. wait_for's own comment above says the background
+        # auto_dispatch_task "may still complete" after the bound expires —
+        # and it did, live, that night: the redispatch worked, but this event
+        # still read "Auto-Recovery fehlgeschlagen", costing an hour of
+        # looking in the wrong direction. Wording now names the ambiguous
+        # case for what it is instead of asserting an outcome nobody confirmed.
+        _tier4_msg = (
+            f"{agent.name}: Tier 3 (Resume) Zeitueberschreitung — Re-Dispatch "
+            "laeuft moeglicherweise im Hintergrund weiter, Kartenstatus vor "
+            "manuellem Eingriff pruefen"
+            if tier3_timed_out else
+            f"{agent.name}: Auto-Recovery fehlgeschlagen — Operator benachrichtigt"
+        )
         await emit_event(
             session,
             "agent.recovery_failed",
-            f"{agent.name}: Auto-Recovery fehlgeschlagen — Operator benachrichtigt",
+            _tier4_msg,
             severity="error",  # auto-triggers Discord webhook (activity.py:73-80)
             agent_id=agent.id,
             board_id=task.board_id,
@@ -1244,6 +1298,7 @@ class TaskRunnerService:
                 "task_id": str(task.id),
                 "task_title": task.title,
                 "runtime": runtime,
+                "tier3_timed_out": tier3_timed_out,
             },
         )
         return False

@@ -1,11 +1,84 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle, RotateCcw, Pause, StopCircle, Play } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Task, TaskStatus, ReviewDecision } from "@/lib/types";
 import { C } from "@/lib/colors";
+import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
+import { useTranslations } from "next-intl";
+
+// ── Review owner gate ────────────────────────────────────────────────────────
+// Incident 11.09.2026: the operator saw Approve/Reject on every task in
+// `review`, including those already with the reviewer agent, and approved
+// mid-review. Decision buttons appear only when the review is the operator's
+// (see lib/reviewRouting.ts); otherwise an explicit "agent is reviewing" note
+// with an opt-in override.
+
+function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
+  const t = useTranslations("inbox");
+  const [override, setOverride] = useState(false);
+  const { data: agents, isError } = useQuery({
+    queryKey: ["agents", boardId],
+    queryFn: () => api.agents.list(boardId),
+    staleTime: 60_000,
+  });
+  // Explicit operator request: never gated behind the agents lookup, so a
+  // broken/hanging /agents call can't hide the decision UI (Incident PR #514 B1).
+  if (task.human_review_required) return <ReviewDecisionSection task={task} boardId={boardId} />;
+  const agent = task.assigned_agent_id ? agents?.find((a) => a.id === task.assigned_agent_id) : null;
+  // While agents are still loading, an assigned reviewer must not flash the buttons.
+  // A failed lookup (isError) must not loop forever — fall through to isOperatorReview instead.
+  const loading = !!task.assigned_agent_id && agents === undefined && !isError;
+  if (loading) return null;
+  // W2 (PR #514 Rex review): reviewer === developer of this card → backend
+  // skipped the handoff, nobody is independently reviewing it. isOperatorReview
+  // already routes this to the decision section below; this only decides the
+  // wording above it ("wartet auf Lead" instead of pretending nothing changed).
+  const selfReviewStall = !!agent && agent.role_canonical === "reviewer" && isSelfReviewStall(task);
+  if (override || isOperatorReview(task, agent)) {
+    return (
+      <>
+        {selfReviewStall && !override && (
+          <div
+            className="px-3 py-2 rounded-lg text-xs"
+            data-testid="self-review-stall-note"
+            style={{
+              backgroundColor: `${C.warning}0F`,
+              color: C.textSecondary ?? C.warning,
+              border: `1px solid ${C.warning}26`,
+            }}
+          >
+            {t("selfReviewStall", { agent: agent?.name ?? "—" })}
+          </div>
+        )}
+        <ReviewDecisionSection task={task} boardId={boardId} />
+      </>
+    );
+  }
+  return (
+    <div
+      className="px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2"
+      data-testid="agent-review-note"
+      style={{
+        backgroundColor: `${C.info}0F`,
+        color: C.textSecondary ?? C.info,
+        border: `1px solid ${C.info}26`,
+      }}
+    >
+      <span>{t("agentReviewing", { agent: agent?.name ?? "—" })}</span>
+      <button
+        type="button"
+        onClick={() => setOverride(true)}
+        className="underline cursor-pointer"
+        style={{ color: C.info }}
+      >
+        {t("decideYourself")}
+      </button>
+    </div>
+  );
+}
 
 // ── Review Decision Section ──────────────────────────────────────────────────
 
@@ -312,9 +385,10 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
         </div>
       )}
 
-      {/* Review Section */}
+      {/* Review Section — only the operator's own reviews get decision
+          buttons; a review held by a reviewer agent (Rex) is shown as such. */}
       {task.status === "review" && (
-        <ReviewDecisionSection task={task} boardId={boardId} />
+        <ReviewOwnerGate task={task} boardId={boardId} />
       )}
 
       {/* Status changes moved to the header dropdown (TaskDetailBody) —

@@ -138,4 +138,21 @@ describe("ActionBar — Stop dispatch gate", () => {
     expect(gear).toHaveClass("w-11");
     expect(gear).toHaveClass("h-11");
   });
+
+  it("restart button says in its tooltip whether both boxes come along", async () => {
+    const solo = renderWithQuery(
+      <ActionBar hostId="spark" hostName="spark" servingName="Qwen3.8" runtimeId="rt-1" variant="trouble" onOpenCockpit={() => {}} />
+    );
+    expect((await screen.findByTestId("restart-now")).getAttribute("title")).toBe(
+      "Restarts the model running on this box."
+    );
+    solo.unmount();
+
+    renderWithQuery(
+      <ActionBar hostId="spark" hostName="spark" servingName="Qwen3.8" runtimeId="rt-1" variant="trouble" multiNode onOpenCockpit={() => {}} />
+    );
+    expect((await screen.findByTestId("restart-now")).getAttribute("title")).toBe(
+      "Multi-node runtime: both boxes are stopped and started together."
+    );
+  });
 });

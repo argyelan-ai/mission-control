@@ -11,6 +11,12 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Docker Desktop defaults StopTimeout to 1s when a service doesn't set
+    # this explicitly (measured, not assumed — see architecture session
+    # 2026-09-14). Postgres under SIGKILL never runs a clean checkpoint, it
+    # just crash-recovers on the next start. 60s gives it real headroom to
+    # shut down cleanly on every `docker stop`/recreate.
+    stop_grace_period: 60s
     logging: *default-logging
     volumes:
       - mc_postgres_data:/var/lib/postgresql/data
@@ -31,6 +37,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). AOF is on
+    # (--appendonly yes --appendfsync everysec): on SIGTERM redis-server finishes
+    # writing to the AOF file and closes it cleanly; on SIGKILL that in-flight
+    # write — and the clean close — is lost. 30s is generous headroom for that
+    # flush, not a full minute like db: there's no checkpoint/WAL replay to wait
+    # out, just a bounded fsync.
+    stop_grace_period: 30s
     logging: *default-logging
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     volumes:
@@ -79,6 +92,10 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/caddy (1s without this line) —
+    # 20s gives in-flight requests and the FastAPI shutdown hooks room to
+    # finish instead of a hard SIGKILL mid-request.
+    stop_grace_period: 20s
     logging: *default-logging
     networks:
       - default
@@ -206,6 +223,10 @@ services:
       # (comma-separated). Without this passthrough the .env key never
       # reaches the backend container (same trap as STT_BASE_URL above).
       OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
+      # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
+      # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
+      HERMES_DRIVER: ${HERMES_DRIVER:-native}
       GH_TOKEN: ${GH_TOKEN:-}
       # Kill-switch: false = legacy single-session dispatch (see ADR-002).
       # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.
@@ -431,6 +452,10 @@ services:
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
       OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
+      # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
+      # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
+      HERMES_DRIVER: ${HERMES_DRIVER:-native}
       GH_TOKEN: ${GH_TOKEN:-}
       USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
       GITHUB_OWNER: ${GITHUB_OWNER:-}
@@ -519,6 +544,13 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). qdrant is
+    # the vector store behind Vault and Memory (mc_qdrant_data holds the
+    # storage segments). On SIGKILL it can't close those segments cleanly,
+    # forcing crash-recovery on the next start. 60s, same as db: aligned by
+    # role (persistent storage engine, not a cache), not by measurement —
+    # nobody has isolated-tested qdrant's own shutdown path yet.
+    stop_grace_period: 60s
     logging: *default-logging
     ports:
       - "127.0.0.1:6333:6333"
@@ -536,6 +568,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/backend (1s without this line) —
+    # 10s lets Caddy drain in-flight connections gracefully on stop/reload.
+    stop_grace_period: 10s
     logging: *default-logging
     depends_on:
       - frontend
@@ -648,8 +683,8 @@ services:
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
       # ADR-083: which wire api a (provider, model) pair speaks — "realtime"
-      # or "live" (OpenAI gpt-live-1 full-duplex, needs the vorab-installed
-      # LiveKit PR #7212 plugin) — is NOT a separate env var. It is derived
+      # or "live" (OpenAI gpt-live-1 full-duplex, needs the GPT-Live plugin
+      # from livekit-plugins-openai >= 1.8.1) — is NOT a separate env var. It is derived
       # from the model name by jarvis_core.voice_provider.classify_voice_api
       # (one rule, shared with the backend's GET /api/v1/agent/voice/config
       # response), whether the model comes from the MC runtime binding
@@ -710,12 +745,20 @@ services:
       - --remote-allow-origins=*
       - about:blank
     healthcheck:
-      # Probe :9223 (the socat forward consumers actually use), not :9222 —
-      # a dead forward with a live browser was exactly the failure that slipped
-      # through before. wget has no socat/curl dep and ships in alpine-chrome.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9223/json/version >/dev/null 2>&1 || exit 1"]
+      # Real CDP roundtrip (HTTP /json/version + a WS Target.getTargets call),
+      # not just HTTP — see docker/cdp-browser/healthcheck.sh for why. Incident
+      # 2026-09-13: HTTP-only stayed "healthy" for 5 days while the WebSocket
+      # path was wedged and every Playwright call hung at its 30s timeout.
+      # timeout: 10s covers the script's own worst case (3s HTTP + 5s WS = 8s)
+      # with margin, so Docker's own kill never fires before the script's.
+      # start_period: 30s — the check now does two real round-trips instead
+      # of one HTTP GET, so it's more likely to catch Chromium still coming
+      # up right after container start. Cheap insurance against that being
+      # mistaken for the wedge this check exists to find.
+      test: ["CMD-SHELL", "/usr/local/bin/cdp-healthcheck.sh"]
       interval: 30s
       timeout: 10s
+      start_period: 30s
       retries: 3
 
   playwright-mcp:
