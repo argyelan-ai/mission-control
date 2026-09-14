@@ -1136,6 +1136,29 @@ class TaskMonitorMixin:
                 from app.models.approval import Approval
                 from datetime import timedelta
 
+                # `review_tasks` was fetched once at the top of this method
+                # (line ~975) and — with expire_on_commit=False everywhere in
+                # this codebase — never refreshes afterwards. If a *different*
+                # session finished the review in the meantime (e.g. the
+                # reviewer approved it while this tick was still working
+                # through the list), `task.status` here is stale. Re-read the
+                # status fresh right before creating the operator approval so
+                # an already-closed card doesn't land in Mark's inbox.
+                # Column selection with intent — select(Task) would hit the
+                # session's identity map and hand back this same stale
+                # object (expire_on_commit=False), silently turning this
+                # guard into a no-op. Only select(Task.status) bypasses it.
+                current_status = (await session.exec(
+                    select(Task.status).where(Task.id == task.id)
+                )).first()
+                if current_status != "review":
+                    logger.info(
+                        "Review-stuck approval skipped for '%s' (%dmin) — "
+                        "status is now '%s', not 'review' anymore",
+                        task.title, int(age_minutes), current_status,
+                    )
+                    continue
+
                 existing = (await session.exec(
                     select(Approval).where(
                         Approval.task_id == task.id,
