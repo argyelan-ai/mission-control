@@ -2972,6 +2972,37 @@ async def agent_update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    if old_status == "blocked":
+                        # Incident 2026-09-14 (61 min Stillstand) — identischer
+                        # Zwilling zum Operator-Pfad (routers/tasks.py). `blocked`
+                        # heisst immer "Turn schon beendet" (der Agent hat
+                        # `mc blocked` selbst aufgerufen, das schliesst den Turn
+                        # synchron ab) — anders als `waiting` (mc ask --blocking:
+                        # "Session bleibt bestehen") gibt es hier nie einen
+                        # echten laufenden Zug, den ein Reset doppelt starten
+                        # koennte. Ohne diesen Reset bleiben `ack_at` (line
+                        # ~2398 stampft es nur, wenn NULL — nach einem
+                        # gescheiterten Lauf ist es das nicht) und die alte
+                        # `dispatch_attempt_id` stehen: agents.py's Orphan-Check
+                        # (_maybe_redispatch_orphaned_run) haelt den Lauf ueber
+                        # das ganze poll_orphan_run_threshold_seconds-Fenster
+                        # fuer "lebend", und selbst danach traegt die neu
+                        # zugestellte Karte noch die ALTE attempt_id — genau
+                        # das, was bridge.py's Dispatch-Dedup (last_attempt_id)
+                        # als "schon erledigt" verwirft. Mirrors den bereits
+                        # akzeptierten Fix im "parked"-Zweig der Antwort-Resume
+                        # (messaging.py resolve_waiting_answer).
+                        from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+                        task.ack_at = None
+                        session.add(task)
+                        await session.commit()
+                        await session.refresh(task)
+                        await set_dispatch_attempt_id(
+                            session, task, str(uuid.uuid4()),
+                            caller="unblock_notify",
+                            reason="unblock_notify_blocked_stale_attempt",
+                            only_if_null=False,
+                        )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
                         .where(TaskComment.task_id == task.id)
