@@ -2733,7 +2733,9 @@
       "cornerSwitching": "switching",
       "cornerUnreachable": "unreachable",
       "cornerUptimeHours": "up {h} h {m}",
-      "cornerUptimeMinutes": "up {m} min"
+      "cornerUptimeMinutes": "up {m} min",
+      "restartHint": "Restarts the model running on this box.",
+      "restartMultiNodeHint": "Multi-node runtime: both boxes are stopped and started together."
     },
     "cockpit": {
       "modeNoDevice": "No node agent is paired with this box — the mode list is unavailable.",
@@ -2786,7 +2788,9 @@
       "lastAttempt": "last attempt {when} · {status}",
       "lastAttemptTimeOnly": "last attempt {when}",
       "resultOk": "ok",
-      "resultFailed": "failed"
+      "resultFailed": "failed",
+      "restartHint": "Restarts the model running on this box.",
+      "restartMultiNodeHint": "Multi-node runtime: both boxes are stopped and started together."
     }
   },
   "bench": {
@@ -2978,6 +2982,15 @@
       "fromMc": "Mission Control",
       "expand": "Show content",
       "collapse": "Hide content"
+    },
+    "error": {
+      "generic": "Chat error",
+      "rpc_error": "Protocol error",
+      "provider_error": "Provider error",
+      "empty_turn": "No answer",
+      "process_exit": "Process ended",
+      "busy": "Still working",
+      "session_reset": "Session restarted"
     }
   }
 }

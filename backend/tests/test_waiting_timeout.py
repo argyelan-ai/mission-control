@@ -21,6 +21,7 @@ from app.auth import create_access_token, generate_agent_token
 from app.models.agent import Agent
 from app.models.board import Board
 from app.models.task import Task, TaskComment, TaskEvent
+from app.models.task_attempt_audit import TaskAttemptAudit
 from app.models.thread import Message
 from app.models.user import User
 from app.services.messaging import ensure_task_thread, post_message
@@ -92,14 +93,28 @@ async def _agent(board_id: uuid.UUID, current_task_id: uuid.UUID | None = None):
     return agent, raw_token
 
 
-async def _waiting_task(board_id: uuid.UUID, agent_id: uuid.UUID, *, waited_days: int = 5) -> Task:
-    """A task parked `waiting`, with a waiting-transition event `waited_days` ago."""
+async def _waiting_task(
+    board_id: uuid.UUID, agent_id: uuid.UUID, *,
+    waited_days: int = 5, dispatch_attempt_id: str | None = None,
+) -> Task:
+    """A task parked `waiting`, with a waiting-transition event `waited_days` ago.
+
+    dispatch_attempt_id: the realistic production shape carries the id from
+    the ORIGINAL dispatch straight through the waiting park — the module doc
+    in task_lifecycle.py is explicit that `waiting` clears neither
+    current_task_id nor (by construction, since it isn't in the
+    done/failed/blocked/inbox list) dispatch_attempt_id. Tests that omit this
+    (leaving it None, as this fixture used to unconditionally do) can't
+    observe the card f5cc4cee point (d) regression: only_if_null writes are
+    no-ops against a NULL column either way.
+    """
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = Task(
             id=uuid.uuid4(), board_id=board_id, title="WT waiting task",
             status="waiting", assigned_agent_id=agent_id,
             dispatched_at=dt.datetime.now(tz=dt.timezone.utc),
             ack_at=dt.datetime.now(tz=dt.timezone.utc),
+            dispatch_attempt_id=dispatch_attempt_id,
         )
         s.add(task)
         s.add(TaskEvent(
@@ -407,6 +422,71 @@ class TestWaitingResumeRecap:
                 )
             )).all()
             assert any("Weiter geht" in c.content for c in recaps)
+
+    async def test_parked_answer_rotates_stale_attempt_id(self, client):
+        """Card f5cc4cee point (d): a parked-resume must mint a FRESH
+        dispatch_attempt_id, not just re-deliver with the one the ORIGINAL
+        dispatch already stamped.
+
+        Both poll.sh (poll.sh:610-614) and the omp-bridge (bridge.py
+        dispatch-dedup) key their re-paste guard on dispatch_attempt_id, not
+        task_id — "same attempt_id already handled, don't paste again". A
+        `waiting` transition deliberately does NOT clear dispatch_attempt_id
+        (task_lifecycle.py module doc: the session is meant to stay alive).
+        That's correct for the NOT-parked branch (nudge, no new dispatch at
+        all). But when the resume goes through the PARKED branch — a genuine
+        new delivery via auto_dispatch_task — reusing the stale id makes
+        every delivery mechanism downstream treat it as a repeat: the card
+        flips back to `in_progress` with a fresh `ack_at`, and neither
+        poll.sh nor the bridge ever starts a turn for it.
+        """
+        stale_attempt_id = str(uuid.uuid4())
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        agent, _ = await _agent(board.id, current_task_id=None)
+        task = await _waiting_task(
+            board.id, agent.id, dispatch_attempt_id=stale_attempt_id,
+        )
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            db_task = await s.get(Task, task.id)
+            thread = await ensure_task_thread(s, db_task)
+            question = await post_message(
+                s, thread_id=thread.id, sender_type="agent", sender_id=agent.id,
+                message_type="question", body="Deploy jetzt?",
+                question_meta={"awaiting": True, "blocking": True, "to": "boss", "priority": "high"},
+            )
+
+        user_id = uuid.uuid4()
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            s.add(User(id=user_id, email=f"u-{user_id.hex[:6]}@mc.local",
+                       name="Op", role="admin", is_active=True))
+            await s.commit()
+        user_token = create_access_token(str(user_id), "admin")
+
+        with patch("app.services.dispatch.auto_dispatch_task", AsyncMock()):
+            client.headers["Authorization"] = f"Bearer {user_token}"
+            resp = await client.post(
+                f"/api/v1/tasks/{task.id}/thread/messages",
+                json={"body": "Ja, deploy.", "reply_to": str(question.id)},
+            )
+        assert resp.status_code == 201, resp.text
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            resumed = await s.get(Task, task.id)
+            assert resumed.status == "in_progress"
+            assert resumed.dispatch_attempt_id is not None
+            assert resumed.dispatch_attempt_id != stale_attempt_id
+
+            audit_rows = (await s.exec(
+                select(TaskAttemptAudit).where(
+                    TaskAttemptAudit.task_id == task.id,
+                    TaskAttemptAudit.reason == "waiting_resume_parked",
+                )
+            )).all()
+            assert len(audit_rows) == 1
+            assert str(audit_rows[0].old_attempt) == stale_attempt_id
+            assert str(audit_rows[0].new_attempt) == resumed.dispatch_attempt_id
 
     async def test_recap_reaches_built_prompt_verbatim(self):
         """The REAL dispatch message build (no mock) injects the recovery_context

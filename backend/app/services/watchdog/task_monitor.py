@@ -693,6 +693,18 @@ class TaskMonitorMixin:
         if not completed_parent.project_id:
             return
 
+        # C2 (PR #533 Nacharbeit Runde 3, Rex review B1): mirrors the fix in
+        # tasks.py's inline phase-auto-advance. `run_control.is_(None)` used
+        # to sit as a filter on this query — a filter removes the held row
+        # from the result set instead of halting the walk, so the query
+        # returned the next *unheld* phase after it and started that one
+        # (leapfrog). Since this runs on every watchdog tick as long as
+        # completed_parent stays "done", every phase behind the hold gets
+        # force-started on successive ticks — one `mc hold` cascades the
+        # rest of the project into parallel in_progress. The check now runs
+        # AFTER selecting the immediate next phase by sort_order: if that
+        # phase is held, stop — the phase stays "inbox" and is picked up
+        # automatically on the first tick after release.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == completed_parent.project_id,
@@ -702,7 +714,7 @@ class TaskMonitorMixin:
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()
 
-        if not next_phase:
+        if not next_phase or next_phase.run_control is not None:
             return
 
         try:
@@ -902,15 +914,34 @@ class TaskMonitorMixin:
         now = utcnow()
 
         for dep in all_deps:
-            # Only check if the dependent task is still actively waiting
-            task = await session.get(Task, dep.task_id)
-            if not task or task.status not in ("inbox", "in_progress"):
+            # ── Fresh status reads BEFORE any decision (identity-map trap) ──
+            # With expire_on_commit=False everywhere in this codebase,
+            # session.get() returns the cached object from THIS session's
+            # identity map — if another session resolved the dependency (or
+            # dispatched the waiting task) since this session last saw it,
+            # the cached "failed"/"inbox" would still produce a zombie
+            # approval for a problem that no longer exists. Column selection
+            # bypasses the identity map (see the review_stuck guard in
+            # _check_review_tasks for the same pattern).
+            task_row = (await session.exec(
+                select(Task.status).where(Task.id == dep.task_id)
+            )).first()
+            if task_row is None or task_row not in ("inbox", "in_progress"):
                 continue
 
-            # Check dependency task
-            dep_task = await session.get(Task, dep.depends_on_task_id)
-            if not dep_task or dep_task.status not in ("failed", "blocked"):
+            dep_row = (await session.exec(
+                select(Task.status, Task.updated_at).where(Task.id == dep.depends_on_task_id)
+            )).first()
+            if dep_row is None or dep_row.status not in ("failed", "blocked"):
                 continue
+
+            task = await session.get(Task, dep.task_id)
+            dep_task = await session.get(Task, dep.depends_on_task_id)
+            if not task or not dep_task:
+                continue
+            # Use the FRESH status/updated_at below, not the cached object's
+            dep_status = dep_row.status
+            dep_updated_at = dep_row.updated_at
 
             # ── `blocked` ist NICHT terminal (Fix D, Incident 2026-07-04) ──
             # Ein blockierter Upstream hat einen aktiven Loesungsweg:
@@ -919,7 +950,7 @@ class TaskMonitorMixin:
             # denselben Vorfall (im Incident: 60s nach dem Ursprungs-Blocker).
             # Zombie-Eskalation nur, wenn der Upstream >60min blocked ist UND
             # kein offener Fall existiert (Leiter faktisch tot = Safety-Net).
-            if dep_task.status == "blocked":
+            if dep_status == "blocked":
                 pending_upstream = (await session.exec(
                     select(Approval).where(
                         Approval.task_id == dep_task.id,
@@ -930,8 +961,8 @@ class TaskMonitorMixin:
                     )
                 )).first()
                 blocked_minutes = (
-                    (now - dep_task.updated_at).total_seconds() / 60
-                    if dep_task.updated_at else 0
+                    (now - dep_updated_at).total_seconds() / 60
+                    if dep_updated_at else 0
                 )
                 if pending_upstream is not None or blocked_minutes < 60:
                     continue
@@ -962,7 +993,7 @@ class TaskMonitorMixin:
                     action_type="dependency_zombie",
                     description=(
                         f"Task '{task.title}' wartet auf '{dep_task.title}' "
-                        f"die im Status '{dep_task.status}' steht. "
+                        f"die im Status '{dep_status}' steht. "
                         f"Dependency wird nie erfuellt — manuelle Aufloesung noetig."
                     ),
                 )
@@ -973,13 +1004,13 @@ class TaskMonitorMixin:
 
             await emit_event(
                 session, "task.dependency_zombie",
-                f"Zombie-Dependency: '{task.title}' wartet auf '{dep_task.title}' ({dep_task.status})",
+                f"Zombie-Dependency: '{task.title}' wartet auf '{dep_task.title}' ({dep_status})",
                 board_id=task.board_id, task_id=task.id,
                 severity="warning",
             )
             logger.warning(
                 "Dependency zombie: '%s' waits on '%s' (status=%s)",
-                task.title, dep_task.title, dep_task.status,
+                task.title, dep_task.title, dep_status,
             )
 
     async def _check_review_tasks(self, session: AsyncSession) -> None:
@@ -1133,6 +1164,29 @@ class TaskMonitorMixin:
                 from app.models.approval import Approval
                 from datetime import timedelta
 
+                # `review_tasks` was fetched once at the top of this method
+                # (line ~975) and — with expire_on_commit=False everywhere in
+                # this codebase — never refreshes afterwards. If a *different*
+                # session finished the review in the meantime (e.g. the
+                # reviewer approved it while this tick was still working
+                # through the list), `task.status` here is stale. Re-read the
+                # status fresh right before creating the operator approval so
+                # an already-closed card doesn't land in Mark's inbox.
+                # Column selection with intent — select(Task) would hit the
+                # session's identity map and hand back this same stale
+                # object (expire_on_commit=False), silently turning this
+                # guard into a no-op. Only select(Task.status) bypasses it.
+                current_status = (await session.exec(
+                    select(Task.status).where(Task.id == task.id)
+                )).first()
+                if current_status != "review":
+                    logger.info(
+                        "Review-stuck approval skipped for '%s' (%dmin) — "
+                        "status is now '%s', not 'review' anymore",
+                        task.title, int(age_minutes), current_status,
+                    )
+                    continue
+
                 existing = (await session.exec(
                     select(Approval).where(
                         Approval.task_id == task.id,
@@ -1219,6 +1273,24 @@ class TaskMonitorMixin:
         dedup_key = f"mc:watchdog:review_decision_missing:{task.id}"
         if await redis.get(dedup_key):
             return  # Already nudged, cooldown running
+
+        # ── Fresh status check BEFORE nudging (identity-map trap) ──
+        # `task` was fetched once at the top of _check_review_tasks and, with
+        # expire_on_commit=False, never refreshes. If the reviewer (or the
+        # lead) closed the review while this tick was still walking the list,
+        # the cached "review" is stale and the nudge would land on a card
+        # that no longer waits for a decision. Column selection bypasses the
+        # session's identity map — same pattern as the review_stuck guard.
+        current_status = (await session.exec(
+            select(Task.status).where(Task.id == task.id)
+        )).first()
+        if current_status != "review":
+            logger.info(
+                "Decision-missing nudge skipped for '%s' — status is now "
+                "'%s', not 'review' anymore",
+                task.title, current_status,
+            )
+            return
 
         # Nudge reviewer via TaskComment (Pattern A 29-PATTERNS.md)
         reviewer_agent = await session.get(Agent, task.assigned_agent_id)
