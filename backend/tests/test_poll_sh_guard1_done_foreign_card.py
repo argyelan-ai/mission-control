@@ -27,6 +27,30 @@ pytestmark = pytest.mark.skipif(
     not POLL_SH.exists(), reason="canonical poll.sh not found"
 )
 
+# run_task() writes /tmp/mc-context.env UNCONDITIONALLY (hardcoded path, no
+# env-var override — unlike TASK_PROMPT_FILE/TASK_LOCK_FILE/RECYCLER_MARKER_FILE
+# above, which the tests already redirect into $WORK). Live-hit during this
+# fix's own development: running these tests overwrote the REAL, host-shared
+# context file with the fixture's fake t1/b1 IDs, which then made every `mc`
+# CLI call on this very container fail with 422 (same incident class as #579,
+# which fixed the analogous mc-cli-side hardcoding — poll.sh's own copy of the
+# bug was untouched by that PR). Snapshot + restore around every test here so
+# this file can never repeat that; a proper poll.sh-side fix (env override,
+# mirroring #579) is a separate, out-of-scope change.
+REAL_CONTEXT_FILE = Path("/tmp/mc-context.env")
+
+
+@pytest.fixture(autouse=True)
+def _protect_real_context_file():
+    backup = REAL_CONTEXT_FILE.read_bytes() if REAL_CONTEXT_FILE.exists() else None
+    try:
+        yield
+    finally:
+        if backup is not None:
+            REAL_CONTEXT_FILE.write_bytes(backup)
+        elif REAL_CONTEXT_FILE.exists():
+            REAL_CONTEXT_FILE.unlink()
+
 TMUX_SHIM = """#!/usr/bin/env bash
 if [ -n "${TMUX_LOG:-}" ]; then
     echo "$*" >> "$TMUX_LOG"
