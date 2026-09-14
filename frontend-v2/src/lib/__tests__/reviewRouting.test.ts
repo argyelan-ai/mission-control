@@ -66,4 +66,10 @@ describe("isSelfReviewStall", () => {
   it("manual reassignment (dispatch_intent 'manual_redispatch') → NOT a stall (B2, PR #517 Rex review)", () => {
     expect(isSelfReviewStall({ assigned_agent_id: "reviewer-b", dispatch_intent: "manual_redispatch" })).toBe(false);
   });
+  it("reviewer agent with freetext `role` still resolves via role_canonical → NOT the operator's", () => {
+    expect(isOperatorReview({ human_review_required: false, assigned_agent_id: "argus" }, freetextReviewer)).toBe(false);
+  });
+  it("agent has no canonical role (unrecognized freetext) → operator's (fail safe)", () => {
+    expect(isOperatorReview({ human_review_required: false, assigned_agent_id: "argus" }, { role_canonical: null })).toBe(true);
+  });
 });
