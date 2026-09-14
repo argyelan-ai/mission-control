@@ -44,8 +44,9 @@ per the team's own "Sabotage-Mutation muss Schutzschicht durchbrechen" /
      exception raised for a missing directory).
 
 Run: pytest docker/omp-bridge/tests/test_acp_workspace_parity.py -v
-     (needs OPENAI_MODEL set — see test_acp_through_tests.py's own note;
-     CI does not run this suite today, see docs/dispatch-path-parity.md)
+     (needs OPENAI_MODEL set; the `omp-bridge` CI lane in
+     .github/workflows/ci.yml runs the whole tests/ directory, this file
+     included — PR #547 follow-up W3, see docs/dispatch-path-parity.md)
 """
 from __future__ import annotations
 
