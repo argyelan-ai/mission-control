@@ -659,6 +659,12 @@ async def execute_review_decision(
                         board_id=board_id, task_id=task.id, agent_id=actor_agent.id,
                         severity="warning",
                     )
+                    # Same class of gap as the reassign endpoints: reassigning
+                    # to the Board Lead here never went through
+                    # auto_dispatch_task, so the Board Lead's workspace was
+                    # never prepared for this task/branch.
+                    from app.services.task_context_builder import prepare_agent_workspace_for_task
+                    await prepare_agent_workspace_for_task(task, _board_lead, session)
                     return  # Return without approve — Board Lead must decide
                 else:
                     raise HTTPException(
