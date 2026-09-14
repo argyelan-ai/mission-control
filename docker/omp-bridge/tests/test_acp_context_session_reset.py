@@ -58,7 +58,8 @@ EXPECTED_PCT = 3.5
 
 _SERVE_ENV_KEYS = (
     "PI_CODING_AGENT_DIR", "OMP_DRIVER", "OMP_ACP_CWD", "OMP_ACP_PERMISSIONS",
-    "OMP_TASK_DEADLINE", "MSG_DELIVERY_MODE", "OMP_HOME", "OMP_TURN_SIGNAL_FILE",
+    "OMP_TASK_DEADLINE", "MSG_DELIVERY_MODE", "OMP_HOME", "OMP_PROFILE",
+    "OMP_TURN_SIGNAL_FILE",
     "OMP_TASK_LOCK_FILE", "OMP_MSG_QUEUE_DIR", "OMP_MSG_ACK_DIR",
     "OMP_MSG_NUDGE_STATE_FILE", "OMP_MSG_NUDGE_MSG_FILE",
     "OMP_MAX_RETRIES", "OMP_MAX_CONTINUES",
@@ -120,6 +121,10 @@ def drive_serve_loop_pickup(*, seed_pct: float, fixture_name: str) -> dict:
                 "OMP_MAX_CONTINUES": "0",
             })
             os.environ.pop("OMP_TASK_DEADLINE", None)
+            # The container image pins OMP_PROFILE; with it set, session_dir() prefers
+            # the profile tree over PI_CODING_AGENT_DIR and the transcript would land
+            # somewhere this test never looks. Restored via _SERVE_ENV_KEYS.
+            os.environ.pop("OMP_PROFILE", None)
             (tmp / "agent").mkdir()
 
             bridge._set_acp_context_pct(seed_pct)

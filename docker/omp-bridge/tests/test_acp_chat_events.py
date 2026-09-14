@@ -362,6 +362,39 @@ def test_sink_degrades_to_noop_on_unwritable_dir(tmp_path):
     sink.write(["{}"])  # must not raise
 
 
+def test_session_dir_follows_omp_profile_not_pi_dir(tmp_path, monkeypatch):
+    # Live finding 14.09.2026: with OMP_PROFILE set, omp itself keeps its agent
+    # dir under $OMP_HOME/profiles/<profile>/agent — the path the compose bind
+    # mount exposes to the backend. PI_CODING_AGENT_DIR still points at the
+    # profile-less $OMP_HOME/agent, and a sessions tree written there is
+    # invisible on the host (no acp-chat-state.json ever reached the backend,
+    # effort switch answered 409 input_not_supported).
+    monkeypatch.setenv("OMP_HOME", str(tmp_path / "omp"))
+    monkeypatch.setenv("OMP_PROFILE", "mc-agent")
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp" / "agent"))
+    directory = acp_chat_events.session_dir(cwd="/workspace")
+    assert directory is not None
+    assert directory == tmp_path / "omp" / "profiles" / "mc-agent" / "agent" / "sessions" / "--workspace--"
+    assert not (tmp_path / "omp" / "agent").exists()
+
+
+def test_session_dir_without_profile_keeps_pi_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("OMP_HOME", str(tmp_path / "omp"))
+    monkeypatch.delenv("OMP_PROFILE", raising=False)
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi"))
+    directory = acp_chat_events.session_dir(cwd="/workspace")
+    assert directory == tmp_path / "pi" / "sessions" / "--workspace--"
+
+
+def test_session_dir_explicit_agent_dir_beats_profile(tmp_path, monkeypatch):
+    # The keyword argument is the caller's explicit choice (tests, replay
+    # tooling) and must not be overridden by whatever profile the env names.
+    monkeypatch.setenv("OMP_HOME", str(tmp_path / "omp"))
+    monkeypatch.setenv("OMP_PROFILE", "mc-agent")
+    directory = acp_chat_events.session_dir(agent_dir_env=str(tmp_path / "explicit"), cwd="/w")
+    assert directory == tmp_path / "explicit" / "sessions" / "--w--"
+
+
 def test_history_roundtrip_through_read_history(tmp_path):
     """The full backend path: mapped lines on disk -> read_history -> events
     a browser would render, tool result merged onto its card."""
