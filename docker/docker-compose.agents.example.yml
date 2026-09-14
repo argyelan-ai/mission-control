@@ -49,7 +49,7 @@ x-claude-agent-base: &claude-agent-base
   # assumed — architecture session 2026-09-14). 20s alone doesn't save a
   # graceful shutdown yet — entrypoint.sh has no SIGTERM trap, so PID 1
   # still never sees the signal and the container still dies via SIGKILL
-  # in ~1s. That trap is a separate card (Sparky); the two ship together.
+  # in ~1s. That trap is a separate, already-filed card; the two ship together.
   stop_grace_period: 20s
   networks:
     - mission-control_default
