@@ -96,7 +96,7 @@ def task_still_reactivatable(task: Task, *, expected_status: str | None = None) 
     decision made earlier" write through this predicate, so this ledger IS
     the mechanism the tenth site is supposed to find; grep for
     `task_still_reactivatable` in this repo before enumerating from
-    scratch). Status as of PR #556 follow-up (2026-09-13):
+    scratch). Status as of the 9th-path follow-up card (2026-09-13):
 
       GUARDED — routed through this predicate:
       1. dispatch.redispatch_after_blocker_answer, wraps auto_dispatch_task
@@ -107,6 +107,14 @@ def task_still_reactivatable(task: Task, *, expected_status: str | None = None) 
       5. routers/approvals.py quick_resolve_confirm, blocker_decision/approved
          (POST .../quick-resolve/confirm, Telegram URL-button path) — calls
          #1 above
+      9. services/telegram_bot.py TelegramBotService._resolve_approval,
+         blocker_decision/approved (follow-up to PR #556) — previously
+         checked only `task.status == "blocked"`, never run_control.
+         (Earlier PR #556 text excused this one as "resumes in place, no
+         redispatch, untouched" — wrong excuse: the gap this predicate
+         closes is reactivating a task whose ground shifted underneath it,
+         not specifically the redispatch mechanism; "no redispatch"
+         doesn't address it.)
 
       OPEN — found, not yet guarded (flagged for follow-up cards, PR #556
       review):
@@ -116,13 +124,6 @@ def task_still_reactivatable(task: Task, *, expected_status: str | None = None) 
          `original_task.status = "in_progress"` with no check at all
       8. routers/approvals.py clarification_question approval — checks
          `task.status == "blocked"`, never run_control
-      9. services/telegram_bot.py TelegramBotService._resolve_approval,
-         blocker_decision/approved — checks `task.status == "blocked"`,
-         never run_control. (Earlier PR #556 text excused this one as
-         "resumes in place, no redispatch, untouched" — wrong excuse: the
-         gap this predicate closes is reactivating a task whose ground
-         shifted underneath it, not specifically the redispatch mechanism;
-         "no redispatch" doesn't address it. See follow-up card.)
     """
     if task.run_control is not None:
         return False
@@ -931,6 +932,20 @@ async def execute_review_decision(
     task.updated_at = utcnow()
     session.add(task)
     await session.commit()
+
+    # W1 fix (PR #558 follow-up): this review path sets task.status directly
+    # and never goes through the generic PATCH handlers (routers/tasks.py,
+    # routers/agent_task_status.py) where cleanup_obsolete_approvals is
+    # normally wired to updates["status"] — so a pending review_stuck (or
+    # blocker_decision/clarification_question/spawn_timeout/
+    # dispatch_escalation) approval on this task would sit as a zombie in
+    # the operator's inbox until the next watchdog reconciliation tick
+    # (~30s). task.status here already reflects the final state for every
+    # branch above (done/user_test/blocked-on-E2E for approve, whatever
+    # handle_review_rejection landed on for request_changes, unchanged
+    # "review" for hold), so one call after the commit covers all of them.
+    from app.services.approval_cleanup import cleanup_obsolete_approvals
+    await cleanup_obsolete_approvals(session, task.id, task.status, board_id)
 
 
 async def system_finalize_task_done(
