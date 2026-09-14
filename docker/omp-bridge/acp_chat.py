@@ -731,8 +731,9 @@ def build_session() -> ChatSession:
     sessions_dir = acp_chat_events.session_dir(cwd=cwd)
     if sessions_dir is None:
         raise RuntimeError(
-            "PI_CODING_AGENT_DIR not set — no sessions directory for the chat "
-            "transcript (the entrypoint exports it)"
+            "no sessions directory for the chat transcript — neither "
+            "OMP_HOME+OMP_PROFILE nor PI_CODING_AGENT_DIR is set (the "
+            "entrypoint exports them)"
         )
     state_dir = Path(os.environ.get("OMP_HOME") or "/home/agent/.omp")
     return ChatSession(
