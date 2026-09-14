@@ -505,43 +505,45 @@ def test_dispatch_poll_loop_skips_dispatch_when_shutdown_set_mid_poll(bridge, mo
     )
 
 
-def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge, monkeypatch, tmp_path):
-    """Regression for the 13.09.2026 incident, reproduced with real threading
-    and wall-clock timestamps (mirrors the incident's own log shape):
+def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge):
+    """Regression for the 13.09.2026 incident, reproduced with a real
+    background thread and wall-clock timestamps (mirrors the incident's own
+    log shape):
 
         23:38:06.895  received SIGTERM
         23:38:06.904  dispatched task ebfc704f
 
-    Runs the REAL dispatch_poll_loop() in a background thread against a fake
-    /me/poll that always offers a FRESH dispatch_attempt_id (worst case: dedup
-    can never block a redispatch), lets a few real ticks happen, fires the
-    REAL _handle_sigterm, and asserts no dispatch timestamp falls after it.
+    Deliberately does NOT run the real dispatch_poll_loop() in this thread —
+    CI runs this suite under pytest-xdist (`pytest -n auto`), and an earlier
+    version of this test that did drive the real loop (mocking tmux/urlopen
+    via monkeypatch) caused two real ~20+ minute CI hangs: if the thread
+    didn't observe the shutdown signal before the test function returned,
+    monkeypatch's teardown reverted its mocks out from under a STILL-RUNNING
+    thread, which then fell through to genuine tmux subprocess calls in a
+    tight loop inside a shared xdist worker process. The stand-in loop below
+    checks the actual module-level `_shutdown_event` (the same one
+    `_handle_sigterm` sets) at the same two points the production loop does,
+    but touches nothing beyond a Python list and a threading.Event — safe to
+    run as a real thread under any scheduling conditions. The two
+    deterministic tests above already pin the exact guard lines inside the
+    real dispatch_poll_loop (`test_dispatch_poll_loop_skips_*`); this one
+    specifically proves _handle_sigterm stops a live thread before exiting.
     """
     import threading
     import time as real_time
     import signal as _sig
 
-    fake_env_file = tmp_path / "agent.env"
-    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
-    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
-    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0.02)
-    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
-    monkeypatch.setattr(bridge, "driver_is_acp", lambda: False)
-
     dispatch_ts: list[float] = []
-    monkeypatch.setattr(bridge, "_send_to_tmux", lambda prompt: dispatch_ts.append(real_time.monotonic()))
 
-    counter = {"n": 0}
+    def fake_dispatcher_loop():
+        while True:
+            if bridge._shutdown_event.is_set():
+                return
+            dispatch_ts.append(real_time.monotonic())
+            if bridge._shutdown_event.wait(0.02):
+                return
 
-    def fake_urlopen(req, timeout=10):
-        counter["n"] += 1
-        return _FakeResp(json.dumps(_fake_poll_response(
-            "44444444-4444-4444-4444-444444444444", f"attempt-{counter['n']}",
-        )).encode())
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-
-    t = threading.Thread(target=bridge.dispatch_poll_loop, name="test-hermes-dispatcher", daemon=True)
+    t = threading.Thread(target=fake_dispatcher_loop, name="test-hermes-dispatcher", daemon=True)
     bridge._dispatcher_thread = t
     t.start()
 
@@ -549,7 +551,7 @@ def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge, monkeypat
         deadline = real_time.monotonic() + 2.0
         while len(dispatch_ts) < 2 and real_time.monotonic() < deadline:
             real_time.sleep(0.005)
-        assert len(dispatch_ts) >= 2, "fixture never dispatched — test setup is broken, not the fix"
+        assert len(dispatch_ts) >= 2, "fixture never ticked — test setup is broken, not the fix"
 
         sigterm_ts = real_time.monotonic()
         with pytest.raises(SystemExit) as exc_info:
@@ -558,22 +560,14 @@ def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge, monkeypat
 
         assert not t.is_alive(), "dispatcher thread must be stopped before the SIGTERM handler returns"
 
-        # A stray tick would show up quickly (the incident's own gap was 9ms) —
-        # but the thread is already joined-and-dead above, so this is just a
-        # documented safety margin, not the primary assertion.
-        real_time.sleep(0.1)
-
         late = [ts for ts in dispatch_ts if ts > sigterm_ts]
         assert not late, (
-            f"dispatch happened AFTER SIGTERM was handled ({len(late)} of {len(dispatch_ts)}) — "
+            f"tick happened AFTER SIGTERM was handled ({len(late)} of {len(dispatch_ts)}) — "
             f"this is the 13.09.2026 race (scripts/hermes-bridge.py:_handle_sigterm)"
         )
     finally:
-        # Never let this thread survive the test on ANY exit path (assertion
-        # failure included) — once monkeypatch reverts ENV_FILE/_send_to_tmux/
-        # is_session_running below, a still-running loop would fall through to
-        # the REAL implementations (real tmux/network calls) and could hang or
-        # slow down every test that runs after this one.
+        # Belt-and-suspenders even though fake_dispatcher_loop is harmless if
+        # it lingers — never leave a thread pointed at this bridge instance.
         bridge._shutdown_event.set()
         t.join(timeout=5)
 
