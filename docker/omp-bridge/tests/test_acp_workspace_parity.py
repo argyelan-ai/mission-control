@@ -11,7 +11,7 @@ branch (`run_native_turn(cwd=_cwd, ...)`), but the ACP branch's call to
 `os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()` (== `os.getcwd()`,
 `/home/agent`, unprepared). The model then bootstrapped its own `gh repo
 clone mission-control`, which resolved the short name against the logged-in
-`gh` account (`marknx`) instead of `argyelan-ai` — two PRs (#148, #149)
+`gh` account (the operator's personal account) instead of `argyelan-ai` — two PRs (#148, #149)
 landed on the wrong GitHub org and had to be ported by hand.
 
 Style: reuses the AST/call-based conventions of test_serve_loop_wiring.py
@@ -44,8 +44,9 @@ per the team's own "Sabotage-Mutation muss Schutzschicht durchbrechen" /
      exception raised for a missing directory).
 
 Run: pytest docker/omp-bridge/tests/test_acp_workspace_parity.py -v
-     (needs OPENAI_MODEL set — see test_acp_through_tests.py's own note;
-     CI does not run this suite today, see docs/dispatch-path-parity.md)
+     (needs OPENAI_MODEL set; the `omp-bridge` CI lane in
+     .github/workflows/ci.yml runs the whole tests/ directory, this file
+     included — PR #547 follow-up W3, see docs/dispatch-path-parity.md)
 """
 from __future__ import annotations
 

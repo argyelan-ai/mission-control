@@ -8,7 +8,9 @@ never touches the omp TUI transcript the native path writes — the headless
 `omp acp` child streams its events over JSON-RPC and they evaporate once the
 turn ends. The backend chat view (services/transcript_chat.py
 ChatTailerManager + services/omp_chat.py) reads exactly ONE thing: the JSONL
-session files under `$PI_CODING_AGENT_DIR/sessions/<encoded-cwd>/`. So the
+session files under the omp sessions root (see ``session_dir``: the
+profile tree ``$OMP_HOME/profiles/$OMP_PROFILE/agent/sessions/`` when a
+profile is set, else ``$PI_CODING_AGENT_DIR/sessions/``). So the
 bridge writes the ACP events there, in the SAME line format omp itself uses,
 and the existing tailer/SSE/history pipeline serves an ACP run like any
 native run — no backend change, no frontend change, no second chat path.
@@ -590,6 +592,23 @@ def _encode_cwd(path: str) -> str:
     return "--" + name.replace("/", "-") + "--"
 
 
+def _profile_agent_dir() -> Optional[str]:
+    """``$OMP_HOME/profiles/<OMP_PROFILE>/agent`` when a profile is set, else None.
+
+    With OMP_PROFILE set, omp keeps its agent dir (sessions, models.yml, DBs)
+    under the profile — regardless of PI_CODING_AGENT_DIR, which the image
+    still points at the profile-less ``$OMP_HOME/agent``. The compose bind
+    mount (``~/.mc/agents/<slug>/omp-sessions``) targets the PROFILE tree, so
+    only files written there reach the backend. Live finding 14.09.2026:
+    acp-chat-state.json landed in the unmounted tree and the effort switch
+    answered 409 input_not_supported although the daemon was healthy."""
+    profile = os.environ.get("OMP_PROFILE")
+    home = os.environ.get("OMP_HOME")
+    if not profile or not home:
+        return None
+    return str(Path(home) / "profiles" / profile / "agent")
+
+
 def session_dir(
     agent_dir_env: str | None = None,
     cwd: str | None = None,
@@ -597,9 +616,14 @@ def session_dir(
 ) -> Optional[Path]:
     """The omp sessions directory for THIS bridge container, fail-closed.
 
-    Layout: ``$PI_CODING_AGENT_DIR/sessions/<encoded-cwd>/`` — the same root
+    Layout: ``<agent dir>/sessions/<encoded-cwd>/``, where ``<agent dir>`` is
+    resolved in this order: explicit ``agent_dir_env`` → the profile tree
+    ``$OMP_HOME/profiles/$OMP_PROFILE/agent`` (omp ignores
+    ``PI_CODING_AGENT_DIR`` once ``OMP_PROFILE`` is set, and the container
+    image sets it) → ``$PI_CODING_AGENT_DIR``. The profile tree is the root
     the backend's omp_chat.resolve_transcript_dir reads through the
-    ``~/.mc/agents/<slug>/omp-sessions`` bind mount. The cwd encoded is the
+    ``~/.mc/agents/<slug>/omp-sessions`` bind mount; writing under the bare
+    ``$PI_CODING_AGENT_DIR`` lands OUTSIDE that mount and is invisible. The cwd encoded is the
     ACP-pinned one (OMP_ACP_CWD), so an ACP run lands in its own folder
     instead of polluting a native session's directory.
 
@@ -613,7 +637,7 @@ def session_dir(
     if sessions_root is not None:
         root = Path(sessions_root)
     else:
-        agent_dir = agent_dir_env or os.environ.get("PI_CODING_AGENT_DIR")
+        agent_dir = agent_dir_env or _profile_agent_dir() or os.environ.get("PI_CODING_AGENT_DIR")
         if not agent_dir:
             return None
         root = Path(agent_dir) / "sessions"

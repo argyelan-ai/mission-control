@@ -8,6 +8,12 @@ SESSION="${AGENT_NAME:-agent}"
 # Bun in PATH (claude-mem Worker braucht bun:sqlite, installiert unter ~/.bun/bin)
 export PATH="/home/agent/.bun/bin:${PATH}"
 
+# Graceful shutdown (docker/shared/sigforward.sh): trap TERM/INT, forward to
+# the tmux windows, bounded wait, exit 143. Without a handler the kernel never
+# delivers TERM to PID 1 (/proc/1/status SigCgt lacked 0x4000) and every
+# `docker stop` ended in SIGKILL on the whole tree (Exit 137).
+. /home/agent/sigforward.sh
+
 # ── Bootstrap: Tokens vom Backend holen (Vault-dekryptiert, kein Klartext auf Disk) ──
 # Retry-Loop: Backend braucht beim Kaltstart ein paar Sekunden.
 BOOTSTRAP_URL="${MC_API_URL:-http://backend:8000}/api/v1/internal/bootstrap?agent_name=${AGENT_NAME}"
@@ -183,7 +189,7 @@ _wait_for_bootstrap_model() {
     while [ "$_waited" -lt 1800 ]; do
         _RETRY=$(curl -sf --max-time 5 "$BOOTSTRAP_URL" 2>/dev/null) || {
             echo "[entrypoint] MC nicht erreichbar — warte (${_waited}s/1800s)"
-            sleep 20
+            mc_sleep_wait 20
             _waited=$((_waited + 20))
             continue
         }
@@ -214,7 +220,7 @@ except Exception:
         # herein, in der der Container hochfuhr, waere sonst eine ganze
         # Wartestufe verschenkt.
         echo "[entrypoint] Kein Modell von MC — warte auf die Box (${_waited}s/1800s)"
-        sleep 20
+        mc_sleep_wait 20
         _waited=$((_waited + 20))
     done
     return 1
@@ -351,7 +357,10 @@ restart_recycler_window() {
 # Session allein reicht nicht: wenn nur Window 1 (poll) stirbt, bleibt die
 # Session bestehen, Tasks haengen aber ohne poll.sh (kein Dispatch, kein Heartbeat).
 while true; do
-    sleep 30
+    # mc_sleep_wait, NOT bare `sleep 30`: a foreground external sleep defers
+    # the TERM trap until it completes (30s > the 20s stop_grace_period —
+    # SIGKILL would win). `wait` is interrupted by the trapped signal.
+    mc_sleep_wait 30
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
         echo "[watchdog] tmux session '$SESSION' weg — neustart"
         start_tmux

@@ -17,7 +17,12 @@ DEFAULT_CONTEXT_ENV_PATH = "/tmp/mc-context.env"
 def context_env_path() -> str:
     """Resolve the task-context env file: MC_CONTEXT_ENV_PATH wins, the legacy
     /tmp path is the fallback. Single source of truth for readers
-    (Config.from_env) AND writers (commands._write_context_file, recover)."""
+    (Config.from_env) AND writers (commands._write_context_file, recover).
+
+    Also the test-isolation seam (2026-09-14 incident, #579): tests/conftest.py
+    redirects MC_CONTEXT_ENV_PATH to a per-test tmp_path so a suite run never
+    touches the real, host-shared /tmp/mc-context.env other agents rely on.
+    """
     return os.environ.get("MC_CONTEXT_ENV_PATH") or DEFAULT_CONTEXT_ENV_PATH
 
 

@@ -680,6 +680,39 @@ _Keine Revisionen._
         )
         logger.info("PR #%d gemerged (squash)", pr_number)
 
+    async def prepare_review_checkout(
+        self, workspace_path: str, repo_url: str, project_slug: str, pr_number: int,
+    ) -> tuple[str, str]:
+        """Clone-or-reuse the project dir, then `gh pr checkout` the review target.
+
+        `project_dir` (workspace_path/project_slug) is the SAME shared path
+        `ensure_workspace()` uses for this project in this agent's workspace —
+        a previous review task may have left a different PR checked out there.
+        Hard-reset to origin/main before checkout so no stale state leaks
+        between review tasks (incident 2026-09-12: reviewer got an empty/
+        stale workspace and lost 81 minutes reconstructing the PR by hand).
+
+        Raises on any failure — caller must surface it visibly instead of
+        leaving a stale or empty workspace.
+
+        Returns: (project_dir, head_sha) — head_sha is the checked-out PR's
+        HEAD commit, so the reviewer's card can carry a target SHA to check
+        their review against.
+        """
+        project_dir = os.path.join(workspace_path, project_slug)
+        if os.path.isdir(os.path.join(project_dir, ".git")):
+            await self._run_cmd("git", "fetch", "origin", cwd=project_dir)
+            await self._run_cmd("git", "checkout", "main", cwd=project_dir)
+            await self._run_cmd("git", "reset", "--hard", "origin/main", cwd=project_dir)
+            await self._run_cmd("git", "clean", "-fd", cwd=project_dir)
+        else:
+            os.makedirs(workspace_path, exist_ok=True)
+            await self._run_cmd("git", "clone", repo_url, project_dir)
+        await self._run_cmd("gh", "pr", "checkout", str(pr_number), cwd=project_dir)
+        head_sha = await self._run_cmd("git", "rev-parse", "HEAD", cwd=project_dir)
+        logger.info("Review-Checkout vorbereitet: PR #%d -> %s (%s)", pr_number, project_dir, head_sha)
+        return project_dir, head_sha
+
     async def cleanup_task_worktree(
         self, project_dir: str, task_slug: str,
     ) -> bool:
