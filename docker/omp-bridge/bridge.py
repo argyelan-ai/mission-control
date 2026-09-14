@@ -2787,6 +2787,24 @@ def serve_loop(
                 acp_cancel = ACPCancelState()
                 _acp_control_sink.clear()
                 _acp_control_sink.append(acp_cancel)
+                # G5 context-holder reset at the SESSION change (task
+                # 1556064c): a new task must not inherit the previous
+                # session's context% (#554), but the value must survive every
+                # turn WITHIN the task — so the reset fires ONCE per pickup
+                # here, NOT at on_session_id: run_acp_once opens a NEW ACP
+                # session for every attempt (continue-nudges and retries
+                # included), so a reset there is the per-turn reset #560
+                # measured as broken (the value is restamped only 2 events
+                # before turn end vs a 30 s heartbeater). Stamping 0.0 — not
+                # None — makes the heartbeater REPORT the reset (a fresh
+                # session has used ~0 of the window); under the receiver's
+                # "no context_pct = no news" semantics (agents.py, unchanged)
+                # a None reset would keep the previous session's % on display
+                # until the new session's first usage_update. Absent still
+                # means "no news", so the Claude scrape path keeps its
+                # last value on a transient scrape miss instead of
+                # flickering empty.
+                _set_acp_context_pct(0.0)
 
                 # Model selector parity with the native launcher (incident
                 # 09.09.2026, first ACP live probe): `omp acp` inherits the
