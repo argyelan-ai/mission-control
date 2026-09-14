@@ -36,7 +36,13 @@ async def _agent_with_task(
     *,
     task_status: str = "in_progress",
     run_control: str | None = None,
+    dispatched: bool = True,
 ):
+    """`dispatched=False` mimics the real re-open path (`PATCH
+    .../tasks/{id}` with `{"status": "in_progress"}`, `routers/tasks.py`):
+    `started_at`/`ack_at` get stamped, `dispatched_at` never does (B-3, PR
+    #519 Rex review round 3) — this is NOT a legacy row, it's how every
+    "back to in_progress without a fresh dispatch" card looks today."""
     board = Board(name="B", slug=f"b-{uuid.uuid4().hex[:6]}")
     session.add(board)
     raw_token, token_hash = generate_agent_token()
@@ -55,8 +61,9 @@ async def _agent_with_task(
         title="Interrupt probe",
         status=task_status,
         run_control=run_control,
-        dispatched_at=now,
+        dispatched_at=now if dispatched else None,
         ack_at=now,
+        started_at=now,
         blocked_at=now if task_status == "blocked" else None,
     )
     session.add(task)
@@ -844,16 +851,23 @@ async def test_heartbeat_missing_cursor_seeds_foreign_comment_after_dispatch_fla
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_missing_cursor_legacy_task_without_dispatched_at_stays_quiet(
+async def test_heartbeat_missing_cursor_no_time_anchor_stays_quiet(
     client: AsyncClient,
 ):
-    """Legacy safety net: a row predating the `dispatched_at` column (still
-    possible on old, long-running tasks) has no boundary to compare
-    against — falls back to the old `[]` behavior rather than guessing, so
-    it never floods a legacy task with its entire history at once."""
+    """Safety net for the genuinely anchor-less task — `dispatched_at`,
+    `ack_at` AND `started_at` all NULL (not "legacy": those three columns
+    are old enough that a row missing all of them is essentially only
+    possible pre-first-PATCH; B-3, PR #519 Rex review round 3, renamed from
+    `..._legacy_task_without_dispatched_at_stays_quiet` because the old name
+    and docstring called this "legacy", which the review found is wrong).
+    With no boundary at all to compare against, falls back to the old `[]`
+    behavior rather than guessing, so it never floods a task with its
+    entire history at once."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, task, token = await _agent_with_task(s)
         task.dispatched_at = None
+        task.ack_at = None
+        task.started_at = None
         s.add(task)
         await s.commit()
         lead_raw, lead_hash = generate_agent_token()
@@ -864,13 +878,66 @@ async def test_heartbeat_missing_cursor_legacy_task_without_dispatched_at_stays_
         s.add(lead)
         await s.commit()
         await s.refresh(lead)
-        await _add_comment(
+        tail = await _add_comment(
             s, task, author_type="agent", author_agent_id=lead.id,
-            comment_type="handoff", content="Kein dispatched_at auf dieser Karte",
+            comment_type="handoff", content="Kein Zeitanker auf dieser Karte",
         )
 
     beat = await _heartbeat(client, token)
     assert "control" not in beat.json()
+
+    # W-3 (PR #519 Rex review round 3): the blanket `except Exception:
+    # return None` around the whole decision makes "no control" the answer
+    # to EVERY crash, not just genuine silence — a `raise` as the first
+    # line of the decision passes this assertion too. Pin a positive anchor
+    # that only the healthy path produces: the seed write runs after the
+    # decision's try/except, so it never executes on the crash path. If the
+    # watermark isn't on the tail, this test passed for the wrong reason.
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        seeded = await _cursor_row(s, agent.id, task.id)
+        assert seeded is not None
+        assert seeded.last_signalled_comment_id == tail.id
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_missing_cursor_reopened_without_dispatch_flags_soft_first_beat(
+    client: AsyncClient,
+):
+    """B-3 (PR #519 Rex review round 3): `dispatched_at IS NULL` is not a
+    legacy case — it's the normal shape of a card that went back to
+    `in_progress` via `PATCH .../tasks/{id}` (`{"status": "in_progress"}`,
+    the UI's own re-open action) without a fresh dispatch. That PATCH sets
+    `ack_at`/`started_at` but never `dispatched_at`. A foreign handoff
+    landing after that re-open must still soft-interrupt on the FIRST beat —
+    the old code fell back to an unconditional `[]` whenever
+    `dispatched_at` was None and swallowed it for two beats (Rex's own probe
+    against the live endpoints), catching up only on the third. Pin both:
+    the pre-reopen history stays quiet, the post-reopen handoff fires
+    immediately."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_task(s, dispatched=False)
+        await _add_comment(
+            s, task, author_type="user", comment_type="message",
+            content="Alte Historie, vor dem Reopen",
+            created_at=task.ack_at - dt.timedelta(minutes=5),
+        )
+        lead_raw, lead_hash = generate_agent_token()
+        lead = Agent(
+            name=f"Lead-{uuid.uuid4().hex[:6]}", agent_runtime="host",
+            agent_token_hash=lead_hash, board_id=task.board_id,
+        )
+        s.add(lead)
+        await s.commit()
+        await s.refresh(lead)
+        await _add_comment(
+            s, task, author_type="agent", author_agent_id=lead.id,
+            comment_type="handoff", content="Neu, nach dem Reopen ohne Dispatch",
+        )
+        assert task.dispatched_at is None
+        assert await _cursor_row(s, agent.id, task.id) is None
+
+    beat = await _heartbeat(client, token)
+    assert beat.json()["control"]["interrupt"] == "soft"
 
 
 # ── W-1 (PR #519 Rex review round 3) — the ack-guard must compare against

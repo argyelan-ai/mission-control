@@ -3847,17 +3847,29 @@ async def _collect_heartbeat_control(session, agent, active_task):
         TO itself — filtered out of `soft_unread` regardless of the cursor.
       - No signal-cursor row yet does NOT mean "every historic comment is
         unseen", but it also must NOT mean "nothing is unseen" — the
-        dispatch prompt only carried comments that existed as of
-        `active_task.dispatched_at` (mirrors the bridge's own
+        dispatch prompt only carried comments that existed as of the
+        dispatch boundary (mirrors the bridge's own
         `delivery.drop_comments()` at dispatch). With no persisted
-        watermark yet, "unseen" is therefore everything created AFTER
-        `dispatched_at`, not an unconditional `[]` — the latter swallowed
-        the very first real comment posted after a fresh dispatch (B-1, PR
-        #519 Rex review round 3: `all_comments` only starts existing once
-        that first comment lands, so `[]` silently ate it before the seed
-        ever had a real id to seed to). Once the seed write below has run
-        once, later beats switch to the ID-based lookup against the
-        persisted watermark.
+        watermark yet, "unseen" is therefore everything created AFTER that
+        boundary, not an unconditional `[]` — the latter swallowed the very
+        first real comment posted after a fresh dispatch (B-1, PR #519 Rex
+        review round 3: `all_comments` only starts existing once that first
+        comment lands, so `[]` silently ate it before the seed ever had a
+        real id to seed to). Once the seed write below has run once, later
+        beats switch to the ID-based lookup against the persisted
+        watermark.
+
+        The dispatch boundary itself is derived falling back through
+        `dispatched_at -> ack_at -> started_at` (B-3, PR #519 Rex review
+        round 3): `dispatched_at` is None not only for the odd legacy row,
+        but on a completely ordinary path — `PATCH .../tasks/{id}` with
+        `{"status": "in_progress"}` (the UI's own re-open action, e.g.
+        `frontend-v2/src/app/tasks/page.tsx`) sets `started_at`/`ack_at`
+        but never touches `dispatched_at`, and every return to inbox clears
+        `dispatched_at` outright (`routers/tasks.py`). `ack_at` is set on
+        exactly that path, so it is the next-best anchor; `started_at`
+        (first-set-wins across re-opens) is the last resort. Only a task
+        with none of the three set falls back to the unconditional `[]`.
 
     Any failure in the decision itself returns None, so the heartbeat
     response stays legacy-shaped; a failure while persisting the watermark
@@ -3913,9 +3925,18 @@ async def _collect_heartbeat_control(session, agent, active_task):
         else:
             # No persisted watermark yet — fall back to the dispatch
             # boundary instead of an unconditional `[]` (B-1, PR #519 Rex
-            # review round 3). `dispatched_at` is None only for legacy rows
-            # predating that column; keep the old (safe) behavior there.
-            dispatch_boundary = _aware(getattr(active_task, "dispatched_at", None))
+            # review round 3). `dispatched_at` alone goes missing on a
+            # normal re-open path (PATCH .../tasks/{id} status=in_progress
+            # sets ack_at/started_at, never dispatched_at — B-3, PR #519 Rex
+            # review round 3), so derive the boundary falling back through
+            # dispatched_at -> ack_at -> started_at. Only a task with none
+            # of the three set (no time anchor at all) keeps the old, safe
+            # `[]` behavior.
+            dispatch_boundary = _aware(
+                getattr(active_task, "dispatched_at", None)
+                or getattr(active_task, "ack_at", None)
+                or getattr(active_task, "started_at", None)
+            )
             unseen = (
                 []
                 if dispatch_boundary is None
