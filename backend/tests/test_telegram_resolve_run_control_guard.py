@@ -30,6 +30,7 @@ import fakeredis.aioredis
 import pytest
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config import settings
 from app.models.approval import Approval
 from app.models.task import Task
 from app.services.telegram_bot import telegram_bot
@@ -137,6 +138,54 @@ async def test_stopped_task_can_still_be_rejected_via_telegram(make_board, make_
         assert fresh.assigned_agent_id is None, (
             "apply_terminal_unassign muss auch auf der gestoppten Karte laufen"
         )
+
+
+@pytest.mark.asyncio
+async def test_stopped_task_callback_reports_held_not_generic_conflict(
+    make_board, make_agent, make_task, monkeypatch
+):
+    """N1 (PR #563 review, round 2): the ``task_held`` branch in
+    _handle_callback (telegram_bot.py) had no test exercising the
+    operator-facing message -- every existing test up to here only pins
+    _resolve_approval's return value (see
+    test_stopped_task_not_reactivated_by_telegram_resolve above), never
+    what the callback handler actually tells the operator. Rex's sabotage
+    probe S3 (silencing the ``elif resolved == "task_held"`` branch) left
+    all three then-existing tests green, because the fallback ``else:``
+    branch also returns without raising -- and would have handed Mark
+    "Bereits erledigt." instead of the actionable "erst im Board
+    freigeben" text that W2 (round 1) was written to introduce.
+    """
+    from app.services.operations import stop_task_run
+
+    monkeypatch.setattr(settings, "telegram_chat_id", "12345", raising=False)
+
+    task, approval_id = await _make_running_task_with_pending_approval(
+        make_board, make_agent, make_task
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await stop_task_run(s, task.id, "mark", reason="test-stop")
+        await s.commit()
+
+    with patch.object(telegram_bot, "answer_callback_query") as mock_answer, \
+            patch.object(telegram_bot, "update_resolved_telegram") as mock_update:
+        await telegram_bot._handle_callback({
+            "id": "cb-1",
+            "from": {"username": "mark"},
+            "message": {"chat": {"id": 12345}},
+            "data": f"approve:{approval_id}",
+        })
+
+    mock_answer.assert_awaited_once()
+    _callback_id, answer_text = mock_answer.await_args.args
+    assert "gestoppt" in answer_text and "gehalten" in answer_text, answer_text
+    assert "zwischenzeitlich" not in answer_text, (
+        f"must not fall back to the task_conflict wording: {answer_text!r}"
+    )
+
+    mock_update.assert_awaited_once()
+    resolver_note = mock_update.await_args.kwargs.get("resolver_note", "")
+    assert "gestoppt/gehalten" in resolver_note, resolver_note
 
 
 @pytest.mark.asyncio
