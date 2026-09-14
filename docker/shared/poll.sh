@@ -757,7 +757,7 @@ run_task() {
     task_status=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('status') or '')" 2>/dev/null || echo "")
     task_assigned_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('assigned_agent_id') or '')" 2>/dev/null || echo "")
     my_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('my_agent_id') or '')" 2>/dev/null || echo "")
-    if false && { [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; }; then
+    if [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; then
         log "GUARD 1: Task $task_id hat status=$task_status — Dispatch verweigert (erledigte Karte)"
         return
     fi
