@@ -30,6 +30,8 @@ from mc_cli.commands import _cmd_ack  # noqa: E402
 from mc_cli.config import Config  # noqa: E402
 from mc_cli.errors import UsageError  # noqa: E402
 
+# Redirected to a per-test tmp_path by tests/conftest.py's autouse
+# _isolate_mc_context_file fixture — never the real, host-shared file.
 CTX_PATH = "/tmp/mc-context.env"
 
 TASK_A = "aaaaaaaa-1111-2222-3333-444444444444"
