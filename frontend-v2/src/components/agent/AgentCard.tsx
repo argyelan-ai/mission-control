@@ -203,14 +203,14 @@ export function AgentCard({ agent, className }: AgentCardProps) {
             <div className="mt-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
-                <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
+                <span className="text-[10px] text-[var(--color-text-muted)]">{pct === null ? "—" : `${pct}%`}</span>
               </div>
               <div className="h-1 rounded-sm bg-[var(--color-bg-elevated)] overflow-hidden">
                 <motion.div
                   className="h-full rounded-sm"
                   style={{ backgroundColor: barColor }}
                   initial={{ width: 0 }}
-                  animate={{ width: `${Math.min(pct, 100)}%` }}
+                  animate={{ width: `${Math.min(pct ?? 0, 100)}%` }}
                   transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
                 />
               </div>
