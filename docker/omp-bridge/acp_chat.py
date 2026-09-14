@@ -361,6 +361,31 @@ class ChatSession:
                 self._emit_preview([self._throttle["pending"]])
                 self._throttle["pending"] = None
 
+        with self._lock:
+            closed = self._closed
+        if closed:
+            # close() ran while this turn was in flight (a `/restart` that
+            # tore down the child mid-turn — the whole point of this branch,
+            # see ChatDaemon.restart). client.prompt() only returned because
+            # close() force-woke the pending RPC wait, NOT because the turn
+            # actually finished — result/error_text describe nothing real.
+            #
+            # This session is retired: ChatDaemon already swapped in a
+            # DIFFERENT ChatSession object (new client, new session id) that
+            # may already be writing to shared paths (`sessions_dir` and
+            # `state_dir` are workspace-scoped, not session-object-scoped —
+            # a loaded session even APPENDS to the same transcript file).
+            # Emitting a transcript line, calling `_restart_child()` (which
+            # spawns yet another real child process nobody will ever close),
+            # or writing acp-chat-state.json / the persist file here would
+            # race the active session's own writes and can clobber its
+            # sessionId with this dead session's — kill the turn silently and
+            # stop touching anything.
+            with self._lock:
+                self._busy = False
+            self._idle.set()
+            return
+
         final_text = "".join(self._full_text)
         stop_reason = getattr(result, "stopReason", "") if result is not None else ""
         if result is not None:
@@ -731,8 +756,9 @@ def build_session() -> ChatSession:
     sessions_dir = acp_chat_events.session_dir(cwd=cwd)
     if sessions_dir is None:
         raise RuntimeError(
-            "PI_CODING_AGENT_DIR not set — no sessions directory for the chat "
-            "transcript (the entrypoint exports it)"
+            "no sessions directory for the chat transcript — neither "
+            "OMP_HOME+OMP_PROFILE nor PI_CODING_AGENT_DIR is set (the "
+            "entrypoint exports them)"
         )
     state_dir = Path(os.environ.get("OMP_HOME") or "/home/agent/.omp")
     return ChatSession(

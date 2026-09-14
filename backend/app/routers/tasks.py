@@ -1700,6 +1700,18 @@ async def update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    # W1/W2 (Rex' review of #570): one shared criterion for
+                    # all three resolve_unblock_action branches now lives in
+                    # task_lifecycle.apply_unblock_notify_reset — see its
+                    # docstring for the full rationale and the W1 correction.
+                    # This operator PATCH never touches current_task_id
+                    # itself, so the live value read on `target` above is
+                    # already the pre-transition snapshot the helper needs.
+                    from app.services.task_lifecycle import apply_unblock_notify_reset
+                    await apply_unblock_notify_reset(
+                        session, task, old_status, target.current_task_id,
+                        caller="unblock_notify_tasks_router",
+                    )
                     _verb = "entblockt" if old_status == "blocked" else "fortgesetzt (war zurueckgestellt)"
                     msg = (
                         f"UNBLOCKED: Dein Task \"{task.title}\" wurde {_verb}.\n\n"
