@@ -144,11 +144,25 @@ async def resolve_adhoc_repo_target(
 
     if task.repo_id:
         registry_repo = await session.get(Repo, task.repo_id)
-        if registry_repo is not None:
-            return (
-                clone_url_for(registry_repo),
-                registry_repo.full_name.split("/", 1)[-1],
+        if registry_repo is None or not registry_repo.is_active:
+            # PR #584 review N4/N5: task.repo_id is an EXPLICIT choice made
+            # in the ad-hoc-card Maske — silently substituting board-default
+            # or the shared scratch repo when it doesn't resolve (archived
+            # in the registry, or — unlikely given the FK, but the caller's
+            # hard-fail contract is cheap insurance — deleted) is the more
+            # expensive failure direction than a loud abort. Both callers
+            # already wrap this in a try/except that hard-fails (blocker
+            # comment + status=blocked + terminal-unassign), same contract
+            # as every other resolution failure here.
+            raise ValueError(
+                f"task.repo_id={task.repo_id} verweist auf kein aktives "
+                "Registry-Repo — explizite Repo-Wahl wird nicht still durch "
+                "board-default/scratch ersetzt."
             )
+        return (
+            clone_url_for(registry_repo),
+            registry_repo.full_name.split("/", 1)[-1],
+        )
 
     if task.board_id:
         from app.models.board import Board

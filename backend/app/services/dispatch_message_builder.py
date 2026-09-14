@@ -1082,15 +1082,21 @@ For large tasks (website, app, feature with multiple steps):
             # never have to guess or self-clone via a short name (2026-09-14
             # incident: `gh repo clone <shortname>` resolved to the wrong
             # account and produced a checkout with no shared history).
+            from app.services.git_service import slugify_project as _slugify_project_adhoc
             _ws_host = task.workspace_path
             _ws_view = workspace_path_for_runtime(agent, _ws_host) or _ws_host
             _remote_url = _read_origin_remote_sync(_ws_host)
             _repo_line = f"- Repository: `{_remote_url}`\n" if _remote_url else ""
+            # N7 (PR #584 review): the worktree already sits on
+            # `task/<slug>` (git_service.create_task_worktree) — name it
+            # instead of the generic "create a feature branch", matching
+            # the project branch above.
+            _adhoc_task_slug = _slugify_project_adhoc(task.title)
             git_section = (
                 f"{_repo_line}"
                 f"**Working directory:** `{_ws_view}/`\n"
                 f"Change into it FIRST: `cd {_ws_view}`\n\n"
-                "**Git:** create a feature branch, never commit directly to main.\n"
+                f"**Git:** you're already on `task/{_adhoc_task_slug}` — never commit directly to main.\n"
                 "Commit after every major step. Push to GitHub."
             )
             if task.workspace_port:

@@ -14,6 +14,7 @@ kuenftiger Umbau der Templates sie nicht still wieder verliert:
 5. Delegations-Karten mit 4 885-7 136 Zeichen wurden beschnitten; der
    Prompt-Builder kappt bei DISPATCH_HARD_CHARS = 4 000.
 """
+import re
 import uuid
 
 from app.models.agent import Agent
@@ -250,3 +251,72 @@ def test_delegation_doc_teaches_the_in_turn_rule():
     content = docs["delegation"]
     assert LEAD_SENTENCE in content
     assert "wait in-turn for a card" in content
+
+
+# --- 7. Leeres/fremdes Workspace ist ein Blocker, kein Selbst-Klon --------
+#
+# PR #584 Review (B1): der Hunk, der diese Regel einfuehrt, ersetzte die
+# H2-Ueberschrift "## Startup Check" durch die neue H3 und liess den
+# Startup-Check-Regeltext als Anhaengsel ohne eigene Ueberschrift zuruck.
+# `docs/context-reconstruction-design.md:270` verweist namentlich auf die
+# H2 — ein blosser Text-Vorkommen-Test haette den Ebenen-Verlust nicht
+# gefangen (der Text blieb ja erhalten). Die Assertion unten prueft deshalb
+# die Ueberschriften-EBENE, nicht nur das Vorkommen.
+
+SELF_CLONE_HEADING = (
+    "### An empty or unfamiliar workspace is a blocker, not an invitation "
+    "to self-clone (HARD RULE, 2026-09-14)"
+)
+STARTUP_CHECK_H2_PATTERN = re.compile(
+    r"(?m)^## Startup Check — `mc recover` first \(ADR-024\)$"
+)
+
+
+def test_soul_teaches_the_self_clone_hard_rule():
+    soul = _soul()
+    assert SELF_CLONE_HEADING in soul
+    idx = soul.index(SELF_CLONE_HEADING)
+    window = soul[idx : idx + 1200]
+    assert "mc blocked" in window
+    assert "gh repo clone" in window
+    assert "no shared git history with `main`" in window
+    assert "https://github.com/<org>/<repo>.git" in window
+
+
+def test_startup_check_survives_as_its_own_top_level_heading():
+    """Muss als eigenstaendige H2-Zeile stehen — nicht als Fliesstext unter
+    der Selbst-Klon-Regel. Eine Herabstufung auf `### ` (wie im urspruenglichen
+    PR-Hunk) darf diesen Test nicht gruen lassen, deshalb wird die
+    Ueberschriften-EBENE gepinnt (`^## ` mit Zeilenende), nicht nur das
+    Vorkommen des Texts."""
+    soul = _soul()
+    assert STARTUP_CHECK_H2_PATTERN.search(soul), (
+        "`## Startup Check — `mc recover` first (ADR-024)` fehlt als "
+        "eigenstaendige Top-Level-Ueberschrift (H2)"
+    )
+
+
+def test_startup_check_heading_pin_actually_catches_the_demotion():
+    """Gegenprobe zur vorigen Assertion: haengt der Test nur am Text statt an
+    der Ebene, muesste er auch bei einer H3 noch gruen bleiben. Simuliert hier
+    exakt den PR-Hunk (H2 -> H3) auf Textebene, ohne den Renderer/Cache
+    anzufassen."""
+    soul = _soul()
+    demoted = soul.replace(
+        "## Startup Check — `mc recover` first (ADR-024)",
+        "### Startup Check — `mc recover` first (ADR-024)",
+    )
+    assert not STARTUP_CHECK_H2_PATTERN.search(demoted), (
+        "Pin haelt die Herabstufung auf H3 nicht fest — Test ist wertlos"
+    )
+    # Sanity: die Originalfassung (Fix) besteht dieselbe Probe.
+    assert STARTUP_CHECK_H2_PATTERN.search(soul)
+
+
+def test_self_clone_rule_precedes_the_startup_check_heading():
+    """Reihenfolge wie im Fix: die neue Regel steht vor der wiederhergestellten
+    H2, nicht umgekehrt und nicht dazwischengemischt."""
+    soul = _soul()
+    assert soul.index(SELF_CLONE_HEADING) < soul.index(
+        "## Startup Check — `mc recover` first (ADR-024)"
+    )

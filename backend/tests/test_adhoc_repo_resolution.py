@@ -24,6 +24,7 @@ precedence (task.repo_id -> board.default_project_id -> shared
 status=blocked + terminal-unassign) instead of dispatching into an
 unprepared workspace.
 """
+import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -142,6 +143,57 @@ async def test_resolve_adhoc_repo_last_resort_is_shared_scratch_repo():
     assert slug == ADHOC_REPO
 
 
+@pytest.mark.asyncio
+async def test_resolve_adhoc_repo_rejects_archived_registry_repo():
+    """PR #584 review N4: the task-creation route (tasks.py:556) already
+    rejects an archived (is_active=False) repo_id — this resolver did not,
+    so a repo archived AFTER a task was already pointed at it would still
+    get cloned on every dispatch."""
+    from app.services.repo_registry import resolve_adhoc_repo_target
+
+    board = _board()
+    archived_repo = _repo(full_name="argyelan-ai/retired-tool", is_active=False)
+    task = Task(
+        id=uuid.uuid4(), board_id=board.id, title="Ad-hoc mit archiviertem Repo",
+        status="inbox", repo_id=archived_repo.id,
+    )
+    await _seed(board, archived_repo, task)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        loaded_task = await s.get(Task, task.id)
+        with pytest.raises(ValueError, match="kein aktives"):
+            await resolve_adhoc_repo_target(s, loaded_task)
+
+
+@pytest.mark.asyncio
+async def test_resolve_adhoc_repo_raises_loud_instead_of_silent_fallback():
+    """PR #584 review N5: an explicit task.repo_id that doesn't resolve
+    (deleted registry row) must abort loudly, not silently fall through to
+    board-default/scratch — substituting a DIFFERENT repo than the one the
+    operator explicitly chose is the more expensive failure direction. Both
+    callers of this resolver already hard-fail on any exception (blocker +
+    blocked + terminal-unassign), so raising here is safe."""
+    from app.services.repo_registry import resolve_adhoc_repo_target
+
+    board = _board()
+    project = Project(
+        id=uuid.uuid4(), board_id=board.id, name="Board Default (must not be used)",
+        github_repo_url="https://github.com/argyelan-ai/board-default.git",
+    )
+    board.default_project_id = project.id
+    dangling_repo_id = uuid.uuid4()  # no Repo row with this id
+    task = Task(
+        id=uuid.uuid4(), board_id=board.id, title="Ad-hoc mit verwaistem repo_id",
+        status="inbox", repo_id=dangling_repo_id,
+    )
+    await _seed(board, project, task)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        loaded_task = await s.get(Task, task.id)
+        with pytest.raises(ValueError, match="kein aktives"):
+            await resolve_adhoc_repo_target(s, loaded_task)
+
+
 # ── 2. cli_bridge_runner: ad-hoc git-requiring task gets a real clone ──
 
 def _cli_bridge_agent(**kw) -> Agent:
@@ -222,7 +274,17 @@ async def test_cli_bridge_adhoc_non_coder_agent_still_gets_plain_dir():
 
     assert has_repo is False
     assert worktree_path is None
-    assert workspace.startswith(agent.workspace_path)
+    # Not `workspace.startswith(agent.workspace_path)` (PR #584 review W1):
+    # `workspace` is pre-initialized to `agent_base` before the if/elif/else,
+    # so that assertion is trivially true regardless of which branch ran —
+    # it can't see a missing `_create_plain_workspace` call. Pin the actual
+    # plain-dir shape and that the directory really exists on disk instead.
+    from app.services.git_service import slugify_workspace_slug
+
+    assert workspace == os.path.join(
+        agent.workspace_path, slugify_workspace_slug(task.title)
+    )
+    assert os.path.isdir(workspace)
 
 
 @pytest.mark.asyncio
@@ -269,6 +331,51 @@ async def test_cli_bridge_adhoc_git_clone_failure_blocks_task_hard():
         assert "Workspace-Setup fehlgeschlagen" in blockers[0].content
 
 
+# ── 2b. task_context_builder: pre-push guard on the central path (W3) ──
+
+@pytest.mark.asyncio
+async def test_task_context_builder_repo_id_branch_writes_expected_remote_marker():
+    """PR #584 review W3: `_write_expected_remote` only existed in
+    `cli_bridge_runner` — the pre-push hook is fail-open
+    (docker/mc-agent-base/lib/mc-pre-push.sh:33), so the new ad-hoc clones
+    this PR makes `setup_git_workspace_for_dispatch` create on the central
+    path had no wrong-remote protection at all. Covers the explicit
+    `task.repo_id` branch (task_context_builder.py's first branch)."""
+    from app.services.task_context_builder import setup_git_workspace_for_dispatch
+
+    board = _board()
+    repo = _repo(full_name="argyelan-ai/mission-control")
+    agent = _cli_bridge_agent(agent_runtime="host")
+    task = Task(
+        id=uuid.uuid4(), board_id=board.id, title="Ad-hoc mit explizitem Repo",
+        status="inbox", repo_id=repo.id, assigned_agent_id=agent.id,
+    )
+    await _seed(board, repo, agent, task)
+
+    with patch(
+        "app.services.git_service.git_service.ensure_workspace",
+        new_callable=AsyncMock, return_value="/tmp/mc-test-ws/mission-control",
+    ), patch(
+        "app.services.git_service.git_service.create_task_worktree",
+        new_callable=AsyncMock, return_value="/tmp/mc-test-ws/mission-control/.worktrees/x",
+    ), patch(
+        "app.services.git_service.git_service.setup_git_identity",
+        new_callable=AsyncMock,
+    ), patch(
+        "app.services.cli_bridge_runner._write_expected_remote",
+    ) as mock_marker:
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            loaded_agent = await s.get(Agent, agent.id)
+            loaded_task = await s.get(Task, task.id)
+            result = await setup_git_workspace_for_dispatch(loaded_task, loaded_agent, s)
+
+    assert result is True
+    mock_marker.assert_called_once_with(
+        "/tmp/mc-test-ws/mission-control/.worktrees/x",
+        "https://github.com/argyelan-ai/mission-control.git",
+    )
+
+
 # ── 3. task_context_builder: same hard-fail contract for other runtimes ─
 
 @pytest.mark.asyncio
@@ -311,6 +418,48 @@ async def test_task_context_builder_adhoc_git_failure_blocks_not_warns():
             select(TaskComment).where(TaskComment.task_id == task.id)
         )).all())
         assert any(c.comment_type == "blocker" for c in comments)
+
+
+@pytest.mark.asyncio
+async def test_task_context_builder_adhoc_non_coder_agent_skips_git_gate():
+    """PR #584 review B2: `requires_git_workflow`-Gate on the central path
+    (task_context_builder.py:249) mirrors
+    `test_cli_bridge_adhoc_non_coder_agent_still_gets_plain_dir` — a
+    non-coder agent (Research/Writing, `requires_git_workflow=False`) on an
+    ad-hoc task (no repo_id, no project_id) must NOT be forced through
+    `ensure_workspace`. Before this test, Rex's mutation
+    (`elif agent.workspace_path and getattr(...):` -> `elif agent.workspace_path:`)
+    left `test_adhoc_repo_resolution.py` green (10 passed) and was identical
+    to baseline across a 99-file dispatch/workspace sweep — no test in the
+    fleet held this gate."""
+    from app.services.task_context_builder import setup_git_workspace_for_dispatch
+
+    board = _board()
+    agent = _cli_bridge_agent(role="researcher", requires_git_workflow=False)
+    task = Task(
+        id=uuid.uuid4(), board_id=board.id, title="Ad-hoc Recherche, kein Git",
+        status="inbox", assigned_agent_id=agent.id,
+    )
+    await _seed(board, agent, task)
+
+    with patch(
+        "app.services.git_service.git_service.ensure_workspace",
+        new_callable=AsyncMock,
+    ) as mock_ensure:
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            loaded_agent = await s.get(Agent, agent.id)
+            loaded_task = await s.get(Task, task.id)
+            result = await setup_git_workspace_for_dispatch(loaded_task, loaded_agent, s)
+
+    assert result is True
+    assert not mock_ensure.await_count, (
+        "non-coder ad-hoc task must not be forced through a git clone on "
+        "the central dispatch path"
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        reloaded = await s.get(Task, task.id)
+        assert reloaded.workspace_path is None
 
 
 # ── 4. dispatch prompt names the real repo for ad-hoc git workspaces ───
@@ -396,4 +545,11 @@ def test_dispatch_prompt_names_repo_for_adhoc_git_workspace(tmp_path):
     msg = _format_dispatch_message(task, agent, ctx)
     assert "argyelan-ai/mission-control.git" in msg, (
         f"dispatch prompt must name the resolved repo — got:\n{msg}"
+    )
+    # N7 (PR #584 review): the worktree already sits on `task/<slug>`
+    # (git_service.create_task_worktree) — the prompt must name it instead
+    # of a generic "create a feature branch" (which the project branch
+    # above already does via "Your branch: `task/<slug>`").
+    assert "task/ad-hoc-backend-fix" in msg, (
+        f"dispatch prompt must name the actual worktree branch — got:\n{msg}"
     )

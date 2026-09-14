@@ -94,8 +94,9 @@ async def setup_git_workspace_for_dispatch(
                         f"'{agent.workspace_path}' ist nicht backend-mounted."
                     )
                 repo_slug = registry_repo.full_name.split("/", 1)[-1]
+                repo_url = clone_url_for(registry_repo)
                 main_repo = await git_service.ensure_workspace(
-                    agent.workspace_path, clone_url_for(registry_repo), repo_slug,
+                    agent.workspace_path, repo_url, repo_slug,
                 )
                 task_slug = slugify_project(task.title)
                 try:
@@ -109,6 +110,13 @@ async def setup_git_workspace_for_dispatch(
                     await git_service.create_task_branch(main_repo, task_slug)
                     task.workspace_path = main_repo
                 await git_service.setup_git_identity(git_project_dir, agent.name)
+                # MC pre-push guard (PR #584 review W3): the cli-bridge twin
+                # pins the expected remote for every clone it creates; the
+                # central path did not, leaving these clones fail-open
+                # (docker/mc-agent-base/lib/mc-pre-push.sh:33 lets a push
+                # through when the marker is missing).
+                from app.services.cli_bridge_runner import _write_expected_remote
+                _write_expected_remote(git_project_dir, repo_url)
                 session.add(task)
                 await session.commit()
                 return True
@@ -185,6 +193,11 @@ async def setup_git_workspace_for_dispatch(
                 await git_service.setup_git_identity(
                     git_project_dir, agent.name,
                 )
+                # MC pre-push guard (PR #584 review W3): see the repo_id
+                # branch above for the rationale — the cli-bridge twin
+                # already pins this for every clone it creates.
+                from app.services.cli_bridge_runner import _write_expected_remote
+                _write_expected_remote(git_project_dir, project.github_repo_url)
                 session.add(task)
                 await session.commit()
         except Exception as e:
@@ -306,6 +319,12 @@ async def setup_git_workspace_for_dispatch(
             await git_service.setup_git_identity(
                 git_project_dir, agent.name,
             )
+            # MC pre-push guard (PR #584 review W3): these are exactly the
+            # ad-hoc clones that newly exist because of this PR — without
+            # this marker they had no wrong-remote protection at all (the
+            # cli-bridge twin already writes it for its own ad-hoc clones).
+            from app.services.cli_bridge_runner import _write_expected_remote
+            _write_expected_remote(git_project_dir, repo_url)
             session.add(task)
             await session.commit()
         except Exception as e:

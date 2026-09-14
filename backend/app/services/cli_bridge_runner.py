@@ -126,11 +126,15 @@ async def dispatch_to_cli_bridge(
 async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
     """Resolves the workspace path for the task (host path under agent.workspace_path).
 
-    Three paths:
+    Four paths (PR #584, task af914128 — see module docstring):
     - Task + project with github_repo_url → git worktree under
       `<agent_ws>/projects/<proj_slug>/.worktrees/<task_slug>/`
     - Task + project without repo → plain dir under `<agent_ws>/<task_slug>/`
-    - Ad-hoc task (no project) → `<agent_ws>/<task_slug>/`
+    - Ad-hoc task (no project), git-requiring agent → git worktree, repo
+      resolved via `repo_registry.resolve_adhoc_repo_target` — never a bare
+      directory.
+    - Ad-hoc task, non-coder agent (`requires_git_workflow=False`) → plain
+      dir under `<agent_ws>/<task_slug>/`.
 
     Returns: (workspace_path, worktree_path, has_repo)
     - worktree_path: str if a git worktree was created, None otherwise
