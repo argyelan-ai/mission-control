@@ -48,17 +48,28 @@ class Mechanism:
 
 
 class Entry:
-    __slots__ = ("state", "anchor", "reason")
+    __slots__ = ("state", "anchor", "reason", "not_anchor")
 
     def __init__(
         self,
         state: str,
         anchor: Optional[str] = None,
         reason: Optional[str] = None,
+        not_anchor: Optional[str] = None,
     ) -> None:
         self.state = state
         self.anchor = anchor  # "file.py::qualname" or "shell::pattern"
         self.reason = reason  # required for DELIBERATE / REQUIRED_MISSING
+        # W2 (Rex review): optional counter-anchor for DELIBERATE cells.
+        # If it RESOLVES in the branch source, the deliberate-abstention
+        # claim is stale (the branch meanwhile serves the mechanism) and
+        # the suite goes red. PARTIAL guard: only usable where absence is
+        # checkable at all -- cells like (LAUNCH, server_cursor_semantics)
+        # ("the launcher builds no messages") stay trust-based. Where the
+        # anchor is a python symbol, absence is provable; where the twin
+        # writes shell constructs with a different shape, a not_anchor may
+        # not exist -- that is fine, it is optional by design.
+        self.not_anchor = not_anchor
 
 
 # -- family members ------------------------------------------------------------
@@ -153,6 +164,9 @@ REGISTRY = {
         DELIBERATE,
         reason="poll.sh is a polling heart - it invokes no model runtime and "
         "pins nothing (no continuation path of its own).",
+        # W2: stale-abstention guard -- if poll.sh ever starts wiring a
+        # model selector, this cell must be re-classified.
+        not_anchor="docker/shared/poll.sh::OMP_MODEL_SELECTOR",
     ),
     # M2 auth error classification --------------------------------------------
     (BRIDGE, M_AUTH): Entry(
@@ -258,6 +272,8 @@ REGISTRY = {
         reason="hermes receives task context INLINE in the dispatch paste "
         "(no ENV-FILE promise - the agent reads context via mc/API); parity "
         "here is about the channel, not the file.",
+        # W2: if hermes ever grows an ENV-FILE writer, re-classify this cell.
+        not_anchor="docker/hermes/entrypoint.sh::MC_CONTEXT_ENV_PATH",
     ),
     (LAUNCH, M_CONTEXT_ENV): Entry(
         DELIBERATE,
@@ -265,10 +281,16 @@ REGISTRY = {
         "dispatching bridges before the paste.",
     ),
     (POLL, M_CONTEXT_ENV): Entry(
-        DELIBERATE,
-        reason="poll.sh carries no per-task context file; dispatch context is "
-        "owned by the bridges (bridge.py/grok-bridge.py ENV-FILE, hermes "
-        "inline).",
+        SERVED,
+        # B1 (Rex review): poll.sh DOES carry the per-task context file --
+        # it writes /tmp/mc-context.env in run_task() and clears it on
+        # operator stop (docker/shared/poll.sh:756-761, :967; config.py:50
+        # even names poll.sh as a writer). The old DELIBERATE reason was
+        # wrong; it came from the PR-text twin scan grepping only the
+        # SYMBOL MC_CONTEXT_ENV_PATH, which poll.sh never uses (it writes
+        # the path hard, no indirection -- the same "3 writers, 2 seen"
+        # pattern M5 cites as its incident).
+        anchor=r"docker/shared/poll.sh::^\s*cat > /tmp/mc-context\.env",
     ),
 }
 

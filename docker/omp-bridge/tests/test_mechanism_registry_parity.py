@@ -16,7 +16,13 @@ Acceptance probes:
            path without the `--model` pin) in a temp tree and proves the
            forward check reports exactly that cell.
   gegen  : DELIBERATE cells (consciously not served, with reason) must NOT
-           trip the forward check — first-class registry state.
+           trip the forward check — first-class registry state. PARTIAL
+           staleness guard (W2): a DELIBERATE cell MAY carry a not_anchor;
+           if that counter-anchor resolves, the cell has silently become
+           wrong and the suite goes red. Cells whose absence is not
+           structurally checkable (e.g. "launcher builds no messages")
+           stay trust-based — this is a documented partial solution, not a
+           complete one.
 
 Run: pytest docker/omp-bridge/tests/test_mechanism_registry_parity.py -q
      (standalone: python3 test_mechanism_registry_parity.py)
@@ -89,16 +95,49 @@ def resolve_anchor(rel_path: str, spec: str, repo_root: str):
     for mod_ in parts[1:]:
         if mod_.startswith("const:"):
             needle = mod_[len("const:"):]
-            if needle not in node_src:
-                return False, f"const {needle!r} missing inside {parts[0]}"
+            # W1 (Rex review): AST check, not substring. The literal must
+            # appear as an ast.Constant node INSIDE the function body --
+            # a comment mentioning it must NOT count (probe V2/V4: pin
+            # replaced by a comment mentioning --model must go red).
+            try:
+                needle_ast = ast.literal_eval(needle)
+            except (ValueError, SyntaxError):
+                needle_ast = needle
+            def _has_const(node):
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Constant) and sub.value == needle_ast:
+                        return True
+                    if isinstance(sub, ast.JoinedStr):  # f-string parts
+                        for val in sub.values:
+                            if isinstance(val, ast.Constant) and val.value == needle_ast:
+                                return True
+                return False
+            if not _has_const(node):
+                return False, f"const {needle!r} missing inside {parts[0]} (AST)"
         elif mod_.startswith("call:"):
-            # call-SITES live in the caller, not inside the def -> whole-file
+            # W1: resolve the callee structurally. Format "name()" (method
+            # or function call). The call SITE lives in the caller, not
+            # inside the def -> search the whole file's AST for an
+            # ast.Call whose resolved name matches; comment mentions don't
+            # count (probe C2: _pin_model() removed, comment names it).
             needle = mod_[len("call:"):]
-            if needle not in src:
-                return False, f"call-site {needle!r} missing from file"
+            want = needle.rstrip("()").split(".")[-1]
+            def _call_name(fn):
+                f = fn.func
+                if isinstance(f, ast.Name):
+                    return f.id
+                if isinstance(f, ast.Attribute):
+                    return f.attr
+                return None
+            found = any(
+                isinstance(n, ast.Call) and _call_name(n) == want
+                for n in ast.walk(tree)
+            )
+            if not found:
+                return False, f"call-site {want!r} not resolved in AST of file"
         else:
             return False, f"unknown anchor modifier {mod_!r}"
-    return True, f"ast def/assign {parts[0]!r} + deep checks"
+    return True, f"ast def/assign {parts[0]!r} + deep checks (AST)"
 
 
 def forward_failures(module=mech, repo_root: str | None = None):
@@ -108,6 +147,23 @@ def forward_failures(module=mech, repo_root: str | None = None):
     root = repo_root or module.REPO_ROOT
     failures = []
     for (branch, mechanism), entry in module.REGISTRY.items():
+        # W2 (Rex review): a stale DELIBERATE cell can never go red, because
+        # the forward check only inspects SERVED cells. If a DELIBERATE cell
+        # carries an optional not_anchor and that counter-anchor RESOLVES,
+        # the abstention claim is outdated -- the branch meanwhile serves
+        # the mechanism. This is a PARTIAL guard (only where absence is
+        # structurally checkable); cells without a checkable absence stay
+        # trust-based by design.
+        if entry.state == module.DELIBERATE and entry.not_anchor:
+            nrel, _, nspec = entry.not_anchor.partition("::")
+            nok, ndetail = resolve_anchor(nrel, nspec, root)
+            if nok:
+                failures.append(
+                    (branch, mechanism.key,
+                     f"DELIBERATE stale: not_anchor resolves ({ndetail}) -- "
+                     f"re-classify this cell: {entry.not_anchor}")
+                )
+            continue
         if entry.state != module.SERVED:
             continue
         rel, _, spec = entry.anchor.partition("::")
