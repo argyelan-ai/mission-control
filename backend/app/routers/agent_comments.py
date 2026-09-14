@@ -402,22 +402,51 @@ async def _create_comment(
                 # See task_lifecycle.execute_review_decision for why "done"
                 # resets the sticky dispatch_intent label.
                 task.dispatch_intent = "root"
+                task.updated_at = utcnow()
+                session.add(task)
+                auto_promoted = True
             else:
-                task, _ = await lock_and_set(session, task.id, "review", actor="agent")
-            # Prevent stale dispatch_attempt_id (audit trail).
-            from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
-            await clear_dispatch_attempt_id(
-                session, task,
-                caller="agent_comment",
-                reason="resolution_auto_promote",
-            )
-            task.updated_at = utcnow()
-            session.add(task)
-            auto_promoted = True
-            logger.info(
-                "Resolution-Auto-Promote: %s schrieb resolution-Kommentar → Task '%s' in_progress→%s",
-                agent.name, task.title[:60], task.status,
-            )
+                from app.services.task_lifecycle import review_card_would_self_dispatch
+                if review_card_would_self_dispatch(task, agent):
+                    # This IS already a review assignment (dispatch_intent ==
+                    # "review_handoff") — a resolution comment here is the
+                    # reviewer signalling "I'm done", not a developer handing
+                    # off new work. Auto-promoting would spawn a SECOND
+                    # review_handoff at a different reviewer (#6e828ffc).
+                    # Leave the card in_progress and say so, instead of
+                    # silently no-op'ing (a stuck card nobody notices) or
+                    # promoting anyway.
+                    session.add(TaskComment(
+                        task_id=task.id, author_type="system",
+                        comment_type="system_notify",
+                        content=(
+                            "**Auto-Promote uebersprungen.** " + (
+                                "Diese Karte ist bereits eine Review-Zuweisung "
+                                "(dispatch_intent=review_handoff) — die "
+                                "resolution-Meldung wird als Review-Abschluss "
+                                "gelesen, nicht als neue Abgabe. Nutze `mc "
+                                "review approve|reject` fuer deine Entscheidung "
+                                "(siehe #6e828ffc)."
+                            )
+                        ),
+                    ))
+                else:
+                    task, _ = await lock_and_set(session, task.id, "review", actor="agent")
+                    task.updated_at = utcnow()
+                    session.add(task)
+                    auto_promoted = True
+            if auto_promoted:
+                # Prevent stale dispatch_attempt_id (audit trail).
+                from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+                await clear_dispatch_attempt_id(
+                    session, task,
+                    caller="agent_comment",
+                    reason="resolution_auto_promote",
+                )
+                logger.info(
+                    "Resolution-Auto-Promote: %s schrieb resolution-Kommentar → Task '%s' in_progress→%s",
+                    agent.name, task.title[:60], task.status,
+                )
 
     # ── Fulfill report-back contract ──────────────────────────────
     # When the Board Lead posts a report_back comment → contract fulfilled

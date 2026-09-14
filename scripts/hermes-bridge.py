@@ -978,6 +978,27 @@ def deliver_messages(payload: dict, *, dispatch_in_flight: bool = False) -> None
         )
 
 
+def _task_is_dispatchable_for_me(task: dict, payload: dict) -> bool:
+    """Guard 1 (client-side twin of the backend's Guard 2 — erledigte/fremde
+    Karte incident, 14.09.2026): last-ditch check right before pasting a
+    dispatch into the pane. The backend (agents.py `_task_still_dispatchable`)
+    is the guard that's actually supposed to prevent a done/foreign card from
+    ever reaching state=new_task — this is defense in depth for whatever slips
+    past it (a future regression, a backend on an older revision, ...).
+
+    Missing fields (older backend without assigned_agent_id/my_agent_id) fail
+    OPEN — this must never become the reason a legitimate dispatch is dropped.
+    """
+    status = task.get("status")
+    if status in ("done", "failed"):
+        return False
+    my_agent_id = payload.get("my_agent_id")
+    assigned_agent_id = task.get("assigned_agent_id")
+    if my_agent_id and assigned_agent_id and assigned_agent_id != my_agent_id:
+        return False
+    return True
+
+
 def dispatch_poll_loop() -> None:
     """Poll MC for the agent's active task; tmux-dispatch new ones + new comments.
 
@@ -1042,6 +1063,17 @@ def dispatch_poll_loop() -> None:
                     state = payload.get("state")
                     if state == "new_task":
                         task = payload.get("task")
+                        if task and not _task_is_dispatchable_for_me(task, payload):
+                            log.error(
+                                "dispatch_poll_loop: Guard 1 — poll returned "
+                                "state=new_task for a done/foreign card "
+                                "(task=%s status=%s assigned_agent_id=%s "
+                                "my_agent_id=%s) — refusing to paste it",
+                                task.get("id"), task.get("status"),
+                                task.get("assigned_agent_id"),
+                                payload.get("my_agent_id"),
+                            )
+                            task = None
                     elif state in ("idle", "cancelled", "stopped"):
                         # Agent has no active task — clear dedup cache so any
                         # re-opened or freshly assigned task can dispatch freely.
