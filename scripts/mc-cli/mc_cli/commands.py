@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .client import Client
-from .config import Config
+from .config import Config, context_file_path
 from .errors import UsageError
 
 
@@ -240,14 +240,15 @@ def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> None
     `mc`-Call sonst still auf dem alten Kontext — genau der W5-E-Bug.
     Darum UsageError (exit != 0) statt stderr-Warnung.
     """
+    path = context_file_path()
     try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(f"TASK_ID={task_id}\n")
             f.write(f"BOARD_ID={board_id}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={attempt_id}\n")
     except OSError as e:
         raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            f"{path} nicht schreibbar: {e}. "
             "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
             "erst Schreibrechte fixen, dann weiterarbeiten."
         ) from e
@@ -2271,14 +2272,15 @@ def _cmd_recover(args, client, cfg):
     # koennen. poll.sh schreibt diese Datei normalerweise bei new_task —
     # beim manuellen `mc recover` ausserhalb von poll.sh muss der CLI das
     # selbst tun.
+    ctx_path = context_file_path()
     try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+        with open(ctx_path, "w", encoding="utf-8") as f:
             f.write(f"TASK_ID={task['id']}\n")
             f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
     except OSError as e:
         raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            f"{ctx_path} nicht schreibbar: {e}. "
             "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
             "erst Schreibrechte fixen, dann weiterarbeiten."
         ) from e
@@ -2286,7 +2288,7 @@ def _cmd_recover(args, client, cfg):
     print(f"# Recovery-Prompt fuer Task {task['id']}")
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
     print(f"# dispatch_attempt_id: {task['dispatch_attempt_id']}")
-    print(f"# Context-File: /tmp/mc-context.env aktualisiert")
+    print(f"# Context-File: {ctx_path} aktualisiert")
     # Der Prompt sagt dir WAS zu tun ist, nicht was schon besprochen wurde.
     # Genau hier — direkt nach einem Restart — braucht der Agent den Zeiger
     # auf den Gespraechsverlauf, sonst kennt er das Verb nie.

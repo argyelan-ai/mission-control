@@ -27,6 +27,8 @@ def _write_ctx_file(path: str, mapping: dict) -> None:
             f.write(f"{k}={v}\n")
 
 
+# Redirected to a per-test tmp_path by tests/conftest.py's autouse
+# _isolate_mc_context_file fixture — never the real, host-shared file.
 CTX_PATH = "/tmp/mc-context.env"
 
 
