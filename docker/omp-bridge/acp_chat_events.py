@@ -8,7 +8,9 @@ never touches the omp TUI transcript the native path writes — the headless
 `omp acp` child streams its events over JSON-RPC and they evaporate once the
 turn ends. The backend chat view (services/transcript_chat.py
 ChatTailerManager + services/omp_chat.py) reads exactly ONE thing: the JSONL
-session files under `$PI_CODING_AGENT_DIR/sessions/<encoded-cwd>/`. So the
+session files under the omp sessions root (see ``session_dir``: the
+profile tree ``$OMP_HOME/profiles/$OMP_PROFILE/agent/sessions/`` when a
+profile is set, else ``$PI_CODING_AGENT_DIR/sessions/``). So the
 bridge writes the ACP events there, in the SAME line format omp itself uses,
 and the existing tailer/SSE/history pipeline serves an ACP run like any
 native run — no backend change, no frontend change, no second chat path.
@@ -97,6 +99,10 @@ _RESULT_TRUNCATE_LEN = 4000
 # file (never the transcript JSONL). Shared by bridge.run_acp_once's routing
 # and the tests.
 PREVIEW_CUSTOM_TYPE = "acp-preview"
+
+# customType of a chat-visible failure line (chat over ACP). The backend's
+# _parse_custom_message turns it into an error-styled chat event.
+CHAT_ERROR_CUSTOM_TYPE = "chat_error"
 
 _TITLE_TRUNCATE_LEN = 200
 
@@ -230,6 +236,19 @@ class ACPEventMapper:
         except Exception:  # noqa: BLE001 — a broken update must not kill the run
             return []
 
+    def begin_turn(self) -> None:
+        """Reset the per-turn chunk accumulators, keeping identity + seq.
+
+        run_acp_once builds one mapper per attempt; the chat daemon reuses ONE
+        mapper for the whole session. Without this reset a second turn reusing
+        a messageId would render the previous turn's text prepended — and
+        resetting `seq` instead would re-issue entry ids the tailer already
+        deduplicated away.
+        """
+        self._text_by_message.clear()
+        self._thought_by_message.clear()
+        self._prompt_usage = None
+
     def set_session_id(self, session_id: Optional[str]) -> None:
         """Carry the REAL `session/new` sessionId into the sink (Review
         #465 low 5): file name + session header use it, so the chat view's
@@ -307,6 +326,33 @@ class ACPEventMapper:
                     "content": [{"type": "text", "text": text[:8000]}],
                     "attribution": "user",
                 },
+            }
+        ]
+
+    def map_chat_error(
+        self, code: str, detail: str = "", text: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """A chat-visible failure -> ONE ``chat_error`` custom_message line.
+
+        Chat over ACP (spec docs/specs/chat-over-acp.md): errors must land in
+        the timeline as an EVENT, not only in a log the operator never sees.
+        ``data`` carries the machine-readable pair the frontend styles on
+        (``code`` chip + ``detail`` body); ``content`` is the human text.
+        Codes: rpc_error, provider_error, empty_turn, process_exit, busy,
+        session_reset.
+        """
+        body = text or detail or code
+        return [
+            {
+                "type": "custom_message",
+                "customType": CHAT_ERROR_CUSTOM_TYPE,
+                "content": str(body)[:_RESULT_TRUNCATE_LEN],
+                "display": True,
+                "attribution": "agent",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "data": {"code": code, "detail": str(detail)[:_RESULT_TRUNCATE_LEN]},
             }
         ]
 
@@ -546,27 +592,62 @@ def _encode_cwd(path: str) -> str:
     return "--" + name.replace("/", "-") + "--"
 
 
+def _profile_agent_dir() -> Optional[str]:
+    """``$OMP_HOME/profiles/<OMP_PROFILE>/agent`` when a profile is set, else None.
+
+    With OMP_PROFILE set, omp keeps its agent dir (sessions, models.yml, DBs)
+    under the profile — regardless of PI_CODING_AGENT_DIR, which the image
+    still points at the profile-less ``$OMP_HOME/agent``. The compose bind
+    mount (``~/.mc/agents/<slug>/omp-sessions``) targets the PROFILE tree, so
+    only files written there reach the backend. Live finding 14.09.2026:
+    acp-chat-state.json landed in the unmounted tree and the effort switch
+    answered 409 input_not_supported although the daemon was healthy."""
+    profile = os.environ.get("OMP_PROFILE")
+    home = os.environ.get("OMP_HOME")
+    if not profile or not home:
+        return None
+    return str(Path(home) / "profiles" / profile / "agent")
+
+
 def session_dir(
-    agent_dir_env: str | None = None, cwd: str | None = None
+    agent_dir_env: str | None = None,
+    cwd: str | None = None,
+    sessions_root: str | Path | None = None,
 ) -> Optional[Path]:
     """The omp sessions directory for THIS bridge container, fail-closed.
 
-    Layout: ``$PI_CODING_AGENT_DIR/sessions/<encoded-cwd>/`` — the same root
+    Layout: ``<agent dir>/sessions/<encoded-cwd>/``, where ``<agent dir>`` is
+    resolved in this order: explicit ``agent_dir_env`` → the profile tree
+    ``$OMP_HOME/profiles/$OMP_PROFILE/agent`` (omp ignores
+    ``PI_CODING_AGENT_DIR`` once ``OMP_PROFILE`` is set, and the container
+    image sets it) → ``$PI_CODING_AGENT_DIR``. The profile tree is the root
     the backend's omp_chat.resolve_transcript_dir reads through the
-    ``~/.mc/agents/<slug>/omp-sessions`` bind mount. The cwd encoded is the
+    ``~/.mc/agents/<slug>/omp-sessions`` bind mount; writing under the bare
+    ``$PI_CODING_AGENT_DIR`` lands OUTSIDE that mount and is invisible. The cwd encoded is the
     ACP-pinned one (OMP_ACP_CWD), so an ACP run lands in its own folder
     instead of polluting a native session's directory.
+
+    ``sessions_root`` names that root DIRECTLY, for a daemon that runs on the
+    HOST and has no such mount to hide behind (the Hermes chat daemon, see
+    scripts/hermes_acp_chat.py): there the backend reads
+    ``~/.mc/agents/hermes/omp-sessions`` itself, and no value of
+    PI_CODING_AGENT_DIR can produce that name — the mount is what renames
+    ``sessions`` to ``omp-sessions``, and on the host there is no mount.
     """
-    agent_dir = agent_dir_env or os.environ.get("PI_CODING_AGENT_DIR")
-    if not agent_dir:
-        return None
+    if sessions_root is not None:
+        root = Path(sessions_root)
+    else:
+        agent_dir = agent_dir_env or _profile_agent_dir() or os.environ.get("PI_CODING_AGENT_DIR")
+        if not agent_dir:
+            return None
+        root = Path(agent_dir) / "sessions"
     workdir = (
         cwd
         or os.environ.get("OMP_ACP_CWD")
         or os.environ.get("OMP_DEFAULT_CWD")
         or "/workspace"
     )
-    path = Path(agent_dir) / "sessions" / _encode_cwd(workdir)
+    path = root / _encode_cwd(workdir)
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -607,6 +688,25 @@ class ChatEventSink:
                 self._path = candidate
             except OSError:
                 self._path = None
+
+    @classmethod
+    def appending(cls, path: Path, session_id: str) -> "ChatEventSink":
+        """Bind a sink to an EXISTING transcript file — no new session header.
+
+        The chat daemon's `session/load` path (chat over ACP): the ACP
+        session survives a restart, so its history must keep growing in the
+        SAME file. A fresh ChatEventSink would open a second file for one
+        session and the chat view's rollover would split the history.
+        Fail-closed: an unwritable/absent file degrades to a no-op sink.
+        """
+        sink = cls(None, session_id)
+        try:
+            with open(path, "a", encoding="utf-8"):
+                pass
+            sink._path = Path(path)
+        except OSError:
+            sink._path = None
+        return sink
 
     @property
     def session_id(self) -> str:

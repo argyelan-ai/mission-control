@@ -80,8 +80,12 @@ async def test_omp_same_image_switch_gets_long_health_timeout(async_session):
 
     result, kwargs = await _switch_and_capture(async_session, agent, new.id)
 
+    from app.services.agent_runtime_switch import OMP_READY_SIGNALS
+
     assert result.image_switched is False  # gleiches Image => Neustart-Pfad
-    assert kwargs.get("ready_signals") == ("╭─", "❯")
+    # Additive (fix omp-acp-no-tui-window, 13.09.2026): the OMP_ACP_READY
+    # sentinel joins the native-TUI glyphs, it doesn't replace them.
+    assert kwargs.get("ready_signals") == OMP_READY_SIGNALS
     assert kwargs.get("timeout") == 90  # HEALTH_TIMEOUT_RESTART_OMP
 
 

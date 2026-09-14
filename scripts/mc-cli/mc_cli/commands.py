@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .client import Client
-from .config import Config
+from .config import Config, context_file_path
 from .errors import UsageError
 
 
@@ -240,14 +240,15 @@ def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> None
     `mc`-Call sonst still auf dem alten Kontext — genau der W5-E-Bug.
     Darum UsageError (exit != 0) statt stderr-Warnung.
     """
+    path = context_file_path()
     try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(f"TASK_ID={task_id}\n")
             f.write(f"BOARD_ID={board_id}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={attempt_id}\n")
     except OSError as e:
         raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            f"{path} nicht schreibbar: {e}. "
             "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
             "erst Schreibrechte fixen, dann weiterarbeiten."
         ) from e
@@ -2449,14 +2450,15 @@ def _cmd_recover(args, client, cfg):
     # koennen. poll.sh schreibt diese Datei normalerweise bei new_task —
     # beim manuellen `mc recover` ausserhalb von poll.sh muss der CLI das
     # selbst tun.
+    ctx_path = context_file_path()
     try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+        with open(ctx_path, "w", encoding="utf-8") as f:
             f.write(f"TASK_ID={task['id']}\n")
             f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
     except OSError as e:
         raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            f"{ctx_path} nicht schreibbar: {e}. "
             "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
             "erst Schreibrechte fixen, dann weiterarbeiten."
         ) from e
@@ -2464,7 +2466,7 @@ def _cmd_recover(args, client, cfg):
     print(f"# Recovery-Prompt fuer Task {task['id']}")
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
     print(f"# dispatch_attempt_id: {task['dispatch_attempt_id']}")
-    print(f"# Context-File: /tmp/mc-context.env aktualisiert")
+    print(f"# Context-File: {ctx_path} aktualisiert")
     # Der Prompt sagt dir WAS zu tun ist, nicht was schon besprochen wurde.
     # Genau hier — direkt nach einem Restart — braucht der Agent den Zeiger
     # auf den Gespraechsverlauf, sonst kennt er das Verb nie.
@@ -2905,6 +2907,73 @@ def _add_docs_args(p):
     p.add_argument("topic", nargs="?", default=None, help="Topic-Slug (z.B. 'telegram'). Ohne Arg: INDEX/Topic-Liste.")
 
 
+# ── C2: Board Lead queue control (hold / release / reassign) ──────────────
+#
+# Unlike ack/done/blocked/etc., these always target ANOTHER card in the
+# lead's own queue — never "the task I'm currently dispatched on". So the
+# task-id positional is REQUIRED here (see _add_required_task_id), not the
+# `nargs="?"` pattern used for status commands. board_id still comes from
+# the lead's own env context (BOARD_ID / /tmp/mc-context.env) — a lead only
+# controls its own board's queue.
+
+
+def _add_required_task_id(p, help_suffix: str = ""):
+    p.add_argument(
+        "task_id",
+        help=f"Task-UUID der Karte in der eigenen Queue{help_suffix}",
+    )
+
+
+def _cmd_hold(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/hold",
+        body={"reason": args.reason},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_hold_args(p):
+    _add_required_task_id(p, " (noch nicht dispatcht, status=inbox)")
+    p.add_argument("--reason", required=True, help="Warum wird die Karte angehalten?")
+
+
+def _cmd_release(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/release",
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_release_args(p):
+    _add_required_task_id(p, " (zuvor mit mc hold angehalten)")
+
+
+def _cmd_reassign(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/reassign",
+        body={"to": args.to},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_reassign_args(p):
+    _add_required_task_id(p)
+    p.add_argument(
+        "--to",
+        required=True,
+        help="Ziel-Agent (Name oder UUID) — z.B. --to Rex",
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────
 
 _STATUS_ENDPOINT = ("PATCH /boards/{board_id}/tasks/{task_id}",)
@@ -3000,6 +3069,30 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_finish,
         add_args=_add_finish_args,
+    ),
+    "hold": CommandSpec(
+        name="hold",
+        help="C2: eigene Queue — noch nicht dispatchte Karte anhalten (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/hold",),
+        scope="tasks:manage",
+        handler=_cmd_hold,
+        add_args=_add_hold_args,
+    ),
+    "release": CommandSpec(
+        name="release",
+        help="C2: eigene Queue — zuvor gehaltene Karte wieder freigeben (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/release",),
+        scope="tasks:manage",
+        handler=_cmd_release,
+        add_args=_add_release_args,
+    ),
+    "reassign": CommandSpec(
+        name="reassign",
+        help="C2: eigene Queue — Karte an anderen Agenten umhaengen (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/reassign",),
+        scope="tasks:manage",
+        handler=_cmd_reassign,
+        add_args=_add_reassign_args,
     ),
     "blocked": CommandSpec(
         name="blocked",

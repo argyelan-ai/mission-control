@@ -1139,6 +1139,7 @@ class TaskRunnerService:
         # it off to the poll-loop. We also capture the structured recovery recap
         # as a TaskComment so it's durable + visible in the task timeline.
         tier3_ok = False
+        tier3_timed_out = False
         try:
             from app.services.task_context_builder import build_recovery_context
             from app.redis_client import try_claim_recovery_comment_cooldown
@@ -1209,6 +1210,7 @@ class TaskRunnerService:
                     timeout=TIER3_DISPATCH_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
+                tier3_timed_out = True
                 logger.warning(
                     "Tier 3 (resume) dispatch timed out after %ss for %s on task %s",
                     TIER3_DISPATCH_TIMEOUT_SECONDS, agent.name, task.id,
@@ -1230,10 +1232,24 @@ class TaskRunnerService:
             return True
 
         # ── Tier 4: Notify operator (auto-Discord via severity=error) ────
+        # Nit (incident 2026-09-14): a Tier-3 TIMEOUT is not the same claim as
+        # a Tier-3 FAILURE. wait_for's own comment above says the background
+        # auto_dispatch_task "may still complete" after the bound expires —
+        # and it did, live, that night: the redispatch worked, but this event
+        # still read "Auto-Recovery fehlgeschlagen", costing an hour of
+        # looking in the wrong direction. Wording now names the ambiguous
+        # case for what it is instead of asserting an outcome nobody confirmed.
+        _tier4_msg = (
+            f"{agent.name}: Tier 3 (Resume) Zeitueberschreitung — Re-Dispatch "
+            "laeuft moeglicherweise im Hintergrund weiter, Kartenstatus vor "
+            "manuellem Eingriff pruefen"
+            if tier3_timed_out else
+            f"{agent.name}: Auto-Recovery fehlgeschlagen — Operator benachrichtigt"
+        )
         await emit_event(
             session,
             "agent.recovery_failed",
-            f"{agent.name}: Auto-Recovery fehlgeschlagen — Operator benachrichtigt",
+            _tier4_msg,
             severity="error",  # auto-triggers Discord webhook (activity.py:73-80)
             agent_id=agent.id,
             board_id=task.board_id,
@@ -1244,6 +1260,7 @@ class TaskRunnerService:
                 "task_id": str(task.id),
                 "task_title": task.title,
                 "runtime": runtime,
+                "tier3_timed_out": tier3_timed_out,
             },
         )
         return False

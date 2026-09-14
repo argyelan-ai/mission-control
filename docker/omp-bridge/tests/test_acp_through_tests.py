@@ -474,7 +474,8 @@ def test_reducer_stream_mode_one_preview_slot_one_final_line():
 
 _SERVE_ENV_KEYS = (
     "PI_CODING_AGENT_DIR", "OMP_DRIVER", "OMP_ACP_CWD", "OMP_ACP_PERMISSIONS",
-    "OMP_TASK_DEADLINE", "MSG_DELIVERY_MODE", "OMP_HOME", "OMP_TURN_SIGNAL_FILE",
+    "OMP_TASK_DEADLINE", "MSG_DELIVERY_MODE", "OMP_HOME", "OMP_PROFILE",
+    "OMP_TURN_SIGNAL_FILE",
     "OMP_TASK_LOCK_FILE", "OMP_MSG_QUEUE_DIR", "OMP_MSG_ACK_DIR",
     "OMP_MSG_NUDGE_STATE_FILE", "OMP_MSG_NUDGE_MSG_FILE",
     "OMP_MAX_RETRIES", "OMP_MAX_CONTINUES",
@@ -490,7 +491,17 @@ _SERVE_REFLECTION = (
 )
 
 _SERVE_TASK = {"id": "task-1", "board_id": "board-1", "dispatch_attempt_id": "att-1",
-               "workspace_path": "/workspace", "prompt": "Do the thing."}
+               "prompt": "Do the thing."}
+# Rex review B1 (PR #555 follow-up): `workspace_path` used to be the literal
+# "/workspace" — that only exists on this machine because it's the agent
+# container's mount point. On ubuntu-latest (the omp-bridge CI lane added by
+# this same PR series) it doesn't exist, so the G8 guard
+# (_require_prepared_acp_workspace) aborts the turn before run_acp_once is
+# ever reached, and the two tests below fail for an environment reason that
+# has nothing to do with the code under test. `_drive_serve_loop_acp` now
+# points `workspace_path` at a real subdirectory of the TemporaryDirectory the
+# calling test already owns, so both tests run identically on a laptop, this
+# container, and a bare CI runner.
 
 
 class _ServeRecordingLifecycle(bridge.MCLifecycle):
@@ -533,6 +544,8 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
     _run_factory injection) against the in-process fake server. Returns
     (lifecycle calls, captured run_acp_once kwargs, written jsonl paths)."""
     tmp = agent_dir.parent
+    workspace_dir = tmp / "workspace"
+    workspace_dir.mkdir(exist_ok=True)
     os.environ.update({
         "PI_CODING_AGENT_DIR": str(agent_dir),
         "OMP_DRIVER": "acp",
@@ -550,6 +563,10 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
         "OMP_MAX_CONTINUES": "0",
     })
     os.environ.pop("OMP_TASK_DEADLINE", None)
+    # The container image pins OMP_PROFILE; with it set, session_dir() prefers
+    # the profile tree over PI_CODING_AGENT_DIR and the transcript would land
+    # somewhere this test never looks. Restored via _SERVE_ENV_KEYS.
+    os.environ.pop("OMP_PROFILE", None)
 
     fakes: list = []
     captured: dict = {}
@@ -582,7 +599,14 @@ def _drive_serve_loop_acp(agent_dir: Path) -> tuple[list, dict, list]:
 
     bridge.run_acp_once = spy_run
     lc = _ServeRecordingLifecycle()
-    poll_states = iter([{"state": "new_task", "task": dict(_SERVE_TASK)}])
+    # setdefault, not an unconditional override: test_acp_workspace_parity.py
+    # monkeypatches `tat._SERVE_TASK` with its own explicit workspace_path
+    # (a real dir to prove cwd-threading, a missing one to prove the G8
+    # blocker) — those must win. Only the two tests in THIS file, which use
+    # `_SERVE_TASK` unmodified, get the safe real-tempdir default.
+    task = dict(_SERVE_TASK)
+    task.setdefault("workspace_path", str(workspace_dir))
+    poll_states = iter([{"state": "new_task", "task": task}])
 
     def poll():
         try:
@@ -689,12 +713,27 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
     tree, 2026-09-10): with serve_loop's callsite reverted to the bare
     run_acp_once wiring (cancel + heartbeat, NO sinks — the exact pre-fix
     shape), the same full serve_loop dispatch writes NEITHER transcript NOR
-    preview. Proves the assertions above can actually fail."""
+    preview. Proves the assertions above can actually fail.
+
+    Rex review W1 (PR #547 follow-up): the three assertions below are ALSO
+    all true if `bridge.run_acp_once` is never reached at all — e.g. the G8
+    guard (`_require_prepared_acp_workspace`) aborts the turn up front
+    because `workspace_path` points at a directory that does not exist (the
+    original probe hardcoded "/workspace", which only happens to exist on
+    the agent container that wrote this test — `_drive_serve_loop_acp` now
+    points it at a real tempdir subdirectory for exactly that reason, PR
+    #555 follow-up B1). That collapses the turn to a
+    "technical_problem" blocker BEFORE `bare_factory`'s `run()` ever
+    executes, and this probe reported PASSED without exercising the
+    sabotage at all (verified manually: `bridge.container_workspace_path`
+    monkeypatched to resolve to a directory that does not exist -> the OLD
+    assertions alone stayed green, `calls` held only ack+blocker). The two
+    anchors below close that: they fail loudly instead."""
     def bare_factory(*, model, max_time, permission_policy, task_id,
-                     cancel_state=None, heartbeat_fn=None,
+                     cwd=None, cancel_state=None, heartbeat_fn=None,
                      interrupt_state=None):
         def run(prompt):
-            cwd = os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
+            _cwd = cwd or os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
             # Rex review B2: the stub must forward EXACTLY what it received
             # (the real factory forwards interrupt_state too). Swallowing it
             # here would hide the same class of silent-drop the sabotage
@@ -704,7 +743,7 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
                 if bridge._RUN_ACP_ACCEPTS_INTERRUPT_STATE else {}
             )
             return bridge.run_acp_once(
-                prompt, cwd=cwd, model=model, max_time=max_time,
+                prompt, cwd=_cwd, model=model, max_time=max_time,
                 permission_policy=permission_policy, task_id=task_id,
                 cancel_state=cancel_state, heartbeat_fn=heartbeat_fn,
                 **extra,
@@ -719,6 +758,20 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
             agent_dir = Path(td) / "agent"
             agent_dir.mkdir()
             calls, captured, written, _cancel_instances = _drive_serve_loop_acp(agent_dir)
+
+            # Positive anchors (Rex review W1) — prove the turn actually ran
+            # the bare (sink-less) factory instead of aborting before it.
+            finishes = [c for c in calls if c[0] == "finish"]
+            assert finishes, (
+                "sabotage probe never reached a finished turn -> calls="
+                f"{calls!r}. Most likely the G8 workspace guard aborted the "
+                "turn first (e.g. /workspace missing on this machine) -- "
+                "the assertions below would then pass for the wrong reason."
+            )
+            assert captured, (
+                "run_acp_once was never called (captured is empty) -> the "
+                "sabotage was never exercised"
+            )
             assert captured.get("transcript_sink") is None, list(captured)
             assert captured.get("preview_sink") is None, list(captured)
             assert not written, [str(f) for f in written]

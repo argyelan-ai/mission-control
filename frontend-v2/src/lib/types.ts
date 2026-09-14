@@ -613,6 +613,11 @@ export interface Agent {
   board_id: string | null;
   name: string;
   role: string | null;
+  // Canonical form of `role`, resolved server-side (case/whitespace-insensitive
+  // match against the AgentRole enum; null when `role` doesn't match any known
+  // role — e.g. freetext). `GET /api/v1/agents` only; use this for strict role
+  // comparisons instead of the raw `role` string (see lib/reviewRouting.ts).
+  role_canonical: string | null;
   emoji: string | null;
   status: AgentStatus;
   model: string | null;
@@ -682,6 +687,12 @@ export interface Agent {
   // when `runtime_switchable` is false.
   runtime_switchable: boolean;
   runtime_switch_blocked_reason: string | null;
+  // Derived by the backend (models/agent.py computed field): this agent is
+  // driven over ACP, so its chat IS the session — the native TUI in tmux
+  // window 0 runs nothing the operator sends. The Chat/Terminal toggle is not
+  // rendered for such an agent; `?view=terminal` stays as a deep link.
+  // Absent on older backends = not headless.
+  headless_chat?: boolean;
   created_at: string;
   updated_at: string;
 }

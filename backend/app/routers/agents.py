@@ -370,6 +370,8 @@ async def list_agents(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    from app.scopes import normalize_agent_role
+
     query = select(Agent)
     if board_id and not include_unassigned:
         query = query.where(Agent.board_id == board_id)
@@ -382,7 +384,16 @@ async def list_agents(
         query = query.where(Agent.archived_at.is_(None))
     query = query.order_by(Agent.name)
     result = await session.exec(query)
-    return result.all()
+    agents = result.all()
+    # W1 (PR #514 Rex review): `role` can be freetext (setattr in PATCH bypasses
+    # the model's validator — see scopes.normalize_agent_role docstring). The
+    # frontend's strict `role === "reviewer"` check needs a value it can trust,
+    # so add the canonical form here instead of duplicating the enum-matching
+    # heuristic in TypeScript. Raw `role` stays untouched for display purposes.
+    return [
+        {**a.model_dump(), "role_canonical": normalize_agent_role(a.role)}
+        for a in agents
+    ]
 
 
 @router.get("/agents/stream")
@@ -3180,6 +3191,15 @@ async def agent_poll(
                 select(Task)
                 .where(Task.assigned_agent_id == agent.id)
                 .where(Task.status == "inbox")
+                # C2: a lead-held card (run_control=manual_hold) or an
+                # admin-stopped card must not be claimed via poll just
+                # because a blocker-approval reset it to status=inbox —
+                # that path clears dispatch_attempt_id/dispatched_at/ack_at
+                # but never touches run_control (approvals.py resolve_approval).
+                # Without this filter the poll-claim path below (which
+                # bypasses check_dispatch_allowed entirely) would deliver a
+                # held task straight to the agent's session.
+                .where(Task.run_control.is_(None))
                 .order_by(Task.created_at.asc())
             )
             task = None

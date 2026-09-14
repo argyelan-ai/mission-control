@@ -67,6 +67,9 @@ source "$POLLSH"
 detect_turn_state() { echo "${FAKE_TS:-idle}"; }
 wait_for_clean_prompt() { [ "${FAKE_CLEAN:-1}" = "1" ]; }
 verify_paste_landed() { return 0; }
+# paste_and_submit (2026-09-12) classifies via classify_paste_outcome instead
+# of calling verify_paste_landed — the stub lib must provide it ("0" = submitted).
+classify_paste_outcome() { echo 0; }
 """
 
 
@@ -243,6 +246,51 @@ def test_no_fail_open_stops_flush_and_keeps_rest_queued(tmp_path):
     from urllib.parse import unquote
 
     assert json.loads(unquote(out["ACKPARAM"])) == {"T1": 5}  # acked only what pasted
+
+
+# ── W1 (Review PR #529, Runde 3): rc 2 auf dem Queue-Pfad ist doppelt belegt ─
+# flush_msg_queue las rc 2 nur als "Gate zu, gar nicht gepastet" — seit dem
+# Interrupt-Gate-Fix kann derselbe rc auch "gepastet, im Feld steckengeblieben,
+# Karte eskaliert/blockiert" heissen. PASTE_LAST_ESCALATED (poll.sh) trennt
+# beide Faelle im Log, ohne den rc-Vertrag zu aendern.
+def test_flush_log_distinguishes_escalated_from_gate_closed(tmp_path):
+    work = _make_workspace(tmp_path)
+    resp = _resp(_msg(5)).replace('"', '\\"')
+    res = _run(
+        work,
+        # Gate ist offen (Paste passiert), aber der Nudge bleibt im Feld
+        # stecken (classify_paste_outcome konstant "2") und die Eskalation
+        # gelingt (Karte wird blockiert) — das ist der W1-Fall, kein Gate-zu.
+        'wait_for_clean_prompt() { PANE_UI_DETECTED=claude; return 0; }\n'
+        'classify_paste_outcome() { echo 2; }\n'
+        'escalate_unsubmitted_nudge() { return 0; }\n'
+        f'queue_or_deliver "{resp}"\n'
+        'if flush_msg_queue; then FLUSH_RC=0; else FLUSH_RC=$?; fi\n'
+        'echo "FLUSH_RC=$FLUSH_RC"\n',
+    )
+    assert res.returncode == 0, res.stderr
+    assert "FLUSH_RC=1" in res.stdout
+    assert "wurde eskaliert" in res.stdout, res.stdout
+    assert "Gate zu" not in res.stdout, res.stdout
+
+
+# Sabotage-Probe zu W1: derselbe Ablauf, aber das Gate war tatsaechlich zu
+# (wait_for_clean_prompt schlaegt fehl, nichts wurde gepastet) — muss weiterhin
+# als "Gate zu" geloggt werden, nicht als "eskaliert".
+def test_flush_log_still_says_gate_closed_when_nothing_was_pasted(tmp_path):
+    work = _make_workspace(tmp_path)
+    resp = _resp(_msg(5)).replace('"', '\\"')
+    res = _run(
+        work,
+        'wait_for_clean_prompt() { return 1; }\n'
+        f'queue_or_deliver "{resp}"\n'
+        'if flush_msg_queue; then FLUSH_RC=0; else FLUSH_RC=$?; fi\n'
+        'echo "FLUSH_RC=$FLUSH_RC"\n',
+    )
+    assert res.returncode == 0, res.stderr
+    assert "FLUSH_RC=1" in res.stdout
+    assert "Gate zu" in res.stdout, res.stdout
+    assert "wurde eskaliert" not in res.stdout, res.stdout
 
 
 # ── Sanity: non-pilot response (no new_messages key) is ignored ────────────

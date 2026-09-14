@@ -9,6 +9,20 @@ im MC-Runtime-Picker explizit auf die Seed-Zeile `voice-openai-live` (`gpt-live-
 werden — ohne diese Bindung bleibt Jarvis auf Realtime, auch mit diesem PR gemergt (Review-Fund,
 siehe Nachschliff 7). Weiterhin "vorab", weil LiveKit-PR #7212 noch offen ist (siehe Aufräumen
 unten).
+
+> **Statusnotiz 13.09.2026:** Der "vorab"-Zustand ist erledigt. LiveKit-PR #7212 wurde am
+> 10.09.2026 gemerged und mit `livekit-agents` / `livekit-plugins-openai` **1.8.1** regulär auf
+> PyPI veröffentlicht. `voice_worker/requirements.txt` pinnt jetzt schlicht `==1.8.1`; der
+> `--force-reinstall --no-deps`-Block per PR-SHA im `voice_worker/Dockerfile` ist entfallen
+> (der Build-Zeit-Import-Check auf `GPTLiveModel` bleibt als Regressionsschutz). Der Rest dieses
+> ADR beschreibt weiterhin den Stand vom 10.09.2026 und wird nicht umgeschrieben.
+>
+> Noch offen (nicht von diesem Aufräumen gelöst, wartet auf 1.8.2): zwei Fixes, die nur in
+> LiveKits `main` stecken — (a) der Audio-Puffer wird nach einem Verbindungsabbruch nicht
+> geleert (verzerrter Ton), (b) die Abbruch-Codes kennen `account_deactivated` und
+> `billing_hard_limit_reached` nicht, der Worker verbindet bei hartem Guthaben-Limit endlos neu
+> statt klar abzubrechen.
+
 **Datum:** 2026-09-10
 **Scope:** Infra/Runtime (voice_worker) | Backend/Voice
 
