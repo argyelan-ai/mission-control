@@ -160,3 +160,64 @@ async def test_done_supersedes_all_flow_approvals():
         from app.models.approval import Approval
         approval = await s.get(Approval, ids["approval_id"])
         assert approval.status == "superseded"
+
+# ── dependency_zombie (N2, PR-follow-up "Waechter liest veraltet") ────────
+
+
+@pytest.mark.asyncio
+async def test_dependency_zombie_superseded_when_task_leaves_waiting():
+    """dependency_zombie → superseded once the card no longer waits.
+
+    Regression guard: 'dependency_zombie' was missing from
+    APPROVAL_VALID_STATES entirely, so neither the immediate cleanup nor the
+    watchdog reconciliation ever retracted it — a stale approval sat in the
+    operator's inbox for a card that had long moved on (the exact failure
+    class the W3 numbers pinned down for review_stuck).
+    """
+    ids = await _create_task_with_approval("dependency_zombie", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "review")
+        assert count == 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "Superseded" in approval.resolver_note
+
+
+@pytest.mark.asyncio
+async def test_dependency_zombie_stays_pending_while_waiting():
+    """dependency_zombie stays pending while the card genuinely waits."""
+    for status in ("inbox", "in_progress"):
+        ids = await _create_task_with_approval("dependency_zombie", task_status=status)
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            count = await cleanup_obsolete_approvals(s, ids["task_id"], status)
+            assert count == 0
+
+            from app.models.approval import Approval
+            approval = await s.get(Approval, ids["approval_id"])
+            assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_dependency_zombie_reconciliation_supersedes():
+    """The watchdog reconciliation safety-net also retracts dependency_zombie."""
+    ids = await _create_task_with_approval("dependency_zombie", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "done"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await reconcile_stale_approvals(s)
+        assert count >= 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "reconciliation" in approval.resolver_note
