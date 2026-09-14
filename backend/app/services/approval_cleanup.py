@@ -37,6 +37,14 @@ APPROVAL_VALID_STATES: dict[str, set[str]] = {
     # approval is moot — supersede it instead of leaving it in the
     # operator's inbox for a card that's already done.
     "review_stuck": {"review"},
+    # dependency_zombie: the watchdog creates this while the card is actively
+    # waiting on a dead dependency (task in inbox/in_progress). Once the card
+    # leaves those states — review, done, or the dependency resolved by hand —
+    # the approval is moot. Without this entry the type has NO retract path at
+    # all: neither the immediate cleanup nor the reconciliation touches an
+    # unknown action_type (`.get(...) is None → continue`), so a stale
+    # dependency_zombie approval sits in the operator's inbox forever.
+    "dependency_zombie": {"inbox", "in_progress"},
 }
 
 
