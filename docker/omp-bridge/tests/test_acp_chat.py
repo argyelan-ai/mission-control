@@ -313,6 +313,19 @@ class _RestartRaceClient:
 
     def prompt(self, session_id, text, timeout=600.0):
         self.calls.append(("prompt", session_id, text))
+        # Stream SOME real text before hanging — otherwise `_full_text` is
+        # empty and `map_final_assistant_message("")` returns `[]` no matter
+        # what a sabotaged guard does (empty text never becomes a line), so
+        # a transcript-pinning assertion would pass for the wrong reason.
+        for cb in list(self._events):
+            cb({
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "messageId": "m1",
+                    "content": {"type": "text", "text": "partial reply"},
+                },
+            })
         # Blocks until close() force-releases it — exactly like a real
         # `_request()` parked on `pend.event.wait()` when `_wake_all()` fires.
         self._released.wait(timeout=10)
@@ -358,8 +371,39 @@ def test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state(tmp_p
         time.sleep(0.01)
     assert sess.state()["busy"] is True
 
+    # The worker thread writes the user-prompt transcript line asynchronously
+    # too — wait for it explicitly so `transcript_before` is a stable
+    # snapshot, not a coin flip against that write.
+    deadline = time.time() + 3
+    while time.time() < deadline and not (
+        sess.transcript_path and sess.transcript_path.exists()
+        and "hang me" in sess.transcript_path.read_text()
+    ):
+        time.sleep(0.01)
+
     state_before = sess.state_file.read_text() if sess.state_file.exists() else None
-    persist_before = sess.persist_file.read_text() if sess.persist_file.exists() else None
+    transcript_before = (
+        sess.transcript_path.read_text()
+        if sess.transcript_path and sess.transcript_path.exists() else None
+    )
+    assert transcript_before and "hang me" in transcript_before
+
+    # `ChatDaemon.restart()`'s other half: a BRAND NEW session (a different
+    # object, a different sessionId) takes over the same workspace-scoped
+    # persist file. Written here — while THIS turn's worker thread is
+    # still verifiably parked in `client.prompt()` (`_RestartRaceClient`
+    # only unblocks it via `close()` below) — so the ordering versus
+    # whatever the zombie does afterwards is deterministic, not a race
+    # against thread scheduling. A stale rewrite by the zombie is now
+    # actually observable as a clobber, not just "the file happens to
+    # still look the same" (that's all the old before/after
+    # string-equality check could ever show, since a same-session
+    # reconnect always reloads and re-writes the SAME id).
+    replacement_session_id = "sid-REPLACEMENT"
+    sess.persist_file.write_text(json.dumps({
+        "sessionId": replacement_session_id,
+        "transcript": str(sess.transcript_path) if sess.transcript_path else "",
+    }))
 
     # This is the `/restart` moment: the daemon closes THIS session (and, in
     # production, immediately starts a brand new one — irrelevant here, the
@@ -378,14 +422,23 @@ def test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state(tmp_p
         "_restart_child() and spawn a second, permanently orphaned client/process"
     )
     state_after = sess.state_file.read_text() if sess.state_file.exists() else None
-    persist_after = sess.persist_file.read_text() if sess.persist_file.exists() else None
     assert state_after == state_before, (
         "a closed session must not keep writing acp-chat-state.json — that "
         "path is shared with whatever session /restart put in its place"
     )
-    assert persist_after == persist_before, (
-        "a closed session must not keep writing the persisted sessionId — "
-        "shared with the replacement session from /restart"
+    transcript_after = (
+        sess.transcript_path.read_text()
+        if sess.transcript_path and sess.transcript_path.exists() else None
+    )
+    assert transcript_after == transcript_before, (
+        "close() mid-turn must not append a transcript line for the retired "
+        "turn — the transcript file is shared with the replacement session "
+        "/restart just started"
+    )
+    persisted_final = json.loads(sess.persist_file.read_text())
+    assert persisted_final["sessionId"] == replacement_session_id, (
+        "closed session's worker thread clobbered the replacement session's "
+        "persisted sessionId with its own stale id"
     )
     print("PASS test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state")
 
