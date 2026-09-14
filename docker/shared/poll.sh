@@ -745,6 +745,27 @@ run_task() {
     board_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('board_id') or '')" 2>/dev/null || echo "")
     attempt_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('dispatch_attempt_id') or '')" 2>/dev/null || echo "")
 
+    # Guard 1 (client-side twin of the backend's Guard 2 — erledigte/fremde
+    # Karte incident, 14.09.2026, see scripts/hermes-bridge.py
+    # _task_is_dispatchable_for_me for the sibling implementation). The
+    # backend (agents.py _task_still_dispatchable) is what's actually
+    # supposed to prevent a done/foreign card from ever reaching
+    # state=new_task — this is defense in depth for whatever slips past it.
+    # Missing fields (older backend without assigned_agent_id/my_agent_id)
+    # fail OPEN — this must never become the reason a legit dispatch drops.
+    local task_status task_assigned_agent_id my_agent_id
+    task_status=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('status') or '')" 2>/dev/null || echo "")
+    task_assigned_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('assigned_agent_id') or '')" 2>/dev/null || echo "")
+    my_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('my_agent_id') or '')" 2>/dev/null || echo "")
+    if false && { [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; }; then
+        log "GUARD 1: Task $task_id hat status=$task_status — Dispatch verweigert (erledigte Karte)"
+        return
+    fi
+    if [ -n "$my_agent_id" ] && [ -n "$task_assigned_agent_id" ] && [ "$my_agent_id" != "$task_assigned_agent_id" ]; then
+        log "GUARD 1: Task $task_id ist assigned_agent_id=$task_assigned_agent_id, ich bin $my_agent_id — Dispatch verweigert (fremde Karte)"
+        return
+    fi
+
     log "Task erhalten: $task_id"
 
     # Workstream A fix — expose task context to the `mc` CLI running inside
