@@ -14,16 +14,22 @@ concrete gaps closed here:
    cycle's own state, never through the heartbeat's own control channel.
 
 Deliberately NOT covered here (scope, see poll.sh comments at the call site):
-SOFT interrupts stay a no-op — that mirrors bridge.py's own semantics
-(bridge.py:2916, a soft interrupt only comments and lets the turn finish) and
-is not a gap in the parity table.
+SOFT interrupts stay a no-op — deliberately DIFFERENT from the bridge, not a
+mirror of it: the bridge cancels on soft too via the same interrupt ladder
+and can afford to because it resumes the SAME session afterwards with the
+nudge (bridge.py:2916 is that post-hoc nudge comment, not evidence that soft
+left the turn running). poll.sh has no resume path, so an Escape on soft
+would kill the turn with nothing to pick it back up — strictly worse than
+waiting for the triggering comments to arrive via the existing
+deliver_comments/deliver_messages channel. Not a gap in the parity table.
 
 Same harness as test_poll_sh_gate.py: source poll.sh with POLL_SH_SOURCE_ONLY=1
 (functions only), stub tmux via a PATH shim so the ESC-sending call is
-observable without a real terminal, and never touch the network (heartbeat's
-own urllib POST is out of scope for these tests — they call
-build_heartbeat_payload/handle_heartbeat_control directly, both pure/no-I/O
-functions).
+observable without a real terminal. The first half of this file calls
+build_heartbeat_payload/handle_heartbeat_control directly (pure/no-I/O
+functions); the second half exercises heartbeat() itself against a real
+loopback http.server (`_HeartbeatStub`) so the HTTP round-trip and the wiring
+between the two are covered too, not just the isolated helpers.
 """
 
 from __future__ import annotations
@@ -172,7 +178,9 @@ def test_hard_interrupt_sends_escape(tmp_path):
 def test_soft_interrupt_does_not_send_escape(tmp_path):
     # G1 (dispatch-path-parity.md) is a known false-positive risk on soft
     # interrupts (unread own-comments) — poll.sh must NOT cancel the turn for
-    # "soft", mirroring bridge.py:2916 (soft only comments, never cancels).
+    # "soft": unlike the bridge (which can afford to cancel because it resumes
+    # the same session afterwards with the nudge), poll.sh has no resume path,
+    # so an Escape here would kill the turn with nothing to pick it back up.
     work = _make_workspace(tmp_path)
     resp = json.dumps(
         {"ok": True, "control": {"interrupt": "soft", "reason": "Ungelesene Kommentare"}}
