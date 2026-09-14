@@ -82,6 +82,12 @@ _last_dispatched_attempt_id: str | None = None
 # before the dispatch call (the actual race window: after a poll response
 # already offered a task, before it gets pasted in). `_dispatcher_thread` lets
 # the SIGTERM handler join it with a bound — see DISPATCHER_SHUTDOWN_TIMEOUT.
+# Scope, deliberately: this gate only covers the task-dispatch paste. The same
+# loop tick's `deliver_prompt(comments_prompt)` and `deliver_messages(...)`
+# calls stay ungated — comments are already ACK'd server-side at poll time
+# regardless of delivery, and messages are only ACK'd after a successful
+# pane-quiet verify, so neither can produce the redeliverable/duplicate state
+# a bare task-dispatch race would.
 _shutdown_event = threading.Event()
 _dispatcher_thread: "threading.Thread | None" = None
 # Upper bound for how long SIGTERM waits for the dispatcher thread to stop.
@@ -982,8 +988,10 @@ def dispatch_poll_loop() -> None:
       - state=new_task → claim the task + return {task: {id, board_id, title, prompt, ...}}
       - state=working|idle|cancelled|stopped → no task dispatch needed
       - `new_comments` (any state) → batch of User-/System-Comments since last poll
-    Note: /me/poll is a CLAIM endpoint (sets ack_at + status=in_progress on
-    inbox tasks). The MC-built `task.prompt` already contains the full
+    Note: /me/poll only sets dispatched_at on inbox tasks — status stays
+    "inbox" and ack_at stays NULL until the agent's own PATCH
+    status:in_progress lands (that PATCH is the actual ACK, see
+    agents.py:3230). The MC-built `task.prompt` already contains the full
     dispatch context — we wrap it with a Hermes-specific header for the pane.
 
     Bug 11 fix (2026-05-14): also delivers `new_comments` to the tmux session
@@ -1060,12 +1068,20 @@ def dispatch_poll_loop() -> None:
                     )
                 )
                 # 13.09.2026 race: the poll above already claimed the task
-                # (state=new_task flips it to in_progress server-side) BEFORE
-                # we decide whether to paste it. If SIGTERM arrived while that
-                # request was in flight, do NOT paste it now — it stays
-                # undelivered and in_progress, which is exactly what made M7
-                # redeliverable in the incident. Skipping here is deliberate,
-                # not accidental.
+                # (state=new_task sets dispatched_at server-side; status
+                # stays "inbox", ack_at stays NULL) BEFORE we decide whether
+                # to paste it. If SIGTERM arrived while that request was in
+                # flight, do NOT paste it now — it stays undelivered, still
+                # "inbox". Skipping here is deliberate, not accidental.
+                # Redelivery does not come from the claim itself — it comes
+                # from two independent paths: (1) the next poll of the
+                # freshly restarted process finds an empty
+                # _last_dispatched_task_id cache and dispatches again; (2) if
+                # the process is slow to come back, the watchdog's
+                # _check_dispatch_ack (task_runner.py:567, filters on
+                # status == "inbox") fires the ACK-timeout ladder at
+                # ack_timeout/2 and rotates dispatch_attempt_id, forcing a
+                # fresh delivery.
                 if should_dispatch and _shutdown_event.is_set():
                     log.info(
                         "dispatch_poll_loop: shutdown in flight — skipping dispatch of "

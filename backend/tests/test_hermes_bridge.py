@@ -505,6 +505,48 @@ def test_dispatch_poll_loop_skips_dispatch_when_shutdown_set_mid_poll(bridge, mo
     )
 
 
+def test_dispatch_poll_loop_waits_via_shutdown_event_not_plain_sleep(bridge, monkeypatch, tmp_path):
+    """N1 (PR #565 follow-up): the inter-poll wait at the bottom of
+    dispatch_poll_loop() must be `_shutdown_event.wait(...)`, not
+    `time.sleep(...)` — only Event.wait() returns early once the flag is
+    set, which is what lets a SIGTERM during the idle gap between polls be
+    noticed immediately instead of up to DISPATCH_POLL_INTERVAL late (see
+    the shutdown-coordination comment at the top of the module).
+
+    The two guard tests above run with DISPATCH_POLL_INTERVAL=0, so they
+    cannot tell wait() and sleep() apart — both return instantly either
+    way. A revert of that one line back to time.sleep() would leave every
+    existing test green and only show up as CI hanging until its own
+    timeout aborts the run — the more expensive failure mode. Using a
+    large interval here plus a `time.sleep` stand-in that raises turns that
+    hang into an immediate, ordinary assertion failure instead.
+    """
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 300)
+
+    def _forbidden_sleep(seconds):
+        raise AssertionError(
+            f"dispatch_poll_loop called time.sleep({seconds}) instead of "
+            f"_shutdown_event.wait(...) — a SIGTERM during the idle gap "
+            f"would no longer be noticed promptly"
+        )
+
+    monkeypatch.setattr(bridge.time, "sleep", _forbidden_sleep)
+
+    def fake_urlopen(req, timeout=10):
+        # No task on offer; shutdown fires mid-poll, same timing as the
+        # guard test above — the loop must reach the bottom wait() with the
+        # flag already set and return without ever calling time.sleep().
+        bridge._shutdown_event.set()
+        return _FakeResp(json.dumps({"state": "idle"}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    bridge.dispatch_poll_loop()  # must return promptly via Event.wait(); must not raise
+
+
 def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge):
     """Regression for the 13.09.2026 incident, reproduced with a real
     background thread and wall-clock timestamps (mirrors the incident's own
