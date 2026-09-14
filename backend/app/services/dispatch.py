@@ -33,7 +33,7 @@ from app.config import settings
 from app.database import engine
 from app.models.agent import Agent
 from app.scopes import AgentRole
-from app.models.board import Board, Project
+from app.models.board import Board
 from app.utils import utcnow
 from app.models.task import Task, TaskDependency
 from app.services.activity import emit_event
@@ -561,27 +561,28 @@ async def auto_dispatch_task(
                 session.add(task)
                 await session.commit()
 
-            # ── Git Workspace Setup + Worktree Isolation (Bundle 4) ──
-            # Extracted to task_context_builder.setup_git_workspace_for_dispatch
-            # (REF-01 Step 3). Returns False if the task was blocked
+            # ── Git Workspace Setup + Non-Code Phase-C (Bundle 4 / PR #568 B2) ──
+            # Both steps live in task_context_builder.prepare_agent_workspace_for_task
+            # now — this used to be an inline copy of the same two steps, which is
+            # exactly why the reassign/handoff callers of that shared function (the
+            # dedicated reassign endpoint, the assigned_agent_id PATCH branch, the
+            # self-review escalation) drifted from this one the moment either half
+            # got a fix without a matching edit here (PR #568 review, B2). Calling
+            # the shared function instead of duplicating it means every fix to it
+            # — including B1 (stale/foreign task.workspace_path after a reassign) —
+            # automatically applies to every first dispatch too, not just to the
+            # non-dispatch handoff paths. Returns False if the task was blocked
             # (TaskComment + terminal-unassign already committed) — caller MUST
             # return; on success/no-op returns True.
-            from app.services.task_context_builder import setup_git_workspace_for_dispatch
-            if not await setup_git_workspace_for_dispatch(task, best_agent, session):
+            from app.services.task_context_builder import prepare_agent_workspace_for_task
+            if not await prepare_agent_workspace_for_task(task, best_agent, session):
                 return
 
-            # Phase C (T-1): also create workspace for non-code tasks
-            if not task.workspace_path:
-                _proj = await session.get(Project, task.project_id) if task.project_id else None
-                _agent_ws = best_agent.workspace_path if best_agent else None
-                _task_ws = await _ensure_task_workspace(task.id, _proj, _agent_ws)
-                if _task_ws:
-                    task.workspace_path = _task_ws
-                    session.add(task)
-                    await session.commit()
-                    logger.info("Task %s: Non-Code-Workspace erstellt: %s", task.id, _task_ws)
-
             # ── Port Allocation ──────────────────────────────────────
+            # Agent-independent and idempotent (guarded by `if not task.workspace_port`)
+            # — deliberately NOT part of prepare_agent_workspace_for_task's shared
+            # sequence, so the reassign/handoff callers above don't reallocate a
+            # port a running task already has (PR #568 review N2).
             if not task.workspace_port:
                 task.workspace_port = await _allocate_port(session)
                 if task.workspace_port:

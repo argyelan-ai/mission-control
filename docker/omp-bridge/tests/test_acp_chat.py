@@ -237,6 +237,212 @@ def test_second_prompt_while_busy_is_rejected_as_busy(tmp_path):
     print("PASS test_second_prompt_while_busy_is_rejected_as_busy")
 
 
+# ── 2b. close() mid-turn (hermes-bridge POST /restart, dcaf687a) ────────────
+#
+# Live 14.09.2026: `/restart` under HERMES_DRIVER=acp is
+# `ChatDaemon.restart()` = stop() (closes the OLD session) + start() (builds
+# a brand new one). ACPClient.close() force-wakes the pending `session/prompt`
+# RPC wait (`_wake_all()`) BEFORE the real child is confirmed dead — so
+# `client.prompt()` on the worker thread returns a fake "successful" empty
+# result instead of raising. Nothing in `_run_turn()`'s tail checked
+# `self._closed`, so the ORPHANED session (the daemon already swapped in a
+# different one) carried on as if its turn had genuinely finished: if
+# `_client_alive()` happened to see the process as dead by then, it called
+# `_restart_child()` — spawning yet ANOTHER real child process nobody will
+# ever close — and then `_write_state()` / `_write_persisted()` wrote to the
+# EXACT SAME workspace-scoped files (`sessions_dir`/`state_dir` are keyed by
+# cwd, not by session object) the new, active session was writing to,
+# clobbering its sessionId. That is "restart said 200 but the old turn is
+# somehow still shaping what happens" — not a literal immortal process, but
+# an immortal SESSION OBJECT whose worker thread keeps acting after close().
+
+
+class _DeadAfterCloseProc:
+    """Stand-in for `subprocess.Popen`: alive until close() marks it dead —
+    mirrors a real child that only actually exits once ACPClient.close()
+    finishes killing it."""
+
+    def __init__(self):
+        self.dead = False
+
+    def poll(self):
+        return None if not self.dead else 1
+
+
+class _RestartRaceClient:
+    """FakeClient variant that models ACPClient.close()'s real race: a
+    blocked prompt() is force-released by close() (like `_wake_all()`) with
+    an empty, non-error result — NOT a raised exception — and `_proc.poll()`
+    reports the child as dead once close() has run (the realistic case: the
+    close() call's terminate()/kill() sequence wins the race easily against
+    a worker thread that was blocked for a while)."""
+
+    def __init__(self, session_result):
+        self.last_session_result = dict(session_result)
+        self._session_result = session_result
+        self._proc = _DeadAfterCloseProc()
+        self._released = threading.Event()
+        self.closed = False
+        self.calls: list[tuple] = []
+        self._events: list = []
+
+    def on_event(self, cb):
+        self._events.append(cb)
+
+    def on_permission(self, cb):
+        pass
+
+    def _ensure_process(self):
+        self.calls.append(("_ensure_process",))
+
+    def initialize(self, timeout=30.0):
+        return {}
+
+    def new_session(self, cwd, mcp_servers=None, timeout=60.0):
+        self.calls.append(("new_session", cwd))
+        self.last_session_result = dict(self._session_result)
+        return self._session_result.get("sessionId", "sid-new")
+
+    def load_session(self, session_id, cwd, mcp_servers=None, timeout=60.0):
+        self.calls.append(("load_session", session_id, cwd))
+        self.last_session_result = dict(self._session_result)
+        return self.last_session_result
+
+    def set_config_option(self, session_id, key, value, timeout=30.0):
+        return {}
+
+    def prompt(self, session_id, text, timeout=600.0):
+        self.calls.append(("prompt", session_id, text))
+        # Stream SOME real text before hanging — otherwise `_full_text` is
+        # empty and `map_final_assistant_message("")` returns `[]` no matter
+        # what a sabotaged guard does (empty text never becomes a line), so
+        # a transcript-pinning assertion would pass for the wrong reason.
+        for cb in list(self._events):
+            cb({
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "messageId": "m1",
+                    "content": {"type": "text", "text": "partial reply"},
+                },
+            })
+        # Blocks until close() force-releases it — exactly like a real
+        # `_request()` parked on `pend.event.wait()` when `_wake_all()` fires.
+        self._released.wait(timeout=10)
+        return acp_client.PromptResult(stopReason="", usage=None)
+
+    def cancel(self, session_id=None):
+        pass
+
+    def close(self, timeout=5.0):
+        self.closed = True
+        self._proc.dead = True
+        self._released.set()
+
+
+def test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state(tmp_path):
+    """A `/restart` that closes a session WHILE its turn is stuck must retire
+    that turn outright — no self-heal respawn, no state-file write from the
+    now-irrelevant session (dcaf687a-6d40-4bcf-b494-bdfed37208d6)."""
+    made_clients: list[_RestartRaceClient] = []
+
+    def factory():
+        c = _RestartRaceClient(SESSION_RESULT)
+        made_clients.append(c)
+        return c
+
+    state_dir = tmp_path / "state"
+    sessions_dir = tmp_path / "sessions"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    sess = acp_chat.ChatSession(
+        client_factory=factory,
+        cwd=str(tmp_path / "work"),
+        state_dir=state_dir,
+        sessions_dir=sessions_dir,
+        driver="hermes",
+    )
+    sess.start()
+    assert len(made_clients) == 1
+
+    assert sess.prompt("hang me")["ok"] is True
+    deadline = time.time() + 3
+    while not sess.state()["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+    assert sess.state()["busy"] is True
+
+    # The worker thread writes the user-prompt transcript line asynchronously
+    # too — wait for it explicitly so `transcript_before` is a stable
+    # snapshot, not a coin flip against that write.
+    deadline = time.time() + 3
+    while time.time() < deadline and not (
+        sess.transcript_path and sess.transcript_path.exists()
+        and "hang me" in sess.transcript_path.read_text()
+    ):
+        time.sleep(0.01)
+
+    state_before = sess.state_file.read_text() if sess.state_file.exists() else None
+    transcript_before = (
+        sess.transcript_path.read_text()
+        if sess.transcript_path and sess.transcript_path.exists() else None
+    )
+    assert transcript_before and "hang me" in transcript_before
+
+    # `ChatDaemon.restart()`'s other half: a BRAND NEW session (a different
+    # object, a different sessionId) takes over the same workspace-scoped
+    # persist file. Written here — while THIS turn's worker thread is
+    # still verifiably parked in `client.prompt()` (`_RestartRaceClient`
+    # only unblocks it via `close()` below) — so the ordering versus
+    # whatever the zombie does afterwards is deterministic, not a race
+    # against thread scheduling. A stale rewrite by the zombie is now
+    # actually observable as a clobber, not just "the file happens to
+    # still look the same" (that's all the old before/after
+    # string-equality check could ever show, since a same-session
+    # reconnect always reloads and re-writes the SAME id).
+    replacement_session_id = "sid-REPLACEMENT"
+    sess.persist_file.write_text(json.dumps({
+        "sessionId": replacement_session_id,
+        "transcript": str(sess.transcript_path) if sess.transcript_path else "",
+    }))
+
+    # This is the `/restart` moment: the daemon closes THIS session (and, in
+    # production, immediately starts a brand new one — irrelevant here, the
+    # defect lives entirely in what the OLD session's worker thread does to
+    # itself and to shared files after being told it is retired).
+    sess.close()
+
+    assert sess.wait_idle(timeout=5), "close() must release a turn stuck on the dead client"
+    assert sess.state()["busy"] is False
+
+    # Give the worker thread a moment past close() — the bug window.
+    time.sleep(0.3)
+
+    assert len(made_clients) == 1, (
+        "close() must not let the turn's worker thread self-heal via "
+        "_restart_child() and spawn a second, permanently orphaned client/process"
+    )
+    state_after = sess.state_file.read_text() if sess.state_file.exists() else None
+    assert state_after == state_before, (
+        "a closed session must not keep writing acp-chat-state.json — that "
+        "path is shared with whatever session /restart put in its place"
+    )
+    transcript_after = (
+        sess.transcript_path.read_text()
+        if sess.transcript_path and sess.transcript_path.exists() else None
+    )
+    assert transcript_after == transcript_before, (
+        "close() mid-turn must not append a transcript line for the retired "
+        "turn — the transcript file is shared with the replacement session "
+        "/restart just started"
+    )
+    persisted_final = json.loads(sess.persist_file.read_text())
+    assert persisted_final["sessionId"] == replacement_session_id, (
+        "closed session's worker thread clobbered the replacement session's "
+        "persisted sessionId with its own stale id"
+    )
+    print("PASS test_close_mid_turn_does_not_resurrect_a_child_or_clobber_shared_state")
+
+
 # ── 3. cancel is not an error ───────────────────────────────────────────────
 
 

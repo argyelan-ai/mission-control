@@ -103,10 +103,11 @@ COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
 # ZUSÄTZLICH als Symlink in PATH: `docker exec` startet keine Login-Shell und
 # löst nur absolute Pfade oder PATH-Einträge auf.
 COPY render-omp-config.sh /opt/omp-bridge/render-omp-config.sh
+COPY sigforward.sh        /opt/omp-bridge/sigforward.sh
 COPY entrypoint.sh        /usr/local/bin/entrypoint.sh
 COPY omp-recycler.sh      /usr/local/bin/omp-recycler.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/omp-recycler.sh \
-        /opt/omp-bridge/launch-omp.sh /opt/omp-bridge/render-omp-config.sh \
+        /opt/omp-bridge/sigforward.sh /opt/omp-bridge/launch-omp.sh /opt/omp-bridge/render-omp-config.sh \
     && ln -sf /opt/omp-bridge/launch-omp.sh /usr/local/bin/launch-omp.sh \
     && ln -sf /opt/omp-bridge/render-omp-config.sh /usr/local/bin/render-omp-config.sh
 

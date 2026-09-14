@@ -1791,6 +1791,29 @@ async def agent_reassign_task(
     )
     await session.commit()
     await session.refresh(task)
+
+    # Prepare the new assignee's workspace — mirrors every other assignment
+    # path that dispatches via auto_dispatch_task (first dispatch,
+    # handle_review_handoff, handle_test_handoff, handle_review_rejection).
+    # Without this, task.workspace_path keeps pointing at (or stays None
+    # from) the OLD agent's layout, and the receiving agent's ACP guard
+    # (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refuses
+    # the turn — Incident 2026-09-13, Host-Agent -> Container-Agent
+    # reassign. PR #568 review (B1): "no-ops for agents without
+    # workspace_path" is NOT the same as "no-ops for host agents" — Hermes
+    # (a host agent) HAS one (alembic 0095) and gets a real Phase-C
+    # workspace here too. The actual no-op condition is
+    # _needs_non_code_workspace(): task.workspace_path already unset-and-
+    # nothing-to-build-from, or already scoped under the TARGET agent's own
+    # tree (e.g. a same-agent no-op reassign) — not "is this a host agent".
+    from app.services.task_context_builder import prepare_agent_workspace_for_task
+    if not await prepare_agent_workspace_for_task(task, target, session):
+        # Blocked: task_context_builder already posted a blocker comment,
+        # set status=blocked and unassigned the task — reflect that back.
+        await session.refresh(task)
+        return task.model_dump()
+
+    await session.refresh(task)
     return task.model_dump()
 
 
@@ -1973,6 +1996,22 @@ async def agent_update_task(
 
     old_status = task.status
 
+    # W2 (Rex' review of #570): snapshot the assigned agent's active-task
+    # lock BEFORE update_agent_active_task's unconditional repoint further
+    # down in this function runs. By the time the unblock-notify block
+    # executes, current_task_id already reads task.id regardless of what it
+    # held before — that repoint is exactly what
+    # redispatch_unblocked_task's B-3 fix and requeue_unblocked_task's own
+    # comment describe having to UNDO for their branches. Reading it fresh
+    # at notify time would make a released lock (W2, Sonde P-B) and a
+    # genuinely live paused session (P4) indistinguishable. See
+    # task_lifecycle.apply_unblock_notify_reset's docstring.
+    _assigned_agent_lock_before_transition: uuid.UUID | None = None
+    if task.assigned_agent_id:
+        _pre_transition_assignee = await session.get(Agent, task.assigned_agent_id)
+        if _pre_transition_assignee is not None:
+            _assigned_agent_lock_before_transition = _pre_transition_assignee.current_task_id
+
     # ── Reassignment (assigned_agent_id) — permission + application ──
     # Bug 2026-09-09: the field used to be silently discarded by the schema
     # (200 without effect). Now: only Board Leads may reassign — a worker
@@ -1980,6 +2019,11 @@ async def agent_update_task(
     # dispatch model wants (mirrors the ownership philosophy above; the
     # Board-Lead endpoint routers/tasks.py:TaskUpdate has no extra guard
     # because user auth is already the operator).
+    # Set below when this PATCH actually moves assigned_agent_id to a new,
+    # non-None agent — used at the end of the function to prepare that
+    # agent's workspace (same gap/fix as the dedicated reassign endpoint
+    # above; see the comment there for the incident this closes).
+    _reassign_target_agent: Agent | None = None
     if "assigned_agent_id" in updates:
         if not agent.is_board_lead:
             raise HTTPException(
@@ -2013,6 +2057,8 @@ async def agent_update_task(
             )
             task.assigned_agent_id = _new_assignee
             updates.pop("assigned_agent_id", None)  # applied; skip generic setattr
+            if _new_assignee is not None:
+                _reassign_target_agent = _assignee
             await emit_event(
                 session, "task.reassigned",
                 f"Task '{task.title}' neu zugewiesen durch Lead {agent.name}",
@@ -2762,6 +2808,11 @@ async def agent_update_task(
         # CRITICAL call order: PR creation MUST happen BEFORE handle_review_handoff
         # (Pitfall H: marker comment written before reviewer is notified).
         if new_status == "review" and old_status == "in_progress":
+            from app.services.task_lifecycle import (
+                review_card_would_self_dispatch, REVIEW_CARD_SELF_DISPATCH_DETAIL,
+            )
+            if review_card_would_self_dispatch(task, agent):
+                raise HTTPException(409, REVIEW_CARD_SELF_DISPATCH_DETAIL)
             await handle_review_pr_creation(session, task, agent)
             if not getattr(task, "human_review_required", None):
                 from app.services.task_lifecycle import handle_review_handoff
@@ -2972,6 +3023,20 @@ async def agent_update_task(
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)
                 if target:
+                    # W1/W2 (Rex' review of #570): identischer Zwilling zum
+                    # Operator-Pfad (routers/tasks.py) — das gemeinsame
+                    # Kriterium fuer alle drei resolve_unblock_action-Zweige
+                    # lebt jetzt in task_lifecycle.apply_unblock_notify_reset
+                    # (siehe dessen Docstring fuer die volle Begruendung und
+                    # die W1-Korrektur). Der Lock-Snapshot stammt bewusst von
+                    # VOR update_agent_active_task's Repoint oben in dieser
+                    # Funktion, nicht von `target.current_task_id` jetzt.
+                    from app.services.task_lifecycle import apply_unblock_notify_reset
+                    await apply_unblock_notify_reset(
+                        session, task, old_status,
+                        _assigned_agent_lock_before_transition,
+                        caller="unblock_notify_agent_task_status_router",
+                    )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
                         .where(TaskComment.task_id == task.id)
@@ -3007,6 +3072,14 @@ async def agent_update_task(
                             "recovery-comment cooldown already claimed",
                             task.id,
                         )
+
+    # Prepare the new assignee's workspace (twin of the dedicated reassign
+    # endpoint's fix above) — a plain PATCH assigned_agent_id never went
+    # through auto_dispatch_task either, so it left the same gap.
+    if _reassign_target_agent is not None:
+        from app.services.task_context_builder import prepare_agent_workspace_for_task
+        await prepare_agent_workspace_for_task(task, _reassign_target_agent, session)
+        await session.refresh(task)
 
     return task
 

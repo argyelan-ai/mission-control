@@ -48,12 +48,14 @@ COMPOSE_FIXTURE = """\
 x-claude-agent-base: &claude-agent-base
   image: mc-claude-agent:latest
   restart: unless-stopped
+  stop_grace_period: 20s
   networks:
     - mission-control_default
 
 x-openclaude-agent-base: &openclaude-agent-base
   image: mc-agent-base:latest
   restart: unless-stopped
+  stop_grace_period: 20s
   networks:
     - mission-control_default
 
@@ -241,6 +243,69 @@ async def test_new_agent_block_appended(async_session, compose_path):
 
     # Vault mount because scopes=None → vault:write.
     assert "${HOME}/.mc/vault:/vault:rw" in rendered
+
+
+@pytest.mark.asyncio
+async def test_new_agent_block_inherits_stop_grace_period_from_anchor(
+    async_session, compose_path
+):
+    """Same drift class as #524 (append path missing mounts the static path
+    had): _build_new_agent_block must not shadow stop_grace_period with its
+    own service-level key — it has to inherit the anchor's value through
+    ``<<: *anchor`` merge semantics, on BOTH the static and the append path.
+
+    Verified by parsing the actually-rendered YAML (merge keys resolved by
+    yaml.safe_load) rather than string-matching, so the assertion fails if
+    the append path ever starts emitting a conflicting explicit value.
+    """
+    rt = Runtime(
+        slug="anthropic-claude-sonnet",
+        display_name="Claude Sonnet",
+        runtime_type="cloud",
+        endpoint="https://api.anthropic.com",
+        enabled=True,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    blueprint = Agent(
+        name="Blueprint-Vision",
+        agent_runtime="cli-bridge",
+        runtime_id=rt.id,
+        scopes=None,
+    )
+    async_session.add(blueprint)
+    await async_session.commit()
+
+    rendered = await render_compose_agents(async_session, compose_path=compose_path)
+
+    # The appended block itself must not declare stop_grace_period — it has
+    # to come from the anchor alone, exactly like restart/networks do.
+    header = rendered.index("mc-agent-blueprint-vision:")
+    next_header = rendered.find("\n  mc-agent-", header + 1)
+    block = rendered[header : next_header if next_header != -1 else len(rendered)]
+    assert "stop_grace_period" not in block, (
+        "appended block redeclares stop_grace_period instead of inheriting "
+        "it from the anchor via <<: *claude-agent-base"
+    )
+
+    safe_yaml = (
+        rendered
+        .replace("${HOME}", "/FAKE_HOME")
+        .replace("${MC_API_URL:-http://backend:8000}", "http://backend:8000")
+        .replace("${AGENT_RECYCLER_ENABLED:-true}", "true")
+        .replace("${", "__ENV_")
+        .replace("}", "__")
+    )
+    parsed = yaml.safe_load(safe_yaml)
+    services = parsed["services"]
+
+    # Pre-existing static block (rex) and freshly appended block
+    # (blueprint-vision) both resolve to the anchor's value — the twin spot
+    # from the task card, proven structurally instead of asserted.
+    assert services["mc-agent-rex"]["stop_grace_period"] == "20s"
+    assert services["mc-agent-blueprint-vision"]["stop_grace_period"] == "20s"
 
 
 @pytest.mark.asyncio

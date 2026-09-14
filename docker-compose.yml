@@ -11,6 +11,12 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Docker Desktop defaults StopTimeout to 1s when a service doesn't set
+    # this explicitly (measured, not assumed — see architecture session
+    # 2026-09-14). Postgres under SIGKILL never runs a clean checkpoint, it
+    # just crash-recovers on the next start. 60s gives it real headroom to
+    # shut down cleanly on every `docker stop`/recreate.
+    stop_grace_period: 60s
     logging: *default-logging
     volumes:
       - mc_postgres_data:/var/lib/postgresql/data
@@ -31,6 +37,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). AOF is on
+    # (--appendonly yes --appendfsync everysec): on SIGTERM redis-server finishes
+    # writing to the AOF file and closes it cleanly; on SIGKILL that in-flight
+    # write — and the clean close — is lost. 30s is generous headroom for that
+    # flush, not a full minute like db: there's no checkpoint/WAL replay to wait
+    # out, just a bounded fsync.
+    stop_grace_period: 30s
     logging: *default-logging
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     volumes:
@@ -79,6 +92,10 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/caddy (1s without this line) —
+    # 20s gives in-flight requests and the FastAPI shutdown hooks room to
+    # finish instead of a hard SIGKILL mid-request.
+    stop_grace_period: 20s
     logging: *default-logging
     networks:
       - default
@@ -527,6 +544,13 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). qdrant is
+    # the vector store behind Vault and Memory (mc_qdrant_data holds the
+    # storage segments). On SIGKILL it can't close those segments cleanly,
+    # forcing crash-recovery on the next start. 60s, same as db: aligned by
+    # role (persistent storage engine, not a cache), not by measurement —
+    # nobody has isolated-tested qdrant's own shutdown path yet.
+    stop_grace_period: 60s
     logging: *default-logging
     ports:
       - "127.0.0.1:6333:6333"
@@ -544,6 +568,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/backend (1s without this line) —
+    # 10s lets Caddy drain in-flight connections gracefully on stop/reload.
+    stop_grace_period: 10s
     logging: *default-logging
     depends_on:
       - frontend

@@ -5,6 +5,7 @@
 #   - scripts/mc-cli/                → {ctx}/mc-cli/           (gitignored working copy)
 #   - docker/shared/poll.sh          → {ctx}/poll.sh           (gitignored working copy)
 #   - docker/shared/recycler-lib.sh  → {ctx}/recycler-lib.sh   (gitignored working copy)
+#   - docker/shared/sigforward.sh    → {ctx}/sigforward.sh     (gitignored working copy)
 #
 # Rationale: Dockerfile COPY paths must be local to the build context, so we
 # keep ONE canonical source per shared file (mc-cli/, shared/poll.sh) and
@@ -26,6 +27,7 @@ CLI_SRC="$ROOT/scripts/mc-cli"
 SHARED_POLL_SRC="$ROOT/docker/shared/poll.sh"
 SHARED_RECYCLER_LIB_SRC="$ROOT/docker/shared/recycler-lib.sh"
 VERSIONS_MANIFEST="$ROOT/docker/cli-versions.json"
+SHARED_SIGFORWARD_SRC="$ROOT/docker/shared/sigforward.sh"
 
 # Reads docker/cli-versions.json (Single Source of Truth for pinned CLI
 # versions) and exports OPENCLAUDE_VERSION / CLAUDE_VERSION / OMP_VERSION /
@@ -113,6 +115,14 @@ sync_recycler_lib_into() {
   chmod +x "$dst"
 }
 
+sync_sigforward_into() {
+  local dst="$1/sigforward.sh"
+  cp "$SHARED_SIGFORWARD_SRC" "$dst"
+  # Sourced (not executed) by every PID-1 entrypoint — chmod for parity
+  # with poll.sh / recycler-lib.sh.
+  chmod +x "$dst"
+}
+
 build_image() {
   local tag="$1" ctx="$2"
   shift 2
@@ -123,6 +133,8 @@ build_image() {
   sync_poll_into "$ctx"
   echo "→ Syncing shared recycler-lib.sh into $ctx"
   sync_recycler_lib_into "$ctx"
+  echo "→ Syncing shared sigforward.sh into $ctx"
+  sync_sigforward_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
   tag_prefixed "$tag"
@@ -139,6 +151,8 @@ build_image_kimi() {
   sync_cli_into "$ctx"
   echo "→ Syncing shared poll.sh into $ctx"
   sync_poll_into "$ctx"
+  echo "→ Syncing shared sigforward.sh into $ctx"
+  sync_sigforward_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
   tag_prefixed "$tag"
@@ -153,6 +167,8 @@ build_image_omp() {
   local version_args=("$@")
   echo "→ Syncing mc-cli into $ctx"
   sync_cli_into "$ctx"
+  echo "→ Syncing shared sigforward.sh into $ctx"
+  sync_sigforward_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
   tag_prefixed "$tag"
@@ -162,13 +178,14 @@ if [ "$SYNC_ONLY" = "1" ]; then
   sync_cli_into "$ROOT/docker/mc-claude-agent"
   sync_poll_into "$ROOT/docker/mc-claude-agent"
   sync_recycler_lib_into "$ROOT/docker/mc-claude-agent"
+  sync_sigforward_into "$ROOT/docker/mc-claude-agent"
   sync_cli_into "$ROOT/docker/mc-agent-base"
   sync_poll_into "$ROOT/docker/mc-agent-base"
   sync_recycler_lib_into "$ROOT/docker/mc-agent-base"
+  sync_sigforward_into "$ROOT/docker/mc-agent-base"
   echo "✓ Shared sources materialized (sync-only)."
   exit 0
 fi
-
 case "$WHICH" in
   claude)
     build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent" --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION"
