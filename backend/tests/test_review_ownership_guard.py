@@ -69,6 +69,22 @@ async def _event(task_id, agent_id, *, frm: str, to: str, at: datetime):
         await s.commit()
 
 
+async def _user_event(task_id, *, frm: str, to: str, at: datetime):
+    """Same shape as the operator PATCH (routers/tasks.py:update_task)
+    records: no agent_id at all, changed_by='user'. This is the real event
+    form of a card whose transitions went through that endpoint instead of
+    the agent-scoped one (PR #527 review, blocker 1)."""
+    from app.models.task import TaskEvent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskEvent(
+            id=uuid.uuid4(), task_id=task_id,
+            from_status=frm, to_status=to,
+            changed_by="user", agent_id=None, created_at=at,
+        ))
+        await s.commit()
+
+
 def _quiet():
     return (
         patch("app.services.activity.broadcast", new_callable=AsyncMock),
@@ -136,6 +152,46 @@ async def test_hold_on_own_card_is_blocked(client, fake_redis, make_board, make_
         )
     assert resp.status_code == 409, resp.text[:400]
     assert (await _refresh(task.id)).review_decision is None
+
+
+@pytest.mark.asyncio
+async def test_reject_on_own_card_is_blocked_with_user_attributed_events(
+    client, fake_redis, make_board, make_task,
+):
+    """PR #527 review, blocker 1: the E-review shape reproduced with the
+    event form a card actually has when its transitions ran through the
+    operator PATCH (routers/tasks.py) instead of the agent-scoped one —
+    `changed_by='user'`, `agent_id=None` on both entry events. Before the
+    fix, `get_review_worker_agent_ids` filtered these rows out of its query
+    entirely, read back an EMPTY worker set, and let `request_changes` on
+    the agent's own card sail through with 200 — the exact incident this
+    guard exists to catch, reproduced unchanged by main."""
+    board = await make_board(slug="mc-own-reject-user-events")
+    agent, token = await _make_agent_with_token(
+        name="Solo", board_id=board.id, role="reviewer",
+    )
+    task = await make_task(
+        board_id=board.id, status="review", assigned_agent_id=agent.id,
+    )
+    t0 = datetime.utcnow()
+    await _user_event(task.id, frm="inbox", to="in_progress", at=t0)
+    await _user_event(task.id, frm="in_progress", to="review", at=t0 + timedelta(minutes=5))
+
+    b, m = _quiet()
+    with b, m:
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/review",
+            json={"decision": "request_changes", "comment": "Blocker in der Migration."},
+            headers=_headers(token),
+        )
+
+    assert resp.status_code == 409, resp.text[:400]
+    detail = resp.json().get("detail", "")
+    assert "eigene karte" in detail.lower()
+
+    refreshed = await _refresh(task.id)
+    assert refreshed.status == "review", "Die Karte darf nicht nach inbox/in_progress rutschen"
+    assert refreshed.review_decision is None, "changes_requested darf nicht gesetzt werden"
 
 
 # ── Gegenprobe: the everyday case must be untouched ───────────────────────
@@ -290,6 +346,88 @@ async def test_late_review_note_on_own_card_is_blocked(
             f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/review-note",
             json={"decision": "approve", "comment": "Von mir aus passt das."},
             headers=_headers(token),
+        )
+    assert resp.status_code == 409, resp.text[:400]
+    assert (await _refresh(task.id)).review_decision is None
+
+
+# ── PR #527 review, blocker 2: the referral out of the ownership guard ────
+
+@pytest.mark.asyncio
+async def test_late_review_note_opens_for_a_blocked_worker_still_in_review(
+    client, fake_redis, make_board, make_task,
+):
+    """`execute_review_decision`'s 409 on a worker's own in-review card names
+    `mc review-note <task-id>` as the way out — but this endpoint used to
+    refuse EVERY card still in `review`, no exceptions, so the two 409s
+    pointed at each other with no way through. The exact caller the
+    ownership guard just turned away must now get through here; the card
+    must NOT move."""
+    board = await make_board(slug="mc-note-escape-hatch")
+    agent, token = await _make_agent_with_token(
+        name="Solo", board_id=board.id, role="reviewer",
+    )
+    task = await make_task(
+        board_id=board.id, status="review", assigned_agent_id=agent.id,
+    )
+    t0 = datetime.utcnow()
+    await _event(task.id, agent.id, frm="inbox", to="in_progress", at=t0)
+    await _event(task.id, agent.id, frm="in_progress", to="review", at=t0 + timedelta(minutes=5))
+
+    b, m = _quiet()
+    with b, m:
+        # The route the 409 above actually names must itself work.
+        blocked = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/review",
+            json={"decision": "request_changes", "comment": "Sollte blockiert werden."},
+            headers=_headers(token),
+        )
+        assert blocked.status_code == 409, blocked.text[:400]
+
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/review-note",
+            json={"decision": "request_changes", "comment": "Migration fehlt."},
+            headers=_headers(token),
+        )
+
+    assert resp.status_code == 200, resp.text[:400]
+    body = resp.json()
+    assert body["decision"] == "changes_requested"
+    assert body["status_changed"] is False
+
+    refreshed = await _refresh(task.id)
+    assert refreshed.status == "review", "Die Notiz darf die Karte nicht bewegen"
+    assert refreshed.review_decision == "changes_requested"
+
+
+@pytest.mark.asyncio
+async def test_late_review_note_still_refuses_a_foreign_caller_on_open_review(
+    client, fake_redis, make_board, make_task,
+):
+    """Counter-check: the escape hatch must stay narrow. A caller who is NOT
+    classified as a worker on this card (and could simply use the normal
+    decision) still gets the original 409 while the card is open in
+    `review` — this is the pre-existing
+    test_late_review_note_refuses_a_card_still_in_review shape, kept
+    separately so the blocker-2 fix can't silently widen it."""
+    board = await make_board(slug="mc-note-escape-hatch-foreign")
+    author, _ = await _make_agent_with_token(name="Author", board_id=board.id)
+    reviewer, reviewer_token = await _make_agent_with_token(
+        name="Checker", board_id=board.id, role="reviewer",
+    )
+    task = await make_task(
+        board_id=board.id, status="review", assigned_agent_id=reviewer.id,
+    )
+    t0 = datetime.utcnow()
+    await _event(task.id, author.id, frm="inbox", to="in_progress", at=t0)
+    await _event(task.id, author.id, frm="in_progress", to="review", at=t0 + timedelta(minutes=5))
+
+    b, m = _quiet()
+    with b, m:
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/review-note",
+            json={"decision": "approve", "comment": "Passt."},
+            headers=_headers(reviewer_token),
         )
     assert resp.status_code == 409, resp.text[:400]
     assert (await _refresh(task.id)).review_decision is None

@@ -490,18 +490,35 @@ async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[
     both must agree on who counts as "the assignee that did the work" so an
     agent can't bypass the guard by using the generic PATCH endpoint instead
     of POST /review.
+
+    PR #527 review, blocker 1: transitions logged through the operator PATCH
+    (routers/tasks.py:update_task, `changed_by="user"`) never carry
+    `agent_id` at all — that endpoint records WHO called it (a human/system
+    caller), not which agent the card belongs to. A card whose entire entry
+    history went through that path — the ordinary shape of a card someone
+    ACKed/handed-off via a route other than the agent-scoped PATCH — used to
+    read back an EMPTY worker set here (the query filtered `agent_id IS NOT
+    NULL` before this fix), so the guard could not fire for it at all. Falling
+    back to `task.assigned_agent_id` for a NULL-`agent_id` event recovers the
+    common case: nobody has been reassigned away from the card since that
+    event, so the current assignee IS who the transition concerns. This is a
+    best-effort reconstruction, not a full fix — a card with a MIXED history
+    (agent-attributed events from before a handoff, NULL-attributed ones
+    after) could still misattribute a stale NULL event to today's assignee.
+    Closing that fully means stamping `agent_id` at write time in every
+    `changed_by="user"`/`"system"` call site instead of reconstructing it
+    here after the fact — out of scope for this fix.
     """
     events_result = await session.exec(
         select(TaskEvent).where(
             TaskEvent.task_id == task.id,
             TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
-            TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
         ).order_by(TaskEvent.created_at)  # type: ignore[arg-type]
     )
     worker_agent_ids: set[uuid.UUID] = set()
     review_entrants: set[uuid.UUID] = set()  # entered the task FROM review status
     for event in events_result.all():
-        aid = event.agent_id
+        aid = event.agent_id or task.assigned_agent_id
         if not aid:
             continue
         if event.from_status == "review" and event.to_status == "in_progress":
@@ -910,28 +927,54 @@ async def record_late_review_note(
 
     The ownership guard applies here too: filing a late verdict on your own
     work is self-review with extra steps.
+
+    PR #527 review, blocker 2: `execute_review_decision`'s ownership guard
+    sends a worker who is blocked from deciding its own in-review card
+    straight to `review-note` as the way to get its verdict recorded anyway
+    — but this endpoint used to refuse EVERY card still in `review`,
+    unconditionally, so that referral was a dead end: the two 409s pointed
+    at each other with no way through. The escape hatch is narrow — it
+    opens ONLY for the exact caller the ownership guard just turned away
+    (a worker on THIS card, not a board lead, not an uninvolved caller who
+    could simply use the normal decision instead), and it still writes
+    nothing but the note: no status change, same as every other call here.
     """
-    if task.status == "review":
+    worker_agent_ids: set[uuid.UUID] = set()
+    if actor_agent:
+        worker_agent_ids = await get_review_worker_agent_ids(session, task)
+    is_blocked_worker = (
+        actor_agent is not None
+        and actor_agent.id in worker_agent_ids
+        and not actor_agent.is_board_lead
+    )
+
+    if task.status == "review" and not is_blocked_worker:
         raise HTTPException(
             409,
             f"Karte '{task.title}' steht offen im Review — nutze die normale "
             f"Entscheidung (`mc approve <task-id>` / `mc reject <task-id> --feedback ...`). "
-            f"`review-note` ist nur fuer Nachzuegler-Reviews auf bereits geschlossenen Karten.",
+            f"`review-note` ist nur fuer Nachzuegler-Reviews auf bereits geschlossenen Karten "
+            f"oder fuer den Ausweg aus dem Besitz-Guard, wenn die normale Entscheidung "
+            f"dir gerade mit 409 verweigert wurde.",
         )
 
     comment_text = (comment_text or "").strip()
     if not comment_text:
         raise HTTPException(400, "Ein Nachzuegler-Review braucht eine Begruendung (comment).")
 
-    if actor_agent:
-        worker_agent_ids = await get_review_worker_agent_ids(session, task)
-        if actor_agent.id in worker_agent_ids and not actor_agent.is_board_lead:
-            raise HTTPException(
-                409,
-                f"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' selbst "
-                f"gearbeitet — ein Nachtrag dazu waere Self-Review. Gib die Task-ID der "
-                f"Karte an, die du tatsaechlich reviewt hast.",
-            )
+    # Self-review guard — skipped for the escape-hatch case above (task
+    # still in `review`, caller is exactly the blocked worker): that IS the
+    # door execute_review_decision's 409 points to, re-closing it here would
+    # undo the fix. For every other case (the ordinary late note on an
+    # already-closed card) a worker filing about its own implementation work
+    # is still refused.
+    if is_blocked_worker and task.status != "review":
+        raise HTTPException(
+            409,
+            f"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' selbst "
+            f"gearbeitet — ein Nachtrag dazu waere Self-Review. Gib die Task-ID der "
+            f"Karte an, die du tatsaechlich reviewt hast.",
+        )
 
     decision_map = {
         "approve": "approved",
