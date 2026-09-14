@@ -341,11 +341,21 @@ async def test_unblock_notify_resets_ack_and_rotates_attempt_id_so_poll_redelive
 async def test_unblock_notify_on_waiting_task_does_not_touch_ack_or_attempt_id(
     client: AsyncClient, async_session
 ):
-    """Gegenprobe (guardrail): `waiting` (e.g. a live `mc ask --blocking`
-    session, "Session bleibt bestehen — same session, no re-dispatch") must
-    NOT get the blocked-only ack/attempt reset — that session may still be
-    genuinely alive, and resetting ack_at/dispatch_attempt_id here would risk
-    a second, competing dispatch racing the one already in flight."""
+    """Gegenprobe (guardrail, sharpened by W2 — see
+    test_unblock_resolve_action_unified_criterion.py): `waiting` (e.g. a
+    live `mc ask --blocking` session, "Session bleibt bestehen — same
+    session, no re-dispatch") must NOT get the ack/attempt reset — that
+    session may still be genuinely alive, and resetting
+    ack_at/dispatch_attempt_id here would risk a second, competing dispatch
+    racing the one already in flight.
+
+    The W2 criterion (task_lifecycle.apply_unblock_notify_reset) narrows
+    "genuinely alive" to: the agent's own lock (`current_task_id`) still
+    names THIS task — so this Gegenprobe must set that lock explicitly.
+    Before W2 this test passed even without it (the old criterion only
+    checked `old_status`), which is exactly the gap Sonde P-B in Rex' review
+    of #570 found: a `waiting` card whose agent released the lock got the
+    same false protection this test used to grant unconditionally."""
     fresh_seen = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=10)
     board, lead, target, lead_token, task = await _setup(async_session, target_last_seen=fresh_seen)
 
@@ -354,6 +364,9 @@ async def test_unblock_notify_on_waiting_task_does_not_touch_ack_or_attempt_id(
         pre.status = "waiting"
         pre.dispatch_attempt_id = str(uuid.uuid4())
         s.add(pre)
+        t = await s.get(Agent, target.id)
+        t.current_task_id = task.id  # genuinely live session holds the lock
+        s.add(t)
         await s.commit()
         old_ack_at = pre.ack_at
         old_attempt_id = pre.dispatch_attempt_id
