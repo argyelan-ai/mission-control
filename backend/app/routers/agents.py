@@ -2623,6 +2623,45 @@ async def _upsert_cursor(
     await session.execute(stmt)
 
 
+async def _upsert_signalled_cursor(
+    session: AsyncSession,
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    last_signalled_comment_id: uuid.UUID,
+) -> None:
+    """Dialect-agnostic upsert for the heartbeat's OWN watermark column.
+
+    Deliberately separate from `_upsert_cursor` (B1, PR #519 Rex review):
+    that one advances `last_seen_comment_id`, the /me/poll DELIVERY
+    watermark. This one advances `last_signalled_comment_id`, which only the
+    heartbeat's soft-interrupt channel reads/writes — see
+    AgentTaskCommentCursor's docstring for why they must not be the same
+    field. `ON CONFLICT DO UPDATE SET` here touches only this one column, so
+    a concurrent poll's `last_seen_comment_id` write is never clobbered (and
+    vice versa).
+    """
+    from app.models.agent_task_comment_cursor import AgentTaskCommentCursor as _Cursor
+
+    dialect = session.bind.dialect.name if session.bind else "postgresql"
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as _insert
+    else:
+        from sqlalchemy.dialects.postgresql import insert as _insert
+
+    stmt = _insert(_Cursor.__table__).values(
+        agent_id=agent_id,
+        task_id=task_id,
+        last_signalled_comment_id=last_signalled_comment_id,
+    ).on_conflict_do_update(
+        index_elements=["agent_id", "task_id"],
+        set_={
+            "last_signalled_comment_id": last_signalled_comment_id,
+            "updated_at": datetime.now(timezone.utc),
+        },
+    )
+    await session.execute(stmt)
+
+
 # The delivery scope moved to services/thread_scope so the REPLY path can be
 # authorised by the very same rule (an agent may answer exactly where it may
 # listen). These names stay as aliases — imports and tests elsewhere use them,
@@ -3779,14 +3818,12 @@ def _heartbeat_control(
     active_task,
     agent_id,
     blocked_episode_comments: list,
-    comment_cursor_id,
 ):
     """Pure decision core of the heartbeat control channel (unit-testable).
 
     active_task: the agent's in_progress task row (or None).
     blocked_episode_comments: comments on the active task created at-or-after
     blocked_at (the caller slices; keeps this function DB-free).
-    comment_cursor_id: the agent's last-seen comment id (None = nothing seen).
     """
     if active_task is None:
         return None
@@ -3864,9 +3901,57 @@ async def _withdrawn_task_reason(session, agent, task_id, *, previously_held=Non
 
 async def _collect_heartbeat_control(session, agent, active_task):
     """DB side of the control channel: assembles the inputs for
-    _heartbeat_control from the active task's comments + the agent's cursor,
-    plus the soft check (unread blocker/handoff beyond the cursor). Any
-    failure returns None, so the heartbeat response stays legacy-shaped."""
+    _heartbeat_control from the active task's comments + the agent's own
+    signal watermark, plus the soft check (unread blocker/handoff beyond it).
+
+    Maintains `AgentTaskCommentCursor.last_signalled_comment_id` — a field
+    separate from `last_seen_comment_id` (B1, PR #519 Rex review; see that
+    model's docstring). `last_seen_comment_id` is the /me/poll DELIVERY
+    watermark: poll.sh advances it only AFTER handing a comment to the
+    agent. The heartbeat is the ONLY comment-awareness channel the
+    ACP-bridge path has while a turn is blocked (it doesn't poll again
+    until the turn ends), so it needs its own watermark to advance on every
+    beat without touching poll's — writing `last_seen_comment_id` here
+    instead marked comments "delivered" before poll ever sent them,
+    silently swallowing real messages (incident 12.09.2026, Karte 584795fd
+    surfaced the missing-cursor case; the shared-field bug affected every
+    ACP turn once fixed for that, live-reproduced in this PR's review).
+
+    Two guards keep a missing/stale signal-cursor from misfiring the soft
+    channel:
+      - A comment authored by the agent itself is never an unread message
+        TO itself — filtered out of `soft_unread` regardless of the cursor.
+      - No signal-cursor row yet does NOT mean "every historic comment is
+        unseen", but it also must NOT mean "nothing is unseen" — the
+        dispatch prompt only carried comments that existed as of the
+        dispatch boundary (mirrors the bridge's own
+        `delivery.drop_comments()` at dispatch). With no persisted
+        watermark yet, "unseen" is therefore everything created AFTER that
+        boundary, not an unconditional `[]` — the latter swallowed the very
+        first real comment posted after a fresh dispatch (B-1, PR #519 Rex
+        review round 3: `all_comments` only starts existing once that first
+        comment lands, so `[]` silently ate it before the seed ever had a
+        real id to seed to). Once the seed write below has run once, later
+        beats switch to the ID-based lookup against the persisted
+        watermark.
+
+        The dispatch boundary itself is derived falling back through
+        `dispatched_at -> ack_at -> started_at` (B-3, PR #519 Rex review
+        round 3): `dispatched_at` is None not only for the odd legacy row,
+        but on a completely ordinary path — `PATCH .../tasks/{id}` with
+        `{"status": "in_progress"}` (the UI's own re-open action, e.g.
+        `frontend-v2/src/app/tasks/page.tsx`) sets `started_at`/`ack_at`
+        but never touches `dispatched_at`, and every return to inbox clears
+        `dispatched_at` outright (`routers/tasks.py`). `ack_at` is set on
+        exactly that path, so it is the next-best anchor; `started_at`
+        (first-set-wins across re-opens) is the last resort. Only a task
+        with none of the three set falls back to the unconditional `[]`.
+
+    Any failure in the decision itself returns None, so the heartbeat
+    response stays legacy-shaped; a failure while persisting the watermark
+    is separately best-effort and never discards an already-decided
+    control signal.
+    """
     if active_task is None:
         return None
     try:
@@ -3880,6 +3965,9 @@ async def _collect_heartbeat_control(session, agent, active_task):
                 AgentTaskCommentCursor.task_id == active_task.id,
             )
         )).first()
+        had_signal_cursor = (
+            cursor is not None and cursor.last_signalled_comment_id is not None
+        )
 
         all_comments = list((await session.exec(
             select(_TC)
@@ -3899,35 +3987,100 @@ async def _collect_heartbeat_control(session, agent, active_task):
             if blocked_at is None or _aware(c.created_at) >= blocked_at
         ]
 
-        # Unseen slice relative to the cursor (mirrors the poll's comment
-        # cursor semantics: position of last_seen in the FULL log, then the
-        # comments after it).
-        if cursor is not None and cursor.last_seen_comment_id is not None:
+        # Unseen slice relative to the signal watermark (position of
+        # last_signalled in the FULL log, then the comments after it). No
+        # watermark yet -> nothing NEW this beat (see docstring); the
+        # seed-to-tail write happens below.
+        if had_signal_cursor:
             idx = next(
                 (i for i, c in enumerate(all_comments)
-                 if c.id == cursor.last_seen_comment_id),
+                 if c.id == cursor.last_signalled_comment_id),
                 -1,
             )
             unseen = all_comments[idx + 1:] if idx >= 0 else all_comments
         else:
-            unseen = all_comments
+            # No persisted watermark yet — fall back to the dispatch
+            # boundary instead of an unconditional `[]` (B-1, PR #519 Rex
+            # review round 3). `dispatched_at` alone goes missing on a
+            # normal re-open path (PATCH .../tasks/{id} status=in_progress
+            # sets ack_at/started_at, never dispatched_at — B-3, PR #519 Rex
+            # review round 3), so derive the boundary falling back through
+            # dispatched_at -> ack_at -> started_at. Only a task with none
+            # of the three set (no time anchor at all) keeps the old, safe
+            # `[]` behavior.
+            dispatch_boundary = _aware(
+                getattr(active_task, "dispatched_at", None)
+                or getattr(active_task, "ack_at", None)
+                or getattr(active_task, "started_at", None)
+            )
+            unseen = (
+                []
+                if dispatch_boundary is None
+                else [
+                    c for c in all_comments
+                    if _aware(c.created_at) > dispatch_boundary
+                ]
+            )
         soft_unread = [
             c for c in unseen
             if c.comment_type in _HEARTBEAT_CONTROL_COMMENT_TYPES
+            # An agent never counts as an unread sender to itself. `c` is a
+            # real TaskComment row straight from the query above, so both
+            # fields are always present (models/task.py) — a getattr default
+            # here would silently keep filtering after a rename instead of
+            # raising (nit, PR #519 Rex review round 3).
+            and not (
+                c.author_type == "agent"
+                and c.author_agent_id == agent.id
+            )
         ]
 
-        control = _heartbeat_control(
-            active_task, agent.id, episode,
-            cursor.last_seen_comment_id if cursor else None,
-        )
+        control = _heartbeat_control(active_task, agent.id, episode)
         if control is None and soft_unread:
             control = {
                 "interrupt": "soft",
                 "reason": "Ungelesene blocker/handoff-Nachrichten warten",
             }
-        return control
     except Exception:  # noqa: BLE001 — control is best-effort, never breaks the heartbeat
         return None
+
+    # Ack: advance the SIGNAL watermark to what this beat has now accounted
+    # for (the seed-to-tail case above, or a watermark that already existed
+    # but sits behind the log). `_upsert_signalled_cursor`, NOT
+    # `_upsert_cursor` — the latter would advance /me/poll's delivery
+    # watermark instead (B1, PR #519 Rex review). Separate try — a write
+    # hiccup here must never discard a `control` signal already decided
+    # above.
+    #
+    # This advance happens unconditionally, so the soft interrupt fires at
+    # most ONCE per comment, not repeatedly until the agent actually acts on
+    # it — a beat that decides `soft` still pulls the watermark past that
+    # comment. Nothing is lost: delivery to the agent runs on the separate
+    # `last_seen_comment_id` watermark (untouched here), so the next
+    # `/me/poll` hands the comment over regardless (PR #519 Rex review,
+    # round 2, warning 1).
+    #
+    # Same when a HARD control wins the same beat: `if control is None and
+    # soft_unread` below never fires, so any soft-eligible comments in
+    # `unseen` are never signalled — yet the watermark still advances past
+    # them here, since it is unconditional on `all_comments`, not on which
+    # branch of `control` was chosen. Again no data loss (poll's watermark
+    # is separate), just no soft signal for a comment the hard interrupt
+    # already made moot (PR #519 Rex review, round 2, warning 2).
+    try:
+        if all_comments and (
+            not had_signal_cursor
+            or all_comments[-1].id != cursor.last_signalled_comment_id
+        ):
+            await _upsert_signalled_cursor(
+                session, agent.id, active_task.id, all_comments[-1].id,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — cursor persistence is best-effort
+        pass
+
+    return control
+
 
 @router.post("/agent/me/heartbeat")
 async def agent_heartbeat(

@@ -142,16 +142,14 @@ def _file_text(path: str) -> str:
 
 
 KNOWN_GAPS = [
-    # G1 (PR #519, OPEN): the heartbeat soft-check has no author filter and
-    # no cursor seed, so a missing cursor row makes the agent's OWN
-    # blocker/handoff comments read as unread. Backend-side, so the symbol is
-    # pinned against agents.py, not serve_loop. `last_signalled_comment_id`
-    # is the column #519 introduces — when that branch merges this entry goes
-    # stale and this test fails, prompting the doc + exception cleanup.
-    ("G1", "last_signalled_comment_id", "backend",
-     "no separate signal watermark and no author filter: _upsert_cursor has "
-     "exactly one caller (the poll handler), so a low-polling path runs "
-     "without a row and every historic comment reads as unread"),
+    # G1 CLOSED (#519, `fix/heartbeat-own-comments-cursor`): the row below
+    # is gone. `_collect_heartbeat_control` now filters the agent's own
+    # comments out of `soft_unread` unconditionally, and maintains its own
+    # `AgentTaskCommentCursor.last_signalled_comment_id` watermark (seeded
+    # from the dispatch boundary on the first beat, migration
+    # 0198_heartbeat_signalled_cursor) — no longer coupled to `/me/poll`'s
+    # single `_upsert_cursor` call site. See docs/dispatch-path-parity.md
+    # row 3 and the G1 gap-summary row.
     # G6 CLOSED (#562, `fix/g6-poll-sh-heartbeat-control`): both rows below
     # are gone. poll.sh's heartbeat now sends task_id/attempt_id
     # (build_heartbeat_payload, poll.sh:550, gated on CURRENT_TASK_ID) and
