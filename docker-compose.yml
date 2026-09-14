@@ -223,6 +223,7 @@ services:
       # (comma-separated). Without this passthrough the .env key never
       # reaches the backend container (same trap as STT_BASE_URL above).
       OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      RECOVERY_TIER2_SKIP_AGENT_SLUGS: ${RECOVERY_TIER2_SKIP_AGENT_SLUGS:-}
       # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
       # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
       # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
@@ -452,6 +453,7 @@ services:
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
       OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      RECOVERY_TIER2_SKIP_AGENT_SLUGS: ${RECOVERY_TIER2_SKIP_AGENT_SLUGS:-}
       # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
       # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
       # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
