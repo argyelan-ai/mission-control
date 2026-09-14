@@ -755,7 +755,7 @@ async def get_usage_analytics(
             "run_state": agent.run_state,
             "context_tokens": agent.context_tokens,
             "context_max": agent.context_max,
-            "context_pct": round(agent.context_tokens / agent.context_max * 100) if agent.context_max > 0 else 0,
+            "context_pct": (round(agent.context_tokens / agent.context_max * 100) if (agent.context_max > 0 and agent.context_tokens is not None) else None),
             "tasks_completed": agent.total_tasks_completed,
             "total_compactions": agent.total_compactions,
             "last_seen_at": agent.last_seen_at.isoformat() if agent.last_seen_at else None,
