@@ -1442,7 +1442,14 @@ rm -f "$TASK_LOCK_FILE" 2>/dev/null || true
 reset_turn_signal
 # Lockfile bei sauberem Exit raeumen. SIGKILL kann trap nicht abfangen —
 # recycler.sh prueft deshalb zusaetzlich ob poll.sh noch laeuft (pgrep).
-trap 'rm -f "$TASK_LOCK_FILE"' EXIT TERM INT
+#
+# TERM/INT bekommen ein eigenes trap MIT exit: seit die Entrypoints TERM an die
+# tmux-Fenster weiterleiten (sigforward.sh), sieht poll.sh das Signal wirklich —
+# ohne `exit` liefe der Handler weiter und poll.sh pochte als Zombie im toten
+# Container weiter. exit 143 = 128+SIGTERM; der EXIT-trap raeumt danach nochmal
+# (idempotent), ohne den Code zu veraendern.
+trap 'rm -f "$TASK_LOCK_FILE"' EXIT
+trap 'rm -f "$TASK_LOCK_FILE"; exit 143' TERM INT
 
 log "Gestartet. Polle $MC_API_URL alle ${POLL_INTERVAL}s..."
 

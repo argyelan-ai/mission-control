@@ -3,6 +3,8 @@
 #   scripts/mc-cli/                 → mc-cli/
 #   docker/shared/poll.sh           → poll.sh
 #   docker/shared/recycler-lib.sh   → recycler-lib.sh
+#   docker/shared/sigforward.sh     → sigforward.sh
 mc-cli/
 poll.sh
 recycler-lib.sh
+sigforward.sh
