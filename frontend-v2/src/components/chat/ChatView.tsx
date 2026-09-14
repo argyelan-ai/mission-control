@@ -682,10 +682,26 @@ export function ChatView({
     );
   }
 
-  const visibleEvents = stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel));
-  const items = buildTimelineItems(visibleEvents);
+  /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
+     Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
+     Tick — bei einem grossen Transkript blockte das den Main-Thread so lange,
+     dass die Ansicht sprang (Mark: "der chat bewegt sich die ganze zeit").
+     `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
+     deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
+  const visibleEvents = useMemo(
+    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
+    [stream.events, detailLevel],
+  );
+  const items = useMemo(
+    () => buildTimelineItems(visibleEvents),
+    [visibleEvents],
+  );
   // Tail first; the remainder joins one frame later (see `renderAll`).
-  const visibleItems = renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW);
+  const visibleItems = useMemo(
+    () => (renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW)),
+    [items, renderAll],
+  );
 
   // "Nach unten"-Knopf: sobald das Mitlaufen aus ist, merken wir uns, wie
   // viele Eintraege der Verlauf da hatte — alles darueber ist "neu seitdem".
