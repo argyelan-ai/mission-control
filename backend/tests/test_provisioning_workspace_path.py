@@ -149,7 +149,13 @@ async def test_cli_bridge_resolve_workspace_self_heals_null_path(monkeypatch):
     from app.services import cli_bridge_runner
 
     agent = Agent(
-        id=None, name="Ghost Agent", agent_runtime="cli-bridge", workspace_path=None
+        id=None, name="Ghost Agent", agent_runtime="cli-bridge", workspace_path=None,
+        # This test is about the workspace_path self-heal, not about git
+        # workspace setup — requires_git_workflow=False keeps the ad-hoc
+        # task on the plain-dir path (task af914128 made git-requiring
+        # agents attempt a real clone for ad-hoc tasks, which is exercised
+        # separately in test_adhoc_repo_resolution.py).
+        requires_git_workflow=False,
     )
     task = Task(title="Ad-hoc task", project_id=None)
 
