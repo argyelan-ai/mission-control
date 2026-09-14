@@ -545,28 +545,37 @@ def test_sigterm_stops_dispatcher_before_exit_no_late_dispatch(bridge, monkeypat
     bridge._dispatcher_thread = t
     t.start()
 
-    deadline = real_time.monotonic() + 2.0
-    while len(dispatch_ts) < 2 and real_time.monotonic() < deadline:
-        real_time.sleep(0.005)
-    assert len(dispatch_ts) >= 2, "fixture never dispatched — test setup is broken, not the fix"
+    try:
+        deadline = real_time.monotonic() + 2.0
+        while len(dispatch_ts) < 2 and real_time.monotonic() < deadline:
+            real_time.sleep(0.005)
+        assert len(dispatch_ts) >= 2, "fixture never dispatched — test setup is broken, not the fix"
 
-    sigterm_ts = real_time.monotonic()
-    with pytest.raises(SystemExit) as exc_info:
-        bridge._handle_sigterm(_sig.SIGTERM, None)
-    assert exc_info.value.code == 0
+        sigterm_ts = real_time.monotonic()
+        with pytest.raises(SystemExit) as exc_info:
+            bridge._handle_sigterm(_sig.SIGTERM, None)
+        assert exc_info.value.code == 0
 
-    assert not t.is_alive(), "dispatcher thread must be stopped before the SIGTERM handler returns"
+        assert not t.is_alive(), "dispatcher thread must be stopped before the SIGTERM handler returns"
 
-    # A stray tick would show up quickly (the incident's own gap was 9ms) —
-    # but the thread is already joined-and-dead above, so this is just a
-    # documented safety margin, not the primary assertion.
-    real_time.sleep(0.1)
+        # A stray tick would show up quickly (the incident's own gap was 9ms) —
+        # but the thread is already joined-and-dead above, so this is just a
+        # documented safety margin, not the primary assertion.
+        real_time.sleep(0.1)
 
-    late = [ts for ts in dispatch_ts if ts > sigterm_ts]
-    assert not late, (
-        f"dispatch happened AFTER SIGTERM was handled ({len(late)} of {len(dispatch_ts)}) — "
-        f"this is the 13.09.2026 race (scripts/hermes-bridge.py:_handle_sigterm)"
-    )
+        late = [ts for ts in dispatch_ts if ts > sigterm_ts]
+        assert not late, (
+            f"dispatch happened AFTER SIGTERM was handled ({len(late)} of {len(dispatch_ts)}) — "
+            f"this is the 13.09.2026 race (scripts/hermes-bridge.py:_handle_sigterm)"
+        )
+    finally:
+        # Never let this thread survive the test on ANY exit path (assertion
+        # failure included) — once monkeypatch reverts ENV_FILE/_send_to_tmux/
+        # is_session_running below, a still-running loop would fall through to
+        # the REAL implementations (real tmux/network calls) and could hang or
+        # slow down every test that runs after this one.
+        bridge._shutdown_event.set()
+        t.join(timeout=5)
 
 
 def test_sigterm_does_not_sever_an_already_inflight_dispatch(bridge, monkeypatch):
