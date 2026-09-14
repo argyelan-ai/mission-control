@@ -192,6 +192,11 @@ Fields:
 - project_id: UUID of the project (if you created one). Automatically inherited from the parent if not set.
 - depends_on: ["task-uuid", ...] — optional dependencies (subtask waits on these tasks)
 - tags: list of tag names (optional). Shown as colored labels in the pipeline.
+- repo_id (optional, ADR-052): bind this card to a Registry-Repo (UUID or
+  name slug). Rule of thumb: every card that touches our own codebase gets
+  repo_id (or `mc delegate --repo`) — without a binding, a card with no
+  project reference lands in the shared ad-hoc scratch repo. Unknown or
+  deactivated repo → 400, never a silent no-op.
 
 **delegation_type** (optional — enables contract check, 422 on a wrong value):
 | Value | When | Required fields |
@@ -1586,6 +1591,11 @@ Rules:
             "# explicitly (`warning` field). If you know which task this belongs under,\n"
             "# set it explicitly instead of leaving the card parentless:\n"
             "#   mc delegate \"...\" --to Researcher --description \"...\" --parent <task-id>\n"
+            "\n"
+            "# Subtask touches our own codebase, not the caller's project? Bind it to a\n"
+            "# Registry-Repo (ADR-052) — otherwise a card with no project reference lands\n"
+            "# in the shared ad-hoc scratch repo:\n"
+            "#   mc delegate \"...\" --to Developer --description \"...\" --repo <slug-or-uuid>\n"
             "\n"
             "# WAIT: you stay 'in_progress' (NOT blocked!). The subtask_completed comment arrives on the next poll.\n"
             "# If you set blocked: the operator can't meaningfully resolve the blocker (nothing for them to do),\n"

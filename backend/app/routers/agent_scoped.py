@@ -171,6 +171,13 @@ class DelegateCreate(BaseModel):
     # einen Parent zu setzen, statt sich auf die implizite current_task_id-Aufloesung
     # zu verlassen. Ueberschreibt current_task_id, wenn gesetzt.
     parent_task_id: uuid.UUID | None = None
+    # Registry-Repo-Bindung (ADR-052) fuer `mc delegate --repo` — ohne
+    # Angabe erbt der Subtask den Projekt-Pfad wie bisher; ein Ad-hoc-Task
+    # ohne Projektbezug landet sonst im gemeinsamen Ad-hoc-Klon. UUID oder
+    # Name-Slug ("owner/name" bzw. nur "name"), Aufloesung server-seitig
+    # (app.services.repo_registry.resolve_repo_ref) — dieselbe Haerte wie
+    # die Operator-Route: unbekannt/inaktiv lehnt ab statt still zu ignorieren.
+    repo_id: str | None = None
 
 
 class DelegateResponse(BaseModel):
@@ -1194,6 +1201,20 @@ async def agent_delegate_task(
             detail="Selbst-Delegation ist nicht erlaubt. Eigenarbeit direkt am Task machen.",
         )
 
+    # Registry-Repo-Bindung (ADR-052): gleiche Haerte wie die Operator-Route
+    # (routers/tasks.py create_task) — ein unbekanntes oder deaktiviertes
+    # Repo lehnt ab, statt das Feld still zu ignorieren.
+    resolved_repo_id: uuid.UUID | None = None
+    if payload.repo_id:
+        from app.services.repo_registry import resolve_repo_ref
+        chosen_repo = await resolve_repo_ref(session, payload.repo_id)
+        if not chosen_repo or not chosen_repo.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id verweist auf kein aktives Registry-Repo",
+            )
+        resolved_repo_id = chosen_repo.id
+
     # Origin link: explicit value must be a conversation the delegating agent
     # takes part in; without one the subtask inherits the parent's origin, so
     # the orchestrator's consolidation report reaches the ordering thread.
@@ -1262,6 +1283,7 @@ async def agent_delegate_task(
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
         origin_thread_id=origin_thread_id,
+        repo_id=resolved_repo_id,
         # Callback pattern: subtask points back to the delegating agent — set
         # for a root delegation too, so the completion actually reaches them.
         callback_agent_id=agent.id if notify_requester else None,
