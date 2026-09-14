@@ -82,6 +82,11 @@ STAGNATION_THRESHOLD="${STAGNATION_THRESHOLD:-36}"   # 36 * POLL_INTERVAL (5s) =
 # einen Blocker postet sobald die Threshold erreicht ist. Wird beim Wechsel
 # zu einer neuen CURRENT_TASK_ID resettet.
 LAST_BLOCKED_TASK_ID=""
+# G6 idempotency (dispatch-path-parity.md Zeile 31/32): ein Escape pro Task
+# fuer einen HARD-Interrupt aus dem Heartbeat-Control-Kanal, nicht pro
+# 30s-Heartbeat-Zyklus. Wird beim Wechsel zu einer neuen CURRENT_TASK_ID
+# resettet (siehe run_task()), analog zu LAST_BLOCKED_TASK_ID.
+LAST_HARD_INTERRUPT_TASK_ID=""
 # Lockfile: poll.sh schreibt dieses File sobald ein Task aktiv ist.
 # recycler.sh prueft es vor idle-Kill — verhindert Recycle mitten im Task.
 # Stale-Lock-Schutz: recycler prueft ob poll.sh noch laeuft (pgrep).
@@ -533,6 +538,38 @@ paste_and_submit() {
     return 1
 }
 
+# build_heartbeat_payload STATUS CTX_PCT TASK_ID ATTEMPT_ID — reines JSON-Encoding,
+# keine Netzwerk-Seiteneffekte (testbar ohne Mock, analog zu build_acked_seq_param).
+#
+# G6 (dispatch-path-parity.md #31/#32): der Bridge-Pfad meldet im Heartbeat
+# WELCHER Task/Attempt gerade laeuft (_build_heartbeat_payload, bridge.py) —
+# poll.sh tat das nie. task_id/attempt_id werden nur mitgeschickt wenn TASK_ID
+# nicht leer ist (Aufrufer gated das ueber CURRENT_TASK_ID — von run_task()
+# gesetzt, von cancel_task()/stop_task_session() geleert; spiegelt bridge.py's
+# turn_ctx-Gate).
+build_heartbeat_payload() {
+    local status="$1" ctx_pct="$2" task_id="$3" attempt_id="$4"
+    # Pass values via env-vars statt f-string-Interpolation — defense against
+    # shell-metachar injection if pane_title is ever attacker-controlled
+    # (T-06-03-01).
+    STATUS="$status" CTX_PCT="$ctx_pct" TASK_ID="$task_id" ATTEMPT_ID="$attempt_id" python3 -c "
+import json, os
+payload = {'status': os.environ.get('STATUS', 'idle')}
+ctx = os.environ.get('CTX_PCT', '').strip()
+if ctx.isdigit():
+    val = int(ctx)
+    if 0 <= val <= 100:
+        payload['context_pct'] = float(val)
+task_id = os.environ.get('TASK_ID', '').strip()
+if task_id:
+    payload['task_id'] = task_id
+    attempt_id = os.environ.get('ATTEMPT_ID', '').strip()
+    if attempt_id:
+        payload['attempt_id'] = attempt_id
+print(json.dumps(payload))
+"
+}
+
 heartbeat() {
     local status="${1:-idle}"
     # CTX-01 (Phase 6) + CTX-01-Nachzug (2026-08-09): scrape ctx% from the
@@ -549,18 +586,17 @@ heartbeat() {
     if [ -z "$ctx_pct" ]; then
         ctx_pct=$(scrape_context_pct "$(tmux capture-pane -t "${SESSION_NAME}:0" -p 2>/dev/null | tail -10 || true)")
     fi
-    # Pass scraped value via env-var (CTX_PCT) instead of f-string interpolation
-    # — defense against shell-metachar injection if pane_title is ever attacker-
-    # controlled (T-06-03-01).
-    CTX_PCT="$ctx_pct" STATUS="$status" python3 -c "
+    local payload
+    payload=$(build_heartbeat_payload "$status" "$ctx_pct" "$CURRENT_TASK_ID" "$LAST_DISPATCHED_ATTEMPT_ID" 2>/dev/null || true)
+    [ -n "$payload" ] || payload="{\"status\":\"${status}\"}"
+    # G6 (dispatch-path-parity.md #31/#32): die Antwort wurde bisher komplett
+    # verworfen (Backend-Feld `control`, gesetzt von `_collect_heartbeat_control`/
+    # `_withdrawn_task_reason`, agents.py:3798/3767, nie gelesen). Jetzt wird sie
+    # eingelesen und an handle_heartbeat_control uebergeben.
+    local response
+    response=$(PAYLOAD="$payload" python3 -c "
 import json, urllib.request, os, sys
-payload = {'status': os.environ.get('STATUS', 'idle')}
-ctx = os.environ.get('CTX_PCT', '').strip()
-if ctx.isdigit():
-    val = int(ctx)
-    if 0 <= val <= 100:
-        payload['context_pct'] = float(val)
-data = json.dumps(payload).encode()
+data = os.environ['PAYLOAD'].encode()
 req = urllib.request.Request(
     os.environ['MC_API_URL'] + '/api/v1/agent/me/heartbeat',
     data=data,
@@ -571,10 +607,67 @@ req = urllib.request.Request(
     method='POST'
 )
 try:
-    urllib.request.urlopen(req, timeout=5)
+    body = urllib.request.urlopen(req, timeout=5).read()
+    sys.stdout.write(body.decode('utf-8', 'replace'))
 except Exception as e:
     print(f'Heartbeat failed: {e}', file=sys.stderr)
-" 2>/dev/null || true
+" 2>/dev/null || true)
+    handle_heartbeat_control "$response"
+}
+
+# handle_heartbeat_control RESPONSE_JSON — G6 fix: reagiert auf das `control`-
+# Feld der Heartbeat-Antwort. Der Bridge-Pfad tut das schon lange (`_on_control`,
+# bridge.py:1717); poll.sh las die Antwort bisher gar nicht.
+#
+# Nur "hard" wird gehandhabt — "soft" bleibt hier bewusst No-Op, ANDERS als
+# die Bridge, nicht als deren Spiegelung: bridge.py:3660 prueft
+# interrupt_state.fired() in jeder Turn-Runde, und fired() ist fuer "soft"
+# genauso gesetzt wie fuer "hard" (InterruptState-Docstring, bridge.py:3419-
+# 3422: "soft also ends the run"). Die Bridge cancelt den Turn also auch bei
+# "soft" ueber dieselbe Abbruchleiter (_run_interrupt_ladder, bridge.py:3453) —
+# bridge.py:2916 ist nur die Nachbearbeitung DANACH (der Nudge-Kommentar),
+# nicht der Beleg dafuer, dass "soft" den Turn am Laufen liesse. Die Bridge
+# kann sich den Abbruch leisten, weil sie dieselbe Session anschliessend mit
+# dem Nudge fortsetzt (serve_loop). poll.sh hat keinen Fortsetzungspfad: ein
+# Escape auf "soft" wuerde den Turn killen und nichts wieder aufnehmen, waere
+# also strikt schlechter als warten. Die zugrundeliegenden ungelesenen
+# Kommentare, die einen soft-Interrupt ausloesen, kommen ohnehin ueber den
+# bestehenden deliver_comments/deliver_messages-Kanal an — ein zusaetzliches
+# Escape hier waere ein neuer Eingriff, keine Parity-Angleichung.
+#
+# Idempotenz ueber LAST_HARD_INTERRUPT_TASK_ID (wie LAST_CANCELLED_TASK_ID /
+# LAST_STOPPED_TASK_ID): ein Escape pro Task, nicht pro 30s-Heartbeat-Zyklus.
+# Absichtlich KEIN /clear und KEIN CURRENT_TASK_ID-Reset hier — das bleibt
+# Sache der bestehenden state=cancelled/stopped-Pfade (naechster Poll, <=5s),
+# die den vollen Session-Reset samt Backend-Semantik schon korrekt handhaben.
+# Dieser Pfad schickt NUR das sonst fehlende, sofortige Escape.
+handle_heartbeat_control() {
+    local response="$1"
+    [ -n "$response" ] || return 0
+    local interrupt
+    interrupt=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('control', {}).get('interrupt', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    [ "$interrupt" = "hard" ] || return 0
+    local key="${CURRENT_TASK_ID:-none}"
+    if [ "$key" = "$LAST_HARD_INTERRUPT_TASK_ID" ]; then
+        return 0
+    fi
+    local reason
+    reason=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('control', {}).get('reason', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    log "WARNING: Heartbeat-Control meldet HARD-Interrupt (Task ${CURRENT_TASK_ID:-unbekannt}): ${reason:-kein Grund uebermittelt} — sende Escape."
+    tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+    LAST_HARD_INTERRUPT_TASK_ID="$key"
 }
 
 # build_acked_seq_param — serialisiert ACKED_SEQ (thread_id → hoechstes
@@ -829,6 +922,10 @@ except Exception:
     # Task starten — sonst werden false-positive Blocker im naechsten Task
     # auch nicht mehr gemeldet wenn der WIRKLICH stagnations-blocked ist.
     LAST_BLOCKED_TASK_ID=""
+    # G6: gleiches Prinzip fuer den Heartbeat-Control-Dedup — ein neuer
+    # Task-Dispatch darf nicht durch das Escape-Dedup einer VORHERIGEN Karte
+    # unterdrueckt werden.
+    LAST_HARD_INTERRUPT_TASK_ID=""
     # Kein Warten auf Completion — claude meldet sich selbst via MC API.
 }
 
