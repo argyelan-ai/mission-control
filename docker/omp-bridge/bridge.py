@@ -2446,7 +2446,6 @@ def serve_loop(
     _recovery_fn: Optional[Callable[[], Optional[dict]]] = None,
     _lifecycle_factory: Optional[Callable[[dict], MCLifecycle]] = None,
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
-    _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
     _context_env_path: str = MC_CONTEXT_ENV_PATH,
     _msg_queue_dir: Optional[str] = None,
@@ -2763,8 +2762,17 @@ def serve_loop(
                     board_id=task.get("board_id"), attempt_id=task.get("dispatch_attempt_id"),
                 )
 
-            continue_once: Optional[Callable[[str], RunOutcome]] = _continue_factory(task, cwd) \
-                if _continue_factory is not None else None
+            # M7 (Rex architecture session 2026-09-12): this used to be a
+            # second, control-less factory knob (_continue_factory DI param).
+            # The ACP branch below defines continue_once as a thin wrapper
+            # around the CONTROLLED factory product (acp_run from
+            # _make_acp_run_factory: cancel_state, heartbeat, interrupt_state,
+            # sinks), the native branch mirrors run_once via
+            # run_native_continue — the knob had NO caller repo-wide and would
+            # have bypassed that wiring when ever used. Removed; the only
+            # path that still needs the name is the _run_factory test path,
+            # which intentionally opts OUT of Fix B (continue -> blocker).
+            continue_once: Optional[Callable[[str], RunOutcome]] = None
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
             elif _acp_env_driver() == "acp":
