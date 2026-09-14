@@ -20,6 +20,7 @@ Runs two ways:
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import subprocess
@@ -332,6 +333,17 @@ def test_acp_run_without_interrupt_state_arg_keeps_stamp_empty():
     assert outcome.final_stop_reason == "cancelled"
     assert outcome.interrupt_kind is None
     print("PASS test_acp_run_without_interrupt_state_arg_keeps_stamp_empty")
+
+
+def test_run_acp_accepts_interrupt_state_flag_is_true():
+    """PR #492 interplay (DoD): _RUN_ACP_ACCEPTS_INTERRUPT_STATE must be True
+    AFTER the merge — asserted against the ACTUAL signature, not the
+    docstring claim. If someone removes the interrupt_state param from
+    run_acp_once, the serve-loop pass-through goes dead and this goes red."""
+    assert "interrupt_state" in inspect.signature(bridge.run_acp_once).parameters
+    assert bridge._RUN_ACP_ACCEPTS_INTERRUPT_STATE is True
+    print("PASS test_run_acp_accepts_interrupt_state_flag_is_true")
+
 
 
 # ---------------------------------------------------------------------------
