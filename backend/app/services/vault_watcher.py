@@ -68,7 +68,11 @@ class VaultWatcher:
     async def stop(self) -> None:
         if self._observer:
             self._observer.stop()
-            self._observer.join(timeout=5)
+            # W4 (11.09.2026): Thread.join() is a plain blocking call — run
+            # it off the event loop so a slow-to-drain observer thread can't
+            # delay SIGTERM handling by up to 5s (same class of bug as the
+            # vault index rebuild fixed in background.py:start_vault_services).
+            await asyncio.to_thread(self._observer.join, 5)
             logger.info("VaultWatcher stopped")
 
     def _is_excluded(self, file_path: Path) -> bool:

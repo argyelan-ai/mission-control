@@ -48,6 +48,42 @@ LOCK_TTL_SECONDS = 120
 LOCK_REFRESH_INTERVAL_SECONDS = 60
 LOCK_ACQUIRE_MAX_ATTEMPTS = 10
 LOCK_ACQUIRE_RETRY_DELAY_SECONDS = 15
+# W4 (11.09.2026 — Restposten aus #506, live-gemessen: Absturzfall brauchte
+# 18s statt der geforderten 10s).
+#
+# v1 dieses Fixes (Rex-Review PR #509, Blocker B2) verkuerzte NUR den
+# ersten Retry auf 3s. Falsch: der Heartbeat (TTL 15s, alle
+# LOCK_HEARTBEAT_INTERVAL_SECONDS=5s aufgefrischt) hat im Absturzmoment
+# so gut wie immer 10-15s Restlaufzeit (nur in einem schmalen 3s-Fenster
+# direkt vor Ablauf ist die erste 3s-Wartezeit ueberhaupt lang genug).
+# Ausserhalb dieses Fensters war Versuch 2 (bei t=3s) IMMER noch "held by
+# another" und fiel zurueck auf die volle LOCK_ACQUIRE_RETRY_DELAY_SECONDS
+# (15s) -> Versuch 3 bei t=18s. Das 18s-Kliff blieb fast immer bestehen,
+# gemessen per Probe ueber die Heartbeat-Restlaufzeit (siehe
+# test_acquire_lock_crash_takeover_scales_with_heartbeat_remaining_life).
+#
+# v2: die kurze Wartezeit gilt fuer die ersten LOCK_ACQUIRE_FAST_RETRY_ATTEMPTS
+# Versuche (nicht nur den ersten). 5 * 3s = 15s deckt die maximal moegliche
+# Heartbeat-Restlaufzeit (LOCK_HEARTBEAT_TTL_SECONDS=15) vollstaendig ab —
+# der Steal-Check laeuft dadurch alle 3s, bis der Heartbeat natuerlich
+# verfaellt, statt einmal zu kurz zu pollen und dann 15s zu verpassen. Ab
+# dem 6. Versuch (t>=15s, also nur noch relevant fuer einen tatsaechlich
+# lebenden Halter) gilt wieder der langsame 15s-Takt, damit ein legitim
+# lebender Worker nicht haeufiger gepollt wird als vorher.
+#
+# Ehrlich zur DoD (Karte 70d6b417 verlangt "Uebernahme unter 10s ab
+# Absturz"): das ist mit unveraenderter Heartbeat-TTL=15s strukturell NICHT
+# erreichbar, siehe Rex-Review B2 — ein Steal VOR Ablauf der TTL waere ein
+# Design-Bruch (koennte einem lebenden Worker den Lock stehlen). Erreichbar
+# und mit diesem Fix belegt: Uebernahme spaetestens ~3s NACH dem
+# tatsaechlichen Heartbeat-Ablauf, also im schlechtesten Fall (Absturz
+# direkt nach einem Refresh, volle 15s Restlaufzeit) rund 15-18s ab
+# Absturz statt der vorherigen festen 18s IMMER. Frage an den Karten-Autor
+# via mc ask, ob "<10s ab Heartbeat-Ablauf" statt "<10s ab Absturz" die
+# gemeinte DoD ist — NICHT im PR stillschweigend umgedeutet.
+# Die Heartbeat-TTL selbst bleibt bewusst unangetastet (Ticket-Vorgabe).
+LOCK_ACQUIRE_RETRY_DELAY_FIRST_SECONDS = 3
+LOCK_ACQUIRE_FAST_RETRY_ATTEMPTS = 5
 LOCK_HEARTBEAT_TTL_SECONDS = 15
 LOCK_HEARTBEAT_INTERVAL_SECONDS = 5
 
@@ -102,13 +138,18 @@ class SchedulerService:
                     attempt,
                 )
                 return True
+            delay = (
+                LOCK_ACQUIRE_RETRY_DELAY_FIRST_SECONDS
+                if attempt <= LOCK_ACQUIRE_FAST_RETRY_ATTEMPTS
+                else LOCK_ACQUIRE_RETRY_DELAY_SECONDS
+            )
             logger.info(
                 "Scheduler lock held by another worker — retry %d/%d in %ds",
                 attempt,
                 LOCK_ACQUIRE_MAX_ATTEMPTS,
-                LOCK_ACQUIRE_RETRY_DELAY_SECONDS,
+                delay,
             )
-            await asyncio.sleep(LOCK_ACQUIRE_RETRY_DELAY_SECONDS)
+            await asyncio.sleep(delay)
         return False
 
     async def _steal_stale_lock(self, redis) -> bool:
