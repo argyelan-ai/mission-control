@@ -39,6 +39,82 @@ def slugify_workspace_slug(title: str, max_len: int = 50) -> str:
     return slug[:prefix_len] + "-" + content_hash
 
 
+def parse_unified_diff(diff_raw: str) -> list[dict]:
+    """Parse `git diff`/`git show` unified output into
+    [{filename, additions, deletions, hunks: [{header, lines: [{type, content,
+    old_no, new_no}]}]}]. Shared by the per-commit and branch diffs.
+    """
+    import re
+
+    files: list[dict] = []
+    current_file: dict | None = None
+    current_hunk: dict | None = None
+    old_line = 0
+    new_line = 0
+
+    for raw_line in diff_raw.splitlines():
+        if raw_line.startswith("diff --git "):
+            if current_hunk is not None and current_file is not None:
+                current_file["hunks"].append(current_hunk)
+                current_hunk = None
+            if current_file is not None:
+                files.append(current_file)
+            current_file = {"filename": "", "additions": 0, "deletions": 0, "hunks": []}
+
+        elif raw_line.startswith("+++ b/") and current_file is not None:
+            current_file["filename"] = raw_line[6:]
+
+        elif raw_line.startswith("+++ /dev/null") and current_file is not None:
+            current_file["filename"] = current_file.get("filename") or "(deleted)"
+
+        elif raw_line.startswith(("--- ", "index ", "new file", "deleted file", "Binary files")):
+            pass  # ignore
+
+        elif raw_line.startswith("@@ ") and current_file is not None:
+            if current_hunk is not None:
+                current_file["hunks"].append(current_hunk)
+            m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw_line)
+            if m:
+                old_line = int(m.group(1))
+                new_line = int(m.group(2))
+            current_hunk = {"header": raw_line, "lines": []}
+
+        elif current_hunk is not None and current_file is not None:
+            if raw_line.startswith("+"):
+                current_hunk["lines"].append(
+                    {"type": "add", "content": raw_line[1:], "old_no": None, "new_no": new_line}
+                )
+                current_file["additions"] += 1
+                new_line += 1
+            elif raw_line.startswith("-"):
+                current_hunk["lines"].append(
+                    {"type": "del", "content": raw_line[1:], "old_no": old_line, "new_no": None}
+                )
+                current_file["deletions"] += 1
+                old_line += 1
+            elif raw_line.startswith(" "):
+                current_hunk["lines"].append(
+                    {"type": "ctx", "content": raw_line[1:], "old_no": old_line, "new_no": new_line}
+                )
+                old_line += 1
+                new_line += 1
+
+    # Finalize the last file/hunk
+    if current_hunk is not None and current_file is not None:
+        current_file["hunks"].append(current_hunk)
+    if current_file is not None:
+        files.append(current_file)
+    return files
+
+
+def _diff_stats(files: list[dict]) -> dict:
+    return {
+        "files": len(files),
+        "additions": sum(f["additions"] for f in files),
+        "deletions": sum(f["deletions"] for f in files),
+    }
+
+
 class GitService:
     """Executes Git/GitHub operations via CLI."""
 
@@ -533,75 +609,44 @@ _Keine Revisionen._
             cwd=workspace_path,
         )
 
-        files: list = []
-        current_file: dict | None = None
-        current_hunk: dict | None = None
-        old_line = 0
-        new_line = 0
-
-        for raw_line in diff_raw.splitlines():
-            if raw_line.startswith("diff --git "):
-                if current_hunk is not None and current_file is not None:
-                    current_file["hunks"].append(current_hunk)
-                    current_hunk = None
-                if current_file is not None:
-                    files.append(current_file)
-                current_file = {"filename": "", "additions": 0, "deletions": 0, "hunks": []}
-
-            elif raw_line.startswith("+++ b/") and current_file is not None:
-                current_file["filename"] = raw_line[6:]
-
-            elif raw_line.startswith("+++ /dev/null") and current_file is not None:
-                current_file["filename"] = current_file.get("filename") or "(deleted)"
-
-            elif raw_line.startswith(("--- ", "index ", "new file", "deleted file", "Binary files")):
-                pass  # ignore
-
-            elif raw_line.startswith("@@ ") and current_file is not None:
-                if current_hunk is not None:
-                    current_file["hunks"].append(current_hunk)
-                m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw_line)
-                if m:
-                    old_line = int(m.group(1))
-                    new_line = int(m.group(2))
-                current_hunk = {"header": raw_line, "lines": []}
-
-            elif current_hunk is not None and current_file is not None:
-                if raw_line.startswith("+"):
-                    current_hunk["lines"].append(
-                        {"type": "add", "content": raw_line[1:], "old_no": None, "new_no": new_line}
-                    )
-                    current_file["additions"] += 1
-                    new_line += 1
-                elif raw_line.startswith("-"):
-                    current_hunk["lines"].append(
-                        {"type": "del", "content": raw_line[1:], "old_no": old_line, "new_no": None}
-                    )
-                    current_file["deletions"] += 1
-                    old_line += 1
-                elif raw_line.startswith(" "):
-                    current_hunk["lines"].append(
-                        {"type": "ctx", "content": raw_line[1:], "old_no": old_line, "new_no": new_line}
-                    )
-                    old_line += 1
-                    new_line += 1
-
-        # Finalize the last file/hunk
-        if current_hunk is not None and current_file is not None:
-            current_file["hunks"].append(current_hunk)
-        if current_file is not None:
-            files.append(current_file)
+        files = parse_unified_diff(diff_raw)
 
         return {
             "hash": h,
             "message": message,
             "author": author,
             "date": date,
-            "stats": {
-                "files": len(files),
-                "additions": sum(f["additions"] for f in files),
-                "deletions": sum(f["deletions"] for f in files),
-            },
+            "stats": _diff_stats(files),
+            "files": files,
+        }
+
+    async def get_branch_diff(self, workspace_path: str, base: str = "main") -> dict:
+        """Structured diff of the task branch against `base` (three-dot, i.e.
+        everything the branch added since it forked) — the "what did the agent
+        build" view of the task cockpit.
+
+        Returns: {base, merge_base, commits, stats, files} with the same
+        files/hunks/lines shape as get_commit_diff.
+        """
+        merge_base = (
+            await self._run_cmd("git", "merge-base", base, "HEAD", cwd=workspace_path)
+        ).strip()
+        commits_raw = await self._run_cmd(
+            "git", "rev-list", "--count", f"{base}..HEAD", cwd=workspace_path,
+        )
+        try:
+            commits = int(commits_raw.strip() or "0")
+        except ValueError:
+            commits = 0
+        diff_raw = await self._run_cmd(
+            "git", "diff", "--unified=3", "--no-color", f"{base}...HEAD", cwd=workspace_path,
+        )
+        files = parse_unified_diff(diff_raw)
+        return {
+            "base": base,
+            "merge_base": merge_base,
+            "commits": commits,
+            "stats": _diff_stats(files),
             "files": files,
         }
 
