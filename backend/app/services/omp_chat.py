@@ -45,6 +45,12 @@ FORMAT — eigenes, VERSIONIERTES Format (``{"type":"session","version":3}``).
   * Usage steht in ``message.usage`` mit ``input``/``output``/``cacheRead``/
     ``cacheWrite``/``totalTokens`` und ``cost`` (Kosten sind im
     ChatEvent-Schema nicht vorgesehen und werden bewusst weggelassen).
+    WICHTIG: ``input`` ist SITZUNGSKUMULATIV, nicht der Fuellstand — jeder
+    API-Aufruf ohne Prompt-Cache re-processiert das ganze Gespraech, und
+    omp summiert das auf (live 14.09.2026: input=11.795.309 bei einem
+    500k-Fenster). Der echten Fuellstand schreibt omp seit spaeterem Build
+    separat als ``usedTokens`` nebst ``contextWindow``; aeltere Builds
+    haben die beiden Felder nicht.
   * Die Effort-Stufe steht NICHT am Zug, sondern in eigenen
     ``thinking_level_change``-Zeilen (``thinkingLevel``). Der Parser ist
     deshalb ZUSTANDSBEHAFTET (``OmpLineParser``) und traegt die zuletzt
@@ -53,8 +59,10 @@ FORMAT — eigenes, VERSIONIERTES Format (``{"type":"session","version":3}``).
 
 WAS OMP NICHT HAT: Subagenten/Sidechains (``sidechain`` ist immer ``False``),
   In-Session-Slash-Kommandos im Transkript (kein ``command``-Ereignis) und
-  eine Statuszeilen-Datei mit der echten Kontextfenster-Auslastung (kein
-  ``source: "cli"``; die Prozentangabe im Pane wird bewusst nicht gescraped).
+  keine Statuszeilen-Datei wie Claude Code (die Prozentangabe im Pane wird
+  bewusst nicht gescraped) — ABER seit omp ``usedTokens``/``contextWindow``
+  am Zug schreibt, stempelt der Parser daraus ``usedPct`` mit
+  ``source: "cli"``: die Zahl kommt direkt vom CLI, auch ohne Statuszeile.
 
 PANE — omp Fenster 0 ist die ECHTE, interaktive TUI (ADR-049 loest den
   headless ``omp -p``-Betrieb von ADR-045 ab; live bestaetigt: ``ps`` zeigt
@@ -677,23 +685,62 @@ class OmpLineParser:
                 "cacheCreation": usage.get("cacheWrite") or 0,
                 "output": usage.get("output") or 0,
             }
+            # omp's own live context accounting, when the build writes it:
+            # `usedTokens` against `contextWindow` is the CURRENT FILL, the
+            # same figure the pane's context meter shows. `input` above is
+            # session-CUMULATIVE (no prompt cache → every call re-processes
+            # the whole conversation; live 14.09.2026: input=11,795,309
+            # against a 500k window) — feeding it to the frontend's
+            # inputTokens/window fallback clamped the chat ring at 100%
+            # forever (task 156f57c7). When the truth fields exist they win
+            # outright: usedPct becomes a CLI figure (source "cli"), the
+            # window replaces the model-name guess, and inputTokens carries
+            # the fill itself so the panel's Belegt/Frei rows and the ring
+            # can't disagree. The raw cumulative buckets stay out of
+            # `components` — a breakdown of "where the window went" is not
+            # derivable from them, and a wrong breakdown reads as a
+            # measurement.
+            omp_window = usage.get("contextWindow")
+            used_tokens = usage.get("usedTokens")
+            has_fill_truth = (
+                isinstance(omp_window, (int, float)) and omp_window > 0 and
+                isinstance(used_tokens, (int, float)) and used_tokens >= 0
+            )
             events.append(
                 {
                     "kind": "usage",
                     "uuid": entry_id,
                     "ts": ts,
                     "inputTokens": (
-                        components["input"]
-                        + components["cacheRead"]
-                        + components["cacheCreation"]
+                        int(used_tokens)
+                        if has_fill_truth
+                        else (
+                            components["input"]
+                            + components["cacheRead"]
+                            + components["cacheCreation"]
+                        )
                     ),
                     "outputTokens": components["output"],
                     "model": model,
                     # Aus der zuletzt gesehenen thinking_level_change-Zeile —
                     # omp schreibt die Stufe nicht an den Zug (s. Docstring).
                     "effort": self._effort,
-                    "contextWindow": resolve_context_window(model, observed_windows),
-                    "components": components,
+                    "contextWindow": (
+                        int(omp_window)
+                        if has_fill_truth
+                        else resolve_context_window(model, observed_windows)
+                    ),
+                    # Kein Breakdown aus kumulativen Buckets ableitbar (s.o.)
+                    # — ehrlich gar keine statt einer falschen.
+                    "components": components if not has_fill_truth else None,
+                    **(
+                        {
+                            "usedPct": round(used_tokens / omp_window * 100, 1),
+                            "source": "cli",
+                        }
+                        if has_fill_truth
+                        else {}
+                    ),
                 }
             )
 
