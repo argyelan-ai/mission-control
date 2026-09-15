@@ -14,7 +14,7 @@ import { api } from "@/lib/api";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { CommentCard } from "@/components/task/CommentCard";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import Link from "next/link";
 import type { Task, Agent } from "@/lib/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -84,8 +84,8 @@ export function ReviewTaskRow({
                   className="text-[10px] font-medium px-2 py-1 rounded-sm inline-flex items-center gap-1"
                   style={{
                     color: C.accent,
-                    backgroundColor: `${C.accent}1A`,
-                    border: `1px solid ${C.accent}40`,
+                    backgroundColor: `${alpha(C.accent, 0.1)}`,
+                    border: `1px solid ${alpha(C.accent, 0.25)}`,
                   }}
                 >
                   <UserCheck size={10} /> {t("yourReview")}
@@ -207,9 +207,9 @@ export function ReviewTaskRow({
                   task.review_decision === "hold" ? C.warning :
                   C.error,
                 backgroundColor:
-                  task.review_decision === "approved" ? `${C.online}1A` :
-                  task.review_decision === "hold" ? `${C.warning}1A` :
-                  `${C.error}1A`,
+                  task.review_decision === "approved" ? `${alpha(C.online, 0.1)}` :
+                  task.review_decision === "hold" ? `${alpha(C.warning, 0.1)}` :
+                  `${alpha(C.error, 0.1)}`,
               }}
             >
               {task.review_decision === "approved" ? t("decisionApproved") :
@@ -227,9 +227,9 @@ export function ReviewTaskRow({
               disabled={loading}
               className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
               style={{
-                backgroundColor: `${C.online}1F`,
+                backgroundColor: `${alpha(C.online, 0.12)}`,
                 color: C.online,
-                border: `1px solid ${C.online}40`,
+                border: `1px solid ${alpha(C.online, 0.25)}`,
               }}
             >
               <CheckCircle size={13} /> {t("approve")}
@@ -242,9 +242,9 @@ export function ReviewTaskRow({
               disabled={loading}
               className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
               style={{
-                backgroundColor: `${C.error}1F`,
+                backgroundColor: `${alpha(C.error, 0.12)}`,
                 color: C.error,
-                border: `1px solid ${C.error}40`,
+                border: `1px solid ${alpha(C.error, 0.25)}`,
               }}
             >
               <XCircle size={13} /> {t("reject")}
@@ -254,9 +254,9 @@ export function ReviewTaskRow({
               disabled={loading}
               className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
               style={{
-                backgroundColor: `${C.warning}1F`,
+                backgroundColor: `${alpha(C.warning, 0.12)}`,
                 color: C.warning,
-                border: `1px solid ${C.warning}40`,
+                border: `1px solid ${alpha(C.warning, 0.25)}`,
               }}
             >
               <Pause size={13} /> {t("hold")}

@@ -521,7 +521,7 @@ function SessionsPageContent() {
           >
           <div
             className={`${onChatScreen ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col`}
-            style={{ background: C.bgSurface }}
+            style={{ backgroundColor: C.bgSurface }}
             data-testid="chat-column"
           >
             {selectedGroupId && selectedGroup ? (

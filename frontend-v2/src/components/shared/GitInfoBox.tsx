@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { GitBranch, ExternalLink, Pencil, Check, AlertTriangle, Loader2 } from "lucide-react";
 import type { ProjectGitInfo, Repo } from "@/lib/types";
+import { alpha } from "@/lib/colors";
 
 function hasRules(repo: Repo): boolean {
   return Boolean(repo.rules_md && repo.rules_md.trim());
@@ -103,7 +104,7 @@ export function GitInfoBox({
     return (
       <div
         className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-[11px]"
-        style={{ backgroundColor: `${deep}88`, border: `1px solid ${border}` }}
+        style={{ backgroundColor: `${alpha(deep, 0.53)}`, border: `1px solid ${border}` }}
       >
         <Loader2 size={12} className="animate-spin" style={{ color: textMuted }} />
         <span style={{ color: textMuted }}>Git-Info laden...</span>
@@ -115,7 +116,7 @@ export function GitInfoBox({
     return (
       <div
         className="flex flex-col gap-2 px-3 py-2.5 rounded-xl text-[11px]"
-        style={{ backgroundColor: `${deep}88`, border: `1px solid ${border}` }}
+        style={{ backgroundColor: `${alpha(deep, 0.53)}`, border: `1px solid ${border}` }}
       >
         <div className="flex items-center gap-2">
           <GitBranch size={11} style={{ color: accent }} />
@@ -132,14 +133,14 @@ export function GitInfoBox({
                 }}
                 placeholder="repo-name"
                 className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded-sm"
-                style={{ color: textPrimary, border: `1px solid ${accent}44` }}
+                style={{ color: textPrimary, border: `1px solid ${alpha(accent, 0.27)}` }}
               />
               <button
                 type="button"
                 onClick={handleCreateRepo}
                 disabled={!newRepoName.trim() || creatingRepo}
                 className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer disabled:opacity-40"
-                style={{ backgroundColor: `${accent}22`, color: accent, border: `1px solid ${accent}66` }}
+                style={{ backgroundColor: `${alpha(accent, 0.13)}`, color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
               >
                 {creatingRepo ? "..." : "Create"}
               </button>
@@ -163,7 +164,7 @@ export function GitInfoBox({
               className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded-sm cursor-pointer"
               style={{
                 color: repoId ? textPrimary : textSecondary,
-                border: `1px solid ${repoId ? `${accent}44` : border}`,
+                border: `1px solid ${repoId ? `${alpha(accent, 0.27)}` : border}`,
               }}
             >
               <option value="">No repository (default)</option>
@@ -188,7 +189,7 @@ export function GitInfoBox({
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingBranch(false); }}
                 onBlur={() => setEditingBranch(false)}
                 className="flex-1 bg-transparent text-[11px] outline-none px-1 py-0.5 rounded-sm"
-                style={{ color: textPrimary, border: `1px solid ${accent}44` }}
+                style={{ color: textPrimary, border: `1px solid ${alpha(accent, 0.27)}` }}
               />
               <Check size={10} style={{ color: accent }} />
             </div>
@@ -211,7 +212,7 @@ export function GitInfoBox({
     return (
       <div
         className="flex flex-col gap-2 px-3 py-2.5 rounded-xl text-[11px]"
-        style={{ backgroundColor: `${deep}88`, border: `1px solid ${warning}33` }}
+        style={{ backgroundColor: `${alpha(deep, 0.53)}`, border: `1px solid ${alpha(warning, 0.2)}` }}
       >
         <div className="flex items-center gap-2">
           <AlertTriangle size={12} style={{ color: warning }} />
@@ -221,7 +222,7 @@ export function GitInfoBox({
             onClick={onInitRepo}
             disabled={initLoading}
             className="ml-auto px-2.5 py-1 rounded-lg text-[10px] font-medium cursor-pointer transition-all disabled:opacity-40"
-            style={{ backgroundColor: `${accent}22`, color: accent, border: `1px solid ${accent}66` }}
+            style={{ backgroundColor: `${alpha(accent, 0.13)}`, color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
           >
             {initLoading ? "..." : "Repo initialisieren"}
           </button>
@@ -247,7 +248,7 @@ export function GitInfoBox({
                   onClick={handleLinkRepo}
                   disabled={!linkRepoId || linkingRepo}
                   className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer disabled:opacity-40"
-                  style={{ backgroundColor: `${accent}22`, color: accent, border: `1px solid ${accent}66` }}
+                  style={{ backgroundColor: `${alpha(accent, 0.13)}`, color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
                 >
                   {linkingRepo ? "..." : "Link"}
                 </button>
@@ -284,7 +285,7 @@ export function GitInfoBox({
     return (
       <div
         className="flex flex-col gap-2 px-3 py-2.5 rounded-xl text-[11px]"
-        style={{ backgroundColor: `${deep}88`, border: `1px solid ${border}` }}
+        style={{ backgroundColor: `${alpha(deep, 0.53)}`, border: `1px solid ${border}` }}
       >
         <div className="flex items-center gap-2">
           <GitBranch size={12} style={{ color: accent }} />
@@ -321,7 +322,7 @@ export function GitInfoBox({
               <span
                 key={b}
                 className="px-1.5 py-0.5 rounded-sm text-[9px]"
-                style={{ backgroundColor: `${accent}11`, color: textSecondary, border: `1px solid ${border}` }}
+                style={{ backgroundColor: `${alpha(accent, 0.07)}`, color: textSecondary, border: `1px solid ${border}` }}
               >
                 {b}
               </span>
@@ -344,7 +345,7 @@ export function GitInfoBox({
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingBranch(false); }}
                 onBlur={() => setEditingBranch(false)}
                 className="flex-1 bg-transparent text-[11px] outline-none px-1 py-0.5 rounded-sm"
-                style={{ color: textPrimary, border: `1px solid ${accent}44` }}
+                style={{ color: textPrimary, border: `1px solid ${alpha(accent, 0.27)}` }}
               />
             </div>
           ) : (

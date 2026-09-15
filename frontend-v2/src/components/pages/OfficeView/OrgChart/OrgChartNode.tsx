@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 import { Container, HardDrive, Radio, UserRound } from "lucide-react";
 import type { OrgNode, OrgRuntime, OrgStatus } from "./types";
-import { C, STATUS as STATUS_TOKENS } from "@/lib/colors";
+import { C, STATUS as STATUS_TOKENS, alpha } from "@/lib/colors";
 
 // ── Status palette ────────────────────────────────────────────────────────
 
@@ -123,14 +123,14 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             <motion.div
               aria-hidden
               className="absolute inset-0 rounded-xl pointer-events-none"
-              animate={{ boxShadow: [`0 0 0 0 ${C.accent}66`, `0 0 0 12px ${C.accent}00`] }}
+              animate={{ boxShadow: [`0 0 0 0 ${alpha(C.accent, 0.4)}`, `0 0 0 12px ${alpha(C.accent, 0)}`] }}
               transition={{ duration: 2.4, repeat: Infinity, ease: "easeOut" }}
             />
           </div>
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] uppercase tracking-[0.18em] font-medium" style={{ color: `${C.accent}B3` }}>
+              <span className="text-[10px] uppercase tracking-[0.18em] font-medium" style={{ color: `${alpha(C.accent, 0.7)}` }}>
                 {t("tierVoice")}
               </span>
               <span className="h-px flex-1" style={{ background: C.borderSubtle }} />
@@ -223,8 +223,8 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           className="grid place-items-center rounded-lg shrink-0"
           style={{
             width: 38, height: 38,
-            background: `linear-gradient(140deg, ${status.color}26, ${C.bgSurface})`,
-            border: `1px solid ${status.color}30`,
+            background: `linear-gradient(140deg, ${alpha(status.color, 0.15)}, ${C.bgSurface})`,
+            border: `1px solid ${alpha(status.color, 0.19)}`,
             color: status.color,
           }}
         >
@@ -308,8 +308,8 @@ function RuntimeRow({
       <span
         className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono uppercase tracking-wider"
         style={{
-          background: `${runtime.color}12`,
-          border: `1px solid ${runtime.color}22`,
+          background: `${alpha(runtime.color, 0.07)}`,
+          border: `1px solid ${alpha(runtime.color, 0.13)}`,
           color: runtime.color,
           fontSize: 9.5,
         }}

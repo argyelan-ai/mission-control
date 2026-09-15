@@ -22,7 +22,7 @@ import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { MCPAddServerModal } from "@/components/mcp/MCPAddServerModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 const SK = {
   bg: "var(--color-bg-surface)",
@@ -197,7 +197,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                   </button>
                 ))}
                 {dirty && <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-sm"
-                  style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}>{t("unsaved")}</span>}
+                  style={{ background: `${alpha(C.warning, 0.1)}`, color: C.warning, border: `1px solid ${alpha(C.warning, 0.2)}` }}>{t("unsaved")}</span>}
               </div>
               <div className="flex-1 overflow-hidden">
                 {writeTab === "write" ? (
@@ -220,7 +220,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
           {savedToast && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-sm font-mono text-xs font-medium pointer-events-none"
-              style={{ background: `${C.online}26`, border: `1px solid ${C.online}4D`, color: C.online }}>
+              style={{ background: `${alpha(C.online, 0.15)}`, border: `1px solid ${alpha(C.online, 0.3)}`, color: C.online }}>
               <Check size={12} /> {t("saved")}
             </motion.div>
           )}
@@ -298,7 +298,7 @@ function CategoryGroup({ category, skills, index }: { category: string; skills: 
         style={{ borderBottom: collapsed ? "none" : `1px solid ${C.borderSubtle}` }}
         onMouseEnter={(e) => (e.currentTarget.style.background = SK.bgHover)}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${meta.color}15` }}>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${alpha(meta.color, 0.08)}` }}>
           <CatIcon size={14} style={{ color: meta.color }} />
         </div>
         <span className="text-sm font-semibold flex-1" style={{ color: "var(--color-text-primary)" }}>{category}</span>

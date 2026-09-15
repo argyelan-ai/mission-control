@@ -147,6 +147,30 @@
   --color-p2-ok: #55a964;
   --color-p2-wrn: #a67f3e;
   --color-p2-err: #fa4942;
+
+  /* ---- Tokens behind lib/colors.ts `C` (ADR-084 theme plumbing) ----------
+     Dark values here; the light set overrides them in :root[data-theme="light"]
+     below. Names mirror the C keys (kebab-case). */
+  --color-text-dim: #8a8a8a;
+  --color-border-accent: rgba(235, 232, 222, 0.3);
+  --color-accent: #ebe8de;
+  --color-accent-subtle: rgba(235, 232, 222, 0.1);
+  --color-accent-hover: #f9f7ef;
+  --color-accent-deep: #c1beb2;
+  --color-on-accent: #151411;
+  --color-fill: #c1beb2;
+  --color-fill-soft: #8a8a8a;
+  --color-status-online: #55a964;
+  --color-status-warning: #a67f3e;
+  --color-status-warning-text: #b98f4d;
+  --color-status-error: #fa4942;
+  --color-status-info: #5890ca;
+  --color-status-offline: #3a3a3a;
+  --color-term: #0e0e0e;
+  --color-term-fg: #f2f2f2;
+  --color-chart-cpu: #ebe8de;
+  --color-chart-ram: #a3a3a3;
+  --color-chart-disk: #8a8a8a;
   --font-p2-display: "Space Mono", "JetBrains Mono", monospace;
   --font-p2-mono: "JetBrains Mono", "Symbols Nerd Font Mono", monospace;
 
@@ -239,6 +263,74 @@
    variables that aren't referenced in CSS, so runtime-only tokens must
    live in a plain :root block to always be emitted.
    ============================================================ */
+
+/* ---- Light theme (ADR-084) ----------------------------------------------
+   Same tokens, other world: paper ground, white lifted surfaces, ink as the
+   one accent, status colours darkened for AA on light. Terminal tokens stay
+   dark on purpose (a terminal is content, not chrome). Fills are dark warm
+   greys, never pure black — large black areas punch holes in paper
+   (Operator, 13.09.2026). lib/theme.ts flips the attribute. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg-dark: #ece9e1;
+  --color-bg-deep: #f3f1eb;
+  --color-bg-base: #f7f5f0;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #ece9e1;
+  --color-bg-hover: #e3dfd5;
+  --color-text-primary: #1b1a17;
+  --color-text-secondary: #4e4b44;
+  --color-text-muted: #6f6b62;
+  --color-text-body: #1b1a17;
+  --color-text-dim: #b0aca2;
+  --color-border-subtle: rgba(27, 26, 23, 0.05);
+  --color-border: rgba(27, 26, 23, 0.08);
+  --color-border-strong: rgba(27, 26, 23, 0.14);
+  --color-border-accent: rgba(27, 26, 23, 0.3);
+
+  --color-accent: #1b1a17;
+  --color-accent-subtle: rgba(27, 26, 23, 0.08);
+  --color-accent-hover: #000000;
+  --color-accent-deep: #4a473f;
+  --color-on-accent: #ffffff;
+  --color-fill: #4a473f;
+  --color-fill-soft: #8f8b80;
+
+  --color-status-online: #2f7a3e;
+  --color-status-warning: #8a6522;
+  --color-status-warning-text: #7a5a1f;
+  --color-status-error: #b93a34;
+  --color-status-info: #2f63a0;
+  --color-status-offline: #c9c5bb;
+
+  --color-term: #15140f;
+  --color-term-fg: #d9d5c9;
+  --color-chart-cpu: #4a473f;
+  --color-chart-ram: #8f8b80;
+  --color-chart-disk: #b8b4aa;
+
+  --color-p2-bg: #f3f1eb;
+  --color-p2-pan: #ffffff;
+  --color-p2-pan2: #ece9e1;
+  --color-p2-inset: #ece9e1;
+  --color-p2-line: rgba(27, 26, 23, 0.14);
+  --color-p2-line2: rgba(27, 26, 23, 0.07);
+  --color-p2-txt: #1b1a17;
+  --color-p2-dim: #6f6b62;
+  --color-p2-faint: #b0aca2;
+  --color-p2-glass: rgba(255, 255, 255, 0.72);
+  --color-p2-glass-line: rgba(27, 26, 23, 0.1);
+  --color-p2-amb: #1b1a17;
+  --color-p2-amb-d: #4a473f;
+  --color-p2-inv: #ffffff;
+  --color-p2-ok: #2f7a3e;
+  --color-p2-wrn: #8a6522;
+  --color-p2-err: #b93a34;
+
+  --shadow-card: 0 1px 2px rgba(27, 26, 23, 0.04), 0 8px 24px rgba(27, 26, 23, 0.06);
+  --shadow-elevated: 0 2px 6px rgba(27, 26, 23, 0.06), 0 16px 40px rgba(27, 26, 23, 0.1);
+}
 
 :root {
   /* ---- Sticky-Maskierung ---------------------------------------------------

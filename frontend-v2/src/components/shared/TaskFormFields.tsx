@@ -31,6 +31,7 @@ import { PlannerSlider } from "./PlannerSlider";
 import { GitInfoBox } from "./GitInfoBox";
 import { UrlListInput } from "./UrlListInput";
 import { C as MC } from "@/components/homepage/colors";
+import { alpha } from "@/lib/colors";
 
 // ── Design tokens — sourced from the shared MC palette (single source, no purple)
 const C = {
@@ -333,15 +334,15 @@ function AgentCard({
       style={{
         // System A: „selected" trägt über Fläche + Rahmen. Kein Glow mehr — ein
         // weisser Halo wäre auf Schwarz das lauteste Element der Seite.
-        background: selected ? `${C.accent}0F` : C.deep,
-        border: `1px solid ${selected ? `${C.accent}66` : C.border}`,
-        boxShadow: selected ? `0 0 0 1px ${C.accent}33` : "none",
+        background: selected ? `${alpha(C.accent, 0.06)}` : C.deep,
+        border: `1px solid ${selected ? `${alpha(C.accent, 0.4)}` : C.border}`,
+        boxShadow: selected ? `0 0 0 1px ${alpha(C.accent, 0.2)}` : "none",
       }}
     >
       <div className="flex items-center gap-1.5">
         <span
           className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{ background: statusColor, boxShadow: `0 0 6px ${statusColor}aa` }}
+          style={{ background: statusColor, boxShadow: `0 0 6px ${alpha(statusColor, 0.67)}` }}
         />
         <span
           className="text-[12px] font-semibold truncate"
@@ -658,13 +659,13 @@ export function TaskFormFields({
     const selCls = "w-full text-[11px] px-2.5 py-2 rounded-lg outline-none cursor-pointer transition-colors";
     const selStyle = (active: boolean): React.CSSProperties => ({
       background: C.deep,
-      border: `1px solid ${active ? `${C.accent}55` : C.border}`,
+      border: `1px solid ${active ? `${alpha(C.accent, 0.33)}` : C.border}`,
       color: active ? C.textPrimary : C.textMuted,
     });
     const pill = (active: boolean, color: string): React.CSSProperties => ({
-      backgroundColor: active ? `${color}22` : "transparent",
+      backgroundColor: active ? `${alpha(color, 0.13)}` : "transparent",
       color: active ? color : C.textMuted,
-      border: `1px solid ${active ? `${color}55` : C.border}`,
+      border: `1px solid ${active ? `${alpha(color, 0.33)}` : C.border}`,
     });
     const sectionHead = (label: string) => (
       <div className="flex items-center gap-2.5">
@@ -686,7 +687,7 @@ export function TaskFormFields({
               <button key={key} type="button"
                 onClick={() => (active ? patch({ activeTemplate: null }) : applyTemplate(key))}
                 className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
-                style={{ color: active ? t.color : C.textMuted, background: active ? `${t.color}15` : "transparent", border: `1px solid ${active ? `${t.color}55` : C.border}` }}>
+                style={{ color: active ? t.color : C.textMuted, background: active ? `${alpha(t.color, 0.08)}` : "transparent", border: `1px solid ${active ? `${alpha(t.color, 0.33)}` : C.border}` }}>
                 <Icon size={10} />{t.label}
               </button>
             );
@@ -706,7 +707,7 @@ export function TaskFormFields({
                 placeholder="Kurzer, klarer Aufgabentitel"
                 className="w-full text-[15px] outline-none px-3.5 py-3 rounded-xl transition-all"
                 style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
-                onFocus={(e) => { e.target.style.borderColor = `${C.accent}66`; e.target.style.boxShadow = `0 0 0 3px ${C.accent}1a`; }}
+                onFocus={(e) => { e.target.style.borderColor = `${alpha(C.accent, 0.4)}`; e.target.style.boxShadow = `0 0 0 3px ${alpha(C.accent, 0.1)}`; }}
                 onBlur={(e) => { e.target.style.borderColor = C.border; e.target.style.boxShadow = "none"; }}
                 disabled={disabled} />
             </div>
@@ -717,7 +718,7 @@ export function TaskFormFields({
                 onKeyDown={handleKeyDown} placeholder={descriptionPlaceholder}
                 className="w-full flex-1 text-sm outline-none px-3.5 py-3 rounded-xl resize-none transition-all"
                 style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep, minHeight: "200px" }}
-                onFocus={(e) => { e.target.style.borderColor = `${C.accent}66`; e.target.style.boxShadow = `0 0 0 3px ${C.accent}1a`; }}
+                onFocus={(e) => { e.target.style.borderColor = `${alpha(C.accent, 0.4)}`; e.target.style.boxShadow = `0 0 0 3px ${alpha(C.accent, 0.1)}`; }}
                 onBlur={(e) => { e.target.style.borderColor = C.border; e.target.style.boxShadow = "none"; }}
                 disabled={disabled} />
             </div>
@@ -875,13 +876,13 @@ export function TaskFormFields({
               <div className="flex flex-col gap-1.5">
                 <label htmlFor={`${fieldId}-deadline`} className="text-[10px]" style={{ color: C.textMuted }}><Calendar size={10} className="inline mr-1" />Deadline</label>
                 <input id={`${fieldId}-deadline`} type="date" aria-label="Deadline" value={value.dueAt} onChange={(e) => patch({ dueAt: e.target.value })}
-                  className="w-full text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer" style={{ background: C.deep, border: `1px solid ${value.dueAt ? `${C.accent}55` : C.border}`, color: value.dueAt ? C.textPrimary : C.textMuted, colorScheme: "dark" }} />
+                  className="w-full text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer" style={{ background: C.deep, border: `1px solid ${value.dueAt ? `${alpha(C.accent, 0.33)}` : C.border}`, color: value.dueAt ? C.textPrimary : C.textMuted, colorScheme: "dark" }} />
               </div>
               <PlannerSlider value={value.plannerMode} onChange={(m) => patch({ plannerMode: m })} accent={C.accent} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} />
             </div>
 
             {workspacePreview && (
-              <div className="flex items-start gap-2 px-3 py-2 rounded-lg font-mono text-[10px]" style={{ background: `${C.accent}08`, border: `1px solid ${C.accent}22` }}>
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg font-mono text-[10px]" style={{ background: `${alpha(C.accent, 0.03)}`, border: `1px solid ${alpha(C.accent, 0.13)}` }}>
                 <FolderKanban size={11} style={{ color: C.accent, flexShrink: 0, marginTop: 1 }} />
                 <div className="min-w-0">
                   <span style={{ color: C.textMuted }}>Arbeitsplatz: </span>
@@ -918,7 +919,7 @@ export function TaskFormFields({
                     </div>
                     <AnimatePresence>
                       {value.requiresAuth && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${C.warning}33` }}>
+                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${alpha(C.warning, 0.2)}` }}>
                           <div className="flex items-center gap-2">
                             <button type="button" onClick={() => patch({ credentialMode: "vault" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "vault", C.warning)}>Aus Vault</button>
                             <button type="button" onClick={() => patch({ credentialMode: "inline" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "inline", C.warning)}>Einmalig eingeben</button>
@@ -937,7 +938,7 @@ export function TaskFormFields({
                     </AnimatePresence>
                     <AnimatePresence>
                       {value.reportBack && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${C.online}33` }}>
+                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${alpha(C.online, 0.2)}` }}>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[10px]" style={{ color: C.textMuted }}>Kanal:</span>
                             {["discord", "telegram"].map((ch) => (<button key={ch} type="button" onClick={() => patch({ reportChannel: ch })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.reportChannel === ch, C.online)}>{ch.charAt(0).toUpperCase() + ch.slice(1)}</button>))}
@@ -1006,8 +1007,8 @@ export function TaskFormFields({
               className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 color: active ? t.color : C.textMuted,
-                background: active ? `${t.color}15` : "transparent",
-                border: `1px solid ${active ? `${t.color}55` : C.border}`,
+                background: active ? `${alpha(t.color, 0.08)}` : "transparent",
+                border: `1px solid ${active ? `${alpha(t.color, 0.33)}` : C.border}`,
               }}
             >
               <Icon size={10} />
@@ -1047,7 +1048,7 @@ export function TaskFormFields({
             color: C.textPrimary,
             backgroundColor: C.deep,
           }}
-          onFocus={(e) => { e.target.style.borderColor = `${C.accent}66`; e.target.style.boxShadow = `0 0 16px ${C.accent}15`; }}
+          onFocus={(e) => { e.target.style.borderColor = `${alpha(C.accent, 0.4)}`; e.target.style.boxShadow = `0 0 16px ${alpha(C.accent, 0.08)}`; }}
           onBlur={(e) => { e.target.style.borderColor = C.border; e.target.style.boxShadow = "none"; }}
           disabled={disabled}
         />
@@ -1080,7 +1081,7 @@ export function TaskFormFields({
             minHeight: "96px",
             overflowY: "hidden",
           }}
-          onFocus={(e) => { e.target.style.borderColor = `${C.accent}66`; e.target.style.boxShadow = `0 0 16px ${C.accent}15`; }}
+          onFocus={(e) => { e.target.style.borderColor = `${alpha(C.accent, 0.4)}`; e.target.style.boxShadow = `0 0 16px ${alpha(C.accent, 0.08)}`; }}
           onBlur={(e) => { e.target.style.borderColor = C.border; e.target.style.boxShadow = "none"; }}
           disabled={disabled}
         />
@@ -1098,9 +1099,9 @@ export function TaskFormFields({
                 onClick={() => patch({ priority: opt.value })}
                 className="w-6 h-6 flex items-center justify-center rounded-lg text-[10px] font-bold transition-all cursor-pointer"
                 style={{
-                  backgroundColor: value.priority === opt.value ? `${opt.color}22` : "transparent",
+                  backgroundColor: value.priority === opt.value ? `${alpha(opt.color, 0.13)}` : "transparent",
                   color: value.priority === opt.value ? opt.color : C.textMuted,
-                  border: value.priority === opt.value ? `1px solid ${opt.color}66` : "1px solid transparent",
+                  border: value.priority === opt.value ? `1px solid ${alpha(opt.color, 0.4)}` : "1px solid transparent",
                 }}
               >
                 {opt.label}
@@ -1125,7 +1126,7 @@ export function TaskFormFields({
                 className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
                 style={{
                   color: active ? C.accent : C.textMuted,
-                  background: active ? `${C.accent}14` : "transparent",
+                  background: active ? `${alpha(C.accent, 0.08)}` : "transparent",
                 }}
               >
                 <Icon size={10} />
@@ -1199,8 +1200,8 @@ export function TaskFormFields({
           animate={{ opacity: 1, y: 0 }}
           className="flex items-center gap-2 px-3 py-2 rounded-lg font-mono text-[10px]"
           style={{
-            background: `${C.accent}08`,
-            border: `1px solid ${C.accent}22`,
+            background: `${alpha(C.accent, 0.03)}`,
+            border: `1px solid ${alpha(C.accent, 0.13)}`,
             color: C.textSecondary,
           }}
         >
@@ -1219,9 +1220,9 @@ export function TaskFormFields({
           title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
           className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer self-start"
           style={{
-            backgroundColor: value.skipReview ? `${C.accent}22` : "transparent",
+            backgroundColor: value.skipReview ? `${alpha(C.accent, 0.13)}` : "transparent",
             color: value.skipReview ? C.accent : C.textMuted,
-            border: value.skipReview ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
+            border: value.skipReview ? `1px solid ${alpha(C.accent, 0.4)}` : `1px solid ${C.border}`,
           }}
         >
           <FastForward size={11} />
@@ -1237,9 +1238,9 @@ export function TaskFormFields({
             onClick={() => patch({ requiresAuth: !value.requiresAuth })}
             className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer self-start"
             style={{
-              backgroundColor: value.requiresAuth ? `${C.warning}22` : "transparent",
+              backgroundColor: value.requiresAuth ? `${alpha(C.warning, 0.13)}` : "transparent",
               color: value.requiresAuth ? C.warning : C.textMuted,
-              border: value.requiresAuth ? `1px solid ${C.warning}66` : `1px solid ${C.border}`,
+              border: value.requiresAuth ? `1px solid ${alpha(C.warning, 0.4)}` : `1px solid ${C.border}`,
             }}
           >
             <KeyRound size={11} />
@@ -1257,7 +1258,7 @@ export function TaskFormFields({
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.15 }}
                 className="flex flex-col gap-2 overflow-hidden pl-2"
-                style={{ borderLeft: `2px solid ${C.warning}33` }}
+                style={{ borderLeft: `2px solid ${alpha(C.warning, 0.2)}` }}
               >
                 <select
                   value={value.credentialId ?? ""}
@@ -1265,7 +1266,7 @@ export function TaskFormFields({
                   className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                   style={{
                     background: C.deep,
-                    border: `1px solid ${value.credentialId ? `${C.warning}66` : C.border}`,
+                    border: `1px solid ${value.credentialId ? `${alpha(C.warning, 0.4)}` : C.border}`,
                     color: value.credentialId ? C.warning : C.textMuted,
                   }}
                 >
@@ -1296,7 +1297,7 @@ export function TaskFormFields({
                 className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                 style={{
                   background: C.deep,
-                  border: `1px solid ${value.phaseId ? `${C.accent}66` : C.border}`,
+                  border: `1px solid ${value.phaseId ? `${alpha(C.accent, 0.4)}` : C.border}`,
                   color: value.phaseId ? C.accent : C.textMuted,
                 }}
               >
@@ -1322,7 +1323,7 @@ export function TaskFormFields({
                 className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                 style={{
                   background: C.deep,
-                  border: `1px solid ${value.deliverableId ? `${C.accent}66` : C.border}`,
+                  border: `1px solid ${value.deliverableId ? `${alpha(C.accent, 0.4)}` : C.border}`,
                   color: value.deliverableId ? C.accent : C.textMuted,
                 }}
               >
@@ -1392,9 +1393,9 @@ export function TaskFormFields({
                   onClick={() => patch({ taskType: opt.value })}
                   className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
                   style={{
-                    backgroundColor: value.taskType === opt.value ? `${C.accent}22` : "transparent",
+                    backgroundColor: value.taskType === opt.value ? `${alpha(C.accent, 0.13)}` : "transparent",
                     color: value.taskType === opt.value ? C.accent : C.textMuted,
-                    border: `1px solid ${value.taskType === opt.value ? `${C.accent}66` : C.border}`,
+                    border: `1px solid ${value.taskType === opt.value ? `${alpha(C.accent, 0.4)}` : C.border}`,
                   }}
                 >
                   {opt.label}
@@ -1459,7 +1460,7 @@ export function TaskFormFields({
               className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
               style={{
                 background: C.deep,
-                border: `1px solid ${value.dueAt ? `${C.accent}66` : C.border}`,
+                border: `1px solid ${value.dueAt ? `${alpha(C.accent, 0.4)}` : C.border}`,
                 color: value.dueAt ? C.textPrimary : C.textMuted,
                 colorScheme: "dark",
               }}
@@ -1499,7 +1500,7 @@ export function TaskFormFields({
               className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
               style={{
                 background: C.deep,
-                border: `1px solid ${value.approvalPolicy ? `${C.accent}66` : C.border}`,
+                border: `1px solid ${value.approvalPolicy ? `${alpha(C.accent, 0.4)}` : C.border}`,
                 color: value.approvalPolicy ? C.accent : C.textMuted,
               }}
             >
@@ -1516,9 +1517,9 @@ export function TaskFormFields({
               onClick={() => patch({ needsBrowser: !value.needsBrowser })}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.needsBrowser ? `${C.info}22` : "transparent",
+                backgroundColor: value.needsBrowser ? `${alpha(C.info, 0.13)}` : "transparent",
                 color: value.needsBrowser ? C.info : C.textMuted,
-                border: value.needsBrowser ? `1px solid ${C.info}66` : `1px solid ${C.border}`,
+                border: value.needsBrowser ? `1px solid ${alpha(C.info, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <Globe size={11} />
@@ -1530,9 +1531,9 @@ export function TaskFormFields({
               title="After review, a tester agent drives the real user flows in a browser before the task can complete"
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.e2eTestRequired ? `${C.accent}22` : "transparent",
+                backgroundColor: value.e2eTestRequired ? `${alpha(C.accent, 0.13)}` : "transparent",
                 color: value.e2eTestRequired ? C.accent : C.textMuted,
-                border: value.e2eTestRequired ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
+                border: value.e2eTestRequired ? `1px solid ${alpha(C.accent, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <MousePointerClick size={11} />
@@ -1545,9 +1546,9 @@ export function TaskFormFields({
               aria-pressed={value.humanReviewRequired}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.humanReviewRequired ? `${C.accent}22` : "transparent",
+                backgroundColor: value.humanReviewRequired ? `${alpha(C.accent, 0.13)}` : "transparent",
                 color: value.humanReviewRequired ? C.accent : C.textMuted,
-                border: value.humanReviewRequired ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
+                border: value.humanReviewRequired ? `1px solid ${alpha(C.accent, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <UserCheck size={11} />
@@ -1560,9 +1561,9 @@ export function TaskFormFields({
               title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.skipReview ? `${C.accent}22` : "transparent",
+                backgroundColor: value.skipReview ? `${alpha(C.accent, 0.13)}` : "transparent",
                 color: value.skipReview ? C.accent : C.textMuted,
-                border: value.skipReview ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
+                border: value.skipReview ? `1px solid ${alpha(C.accent, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <FastForward size={11} />
@@ -1574,9 +1575,9 @@ export function TaskFormFields({
               title="Blockers on this task come straight to you instead of going to Boss first"
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.blockerToOperator ? `${C.warning}22` : "transparent",
+                backgroundColor: value.blockerToOperator ? `${alpha(C.warning, 0.13)}` : "transparent",
                 color: value.blockerToOperator ? C.warning : C.textMuted,
-                border: value.blockerToOperator ? `1px solid ${C.warning}66` : `1px solid ${C.border}`,
+                border: value.blockerToOperator ? `1px solid ${alpha(C.warning, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <BellRing size={11} />
@@ -1587,9 +1588,9 @@ export function TaskFormFields({
               onClick={() => patch({ requiresAuth: !value.requiresAuth })}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.requiresAuth ? `${C.warning}22` : "transparent",
+                backgroundColor: value.requiresAuth ? `${alpha(C.warning, 0.13)}` : "transparent",
                 color: value.requiresAuth ? C.warning : C.textMuted,
-                border: value.requiresAuth ? `1px solid ${C.warning}66` : `1px solid ${C.border}`,
+                border: value.requiresAuth ? `1px solid ${alpha(C.warning, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <KeyRound size={11} />
@@ -1600,9 +1601,9 @@ export function TaskFormFields({
               onClick={() => patch({ reportBack: !value.reportBack })}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                backgroundColor: value.reportBack ? `${C.online}22` : "transparent",
+                backgroundColor: value.reportBack ? `${alpha(C.online, 0.13)}` : "transparent",
                 color: value.reportBack ? C.online : C.textMuted,
-                border: value.reportBack ? `1px solid ${C.online}66` : `1px solid ${C.border}`,
+                border: value.reportBack ? `1px solid ${alpha(C.online, 0.4)}` : `1px solid ${C.border}`,
               }}
             >
               <MessageSquare size={11} />
@@ -1619,7 +1620,7 @@ export function TaskFormFields({
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.15 }}
                 className="flex flex-col gap-2 overflow-hidden pl-2"
-                style={{ borderLeft: `2px solid ${C.warning}33` }}
+                style={{ borderLeft: `2px solid ${alpha(C.warning, 0.2)}` }}
               >
                 <div className="flex items-center gap-3">
                   <button
@@ -1627,9 +1628,9 @@ export function TaskFormFields({
                     onClick={() => patch({ credentialMode: "vault" })}
                     className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                     style={{
-                      backgroundColor: value.credentialMode === "vault" ? `${C.warning}22` : "transparent",
+                      backgroundColor: value.credentialMode === "vault" ? `${alpha(C.warning, 0.13)}` : "transparent",
                       color: value.credentialMode === "vault" ? C.warning : C.textMuted,
-                      border: `1px solid ${value.credentialMode === "vault" ? `${C.warning}66` : C.border}`,
+                      border: `1px solid ${value.credentialMode === "vault" ? `${alpha(C.warning, 0.4)}` : C.border}`,
                     }}
                   >
                     Aus Vault
@@ -1639,9 +1640,9 @@ export function TaskFormFields({
                     onClick={() => patch({ credentialMode: "inline" })}
                     className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                     style={{
-                      backgroundColor: value.credentialMode === "inline" ? `${C.warning}22` : "transparent",
+                      backgroundColor: value.credentialMode === "inline" ? `${alpha(C.warning, 0.13)}` : "transparent",
                       color: value.credentialMode === "inline" ? C.warning : C.textMuted,
-                      border: `1px solid ${value.credentialMode === "inline" ? `${C.warning}66` : C.border}`,
+                      border: `1px solid ${value.credentialMode === "inline" ? `${alpha(C.warning, 0.4)}` : C.border}`,
                     }}
                   >
                     Einmalig eingeben
@@ -1656,7 +1657,7 @@ export function TaskFormFields({
                     className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                     style={{
                       background: C.deep,
-                      border: `1px solid ${value.credentialId ? `${C.warning}66` : C.border}`,
+                      border: `1px solid ${value.credentialId ? `${alpha(C.warning, 0.4)}` : C.border}`,
                       color: value.credentialId ? C.warning : C.textMuted,
                     }}
                   >
@@ -1693,7 +1694,7 @@ export function TaskFormFields({
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.15 }}
                 className="flex flex-col gap-2 overflow-hidden pl-2"
-                style={{ borderLeft: `2px solid ${C.online}33` }}
+                style={{ borderLeft: `2px solid ${alpha(C.online, 0.2)}` }}
               >
                 <div className="flex items-center gap-3">
                   <span className="text-[10px]" style={{ color: C.textMuted }}>Kanal:</span>
@@ -1704,9 +1705,9 @@ export function TaskFormFields({
                       onClick={() => patch({ reportChannel: ch })}
                       className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                       style={{
-                        backgroundColor: value.reportChannel === ch ? `${C.online}22` : "transparent",
+                        backgroundColor: value.reportChannel === ch ? `${alpha(C.online, 0.13)}` : "transparent",
                         color: value.reportChannel === ch ? C.online : C.textMuted,
-                        border: `1px solid ${value.reportChannel === ch ? `${C.online}66` : C.border}`,
+                        border: `1px solid ${value.reportChannel === ch ? `${alpha(C.online, 0.4)}` : C.border}`,
                       }}
                     >
                       {ch.charAt(0).toUpperCase() + ch.slice(1)}
@@ -1726,9 +1727,9 @@ export function TaskFormFields({
                       onClick={() => toggleReportFormat(fmt.value)}
                       className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                       style={{
-                        backgroundColor: value.reportFormats.includes(fmt.value) ? `${C.online}22` : "transparent",
+                        backgroundColor: value.reportFormats.includes(fmt.value) ? `${alpha(C.online, 0.13)}` : "transparent",
                         color: value.reportFormats.includes(fmt.value) ? C.online : C.textMuted,
-                        border: `1px solid ${value.reportFormats.includes(fmt.value) ? `${C.online}66` : C.border}`,
+                        border: `1px solid ${value.reportFormats.includes(fmt.value) ? `${alpha(C.online, 0.4)}` : C.border}`,
                       }}
                     >
                       {fmt.label}
@@ -1780,7 +1781,7 @@ export function TaskFormFields({
                       className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                       style={{
                         background: C.deep,
-                        border: `1px solid ${value.requestKind ? `${C.accent}66` : C.border}`,
+                        border: `1px solid ${value.requestKind ? `${alpha(C.accent, 0.4)}` : C.border}`,
                         color: value.requestKind ? C.accent : C.textMuted,
                       }}
                     >
@@ -1798,7 +1799,7 @@ export function TaskFormFields({
                       className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                       style={{
                         background: C.deep,
-                        border: `1px solid ${value.autonomyLevel ? `${C.accent}66` : C.border}`,
+                        border: `1px solid ${value.autonomyLevel ? `${alpha(C.accent, 0.4)}` : C.border}`,
                         color: value.autonomyLevel ? C.accent : C.textMuted,
                       }}
                     >
@@ -1832,9 +1833,9 @@ export function TaskFormFields({
                       onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })}
                       className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
                       style={{
-                        backgroundColor: value.publishAllowed === true ? `${C.online}22` : "transparent",
+                        backgroundColor: value.publishAllowed === true ? `${alpha(C.online, 0.13)}` : "transparent",
                         color: value.publishAllowed === true ? C.online : C.textMuted,
-                        border: `1px solid ${value.publishAllowed === true ? `${C.online}66` : C.border}`,
+                        border: `1px solid ${value.publishAllowed === true ? `${alpha(C.online, 0.4)}` : C.border}`,
                       }}
                     >
                       Erlaubt
@@ -1844,9 +1845,9 @@ export function TaskFormFields({
                       onClick={() => patch({ publishAllowed: value.publishAllowed === false ? null : false })}
                       className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
                       style={{
-                        backgroundColor: value.publishAllowed === false ? `${C.warning}22` : "transparent",
+                        backgroundColor: value.publishAllowed === false ? `${alpha(C.warning, 0.13)}` : "transparent",
                         color: value.publishAllowed === false ? C.warning : C.textMuted,
-                        border: `1px solid ${value.publishAllowed === false ? `${C.warning}66` : C.border}`,
+                        border: `1px solid ${value.publishAllowed === false ? `${alpha(C.warning, 0.4)}` : C.border}`,
                       }}
                     >
                       Nur Draft

@@ -18,8 +18,10 @@ import { C } from "@/lib/colors";
 
 /** Token value as jsdom reports it — derived from the single source in
  *  lib/colors.ts, so a palette change never breaks this assertion. */
-function rgbOf(hex: string): string {
-  const h = hex.replace("#", "");
+// Tokens are `var(--color-…)` since ADR-084 — jsdom keeps them verbatim.
+function rgbOf(token: string): string {
+  if (token.startsWith("var(")) return token;
+  const h = token.replace("#", "");
   const n = parseInt(h, 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
 }

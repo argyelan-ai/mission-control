@@ -7,7 +7,7 @@ import remarkBreaks from "remark-breaks";
 import { parseComment, type ParsedComment } from "@/lib/parseComment";
 import { timeAgo } from "@/lib/utils";
 import type { TaskComment } from "@/lib/types";
-import { C, STATUS_TEXT, LANE } from "@/lib/colors";
+import { C, STATUS_TEXT, LANE, alpha } from "@/lib/colors";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -57,15 +57,15 @@ const TYPE_LABELS: Record<CommentType, string> = {
 };
 
 const STATUS_PILL_COLORS: Record<string, { bg: string; text: string }> = {
-  blocked: { bg: `${C.error}26`, text: C.error },
-  failed: { bg: `${C.error}26`, text: C.error },
-  done: { bg: `${C.online}26`, text: C.online },
-  in_progress: { bg: LANE.in_progress + "26", text: LANE.in_progress },
-  review: { bg: `${C.warning}26`, text: C.warning },
-  inbox: { bg: `${C.textSecondary}26`, text: C.textSecondary },
+  blocked: { bg: `${alpha(C.error, 0.15)}`, text: C.error },
+  failed: { bg: `${alpha(C.error, 0.15)}`, text: C.error },
+  done: { bg: `${alpha(C.online, 0.15)}`, text: C.online },
+  in_progress: { bg: alpha(LANE.in_progress, 0.15), text: LANE.in_progress },
+  review: { bg: `${alpha(C.warning, 0.15)}`, text: C.warning },
+  inbox: { bg: `${alpha(C.textSecondary, 0.15)}`, text: C.textSecondary },
   user_test: { bg: C.accentSubtle, text: C.accent },
-  waiting: { bg: LANE.waiting + "26", text: LANE.waiting },
-  aborted: { bg: `${C.textMuted}26`, text: C.textMuted },
+  waiting: { bg: alpha(LANE.waiting, 0.15), text: LANE.waiting },
+  aborted: { bg: `${alpha(C.textMuted, 0.15)}`, text: C.textMuted },
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -192,8 +192,8 @@ function TypeBadge({ type, color }: { type: CommentType; color: string }) {
         textTransform: "uppercase",
         letterSpacing: "0.06em",
         color: color,
-        background: `${color}1a`,
-        border: `1px solid ${color}33`,
+        background: `${alpha(color, 0.1)}`,
+        border: `1px solid ${alpha(color, 0.2)}`,
       }}
     >
       {TYPE_LABELS[type]}
@@ -288,7 +288,7 @@ function ChecklistSection({ content }: { content: string }) {
                   ? `1.5px solid ${C.online}`
                   : "1.5px solid rgba(255, 255, 255, 0.2)",
                 background: checked
-                  ? `${C.online}26`
+                  ? `${alpha(C.online, 0.15)}`
                   : "transparent",
                 color: C.online,
                 fontSize: 10,
@@ -349,11 +349,11 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
 
   // Background tint for special types
   let bgTint = "rgba(255, 255, 255, 0.03)";
-  if (type === "blocker") bgTint = `${C.error}08`;
-  if (type === "resolution") bgTint = `${C.online}05`;
-  if (isReflection) bgTint = `${C.info}0A`;
-  if (isWaitingCallback) bgTint = `${C.warning}0A`;
-  if (isSystem) bgTint = `${C.textSecondary}0D`;
+  if (type === "blocker") bgTint = `${alpha(C.error, 0.03)}`;
+  if (type === "resolution") bgTint = `${alpha(C.online, 0.02)}`;
+  if (isReflection) bgTint = `${alpha(C.info, 0.04)}`;
+  if (isWaitingCallback) bgTint = `${alpha(C.warning, 0.04)}`;
+  if (isSystem) bgTint = `${alpha(C.textSecondary, 0.05)}`;
 
   const leftBorderColor = isSystem ? C.textMuted : color;
   const leftBorderStyle = isSystem ? "dashed" : "solid";
@@ -408,8 +408,8 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
               textTransform: "uppercase",
               letterSpacing: "0.06em",
               color: C.textSecondary,
-              background: `${C.textSecondary}1F`,
-              border: `1px solid ${C.textSecondary}40`,
+              background: `${alpha(C.textSecondary, 0.12)}`,
+              border: `1px solid ${alpha(C.textSecondary, 0.25)}`,
             }}
             title="Automatisch vom System generiert (z.B. Auto-Draft Fallback). Nicht vom Agent verfasst."
           >

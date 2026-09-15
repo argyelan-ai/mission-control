@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { OrgChartNode } from "./OrgChartNode";
 import { ORG_CHART, getChildren, getRoot } from "./org-chart-data";
 import type { OrgNode } from "./types";
-import { C, STATUS } from "@/lib/colors";
+import { C, STATUS, alpha } from "@/lib/colors";
 
 /**
  * Connector descriptor — computed from card DOM rects relative to the
@@ -191,8 +191,8 @@ export function OrgChart({ zoom = 1 }: OrgChartProps = {}) {
             <stop offset="100%" stopColor="rgba(146,170,206,0.18)" />
           </linearGradient>
           <linearGradient id="org-line-voice" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor={`${C.accent}D9`} />
-            <stop offset="100%" stopColor={`${C.accent}59`} />
+            <stop offset="0%"   stopColor={`${alpha(C.accent, 0.85)}`} />
+            <stop offset="100%" stopColor={`${alpha(C.accent, 0.35)}`} />
           </linearGradient>
         </defs>
         {connectors.map((c, i) => (

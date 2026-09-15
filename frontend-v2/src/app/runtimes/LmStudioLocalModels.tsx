@@ -22,7 +22,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Square, Settings2, Loader2, type LucideIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import type { LMStudioModel } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { fmtCtx } from "@/lib/utils";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -50,8 +50,8 @@ function ActionButton({
   // and red already means "failed" elsewhere. The hue still carries the
   // action; the fill only appears on hover.
   const colors = {
-    success: { border: `${C.online}40`, text: C.online, hover: `${C.online}1A` },
-    danger:  { border: `${C.error}33`, text: STATUS_TEXT.error, hover: `${C.error}1A` },
+    success: { border: `${alpha(C.online, 0.25)}`, text: C.online, hover: `${alpha(C.online, 0.1)}` },
+    danger:  { border: `${alpha(C.error, 0.2)}`, text: STATUS_TEXT.error, hover: `${alpha(C.error, 0.1)}` },
     default: { border: C.borderActive, text: C.textMuted, hover: C.bgHover },
   };
   const c = colors[variant];

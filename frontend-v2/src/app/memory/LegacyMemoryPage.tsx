@@ -21,7 +21,7 @@ import { SemanticCardGrid } from "@/components/memory/SemanticCardGrid";
 import { AgentLessonMatrix } from "@/components/memory/AgentLessonMatrix";
 import { AttachmentPanel } from "@/components/memory/AttachmentPanel";
 import { MergeResolutionPanel } from "@/components/memory/MergeResolutionPanel";
-import { C as _C, STATUS_TEXT } from "@/lib/colors";
+import { C as _C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
@@ -43,8 +43,8 @@ const TYPE_CONFIG: Record<MemoryType, { color: string; label: string; pill: stri
   lesson:        { color: C.err,    label: "Lesson",        pill: "rgba(239,68,68,0.12)" },
   reference:     { color: C.warn,   label: "Reference",     pill: "rgba(245,158,11,0.12)" },
   journal:       { color: C.online, label: "Journal",       pill: "rgba(0,204,136,0.10)" },
-  knowledge:     { color: _C.textSecondary, label: "Knowledge",    pill: `${_C.textSecondary}1F` },
-  weekly_review: { color: _C.textSecondary, label: "Weekly",       pill: `${_C.textSecondary}1F` },
+  knowledge:     { color: _C.textSecondary, label: "Knowledge",    pill: `${alpha(_C.textSecondary, 0.12)}` },
+  weekly_review: { color: _C.textSecondary, label: "Weekly",       pill: `${alpha(_C.textSecondary, 0.12)}` },
   research:      { color: STATUS_TEXT.info, label: "Research",     pill: "rgba(46,111,216,0.12)" },
   insight:       { color: C.online, label: "Insight",       pill: "rgba(0,204,136,0.10)" },
 };

@@ -4,6 +4,7 @@
  * the detail level changing under a mounted group.
  */
 import { describe, it, expect } from "vitest";
+import { STATUS_TEXT } from "@/lib/colors";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToolGroup, summarizeActivity, type ActivityEvent } from "./ToolGroup";
@@ -131,7 +132,7 @@ describe("ToolGroup", () => {
     // Ein fehlgeschlagenes Tool unter vielen ist eine Warnung (Bernstein) —
     // Rot ist dem Lauf vorbehalten, der wirklich gescheitert ist.
     render(<ToolGroup events={[tool(), tool({ status: "error" })]} detailLevel="normal" />);
-    expect(screen.getByTestId("tool-group-error-icon").style.color).toBe("rgb(185, 143, 77)");
+    expect(screen.getByTestId("tool-group-error-icon").style.color).toBe(STATUS_TEXT.warning);
   });
 
   it("announces the failure to screen readers, not just in colour", () => {

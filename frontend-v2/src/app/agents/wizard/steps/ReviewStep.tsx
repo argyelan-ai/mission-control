@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { WizardStepProps } from "../types";
 import { TokenDisplay, wizardBtnPrimaryStyle, wizardLabelClass } from "../shared";
 
@@ -107,8 +107,8 @@ export function ReviewStep({
           <div
             className="rounded-lg px-3 py-2 text-[11px]"
             style={{
-              backgroundColor: `${C.warning}14`,
-              border: `1px solid ${C.warning}33`,
+              backgroundColor: `${alpha(C.warning, 0.08)}`,
+              border: `1px solid ${alpha(C.warning, 0.2)}`,
               color: "var(--color-text-secondary)",
             }}
           >

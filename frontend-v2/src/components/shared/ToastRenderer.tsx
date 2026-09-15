@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle, AlertTriangle, Info, X } from "lucide-react";
 import { useNotificationStore, type AppNotification, type NotificationType } from "@/lib/store";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 // Errors stay up longer — they're the ones the operator actually needs to read.
 const AUTO_DISMISS_MS: Record<NotificationType, number> = {
@@ -52,7 +52,7 @@ function ToastItem({ notification }: { notification: AppNotification }) {
       className="pointer-events-auto flex items-start gap-2.5 rounded-lg pl-3.5 pr-2.5 py-3 w-full"
       style={{
         backgroundColor: C.bgSurface,
-        border: `1px solid ${color}4D`,
+        border: `1px solid ${alpha(color, 0.3)}`,
         boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
       }}
     >

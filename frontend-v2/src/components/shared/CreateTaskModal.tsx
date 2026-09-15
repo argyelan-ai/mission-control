@@ -15,6 +15,7 @@ import {
 } from "./TaskFormFields";
 import { C as MC } from "@/components/homepage/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { alpha } from "@/lib/colors";
 
 // ── Design tokens — sourced from the shared MC palette (single source, no purple)
 const C = {
@@ -284,8 +285,8 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
         className="flex items-center justify-center min-h-touch min-w-touch rounded-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
           color: C.accent,
-          border: `1px solid ${C.accent}44`,
-          backgroundColor: `${C.accent}0A`,
+          border: `1px solid ${alpha(C.accent, 0.27)}`,
+          backgroundColor: `${alpha(C.accent, 0.04)}`,
         }}
       >
         <Plus size={14} />
@@ -352,8 +353,8 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                       className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[9px] font-medium"
                       style={{
                         color: currentTemplate.color,
-                        background: `${currentTemplate.color}18`,
-                        border: `1px solid ${currentTemplate.color}33`,
+                        background: `${alpha(currentTemplate.color, 0.09)}`,
+                        border: `1px solid ${alpha(currentTemplate.color, 0.2)}`,
                       }}
                     >
                       <currentTemplate.icon size={9} />
@@ -371,7 +372,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
               {referenceUploadErrors.length > 0 && (
                 <div
                   className="flex items-start gap-2 px-5 py-2.5 text-[11px] shrink-0"
-                  style={{ background: `${C.warning}12`, borderBottom: `1px solid ${C.warning}33`, color: C.warning }}
+                  style={{ background: `${alpha(C.warning, 0.07)}`, borderBottom: `1px solid ${alpha(C.warning, 0.2)}`, color: C.warning }}
                 >
                   <AlertTriangle size={12} className="shrink-0 mt-0.5" />
                   <div className="flex flex-col gap-0.5">

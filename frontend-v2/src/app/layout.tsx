@@ -3,6 +3,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import "@/styles/globals.css";
 import { Providers } from "./providers";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 
 export const metadata: Metadata = {
   title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
@@ -39,10 +40,12 @@ export default async function RootLayout({
     <html
       lang={locale}
       className="dark"
-      style={{ colorScheme: "dark" }}
       suppressHydrationWarning
     >
       <head>
+        {/* Theme before first paint (ADR-084): reads the stored choice and
+            stamps data-theme + color-scheme on <html>. Dependency-free. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <link rel="icon" href="/favicon.ico" sizes="any" />
         {/* Preload the two critical self-hosted fonts (first paint: UI sans + display) */}

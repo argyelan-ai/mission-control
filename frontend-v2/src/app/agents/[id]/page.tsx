@@ -18,7 +18,7 @@ import {
   HardDrive, FolderArchive, RefreshCw, Package, Box,
 } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
-import { C, STATUS } from "@/lib/colors";
+import { C, STATUS, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { useAgentStream } from "@/lib/sse";
 import { notify } from "@/lib/notify";
@@ -149,17 +149,17 @@ function SkillRow({
   });
 
   const borderColor = pendingChange === "add"
-    ? `${C.online}66`
+    ? `${alpha(C.online, 0.4)}`
     : pendingChange === "remove"
-    ? `${C.error}66`
+    ? `${alpha(C.error, 0.4)}`
     : skill.status === "ready"
     ? "var(--color-border)"
-    : `${cfg.color}33`;
+    : `${alpha(cfg.color, 0.2)}`;
 
   const bgTint = pendingChange === "add"
-    ? `${C.online}08`
+    ? `${alpha(C.online, 0.03)}`
     : pendingChange === "remove"
-    ? `${C.error}08`
+    ? `${alpha(C.error, 0.03)}`
     : undefined;
 
   return (
@@ -187,7 +187,7 @@ function SkillRow({
               {skill.emoji && <EntityIcon value={skill.emoji} size={12} className="mr-1" />}
               {skill.name}
             </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: `${alpha(cfg.color, 0.09)}` }}>
               {t(cfg.labelKey)}
             </span>
             {pendingChange && (
@@ -195,7 +195,7 @@ function SkillRow({
                 className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 font-medium"
                 style={{
                   color: pendingChange === "add" ? C.online : C.error,
-                  backgroundColor: pendingChange === "add" ? `${C.online}18` : `${C.error}18`,
+                  backgroundColor: pendingChange === "add" ? `${alpha(C.online, 0.09)}` : `${alpha(C.error, 0.09)}`,
                 }}
               >
                 {pendingChange === "add" ? t("detail.pendingNew") : t("detail.pendingRemoved")}
@@ -252,7 +252,7 @@ function SkillRow({
             onClick={() => toggleMutation.mutate(true)}
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
-            style={{ color: C.online, backgroundColor: `${C.online}1F` }}
+            style={{ color: C.online, backgroundColor: `${alpha(C.online, 0.12)}` }}
             title={t("detail.enableSkill")}
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
@@ -279,8 +279,8 @@ function SkillRow({
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
             style={{
               backgroundColor: isActive
-                ? pendingChange === "remove" ? `${C.error}18` : `${C.accent}26`
-                : pendingChange === "add" ? `${C.online}18` : "var(--color-bg-elevated)",
+                ? pendingChange === "remove" ? `${alpha(C.error, 0.09)}` : `${alpha(C.accent, 0.15)}`
+                : pendingChange === "add" ? `${alpha(C.online, 0.09)}` : "var(--color-bg-elevated)",
               color: isActive
                 ? pendingChange === "remove" ? C.error : C.accent
                 : pendingChange === "add" ? C.online : "var(--color-text-muted)",
@@ -1080,7 +1080,7 @@ function ConfigTab({
           <div
             key={i}
             className="flex items-start gap-2 text-xs p-2 rounded-lg"
-            style={{ backgroundColor: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}40` }}
+            style={{ backgroundColor: `${alpha(C.warning, 0.1)}`, color: C.warning, border: `1px solid ${alpha(C.warning, 0.25)}` }}
           >
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             {w}
@@ -1219,7 +1219,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
             <button
               onClick={() => setConfirmClear(true)}
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
-              style={{ color: C.error, backgroundColor: `${C.error}14` }}
+              style={{ color: C.error, backgroundColor: `${alpha(C.error, 0.08)}` }}
             >
               {t("delete")}
             </button>
@@ -1429,8 +1429,8 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 disabled={deleteMutation.isPending}
                 className="p-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
                 style={{
-                  background: `${C.error}14`,
-                  border: `1px solid ${C.error}33`,
+                  background: `${alpha(C.error, 0.08)}`,
+                  border: `1px solid ${alpha(C.error, 0.2)}`,
                   color: C.error,
                 }}
                 title={t("deleteFile")}
@@ -1546,7 +1546,7 @@ function OverviewTab({
           <div className="mt-2">
             <span
               className="text-xs font-medium px-2 py-0.5 rounded-sm font-mono"
-              style={{ color: rsColor, backgroundColor: `${rsColor}18` }}
+              style={{ color: rsColor, backgroundColor: `${alpha(rsColor, 0.09)}` }}
             >
               {agent.run_state}
             </span>
@@ -1772,9 +1772,9 @@ function ActionButton({
       title={title}
       className="flex items-center justify-center gap-1.5 text-[11px] px-3 py-1.5 max-sm:w-full max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer transition-all disabled:opacity-50"
       style={{
-        backgroundColor: `${color}18`,
+        backgroundColor: `${alpha(color, 0.09)}`,
         color,
-        border: `1px solid ${color}30`,
+        border: `1px solid ${alpha(color, 0.19)}`,
       }}
     >
       {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
@@ -1956,9 +1956,9 @@ export default function AgentDetailPage() {
             className="p-6"
             glow={
               agent.status === "online"
-                ? `${C.online}14`
+                ? `${alpha(C.online, 0.08)}`
                 : agent.status === "error"
-                ? `${C.error}14`
+                ? `${alpha(C.error, 0.08)}`
                 : undefined
             }
           >
@@ -2041,8 +2041,8 @@ export default function AgentDetailPage() {
               <div
                 className="mt-4 rounded-lg px-3 py-2.5 text-[11px] leading-relaxed"
                 style={{
-                  backgroundColor: `${C.warning}14`,
-                  border: `1px solid ${C.warning}33`,
+                  backgroundColor: `${alpha(C.warning, 0.08)}`,
+                  border: `1px solid ${alpha(C.warning, 0.2)}`,
                   color: "var(--color-text-secondary)",
                 }}
               >
@@ -2131,8 +2131,8 @@ export default function AgentDetailPage() {
                     <span
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg max-sm:w-full"
                       style={{
-                        backgroundColor: `${C.warning}14`,
-                        border: `1px solid ${C.warning}33`,
+                        backgroundColor: `${alpha(C.warning, 0.08)}`,
+                        border: `1px solid ${alpha(C.warning, 0.2)}`,
                         color: C.warning,
                       }}
                       title={t("detail.bridgeOfflineTitle")}

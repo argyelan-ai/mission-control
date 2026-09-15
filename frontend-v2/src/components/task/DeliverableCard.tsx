@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import type { TaskDeliverable } from "@/lib/types";
 import { FilePreview } from "./FilePreview";
 import { DirectoryBrowser } from "./DirectoryBrowser";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 function DeliverableIcon({ type }: { type: string }) {
   const map: Record<string, React.ReactNode> = {
@@ -113,7 +113,7 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
             {hasContent && (
               <span
                 className="text-[9px] px-1.5 py-0.5 rounded-sm shrink-0"
-                style={{ background: `${C.online}1A`, color: C.online }}
+                style={{ background: `${alpha(C.online, 0.1)}`, color: C.online }}
               >
                 content
               </span>

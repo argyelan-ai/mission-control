@@ -7,7 +7,7 @@ import { timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { FilePreview } from "@/components/task/FilePreview";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { Approval, XPostApprovalPayload } from "@/lib/types";
 
 // Mirrors backend services/x_publisher.MAX_TWEET_LENGTH — the backend counts
@@ -120,15 +120,15 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 8, height: 0 }}
     >
-      <GlassCard className="p-4" glow={`${C.accent}12`}>
+      <GlassCard className="p-4" glow={`${alpha(C.accent, 0.07)}`}>
         {/* Header */}
         <div className="flex items-center gap-2 flex-wrap">
           <span
             className="text-[11px] px-2 py-0.5 rounded-lg font-medium flex items-center gap-1.5"
             style={{
-              backgroundColor: `${C.accent}18`,
+              backgroundColor: `${alpha(C.accent, 0.09)}`,
               color: C.accent,
-              border: `1px solid ${C.accent}30`,
+              border: `1px solid ${alpha(C.accent, 0.19)}`,
             }}
           >
             <Send size={12} /> X Post
@@ -191,9 +191,9 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
             disabled={loading}
             className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
             style={{
-              backgroundColor: `${C.online}1F`,
+              backgroundColor: `${alpha(C.online, 0.12)}`,
               color: C.online,
-              border: `1px solid ${C.online}40`,
+              border: `1px solid ${alpha(C.online, 0.25)}`,
             }}
           >
             <CheckCircle size={13} /> {t("approvePost")}
@@ -203,9 +203,9 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
             disabled={loading}
             className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
             style={{
-              backgroundColor: `${C.error}1F`,
+              backgroundColor: `${alpha(C.error, 0.12)}`,
               color: C.error,
-              border: `1px solid ${C.error}40`,
+              border: `1px solid ${alpha(C.error, 0.25)}`,
             }}
           >
             <XCircle size={13} /> {t("reject")}

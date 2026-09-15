@@ -29,7 +29,7 @@ import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, 
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { timeAgo } from "@/lib/utils";
-import { C, LANE, STATUS_TEXT } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
@@ -202,7 +202,7 @@ function StatusMenu({
         aria-expanded={open}
         aria-label={t("statusChange", { label: t(STATUS_LABEL_KEY[status]) })}
         className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-85"
-        style={{ background: `${color}1F`, border: `1px solid ${color}55`, color }}
+        style={{ background: `${alpha(color, 0.12)}`, border: `1px solid ${alpha(color, 0.33)}`, color }}
       >
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
         {t(STATUS_LABEL_KEY[status])}
@@ -339,7 +339,7 @@ function OverflowMenu({
                     onClick={onDelete}
                     disabled={deleteLoading}
                     className="px-2 py-1 rounded-sm text-[10px] font-semibold cursor-pointer"
-                    style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
+                    style={{ backgroundColor: `${alpha(C.error, 0.15)}`, color: STATUS_TEXT.error }}
                   >
                     {deleteLoading ? "…" : t("deleteTask")}
                   </button>

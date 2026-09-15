@@ -1191,8 +1191,20 @@
     "save": "Speichern",
     "saved": "Gespeichert",
     "cancel": "Abbrechen",
+    "appearance": {
+      "title": "Darstellung",
+      "description": "So sieht Mission Control auf diesem Gerät aus.",
+      "dark": "Dunkel",
+      "darkDesc": "Der Ops-Room-Look — für Abende und lange Sessions.",
+      "light": "Hell",
+      "lightDesc": "Papier und Tinte — ruhiger bei Tageslicht.",
+      "system": "System",
+      "systemDesc": "Folgt deinem Betriebssystem.",
+      "note": "Wird in diesem Browser gespeichert. Terminals bleiben in beiden Themes dunkel."
+    },
     "sections": {
       "profile": "Profil",
+      "appearance": "Darstellung",
       "security": "Sicherheit",
       "autonomy": "Autonomie",
       "intelligence": "Intelligence",

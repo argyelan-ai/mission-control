@@ -18,7 +18,7 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -145,7 +145,7 @@ function ListRow({
               title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
+                backgroundColor: isCritical ? `${alpha(C.error, 0.1)}` : `${alpha(C.warning, 0.1)}`,
               }}
             >
               <Clock size={9} />

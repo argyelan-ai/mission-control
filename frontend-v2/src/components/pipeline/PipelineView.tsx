@@ -20,6 +20,7 @@ import { PipelineCard } from "./PipelineCard";
 import TaskDetailPanel from "@/components/task/TaskDetailPanel";
 import type { Agent, PipelineTask, Task } from "@/lib/types";
 import { C, LANE } from "@/components/homepage/colors";
+import { alpha } from "@/lib/colors";
 
 // ── Lane Config (colors sourced from the single LANE vocabulary in colors.ts) ──
 
@@ -200,7 +201,7 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
                       className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
                       style={{
                         color: laneColor,
-                        backgroundColor: `${laneColor}1A`,
+                        backgroundColor: `${alpha(laneColor, 0.1)}`,
                       }}
                     >
                       {lane.key === "done" ? done_count : tasks.length}

@@ -22,7 +22,7 @@ import type { Agent, Harness, RuntimeSwitchPreview, RuntimeSwitchSummary } from 
 import { api } from "@/lib/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { notify } from "@/lib/notify";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 
 const SWITCH_STEPS: Array<{ key: string; label: string }> = [
@@ -62,9 +62,9 @@ function MiniRuntimeChip({ runtime }: { runtime: RuntimeSwitchSummary }) {
     <span
       className="inline-flex items-center gap-2 font-mono text-[11px] px-2 py-1 rounded-md"
       style={{
-        backgroundColor: `${color}14`,
+        backgroundColor: `${alpha(color, 0.08)}`,
         color: "var(--color-text-secondary)",
-        border: `1px solid ${color}33`,
+        border: `1px solid ${alpha(color, 0.2)}`,
       }}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />

@@ -25,11 +25,13 @@
 import { render } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { ActivityFeed } from "@/components/shared/ActivityFeed";
+import { C } from "@/lib/colors";
 
+// Tokens are `var(--color-…)` since ADR-084; jsdom keeps them verbatim.
 const STATUS_TO_RGB: Record<string, string> = {
-  warning: "rgb(166, 127, 62)",  // C.warning = #A67F3E
-  online: "rgb(85, 169, 100)",   // C.online  = #55A964
-  error: "rgb(250, 73, 66)",     // C.error   = #FA4942
+  warning: C.warning,
+  online: C.online,
+  error: C.error,
 };
 
 describe("ActivityFeed Phase 6 events", () => {

@@ -12,7 +12,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
 import { JobRow } from "./JobRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 interface JobsTableProps {
   jobs: ScheduledJob[];
@@ -330,8 +330,8 @@ function BulkBtn({
       onClick={onClick}
       className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition"
       style={{
-        borderColor: danger ? `${C.error}59` : "rgba(255,255,255,0.1)",
-        background: danger ? `${C.error}1A` : C.borderSubtle,
+        borderColor: danger ? `${alpha(C.error, 0.35)}` : "rgba(255,255,255,0.1)",
+        background: danger ? `${alpha(C.error, 0.1)}` : C.borderSubtle,
         color: danger ? STATUS_TEXT.error : C.textPrimary,
       }}
     >

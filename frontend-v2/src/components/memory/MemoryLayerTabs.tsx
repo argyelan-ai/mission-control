@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { Database, Clock, GraduationCap, Layers } from "lucide-react";
 import { LAYER_COLORS } from "@/components/memory/graphConfig";
+import { alpha } from "@/lib/colors";
 
 export type MemoryLayer = "semantic" | "episodic" | "agent" | "topics";
 
@@ -47,8 +48,8 @@ export function MemoryLayerTabs({
                 layoutId="memory-layer-tab"
                 className="absolute inset-0 rounded-lg"
                 style={{
-                  background: `${cfg.color}08`,
-                  border: `1px solid ${cfg.color}25`,
+                  background: `${alpha(cfg.color, 0.03)}`,
+                  border: `1px solid ${alpha(cfg.color, 0.15)}`,
                 }}
                 transition={{ type: "spring", stiffness: 400, damping: 30 }}
               />
@@ -60,7 +61,7 @@ export function MemoryLayerTabs({
                 <span
                   className="px-1.5 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
                   style={{
-                    background: isActive ? `${cfg.color}18` : "var(--color-bg-elevated)",
+                    background: isActive ? `${alpha(cfg.color, 0.09)}` : "var(--color-bg-elevated)",
                     color: isActive ? cfg.color : "var(--color-text-muted)",
                   }}
                 >

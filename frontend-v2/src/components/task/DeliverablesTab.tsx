@@ -10,7 +10,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, X, ZoomIn } from "lucide-react";
 import { getToken } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { DeliverableCard } from "./DeliverableCard";
 import type { TaskDeliverable } from "@/lib/types";
 
@@ -61,7 +61,7 @@ function AuthImage({
         className={className}
         style={{ ...style, background: "var(--color-bg-surface)", display: "flex", alignItems: "center", justifyContent: "center" }}
       >
-        <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: `${C.accent}40`, borderTopColor: "transparent" }} />
+        <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: `${alpha(C.accent, 0.25)}`, borderTopColor: "transparent" }} />
       </div>
     );
   }
