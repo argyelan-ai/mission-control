@@ -190,7 +190,7 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
                     task_slug,
                 )
                 workspace = worktree_path
-                await git_service.setup_git_identity(worktree_path, agent.name)
+                await git_service.setup_git_identity(worktree_path, agent.name, main_repo=main_repo)
                 logger.info(
                     "CLI Bridge worktree for task '%s': %s",
                     task.title, worktree_path,
@@ -233,7 +233,7 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
                 main_repo, task_slug,
             )
             workspace = worktree_path
-            await git_service.setup_git_identity(worktree_path, agent.name)
+            await git_service.setup_git_identity(worktree_path, agent.name, main_repo=main_repo)
             logger.info(
                 "CLI Bridge ad-hoc worktree for task '%s': %s",
                 task.title, worktree_path,

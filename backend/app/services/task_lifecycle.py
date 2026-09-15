@@ -572,18 +572,35 @@ async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[
     both must agree on who counts as "the assignee that did the work" so an
     agent can't bypass the guard by using the generic PATCH endpoint instead
     of POST /review.
+
+    PR #527 review, blocker 1: transitions logged through the operator PATCH
+    (routers/tasks.py:update_task, `changed_by="user"`) never carry
+    `agent_id` at all — that endpoint records WHO called it (a human/system
+    caller), not which agent the card belongs to. A card whose entire entry
+    history went through that path — the ordinary shape of a card someone
+    ACKed/handed-off via a route other than the agent-scoped PATCH — used to
+    read back an EMPTY worker set here (the query filtered `agent_id IS NOT
+    NULL` before this fix), so the guard could not fire for it at all. Falling
+    back to `task.assigned_agent_id` for a NULL-`agent_id` event recovers the
+    common case: nobody has been reassigned away from the card since that
+    event, so the current assignee IS who the transition concerns. This is a
+    best-effort reconstruction, not a full fix — a card with a MIXED history
+    (agent-attributed events from before a handoff, NULL-attributed ones
+    after) could still misattribute a stale NULL event to today's assignee.
+    Closing that fully means stamping `agent_id` at write time in every
+    `changed_by="user"`/`"system"` call site instead of reconstructing it
+    here after the fact — out of scope for this fix.
     """
     events_result = await session.exec(
         select(TaskEvent).where(
             TaskEvent.task_id == task.id,
             TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
-            TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
         ).order_by(TaskEvent.created_at)  # type: ignore[arg-type]
     )
     worker_agent_ids: set[uuid.UUID] = set()
     review_entrants: set[uuid.UUID] = set()  # entered the task FROM review status
     for event in events_result.all():
-        aid = event.agent_id
+        aid = event.agent_id or task.assigned_agent_id
         if not aid:
             continue
         if event.from_status == "review" and event.to_status == "in_progress":
@@ -696,12 +713,40 @@ async def execute_review_decision(
         if not children_ok:
             raise HTTPException(400, children_detail)
 
-    # Self-review guard: the agent that WORKED on the task may not approve it.
-    # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work.
-    if decision == "approve" and actor_agent:
+    # Ownership guard: the agent that WORKED on the task may not decide it.
+    # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work,
+    # so the everyday case — a reviewer deciding a card handed to it by
+    # handle_review_handoff — passes untouched.
+    #
+    # This used to run for `approve` only. A reviewer that pointed `mc reject`
+    # at its OWN review card therefore sailed straight through: the card left
+    # `review` for `inbox` carrying review_decision=changes_requested, and the
+    # re-dispatch that followed was pure noise. request_changes and hold move a
+    # card just as much as approve does, so they get the same ownership check.
+    #
+    # Deliberately NOT keyed on `task.assigned_agent_id == actor.id`: in the
+    # normal flow handle_review_handoff assigns the AUTHOR's card to the
+    # reviewer, so that comparison would reject exactly the case that must keep
+    # working. get_review_worker_agent_ids answers the question that actually
+    # matters — did *I* do the implementation work on this card?
+    if decision in ("approve", "request_changes", "hold") and actor_agent:
         worker_agent_ids = await get_review_worker_agent_ids(session, task)
 
-        if actor_agent.id in worker_agent_ids:
+        if actor_agent.id in worker_agent_ids and decision != "approve":
+            # Nothing to escalate on a reject/hold — the decision simply is not
+            # the actor's to make. Hard 409 with the fix spelled out.
+            if not actor_agent.is_board_lead:
+                raise HTTPException(
+                    409,
+                    f"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' "
+                    f"selbst gearbeitet und kann sie nicht reviewen. "
+                    f"Review-Verben entscheiden die Karte des AUTORS — gib deren "
+                    f"Task-ID explizit an: `mc {'reject' if decision == 'request_changes' else 'hold'} <task-id> ...`. "
+                    f"Ist die Autorenkarte schon geschlossen, halte das Urteil mit "
+                    f"`mc review-note <task-id> --decision {decision} --feedback \"...\"` fest.",
+                )
+
+        if actor_agent.id in worker_agent_ids and decision == "approve":
             if not actor_agent.is_board_lead:
                 # Self-review blocked → escalate to Board Lead instead of hard-blocking
                 _bl_result = await session.exec(
@@ -1046,6 +1091,135 @@ async def execute_review_decision(
     # "review" for hold), so one call after the commit covers all of them.
     from app.services.approval_cleanup import cleanup_obsolete_approvals
     await cleanup_obsolete_approvals(session, task.id, task.status, board_id)
+
+
+async def record_late_review_note(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+    decision: Literal["approve", "request_changes", "hold"],
+    comment_text: str,
+    actor_agent: Agent | None = None,
+) -> dict:
+    """Record a LATE review verdict on a card whose review window has closed.
+
+    execute_review_decision requires status == "review" — rightly so, it moves
+    the card. But a reviewer that arrives after the author's card already went
+    `done` then has no formal way to file its verdict at all: the review verbs
+    bounce with 409 and the judgement survives only as prose in some comment.
+    That happened on PR #500 (both author cards were `done`); the verdict was
+    real and well-argued, it just never became a recorded decision.
+
+    This is the narrow completion of that gap. It writes the SAME two artefacts
+    execute_review_decision writes — a `review` comment and
+    review_decision/review_decided_at — and stops there:
+
+      * no status transition, ever. A closed card is not silently reopened on a
+        note, and `request_changes` here does NOT bounce the card back to
+        in_progress. Reopening stays an explicit, separate act.
+      * no re-dispatch, no PR merge, no report-back gate, no agent release.
+      * no new status and no schema change — review_decision already carries
+        approved | changes_requested | hold (models/task.py).
+
+    The ownership guard applies here too: filing a late verdict on your own
+    work is self-review with extra steps.
+
+    PR #527 review, blocker 2: `execute_review_decision`'s ownership guard
+    sends a worker who is blocked from deciding its own in-review card
+    straight to `review-note` as the way to get its verdict recorded anyway
+    — but this endpoint used to refuse EVERY card still in `review`,
+    unconditionally, so that referral was a dead end: the two 409s pointed
+    at each other with no way through. The escape hatch is narrow — it
+    opens ONLY for the exact caller the ownership guard just turned away
+    (a worker on THIS card, not a board lead, not an uninvolved caller who
+    could simply use the normal decision instead), and it still writes
+    nothing but the note: no status change, same as every other call here.
+    """
+    worker_agent_ids: set[uuid.UUID] = set()
+    if actor_agent:
+        worker_agent_ids = await get_review_worker_agent_ids(session, task)
+    is_blocked_worker = (
+        actor_agent is not None
+        and actor_agent.id in worker_agent_ids
+        and not actor_agent.is_board_lead
+    )
+
+    if task.status == "review" and not is_blocked_worker:
+        raise HTTPException(
+            409,
+            f"Karte '{task.title}' steht offen im Review — nutze die normale "
+            f"Entscheidung (`mc approve <task-id>` / `mc reject <task-id> --feedback ...`). "
+            f"`review-note` ist nur fuer Nachzuegler-Reviews auf bereits geschlossenen Karten "
+            f"oder fuer den Ausweg aus dem Besitz-Guard, wenn die normale Entscheidung "
+            f"dir gerade mit 409 verweigert wurde.",
+        )
+
+    comment_text = (comment_text or "").strip()
+    if not comment_text:
+        raise HTTPException(400, "Ein Nachzuegler-Review braucht eine Begruendung (comment).")
+
+    # Self-review guard — skipped for the escape-hatch case above (task
+    # still in `review`, caller is exactly the blocked worker): that IS the
+    # door execute_review_decision's 409 points to, re-closing it here would
+    # undo the fix. For every other case (the ordinary late note on an
+    # already-closed card) a worker filing about its own implementation work
+    # is still refused.
+    if is_blocked_worker and task.status != "review":
+        raise HTTPException(
+            409,
+            f"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' selbst "
+            f"gearbeitet — ein Nachtrag dazu waere Self-Review. Gib die Task-ID der "
+            f"Karte an, die du tatsaechlich reviewt hast.",
+        )
+
+    decision_map = {
+        "approve": "approved",
+        "request_changes": "changes_requested",
+        "hold": "hold",
+    }
+    actor_name = actor_agent.name if actor_agent else "Operator"
+
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="agent" if actor_agent else "user",
+        author_agent_id=actor_agent.id if actor_agent else None,
+        comment_type="review",
+        content=(
+            f"**Nachtrag-Review ({decision_map[decision]})** — abgegeben, "
+            f"nachdem die Karte den Status `{task.status}` erreicht hatte. "
+            f"Kein Statuswechsel.\n\n{comment_text}"
+        ),
+    ))
+
+    task.review_decision = decision_map[decision]
+    task.review_decided_at = utcnow()
+    task.updated_at = utcnow()
+    session.add(task)
+    await session.commit()
+
+    await emit_event(
+        session, "review.late_note",
+        f"Nachzuegler-Review ({decision_map[decision]}) von {actor_name} — '{task.title}'",
+        board_id=board_id, task_id=task.id,
+        agent_id=actor_agent.id if actor_agent else None,
+        severity="warning" if decision != "approve" else "info",
+        detail={
+            "decision": decision_map[decision],
+            "actor": actor_name,
+            "task_status": task.status,
+        },
+    )
+
+    logger.info(
+        "Nachzuegler-Review %s von %s auf '%s' (Status bleibt %s)",
+        decision_map[decision], actor_name, task.title[:40], task.status,
+    )
+    return {
+        "status": "ok",
+        "decision": decision_map[decision],
+        "task_status": task.status,
+        "status_changed": False,
+    }
 
 
 async def system_finalize_task_done(
