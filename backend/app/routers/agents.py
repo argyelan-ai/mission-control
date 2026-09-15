@@ -2967,6 +2967,13 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     # W0.1: one heal per card per round — the redispatch re-delivers the
     # prompt, so it competes with every other healer (watchdog orphans,
     # tiered recovery) acting on this card in the same round.
+    # Pool hygiene (incident 2026-09-14): the ModelUsageEvent select above
+    # opened a read transaction on the request session. The Redis awaits
+    # below are NOT database work — holding the transaction across them
+    # pins a pool connection (29/30 connections were found pinned this way).
+    # Nothing is uncommitted here (read phase), so commit releases the
+    # connection's transaction before the awaits.
+    await session.commit()
     redis = await get_redis()
     if not await try_claim_heal(redis, str(task.id)):
         logger.info(
@@ -3251,6 +3258,11 @@ async def agent_poll(
                     )
                 ).first()
             ):
+                # Pool hygiene (incident 2026-09-14): the selects above opened a
+                # read transaction; the orphan helper awaits Redis (not DB work)
+                # — release the connection's transaction first. Read phase, so
+                # there is nothing uncommitted.
+                await session.commit()
                 orphaned = await _maybe_redispatch_orphaned_run(
                     session, agent, active,
                 )
@@ -3298,6 +3310,11 @@ async def agent_poll(
             # phase_approval claims above are untouched. See runtime_readiness.py.
             if task is not None:
                 from app.services.runtime_readiness import runtime_ready_for_agent
+                # Pool hygiene (incident 2026-09-14): the readiness gate
+                # awaits Redis and — on a cache miss — a live HTTP probe of
+                # the runtime. Not DB work: commit the read transaction
+                # first so no pool connection is pinned across those awaits.
+                await session.commit()
                 _rt_ready, _rt_reason = await runtime_ready_for_agent(agent, session)
                 if not _rt_ready:
                     return {
@@ -3492,6 +3509,10 @@ async def agent_active_task_recovery(
     # Protection against poll.sh crash loops + an agent calling `mc recover`
     # in a loop. Backend logs warnings but still serves the cached prompt.
     from app.redis_client import get_redis
+    # Pool hygiene (incident 2026-09-14): the task select above opened a
+    # read transaction; the Redis awaits below are not DB work. Read phase
+    # — nothing uncommitted — so commit releases the connection before them.
+    await session.commit()
     redis = await get_redis()
     cache_key = f"mc:recovery:attempt_id:{active.id}"
     try:
@@ -4224,6 +4245,12 @@ async def agent_heartbeat(
 
     # CTX-01 (Phase 6): Docker self-report context-window usage. Inverts the
     # display formula at line 166 so frontend bars stay accurate.
+    # Pool hygiene (incident 2026-09-14): the task selects above opened a
+    # transaction and the self-heal above is dirty. The Redis awaits below
+    # are not DB work — commit here so no pool connection is pinned across
+    # them (the ctx bookkeeping below is persisted by the commit further
+    # down).
+    await session.commit()
     if payload.context_pct is not None and agent.context_max:
         agent.context_tokens = round(payload.context_pct / 100 * agent.context_max)
         try:

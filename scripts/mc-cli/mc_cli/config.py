@@ -8,18 +8,22 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# W5 (2026-09-13): Kontextdatei pro Host-Agent statt geteilter /tmp-Datei.
+# MC_CONTEXT_ENV_PATH nennt den Pfad; ohne die Variable gilt der Legacy-Pfad,
+# damit laufende Zuege (Container, nicht-umgestellte Bridges) weiterarbeiten.
+DEFAULT_CONTEXT_ENV_PATH = "/tmp/mc-context.env"
 
-def context_file_path() -> str:
-    """Path to the dispatch context file poll.sh writes on every dispatch.
 
-    Overridable via MC_CONTEXT_FILE so tests can redirect it to a tmp_path
-    instead of touching the real, host-shared /tmp/mc-context.env (2026-09-14
-    incident: a test run left placeholder IDs in the real file, breaking
-    every other agent on the host). Default is unchanged — resolved fresh on
-    every call, not cached, so the env var takes effect even if set after
-    module import.
+def context_env_path() -> str:
+    """Resolve the task-context env file: MC_CONTEXT_ENV_PATH wins, the legacy
+    /tmp path is the fallback. Single source of truth for readers
+    (Config.from_env) AND writers (commands._write_context_file, recover).
+
+    Also the test-isolation seam (2026-09-14 incident, #579): tests/conftest.py
+    redirects MC_CONTEXT_ENV_PATH to a per-test tmp_path so a suite run never
+    touches the real, host-shared /tmp/mc-context.env other agents rely on.
     """
-    return os.environ.get("MC_CONTEXT_FILE", "/tmp/mc-context.env")
+    return os.environ.get("MC_CONTEXT_ENV_PATH") or DEFAULT_CONTEXT_ENV_PATH
 
 
 @dataclass(frozen=True)
@@ -40,13 +44,13 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        # Fallback: read /tmp/mc-context.env when the task context env vars
-        # are missing from the process environment. This covers the case
-        # where claude's Bash tool spawns a fresh shell whose env was set
-        # by tmux set-environment but hasn't propagated yet. poll.sh writes
-        # the file on every dispatch; see docker/mc-claude-agent/poll.sh.
+        # Fallback: read the task-context env file (MC_CONTEXT_ENV_PATH, legacy
+        # /tmp/mc-context.env) when the task context env vars are missing from
+        # the process environment. This covers the case where claude's Bash
+        # tool spawns a fresh shell whose env was set by tmux set-environment
+        # but hasn't propagated yet. poll.sh writes the file on every dispatch.
         file_ctx: dict[str, str] = {}
-        ctx_path = context_file_path()
+        ctx_path = context_env_path()
         if os.path.isfile(ctx_path):
             try:
                 with open(ctx_path, encoding="utf-8") as f:

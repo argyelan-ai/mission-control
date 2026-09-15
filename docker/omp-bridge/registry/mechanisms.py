@@ -268,12 +268,14 @@ REGISTRY = {
         anchor="scripts/grok-bridge.py::write_task_context_env",
     ),
     (HERMES, M_CONTEXT_ENV): Entry(
-        DELIBERATE,
-        reason="hermes receives task context INLINE in the dispatch paste "
-        "(no ENV-FILE promise - the agent reads context via mc/API); parity "
-        "here is about the channel, not the file.",
-        # W2: if hermes ever grows an ENV-FILE writer, re-classify this cell.
-        not_anchor="docker/hermes/entrypoint.sh::MC_CONTEXT_ENV_PATH",
+        SERVED,
+        # #557 nachzug (2026-09-15): the DELIBERATE not_anchor above is what
+        # it was there to catch -- hermes-bridge.py now sets its own
+        # per-agent MC_CONTEXT_ENV_PATH default (propagated into the agent
+        # subprocess env) and docker/hermes/entrypoint.sh's watchdog loop
+        # re-asserts that default across restarts, so hermes IS one of the
+        # per-agent context-file channels now, not an abstainer.
+        anchor="scripts/hermes-bridge.py::MC_CONTEXT_ENV_PATH",
     ),
     (LAUNCH, M_CONTEXT_ENV): Entry(
         DELIBERATE,
@@ -283,14 +285,14 @@ REGISTRY = {
     (POLL, M_CONTEXT_ENV): Entry(
         SERVED,
         # B1 (Rex review): poll.sh DOES carry the per-task context file --
-        # it writes /tmp/mc-context.env in run_task() and clears it on
-        # operator stop (docker/shared/poll.sh:756-761, :967; config.py:50
-        # even names poll.sh as a writer). The old DELIBERATE reason was
-        # wrong; it came from the PR-text twin scan grepping only the
-        # SYMBOL MC_CONTEXT_ENV_PATH, which poll.sh never uses (it writes
-        # the path hard, no indirection -- the same "3 writers, 2 seen"
-        # pattern M5 cites as its incident).
-        anchor=r"docker/shared/poll.sh::^\s*cat > /tmp/mc-context\.env",
+        # it writes the per-agent context file in run_task() and clears it
+        # on operator stop (docker/shared/poll.sh:756-761, :967; config.py:50
+        # even names poll.sh as a writer).
+        # #557 nachzug (2026-09-15): poll.sh no longer hard-codes the
+        # literal /tmp path -- it now writes via $MC_CONTEXT_ENV_PATH
+        # (default unchanged: /tmp/mc-context.env), the same indirection
+        # this mechanism's title cites for the other writers.
+        anchor=r'docker/shared/poll.sh::^\s*cat > "\$MC_CONTEXT_ENV_PATH"',
     ),
 }
 
