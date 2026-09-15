@@ -243,7 +243,9 @@ async def setup_git_workspace_for_dispatch(
                     git_project_dir = main_repo
                     await git_service.create_task_branch(main_repo, task_slug)
                     task.workspace_path = main_repo
-                await git_service.setup_git_identity(git_project_dir, agent.name)
+                await git_service.setup_git_identity(
+                    git_project_dir, agent.name, main_repo=main_repo,
+                )
                 # MC pre-push guard (PR #584 review W3): the cli-bridge twin
                 # pins the expected remote for every clone it creates; the
                 # central path did not, leaving these clones fail-open
@@ -325,7 +327,7 @@ async def setup_git_workspace_for_dispatch(
                     )
                     task.workspace_path = main_repo
                 await git_service.setup_git_identity(
-                    git_project_dir, agent.name,
+                    git_project_dir, agent.name, main_repo=main_repo,
                 )
                 # MC pre-push guard (PR #584 review W3): see the repo_id
                 # branch above for the rationale — the cli-bridge twin
@@ -451,7 +453,7 @@ async def setup_git_workspace_for_dispatch(
                 )
                 task.workspace_path = main_repo
             await git_service.setup_git_identity(
-                git_project_dir, agent.name,
+                git_project_dir, agent.name, main_repo=main_repo,
             )
             # MC pre-push guard (PR #584 review W3): these are exactly the
             # ad-hoc clones that newly exist because of this PR — without
