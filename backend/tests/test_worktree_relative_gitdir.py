@@ -69,7 +69,7 @@ class TestRelativeWorktreeGitdir:
         ), "fixture broken: foreign path must not resolve locally"
 
         # Pre-fix this raised: RuntimeError ... fatal: not a git repository
-        await svc.setup_git_identity(worktree, "Sparky", main_repo=main_repo)
+        await svc.setup_git_identity(worktree, "alpha", main_repo=main_repo)
 
         content = _read_gitfile(worktree)
         assert content.startswith("gitdir: ../../"), content
