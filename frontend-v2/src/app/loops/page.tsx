@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 /**
  * Loops page (ADR-051) — outcome-driven task loops. A runner spins up one
@@ -103,16 +104,7 @@ export default function LoopsPage() {
       <div className="py-6 max-w-4xl">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
-          <div>
-            <div className="label-sys mb-2">Operations · Loops</div>
-            <h1 className="display text-xl font-semibold flex items-center gap-2" style={{ color: C.textPrimary }}>
-              <Repeat size={18} style={{ color: C.accent }} />
-              {t("title")}
-            </h1>
-            <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
-              {t("subtitle")}
-            </p>
-          </div>
+          <PageHeader title={t("title")} meta={t("subtitle")} />
           <button
             onClick={() => setCreateOpen(true)}
             disabled={!activeBoardId}

@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
@@ -676,71 +677,27 @@ export default function AgentsPage() {
     <AppShell>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="label-sys mb-2">{t("fleetAgents")}</div>
-            <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
-              {t("title")}
-            </h1>
-            <p className="text-[13px] text-[var(--color-text-secondary)] mt-1">
-              {t("onlineCount", { online: onlineCount, total: totalCount })}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { setWizardInitial(undefined); setWizardOpen(true); }}
-              className="flex items-center gap-2 px-3.5 py-2 text-sm rounded-sm font-semibold cursor-pointer transition-all hover:brightness-110"
-              style={btnPrimaryStyle}
-            >
+        <PageHeader
+          title={t("title")}
+          meta={t("onlineCount", { online: onlineCount, total: totalCount })}
+          actions={
+            <PageAction onClick={() => { setWizardInitial(undefined); setWizardOpen(true); }}>
               <Plus size={14} />
               {t("newAgent")}
-            </button>
-          </div>
-        </div>
-
-        {/* Tab header — .tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
-        <div
-          className="flex items-center gap-1 border-b tab-strip"
-          style={{ borderColor: CINEMA.borderSubtle }}
-        >
-          <button
-            onClick={() => setActiveTab("agents")}
-            className="px-4 py-2.5 text-sm font-medium transition-colors cursor-pointer min-h-touch"
-            style={{
-              color: activeTab === "agents"
-                ? "var(--color-text-primary)"
-                : "var(--color-text-muted)",
-              borderBottom: activeTab === "agents"
-                ? `2px solid ${C.accent}`
-                : "2px solid transparent",
-              marginBottom: "-1px",
-            }}
-          >
-            <span className="flex items-center gap-2">
-              <Bot size={14} />
-              {t("title")} ({totalCount})
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveTab("templates")}
-            className="px-4 py-2.5 text-sm font-medium transition-colors cursor-pointer min-h-touch"
-            style={{
-              color: activeTab === "templates"
-                ? "var(--color-text-primary)"
-                : "var(--color-text-muted)",
-              borderBottom: activeTab === "templates"
-                ? `2px solid ${C.accent}`
-                : "2px solid transparent",
-              marginBottom: "-1px",
-            }}
-          >
-            <span className="flex items-center gap-2">
-              <Users size={14} />
-              {t("templates")}
-            </span>
-          </button>
-        </div>
+            </PageAction>
+          }
+          tabs={
+            <PageTabs
+              ariaLabel={t("title")}
+              items={[
+                { key: "agents", label: t("title"), count: totalCount },
+                { key: "templates", label: t("templates") },
+              ]}
+              active={activeTab}
+              onChange={setActiveTab}
+            />
+          }
+        />
 
         {/* Tab: Agents */}
         {activeTab === "agents" && (

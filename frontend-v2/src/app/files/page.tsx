@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useLocale, useTranslations } from "next-intl";
 
@@ -189,26 +190,22 @@ export default function FilesPage() {
       <div className="max-w-[1400px] mx-auto">
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4">
-          <div>
-            <div className="label-sys mb-2">{tr("storageFiles")}</div>
-            <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
-              {tr("title")}
-            </h1>
-            <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-              {tr("subtitle")}
-            </p>
-          </div>
-          <button
-            onClick={() => reindex.mutate()}
-            disabled={reindex.isPending}
-            className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-60"
-            style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textSecondary }}
-            title={tr("reindexHint")}
-            aria-label={tr("reindexFiles")}
-          >
-            <RefreshCw size={14} className={reindex.isPending ? "animate-spin" : ""} style={{ color: C.accent }} />
-            {reindex.isPending ? tr("reindexing") : tr("reindex")}
-          </button>
+          <PageHeader
+            title={tr("title")}
+            meta={tr("subtitle")}
+            actions={
+              <PageAction
+                variant="secondary"
+                onClick={() => reindex.mutate()}
+                disabled={reindex.isPending}
+                title={tr("reindexHint")}
+                ariaLabel={tr("reindexFiles")}
+              >
+                <RefreshCw size={14} className={reindex.isPending ? "animate-spin" : ""} />
+                {reindex.isPending ? tr("reindexing") : tr("reindex")}
+              </PageAction>
+            }
+          />
         </div>
 
         {/* Search */}

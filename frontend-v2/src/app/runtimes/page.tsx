@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
@@ -838,18 +839,9 @@ export default function RuntimesPage() {
       <div className="py-6 max-w-4xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="label-sys mb-2">System · Runtimes</div>
-            <h1
-              className="display text-xl font-semibold"
-              style={{ color: C.textPrimary }}
-            >
-              {t("title")}
-            </h1>
-            {/* Kein Seiten-Untertitel (Spec §2) — die Bühne selbst erklärt
-                den Zustand der Flotte, eine zusätzliche Zeile hier würde das
-                nur doppeln. */}
-          </div>
+          {/* Kein Seiten-Untertitel (Spec §2) — die Bühne selbst erklärt
+              den Zustand der Flotte. */}
+          <PageHeader title={t("title")} />
 
           <button
             onClick={() => setAddOpen(true)}

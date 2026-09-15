@@ -1,4 +1,5 @@
 "use client";
+import { PageHeader, PageAction, PageTabs } from "@/components/shared/PageHeader";
 
 /**
  * TaskListColumn — the primary task list of the /tasks page (Redesign 07/2026).
@@ -495,24 +496,8 @@ export default function TaskListColumn({
 
   return (
     <div className="flex flex-col h-full min-h-0 min-w-0 w-full">
-      {/* Header — v3: Micro-Label, Clash-Display-Titel, Akzent-Messmarke */}
       <div className="px-4 pt-4 pb-2 shrink-0">
-        <div className="label-sys mb-1.5">{t("consoleTasks")}</div>
-        <div className="flex items-baseline gap-2">
-          <h1 className="display text-[20px] font-semibold leading-tight" style={{ color: C.textPrimary }}>
-            {t("title")}
-          </h1>
-          <span className="text-[11px] font-mono" style={{ color: C.textDim }}>
-            {t("openCount", { count: openCount })}
-          </span>
-        </div>
-        {/* Messmarke: 1px-Linie mit Akzent-Segment — Instrumenten-Detail */}
-        <div className="relative mt-3 h-px" style={{ backgroundColor: C.border }}>
-          <div
-            className="absolute left-0 -top-px h-[2px] w-16"
-            style={{ backgroundColor: C.accent }}
-          />
-        </div>
+        <PageHeader compact title={t("title")} meta={t("openCount", { count: openCount })} />
       </div>
 
       {/* Controls */}
