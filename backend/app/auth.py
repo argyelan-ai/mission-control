@@ -216,12 +216,25 @@ async def require_user(
     if is_agent_token_shape:
         path = request.url.path
         suggestion = path.replace("/api/v1/", "/api/v1/agent/", 1) if path.startswith("/api/v1/") else path
-        if _agent_route_exists(request.app, suggestion):
+        match = _agent_route_match(request.app, suggestion)
+        if match == "exact":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=(
                     f"Agent-Token darf User-Routes nicht nutzen. "
                     f"Verwende {suggestion} statt {path} (agent-scoped endpoint)."
+                ),
+            )
+        if match == "prefix":
+            # No route with this exact shape, but agent-scoped endpoints
+            # live under this namespace — point at the family, not at a
+            # made-up concrete path.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"Agent-Token darf User-Routes nicht nutzen. "
+                    f"Agent-scoped endpoints für {path} liegen unter "
+                    f"{suggestion}/... (agent-scoped endpoint)."
                 ),
             )
         raise HTTPException(
@@ -236,14 +249,19 @@ async def require_user(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
-def _agent_route_exists(app: object, path: str) -> bool:
-    """True if the app registers an /api/v1/agent route matching `path`.
+def _agent_route_match(app: object, path: str) -> str | None:
+    """How the app's registered /api/v1/agent routes relate to `path`.
 
     The 401 hint for agent tokens must only ever point at routes that
     actually exist — a suggestion to a 404 route sent agents hunting for
-    alternate ways in (scoping finding 2026-09-15). Matches concrete path
-    segments against the route's {param} templates.
+    alternate ways in (scoping finding 2026-09-15). Returns:
+      "exact"  — a registered route matches the path shape
+                 (concrete segments vs {param} templates)
+      "prefix" — no exact match, but registered agent routes start with
+                 this path + "/" (an endpoint family exists here)
+      None     — nothing agent-scoped anywhere near this path
     """
+    best: str | None = None
     for route in getattr(app, "routes", []):
         candidates = [getattr(route, "path", None)]
         # Routers are included as _IncludedRouter wrappers; their real
@@ -257,8 +275,10 @@ def _agent_route_exists(app: object, path: str) -> bool:
             parts = re.split(r"(\{[^}]+\})", route_path)
             pattern = "".join("[^/]+" if p.startswith("{") else re.escape(p) for p in parts)
             if re.fullmatch(pattern, path):
-                return True
-    return False
+                return "exact"
+            if best is None and route_path.startswith(path + "/"):
+                best = "prefix"
+    return best
 
 
 async def require_bench_view(
