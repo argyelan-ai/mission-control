@@ -29,7 +29,7 @@ import {
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
-import type { MessageEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import type { MessageEvent, PreviewEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,13 @@ vi.mock("@/lib/api", () => ({
     },
   },
 }));
+// ChatView liest den `?view=`-Parameter selbst: bei einem Agenten ohne
+// Umschalter (headless_chat) ist der Tiefenlink die EINZIGE Tuer zum Terminal,
+// und die muss offen bleiben (Spec docs/specs/chat-over-acp.md, Nicht-Ziele).
+const navMock = vi.hoisted(() => ({ params: new URLSearchParams() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => navMock.params,
+}));
 // Die echte VoiceButton haengt an <VoiceProvider>, und der baut beim Mounten
 // einen LiveKit-Room auf — fuer einen Kopfzeilen-Test viel zu schwer. Der Stub
 // haelt genau das fest, was ChatView zu verantworten hat: dass auf dem Handy
@@ -82,6 +89,23 @@ vi.mock("./TerminalPanel", async () => {
     TerminalPanel: ({ agent }: { agent: { name: string } }) => (
       <div data-testid="terminal-panel-stub">Terminal-Panel: {agent.name}</div>
     ),
+  };
+});
+
+/* Naht-Spy (PR #595 Nacharbeit): ChatView bezieht `buildTimelineItems` aus
+   seinem eigenen Modul. Der Wrapper zaehlt Aufrufe, ruft aber die echte
+   Funktion auf — alle Tests unten laufen gegen echtes Gruppierungsverhalten,
+   und der Naht-Test kann zaehlen, ob ChatView bei Preview-Ticks neu
+   gruppiert. */
+const timelineCalls = vi.hoisted(() => ({ build: 0 }));
+vi.mock("./buildTimelineItems", async (importOriginal) => {
+  const actual = await vi.importActual<typeof import("./buildTimelineItems")>("./buildTimelineItems");
+  return {
+    ...actual,
+    buildTimelineItems: (events: TimelineChatEvent[]) => {
+      timelineCalls.build += 1;
+      return actual.buildTimelineItems(events);
+    },
   };
 });
 
@@ -105,6 +129,7 @@ function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
     board_id: null,
     name: "Cody",
     role: null,
+    role_canonical: null,
     emoji: null,
     status: "idle",
     model: null,
@@ -1943,4 +1968,113 @@ describe("ChatView", () => {
     });
   });
 
+});
+
+/**
+ * Headless-Chat (ACP-Agenten, Spec docs/specs/chat-over-acp.md).
+ *
+ * Bei `headless_chat` ist der Chat die einzige Oberflaeche: der zweite
+ * Konsolen-Tab zeigt eine TUI, die den Auftrag gar nicht faehrt. Der Umschalter
+ * verschwindet darum — der Tiefenlink `?view=terminal` bleibt.
+ */
+describe("ChatView — headless chat", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+  });
+
+  it("renders no Chat/Terminal toggle for a headless agent", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
+  // Sabotage-Probe: ohne das Merkmal muss der Umschalter unveraendert dastehen.
+  it("still renders the toggle for a non-headless agent", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: false }) });
+
+    expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat" })).toBeInTheDocument();
+  });
+
+  it("forces the chat view for a headless agent even when the stored view says terminal", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }), centerView: "terminal" });
+
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
+  it("?view=terminal still opens the terminal for a headless agent", () => {
+    navMock.params = new URLSearchParams("view=terminal");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }), centerView: "chat" });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+    expect(screen.queryByText("Hallo!")).not.toBeInTheDocument();
+  });
+
+  it("a headless agent without a transcript still falls back to the terminal", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ agent: mkAgent({ headless_chat: true }), hasTranscript: false });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+  });
+});
+
+describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte Komponente)", () => {
+  /* PR #595 Nacharbeit. Der Vorschau-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues stream-Objekt, veraendert `events` aber nicht. Der
+     Springen-Fix memoisiert filter + buildTimelineItems in ChatView; dieser
+     Test prueft ueber die Modul-Naht die echte Folge: ChatView rendert neu,
+     aber buildTimelineItems wird NICHT erneut aufgerufen. Faellt der
+     useMemo-Fix aus, laeuft die Gruppierung bei jedem Tick — der Test wird
+     rot. Der erste Aufruf beim Mount zaehlt alsBaseline. */
+  const chatElement = () => (
+    <ChatView
+      agent={mkAgent()}
+      hasTranscript
+      detailLevel="normal"
+      onDetailLevelChange={noop}
+      centerView="chat"
+      onCenterViewChange={noop}
+    />
+  );
+
+  it("ruft buildTimelineItems bei 5 Preview-Ticks NICHT erneut auf", () => {
+    const events: TimelineChatEvent[] = [MSG, TOOL, THINKING];
+    const preview = (text: string): PreviewEvent =>
+      ({ kind: "preview", uuid: null, ts: "2026-09-10T00:00:00Z", text, source: "acp" });
+    mockUseChatStream.mockReturnValue(mkStream({ events, preview: preview("Zeile 1") }));
+    const { rerender } = renderChatView();
+    expect(timelineCalls.build).toBeGreaterThan(0);
+
+    const before = timelineCalls.build;
+    for (let tick = 2; tick <= 6; tick++) {
+      mockUseChatStream.mockReturnValue(
+        mkStream({ events, preview: preview(`Zeile 1\nZeile ${tick}`) })
+      );
+      rerender(chatElement());
+    }
+
+    expect(timelineCalls.build).toBe(before);
+  });
+
+  /* Korrektheits-Kontrolle: aendert sich `events` wirklich (neues Ereignis),
+     MUSS neu gruppiert werden — der Test darf nicht trivial-gruen stehen. */
+  it("gruppiert neu, wenn sich events wirklich aendern", () => {
+    const events: TimelineChatEvent[] = [MSG];
+    mockUseChatStream.mockReturnValue(mkStream({ events }));
+    const { rerender } = renderChatView();
+
+    const before = timelineCalls.build;
+    mockUseChatStream.mockReturnValue(mkStream({ events: [...events, TOOL] }));
+    rerender(chatElement());
+
+    expect(timelineCalls.build).toBeGreaterThan(before);
+  });
 });

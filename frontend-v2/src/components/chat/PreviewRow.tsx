@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { useTranslations } from "next-intl";
 import { Radio } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -17,7 +18,7 @@ import type { PreviewEvent } from "@/lib/chatTypes";
  * Was hier steht, hat das Transkript noch nicht bestaetigt — darum nie
  * verwechselbar mit einer echten Antwort.
  */
-export function PreviewRow({ preview }: { preview: PreviewEvent }) {
+export const PreviewRow = memo(function PreviewRow({ preview }: { preview: PreviewEvent }) {
   const t = useTranslations("sessions");
   return (
     <div className="w-full px-4 md:px-5 py-3 md:py-4" data-testid="preview-row" aria-live="polite">
@@ -41,4 +42,4 @@ export function PreviewRow({ preview }: { preview: PreviewEvent }) {
       </div>
     </div>
   );
-}
+});

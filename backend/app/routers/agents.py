@@ -162,6 +162,12 @@ class TriggerPayload(BaseModel):
     message: str = "Please continue with your current task."
 
 
+# Nach so vielen Herzschlaegen ohne context_pct gilt der Kontextwert als
+# unbekannt (NULL). 3 = ein Scrape-Aussetzer wird toleriert, ein Formatwechsel
+# der Statuszeile nicht mehr verschleiert.
+CONTEXT_UNKNOWN_AFTER_MISSES = 3
+
+
 class AgentHeartbeatPayload(BaseModel):
     status: str = "idle"  # idle | working
     task_id: str | None = None
@@ -370,6 +376,8 @@ async def list_agents(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    from app.scopes import normalize_agent_role
+
     query = select(Agent)
     if board_id and not include_unassigned:
         query = query.where(Agent.board_id == board_id)
@@ -382,7 +390,16 @@ async def list_agents(
         query = query.where(Agent.archived_at.is_(None))
     query = query.order_by(Agent.name)
     result = await session.exec(query)
-    return result.all()
+    agents = result.all()
+    # W1 (PR #514 Rex review): `role` can be freetext (setattr in PATCH bypasses
+    # the model's validator — see scopes.normalize_agent_role docstring). The
+    # frontend's strict `role === "reviewer"` check needs a value it can trust,
+    # so add the canonical form here instead of duplicating the enum-matching
+    # heuristic in TypeScript. Raw `role` stays untouched for display purposes.
+    return [
+        {**a.model_dump(), "role_canonical": normalize_agent_role(a.role)}
+        for a in agents
+    ]
 
 
 @router.get("/agents/stream")
@@ -2612,6 +2629,45 @@ async def _upsert_cursor(
     await session.execute(stmt)
 
 
+async def _upsert_signalled_cursor(
+    session: AsyncSession,
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    last_signalled_comment_id: uuid.UUID,
+) -> None:
+    """Dialect-agnostic upsert for the heartbeat's OWN watermark column.
+
+    Deliberately separate from `_upsert_cursor` (B1, PR #519 Rex review):
+    that one advances `last_seen_comment_id`, the /me/poll DELIVERY
+    watermark. This one advances `last_signalled_comment_id`, which only the
+    heartbeat's soft-interrupt channel reads/writes — see
+    AgentTaskCommentCursor's docstring for why they must not be the same
+    field. `ON CONFLICT DO UPDATE SET` here touches only this one column, so
+    a concurrent poll's `last_seen_comment_id` write is never clobbered (and
+    vice versa).
+    """
+    from app.models.agent_task_comment_cursor import AgentTaskCommentCursor as _Cursor
+
+    dialect = session.bind.dialect.name if session.bind else "postgresql"
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as _insert
+    else:
+        from sqlalchemy.dialects.postgresql import insert as _insert
+
+    stmt = _insert(_Cursor.__table__).values(
+        agent_id=agent_id,
+        task_id=task_id,
+        last_signalled_comment_id=last_signalled_comment_id,
+    ).on_conflict_do_update(
+        index_elements=["agent_id", "task_id"],
+        set_={
+            "last_signalled_comment_id": last_signalled_comment_id,
+            "updated_at": datetime.now(timezone.utc),
+        },
+    )
+    await session.execute(stmt)
+
+
 # The delivery scope moved to services/thread_scope so the REPLY path can be
 # authorised by the very same rule (an agent may answer exactly where it may
 # listen). These names stay as aliases — imports and tests elsewhere use them,
@@ -2832,6 +2888,20 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
     return out
 
 
+def _task_still_dispatchable(task: Task, agent: Agent) -> bool:
+    """Guard 2 (erledigte/fremde Karte, 14.09.2026 incident): the last check
+    before ANY `state=new_task` response leaves this function. Every SQL
+    query upstream in agent_poll already whitelists non-terminal statuses,
+    but the Python `task`/`active` object they produce can go stale across
+    an `await` (grace-window board lookup, dependencies_met, the orphan
+    helper's own commit+refresh) if a concurrent request finishes or
+    reassigns the SAME card in that window. Callers MUST refresh `task`
+    from the DB immediately before calling this — checking a stale in-memory
+    attribute defeats the whole point.
+    """
+    return task.status not in ("done", "failed") and task.assigned_agent_id == agent.id
+
+
 async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, task: Task) -> dict | None:
     """Fix 2 (Poll-Luecke, 07.09.2026 incident): detect an ORPHANED RUN.
 
@@ -2897,6 +2967,13 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     # W0.1: one heal per card per round — the redispatch re-delivers the
     # prompt, so it competes with every other healer (watchdog orphans,
     # tiered recovery) acting on this card in the same round.
+    # Pool hygiene (incident 2026-09-14): the ModelUsageEvent select above
+    # opened a read transaction on the request session. The Redis awaits
+    # below are NOT database work — holding the transaction across them
+    # pins a pool connection (29/30 connections were found pinned this way).
+    # Nothing is uncommitted here (read phase), so commit releases the
+    # connection's transaction before the awaits.
+    await session.commit()
     redis = await get_redis()
     if not await try_claim_heal(redis, str(task.id)):
         logger.info(
@@ -2910,6 +2987,20 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     session.add(task)
     await session.commit()
     await session.refresh(task)
+
+    # Guard 2: the "in_progress" the caller saw before invoking this helper
+    # can be stale by now — a concurrent request may have finished or
+    # reassigned this exact card while try_claim_heal/commit were in flight.
+    # Redispatching it here would hand a done/foreign card a fresh prompt.
+    if not _task_still_dispatchable(task, agent):
+        logger.warning(
+            "Poll-orphan redispatch aborted for task %s — status/assignee "
+            "changed underneath us (status=%s, assigned_agent_id=%s, "
+            "agent=%s). Reporting idle instead of new_task.",
+            task.id, task.status, task.assigned_agent_id, agent.id,
+        )
+        return {"state": "idle"}
+
     await set_dispatch_attempt_id(
         session, task, str(uuid.uuid4()),
         caller="agent_poll", reason="poll_orphan_run",
@@ -2957,6 +3048,10 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
             "id": str(task.id),
             "title": task.title,
             "status": task.status,
+            # Guard 1 (client-side twin, hermes-bridge.py / poll.sh): lets the
+            # bridge cross-check against its own agent id (poll response's
+            # top-level "my_agent_id") before pasting a dispatch.
+            "assigned_agent_id": str(task.assigned_agent_id) if task.assigned_agent_id else None,
             "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
             "ack_at": task.ack_at.isoformat() if task.ack_at else None,
             "board_id": str(task.board_id) if task.board_id else None,
@@ -2998,7 +3093,11 @@ async def agent_poll(
     # comm_v2 pilot (Task 11 adds the flag): deliver Thread messages via the
     # two-stage cursor alongside the untouched comment path. `_poll_extra` is
     # spread into every return so non-pilot agents are byte-identical to before.
-    _poll_extra: dict = {"new_comments": new_comments}
+    # `my_agent_id` (Guard 1, erledigte/fremde Karte incident): lets the
+    # bridge/poll.sh cross-check a delivered task's `assigned_agent_id`
+    # against its own identity before pasting a dispatch, without needing
+    # any new provisioning/env plumbing.
+    _poll_extra: dict = {"new_comments": new_comments, "my_agent_id": str(agent.id)}
     if getattr(agent, "comm_v2", False):
         acked: dict[str, int] = {}
         if acked_seq:
@@ -3159,6 +3258,11 @@ async def agent_poll(
                     )
                 ).first()
             ):
+                # Pool hygiene (incident 2026-09-14): the selects above opened a
+                # read transaction; the orphan helper awaits Redis (not DB work)
+                # — release the connection's transaction first. Read phase, so
+                # there is nothing uncommitted.
+                await session.commit()
                 orphaned = await _maybe_redispatch_orphaned_run(
                     session, agent, active,
                 )
@@ -3180,6 +3284,15 @@ async def agent_poll(
                 select(Task)
                 .where(Task.assigned_agent_id == agent.id)
                 .where(Task.status == "inbox")
+                # C2: a lead-held card (run_control=manual_hold) or an
+                # admin-stopped card must not be claimed via poll just
+                # because a blocker-approval reset it to status=inbox —
+                # that path clears dispatch_attempt_id/dispatched_at/ack_at
+                # but never touches run_control (approvals.py resolve_approval).
+                # Without this filter the poll-claim path below (which
+                # bypasses check_dispatch_allowed entirely) would deliver a
+                # held task straight to the agent's session.
+                .where(Task.run_control.is_(None))
                 .order_by(Task.created_at.asc())
             )
             task = None
@@ -3197,6 +3310,11 @@ async def agent_poll(
             # phase_approval claims above are untouched. See runtime_readiness.py.
             if task is not None:
                 from app.services.runtime_readiness import runtime_ready_for_agent
+                # Pool hygiene (incident 2026-09-14): the readiness gate
+                # awaits Redis and — on a cache miss — a live HTTP probe of
+                # the runtime. Not DB work: commit the read transaction
+                # first so no pool connection is pinned across those awaits.
+                await session.commit()
                 _rt_ready, _rt_reason = await runtime_ready_for_agent(agent, session)
                 if not _rt_ready:
                     return {
@@ -3207,6 +3325,22 @@ async def agent_poll(
                     }
 
     if task is None:
+        return {"state": "idle", **_poll_extra}
+
+    # Guard 2 (erledigte/fremde Karte, 14.09.2026 incident): `task` was
+    # selected by a query several `await`s ago (dependencies_met per
+    # candidate, the blocked grace-window board lookup, ...) — refresh it
+    # from the DB right before deciding to dispatch so a concurrent
+    # completion/reassignment in that window can't slip a done/foreign card
+    # through as state=new_task. Cheap: single-row fetch by PK, already in
+    # the session identity map.
+    await session.refresh(task)
+    if not _task_still_dispatchable(task, agent):
+        logger.warning(
+            "agent_poll: refusing to dispatch stale task %s to agent %s "
+            "(status=%s, assigned_agent_id=%s) — card changed underneath us",
+            task.id, agent.id, task.status, task.assigned_agent_id,
+        )
         return {"state": "idle", **_poll_extra}
 
     # 3. Claim the task. Two paths:
@@ -3317,6 +3451,10 @@ async def agent_poll(
             # the agent's own PATCH sets it to in_progress. Consumers must
             # trust `state` for delivery semantics, `status` for lifecycle.
             "status": task.status,
+            # Guard 1 (client-side twin, hermes-bridge.py / poll.sh): lets the
+            # bridge cross-check against its own agent id (poll response's
+            # top-level "my_agent_id") before pasting a dispatch.
+            "assigned_agent_id": str(task.assigned_agent_id) if task.assigned_agent_id else None,
             # F3 fix (Plan 26-02): expose dispatched_at + ack_at so downstream
             # consumers (bridge, tests) can observe the spread.
             "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
@@ -3371,6 +3509,10 @@ async def agent_active_task_recovery(
     # Protection against poll.sh crash loops + an agent calling `mc recover`
     # in a loop. Backend logs warnings but still serves the cached prompt.
     from app.redis_client import get_redis
+    # Pool hygiene (incident 2026-09-14): the task select above opened a
+    # read transaction; the Redis awaits below are not DB work. Read phase
+    # — nothing uncommitted — so commit releases the connection before them.
+    await session.commit()
     redis = await get_redis()
     cache_key = f"mc:recovery:attempt_id:{active.id}"
     try:
@@ -3703,14 +3845,12 @@ def _heartbeat_control(
     active_task,
     agent_id,
     blocked_episode_comments: list,
-    comment_cursor_id,
 ):
     """Pure decision core of the heartbeat control channel (unit-testable).
 
     active_task: the agent's in_progress task row (or None).
     blocked_episode_comments: comments on the active task created at-or-after
     blocked_at (the caller slices; keeps this function DB-free).
-    comment_cursor_id: the agent's last-seen comment id (None = nothing seen).
     """
     if active_task is None:
         return None
@@ -3788,9 +3928,57 @@ async def _withdrawn_task_reason(session, agent, task_id, *, previously_held=Non
 
 async def _collect_heartbeat_control(session, agent, active_task):
     """DB side of the control channel: assembles the inputs for
-    _heartbeat_control from the active task's comments + the agent's cursor,
-    plus the soft check (unread blocker/handoff beyond the cursor). Any
-    failure returns None, so the heartbeat response stays legacy-shaped."""
+    _heartbeat_control from the active task's comments + the agent's own
+    signal watermark, plus the soft check (unread blocker/handoff beyond it).
+
+    Maintains `AgentTaskCommentCursor.last_signalled_comment_id` — a field
+    separate from `last_seen_comment_id` (B1, PR #519 Rex review; see that
+    model's docstring). `last_seen_comment_id` is the /me/poll DELIVERY
+    watermark: poll.sh advances it only AFTER handing a comment to the
+    agent. The heartbeat is the ONLY comment-awareness channel the
+    ACP-bridge path has while a turn is blocked (it doesn't poll again
+    until the turn ends), so it needs its own watermark to advance on every
+    beat without touching poll's — writing `last_seen_comment_id` here
+    instead marked comments "delivered" before poll ever sent them,
+    silently swallowing real messages (incident 12.09.2026, Karte 584795fd
+    surfaced the missing-cursor case; the shared-field bug affected every
+    ACP turn once fixed for that, live-reproduced in this PR's review).
+
+    Two guards keep a missing/stale signal-cursor from misfiring the soft
+    channel:
+      - A comment authored by the agent itself is never an unread message
+        TO itself — filtered out of `soft_unread` regardless of the cursor.
+      - No signal-cursor row yet does NOT mean "every historic comment is
+        unseen", but it also must NOT mean "nothing is unseen" — the
+        dispatch prompt only carried comments that existed as of the
+        dispatch boundary (mirrors the bridge's own
+        `delivery.drop_comments()` at dispatch). With no persisted
+        watermark yet, "unseen" is therefore everything created AFTER that
+        boundary, not an unconditional `[]` — the latter swallowed the very
+        first real comment posted after a fresh dispatch (B-1, PR #519 Rex
+        review round 3: `all_comments` only starts existing once that first
+        comment lands, so `[]` silently ate it before the seed ever had a
+        real id to seed to). Once the seed write below has run once, later
+        beats switch to the ID-based lookup against the persisted
+        watermark.
+
+        The dispatch boundary itself is derived falling back through
+        `dispatched_at -> ack_at -> started_at` (B-3, PR #519 Rex review
+        round 3): `dispatched_at` is None not only for the odd legacy row,
+        but on a completely ordinary path — `PATCH .../tasks/{id}` with
+        `{"status": "in_progress"}` (the UI's own re-open action, e.g.
+        `frontend-v2/src/app/tasks/page.tsx`) sets `started_at`/`ack_at`
+        but never touches `dispatched_at`, and every return to inbox clears
+        `dispatched_at` outright (`routers/tasks.py`). `ack_at` is set on
+        exactly that path, so it is the next-best anchor; `started_at`
+        (first-set-wins across re-opens) is the last resort. Only a task
+        with none of the three set falls back to the unconditional `[]`.
+
+    Any failure in the decision itself returns None, so the heartbeat
+    response stays legacy-shaped; a failure while persisting the watermark
+    is separately best-effort and never discards an already-decided
+    control signal.
+    """
     if active_task is None:
         return None
     try:
@@ -3804,6 +3992,9 @@ async def _collect_heartbeat_control(session, agent, active_task):
                 AgentTaskCommentCursor.task_id == active_task.id,
             )
         )).first()
+        had_signal_cursor = (
+            cursor is not None and cursor.last_signalled_comment_id is not None
+        )
 
         all_comments = list((await session.exec(
             select(_TC)
@@ -3823,35 +4014,100 @@ async def _collect_heartbeat_control(session, agent, active_task):
             if blocked_at is None or _aware(c.created_at) >= blocked_at
         ]
 
-        # Unseen slice relative to the cursor (mirrors the poll's comment
-        # cursor semantics: position of last_seen in the FULL log, then the
-        # comments after it).
-        if cursor is not None and cursor.last_seen_comment_id is not None:
+        # Unseen slice relative to the signal watermark (position of
+        # last_signalled in the FULL log, then the comments after it). No
+        # watermark yet -> nothing NEW this beat (see docstring); the
+        # seed-to-tail write happens below.
+        if had_signal_cursor:
             idx = next(
                 (i for i, c in enumerate(all_comments)
-                 if c.id == cursor.last_seen_comment_id),
+                 if c.id == cursor.last_signalled_comment_id),
                 -1,
             )
             unseen = all_comments[idx + 1:] if idx >= 0 else all_comments
         else:
-            unseen = all_comments
+            # No persisted watermark yet — fall back to the dispatch
+            # boundary instead of an unconditional `[]` (B-1, PR #519 Rex
+            # review round 3). `dispatched_at` alone goes missing on a
+            # normal re-open path (PATCH .../tasks/{id} status=in_progress
+            # sets ack_at/started_at, never dispatched_at — B-3, PR #519 Rex
+            # review round 3), so derive the boundary falling back through
+            # dispatched_at -> ack_at -> started_at. Only a task with none
+            # of the three set (no time anchor at all) keeps the old, safe
+            # `[]` behavior.
+            dispatch_boundary = _aware(
+                getattr(active_task, "dispatched_at", None)
+                or getattr(active_task, "ack_at", None)
+                or getattr(active_task, "started_at", None)
+            )
+            unseen = (
+                []
+                if dispatch_boundary is None
+                else [
+                    c for c in all_comments
+                    if _aware(c.created_at) > dispatch_boundary
+                ]
+            )
         soft_unread = [
             c for c in unseen
             if c.comment_type in _HEARTBEAT_CONTROL_COMMENT_TYPES
+            # An agent never counts as an unread sender to itself. `c` is a
+            # real TaskComment row straight from the query above, so both
+            # fields are always present (models/task.py) — a getattr default
+            # here would silently keep filtering after a rename instead of
+            # raising (nit, PR #519 Rex review round 3).
+            and not (
+                c.author_type == "agent"
+                and c.author_agent_id == agent.id
+            )
         ]
 
-        control = _heartbeat_control(
-            active_task, agent.id, episode,
-            cursor.last_seen_comment_id if cursor else None,
-        )
+        control = _heartbeat_control(active_task, agent.id, episode)
         if control is None and soft_unread:
             control = {
                 "interrupt": "soft",
                 "reason": "Ungelesene blocker/handoff-Nachrichten warten",
             }
-        return control
     except Exception:  # noqa: BLE001 — control is best-effort, never breaks the heartbeat
         return None
+
+    # Ack: advance the SIGNAL watermark to what this beat has now accounted
+    # for (the seed-to-tail case above, or a watermark that already existed
+    # but sits behind the log). `_upsert_signalled_cursor`, NOT
+    # `_upsert_cursor` — the latter would advance /me/poll's delivery
+    # watermark instead (B1, PR #519 Rex review). Separate try — a write
+    # hiccup here must never discard a `control` signal already decided
+    # above.
+    #
+    # This advance happens unconditionally, so the soft interrupt fires at
+    # most ONCE per comment, not repeatedly until the agent actually acts on
+    # it — a beat that decides `soft` still pulls the watermark past that
+    # comment. Nothing is lost: delivery to the agent runs on the separate
+    # `last_seen_comment_id` watermark (untouched here), so the next
+    # `/me/poll` hands the comment over regardless (PR #519 Rex review,
+    # round 2, warning 1).
+    #
+    # Same when a HARD control wins the same beat: `if control is None and
+    # soft_unread` below never fires, so any soft-eligible comments in
+    # `unseen` are never signalled — yet the watermark still advances past
+    # them here, since it is unconditional on `all_comments`, not on which
+    # branch of `control` was chosen. Again no data loss (poll's watermark
+    # is separate), just no soft signal for a comment the hard interrupt
+    # already made moot (PR #519 Rex review, round 2, warning 2).
+    try:
+        if all_comments and (
+            not had_signal_cursor
+            or all_comments[-1].id != cursor.last_signalled_comment_id
+        ):
+            await _upsert_signalled_cursor(
+                session, agent.id, active_task.id, all_comments[-1].id,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — cursor persistence is best-effort
+        pass
+
+    return control
+
 
 @router.post("/agent/me/heartbeat")
 async def agent_heartbeat(
@@ -3989,8 +4245,32 @@ async def agent_heartbeat(
 
     # CTX-01 (Phase 6): Docker self-report context-window usage. Inverts the
     # display formula at line 166 so frontend bars stay accurate.
+    # Pool hygiene (incident 2026-09-14): the task selects above opened a
+    # transaction and the self-heal above is dirty. The Redis awaits below
+    # are not DB work — commit here so no pool connection is pinned across
+    # them (the ctx bookkeeping below is persisted by the commit further
+    # down).
+    await session.commit()
     if payload.context_pct is not None and agent.context_max:
         agent.context_tokens = round(payload.context_pct / 100 * agent.context_max)
+        try:
+            await (await get_redis()).delete(f"mc:ctx:miss:{agent.id}")
+        except Exception:  # noqa: BLE001 — bookkeeping only
+            pass
+    elif payload.context_pct is None and agent.context_tokens is not None:
+        # "Kein Wert" statt "alter Wert" (10.09.2026): meldet ein Agent drei
+        # Herzschlaege in Folge keinen Kontextwert (Statuszeile nicht erkannt,
+        # frische Session), wird der gespeicherte Wert zu NULL = unbekannt.
+        # Sonst zeigt die Startseite einen Stunden alten Prozentwert als
+        # aktuell — und warnt bei "100 %", waehrend der Agent bei 10 % steht.
+        try:
+            _r = await get_redis()
+            _miss = await _r.incr(f"mc:ctx:miss:{agent.id}")
+            await _r.expire(f"mc:ctx:miss:{agent.id}", 3600)
+            if _miss >= CONTEXT_UNKNOWN_AFTER_MISSES:
+                agent.context_tokens = None
+        except Exception:  # noqa: BLE001 — never break the heartbeat
+            pass
 
     # Host agents: flip provision_status "provisioning" -> "provisioned" on
     # the first heartbeat that ever arrives (2026-07-10 E2E Lauf 3). The

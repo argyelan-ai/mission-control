@@ -9,6 +9,17 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://mc:password@localhost:5432/mission_control"
+    # Pool exhaustion guard (incident 2026-09-14: 29/30 connections pinned in
+    # open transactions → whole API unresponsive). pool_timeout bounds how
+    # long a request WAITS for a free connection before failing fast (503)
+    # instead of piling up behind a leak. 5s ≫ any healthy checkout wait
+    # (see database.py docstring for the sizing math), ≪ the 8s client
+    # timeout observed during the incident.
+    db_pool_timeout: float = 5.0
+    # Observability: a request whose session holds a pool connection longer
+    # than this is logged with endpoint + duration at return time — the
+    # "old transactions are a leak" signature, visible without psql.
+    db_session_hold_warn_seconds: float = 10.0
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -200,6 +211,20 @@ class Settings(BaseSettings):
     # switched to the ACP protocol path. Comma-separated list from .env —
     # agent names deliberately live in deployment config, not in code.
     omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
+    # Recovery Tier 2 (process restart) opt-out — deployment config like
+    # OMP_ACP_AGENT_SLUGS (ADR-081). Slugs listed here are NEVER restarted by
+    # the tiered recovery; ACP agents (omp_acp_agents()) are skipped implicitly.
+    # Measured 2026-09-14: for ACP agents the restart kills the running turn
+    # (/restart, PR #574) and produced phantom deliveries + double reviews.
+    recovery_tier2_skip_agent_slugs: str = ""
+
+    # Which driver the host-side hermes bridge runs (scripts/hermes-bridge.py).
+    # "native" (default) = the bridge drives a hermes TUI in tmux and the
+    # Sessions page has no chat for it at all; "acp" = the bridge runs the ACP
+    # chat daemon and the Sessions chat becomes Hermes' ONLY interface
+    # (docs/specs/chat-over-acp.md). Read by acp_chat_transport.headless_chat_kind
+    # — deployment config, same reasoning as OMP_ACP_AGENT_SLUGS above.
+    hermes_driver: str = "native"  # native | acp
 
     # Secrets encryption (Fernet key for MC-managed secrets)
     secrets_encryption_key: str = ""
@@ -638,6 +663,20 @@ def omp_acp_agents(s: Settings | None = None) -> set[str]:
     """
     s = s or settings
     return {u.strip() for u in s.omp_acp_agent_slugs.split(",") if u.strip()}
+
+
+def recovery_tier2_skip_agents(s: Settings | None = None) -> set[str]:
+    """Agent slugs for which tiered recovery must NOT run Tier 2 (restart).
+
+    Union of RECOVERY_TIER2_SKIP_AGENT_SLUGS (explicit opt-out, e.g. a host
+    agent whose bridge runs a driver the backend cannot see) and
+    omp_acp_agents() (every ACP agent — a restart kills its running turn).
+    Deployment config, deliberately not code; empty default keeps today's
+    behaviour for a fleet without ACP agents.
+    """
+    s = s or settings
+    explicit = {u.strip() for u in s.recovery_tier2_skip_agent_slugs.split(",") if u.strip()}
+    return explicit | omp_acp_agents(s)
 
 
 def effective_host_ssh_user() -> str:

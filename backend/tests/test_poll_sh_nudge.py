@@ -55,6 +55,9 @@ source "$POLLSH"
 detect_turn_state() { echo "${FAKE_TS:-idle}"; }
 wait_for_clean_prompt() { [ "${FAKE_CLEAN:-1}" = "1" ]; }
 verify_paste_landed() { return 0; }
+# paste_and_submit (2026-09-12) classifies via classify_paste_outcome instead
+# of calling verify_paste_landed — the stub lib must provide it ("0" = submitted).
+classify_paste_outcome() { echo 0; }
 """
 
 

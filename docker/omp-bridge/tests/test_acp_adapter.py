@@ -20,11 +20,13 @@ Runs two ways:
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -42,8 +44,13 @@ FIXTURES = {
     "normal": RPC / "acp-normal-turn.ndjson",
     "permission": RPC / "acp-permission-tool.ndjson",
     "cancel": RPC / "acp-cancel-mid-turn.ndjson",
+    # G4 probe: a long pure-reasoning stream — 13 agent_message_chunks, ZERO
+    # tool_call. The idle watchdog's non-tool progress case.
+    "reasoning": RPC / "acp-long-reasoning.ndjson",
+    # G4 counter-probe: the cancel transcript stripped of every chunk — zero
+    # stream activity, zero tools. A real hang.
+    "silent": RPC / "acp-silent-cancel.ndjson",
 }
-
 for name, path in FIXTURES.items():
     if not path.exists():
         raise RuntimeError(f"missing fixture: {path}")
@@ -61,7 +68,7 @@ def make_client(fixture: Path, transcript_sink: list) -> acp_client.ACPClient:
 class InProcessFake:
     """Runs fake_acp_server.replay_transcript on pipes against the real client."""
 
-    def __init__(self, fixture: Path, transcript_sink: list):
+    def __init__(self, fixture: Path, transcript_sink: list, fake_delay: float | None = None):
         c_r, c_w = os.pipe()   # client writes here (fake reads)
         f_r, f_w = os.pipe()   # fake writes here (client reads)
         self.client = acp_client.ACPClient(command=["never-spawned"])
@@ -69,7 +76,7 @@ class InProcessFake:
         self.client._closed = False
         self._sink = transcript_sink
         self._thread = threading.Thread(
-            target=self._run_fake, args=(fixture, c_r, f_w), daemon=True
+            target=self._run_fake, args=(fixture, c_r, f_w, fake_delay), daemon=True
         )
         self._thread.start()
         self.client._reader = threading.Thread(
@@ -80,14 +87,14 @@ class InProcessFake:
             target=lambda: None, name="acp-stderr", daemon=True
         )
 
-    def _run_fake(self, fixture: Path, c_r: int, f_w: int) -> None:
+    def _run_fake(self, fixture: Path, c_r: int, f_w: int, fake_delay: float | None) -> None:
         import io
 
         with io.open(c_r, "r", encoding="utf-8", newline="") as fin, \
                 io.open(f_w, "w", encoding="utf-8", newline="") as fout:
             fake_acp_server.replay(
                 [json.loads(l) for l in fixture.read_text().splitlines() if l.strip()],
-                fin, fout, sink=self._sink,
+                fin, fout, sink=self._sink, delay_s=fake_delay,
             )
 
     def close(self) -> None:
@@ -118,12 +125,13 @@ class _FakeProc:
     def kill(self):
         pass
 
-
 def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = False,
-                ask_answers: list | None = None, model: str | None = "m") -> tuple[bridge.RunOutcome, list]:
+                ask_answers: list | None = None, model: str | None = "m",
+                heartbeat=None, fake_delay: float | None = None,
+                interrupt_state: "bridge.InterruptState | None" = None) -> tuple[bridge.RunOutcome, list]:
     """Run one bridge.run_acp_once attempt against an in-process fake server."""
     sink: list = []
-    fake = InProcessFake(fixture, sink)
+    fake = InProcessFake(fixture, sink, fake_delay=fake_delay)
     answers = list(ask_answers or [])
     state = bridge.ACPCancelState(requested=cancel_before)
 
@@ -142,6 +150,8 @@ def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = Fa
             cancel_poll_interval=0.01,
             client_factory=lambda: fake.client,
             ask_fn=ask_fn,
+            heartbeat_fn=heartbeat,
+            interrupt_state=interrupt_state,
         )
     finally:
         fake.close()
@@ -165,6 +175,59 @@ def test_acp_run_once_collects_streamed_text():
     outcome, _ = run_adapter(FIXTURES["normal"])
     assert "hello golden fixture" in outcome.final_text
     print("PASS test_acp_run_once_collects_streamed_text")
+
+
+
+# ---------------------------------------------------------------------------
+# G4 (parity audit #521): non-tool progress. A long pure-reasoning stream
+# (agent_message_chunks, ZERO tool calls) must feed the heartbeat — the idle
+# watchdog (OMP_TURN_IDLE_TIMEOUT, default 900 s) otherwise kills a producing
+# run as `watchdog_killed` -> ABORT_HANG -> blocker. Counter-probe: a run with
+# NEITHER stream NOR tools must produce ZERO stamps — a real hang stays a
+# hang.
+# ---------------------------------------------------------------------------
+
+def test_acp_stream_heartbeat_fires_without_tool_calls():
+    # 13 streamed chunks at 90 ms spacing ≈ 1.1 s of stream — spans two
+    # 1/s throttle windows, so AT LEAST 2 distinct stamps must arrive,
+    # with ZERO tool calls. Without this feed the idle watchdog kills the
+    # run as `watchdog_killed` -> ABORT_HANG -> blocker.
+    stamps: list[float] = []
+    outcome, _ = run_adapter(
+        FIXTURES["reasoning"], heartbeat=lambda: stamps.append(time.monotonic()),
+        fake_delay=0.09,
+    )
+    assert outcome.saw_agent_end and outcome.tool_calls == 0, outcome.final_stop_reason
+    assert len(stamps) >= 2, f"stream produced {len(stamps)} heartbeats — idle-kill candidate"
+    print("PASS test_acp_stream_heartbeat_fires_without_tool_calls")
+
+
+def test_acp_stream_heartbeat_is_throttled():
+    # 100 chunks within <1 s: the 1/s throttle must cap the stamps well below
+    # the chunk count (one signal line per token would be pointless I/O —
+    # same reasoning as the native hook's STREAM_HEARTBEAT_MS).
+    stamps: list[float] = []
+    outcome, _ = run_adapter(
+        FIXTURES["reasoning"], heartbeat=lambda: stamps.append(time.monotonic()),
+        fake_delay=0.002,
+    )
+    assert outcome.saw_agent_end
+    assert 0 < len(stamps) <= 5, len(stamps)
+
+
+def test_acp_total_silence_produces_no_heartbeat():
+    # Counter-probe: the cancel transcript stripped of EVERY agent chunk —
+    # zero stream activity, zero tool calls before the cancelled prompt
+    # resolves. Liveness must stay silent, otherwise a hung run (no stream,
+    # no tools) would look alive to the idle watchdog.
+    stamps: list[float] = []
+    outcome, _ = run_adapter(
+        FIXTURES["silent"], cancel_before=True,
+        heartbeat=lambda: stamps.append(time.monotonic()),
+    )
+    assert outcome.final_stop_reason == "cancelled"
+    assert stamps == [], f"{len(stamps)} heartbeats on a silent run — hang would look alive"
+    print("PASS test_acp_total_silence_produces_no_heartbeat")
 
 
 def test_acp_run_once_prefixes_context_files(tmp_path="unused"):
@@ -222,6 +285,65 @@ def test_acp_cancel_sends_session_cancel_notification():
     assert cancels, "session/cancel must be sent as ladder step 1"
     assert all("id" not in m for m in cancels), "cancel is a bare notification"
     print("PASS test_acp_cancel_sends_session_cancel_notification")
+
+def test_acp_cancel_mid_turn_stamps_interrupt_kind_and_reason():
+    """Ladder step 1 bookkeeping: when the control channel fired and the
+    turn ends cancelled, the outcome carries WHAT interrupted it
+    (kind/reason from the InterruptState) — like the native path's
+    _observe_native_turn stamp. Without the interrupt_state plumbed in,
+    both fields stay None (the drive_live_run log then reads
+    "interrupted (None: None)")."""
+    state = bridge.InterruptState()
+    state.signal("hard", "run_control=stopped")
+    sink: list = []
+    fake = InProcessFake(FIXTURES["cancel"], sink)
+    cancel = bridge.ACPCancelState(requested=True)
+    try:
+        outcome = bridge.run_acp_once(
+            "x", cwd=str(HERE), model="m", max_time=10, permission_policy="yolo",
+            task_id="T1", cancel_state=cancel, cancel_poll_interval=0.01,
+            interrupt_state=state,
+            client_factory=lambda: fake.client,
+        )
+    finally:
+        fake.close()
+    assert outcome.final_stop_reason == "cancelled"
+    assert outcome.interrupted is True
+    assert outcome.interrupt_kind == "hard"
+    assert outcome.interrupt_reason == "run_control=stopped"
+    print("PASS test_acp_cancel_mid_turn_stamps_interrupt_kind_and_reason")
+
+
+def test_acp_run_without_fired_interrupt_leaves_stamp_empty():
+    """No fired control signal -> no stamp. stopReason=cancelled without a
+    ladder signal (e.g. the agent itself cancelled) keeps kind/reason None."""
+    state = bridge.InterruptState()  # created, never fired
+    outcome, _ = run_adapter(FIXTURES["cancel"], cancel_before=True,
+                             interrupt_state=state)
+    assert outcome.final_stop_reason == "cancelled"
+    assert outcome.interrupt_kind is None
+    assert outcome.interrupt_reason is None
+    print("PASS test_acp_run_without_fired_interrupt_leaves_stamp_empty")
+
+
+def test_acp_run_without_interrupt_state_arg_keeps_stamp_empty():
+    """Back-compat: no interrupt_state passed at all (existing call sites in
+    tests / _make_acp_run_factory) -> stamp stays None, nothing breaks."""
+    outcome, _ = run_adapter(FIXTURES["cancel"], cancel_before=True)
+    assert outcome.final_stop_reason == "cancelled"
+    assert outcome.interrupt_kind is None
+    print("PASS test_acp_run_without_interrupt_state_arg_keeps_stamp_empty")
+
+
+def test_run_acp_accepts_interrupt_state_flag_is_true():
+    """PR #492 interplay (DoD): _RUN_ACP_ACCEPTS_INTERRUPT_STATE must be True
+    AFTER the merge — asserted against the ACTUAL signature, not the
+    docstring claim. If someone removes the interrupt_state param from
+    run_acp_once, the serve-loop pass-through goes dead and this goes red."""
+    assert "interrupt_state" in inspect.signature(bridge.run_acp_once).parameters
+    assert bridge._RUN_ACP_ACCEPTS_INTERRUPT_STATE is True
+    print("PASS test_run_acp_accepts_interrupt_state_flag_is_true")
+
 
 
 # ---------------------------------------------------------------------------

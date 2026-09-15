@@ -42,6 +42,11 @@ async def _seed_agent_with_queue(
         board_id=board.id,
         agent_runtime="cli-bridge",
         status=agent_status,
+        # Drain mechanics, not git workspace setup — the queued tasks below
+        # are ad-hoc (no project_id); a git-requiring agent would otherwise
+        # make the drained dispatch actually try a real GitHub clone
+        # (repo_registry.resolve_adhoc_repo_target, task af914128).
+        requires_git_workflow=False,
     )
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         from app.services.task_queue import enqueue_task
