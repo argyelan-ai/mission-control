@@ -44,6 +44,18 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   them. From then on `./install.sh --update` wraps every pull in
   `scripts/migrate-agents-yml.sh save` / `restore` and you never think about
   it again. Details: [docs/setup/updating.md](docs/setup/updating.md).
+- **The file indexer no longer holds a database transaction while it walks
+  the filesystem.** The periodic walk (every 600 s, all `~/.mc` roots) used
+  to run inside one session — measured on 2026-09-14 as the oldest open
+  transaction in the database (1789 s; a backend restart alone did not clear
+  it, the worker had to die too). The walk now runs with no session open and
+  writes in short committed batches (longest open transaction on the same
+  data set: 33.8 s → 0.7 s). Its 50 000-entry cap comes with a real
+  exclusion list (build/test noise: `target`, `venv`, `.pytest_cache`,
+  `.gradle`, `out`, coverage caches, `*.egg-info`, …, matched
+  case-insensitively) so the cap is not hit every round by counting noise —
+  and if it is hit, the warning fires once per state with the count and the
+  root instead of an identical line every 600 s.
 
 ## [0.2.0] - 2026-08-06
 

@@ -430,9 +430,17 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
     from app.main import app as fastapi_app
     import app.redis_client
 
-    async def override_get_session():
-        async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            yield s
+    from fastapi import Request as _Request
+
+    from app.database import managed_session
+
+    async def override_get_session(request: _Request):
+        # Same lifecycle as production get_session (managed_session): the
+        # release/observability behavior under test is the real one, not a
+        # lookalike. SQLite/StaticPool ignores pool_timeout — irrelevant here.
+        session = AsyncSession(test_engine, expire_on_commit=False)
+        async with managed_session(session, route=request.url.path):
+            yield session
 
     async def override_get_redis():
         return fake_redis
