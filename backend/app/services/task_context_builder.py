@@ -980,13 +980,15 @@ async def _load_dispatch_context(
         except Exception:
             return ""
 
-    # Run all queries in parallel
+    # DB phase: every session.exec below. Run in parallel (as before) —
+    # deliberately WITHOUT the semantic-memory loader, because that one
+    # awaits the embedding HTTP call + Qdrant queries, which are NOT
+    # database work.
     results = await asyncio.gather(
         _load_memory(),
         _load_lessons(),
         _load_agent_lessons(),
         _load_relevant_lessons(),
-        _load_semantic_memory(),  # Phase A
         _load_intelligence(),
         _load_feedback(),
         _load_review_comment(),
@@ -997,25 +999,37 @@ async def _load_dispatch_context(
         _load_dependencies(),
         return_exceptions=True,
     )
-
     # Assign results (errors are treated as empty values)
     ctx.memory_context = results[0] if isinstance(results[0], str) else ""
     ctx.lessons_context = results[1] if isinstance(results[1], str) else ""
     ctx.agent_lessons_context = results[2] if isinstance(results[2], str) else ""
     ctx.relevant_lessons_context = results[3] if isinstance(results[3], str) else ""
-    ctx.semantic_memory_context = results[4] if isinstance(results[4], str) else ""
-    ctx.intelligence_context = results[5] if isinstance(results[5], str) else ""
-    ctx.feedback_context = results[6] if isinstance(results[6], str) else ""
-    ctx.review_comment_context = results[7] if isinstance(results[7], str) else ""
+    ctx.intelligence_context = results[4] if isinstance(results[4], str) else ""
+    ctx.feedback_context = results[5] if isinstance(results[5], str) else ""
+    ctx.review_comment_context = results[6] if isinstance(results[6], str) else ""
 
-    if isinstance(results[8], tuple):
-        ctx.project, ctx.project_tags = results[8]
-    if isinstance(results[9], list):
-        ctx.team_agents = results[9]
-    ctx.meeting_context = results[10] if isinstance(results[10], str) else ""
-    if isinstance(results[11], list):
-        ctx.child_tasks = results[11]
-    ctx.dependency_context = results[12] if isinstance(results[12], str) else ""
+    if isinstance(results[7], tuple):
+        ctx.project, ctx.project_tags = results[7]
+    if isinstance(results[8], list):
+        ctx.team_agents = results[8]
+    ctx.meeting_context = results[9] if isinstance(results[9], str) else ""
+    if isinstance(results[10], list):
+        ctx.child_tasks = results[10]
+    ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
+
+    # Pool hygiene (incident 2026-09-14): the DB phase opened a read
+    # transaction on the request session. The semantic-memory phase below
+    # awaits the embedding service and Qdrant over HTTP — possibly for a
+    # long time under load. Commit here (read phase — nothing uncommitted
+    # on the poll/recovery paths; dispatch flows commit again right after)
+    # so the pool connection's transaction is released across those
+    # network awaits instead of pinning it (29/30 connections were found
+    # pinned in open transactions during the incident).
+    try:
+        await session.commit()
+    except Exception:
+        pass
+    ctx.semantic_memory_context = await _load_semantic_memory()
 
     # Per-repo working rules (ADR-050/052) — Task-Repo hat Vorrang vor dem
     # Projekt-Repo. Läuft nach dem gather (braucht ctx.project). Best-effort.

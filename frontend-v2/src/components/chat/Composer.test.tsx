@@ -1294,6 +1294,28 @@ describe("Composer", () => {
     expect(screen.getByTestId("context-ring")).toHaveAttribute("data-source", "estimate");
   });
 
+  it("shows the omp fill truth (usedPct from usedTokens/contextWindow), not the cumulative inputTokens — live 14.09.2026: 92,799 of 500k = 18.6% while cumulative input was 11.8M (task 156f57c7)", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({
+          inputTokens: 92_799,
+          model: "GLM-5.3-Flash-EXL3",
+          contextWindow: 500_000,
+          usedPct: 18.6,
+          source: "cli",
+          components: null,
+        })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("context-ring-pct")).toHaveTextContent("19%");
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("aria-valuenow", "19");
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("data-source", "cli");
+  });
+
   it("marks the ring's data-source as cli when usedPct is used", () => {
     render(
       <Composer
