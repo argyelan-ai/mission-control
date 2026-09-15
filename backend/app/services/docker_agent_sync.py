@@ -407,8 +407,16 @@ async def sync_docker_agent_files(
     if agent.runtime_id:
         runtime = await session.get(Runtime, agent.runtime_id)
 
-    from app.services.harness_compat import runtime_protocol
-    is_anthropic = bool(runtime and runtime.enabled and runtime_protocol(runtime) == "anthropic")
+    from app.services.harness_compat import settings_extras_for
+    # ADR-084: the hooks/statusLine pair is a capability-matrix decision —
+    # claude always, openclaude per bound runtime's protocol, others never.
+    # `runtime.enabled` stays a separate gate (a disabled runtime renders no
+    # extras regardless of harness).
+    is_anthropic = bool(
+        runtime
+        and runtime.enabled
+        and settings_extras_for(getattr(agent, "harness", None), runtime)
+    )
 
     # Sync settings.json — Bug 5 permanent fix (2026-05-13).
     #

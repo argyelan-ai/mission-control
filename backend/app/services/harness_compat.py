@@ -7,8 +7,11 @@ scattered across internal.py, docker_agent_sync.py and compose_renderer.py.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.config import settings
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
@@ -233,3 +236,124 @@ def requires_runtime_binding(harness: str | None) -> bool:
     the bootstrap and the switch service use.
     """
     return (harness or "") in HARNESSES_REQUIRING_RUNTIME_BINDING
+
+
+# ── ADR-084: ACP als Harness-Eigenschaft + Fähigkeiten-Matrix ───────────────
+#
+# Verhalten leitet sich aus Harness und Runtime-Fähigkeit ab, NIE aus der
+# Identität eines Agenten. ADR-081 hatte den omp-ACP-Treiber per
+# Namensliste (OMP_ACP_AGENT_SLUGS) deployment-konfiguriert — ein frisch
+# angelegter Agent fiel dadurch auf den nativen TUI-Pfad zurück (Pane-Scrape,
+# Komposer-Verifikation, Hook-Signal-Datei; docs/dispatch-path-parity.md
+# Zeilen 20/33/43), mit vier gescheiterten Versuchen als Live-Evidenz.
+
+
+def omp_driver_for(harness: str | None) -> str:
+    """Which driver the omp bridge runs for this harness: ``"acp"`` | ``"native"``.
+
+    THE one decision point (ADR-084). ACP is a property of the omp harness:
+    every omp agent gets it, including one created five minutes ago in a
+    fresh install. The single global escape hatch is ``OMP_DRIVER_DEFAULT``
+    (deployment config, read via ``settings.omp_driver_default``) — it
+    switches the WHOLE fleet, never a name list.
+
+    Non-omp harnesses always answer ``"native"`` (their containers never run
+    the omp bridge, so the answer is only meaningful for compose injection).
+    """
+    if (harness or "") != "omp":
+        return "native"
+    driver = (getattr(settings, "omp_driver_default", "acp") or "acp").strip().lower()
+    return driver if driver in ("acp", "native") else "acp"
+
+
+@dataclass(frozen=True)
+class HarnessCapabilities:
+    """What a harness supports — the matrix ADR-084 consolidates.
+
+    Every field is grounded in one code site (cited in the comment); before
+    this matrix the same facts were scattered over protocol checks and
+    image-name comparisons. ``settings_extras`` is the turn-signal-hooks +
+    statusLine pair from ``plugin_manager.render_agent_settings``: claude is
+    anthropic-protocol by definition (True), openclaude is protocol-flexible
+    (None → decide via ``runtime_protocol(runtime) == "anthropic"``), every
+    other harness never receives the unknown keys (False).
+    """
+
+    #: Claude-Code settings.json extras (hooks + statusLine) — plugin_manager.
+    settings_extras: bool | None
+    #: shared-mcp compose volume — compose_renderer only mounts it on the
+    #: claude-agent anchor.
+    shared_mcp_mount: bool
+    #: native start-claude.sh launcher for host agents — docker_agent_sync
+    #: renders it only for harness claude.
+    host_native_launcher: bool
+    #: Claude-Code plugin/skill files take effect on this harness (settings.json
+    #: consumer). omp/kimi carry their own config surfaces and ignore them.
+    cli_plugins: bool
+    cli_skills: bool
+
+
+HARNESS_CAPABILITIES: dict[str, HarnessCapabilities] = {
+    "claude": HarnessCapabilities(
+        settings_extras=True,
+        shared_mcp_mount=True,
+        host_native_launcher=True,
+        cli_plugins=True,
+        cli_skills=True,
+    ),
+    "openclaude": HarnessCapabilities(
+        settings_extras=None,  # decide per bound runtime's protocol
+        shared_mcp_mount=False,
+        host_native_launcher=False,
+        cli_plugins=True,
+        cli_skills=True,
+    ),
+    "omp": HarnessCapabilities(
+        settings_extras=False,
+        shared_mcp_mount=False,
+        host_native_launcher=False,
+        cli_plugins=False,
+        cli_skills=False,
+    ),
+    "kimi": HarnessCapabilities(
+        settings_extras=False,
+        shared_mcp_mount=False,
+        host_native_launcher=False,
+        cli_plugins=False,
+        cli_skills=False,
+    ),
+}
+
+# Host-only harnesses (ADR-064/066) — same shape, all capabilities off except
+# the hermes ACP driver knob, which is deployment config (settings.hermes_driver).
+for _h in ("hermes", "grok"):
+    HARNESS_CAPABILITIES[_h] = HarnessCapabilities(
+        settings_extras=False,
+        shared_mcp_mount=False,
+        host_native_launcher=False,
+        cli_plugins=False,
+        cli_skills=False,
+    )
+
+
+def capabilities_for(harness: str | None) -> HarnessCapabilities:
+    """Capabilities for ``harness``; unknown harnesses get the all-off row."""
+    return HARNESS_CAPABILITIES.get(
+        harness or "",
+        HarnessCapabilities(
+            settings_extras=False,
+            shared_mcp_mount=False,
+            host_native_launcher=False,
+            cli_plugins=False,
+            cli_skills=False,
+        ),
+    )
+
+
+def settings_extras_for(harness: str | None, runtime: Runtime | None) -> bool:
+    """Turn-signal hooks + statusLine decision, previously inlined at three
+    call sites as ``runtime_protocol(runtime) == "anthropic"``."""
+    caps = capabilities_for(harness)
+    if caps.settings_extras is None:
+        return runtime_protocol(runtime) == "anthropic"
+    return caps.settings_extras

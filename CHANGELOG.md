@@ -18,6 +18,17 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   agent turn and no (non-system) comment for 30 minutes are reported once
   to the Board Lead via `watchdog_notify`. Status is never auto-changed.
   One message per silent phase (DB-dedup, not a Redis TTL).
+- **ACP is an omp-harness property (ADR-084, supersedes ADR-081).** The
+  driver decision moved from the `OMP_ACP_AGENT_SLUGS` name list to
+  `harness_compat.omp_driver_for(harness)` — every omp agent, including one
+  created minutes ago, runs the ACP path. The single rollback knob is
+  `OMP_DRIVER_DEFAULT=native` (whole fleet); a per-service
+  `OMP_DRIVER=native` entry still survives re-rendering. New
+  `HARNESS_CAPABILITIES` matrix consolidates the scattered per-harness
+  conditions (hooks/statusLine, shared-mcp, host launcher, plugin/skill
+  support), and switching to a pluginless harness now warns visibly in the
+  switch result. Tier-2 recovery skips omp/ACP agents via the harness, the
+  explicit `RECOVERY_TIER2_SKIP_AGENT_SLUGS` opt-out stays for host agents.
 
 ### Changed
 - **Your agent fleet leaves version control.**

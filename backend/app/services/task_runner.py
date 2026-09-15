@@ -1137,8 +1137,16 @@ class TaskRunnerService:
         # restart (option A) replaces this branch.
         from app.config import recovery_tier2_skip_agents
         from app.services.fs_service import agent_slug as _agent_slug
+        from app.services.harness_compat import omp_driver_for
         _slug = _agent_slug(agent) or ""
-        _tier2_skip = _slug in recovery_tier2_skip_agents()
+        _harness = getattr(agent, "harness", None)
+        # ADR-084: the implicit skip is harness-derived (omp + ACP driver =
+        # restart would kill the running turn), the explicit one stays an
+        # operator opt-out for host agents the backend cannot observe.
+        _tier2_skip = (
+            _slug in recovery_tier2_skip_agents()
+            or (_harness == "omp" and omp_driver_for(_harness) == "acp")
+        )
         if _tier2_skip:
             logger.info(
                 "Tier 2 (restart) skipped for %s (slug=%s): ACP/opt-out agent — "
