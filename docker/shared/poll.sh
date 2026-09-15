@@ -317,6 +317,7 @@ wait_for_clean_prompt() {
     # in eine Dauerschleife aus Tastendruecken schicken. Bleibt er trotzdem
     # stehen, greift danach dasselbe fail-open + Eskalation wie bisher.
     local survey_dismissed=false
+    local effort_dismissed=false
     local picker_dismissed=false
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local ui
@@ -335,6 +336,13 @@ wait_for_clean_prompt() {
             log "wait_for_clean_prompt: Modell-Picker erkannt — sende Enter (Standard bestaetigen), analog wait_for_agent_healthy."
             tmux_submit "${SESSION_NAME}:0"
             picker_dismissed=true
+            sleep "$READY_POLL_INTERVAL_SEC"
+            continue
+        fi
+        if ! $effort_dismissed && pane_in_effort_dialog "${SESSION_NAME}:0"; then
+            log "wait_for_clean_prompt: Effort-Dialog erkannt — sende '2' (No, go back), NICHT Enter (Enter waehlt die markierte Option '1. Yes, switch to medium' = die teure Umstellung, s. pane_in_effort_dialog)."
+            tmux send-keys -t "${SESSION_NAME}:0" "2" 2>/dev/null || true
+            effort_dismissed=true
             sleep "$READY_POLL_INTERVAL_SEC"
             continue
         fi
@@ -370,7 +378,7 @@ wait_for_clean_prompt() {
 # das volle 15-Zeilen-Fenster zurueck — altes Verhalten, kein neues Risiko.
 PASTE_DIALOG_LOOKBACK_LINES="${PASTE_DIALOG_LOOKBACK_LINES:-6}"
 
-# _dialog_lookback_window TARGET — gemeinsame Grundlage fuer alle drei
+# _dialog_lookback_window TARGET — gemeinsame Grundlage fuer alle vier
 # pane_in_*_dialog-Erkenner unten: derselbe Anker/Fallback-Ausschnitt
 # (Composer-Box plus PASTE_DIALOG_LOOKBACK_LINES Zeilen darueber, oder das
 # volle 15-Zeilen-Fenster ohne erkennbaren Anker) wie die urspruengliche
@@ -426,6 +434,40 @@ pane_in_model_picker() {
     local window
     window=$(_dialog_lookback_window "$1") || return 1
     echo "$window" | grep -q 'Enter to confirm'
+}
+
+# pane_in_effort_dialog TARGET — Fall 5 (15.09.2026, live ueber Nacht bei
+# einem Regressionslauf): Claude Code fragt an Sessions mit gecachtem
+# Verlauf gelegentlich selbsttaetig nach ("Change effort level? / Your next
+# response will be slower and use more tokens / ❯ 1. Yes, switch to medium /
+#   2. No, go back") und verdeckt das Eingabefeld wie der Survey-Dialog —
+# der Agent stand darueber ueber eine Stunde still.
+#
+# WARUM Taste "2" und NIEMALS Enter: Enter bestaetigt die MARKIERTE Option,
+# und die ist hier "1. Yes, switch to medium" — genau die teure Umstellung
+# (naechste Antwort langsamer, mehr Token, gesamte Unterhaltung neu
+# eingelesen). Ein blindes Enter haette bei dem nachtlichen Vorfall die
+# Arbeitsstufe eines Agenten umgeschaltet, der ueber eine Stunde an einem
+# Regressionslauf sass. "2" waehlt direkt "No, go back": der Dialog ist zu,
+# der Agent unverändert auf derselben Stufe. (Der Backend-Pfad
+# backend/app/services/agent_chat_input.py bestaetigt denselben Dialog
+# bewusst mit Enter — dort will der Operator den Wechsel ja explizit; hier
+# taucht der Dialog UNVERLANGT auf, also immer verneinen.)
+#
+# WARUM diese zwei Anker ("Change effort level" + "No, go back"), und nicht
+# nur einer: der Titel allein koennte als Kartentext-Zitat im sichtbaren
+# Verlauf stehen (dieselbe Falle wie P4/S3 — Substring-Match auf zitierten
+# Text); die Optionszeile allein ("No, go back") ist zu generisch. Erst
+# Titel + Optionszeile zusammen belegen, dass der ZWEI-Optionen-Dialog
+# tatsaechlich ueber der Composer-Box offen ist — der Zustand, in dem eine
+# Taste ueberhaupt etwas ausloest. Das Untertitel-Muster ("Your next
+# response will be slower ...") wird bewusst NICHT verankert: laengster,
+# formulierungsreichster Text, den ein CLI-Update am ehesten umformuliert.
+pane_in_effort_dialog() {
+    local window
+    window=$(_dialog_lookback_window "$1") || return 1
+    echo "$window" | grep -q 'Change effort level' \
+        && echo "$window" | grep -q 'No, go back'
 }
 
 # Bug 10 (2026-05-13): fail-open des paste-Schritts war silent — bei Race
@@ -597,6 +639,10 @@ paste_and_submit() {
                     dialog_kind="Modell-Picker"
                     log "WARNING: paste_and_submit Versuch ${attempt}: Modell-Picker verdeckt das Eingabefeld — sende Enter (Standard bestaetigen), dritter Versuch."
                     tmux_submit "${SESSION_NAME}:0"
+                elif pane_in_effort_dialog "${SESSION_NAME}:0"; then
+                    dialog_kind="Effort-Dialog"
+                    log "WARNING: paste_and_submit Versuch ${attempt}: Effort-Dialog verdeckt das Eingabefeld — sende '2' (No, go back), NICHT Enter (Enter waehlt die markierte teure Option, s. pane_in_effort_dialog)."
+                    tmux send-keys -t "${SESSION_NAME}:0" "2" 2>/dev/null || true
                 fi
                 if [ -n "$dialog_kind" ]; then
                     sleep "$PASTE_VERIFY_DELAY_SEC"

@@ -388,6 +388,56 @@ if pane_in_model_picker "${SESSION_NAME}:0"; then
     fail "case M2: abgesendetes Pane ohne Picker darf pane_in_model_picker nicht triggern"
 fi
 
+# ── Fall 5 (15.09.2026, ueber Nacht): pane_in_effort_dialog ────────────────
+# "Change effort level?"-Dialog verdeckt das Eingabefeld; die markierte
+# Option ist "1. Yes, switch to medium" = die teure Umstellung, darum muss
+# die Entladetaste "2" (No, go back) sein, nie Enter. Fixture-Wortlaut 1:1
+# aus der Karten-Beobachtung vom 15.09.2026.
+
+# Case E1: Effort-Dialog im Composer-Fenster wird erkannt.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-effort-dialog.txt"
+if ! pane_in_effort_dialog "${SESSION_NAME}:0"; then
+    fail "case E1: Effort-Dialog (Change effort level? .. No, go back) muss erkannt werden"
+fi
+
+# Case E2: normales, abgesendetes Pane darf nicht matchen.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+if pane_in_effort_dialog "${SESSION_NAME}:0"; then
+    fail "case E2: abgesendetes Pane ohne Dialog darf pane_in_effort_dialog nicht triggern"
+fi
+
+# Case E3 (Sabotage-Probe): NUR der Titel ohne Optionszeile darf nicht
+# genuegen — sonst gilt jeder Kartentext, der "Change effort level" zitiert,
+# als offener Dialog (dieselbe Falle wie P4/S3).
+pane_e3=$(mktemp)
+{
+    for i in 1 2 3 4 5 6 7 8 9 10; do echo "filler $i"; done
+    echo "Kartentext: 'Change effort level?' beschreibt den Dialog, Optionszeile fehlt"
+    echo "────"
+    echo "❯ "
+    echo "────"
+} > "$pane_e3"
+export TMUX_STUB_PANE_FILE="$pane_e3"
+if pane_in_effort_dialog "${SESSION_NAME}:0"; then
+    fail "case E3: 'Change effort level' allein (ohne 'No, go back') darf nicht als Effort-Dialog gelten"
+fi
+
+# Case E4 (Sabotage-Probe, Gegenrichtung): NUR die Optionszeile ohne Titel
+# darf nicht genuegen — "No, go back" ist zu generisch fuer einen alleinigen
+# Anker.
+pane_e4=$(mktemp)
+{
+    for i in 1 2 3 4 5 6 7 8 9 10; do echo "filler $i"; done
+    echo "  2. No, go back and revisit the earlier step (unrelated, kein Dialog)"
+    echo "────"
+    echo "❯ "
+    echo "────"
+} > "$pane_e4"
+export TMUX_STUB_PANE_FILE="$pane_e4"
+if pane_in_effort_dialog "${SESSION_NAME}:0"; then
+    fail "case E4: 'No, go back' allein (ohne 'Change effort level') darf nicht als Effort-Dialog gelten"
+fi
+
 # ── B2-1 (Review PR #529, Runde 3): wait_for_clean_prompt muss das Gate aus
 # pane_in_interrupted_dialog auch VERWENDEN (poll.sh:296) — P1-P3 oben pruefen
 # nur die isolierte Funktion, nicht die Verdrahtung. Faellt der Aufruf bei
@@ -471,6 +521,36 @@ echo "$pane_after_m" | grep -q 'Enter to confirm' \
     && fail "case G4: Pane zeigt den Modell-Picker IMMER NOCH, obwohl wait_for_clean_prompt rc=0 meldet"
 unset TMUX_KEYS_LOG TMUX_STUB_DISMISS_KEY TMUX_STUB_DISMISS_MARKER TMUX_STUB_PANE_FILE_AFTER
 READY_TIMEOUT_SEC=1
+# Case E5 (Verdrahtung): wait_for_clean_prompt muss im Effort-Dialog '2'
+# senden — NICHT Enter — und sich danach freigeben, sobald das Pane den
+# Dialog nicht mehr zeigt. Beweis am Keys-Log und am vorher/nachher-Capture,
+# wie bei G3/G4. Entfaellt die Verdrahtung, gibt die Funktion im Dialog
+# entweder gar nicht frei oder (schlimmer) via fail-open-Paste mit Enter in
+# den Dialog.
+TMUX_STUB_DISMISS_MARKER=$(mktemp -u)
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-effort-dialog.txt"
+export TMUX_STUB_PANE_FILE_AFTER="$FIX_DIR/claude-24-idle-after-dismiss.txt"
+export TMUX_STUB_DISMISS_KEY="2"
+export TMUX_STUB_DISMISS_MARKER
+export TMUX_KEYS_LOG=$(mktemp)
+: > "$TMUX_KEYS_LOG"
+READY_TIMEOUT_SEC=3
+PANE_UI_DETECTED=""
+pane_before_e=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S -15)
+echo "$pane_before_e" | grep -q 'Change effort level' \
+    || fail "case E5: Testaufbau kaputt — Stub zeigt den Effort-Dialog nicht als 'vorher'"
+rc=0
+wait_for_clean_prompt || rc=$?
+[ "$rc" = "0" ] || fail "case E5: wait_for_clean_prompt muss nach dem Effort-Dismiss freigeben, war rc='$rc'"
+grep -qE '^send-keys .* 2$' "$TMUX_KEYS_LOG" \
+    || fail "case E5: '2' (No, go back) wurde nicht gesendet: $(cat "$TMUX_KEYS_LOG")"
+grep -q -- '-H 0d' "$TMUX_KEYS_LOG" \
+    && fail "case E5: Enter wurde in den Effort-Dialog gesendet — markierte Option '1. Yes, switch to medium' haette die teure Umstellung ausgeloest: $(cat "$TMUX_KEYS_LOG")"
+pane_after_e=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S -15)
+echo "$pane_after_e" | grep -q 'Change effort level' \
+    && fail "case E5: Pane zeigt den Effort-Dialog IMMER NOCH, obwohl wait_for_clean_prompt rc=0 meldet"
+unset TMUX_KEYS_LOG TMUX_STUB_DISMISS_KEY TMUX_STUB_DISMISS_MARKER TMUX_STUB_PANE_FILE_AFTER
+READY_TIMEOUT_SEC=1
 
 unset -f detect_pane_ui
 
@@ -541,6 +621,40 @@ paste_and_submit "$msg_e1" || rc=$?
 [ "$rc" = "2" ] || fail "case E1: paste_and_submit muss 2 zurueckgeben (Karte blockiert), war '$rc'"
 grep -q "task=fresh-task" "$BLOCKER_LOG" || fail "case E1: Eskalation traf die falsche Karte: $(cat "$BLOCKER_LOG")"
 grep -q "source=poll.sh paste_and_submit" "$BLOCKER_LOG" || fail "case E1: Quellenkennung fehlt: $(cat "$BLOCKER_LOG")"
+
+# Case U1 (Gegenrichtung, Schutzwirkung von #581): ein UNBEKANNTER Dialog im
+# Pane darf NICHT weggeklickt werden — kein '0', kein '2', kein Extr-enter —
+# sondern muss laut eskalieren (report_blocker, rc 2). Der Pane zeigt einen
+# fremden Zwei-Optionen-Dialog ("Trust this folder?"), auf den KEIN
+# pane_in_*_Erkenner passt: die Erkennungsliste schliesst nur Bekanntes.
+pane_u1=$(mktemp)
+{
+    for i in 1 2 3 4 5 6 7 8; do echo "filler $i"; done
+    echo "Do you trust the files in this folder?"
+    echo "\xe2\x9d\xaf 1. Yes, proceed"
+    echo "  2. No, exit"
+    echo "────"
+    echo "❯ Weiter mit der Karte"
+    echo "────"
+    echo "  ⏵⏵ bypass permissions on"
+} > "$pane_u1"
+export TMUX_STUB_PANE_FILE="$pane_u1"
+TMUX_KEYS_LOG_U1=$(mktemp)
+: > "$TMUX_KEYS_LOG_U1"
+export TMUX_KEYS_LOG="$TMUX_KEYS_LOG_U1"
+: > "$BLOCKER_LOG"
+rc=0
+paste_and_submit "$msg_e1" || rc=$?
+[ "$rc" = "2" ] || fail "case U1: unbekannter Dialog muss eskalieren (rc 2), war '$rc'"
+grep -q "task=fresh-task" "$BLOCKER_LOG" || fail "case U1: Eskalation fehlt: $(cat "$BLOCKER_LOG")"
+grep -qE '^send-keys .* 2$' "$TMUX_KEYS_LOG_U1" \
+    && fail "case U1: '2' wurde bei UNBEKANNNTEM Dialog gesendet — Wegdruecken darf nur bei erkannten Dialogen laufen: $(cat "$TMUX_KEYS_LOG_U1")"
+grep -qE '^send-keys .* 0$' "$TMUX_KEYS_LOG_U1" \
+    && fail "case U1: '0' wurde bei UNBEKANNNTEM Dialog gesendet: $(cat "$TMUX_KEYS_LOG_U1")"
+u1_submits=$(grep -c -- '-H 0d$' "$TMUX_KEYS_LOG_U1" 2>/dev/null || true)
+[ "$u1_submits" = "2" ] || fail "case U1: erwartet genau zwei Submit-Enters, waren '$u1_submits': $(cat "$TMUX_KEYS_LOG_U1")"
+unset TMUX_STUB_PANE_FILE TMUX_KEYS_LOG
+unset TMUX_KEYS_LOG_U1
 
 # Case E2: ohne Escalation-Override faellt es auf die laufende Karte zurueck.
 : > "$BLOCKER_LOG"
