@@ -119,6 +119,11 @@ TWO_FILE_MENTION_LINE = json.dumps(
 # Ankuendigung, der Parser muss ihn still ueberspringen statt zu sterben.
 UNKNOWN_TYPE_LINE = '{"type":"telepathy_change","id":"zz","timestamp":"2026-08-19T12:00:00.000Z","vibes":"gut"}'
 
+# Live 14.09.2026 (PR-492-Session, 500k-Fenster): neuere omp-Builds schreiben
+# neben dem SITZUNGSKUMULATIVEN ``input`` (11.795.309!) den echten Fuellstand
+# als ``usedTokens``/``contextWindow``. Zahlen echt, Text neutralisiert.
+FILL_TRUTH_LINE = '{"type":"message","id":"01a0a0fa","parentId":"01a0a0f9","timestamp":"2026-09-14T18:59:20.963Z","message":{"role":"assistant","content":[{"type":"text","text":"Fertig."}],"api":"openai-completions","provider":"mc-openai","model":"GLM-5.3-Flash-EXL3","usage":{"input":11795309,"cacheRead":0,"cacheWrite":0,"output":30289,"contextWindow":500000,"usedTokens":92799},"stopReason":"stop"}}'
+
 BROKEN_LINE = '{"type":"message","id":"kaputt",'
 
 NOT_AN_OBJECT_LINE = '["das ist eine Liste"]'
@@ -259,6 +264,45 @@ def test_context_window_is_resolved_from_the_observed_map():
 
 def test_unknown_model_gets_no_invented_context_window():
     assert parse(ASSISTANT_LINE)[-1]["contextWindow"] is None
+
+
+# ── Parser: omp-eigener Fuellstand (usedTokens/contextWindow) ───────────────
+
+
+def test_fill_truth_stamps_used_pct_instead_of_the_cumulative_lie():
+    """``input`` ist sitzungskumulativ (11.8M gegen ein 500k-Fenster!) — der
+    alte Weg inputTokens/window lies den Kontextring fuer immer bei 100%
+    klemmen (Task 156f57c7). omp's eigener usedTokens/contextWindow ist der
+    Fuellstand und gewinnt: 92799/500000 = 18.6%, Quelle CLI."""
+    usage = parse(FILL_TRUTH_LINE)[-1]
+    assert usage["usedPct"] == 18.6
+    assert usage["source"] == "cli"
+    # Der Fuellstand selbst, nicht die kumulative Summe — Ring und Panel
+    # koennen nicht auseinanderlaufen.
+    assert usage["inputTokens"] == 92_799
+    assert usage["contextWindow"] == 500_000
+    # Aus kumulativen Buckets ist keine Breakdown ableitbar — ehrlich keine
+    # statt einer falschen (Panel zeigt dann eine einzige Belegt-Zeile).
+    assert usage["components"] is None
+
+
+def test_fill_window_outranks_the_model_name_guess():
+    """Auch wenn die observed-Map das Modell kennt: das Fenster aus omp's
+    eigener Buchhaltung ist ground truth und gewinnt."""
+    usage = parse(FILL_TRUTH_LINE, observed={"GLM-5.3-Flash-EXL3": 1_000_000})[-1]
+    assert usage["contextWindow"] == 500_000
+    assert usage["usedPct"] == 18.6
+
+
+def test_old_build_without_fill_fields_keeps_the_estimate_path():
+    """Aeltere omp-Builds schreiben kein usedTokens/contextWindow — das
+    Event bleibt wie bisher (Schaetzungsweg des Frontends), nur ohne
+    gebrauchte usedPct/source-Schluessel."""
+    usage = parse(ASSISTANT_LINE)[-1]
+    assert "usedPct" not in usage
+    assert "source" not in usage
+    assert usage["inputTokens"] == 23_918
+    assert usage["components"] is not None
 
 
 # ── Parser: Werkzeuge ───────────────────────────────────────────────────────
