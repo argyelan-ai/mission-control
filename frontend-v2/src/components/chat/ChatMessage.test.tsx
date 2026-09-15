@@ -316,3 +316,23 @@ describe("Echo-Blase", () => {
     expect(bubble.style.opacity === "" || Number(bubble.style.opacity) >= 1).toBe(true);
   });
 });
+
+describe("Horizontale Umbruch-Regel (Operator 15.09.: chat ist am Handy horizontal scrollbar)", () => {
+  it("der assistant-Markdown-Body traegt break-words (overflow-wrap vererbt auf p/li)", () => {
+    // Lange Pfade/URLs in Antworttexten liefen ohne Umbruch ueber den Rand —
+    // der Chat-Verlauf wurde damit selbst horizontal scrollbar (390px).
+    // break-words am Body erbt in alle Markdown-Kinder (p, li, headings).
+    render(<ChatMessage ev={mkEvent({ role: "assistant", text: "Antwort mit /tmp/sehr/langer/pfad/ohne/leerzeichen/bis/ans/ende.txt" })} />);
+    const body = document.querySelector('[data-testid="chat-timeline"] .break-words')
+      ?? screen.getByText(/Antwort mit/).closest("div.break-words");
+    expect(body).toBeTruthy();
+  });
+
+  it("inline code + links nutzen overflow-wrap:anywhere (MarkdownContent)", () => {
+    // bereits auf main gepinnt — hier als Gegenprobe, dass der Body-Fix sie
+    // nicht ausser Kraft setzt:
+    render(<ChatMessage ev={mkEvent({ role: "assistant", text: "Siehe `src/komponente/SehrLangerName.tsx` und https://example.com/ein/sehr/langer/pfad" })} />);
+    const inlineCode = screen.getByText(/SehrLangerName/);
+    expect(inlineCode).toBeTruthy();
+  });
+});
