@@ -243,6 +243,7 @@ describe("Live-Vorschau (preview) — eigenes Fach, nie Zeitachse", () => {
   const preview = (text: string): PreviewEvent =>
     ({ kind: "preview", uuid: null, ts: "2026-08-31T00:00:00Z", text, source: "pane" });
 
+
   it("legt die Vorschau ins eigene Fach und laesst die Zeitachse in Ruhe", () => {
     const state = chatReducer(createInitialChatState(), preview("Ich schaue mir die Datei an"));
     expect(state.events).toHaveLength(0);
@@ -347,6 +348,65 @@ describe("seedSequence — Historie vor bereits eingetroffenen Live-Zeilen", () 
     for (const ev of seedSequence([shared], [shared])) st = chatReducer(st, ev);
 
     expect(st.events).toHaveLength(1);
+  });
+});
+
+describe("seedSequence — veraltete Preview-Zeilen sterben beim Seed", () => {
+  const pv = (text: string, ts: string): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts, text, source: "acp" });
+  const pv2 = (text: string, ts: string): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts, text, source: "acp" });
+
+  it("wirft gepufferte Preview-Zeilen der BEREITS fertigen Antwort weg (doppelte Antwort)", () => {
+    // Mark, 14.09.2026: nach dem Zugende stand die Antwort zweimal — einmal
+    // als message (History), einmal als LIVE PREVIEW (gepufferte preview-
+    // Zeilen derselben Antwort, die previews/-Datei ueberlebt den Turn).
+    const answer = msg("a1", "Fertige Antwort.", "assistant");
+    answer.ts = "2026-08-15T00:00:05Z";
+    const stalePreview = pv("Fertige Antwort.", "2026-08-15T00:00:03Z");
+
+    let st = createInitialChatState();
+    for (const ev of seedSequence([answer], [stalePreview])) st = chatReducer(st, ev);
+
+    // Die Vorschau darf die bestaetigte Antwort nicht unterstellen:
+    expect(st.preview).toBeNull();
+    expect(st.events).toHaveLength(1);
+  });
+
+  it("behält eine Preview, die NACH der letzten Antwort liegt (Agent schreibt weiter)", () => {
+    const answer = msg("a1", "Fertig.", "assistant");
+    answer.ts = "2026-08-15T00:00:05Z";
+    const live = pv("naechster Zug laeuft…", "2026-08-15T00:00:09Z");
+
+    let st = createInitialChatState();
+    for (const ev of seedSequence([answer], [live])) st = chatReducer(st, ev);
+
+    expect(st.preview?.text).toBe("naechster Zug laeuft…");
+  });
+
+  it("behält Previews, wenn die History noch keine assistant-message hat", () => {
+    const live = pv("erste Zeile…", "2026-08-15T00:00:01Z");
+    let st = createInitialChatState();
+    for (const ev of seedSequence([], [live])) st = chatReducer(st, ev);
+    expect(st.preview?.text).toBe("erste Zeile…");
+  });
+});
+
+describe("preview wartet auf den Seed (ruhiger Erst-Aufbau, kein Flackern)", () => {
+  /* Das ist das Verhalten von useChatStream selbst: before seeding, preview
+     frames go into the buffer instead of straight into the reducer. Getestet
+     ueber seedSequence-Ebene + die Buffer-Regel ist Hook-intern — hier als
+     Vertragstest der Regel, die der Hook implementiert: eine preview vor dem
+     Seed landet im Puffer und wird NACH dem Seed nur noch gespielt, wenn sie
+     die letzte Antwort nicht ueberholt hat. */
+  it("Regel: preview + dann message im Puffer -> Preview stirbt beim Seed", () => {
+    const p: PreviewEvent =
+      { kind: "preview", uuid: null, ts: "2026-08-15T00:00:04Z", text: "Die Antwort.", source: "acp" };
+    const answer = msg("a1", "Die Antwort.", "assistant");
+    answer.ts = "2026-08-15T00:00:05Z";
+    let st = createInitialChatState();
+    for (const ev of seedSequence([answer], [p])) st = chatReducer(st, ev);
+    expect(st.preview).toBeNull();
   });
 });
 

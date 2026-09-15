@@ -27,16 +27,17 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
 import { isAgentStartingError, isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
-import type { StateEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
 import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
+import { buildTimelineItems } from "./buildTimelineItems";
 import { ChatMessage } from "./ChatMessage";
 import { PreviewRow } from "./PreviewRow";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
-import { ToolGroup, type ActivityEvent } from "./ToolGroup";
+import { ToolGroup } from "./ToolGroup";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
@@ -51,6 +52,12 @@ import type { PanelKind } from "./PanelRail";
 // importing ChatView back (see chatOptions.ts). Importers are unaffected.
 export { CENTER_VIEWS, DETAIL_LEVELS };
 export type { CenterView, DetailLevel };
+
+// buildTimelineItems lebt jetzt in seinem eigenen Modul (Test-Naht: ein Test
+// kann die echte Funktion via Modul-Spy zaehlen, waehrend ChatView rendert —
+// PR #595 Nacharbeit). Re-export, damit Importeure unverändert bleiben.
+export { buildTimelineItems, ACTIVITY_GROUP_MIN_SIZE } from "./buildTimelineItems";
+export type { TimelineItem } from "./buildTimelineItems";
 
 // Distance (px) from the bottom of the scroll container within which the
 // view still counts as "at the bottom" — classic chat scroll-lock.
@@ -148,12 +155,6 @@ export function headerSideReservation(opts: {
   };
 }
 
-function isSidechain(ev: TimelineChatEvent): boolean {
-  // CommandEvent carries no `sidechain` field (chatTypes.ts) — narrow safely
-  // instead of assuming every union member has the property.
-  return "sidechain" in ev && ev.sidechain === true;
-}
-
 function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
   if (level !== "compact") return true;
   /* Ein delegierter Auftrag ist Gespraechsstruktur, kein Werkzeug-Rauschen:
@@ -168,97 +169,9 @@ function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
   return ev.kind === "message" || ev.kind === "command";
 }
 
-function isActivity(ev: TimelineChatEvent): ev is ActivityEvent {
-  return ev.kind === "tool" || ev.kind === "thinking";
-}
-
-export type TimelineItem =
-  /** A message or command, or a run too short to be worth collapsing. */
-  | { kind: "single"; event: TimelineChatEvent }
-  /** A run of consecutive tool/thinking events → one ToolGroup chip. */
-  | { kind: "activity"; events: ActivityEvent[] }
-  /** A run of consecutive sidechain (subagent) events → one SubagentGroup. */
-  | { kind: "sidechain"; events: TimelineChatEvent[] }
-  /** Ein delegierter Auftrag (Werkzeug `Agent`) → eine eigene Karte. */
-  | { kind: "agent"; event: ToolEvent };
-
-/** Runs shorter than this render as plain rows: collapsing a single tool call
- *  behind "1 Befehl ausgeführt" would hide its title (the useful part) and
- *  cost a tap to get it back. Two or more is where the wall starts. */
-export const ACTIVITY_GROUP_MIN_SIZE = 2;
-
 /** Timeline items mounted in the first commit — roughly a screenful, so the
  *  operator sees the end of the conversation immediately. */
 export const INITIAL_RENDER_WINDOW = 30;
-
-/**
- * Turns the flat event list into the timeline's render items.
- *
- * Two independent runs are accumulated: sidechain events (subagent turns,
- * unchanged behavior) and top-level tool/thinking events (the new activity
- * groups). Any other event — an assistant text message, a user message, a
- * slash command — closes both runs, which is exactly the group boundary the
- * reference contract asks for: a group covers one working stretch between two
- * things a human said or read.
- */
-export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] {
-  const out: TimelineItem[] = [];
-  let sidechainRun: TimelineChatEvent[] = [];
-  let activityRun: ActivityEvent[] = [];
-
-  function flushSidechain() {
-    if (sidechainRun.length > 0) {
-      out.push({ kind: "sidechain", events: sidechainRun });
-      sidechainRun = [];
-    }
-  }
-
-  function flushActivity() {
-    if (activityRun.length === 0) return;
-    if (activityRun.length >= ACTIVITY_GROUP_MIN_SIZE) {
-      out.push({ kind: "activity", events: activityRun });
-    } else {
-      for (const ev of activityRun) out.push({ kind: "single", event: ev });
-    }
-    activityRun = [];
-  }
-
-  const absorbiert = new Set(
-    events.filter(isAgentSpawn).map((ev) => ev.toolUseId).filter(Boolean) as string[],
-  );
-
-  for (const ev of events) {
-    if (ev.kind === "notification" && ev.toolUseId && absorbiert.has(ev.toolUseId)) {
-      /* Gehoert zu einer Karte — dort wird sie gezeigt. Zweimal dasselbe
-         nebeneinander war genau das Rauschen, das hier weg soll. */
-      continue;
-    }
-    if (isSidechain(ev)) {
-      flushActivity();
-      sidechainRun.push(ev);
-      continue;
-    }
-    flushSidechain();
-    if (isAgentSpawn(ev)) {
-      /* Muss VOR der Aktivitaets-Sammlung stehen: sonst verschwindet der
-         Auftrag als anonymes "+1 Tool" in einer Werkzeug-Gruppe, weil er in
-         der Praxis fast immer neben Bash/Read steht. */
-      flushActivity();
-      out.push({ kind: "agent", event: ev });
-      continue;
-    }
-    if (isActivity(ev)) {
-      activityRun.push(ev);
-      continue;
-    }
-    flushActivity();
-    out.push({ kind: "single", event: ev });
-  }
-
-  flushActivity();
-  flushSidechain();
-  return out;
-}
 
 /**
  * The uuids of assistant messages whose model differs from the previous
@@ -682,10 +595,26 @@ export function ChatView({
     );
   }
 
-  const visibleEvents = stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel));
-  const items = buildTimelineItems(visibleEvents);
+  /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
+     Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
+     Tick — bei einem grossen Transkript blockte das den Main-Thread so lange,
+     dass die Ansicht sprang (Mark: "der chat bewegt sich die ganze zeit").
+     `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
+     deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
+  const visibleEvents = useMemo(
+    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
+    [stream.events, detailLevel],
+  );
+  const items = useMemo(
+    () => buildTimelineItems(visibleEvents),
+    [visibleEvents],
+  );
   // Tail first; the remainder joins one frame later (see `renderAll`).
-  const visibleItems = renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW);
+  const visibleItems = useMemo(
+    () => (renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW)),
+    [items, renderAll],
+  );
 
   // "Nach unten"-Knopf: sobald das Mitlaufen aus ist, merken wir uns, wie
   // viele Eintraege der Verlauf da hatte — alles darueber ist "neu seitdem".
