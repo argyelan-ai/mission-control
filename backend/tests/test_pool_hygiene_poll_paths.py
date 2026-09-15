@@ -14,8 +14,15 @@ Contract under test:
   4. Pool timeout: when no connection frees within db_pool_timeout, the
      request fails with an error (logged, with duration) instead of binding
      a connection forever.
+  5. EVERY non-DB await seam on the poll/recovery/heartbeat family is
+     guarded the same way (fundstellen 1–4 of the fix): readiness gate,
+     orphan heal-claim, recovery rate-limit, heartbeat ctx bookkeeping.
+     Each probe measures the real pool checkout counter inside the non-DB
+     await — reverting the `session.commit()` at exactly that seam turns
+     exactly that one test red (verified per fundstelle).
 """
 import asyncio
+import datetime
 import logging
 import uuid
 from unittest.mock import patch
@@ -31,6 +38,8 @@ from app.config import settings
 from app.models.agent import Agent
 from app.models.board import Board
 from app.models.task import Task
+from app.redis_client import get_redis as _real_get_redis
+from app.redis_client import try_claim_heal as _real_try_claim_heal
 from tests.conftest import test_engine
 
 
@@ -66,6 +75,26 @@ async def _make_inbox_task(session: AsyncSession, *, board: Board, agent: Agent)
     return task
 
 
+async def _make_running_task(
+    session: AsyncSession, *, board: Board, agent: Agent, ack_age_s: int
+) -> Task:
+    """An acked in_progress task whose run signals are `ack_age_s` old —
+    past poll_orphan_run_threshold_seconds (600), so the poll orphan path
+    treats the run as orphaned."""
+    task = Task(
+        board_id=board.id,
+        assigned_agent_id=agent.id,
+        title=f"Pool hygiene orphan {uuid.uuid4().hex[:6]}",
+        status="in_progress",
+        ack_at=datetime.datetime.now(tz=datetime.timezone.utc)
+        - datetime.timedelta(seconds=ack_age_s),
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    return task
+
+
 class _PoolProbe:
     """Tracks how many pool connections are currently checked out."""
 
@@ -83,6 +112,50 @@ class _PoolProbe:
     def detach(self, engine):
         event.remove(engine.sync_engine, "checkout", self._on_checkout)
         event.remove(engine.sync_engine, "checkin", self._on_checkin)
+
+
+class _RecordingRedis:
+    """Proxy around the real (test) redis client that records the pool
+    checkout count at the moment each redis command executes, tagged with
+    command + key — so a probe can be keyed to ONE specific await seam
+    (e.g. the recovery attempt-id read) even when other redis commands run
+    earlier in the same request."""
+
+    def __init__(self, inner, probe, observed: list):
+        self._inner = inner
+        self._probe = probe
+        self._observed = observed
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        async def _call(*args, **kwargs):
+            key = str(args[0]) if args else ""
+            self._observed.append((name, key, self._probe.held))
+            return await attr(*args, **kwargs)
+
+        return _call
+
+
+def _recording_get_redis(probe, observed: list):
+    """Replaces a module's `get_redis` with one returning the recording
+    proxy around the real (fixture-seeded) client."""
+
+    async def _get():
+        return _RecordingRedis(await _real_get_redis(), probe, observed)
+
+    return _get
+
+
+def _observed_held(observed: list, *, key_fragment: str, command: str | None = None):
+    """Pool-checkout counts recorded at every command touching a key."""
+    return [
+        held
+        for (cmd, key, held) in observed
+        if key_fragment in key and (command is None or cmd == command)
+    ]
 
 
 class _ListHandler(logging.Handler):
@@ -260,3 +333,216 @@ def test_engine_uses_configured_pool_timeout():
 
     assert engine.pool.timeout() == pytest.approx(settings.db_pool_timeout)
     assert settings.db_pool_timeout == pytest.approx(5.0)
+
+
+# ── Fundstelle 1: readiness gate (agents.py, agent_poll) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_poll_releases_connection_before_readiness_gate(
+    client: AsyncClient, async_session
+):
+    """Fundstelle 1: the readiness-gate seam in agent_poll. The gate awaits
+    Redis and — on cache miss — a live HTTP probe of the runtime; that is
+    NOT database work. The commit must happen before the gate is entered.
+
+    Sabotage: drop the `await session.commit()` right before
+    `runtime_ready_for_agent` in agent_poll → the read transaction opened by
+    the candidate/dependencies_met selects is still open at gate entry →
+    THIS test goes red (held=1); the other fundstellen tests stay green."""
+    board, agent, token = await _make_board_and_agent(async_session)
+    await _make_inbox_task(async_session, board=board, agent=agent)
+
+    probe = _PoolProbe(test_engine)
+    observed: dict = {}
+
+    async def _probe_gate(a, s):
+        # Measured at the moment control enters the non-DB await region.
+        observed["held_at_gate"] = probe.held
+        return True, None
+
+    try:
+        with patch(
+            "app.services.runtime_readiness.runtime_ready_for_agent",
+            side_effect=_probe_gate,
+        ), patch(
+            "app.services.memory_query.run_memory_query",
+            return_value={"results": {}, "fallback": True},
+        ):
+            resp = await client.get(
+                "/api/v1/agent/me/poll",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    finally:
+        probe.detach(test_engine)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "new_task", resp.json()
+    assert "held_at_gate" in observed, "readiness gate was never reached"
+    assert observed["held_at_gate"] == 0, (
+        "pool connection still checked out (transaction open) when the "
+        f"readiness gate was entered — held={observed['held_at_gate']}"
+    )
+
+
+# ── Fundstelle 2: orphan redispatch (helper + poll call site) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_orphan_redispatch_releases_connection_before_heal_claim(
+    client: AsyncClient, async_session
+):
+    """Fundstelle 2: the orphan redispatch. The ModelUsageEvent select in
+    _maybe_redispatch_orphaned_run opens a read transaction; the Redis
+    heal-claim await below it is NOT database work.
+
+    Sabotage: drop the `await session.commit()` in
+    _maybe_redispatch_orphaned_run (helper) and/or its poll call site →
+    THIS test goes red (held=1); the other fundstellen tests stay green.
+
+    Seam note: the load-bearing commit is the helper's own (it runs after
+    the ModelUsageEvent select that (re)opens the transaction). The call-site
+    commit in agent_poll is belt-and-braces — reverting it alone is
+    behavior-neutral because the helper commit still releases before the
+    awaits. This test pins the pair as one fundstelle: any revert that
+    leaves the transaction open at the heal claim turns it red."""
+    board, agent, token = await _make_board_and_agent(async_session)
+    agent.last_task_activity_at = (
+        datetime.datetime.now(tz=datetime.timezone.utc)
+        - datetime.timedelta(seconds=700)
+    )
+    async_session.add(agent)
+    await async_session.commit()
+    task = await _make_running_task(
+        async_session, board=board, agent=agent, ack_age_s=700
+    )
+
+    probe = _PoolProbe(test_engine)
+    observed: dict = {}
+
+    async def _probe_try_claim(redis, task_id):
+        observed["held_at_heal_claim"] = probe.held
+        return await _real_try_claim_heal(redis, task_id)
+
+    try:
+        with patch(
+            "app.routers.agents.try_claim_heal",
+            side_effect=_probe_try_claim,
+        ), patch(
+            "app.services.memory_query.run_memory_query",
+            return_value={"results": {}, "fallback": True},
+        ):
+            resp = await client.get(
+                "/api/v1/agent/me/poll",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    finally:
+        probe.detach(test_engine)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "new_task", body
+    assert body.get("orphaned_run_redispatched") is True, body
+    assert body["task"]["id"] == str(task.id)
+    assert "held_at_heal_claim" in observed, "orphan heal claim was never reached"
+    assert observed["held_at_heal_claim"] == 0, (
+        "pool connection still checked out (transaction open) at the Redis "
+        f"heal-claim await — held={observed['held_at_heal_claim']}"
+    )
+
+
+# ── Fundstelle 3: active-task recovery (rate-limit redis read) ────────────
+
+
+@pytest.mark.asyncio
+async def test_recovery_releases_connection_before_redis_rate_limit(
+    client: AsyncClient, async_session
+):
+    """Fundstelle 3: agent_active_task_recovery. The active-task select opens
+    a read transaction; the Redis rate-limit read below it is NOT database
+    work. The commit must happen before `redis.get(cache_key)`.
+
+    Sabotage: drop the `await session.commit()` before `get_redis()` in
+    agent_active_task_recovery → THIS test goes red (held=1 at the
+    recovery-key read); the other fundstellen tests stay green."""
+    board, agent, token = await _make_board_and_agent(async_session)
+    task = await _make_running_task(
+        async_session, board=board, agent=agent, ack_age_s=30
+    )
+
+    probe = _PoolProbe(test_engine)
+    observed: list = []
+
+    try:
+        with patch(
+            "app.redis_client.get_redis",
+            side_effect=_recording_get_redis(probe, observed),
+        ), patch(
+            "app.services.memory_query.run_memory_query",
+            return_value={"results": {}, "fallback": True},
+        ):
+            resp = await client.get(
+                "/api/v1/agent/me/active-task-recovery",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    finally:
+        probe.detach(test_engine)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["active"] is True, body
+    assert body["task"]["id"] == str(task.id)
+    held_at_recovery_read = _observed_held(
+        observed, key_fragment="mc:recovery:attempt_id", command="get"
+    )
+    assert held_at_recovery_read, "recovery rate-limit redis read never happened"
+    assert held_at_recovery_read[0] == 0, (
+        "pool connection still checked out (transaction open) at the Redis "
+        f"rate-limit read — held={held_at_recovery_read[0]}"
+    )
+
+
+# ── Fundstelle 4: heartbeat ctx bookkeeping (redis incr) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_releases_connection_before_ctx_bookkeeping(
+    client: AsyncClient, async_session
+):
+    """Fundstelle 4: agent_heartbeat. The task selects + the (dirty) Bug-18
+    self-heal above leave a transaction; the Redis ctx:miss bookkeeping
+    below is NOT database work. The commit must happen before the incr.
+
+    Sabotage: drop the `await session.commit()` before the ctx bookkeeping
+    in agent_heartbeat → THIS test goes red (held=1 at the ctx:miss incr);
+    the other fundstellen tests stay green."""
+    board, agent, token = await _make_board_and_agent(async_session)
+    agent.context_tokens = 42_000  # not None → the "no ctx reported" miss path
+    async_session.add(agent)
+    await async_session.commit()
+
+    probe = _PoolProbe(test_engine)
+    observed: list = []
+
+    try:
+        with patch(
+            "app.routers.agents.get_redis",
+            side_effect=_recording_get_redis(probe, observed),
+        ):
+            resp = await client.post(
+                "/api/v1/agent/me/heartbeat",
+                json={"status": "idle"},  # context_pct absent → miss branch
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    finally:
+        probe.detach(test_engine)
+
+    assert resp.status_code == 200, resp.text
+    held_at_ctx_incr = _observed_held(
+        observed, key_fragment=f"mc:ctx:miss:{agent.id}", command="incr"
+    )
+    assert held_at_ctx_incr, "heartbeat ctx bookkeeping never ran"
+    assert held_at_ctx_incr[0] == 0, (
+        "pool connection still checked out (transaction open) at the Redis "
+        f"ctx bookkeeping await — held={held_at_ctx_incr[0]}"
+    )
