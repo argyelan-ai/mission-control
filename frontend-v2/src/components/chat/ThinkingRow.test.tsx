@@ -70,3 +70,13 @@ describe("ThinkingRow", () => {
     expect(screen.queryByText(/tradeoffs/)).not.toBeInTheDocument();
   });
 });
+
+describe("Horizontale Umbruch-Regel — ThinkingRow", () => {
+  it("der Thinking-Text traegt break-words (lange Tokens brechen, kein Seitwaerts-Schieben)", () => {
+    // Thinking-Blocks enthalten Rohtext mit Pfaden/Flags; ohne break-words
+    // wurde der Verlauf bei 390px horizontal scrollbar.
+    render(<ThinkingRow detailLevel="verbose" ev={{ kind: "thinking", uuid: "t1", ts: "2026-09-15T00:00:00Z", text: "/tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/kein/leerzeichen", sidechain: false }} />);
+    const el = screen.getByText(/kein\/leerzeichen/).closest("pre");
+    expect(el?.className).toContain("break-words");
+  });
+});

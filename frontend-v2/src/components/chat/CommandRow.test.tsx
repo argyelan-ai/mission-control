@@ -58,3 +58,16 @@ describe("CommandRow", () => {
     expect(screen.getByTestId("command-row-result")).toBeInTheDocument();
   });
 });
+
+describe("Horizontale Umbruch-Regel — CommandRow", () => {
+  it("die Befehls-Ausgabe traegt break-words", () => {
+    render(
+      <CommandRow
+        detailLevel="verbose"
+        ev={mkCommand({ result: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /tmp/pfad/ohne/leerzeichen" })}
+      />,
+    );
+    const el = screen.getByText(/\/tmp\/pfad\/ohne\/leerzeichen/).closest("pre");
+    expect(el?.className).toContain("break-words");
+  });
+});
