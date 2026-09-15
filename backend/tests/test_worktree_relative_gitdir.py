@@ -2,7 +2,7 @@
 
 `git worktree add` schreibt einen ABSOLUTEN Zeiger in die `.git`-Datei des
 Worktrees — gepraegt vom Mount-Pfad des Erstellers. Backend-Container
-(`/Users/Henry/.mc/workspaces/<slug>/...`) und Agenten-Container
+(`/Users/testuser/.mc/workspaces/<slug>/...`) und Agenten-Container
 (`/workspace/...`) mounten denselben Workspace an unterschiedlichen
 Wurzel-Pfaden; ein absoluter Zeiger loest daher nie in beiden Sichten auf
 (`fatal: not a git repository` bei jedem git-Kommando im Worktree).
@@ -61,7 +61,7 @@ class TestRelativeWorktreeGitdir:
         main_repo, worktree = _make_repo_with_worktree(tmp_path, "heal-me")
         real_target = _read_gitfile(worktree).split(":", 1)[1].strip()
         # Simulate the other mount view: absolute path that does NOT exist here
-        broken = "gitdir: /Users/Henry/.mc/workspaces/slug/mission-control/.git/worktrees/heal-me\n"
+        broken = "gitdir: /Users/testuser/.mc/workspaces/slug/mission-control/.git/worktrees/heal-me\n"
         with open(os.path.join(worktree, ".git"), "w") as f:
             f.write(broken)
         assert not os.path.isdir(
@@ -111,7 +111,7 @@ class TestRelativeWorktreeGitdir:
         main_repo, worktree = _make_repo_with_worktree(tmp_path, "reuse")
         with open(os.path.join(worktree, ".git"), "w") as f:
             f.write(
-                "gitdir: /Users/Henry/.mc/workspaces/slug/mission-control/.git/worktrees/reuse\n"
+                "gitdir: /Users/testuser/.mc/workspaces/slug/mission-control/.git/worktrees/reuse\n"
             )
 
         path = await svc.create_task_worktree(main_repo, "reuse")

@@ -221,7 +221,7 @@ class GitService:
 
         `git worktree add` writes an ABSOLUTE path — the creator's mount
         view (incident 2026-09-15: backend writes
-        `/Users/Henry/.mc/workspaces/<slug>/...`, agent containers mount the
+        `/Users/testuser/.mc/workspaces/<slug>/...`, agent containers mount the
         same workspace at `/workspace`, so every git command in the worktree
         dies with `fatal: not a git repository`). A relative pointer
         resolves in both views.
