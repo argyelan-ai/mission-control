@@ -143,6 +143,12 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             # silent card is visible to the Board Lead even if a later
             # healer resets it. Never changes status.
             await self._check_silent_cards(session)
+            # Same report-only family, one grain coarser: an agent's whole
+            # mailbox (inbox > 0, in_progress == 0) instead of a single card.
+            # Placed right after _check_silent_cards — same DB-dedup design,
+            # same "before orphan recovery" reasoning (visible even if a
+            # later healer changes something). Never changes status.
+            await self._check_silent_mailbox(session)
             # Second stage: a stage-1 lead message (watchdog_notify /
             # blocker_lead_notify) with no lead reaction for 30 minutes is
             # reported to the operator — once per silent phase, report-only.
