@@ -109,6 +109,21 @@ RECYCLER_MARKER_FILE="${RECYCLER_MARKER_FILE:-/home/agent/.claude/last-task.mark
 export TASK_PROMPT_FILE="${TASK_PROMPT_FILE:-/tmp/current_task_prompt.txt}"
 export COMMENTS_PROMPT_FILE="${COMMENTS_PROMPT_FILE:-/tmp/new_comments_prompt.txt}"
 
+# W5 (2026-09-13): mc-context.env pro Host-Agent statt geteilter /tmp-Datei.
+# Im Container ist /tmp isoliert (OUT of scope dieser Aenderung) — Legacy-
+# Default bleibt /tmp/mc-context.env, byte-identisch zum bisherigen Literal.
+# Auf dem Host teilen sich alle poll.sh-Loops, Bridges UND die mc-CLIs der
+# Agenten dieselbe Datei: wer zuletzt schreibt, setzt TASK_ID und
+# X_DISPATCH_ATTEMPT_ID fuer ALLE (Beleg 13.09.2026: Hermes' TASK_ID=4c9bb492
+# färbte auf andere Karten ab, progress-Kommentare landeten auf der falschen
+# Karte). Der Host-Entrypoint (docker/boss-host|kimi-host/entrypoint.sh) lenkt
+# den Pfad deshalb wie TASK_PROMPT_FILE ins Agent-Config-Dir:
+#   MC_CONTEXT_ENV_PATH="$BASE/mc-context.env"
+# Die mc-CLI liest dieselbe Variable (mc_cli/config.py:context_env_path) und
+# faellt ohne sie auf den Legacy-Pfad zurueck — laufende Zuege brechen nicht.
+export MC_CONTEXT_ENV_PATH="${MC_CONTEXT_ENV_PATH:-/tmp/mc-context.env}"
+
+
 # Interaction Model 2.0 (comm_v2) — Turn-Grenzen-Gate fuer Thread-Messages.
 # new_messages aus /me/poll (Task 4) werden NICHT sofort gepastet: waehrend
 # claude arbeitet (turn_state=working) oder der Prompt nicht clean ist, landen
@@ -916,12 +931,19 @@ run_task() {
     tmux set-environment -t "$SESSION_NAME" TASK_ID "$task_id" 2>/dev/null || true
     tmux set-environment -t "$SESSION_NAME" BOARD_ID "$board_id" 2>/dev/null || true
     tmux set-environment -t "$SESSION_NAME" X_DISPATCH_ATTEMPT_ID "$attempt_id" 2>/dev/null || true
-    cat > /tmp/mc-context.env <<EOF
+    tmux set-environment -t "$SESSION_NAME" MC_CONTEXT_ENV_PATH "$MC_CONTEXT_ENV_PATH" 2>/dev/null || true
+    cat > "$MC_CONTEXT_ENV_PATH" <<EOF
 TASK_ID=$task_id
 BOARD_ID=$board_id
 X_DISPATCH_ATTEMPT_ID=$attempt_id
 EOF
-    chmod 644 /tmp/mc-context.env 2>/dev/null || true
+    # Pro-Agent-Pfad: strikt 0600 (enthaelt Attempt-IDs). Legacy-/tmp-Pfad:
+    # 644 wie bisher — Container-Verhalten byte-identisch.
+    if [ "$MC_CONTEXT_ENV_PATH" = "/tmp/mc-context.env" ]; then
+        chmod 644 "$MC_CONTEXT_ENV_PATH" 2>/dev/null || true
+    else
+        chmod 600 "$MC_CONTEXT_ENV_PATH" 2>/dev/null || true
+    fi
 
     # Prompt in Datei schreiben
     echo "$response_json" | python3 -c "
@@ -1127,7 +1149,7 @@ stop_task_session() {
     tmux send-keys -t "${SESSION_NAME}:0" "/clear" 2>/dev/null || true
     tmux_submit "${SESSION_NAME}:0" 2>/dev/null || true
     reset_turn_signal   # W2.1: Turn-Signal beim Operator-Stop leeren
-    : > /tmp/mc-context.env
+    : > "$MC_CONTEXT_ENV_PATH"
     tmux set-environment -t "$SESSION_NAME" TASK_ID "" 2>/dev/null || true
     tmux set-environment -t "$SESSION_NAME" BOARD_ID "" 2>/dev/null || true
     tmux set-environment -t "$SESSION_NAME" X_DISPATCH_ATTEMPT_ID "" 2>/dev/null || true

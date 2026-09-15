@@ -142,7 +142,7 @@ def test_registry_entry_is_read_only():
 def test_recover_points_at_thread(capsys, tmp_path, monkeypatch, _isolate_mc_context_file):
     """`_cmd_recover` writes the dispatch context file as a side effect —
     this test isolates that write via the tests/conftest.py autouse fixture
-    (MC_CONTEXT_FILE) instead of the real, host-shared /tmp/mc-context.env
+    (MC_CONTEXT_ENV_PATH) instead of the real, host-shared /tmp/mc-context.env
     (2026-09-14 incident: this exact test left placeholder aaaaaaaa/
     bbbbbbbb/cccccccc IDs behind in the real file with no cleanup)."""
     monkeypatch.chdir(tmp_path)

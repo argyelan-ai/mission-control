@@ -299,7 +299,7 @@ export function ChatMessage({
           `ch` so it stays a measure and not a magic pixel number; below md the
           viewport is narrower than the cap anyway, so this is desktop-only in
           effect. */}
-      <div className="text-[14px] leading-[1.7] max-w-[76ch] min-w-0 [&>*:last-child]:mb-0">
+      <div className="text-[14px] leading-[1.7] max-w-[76ch] min-w-0 break-words [&>*:last-child]:mb-0">
         <MarkdownContent content={ev.text} />
       </div>
     </div>

@@ -67,7 +67,7 @@ fi
 # carries the key) so agent-side `mc inbox` calls in nudge mode are
 # deterministic. Twin of grok-bridge's _grok_launch_shell_cmd export.
 "$TMUX_BIN" new-session -d -s "$SESSION" -x 220 -y 50 \
-  "while true; do set -a; . $ENV_FILE; set +a; : \"\${MC_API_URL:=http://localhost:8000}\"; export MC_API_URL; $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
+  "while true; do set -a; . $ENV_FILE; set +a; : \"\${MC_API_URL:=http://localhost:8000}\"; export MC_API_URL; : \"\${MC_CONTEXT_ENV_PATH:=$AGENT_DIR/mc-context.env}\"; export MC_CONTEXT_ENV_PATH; $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
 
 # Web-terminal scroll: forward wheel events to the native Hermes TUI so mouse
 # scroll walks the OUTPUT, not Hermes' input history. Every cli-bridge agent

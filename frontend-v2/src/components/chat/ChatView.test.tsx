@@ -29,7 +29,7 @@ import {
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
-import type { MessageEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import type { MessageEvent, PreviewEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,23 @@ vi.mock("./TerminalPanel", async () => {
     TerminalPanel: ({ agent }: { agent: { name: string } }) => (
       <div data-testid="terminal-panel-stub">Terminal-Panel: {agent.name}</div>
     ),
+  };
+});
+
+/* Naht-Spy (PR #595 Nacharbeit): ChatView bezieht `buildTimelineItems` aus
+   seinem eigenen Modul. Der Wrapper zaehlt Aufrufe, ruft aber die echte
+   Funktion auf — alle Tests unten laufen gegen echtes Gruppierungsverhalten,
+   und der Naht-Test kann zaehlen, ob ChatView bei Preview-Ticks neu
+   gruppiert. */
+const timelineCalls = vi.hoisted(() => ({ build: 0 }));
+vi.mock("./buildTimelineItems", async (importOriginal) => {
+  const actual = await vi.importActual<typeof import("./buildTimelineItems")>("./buildTimelineItems");
+  return {
+    ...actual,
+    buildTimelineItems: (events: TimelineChatEvent[]) => {
+      timelineCalls.build += 1;
+      return actual.buildTimelineItems(events);
+    },
   };
 });
 
@@ -2006,5 +2023,58 @@ describe("ChatView — headless chat", () => {
     renderChatView({ agent: mkAgent({ headless_chat: true }), hasTranscript: false });
 
     expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+  });
+});
+
+describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte Komponente)", () => {
+  /* PR #595 Nacharbeit. Der Vorschau-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues stream-Objekt, veraendert `events` aber nicht. Der
+     Springen-Fix memoisiert filter + buildTimelineItems in ChatView; dieser
+     Test prueft ueber die Modul-Naht die echte Folge: ChatView rendert neu,
+     aber buildTimelineItems wird NICHT erneut aufgerufen. Faellt der
+     useMemo-Fix aus, laeuft die Gruppierung bei jedem Tick — der Test wird
+     rot. Der erste Aufruf beim Mount zaehlt alsBaseline. */
+  const chatElement = () => (
+    <ChatView
+      agent={mkAgent()}
+      hasTranscript
+      detailLevel="normal"
+      onDetailLevelChange={noop}
+      centerView="chat"
+      onCenterViewChange={noop}
+    />
+  );
+
+  it("ruft buildTimelineItems bei 5 Preview-Ticks NICHT erneut auf", () => {
+    const events: TimelineChatEvent[] = [MSG, TOOL, THINKING];
+    const preview = (text: string): PreviewEvent =>
+      ({ kind: "preview", uuid: null, ts: "2026-09-10T00:00:00Z", text, source: "acp" });
+    mockUseChatStream.mockReturnValue(mkStream({ events, preview: preview("Zeile 1") }));
+    const { rerender } = renderChatView();
+    expect(timelineCalls.build).toBeGreaterThan(0);
+
+    const before = timelineCalls.build;
+    for (let tick = 2; tick <= 6; tick++) {
+      mockUseChatStream.mockReturnValue(
+        mkStream({ events, preview: preview(`Zeile 1\nZeile ${tick}`) })
+      );
+      rerender(chatElement());
+    }
+
+    expect(timelineCalls.build).toBe(before);
+  });
+
+  /* Korrektheits-Kontrolle: aendert sich `events` wirklich (neues Ereignis),
+     MUSS neu gruppiert werden — der Test darf nicht trivial-gruen stehen. */
+  it("gruppiert neu, wenn sich events wirklich aendern", () => {
+    const events: TimelineChatEvent[] = [MSG];
+    mockUseChatStream.mockReturnValue(mkStream({ events }));
+    const { rerender } = renderChatView();
+
+    const before = timelineCalls.build;
+    mockUseChatStream.mockReturnValue(mkStream({ events: [...events, TOOL] }));
+    rerender(chatElement());
+
+    expect(timelineCalls.build).toBeGreaterThan(before);
   });
 });
