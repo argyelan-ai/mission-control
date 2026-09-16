@@ -472,3 +472,53 @@ async def test_waiver_is_recorded_even_when_the_project_has_no_repo(client, fake
         "eine Projekt-Bindung ohne GitHub-Repo ist keine Bindung — die "
         "Ausnahme muss also dokumentiert sein"
     )
+
+
+@pytest.mark.asyncio
+async def test_delegate_into_project_bound_only_through_the_registry_passes(client, fake_redis):
+    """Ein ueber ADR-050 an die Registry gebundenes Projekt traegt `repo_id`,
+    aber kein `github_repo_name`. Die Delegation erbt dieses Projekt und nennt
+    eine Fundstelle → 201. Zaehlt der Waechter nur das Namensfeld, gilt das
+    Projekt als ungebunden und eine korrekt gebundene Arbeit wird mit 422
+    abgelehnt — dieselbe Verwechslung wie in Befund C, nur andersherum."""
+    from app.models.board import Project
+
+    board = Board(id=uuid.uuid4(), name="B", slug=f"b-{uuid.uuid4().hex[:6]}")
+    repo = Repo(
+        full_name=f"acme/registry-{uuid.uuid4().hex[:5]}",
+        url="https://example.invalid/acme/registry",
+    )
+    project = Project(
+        id=uuid.uuid4(),
+        board_id=board.id,
+        name=f"Proj-Registry-{uuid.uuid4().hex[:5]}",
+        repo_id=repo.id,
+    )
+    await _mk([board, repo, project])
+    lead, lead_token = await _agent(board.id, is_board_lead=True)
+    worker, _ = await _agent(board.id, role="developer")
+
+    parent = Task(
+        id=uuid.uuid4(),
+        board_id=board.id,
+        project_id=project.id,
+        title="Parent mit Registry-Repo",
+        status="in_progress",
+        assigned_agent_id=lead.id,
+    )
+    await _mk([parent])
+    lead.current_task_id = parent.id
+    await _mk([lead])
+
+    p1, p2, p3 = _delegate_patches()
+    with p1, p2, p3:
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/delegate",
+            json={
+                "title": "Fix mit Fundstelle",
+                "description": "Der Fehler sitzt in backend/app/routers/agent_scoped.py:1289.",
+                "assigned_agent_id": str(worker.id),
+            },
+            headers={"Authorization": f"Bearer {lead_token}"},
+        )
+    assert resp.status_code == 201, resp.text
