@@ -315,7 +315,10 @@ def resolve_context_window(
        hash; ``None``/``{}`` here just skips this tier, keeping this
        function itself Redis-free and pure/synchronous — see
        ``harness_catalog``'s module docstring for why the dependency runs
-       this direction and not the reverse).
+       this direction and not the reverse) — but ONLY when it does not
+       SHRINK a value we already curated in step 2 (see the floor note
+       below). An observation that is merely absent from the static map,
+       or genuinely larger than it, always wins outright.
     2. Exact match against a configured key in ``settings.context_windows``
        (the static, config-seeded fallback — demoted from primary to
        tertiary this round, not deleted: still what answers before any
@@ -327,20 +330,41 @@ def resolve_context_window(
        context beta suffix) -> 1,000,000.
     5. Otherwise ``None`` — an unknown model gets no number rather than a
        guessed one.
+
+    STATIC-SEED-AS-FLOOR (Kontextanzeige-Transkript-Pfad round, 16.09.2026):
+    a context window is not a pure function of the model NAME — it also
+    depends on the reporting session's own account/beta entitlement (the
+    1M-context beta is opt-in per API key, not universal). ``observed`` is
+    shared FLEET-WIDE, keyed only by model name — one session on an account
+    without the beta honestly reports 200,000 for "claude-opus-5", and
+    without this floor that single observation would silently override the
+    curated 1,000,000 for every OTHER agent on the same model name,
+    including ones that genuinely have the full window. That is precisely
+    how a correct static seed turns into a displayed 200,000/141%-clamped-
+    to-100% for an agent whose own window is actually 1,000,000/28% full.
+    So: a static entry is a FLOOR once curated — observed may raise it
+    (larger, equally honest capability) but never lower it. Models with NO
+    static entry are unaffected: any observed value is accepted as-is,
+    same as before this round.
     """
     if not model:
         return None
 
-    if observed and model in observed:
-        return observed[model]
-
     windows = settings.context_windows
-    if model in windows:
-        return windows[model]
+    static_value = windows.get(model)
+    if static_value is None:
+        prefix_matches = [key for key in windows if model.startswith(key)]
+        if prefix_matches:
+            static_value = windows[max(prefix_matches, key=len)]
 
-    prefix_matches = [key for key in windows if model.startswith(key)]
-    if prefix_matches:
-        return windows[max(prefix_matches, key=len)]
+    if observed and model in observed:
+        observed_value = observed[model]
+        if static_value is None or observed_value > static_value:
+            return observed_value
+        return static_value
+
+    if static_value is not None:
+        return static_value
 
     if "[1m]" in model:
         return 1_000_000
