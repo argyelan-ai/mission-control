@@ -72,6 +72,22 @@ async def _agent_with_token(board_id, **kw) -> tuple[Agent, str]:
     return agent, token
 
 
+async def _open_card(board_id, agent_id, title="Aktive Karte"):
+    """A card the delegating agent owns, to hang a delegation under.
+
+    Since task f8c9cdb9 `mc delegate` no longer opens a parentless card: with
+    no active task the caller must name a parent, otherwise the server refuses
+    with 409 before creating anything. These tests are about `repo_id`, so they
+    need the minimal valid delegation context, not a second orphan path.
+    """
+    task = Task(
+        id=uuid.uuid4(), board_id=board_id, title=title,
+        status="in_progress", assigned_agent_id=agent_id,
+    )
+    await _mk([task])
+    return task
+
+
 # ── AgentTaskCreate (POST /agent/boards/{board_id}/tasks) ────────────────
 
 
@@ -187,6 +203,7 @@ async def test_delegate_with_repo_persists_repo_id_in_db(client, fake_redis):
     await _mk([board, repo])
     lead, lead_token = await _agent_with_token(board.id, is_board_lead=True)
     worker, _ = await _agent_with_token(board.id, role="researcher")
+    parent = await _open_card(board.id, lead.id)
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock), \
          patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock), \
@@ -199,6 +216,7 @@ async def test_delegate_with_repo_persists_repo_id_in_db(client, fake_redis):
                 "description": "Beschreibung lang genug fuer die Delegation-Guards hier.",
                 "assigned_agent_id": str(worker.id),
                 "repo_id": str(repo.id),
+                "parent_task_id": str(parent.id),
             },
             headers={"Authorization": f"Bearer {lead_token}"},
         )
@@ -217,6 +235,7 @@ async def test_delegate_rejects_inactive_repo(client, fake_redis):
     await _mk([board, inactive])
     lead, lead_token = await _agent_with_token(board.id, is_board_lead=True)
     worker, _ = await _agent_with_token(board.id, role="researcher")
+    parent = await _open_card(board.id, lead.id)
 
     resp = await client.post(
         f"/api/v1/agent/boards/{board.id}/delegate",
@@ -225,6 +244,7 @@ async def test_delegate_rejects_inactive_repo(client, fake_redis):
             "description": "Beschreibung lang genug fuer die Delegation-Guards hier.",
             "assigned_agent_id": str(worker.id),
             "repo_id": str(inactive.id),
+            "parent_task_id": str(parent.id),
         },
         headers={"Authorization": f"Bearer {lead_token}"},
     )
@@ -238,6 +258,7 @@ async def test_delegate_without_repo_stays_none(client, fake_redis):
     await _mk([board])
     lead, lead_token = await _agent_with_token(board.id, is_board_lead=True)
     worker, _ = await _agent_with_token(board.id, role="researcher")
+    parent = await _open_card(board.id, lead.id)
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock), \
          patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock), \
@@ -249,6 +270,7 @@ async def test_delegate_without_repo_stays_none(client, fake_redis):
                 "title": "Ohne Bindung delegiert",
                 "description": "Beschreibung lang genug fuer die Delegation-Guards hier.",
                 "assigned_agent_id": str(worker.id),
+                "parent_task_id": str(parent.id),
             },
             headers={"Authorization": f"Bearer {lead_token}"},
         )
