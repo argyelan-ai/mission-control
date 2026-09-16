@@ -7,6 +7,24 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 ## [Unreleased]
 
 ### Added
+- **Disk preflight in front of every build, plus a watchdog that reports
+  before the disk hits 95 %.** `docker system df` measured 75.8 GB of build
+  cache — Docker never garbage-collects it on its own — and
+  `docker compose up --build` then died mid-layer-write with a raw
+  "no space left on device", after minutes of work and with nothing pointing
+  at the cause. Every build path (`make up/build/build-dev`, `install.sh`,
+  `scripts/start-all.sh --build`, `scripts/build-agent-images.sh`,
+  `scripts/vault-cleanup-orchestrate.py`, the backend's compose recreate
+  paths) now runs `docker/shared/disk-preflight.sh` first and refuses below
+  the threshold with both numbers, the variable that set it, and the fix in
+  the message; after a SUCCESSFUL build it bounds the build cache with
+  `docker builder prune --keep-storage`. An unreadable `df` never blocks a
+  build (unknown is not zero). Thresholds come from the project's config path
+  (`BUILD_MIN_FREE_GB` / `BUILD_CACHE_KEEP_GB` / `DISK_WATCHDOG_PERCENT`),
+  never hardcoded. The watchdog **reports only** — it never deletes anything
+  and never changes a status; it fires at `DISK_WATCHDOG_PERCENT` (default
+  95) with `severity=critical` (a `warning` would wait up to 30 minutes in
+  the Discord digest) and is deduped per threshold via Redis.
 - **Lead-escalation second stage.** A stage-1 lead message
   (`watchdog_notify` from the silent-card watchdog, `blocker_lead_notify`
   from blocker lead-triage) that got no Board-Lead reaction for 30

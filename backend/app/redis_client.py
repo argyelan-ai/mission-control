@@ -329,6 +329,16 @@ class RedisKeys:
         return f"mc:session_health_escalated:{task_id}"
 
     @staticmethod
+    def disk_watchdog_notified(percent: int) -> str:
+        """Dedup-Marke fuer die Plattenplatz-Warnung des Watchdogs.
+
+        Ein Schluessel PRO Schwellenwert-Stufe (nicht pro Prozentpunkt): sonst
+        wandert der Schluessel bei jeder 0,1-%-Schwankung und die Warnung
+        wiederholt sich im Minutentakt. Die TTL setzt der Aufrufer.
+        """
+        return f"mc:watchdog:disk_notified:{percent}"
+
+    @staticmethod
     def poll_orphan_redispatch_count(task_id: str) -> str:
         """Counter: how often this task was already redispatched as an
         orphaned run by /agent/me/poll (Fix 2, 07.09.2026). No TTL — the

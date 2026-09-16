@@ -61,6 +61,19 @@ print(data.get("kimi", {}).get("sha256", ""))
 
 read_manifest
 
+# Plattenplatz-Preflight (docker/shared/disk-preflight.sh). Gesourct, weil
+# dieses Skript der einzige Bau-Weg fuer die Agent-Images ist — und weil
+# auto-rebuild-agents-on-drift.sh und cli-bridge.py transitiv hier landen:
+# ein Preflight hier deckt alle drei ab.
+#
+# MC_ENV_FILE auf $ROOT/.env: das Skript darf aus jedem Verzeichnis laufen,
+# die .env liegt aber am Repo-Root. Ohne das laese die Lib die .env des
+# aufrufenden Verzeichnisses und faende die Schwelle nicht.
+MC_ENV_FILE="${MC_ENV_FILE:-$ROOT/.env}"
+export MC_ENV_FILE
+. "$ROOT/docker/shared/disk-preflight.sh"
+mc_disk_preflight
+
 WHICH="both"
 DOCKER_ARGS=()
 SYNC_ONLY=0
@@ -210,5 +223,13 @@ case "$WHICH" in
     build_image_kimi mc-kimi-agent:latest "$ROOT/docker/mc-kimi-agent" --build-arg "KIMI_VERSION=$KIMI_VERSION" --build-arg "KIMI_SHA256=$KIMI_SHA256"
     ;;
 esac
+
+# Cache-Aufraeumen nach erfolgreichem Bau. `set -euo pipefail` oben: ein
+# fehlgeschlagener `docker build` bricht vorher ab, ein Fehlschlag erreicht
+# diese Zeile also nicht (und der Layer-Cache bleibt fuer den Retry).
+# --sync-only (oben, exit 0) materialisiert nur Quellen und baut nichts —
+# ein Prune dort waere ein Cache-Wipe ohne Bau, genau das Verhalten, das
+# die Header-Begruendung ausschliesst.
+mc_build_cache_cleanup
 
 echo "✓ Done."

@@ -178,7 +178,11 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
                 # gateway-only (TODO Phase 31: cli-bridge task-queue timeouts).
 
             db_latency, redis_latency = await self._check_system_health(session)
-            await self._collect_system_metrics(db_latency, redis_latency)
+            # session durchgereicht: der Plattenplatz-Waechter in
+            # _collect_system_metrics meldet ueber emit_event, und das braucht
+            # eine Session. Die Plattenmessung selbst hat der Snapshot dort
+            # schon gemacht — kein zweiter psutil-Aufruf.
+            await self._collect_system_metrics(db_latency, redis_latency, session)
 
             # Token harvester: Phase 31 — reads JSONL transcripts, inserts
             # model_usage_events. Runs every 5 cycles (~2.5 min at 30s interval).
