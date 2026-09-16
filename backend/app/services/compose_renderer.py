@@ -39,6 +39,7 @@ from pathlib import Path
 
 from app import config as app_config
 from app.config import settings
+from app.services.harness_compat import omp_driver_for
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -531,16 +532,30 @@ def _ensure_msg_delivery_mode(body_lines: list[str]) -> list[str]:
     return body
 
 
-def _agent_env_overrides(slug: str) -> dict[str, str]:
-    """Per-agent environment overrides (ADR-081) for ``slug``.
-    Slugs listed in app_config.omp_acp_agents() (OMP_ACP_AGENT_SLUGS, comma-
-    separated .env config) get ``OMP_DRIVER=acp`` — the omp bridge reads the
-    variable at startup (docker/omp-bridge/bridge.py ``_omp_driver()``,
-    default ``native``), so a missing entry IS the native rollback — no
-    per-service native line needed. Every unlisted agent's environment
-    stays untouched. Agent names live in deployment config, not in code.
+def _harness_for_image(image: str | None) -> str | None:
+    """Reverse of ``HARNESS_IMAGES``: which harness runs on ``image``.
+
+    The renderer sees resolved images, not Agent rows — this is the harness
+    signal the env-override decision (ADR-084) is derived from.
     """
-    if slug in app_config.omp_acp_agents():
+    for harness, harness_image in HARNESS_IMAGES.items():
+        if _image_is(image, harness_image.split(":", 1)[0]):
+            return harness
+    return None
+
+
+def _agent_env_overrides(harness: str | None) -> dict[str, str]:
+    """Per-harness environment overrides (ADR-084) for ``harness``.
+
+    The omp harness gets ``OMP_DRIVER=acp`` — decided centrally by
+    ``harness_compat.omp_driver_for`` (harness property, never an agent
+    name; the whole-fleet rollback is ``OMP_DRIVER_DEFAULT=native``). The
+    bridge reads the variable at startup (docker/omp-bridge/bridge.py
+    ``_omp_driver()``), so a missing entry IS the native rollback — no
+    per-service native line needed. Every other harness's environment
+    stays untouched.
+    """
+    if harness == "omp" and omp_driver_for(harness) == "acp":
         # OMP_ACP_PERMISSIONS=yolo mirrors launch-omp.sh (`--approval-mode
         # yolo`): the agent runs unattended, tool calls must not block on a
         # human. The bridge still transcribes every permission decision as a
@@ -549,15 +564,15 @@ def _agent_env_overrides(slug: str) -> dict[str, str]:
         return {"OMP_DRIVER": "acp", "OMP_ACP_PERMISSIONS": "yolo"}
     return {}
 
-def _ensure_agent_env_overrides(body_lines: list[str], slug: str) -> list[str]:
-    """Inject the per-agent env overrides for ``slug`` into the service body.
+def _ensure_agent_env_overrides(body_lines: list[str], harness: str | None) -> list[str]:
+    """Inject the per-harness env overrides (ADR-084) into the service body.
 
     Idempotent per variable: an existing ``- VAR=`` entry (any value) is kept
     as-is so a deliberate manual override survives re-rendering; only missing
     variables are appended to the ``environment`` block (created when absent,
     mirroring _ensure_msg_delivery_mode).
     """
-    overrides = _agent_env_overrides(slug)
+    overrides = _agent_env_overrides(harness)
     if not overrides:
         return list(body_lines)
     body = list(body_lines)
@@ -852,9 +867,11 @@ def _rewrite_compose(
         # Fleet default nudge+pull (W2.1, ADR-071) for every agent service.
         body_lines = _ensure_msg_delivery_mode(body_lines)
 
-        # ADR-081: per-agent env overrides — slugs from deployment config
-        # (app_config.omp_acp_agents()); unlisted agents stay on the bridge's
-        body_lines = _ensure_agent_env_overrides(body_lines, slug)
+        # ADR-084: per-harness env overrides — omp harness gets ACP via
+        # harness_compat.omp_driver_for, never an agent-name list.
+        body_lines = _ensure_agent_env_overrides(
+            body_lines, _harness_for_image(final_image)
+        )
 
         out.extend(body_lines)
 
@@ -976,9 +993,10 @@ def _build_new_agent_block(
         "      - AGENT_VAULT_INBOX=/vault/_inbox",
         f"      - AGENT_SLUG={slug}",
     ]
-    # ADR-081: per-agent env overrides — same gating as the rewrite loop
-    # (slugs from deployment config; all others stay native).
-    for var, value in _agent_env_overrides(slug).items():
+    # ADR-084: per-harness env overrides — same decision as the rewrite loop
+    # (harness from the resolved image; OMP_DRIVER_DEFAULT=native rolls the
+    # whole fleet back to native, no name lists anywhere).
+    for var, value in _agent_env_overrides(_harness_for_image(image)).items():
         lines.append(f"      - {var}={value}")
     lines += [
         "    volumes:",

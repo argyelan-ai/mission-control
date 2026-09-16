@@ -3,9 +3,9 @@
 Drei Schichten, alle ohne echten Container und ohne echten Host:
 
 1. ``headless_chat_kind`` / ``Agent.headless_chat`` — die Wahrheitstabelle aus
-   der Spezifikation (docs/specs/chat-over-acp.md), inkl. Sabotage: ein
-   omp-Agent, dessen Slug NICHT in ``OMP_ACP_AGENT_SLUGS`` steht, bleibt auf
-   dem TUI-Pfad.
+   der Spezifikation (docs/specs/chat-over-acp.md), inkl. Sabotage: der
+   globale Notausstieg OMP_DRIVER_DEFAULT=native stellt den ganzen omp-Kader
+   auf den TUI-Pfad zurueck.
 2. ``DockerCtlTransport`` — argv-Bau, JSON-Auswertung, Exit 3 (Socket tot).
    Der Subprozess ist gemockt; hier laeuft nie ein ``docker exec``.
 3. ``HttpCtlTransport`` — URL/Body gegen ein ``httpx.MockTransport``.
@@ -35,11 +35,9 @@ class _StubAgent:
 
 
 @pytest.fixture
-def acp_slug(monkeypatch):
-    """``acp-one`` ist fuer diesen Test der einzige ACP-Agent der Flotte."""
-    from app import config
-
-    monkeypatch.setattr(config.settings, "omp_acp_agent_slugs", "acp-one")
+def acp_slug():
+    """Neutraler Slugs — unter ADR-084 haengt der Treiber am Harness, der
+    Name ist fuer die Entscheidung irrelevant."""
     return "acp-one"
 
 
@@ -48,20 +46,23 @@ def acp_slug(monkeypatch):
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def test_headless_kind_docker_for_listed_omp_agent(acp_slug):
+def test_headless_kind_docker_for_omp_agent(acp_slug):
+    """ADR-084: ACP ist eine Eigenschaft des omp-Harness — jeder omp-Agent
+    (auch ein frisch angelegter) chattet kopflos."""
     from app.services.acp_chat_transport import headless_chat_kind
 
     agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
     assert headless_chat_kind(agent) == "acp-docker"
 
 
-def test_headless_kind_none_for_unlisted_omp_agent(acp_slug):
-    """Sabotage: gleicher Runtime, gleicher Harness — aber der Slug steht
-    nicht in der Liste. Genau hier entscheidet sich, ob MC einen Agenten
-    still auf einen Kanal umlenkt, den sein Container gar nicht bedient."""
+def test_headless_kind_none_under_global_native_rollback(acp_slug, monkeypatch):
+    """Sabotage: OMP_DRIVER_DEFAULT=native ist der EINE globale Notausstieg —
+    der ganze omp-Kader faellt auf den TUI-Pfad zurueck, ohne Namensliste."""
+    from app import config
     from app.services.acp_chat_transport import headless_chat_kind
 
-    agent = _StubAgent(slug="tui-one", agent_runtime="cli-bridge", harness="omp")
+    monkeypatch.setattr(config.settings, "omp_driver_default", "native")
+    agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
     assert headless_chat_kind(agent) is None
 
 
@@ -89,7 +90,6 @@ def test_headless_kind_none_for_hermes_on_native_driver(monkeypatch):
     agent = _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
     assert headless_chat_kind(agent) is None
 
-
 def test_agent_model_serializes_headless_chat(acp_slug):
     """Das Feld muss in JEDER Serialisierung stehen (GET /agents und
     /agents/{id}) — gleiche Bauart wie ``runtime_switchable``."""
@@ -99,7 +99,7 @@ def test_agent_model_serializes_headless_chat(acp_slug):
     dumped = agent.model_dump()
     assert dumped["headless_chat"] is True
 
-    other = Agent(name="Tui One", slug="tui-one", agent_runtime="cli-bridge", harness="omp")
+    other = Agent(name="Tui One", slug="tui-one", agent_runtime="cli-bridge", harness="claude")
     assert other.model_dump()["headless_chat"] is False
 
 
@@ -291,7 +291,7 @@ def test_transport_for_rejects_tui_agent(acp_slug):
 
     with pytest.raises(InputNotSupportedError):
         acp_chat_transport.transport_for(
-            _StubAgent(slug="tui-one", agent_runtime="cli-bridge", harness="omp")
+            _StubAgent(slug="tui-one", agent_runtime="cli-bridge", harness="claude")
         )
 
 

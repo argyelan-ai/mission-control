@@ -42,6 +42,18 @@ def _no_effort_probe(monkeypatch):
     monkeypatch.setattr(agent_chat_input, "discover_effort_support", _unknown)
 
 
+
+@pytest.fixture(autouse=True)
+def _native_omp_driver(monkeypatch):
+    """Diese Datei testet die Pane-Mechanik des TUI-Eingabepfads (tmux,
+    docker-exec, Readiness-Gate). Seit ADR-084 faehrt ein omp-Agent per
+    Default ACP — der Kopflos-Pfad ist in tests/test_chat_over_acp_input.py
+    abgedeckt. Hier wird der native Pfad bewusst geprueft, daher der
+    globale Rollback-Knopf statt einer Namensliste."""
+    from app import config
+
+    monkeypatch.setattr(config.settings, "omp_driver_default", "native")
+
 class _StubAgent:
     """Duck-typed stand-in for the DB-backed Agent row — mirrors the
     ``agent.slug`` / ``agent.agent_runtime`` contract ``_target_kind`` reads,

@@ -407,8 +407,22 @@ async def sync_docker_agent_files(
     if agent.runtime_id:
         runtime = await session.get(Runtime, agent.runtime_id)
 
-    from app.services.harness_compat import runtime_protocol
-    is_anthropic = bool(runtime and runtime.enabled and runtime_protocol(runtime) == "anthropic")
+    from app.services.harness_compat import runtime_protocol, settings_extras_for
+    # ADR-084: the hooks/statusLine pair is a capability-matrix decision —
+    # claude always, openclaude per bound runtime's protocol, others never.
+    # `runtime.enabled` stays a separate gate (a disabled runtime renders no
+    # extras regardless of harness). Legacy rows without a harness keep the
+    # old protocol signal. The .env OPENAI-shim gate below stays
+    # protocol-based (`is_anthropic`): it decides auth material, not
+    # settings.json extras, and must not flip with the matrix.
+    is_anthropic = bool(
+        runtime and runtime.enabled and runtime_protocol(runtime) == "anthropic"
+    )
+    render_extras = (
+        settings_extras_for(getattr(agent, "harness", None), runtime)
+        if getattr(agent, "harness", None)
+        else is_anthropic
+    )
 
     # Sync settings.json — Bug 5 permanent fix (2026-05-13).
     #
@@ -456,11 +470,12 @@ async def sync_docker_agent_files(
                 agent.soul_md,
                 runtime.model_identifier,
                 agent.cli_plugins,
-                # W2.1 turn-signal hooks + the statusLine hook are both
-                # claude-only — openclaude must not receive either unknown
-                # settings.json key (is_anthropic above).
-                turn_signal_hooks=is_anthropic,
-                status_line=is_anthropic,
+                # W2.1 turn-signal hooks + the statusLine hook follow the
+                # ADR-084 capability matrix — claude always, openclaude per
+                # bound runtime's protocol, others never (legacy rows: the
+                # old protocol signal, see render_extras above).
+                turn_signal_hooks=render_extras,
+                status_line=render_extras,
             )
             if written.get("settings.json"):
                 results["settings.json"] = (
