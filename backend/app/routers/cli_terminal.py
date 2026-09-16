@@ -1189,7 +1189,27 @@ async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
         ]
         for label in labels:
             await _ssh_host(f"launchctl kickstart -k {label} 2>&1 || true")
-        return {"ok": True, "action": "restart", "agent": slug}
+        result: dict = {"ok": True, "action": "restart", "agent": slug}
+        # PR #604 review, Befund 3 (Rex, 2026-09-16): this function had the
+        # exact same false-"restart done"-during-the-boot-window mechanism
+        # as _host_agent_process_restart, on 3 callers including the
+        # user-visible POST /host-agents/{id}/restart — no verification of
+        # any kind, not even a pgrep. Same readiness wait as the process-
+        # restart path, same headless-bridge exclusion (hermes never reaches
+        # here — handled above; grok has no interactive tmux CLI to wait on).
+        if slug not in _HOST_AGENT_HEADLESS_BRIDGE_SLUGS:
+            readiness = await _wait_for_host_window_ready(slug)
+            if not readiness["healthy"]:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"host-agent restart for {slug}: launchctl kickstart "
+                        f"issued but CLI never became ready ({readiness['reason']})"
+                    ),
+                )
+            result["cli_ready"] = True
+            result["readiness_reason"] = readiness["reason"]
+        return result
 
     raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
@@ -1368,7 +1388,52 @@ async def _restart_hermes_worker_session() -> str:
 # tmux server lives on the Mac (SSH via _ssh_host above), not in a container
 # this backend can `docker exec` into; the algorithm (poll pane text for a
 # ready glyph) is the same, only the transport differs.
-_HOST_READY_SIGNALS = ("╭─", "❯", "> ", "$ ")
+#
+# PR #604 review (Rex, 2026-09-16, geprueft 735fa683) proved two of the four
+# original glyphs false-positive with synthetic pane content:
+#   - bare "> " matched anywhere in the pane, including mid-line log/boot
+#     text that has nothing to do with a prompt (e.g. "progress: 40 > 30
+#     items/s"). Fix: "> " now only counts at the trailing edge of the
+#     pane's last non-blank line (an actual cursor position), not as a
+#     substring anywhere — see _host_pane_looks_ready below.
+#   - bare "$ " matched a bash prompt left behind after the CLI itself
+#     crashed (pane: "agent exited\n$ ") — exactly the false "restart
+#     succeeded" this fix exists to prevent, in a different disguise.
+#     Unlike "> ", this has no textual fix: a real bash-fallback prompt and
+#     a crashed-back-to-bash prompt are the same string, so no pane-content
+#     rule can tell them apart. Every caller of _wait_for_host_window_ready
+#     already excludes the headless bridge agents (hermes/grok via
+#     _HOST_AGENT_HEADLESS_BRIDGE_SLUGS below) up front, so every remaining
+#     host agent is expected to end up in the actual CLI (claude/openclaude)
+#     and bash is never a legitimate ready state for it — "$ " is therefore
+#     dropped entirely rather than kept as an ambiguous fallback. Residual
+#     unscharfe: this still can't distinguish "CLI ready" from "some other
+#     program that also draws a lone > /❯ at end of line", which is judged
+#     low-probability for the known host-agent CLIs and is the honestly
+#     named remaining gap, not a claimed-solved one.
+#   - "╭─" and "❯" are not disputed by the review (not reproduced as false
+#     positives) and stay substring-anywhere matches.
+_HOST_READY_GLYPH_SIGNALS = ("╭─", "❯")
+_HOST_READY_TRAILING_SIGNAL = ">"
+
+
+def _host_pane_looks_ready(pane: str) -> bool:
+    """True if `pane` (tmux capture-pane output) shows an unambiguous CLI
+    ready-prompt — see the _HOST_READY_GLYPH_SIGNALS comment above for why
+    "> " is trailing-edge-only and "$ " was dropped entirely."""
+    if any(sig in pane for sig in _HOST_READY_GLYPH_SIGNALS):
+        return True
+    lines = [ln for ln in pane.splitlines() if ln.strip()]
+    return bool(lines) and lines[-1].rstrip().endswith(_HOST_READY_TRAILING_SIGNAL)
+
+
+# 53s measured live 16.09.2026 (entrypoint 08:05:11, CLI ready 08:06:04) is
+# the incident this whole fix responds to. The original PR bounded the wait
+# at 45s — under its own motivating measurement, so the exact repeat case
+# would still misreport a 502 five seconds before the CLI actually comes up
+# (PR #604 review, Befund 2). 75s = 53s + ~40% margin for boot-time jitter,
+# not a round-number guess.
+_HOST_CLI_READY_TIMEOUT_SECONDS = 75.0
 
 # Host agents whose launchd-managed process is a headless bridge/poll script
 # with no interactive tmux pane to become "ready" in the CLI-prompt sense:
@@ -1402,7 +1467,7 @@ def _resolve_host_tmux_target(slug: str) -> tuple[str | None, str]:
 async def _wait_for_host_window_ready(
     slug: str,
     *,
-    timeout: float = 45.0,
+    timeout: float = _HOST_CLI_READY_TIMEOUT_SECONDS,
     poll_interval: float = 3.0,
 ) -> dict[str, str | bool]:
     """Polls a host agent's tmux Window 0 over SSH until a ready glyph shows
@@ -1423,7 +1488,7 @@ async def _wait_for_host_window_ready(
     last_reason = "never polled"
     while True:
         pane = await _ssh_host(f"{tmux_prefix} capture-pane -p -t {session}:0 2>&1 || true")
-        if any(sig in pane for sig in _HOST_READY_SIGNALS):
+        if _host_pane_looks_ready(pane):
             return {"healthy": True, "reason": f"tmux window ready ({session}:0)"}
         last_reason = pane.strip()[:200] or "empty pane"
         if time.monotonic() >= deadline:
