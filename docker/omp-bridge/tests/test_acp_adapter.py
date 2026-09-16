@@ -128,7 +128,9 @@ class _FakeProc:
 def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = False,
                 ask_answers: list | None = None, model: str | None = "m",
                 heartbeat=None, fake_delay: float | None = None,
-                interrupt_state: "bridge.InterruptState | None" = None) -> tuple[bridge.RunOutcome, list]:
+                interrupt_state: "bridge.InterruptState | None" = None,
+                context_pct: "bridge.ACPContextPct | None" = None,
+                ) -> tuple[bridge.RunOutcome, list]:
     """Run one bridge.run_acp_once attempt against an in-process fake server."""
     sink: list = []
     fake = InProcessFake(fixture, sink, fake_delay=fake_delay)
@@ -151,6 +153,7 @@ def run_adapter(fixture: Path, *, policy: str = "yolo", cancel_before: bool = Fa
             client_factory=lambda: fake.client,
             ask_fn=ask_fn,
             heartbeat_fn=heartbeat,
+            context_pct=context_pct,
             interrupt_state=interrupt_state,
         )
     finally:

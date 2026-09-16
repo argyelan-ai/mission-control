@@ -1629,24 +1629,35 @@ def _get_turn_context() -> Optional[dict]:
 # (poll.sh heartbeat -> POST /me/heartbeat; backend receiver
 # backend/app/routers/agents.py AgentHeartbeat.context_pct, Field(ge=0,
 # le=100)). No second field, no second endpoint — the existing display works
-# without frontend changes. Module-global read mirrors _get_turn_context.
-_ACP_CONTEXT_PCT: Optional[float] = None
-_ACP_CONTEXT_PCT_LOCK = threading.Lock()
+# without frontend changes. The holder is a plain object,
+# NOT a module global: the writer (on_event) runs on the acp-reader thread,
+# which outlives its run — a module global let a late stamp poison whatever
+# ran next (the omp-bridge lane's intermittent red). The holder is owned by
+# whoever owns the value's lifetime: serve_loop creates one per loop (reset
+# to 0.0 at the session change, #554; survives every turn WITHIN the task,
+# #560), run_acp_once receives it explicitly, the heartbeater reads it via
+# ``get``.
+class ACPContextPct:
+    """Thread-safe per-session holder for the last ACP context % (G5)."""
 
+    __slots__ = ("_lock", "_pct")
 
-def _set_acp_context_pct(pct: Optional[float]) -> None:
-    global _ACP_CONTEXT_PCT
-    with _ACP_CONTEXT_PCT_LOCK:
-        _ACP_CONTEXT_PCT = pct
+    def __init__(self, initial: Optional[float] = None) -> None:
+        self._lock = threading.Lock()
+        self._pct = initial
 
+    def set(self, pct: Optional[float]) -> None:
+        with self._lock:
+            self._pct = pct
 
-def _get_acp_context_pct() -> Optional[float]:
-    with _ACP_CONTEXT_PCT_LOCK:
-        return _ACP_CONTEXT_PCT
-
+    def get(self) -> Optional[float]:
+        with self._lock:
+            return self._pct
 
 def _build_heartbeat_payload(
-    status: str, capture_pane: Optional[Callable[[], str]]
+    status: str,
+    capture_pane: Optional[Callable[[], str]],
+    acp_context_pct: Optional[Callable[[], Optional[float]]] = None,
 ) -> dict:
     """CTX-01 Nachzug Teil 2 (2026-08-10): mergt einen best-effort
     Kontext-Prozentwert (aus der omp/openclaude-TUI-Statuszeile gescrapt) in
@@ -1654,7 +1665,6 @@ def _build_heartbeat_payload(
     damit sie OHNE Threading/urllib-Mocking direkt testbar ist.
 
     Fix 3b (2026-09-08): waehrend eines laufenden Turns sendet der Payload
-    zusaetzlich `task_id` + `attempt_id` (aus dem Turn-Kontext, gesetzt von
     serve_loop via `_set_turn_context`). Das ist die Wahrheit der Bridge
     darueber, WELCHER Task gerade laeuft — unabhaengig vom DB-Status. Der
     Backend-Heartbeat nutzt sie fuer den Control-Kanal (gestoppte/blockierte
@@ -1683,8 +1693,8 @@ def _build_heartbeat_payload(
     # Claude path uses (poll.sh heartbeat() is the template). A scrape hit
     # still wins, so native/Claude behaviour is byte-identical; the holder is
     # only consulted when the scrape produced nothing.
-    if "context_pct" not in payload:
-        acp_pct = _get_acp_context_pct()
+    if "context_pct" not in payload and acp_context_pct is not None:
+        acp_pct = acp_context_pct()
         if acp_pct is not None:
             payload["context_pct"] = float(acp_pct)
     return payload
@@ -1700,6 +1710,7 @@ def start_heartbeater(
     _stop_event: Optional["threading.Event"] = None,
     _capture_pane: Optional[Callable[[], str]] = None,
     _on_control: Optional[Callable[[str, str], None]] = None,
+    _acp_context_pct: Optional[Callable[[], Optional[float]]] = None,
 ) -> "threading.Event":
     """Daemon-Thread: POST /me/heartbeat wie poll.sh es tut (working/idle).
 
@@ -1735,7 +1746,9 @@ def start_heartbeater(
         transport/parse problem) so the control loop can read `control`."""
         req = urllib.request.Request(
             f"{api_url}/api/v1/agent/me/heartbeat",
-            data=json.dumps(_build_heartbeat_payload(status, _capture_pane)).encode(),
+            data=json.dumps(
+                _build_heartbeat_payload(status, _capture_pane, _acp_context_pct)
+            ).encode(),
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -2524,6 +2537,7 @@ def serve_loop(
     _child_alive_fn: Optional[Callable[[], bool]] = None,
     _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
     _acp_prompt: Optional[Callable[[str], bool]] = None,
+    context_pct: Optional[ACPContextPct] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -2662,6 +2676,12 @@ def serve_loop(
     # channel also flips the session/cancel flag (Abbruch-Leiter Stufe 1).
     _acp_control_sink: list = []  # holds ACPCancelState once the ACP branch runs
 
+    # G5 context holder: ONE per serve_loop, stamped by the ACP driver's
+    # usage_update handler, read by the heartbeater's payload builder. Reset
+    # to 0.0 at every task pickup (the ACP branch below) — the value's
+    # lifetime is the pickup, not the process.
+    acp_context_pct = context_pct or ACPContextPct()
+
     withdrawn_notes: list = []  # (task_id, reason) — consumed at the next boundary
 
     def _on_control(kind: str, reason: str) -> None:
@@ -2690,6 +2710,7 @@ def serve_loop(
         start_heartbeater(
             api_url, token, _capture_pane=tui.capture_pane,
             _on_control=_on_control,
+            _acp_context_pct=acp_context_pct.get,
         )
     last_attempt_id: Optional[str] = None
     ready_printed = False
@@ -2892,7 +2913,7 @@ def serve_loop(
                 # means "no news", so the Claude scrape path keeps its
                 # last value on a transient scrape miss instead of
                 # flickering empty.
-                _set_acp_context_pct(0.0)
+                acp_context_pct.set(0.0)
 
                 # Model selector parity with the native launcher (incident
                 # 09.09.2026, first ACP live probe): `omp acp` inherits the
@@ -2938,9 +2959,10 @@ def serve_loop(
                     permission_policy=os.environ.get("OMP_ACP_PERMISSIONS", "ask"),
                     task_id=str(task["id"]),
                     cwd=cwd,
+                    interrupt_state=interrupt_state,
+                    context_pct=acp_context_pct,
                     cancel_state=acp_cancel,
                     heartbeat_fn=_acp_tool_heartbeat,
-                    interrupt_state=interrupt_state,
                 )
 
                 def run_once(_p=prompt, _cwd=cwd) -> RunOutcome:
@@ -4140,9 +4162,10 @@ def run_acp_once(
     client_factory: Optional[Callable[[], "acp_client.ACPClient"]] = None,
     ask_fn: Optional[Callable[[str, str], str]] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
-    on_session_id: Optional[Callable[[str], None]] = None,
+    context_pct: Optional[ACPContextPct] = None,
     transcript_sink: Optional[Callable[[list[str]], None]] = None,
     preview_sink: Optional[Callable[[list[str]], None]] = None,
+    on_session_id: Optional[Callable[[str], None]] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
 
@@ -4166,6 +4189,10 @@ def run_acp_once(
     silent ACP tool run looks idle to the watchdog (#410/#411). ``None``
     keeps the pure-driver behaviour.
 
+    ``context_pct`` (G5 holder, replaces the former module global): the
+    caller-owned ACPContextPct the usage_update handler stamps. serve_loop
+    passes ITS holder (one per loop, reset 0.0 per pickup); ``None`` keeps
+    the pure-driver behaviour (no stamping at all).
     Sessions chat view (Review #465, Mark's Option b + Folge-PR): chunks go
     ONLY to the preview channel — a SIBLING preview file the backend tailer
     broadcasts as volatile ``preview`` events (``preview_sink``); they never
@@ -4235,14 +4262,15 @@ def run_acp_once(
             # G5 (parity audit #521): omp reports the context window here —
             # size = window in tokens, used = tokens in use (same numbers the
             # chat mapper stamps onto the final assistant line). Stamp the
-            # shared holder so the existing heartbeater reports context_pct;
+            # caller's holder so the existing heartbeater reports context_pct;
             # validation mirrors acp_chat_events (ints, size>0) plus the
             # poll.sh sanitize rule (0-100) — garbage never reaches the
             # backend Field(ge=0, le=100). Best-effort: never kills the run.
             size, used = upd.get("size"), upd.get("used")
             if (isinstance(size, int) and size > 0
                     and isinstance(used, int) and 0 <= used <= size):
-                _set_acp_context_pct(round(used / size * 100.0, 1))
+                if context_pct is not None:
+                    context_pct.set(round(used / size * 100.0, 1))
         # Sessions chat stream: mapping is deliberately SEPARATE from the
         # classification bookkeeping above. Preview flushes go to their OWN
         # channel (the sibling preview file via emit_preview) — never the
@@ -4595,9 +4623,10 @@ def _make_acp_run_factory(
     permission_policy: str,
     task_id: str,
     cwd: Optional[str] = None,
+    interrupt_state: Optional[InterruptState] = None,
+    context_pct: Optional[ACPContextPct] = None,
     cancel_state: Optional[ACPCancelState] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
-    interrupt_state: Optional[InterruptState] = None,
 ) -> Callable[[str], RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable.
 
@@ -4689,6 +4718,7 @@ def _make_acp_run_factory(
             transcript_sink=sink,
             preview_sink=preview_sink,
             on_session_id=on_session_id,
+            context_pct=context_pct,
             **(
                 {"interrupt_state": interrupt_state}
                 if interrupt_state is not None and _RUN_ACP_ACCEPTS_INTERRUPT_STATE

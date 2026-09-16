@@ -127,7 +127,7 @@ def drive_serve_loop_pickup(*, seed_pct: float, fixture_name: str) -> dict:
             os.environ.pop("OMP_PROFILE", None)
             (tmp / "agent").mkdir()
 
-            bridge._set_acp_context_pct(seed_pct)
+            holder = bridge.ACPContextPct(seed_pct)
 
             orig_run = bridge.run_acp_once
 
@@ -153,13 +153,13 @@ def drive_serve_loop_pickup(*, seed_pct: float, fixture_name: str) -> dict:
                     _run_factory=None,
                     _sleep=lambda _s: None,
                     _context_env_path=str(tmp / "mc-context.env"),
+                    context_pct=holder,
                 )
             finally:
                 bridge.run_acp_once = orig_run
             # The consumer-visible contract: what the 30 s heartbeater sends.
-            return bridge._build_heartbeat_payload("working", None)
+            return bridge._build_heartbeat_payload("working", None, holder.get)
     finally:
-        bridge._set_acp_context_pct(None)
         for fake in fakes:
             try:
                 fake.close()
@@ -193,38 +193,39 @@ def test_context_pct_survives_new_acp_session_within_task():
     and carries NO usage_update — exactly where a per-attempt reset (the
     #560 mistake, via on_session_id or turn end) would blank the display.
     The payload after attempt 2 must still report 3.5."""
-    bridge._set_acp_context_pct(None)
-    try:
-        outcome1, _ = taa.run_adapter(taa.FIXTURES["normal"])
-        assert outcome1.final_stop_reason == "end_turn"
-        assert bridge._get_acp_context_pct() == EXPECTED_PCT
+    holder = bridge.ACPContextPct()
+    outcome1, _ = taa.run_adapter(taa.FIXTURES["normal"], context_pct=holder)
+    assert outcome1.final_stop_reason == "end_turn"
+    assert holder.get() == EXPECTED_PCT
 
-        outcome2, _ = taa.run_adapter(taa.FIXTURES["silent"])
-        assert outcome2.final_stop_reason == "cancelled"
-        assert bridge._get_acp_context_pct() == EXPECTED_PCT, (
-            "the value must survive the attempt boundary within a task — "
-            "a per-attempt reset would blank it here"
-        )
-        payload = bridge._build_heartbeat_payload("working", None)
-        assert payload.get("context_pct") == EXPECTED_PCT, payload
-    finally:
-        bridge._set_acp_context_pct(None)
+    outcome2, _ = taa.run_adapter(taa.FIXTURES["silent"], context_pct=holder)
+    assert outcome2.final_stop_reason == "cancelled"
+    assert holder.get() == EXPECTED_PCT, (
+        "the value must survive the attempt boundary within a task — "
+        "a per-attempt reset would blank it here"
+    )
+    payload = bridge._build_heartbeat_payload("working", None, holder.get)
+    assert payload.get("context_pct") == EXPECTED_PCT, payload
     print("PASS test_context_pct_survives_new_acp_session_within_task")
 
 
 def _remove_pickup_reset_statement(src: str) -> str:
-    """AST-anchored sabotage: delete the `_set_acp_context_pct(0.0)`
-    statement from serve_loop (located by AST — literal-0.0 call inside the
-    serve_loop FunctionDef — NOT by a text anchor). No text search, so a
-    renamed variable or reformatted comment cannot keep the probe green."""
+    """AST-anchored sabotage: delete the `acp_context_pct.set(0.0)`
+    statement from serve_loop (located by AST — literal-0.0 call on the
+    holder inside the serve_loop FunctionDef — NOT by a text anchor). No
+    text search, so a renamed variable or reformatted comment cannot keep
+    the probe green."""
     tree = ast.parse(src)
     hits: list[ast.Expr] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.FunctionDef) and node.name == "serve_loop"):
             continue
         for sub in ast.walk(node):
+            func = getattr(getattr(sub, "value", None), "func", None)
             if (isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call)
-                    and getattr(sub.value.func, "id", "") == "_set_acp_context_pct"
+                    and isinstance(func, ast.Attribute) and func.attr == "set"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "acp_context_pct"
                     and len(sub.value.args) == 1
                     and isinstance(sub.value.args[0], ast.Constant)
                     and sub.value.args[0].value == 0.0):
