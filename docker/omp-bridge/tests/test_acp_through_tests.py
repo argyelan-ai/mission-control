@@ -731,7 +731,7 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
     anchors below close that: they fail loudly instead."""
     def bare_factory(*, model, max_time, permission_policy, task_id,
                      cwd=None, cancel_state=None, heartbeat_fn=None,
-                     interrupt_state=None):
+                     interrupt_state=None, context_pct=None):
         def run(prompt):
             _cwd = cwd or os.environ.get("OMP_ACP_CWD") or bridge._acp_cwd_default()
             # Rex review B2: the stub must forward EXACTLY what it received
@@ -746,6 +746,7 @@ def test_serve_loop_acp_sabotage_bare_callsite_writes_nothing():
                 prompt, cwd=_cwd, model=model, max_time=max_time,
                 permission_policy=permission_policy, task_id=task_id,
                 cancel_state=cancel_state, heartbeat_fn=heartbeat_fn,
+                context_pct=context_pct,
                 **extra,
             )
         return run
