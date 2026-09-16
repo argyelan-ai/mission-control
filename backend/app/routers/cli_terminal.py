@@ -1361,6 +1361,79 @@ async def _restart_hermes_worker_session() -> str:
     )
 
 
+# Same prompt-glyph vocabulary docker_agent_sync._wait_for_window_ready
+# already established for docker-agent readiness (╭─ openclaude header, ❯/>
+# Claude Code prompt, $ bash fallback) — this module builds a second, SSH-
+# based probe rather than reuse that function directly because host agents'
+# tmux server lives on the Mac (SSH via _ssh_host above), not in a container
+# this backend can `docker exec` into; the algorithm (poll pane text for a
+# ready glyph) is the same, only the transport differs.
+_HOST_READY_SIGNALS = ("╭─", "❯", "> ", "$ ")
+
+# Host agents whose launchd-managed process is a headless bridge/poll script
+# with no interactive tmux pane to become "ready" in the CLI-prompt sense:
+# hermes-bridge.py is an HTTP server (readiness = the bridge already has its
+# own /restart reachability check, see _restart_hermes_worker_session), and
+# grok-bridge.py is a one-shot poll+dispatch process per its own comment in
+# _HOST_AGENT_PROCESS_MATCH above ("NO persistent tmux session"). Every other
+# host agent (boss, kimi, and every wizard-staged claude/openclaude agent —
+# see docker/boss-host/entrypoint.sh, docker/kimi-host/entrypoint.sh,
+# backend/templates/host_agent_run.sh.j2) runs the actual CLI inside tmux
+# Window 0, so a pgrep hit on the launcher script proves only that the
+# *launcher* is alive, not that the CLI inside has finished booting — the
+# gap measured live 16.09.2026 (entrypoint at 08:05:11, CLI ready 08:06:04,
+# 53s Mission Control had already reported the restart a success).
+_HOST_AGENT_HEADLESS_BRIDGE_SLUGS = frozenset({"hermes", "grok"})
+
+
+def _resolve_host_tmux_target(slug: str) -> tuple[str | None, str]:
+    """(-S socket arg or None for the default socket, tmux session name) for
+    a host agent's CLI window — same resolution _build_host_upstream_url
+    uses for the terminal WS, so the two paths can never disagree about
+    where an agent's tmux session lives."""
+    if slug in ("boss", "boss-host"):
+        return "$HOME/.mc/agents/boss-host/.tmux.sock", "boss-host"
+    target = _HOST_AGENT_TMUX_TARGETS.get(slug)
+    if target is not None:
+        return target["socket"], target["session"]
+    return None, slug
+
+
+async def _wait_for_host_window_ready(
+    slug: str,
+    *,
+    timeout: float = 45.0,
+    poll_interval: float = 3.0,
+) -> dict[str, str | bool]:
+    """Polls a host agent's tmux Window 0 over SSH until a ready glyph shows
+    up, bounded by `timeout` — never waits forever (a host agent that never
+    boots must still surface as a failed restart, not hang the request).
+
+    A missing tmux server ("no server running on <socket>", exactly the
+    error a message delivered into this same window hit live 16.09.2026) is
+    treated as "not ready yet", not as a hard error: appending `|| true` to
+    the remote command keeps the SSH exit code at 0 so `_ssh_host` returns
+    the error text instead of raising, and polling continues. A genuine SSH
+    failure (host unreachable, auth broken) still raises immediately from
+    `_ssh_host` — that is not this function's problem to retry.
+    """
+    socket_arg, session = _resolve_host_tmux_target(slug)
+    tmux_prefix = f"tmux -S {socket_arg}" if socket_arg else "tmux"
+    deadline = time.monotonic() + timeout
+    last_reason = "never polled"
+    while True:
+        pane = await _ssh_host(f"{tmux_prefix} capture-pane -p -t {session}:0 2>&1 || true")
+        if any(sig in pane for sig in _HOST_READY_SIGNALS):
+            return {"healthy": True, "reason": f"tmux window ready ({session}:0)"}
+        last_reason = pane.strip()[:200] or "empty pane"
+        if time.monotonic() >= deadline:
+            return {
+                "healthy": False,
+                "reason": f"timeout after {timeout:.0f}s — window not ready (last: {last_reason!r})",
+            }
+        await asyncio.sleep(poll_interval)
+
+
 async def _host_agent_process_restart(agent: Agent) -> dict:
     """Full process-level restart for a host (launchd) agent: orphan sweep +
     atomic kickstart (unload/load fallback) + pgrep-verified success.
@@ -1412,6 +1485,25 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
             detail += f" and unload/load fallback ({fallback_out.strip()[:200]!r})"
         raise HTTPException(status_code=502, detail=detail)
 
+    # The pgrep hit above only proves the launcher SCRIPT is alive, not that
+    # the CLI inside its tmux window can accept keystrokes yet — for a
+    # tmux-CLI agent (everything except the headless bridges below) that gap
+    # was measured at 53s live (16.09.2026: entrypoint 08:05:11, CLI ready
+    # 08:06:04, restart already reported "success" throughout). Wait for the
+    # real readiness signal before reporting done, bounded so a launcher that
+    # never gets its CLI ready still fails the request instead of hanging.
+    readiness: dict[str, str | bool] | None = None
+    if slug not in _HOST_AGENT_HEADLESS_BRIDGE_SLUGS:
+        readiness = await _wait_for_host_window_ready(slug)
+        if not readiness["healthy"]:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"restart-process for {slug}: process running (pids={running_pids}) "
+                    f"but CLI never became ready ({readiness['reason']})"
+                ),
+            )
+
     worker_restart_output: str | None = None
     if slug == "hermes":
         worker_restart_output = await _restart_hermes_worker_session()
@@ -1426,6 +1518,9 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
         "process_running": True,
         "running_pids": running_pids,
     }
+    if readiness is not None:
+        result["cli_ready"] = True
+        result["readiness_reason"] = readiness["reason"]
     if worker_restart_output is not None:
         result["worker_restart_output"] = worker_restart_output
     return result
