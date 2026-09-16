@@ -169,7 +169,17 @@ async def phase_w5_frontend_rebuild(state: VaultCleanupState) -> None:
     For the autonomous run we trigger a frontend rebuild here so the
     new graph view is live in the container."""
     import subprocess
+    from app.services.disk_preflight import build_preflight_error, build_cache_cleanup
+
     state.log("INFO", "phase_w5_frontend_rebuild start")
+    # Plattenplatz-Preflight wie in jedem anderen Bau-Weg: ohne ihn stirbt der
+    # Rebuild mitten im Layer-Schreiben mit einem rohen "no space left on
+    # device" — nach Minuten, mitten in einem autonomen Lauf, und ohne zu
+    # sagen, was zu tun ist.
+    preflight = build_preflight_error(str(ROOT))
+    if preflight:
+        state.log("ERROR", f"frontend rebuild aborted preflight: {preflight}")
+        raise SystemExit(4)
     try:
         proc = subprocess.run(
             ["docker", "compose", "up", "--build", "-d", "frontend"],
@@ -179,6 +189,9 @@ async def phase_w5_frontend_rebuild(state: VaultCleanupState) -> None:
         if proc.returncode != 0:
             state.log("ERROR", f"frontend rebuild failed: {proc.stderr[:500]}")
             raise SystemExit(4)
+        # Nur nach Erfolg — der Layer-Cache eines Fehlschlags bleibt fuer den
+        # Wiederholungsversuch erhalten.
+        build_cache_cleanup()
         state.log("INFO", "frontend rebuilt and restarted")
     except subprocess.TimeoutExpired:
         state.log("ERROR", "frontend rebuild timed out after 10 minutes")
