@@ -129,12 +129,33 @@ test_refusal_message_is_actionable() {
     case "$MSG" in *"15 GB"*) ;; *) MISSING="$MISSING Schwelle-Zahl" ;; esac
     case "$MSG" in *"BUILD_MIN_FREE_GB"*) ;; *) MISSING="$MISSING Schwellen-Quelle" ;; esac
     case "$MSG" in *"builder prune"*) ;; *) MISSING="$MISSING Handlungsanweisung" ;; esac
+    # The bound must be the CACHE ceiling, not the free space. `--keep-storage
+    # <free>g` would advise keeping 3 GB of cache here — and 373 GB on the
+    # full disk this card is about, i.e. the exact opposite of the fix.
+    case "$MSG" in *"keep-storage 20g"*) ;; *) MISSING="$MISSING Cache-Obergrenze-im-Fix" ;; esac
 
     if [ -z "$MISSING" ]; then
         pass "Verweigerungs-Meldung nennt beide Zahlen, die Quelle und den Fix"
     else
         fail "Meldung unvollstaendig, fehlt:$MISSING — Meldung war: $MSG"
     fi
+}
+
+# ── Test 3b: the fix in the message follows BUILD_CACHE_KEEP_GB ──────────────
+# The operator edits this setting; a literal `20g` in the advice would tell them
+# to run something that contradicts their own configuration — the same
+# config-drift class as the hardcoded threshold this card removes.
+test_refusal_message_follows_configured_cache_bound() {
+    MSG=$(MC_TEST_DF_OUT="$(df_out_with_free_gb 3)" BUILD_MIN_FREE_GB=15 \
+        BUILD_CACHE_KEEP_GB=7 \
+        sh -c '. "$1"; mc_disk_preflight / 2>&1 >/dev/null' sh "$LIB")
+
+    case "$MSG" in
+        *"keep-storage 7g"*)
+            pass "Fix im Verweigerungstext folgt BUILD_CACHE_KEEP_GB (7g)" ;;
+        *)
+            fail "Fix im Text ignoriert die Konfiguration (erwartet 'keep-storage 7g'): $MSG" ;;
+    esac
 }
 
 # ── Test 4: the reason goes to stderr, not stdout ────────────────────────────
@@ -280,6 +301,7 @@ echo "=== disk-preflight.sh behavior tests ($LIB) ==="
 test_allow_when_space_available
 test_refuse_when_space_low
 test_refusal_message_is_actionable
+test_refusal_message_follows_configured_cache_bound
 test_refusal_goes_to_stderr
 test_unknown_space_allows_build
 test_garbage_df_allows_build

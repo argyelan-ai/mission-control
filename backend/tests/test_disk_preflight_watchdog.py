@@ -76,6 +76,26 @@ def test_preflight_refuses_build_below_threshold():
     assert "15 GB" in error, f"Schwelle fehlt in der Meldung: {error}"
     assert "BUILD_MIN_FREE_GB" in error, f"Quelle der Schwelle fehlt: {error}"
     assert "builder prune" in error, f"Handlungsanweisung fehlt: {error}"
+    # The bound in the fix must be the CACHE ceiling, never the free space:
+    # `--keep-storage 3g` would be wrong here and `--keep-storage 373g` on the
+    # full disk this card is about would advise the opposite of the fix.
+    assert "keep-storage 20g" in error, f"Cache-Obergrenze fehlt im Fix: {error}"
+
+
+def test_preflight_refusal_follows_configured_cache_bound():
+    """The advice must track BUILD_CACHE_KEEP_GB, not a literal.
+
+    Same drift bug as a hardcoded threshold: the operator changes the setting
+    and the message keeps recommending a prune that contradicts it. The shell
+    twin of this test is `test_refusal_message_follows_configured_cache_bound`.
+    """
+    with patch.object(disk_preflight.subprocess, "run", _fake_df(3)), \
+         patch.object(disk_preflight.settings, "build_cache_keep_gb", 7):
+        error = disk_preflight.build_preflight_error("/")
+
+    assert error is not None and "keep-storage 7g" in error, (
+        f"Fix ignoriert BUILD_CACHE_KEEP_GB (erwartet 'keep-storage 7g'): {error}"
+    )
 
 
 def test_preflight_threshold_comes_from_settings():

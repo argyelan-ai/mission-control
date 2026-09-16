@@ -132,7 +132,14 @@ mc_disk_preflight() {
             echo "  .env; Standard ${MC_BUILD_MIN_FREE_GB_DEFAULT} GB)."
             echo "  Ein Bau ohne Platz stirbt mitten im Layer-Schreiben mit einem rohen"
             echo "  \"no space left on device\" — deshalb bricht er hier ab."
-            echo "  Platz schaffen:  docker builder prune --keep-storage ${_mc_pf_free}g"
+            # The bound in this hint is the CACHE ceiling, not the free space.
+            # `--keep-storage <free>g` would tell the operator to keep 373 GB of
+            # cache on the very disk that just ran out — the exact opposite of
+            # the fix, and it reads as authoritative because it is a real number
+            # measured from this machine. `mc_build_cache_keep_gb` is the value
+            # that actually bounds the cache, and it follows the operator's own
+            # configuration (BUILD_CACHE_KEEP_GB) instead of a literal here.
+            echo "  Platz schaffen:  docker builder prune --keep-storage $(mc_build_cache_keep_gb)g"
             echo "  Schwelle senken: BUILD_MIN_FREE_GB=<GB> (in .env auch dauerhaft)."
             echo ""
         } >&2

@@ -97,12 +97,17 @@ def build_preflight_error(path: str = "/") -> str | None:
         return None
 
     if available < minimum:
+        # The keep bound comes from settings, not a literal: the operator edits
+        # BUILD_CACHE_KEEP_GB, and a hardcoded number here would start advising
+        # a prune that contradicts their own configuration — the same
+        # config-drift bug the watchdog note is tested against.
+        keep = settings.build_cache_keep_gb
         return (
             f"Zu wenig Plattenplatz: {available} GB frei an {path}, "
             f"noetig sind {minimum} GB (Schwelle BUILD_MIN_FREE_GB). "
             "Ein Bau ohne Platz stirbt mitten im Layer-Schreiben mit einem "
             "rohen \"no space left on device\". "
-            "Fix: docker builder prune --keep-storage 20g, "
+            f"Fix: docker builder prune --keep-storage {keep}g, "
             "oder die Schwelle senken (BUILD_MIN_FREE_GB in .env)."
         )
 
