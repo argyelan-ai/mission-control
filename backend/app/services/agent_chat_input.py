@@ -200,6 +200,20 @@ _BOSS_SLUGS = ("boss", "boss-host")
 _BOSS_WS_URL = "ws://host.docker.internal:7682/?mode=keys"
 _BOSS_ACK_TIMEOUT_SECONDS = 10
 
+# Bounded retry for a transient delivery failure (bridge unreachable, or the
+# bridge answering "no server running on .tmux.sock" because boss-host's
+# tmux server is between `kill-server` and the fresh `new-session` a restart
+# does — live incident 16.09.2026: a message landed in exactly that window,
+# was rejected once, and never tried again). Bounded in BOTH count and total
+# time per the task guardrail — an unbounded queue would just move the
+# problem, not fix it. 4 attempts * 3s = worst case ~12s of extra wait on
+# top of the per-attempt ack timeout above; long enough to ride out the
+# trailing edge of a restart once cli_terminal._wait_for_host_window_ready
+# (see that module) already withholds "restart done" until the CLI is
+# actually ready, short enough that a message never appears to hang.
+_BOSS_KEY_DELIVERY_ATTEMPTS = 4
+_BOSS_KEY_DELIVERY_RETRY_DELAY_SECONDS = 3.0
+
 _BRACKETED_PASTE_START = "\x1b[200~"
 _BRACKETED_PASTE_END = "\x1b[201~"
 
@@ -406,11 +420,9 @@ async def _touch_recycler_marker(slug: str) -> None:
     )
 
 
-async def _send_boss_keys(keys: list[dict]) -> None:
-    """Delivers one ``send_keys`` batch to the host-pty-bridge (``?mode=keys``)
-    and waits for its ack. ``keys`` items are ``{"literal": text}`` (typed
-    via ``tmux send-keys -l``) or ``{"named": "Enter"}`` (a named tmux key
-    from ``_TMUX_NAMED_KEYS``). Raises ``BossDeliveryError`` unless the
+async def _send_boss_keys_once(keys: list[dict]) -> None:
+    """Single delivery attempt — see ``_send_boss_keys`` for the retry
+    wrapper callers actually use. Raises ``BossDeliveryError`` unless the
     bridge answered ``ok=true`` — unlike the old raw-pty write this never
     reports success it cannot vouch for."""
     frame = json.dumps({"type": "send_keys", "keys": keys})
@@ -431,6 +443,39 @@ async def _send_boss_keys(keys: list[dict]) -> None:
         error = ack.get("error") if isinstance(ack, dict) else raw
         logger.warning("chat input: boss bridge rejected keys: %s", error)
         raise BossDeliveryError(str(error))
+
+
+async def _send_boss_keys(keys: list[dict]) -> None:
+    """Delivers one ``send_keys`` batch to the host-pty-bridge (``?mode=keys``),
+    retrying a bounded number of times on failure before giving up.
+
+    Every failure of ``_send_boss_keys_once`` — bridge unreachable, no ack,
+    or an explicit rejection such as "no server running on .tmux.sock" — is
+    treated as retry-worthy here: all three are observed symptoms of the same
+    narrow restart window (see the module comment on
+    ``_BOSS_KEY_DELIVERY_ATTEMPTS``), and retrying a handful of times costs
+    nothing when the bridge is simply down for good, since the final attempt
+    still raises. Only the LAST attempt's ``BossDeliveryError`` propagates —
+    callers see one honest failure, not a confusing chain. Never fails
+    silently: a message either gets an ``ok`` ack within the bounded retry
+    window, or the caller gets a 502 with the real reason attached
+    (``routers/agent_chat.py::_boss_delivery_failed``).
+    """
+    last_error: BossDeliveryError | None = None
+    for attempt in range(1, _BOSS_KEY_DELIVERY_ATTEMPTS + 1):
+        try:
+            await _send_boss_keys_once(keys)
+            return
+        except BossDeliveryError as e:
+            last_error = e
+            if attempt < _BOSS_KEY_DELIVERY_ATTEMPTS:
+                logger.info(
+                    "chat input: boss key delivery attempt %d/%d failed (%s), retrying",
+                    attempt, _BOSS_KEY_DELIVERY_ATTEMPTS, e,
+                )
+                await asyncio.sleep(_BOSS_KEY_DELIVERY_RETRY_DELAY_SECONDS)
+    assert last_error is not None  # loop always raises or returns before falling through
+    raise last_error
 
 
 def _boss_key_item(key: str) -> dict:
