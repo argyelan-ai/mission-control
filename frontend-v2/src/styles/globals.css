@@ -1051,6 +1051,37 @@ option {
   }
 }
 
+/* ── Tastatur zieht die Shell zusammen (MOBILE-SPEC M9, Defekt 15.09.2026) ──
+   `useKeyboardInset` setzt seit jeher `--keyboard-inset`, gelesen hat die
+   Variable niemand: die Shell hing an `100dvh` und blieb auf voller Hoehe
+   stehen, waehrend das visuelle Viewport um die Tastatur schrumpfte. Die
+   Eingabezeile des Threads lag danach unter der Tastatur — in Chromium bei
+   390x844 mit 300px Tastatur 222px, bei 430x932 noch 134px unterhalb der
+   sichtbaren Kante (nachgemessen, siehe Deliverable).
+
+   `100dvh` ist auch nach dem Tastatur-Aufklappen unveraendert; nur das
+   visuelle Viewport schrumpft. Deshalb wird der Inset hier abgezogen: die
+   Shell endet dann genau an der sichtbaren Kante, die Flex-Kette fliesst nach
+   und der fokussierte Composer bleibt erreichbar.
+
+   Nur unterhalb von md — auf dem Desktop gibt es keine Bildschirmtastatur,
+   und `100dvh` soll dort unangetastet bleiben. Der `0px`-Fallback ist
+   tragend: ohne ihn waere die Hoehe bei fehlender Variable ungueltig und die
+   Shell kollabierte im Normalzustand. */
+@media (max-width: 767px) {
+  .app-shell-height {
+    height: calc(100dvh - var(--keyboard-inset, 0px));
+  }
+}
+
+/* Dieselbe Rechnung fuer die installierte PWA: dort traegt die Shell `lvh`
+   (siehe Begruendung oben), der Inset muss davon ebenso abgezogen werden. */
+@media (max-width: 767px) and (display-mode: standalone) {
+  .app-shell-height {
+    height: calc(100lvh - var(--keyboard-inset, 0px));
+  }
+}
+
 /* ── Icon action buttons (runtime/host rows) ────────────────────────────────
    Outlined by default so a row of them stays quiet; the semantic hue fills in
    only on hover. --action-hover is set per button by the component. */
