@@ -6,10 +6,11 @@ turn (double review, phantom delivery). Until the liveness-based restart
 (option A) lands, ACP agents and explicitly opted-out slugs are REPORTED
 (Tier 3 resume + Tier 4 operator notification) but never restarted.
 
-Three probes, each one a sabotage of the other:
-  * docker agent whose slug is in OMP_ACP_AGENT_SLUGS   -> restart NOT called
+Vier Proben, jede eine Sabotage der anderen:
+  * docker agent mit Harness omp (ACP-Treiber, ADR-084) -> restart NOT called
   * host agent whose slug is in RECOVERY_TIER2_SKIP_*   -> lifecycle NOT called
-  * docker agent in neither list                         -> restart called (unchanged)
+  * docker agent (claude harness)                       -> restart called (unchanged)
+  * omp agent unter OMP_DRIVER_DEFAULT=native           -> restart called again
 """
 from __future__ import annotations
 
@@ -20,11 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-async def _fixtures(make_board, make_agent, make_task, *, runtime: str, name: str):
+async def _fixtures(make_board, make_agent, make_task, *, runtime: str, name: str, harness: str = "claude"):
     board = await make_board(name=f"Tier2 skip {runtime}", slug=f"t2s-{runtime}-{uuid.uuid4().hex[:6]}")
     agent = await make_agent(
         name=name, board_id=board.id, is_board_lead=False,
-        role="developer", agent_runtime=runtime,
+        role="developer", agent_runtime=runtime, harness=harness,
     )
     task = await make_task(
         board_id=board.id, title=f"stale on {name}", status="in_progress",
@@ -56,12 +57,10 @@ async def _run_recovery(fake_redis, agent, task):
 
 @pytest.mark.asyncio
 async def test_tier2_skipped_for_acp_agent(fake_redis, make_board, make_agent, make_task, monkeypatch):
-    """Slug listed in OMP_ACP_AGENT_SLUGS -> restart_docker_agent_container is never called."""
-    _, agent, task = await _fixtures(make_board, make_agent, make_task, runtime="docker", name="AcpWorker")
-    from app.services.fs_service import agent_slug
+    """Harness omp + ACP-Treiber (ADR-084) -> restart_docker_agent_container is never called.
+    Kein Config-Eintrag: der Skip leitet sich aus dem Harness ab, nicht aus einer Namensliste."""
+    _, agent, task = await _fixtures(make_board, make_agent, make_task, runtime="docker", name="AcpWorker", harness="omp")
     from app.config import settings
-    assert agent_slug(agent)
-    monkeypatch.setattr(settings, "omp_acp_agent_slugs", agent_slug(agent))
     monkeypatch.setattr(settings, "recovery_tier2_skip_agent_slugs", "")
 
     restart_spy = MagicMock(return_value={"status": "restarted"})
@@ -76,7 +75,6 @@ async def test_tier2_skipped_for_explicit_optout_host_agent(fake_redis, make_boa
     _, agent, task = await _fixtures(make_board, make_agent, make_task, runtime="host", name="HostOptout")
     from app.services.fs_service import agent_slug
     from app.config import settings
-    monkeypatch.setattr(settings, "omp_acp_agent_slugs", "")
     monkeypatch.setattr(settings, "recovery_tier2_skip_agent_slugs", f"other-agent, {agent_slug(agent)}")
 
     lifecycle_spy = AsyncMock(return_value=None)
@@ -87,13 +85,27 @@ async def test_tier2_skipped_for_explicit_optout_host_agent(fake_redis, make_boa
 
 @pytest.mark.asyncio
 async def test_tier2_still_restarts_plain_docker_agent(fake_redis, make_board, make_agent, make_task, monkeypatch):
-    """Sabotage of the two tests above: an agent in NEITHER list is restarted exactly as before."""
+    """Sabotage of the skip tests: a claude-harness docker agent is restarted exactly as before."""
     _, agent, task = await _fixtures(make_board, make_agent, make_task, runtime="docker", name="PlainWorker")
     from app.config import settings
-    monkeypatch.setattr(settings, "omp_acp_agent_slugs", "someone-else")
     monkeypatch.setattr(settings, "recovery_tier2_skip_agent_slugs", "")
 
     restart_spy = MagicMock(return_value={"status": "restarted"})
     with patch("app.services.docker_agent_sync.restart_docker_agent_container", restart_spy):
         await _run_recovery(fake_redis, agent, task)
     assert restart_spy.call_count >= 1, "non-ACP docker agent must still get the Tier 2 restart"
+
+
+@pytest.mark.asyncio
+async def test_tier2_restarts_omp_agent_under_global_native_rollback(fake_redis, make_board, make_agent, make_task, monkeypatch):
+    """Sabotage of the implicit skip: OMP_DRIVER_DEFAULT=native rolls the whole
+    fleet back — the omp agent loses the ACP skip and is restarted again."""
+    _, agent, task = await _fixtures(make_board, make_agent, make_task, runtime="docker", name="NativeOmp", harness="omp")
+    from app.config import settings
+    monkeypatch.setattr(settings, "omp_driver_default", "native")
+    monkeypatch.setattr(settings, "recovery_tier2_skip_agent_slugs", "")
+
+    restart_spy = MagicMock(return_value={"status": "restarted"})
+    with patch("app.services.docker_agent_sync.restart_docker_agent_container", restart_spy):
+        await _run_recovery(fake_redis, agent, task)
+    assert restart_spy.call_count >= 1, "native-driver omp agent must get the Tier 2 restart again"

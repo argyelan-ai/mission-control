@@ -667,6 +667,7 @@ async def switch_agent_runtime(
     # NULL rows behave exactly as before). Matrix validation only fires when we
     # actually have an effective harness — legacy NULL keeps the old behaviour.
     from app.services.harness_compat import (
+        capabilities_for,
         derive_harness,
         incompat_reason,
         is_compatible,
@@ -701,6 +702,19 @@ async def switch_agent_runtime(
             or f"Harness '{effective_new_harness}' ist mit Runtime "
             f"'{new_runtime.slug}' nicht kompatibel."
         )
+
+    # ADR-084: a harness switch must announce its consequences. Plugins and
+    # skills that cannot run on the target harness are a VISIBLE warning on
+    # the switch result (and in the log) — never a silent drop.
+    _caps = capabilities_for(effective_new_harness)
+    if not _caps.cli_plugins and (agent.cli_plugins or agent.cli_skills):
+        _warn = (
+            f"Harness '{effective_new_harness}' unterstuetzt keine CLI-Plugins/"
+            f"Skills — die zugewiesenen Eintraege des Agenten '{agent.name}' "
+            f"laufen nach dem Wechsel nicht mehr (Fähigkeiten-Matrix, ADR-084)."
+        )
+        warnings = warnings + [_warn]
+        logger.warning("runtime switch %s: %s", agent.name, _warn)
 
     if is_agent_busy(agent) and not force_when_in_progress:
         raise AgentBusyError(

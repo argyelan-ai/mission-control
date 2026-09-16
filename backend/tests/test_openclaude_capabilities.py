@@ -915,7 +915,11 @@ async def test_send_text_gates_on_readiness_for_openclaude(monkeypatch):
     # mit eigener Sonde hat; das Tor liest mit DESSEN Regeln. Vorher stand
     # hier das Gegenteil, und das stimmte auch: solange omp keine Sonde
     # hatte, waere jede Aussage ``unknown`` und damit eine Ablehnung ohne
-    # Erkenntnis gewesen.
+    # Erkenntnis gewesen. Seit ADR-084 faehrt omp per Default kopflos (ACP,
+    # ohne Pane); dieser Leg testet den nativen Pfad, also Rollback-Knopf.
+    from app import config
+
+    monkeypatch.setattr(config.settings, "omp_driver_default", "native")
     await agent_chat_input.send_text(_agent(harness="omp"), "hallo")
     assert gated["n"] == 2
 

@@ -206,16 +206,15 @@ class Settings(BaseSettings):
     # pydantic-settings reads PUBLIC_HOST / EXTRA_CORS_ORIGINS env vars.
     public_host: str = ""
     extra_cors_origins: str = ""  # comma-separated list of additional origins
-    # Agent slugs whose compose service gets OMP_DRIVER=acp (ADR-081). The omp
-    # bridge defaults to the native TUI driver; only slugs listed here are
-    # switched to the ACP protocol path. Comma-separated list from .env —
-    # agent names deliberately live in deployment config, not in code.
-    omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
-    # Recovery Tier 2 (process restart) opt-out — deployment config like
-    # OMP_ACP_AGENT_SLUGS (ADR-081). Slugs listed here are NEVER restarted by
-    # the tiered recovery; ACP agents (omp_acp_agents()) are skipped implicitly.
-    # Measured 2026-09-14: for ACP agents the restart kills the running turn
-    # (/restart, PR #574) and produced phantom deliveries + double reviews.
+    # Fleet-wide driver default for the omp harness (ADR-084): "acp" gives
+    # EVERY omp agent the ACP protocol path — harness property, never a name
+    # list (ADR-081's OMP_ACP_AGENT_SLUGS is gone). "native" is the global
+    # escape hatch: one knob, whole fleet, back to the bridge's TUI driver.
+    omp_driver_default: str = "acp"  # acp | native
+    # Recovery Tier 2 (process restart) opt-out for host agents whose bridge
+    # runs a driver the backend cannot observe (deployment config). Docker
+    # omp agents are skipped implicitly via their harness (ADR-084) — a
+    # restart kills the running ACP turn: measured 2026-09-14, PR #574.
     recovery_tier2_skip_agent_slugs: str = ""
 
     # Which driver the host-side hermes bridge runs (scripts/hermes-bridge.py).
@@ -223,7 +222,7 @@ class Settings(BaseSettings):
     # Sessions page has no chat for it at all; "acp" = the bridge runs the ACP
     # chat daemon and the Sessions chat becomes Hermes' ONLY interface
     # (docs/specs/chat-over-acp.md). Read by acp_chat_transport.headless_chat_kind
-    # — deployment config, same reasoning as OMP_ACP_AGENT_SLUGS above.
+    # — deployment config, the host-side counterpart to OMP_DRIVER_DEFAULT.
     hermes_driver: str = "native"  # native | acp
 
     # Secrets encryption (Fernet key for MC-managed secrets)
@@ -654,29 +653,16 @@ def node_agent_base_urls() -> list[str]:
     return [u.strip() for u in settings.mc_node_agent_base_url.split(",") if u.strip()]
 
 
-def omp_acp_agents(s: Settings | None = None) -> set[str]:
-    """Agent slugs whose compose service renders OMP_DRIVER=acp (ADR-081).
-
-    Comma-separated OMP_ACP_AGENT_SLUGS from .env; empty (default) → no
-    agent gets the env override and the whole fleet stays on the bridge's
-    native driver default. Deployment config, deliberately not code.
-    """
-    s = s or settings
-    return {u.strip() for u in s.omp_acp_agent_slugs.split(",") if u.strip()}
-
-
 def recovery_tier2_skip_agents(s: Settings | None = None) -> set[str]:
     """Agent slugs for which tiered recovery must NOT run Tier 2 (restart).
 
-    Union of RECOVERY_TIER2_SKIP_AGENT_SLUGS (explicit opt-out, e.g. a host
-    agent whose bridge runs a driver the backend cannot see) and
-    omp_acp_agents() (every ACP agent — a restart kills its running turn).
-    Deployment config, deliberately not code; empty default keeps today's
-    behaviour for a fleet without ACP agents.
+    EXPLICIT opt-outs only (RECOVERY_TIER2_SKIP_AGENT_SLUGS, e.g. a host
+    agent whose bridge runs a driver the backend cannot see). The implicit
+    omp/ACP skip is harness-derived now (ADR-084): task_runner consults
+    ``omp_driver_for(agent.harness)`` directly instead of this name list.
     """
     s = s or settings
-    explicit = {u.strip() for u in s.recovery_tier2_skip_agent_slugs.split(",") if u.strip()}
-    return explicit | omp_acp_agents(s)
+    return {u.strip() for u in s.recovery_tier2_skip_agent_slugs.split(",") if u.strip()}
 
 
 def effective_host_ssh_user() -> str:

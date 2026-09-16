@@ -299,6 +299,7 @@ docs/decisions/047-docker-socket-proxy.md: sparky
 docs/decisions/049-omp-native-tui-session.md: sparky
 docs/decisions/056-harness-provider-decoupling.md: sparky
 docs/decisions/073-sessions-chat-transcript-tailing.md: sparky
+docs/decisions/084-omp-acp-harness-property.md: freecode, sparky
 docs/decisions/README.md: sparky
 docs/lifecycle-safety-watchdog-REPORT.md: sparky
 docs/omp-runtime-REPORT.md: sparky

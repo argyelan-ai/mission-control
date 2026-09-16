@@ -96,7 +96,7 @@ When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `
 
 ### Backend
 
-- `Agent.headless_chat` (computed_field, `models/agent.py`): `True` when (`agent_runtime == "cli-bridge"` and `harness == "omp"` and `slug in settings.omp_acp_agents()`) or (`agent_runtime == "host"` and `harness == "hermes"` and `settings.hermes_driver == "acp"`). Exposed in `AgentRead`.
+- `Agent.headless_chat` (computed_field, `models/agent.py`): `True` when (`agent_runtime == "cli-bridge"` and `harness == "omp"` and `omp_driver_for("omp") == "acp"` — ADR-084, harness property; the ADR-081 slug list is gone) or (`agent_runtime == "host"` and `harness == "hermes"` and `settings.hermes_driver == "acp"`). Exposed in `AgentRead`.
 - `agent_chat_input._target_kind` gains `"acp-docker"` / `"acp-http"`; `send_text`, `send_keys` (`Escape` → `cancel`, everything else → `InputNotSupportedError`), `set_effort` (→ `config thinking=<level>`; `EffortSwitchRejectedError` on `ok:false`), and a new `set_model(agent, name)` (→ `config model=<name>`) route through `acp_chat_transport.py`.
 - `effort_capabilities` → levels from `configOptions[id=thinking].options` in `acp-chat-state.json`; `slash_command_capabilities` → `commands`; `model_options_capabilities` → `configOptions[id=model].options` (label = name, command = `/model <value>`). Empty/missing state file → empty lists with reason `acp_state_missing` (never raises).
 - `omp_chat.resolve_transcript_dir` accepts `host` + `harness == "hermes"` (dir `~/.mc/agents/hermes/omp-sessions`), so the Hermes daemon reuses the omp transcript format and the whole reader/preview stack unchanged.

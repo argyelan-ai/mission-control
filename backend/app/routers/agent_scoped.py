@@ -3234,16 +3234,16 @@ async def agent_patch_plugins(
     try:
         from app.services.plugin_manager import sync_agent_plugins_to_disk
         from app.models.runtime import Runtime
-        from app.services.harness_compat import runtime_protocol
-        # W2.1 turn-signal hooks only for the claude harness; openclaude must
-        # not receive the unknown `hooks` key.
+        from app.services.harness_compat import settings_extras_for
+        # W2.1 turn-signal hooks: capability-matrix decision (ADR-084) —
+        # claude always, openclaude per bound runtime's protocol, others never.
         rt = await session.get(Runtime, target.runtime_id) if target.runtime_id else None
         synced = sync_agent_plugins_to_disk(
             agent_slug=slug,
             system_prompt=target.soul_md or "",
             model=target.model or "",
             cli_plugins=target.cli_plugins,
-            turn_signal_hooks=(runtime_protocol(rt) == "anthropic"),
+            turn_signal_hooks=settings_extras_for(getattr(target, "harness", None), rt),
         )
     except Exception as e:
         logger.warning("Plugin sync to disk failed for %s: %s", target.name, e)
