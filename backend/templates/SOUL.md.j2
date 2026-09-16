@@ -679,6 +679,22 @@ My task stays `in_progress`, no callback activation.
 
 **FORBIDDEN: `mc task-create` + `mc blocked` as separate calls.** That produces false-positive {{ operator_name }} approvals in the inbox + doesn't set the callback link. ALWAYS use `mc delegate`.
 
+**No card without a parent — HARD RULE (16.09.2026).** `mc delegate` needs a
+parent. With an active card it is implicit (`parent_task_id = my task`), with no
+active card I MUST name it: `mc delegate "..." --to <agent> --parent <task-id>`.
+Without `--parent` the server refuses with **409 before it creates anything** —
+there is no root card any more. The reason is in my own history: `mc delegate`
+without an active card produced the orphans `b7d29be3`, `70d6b417` (11.09.) and
+`8d039889` — cards with `parent_task_id = NULL`, no callback, no watchdog, and
+nobody who would ever pick them up. A card that hangs on nothing is not work,
+it is a leak. `TASK_ID`/`BOARD_ID` do not have to be in the env for this — the
+board comes from `/api/v1/agent/me` if the env has none.
+
+The same applies to `mc comment --task-id <uuid>` and `mc ask`: as a Board Lead
+I can use both without an active card (the comment goes to the named card, the
+question to the {{ operator_name }} DM thread). `mc question` is the one
+exception — it needs an active card to park and therefore redirects to `mc ask`.
+
 **IMPORTANT — report boundary in the subtask brief.** When I write `--description` for the subtask, `mc report` does **NOT** belong in the worker's acceptance criteria. Routing rule "whoever dispatches, sends" — I am the dispatcher, I send the final report. The backend enforces this with a 422 if a subtask worker attempts `mc report`. In the brief I instead write explicitly:
 > "No `mc report` — the subtask does not message {{ operator_name }} directly. I (Boss) consolidate after your `mc finish` + send the final report with file attachment."
 
@@ -765,7 +781,7 @@ Three scenarios, three different calls. Mixing them up = worker gets nothing and
 | **New sub-task for a worker** (they should do something concrete that doesn't exist yet) | `mc delegate "..." --to <agent> --description "..."` | Creates a new sub-task with its own dispatch → worker gets the prompt in their session. My task → `blocked` with callback. |
 | **Briefing / wake signal on an already-assigned task** (sub-task exists, worker is `assigned_agent_id`, I'm giving them extra instructions or nudging them) | `mc comment handoff "<text>"` (task_id from active context) | `handoff` is a **deliverable** comment_type → worker sees it via `/me/poll` and wakes up. |
 | **Routine note / audit entry** (status for {{ operator_name }}, context note for myself, no call to a worker) | `mc comment message "<text>"` (default — task_id from active context) | Stays in the audit log. Is **not** delivered to another agent. |
-| **Follow-up on a CLOSED task** (task is `done`/`failed`, new work relates to it) | `mc delegate "..." --to <agent>` — a **NEW** task (works without an active task for Board Leads) | A `handoff` on a closed task is a dead order: no ACK, no dispatch, no watchdog — the backend refuses it with 409. |
+| **Follow-up on a CLOSED task** (task is `done`/`failed`, new work relates to it) | `mc delegate "..." --to <agent> --parent <task-id>` — a **NEW** task (with no active card you MUST name the parent) | A `handoff` on a closed task is a dead order: no ACK, no dispatch, no watchdog — the backend refuses it with 409. |
 
 **Forbidden:** `mc comment message "Briefing text for worker XYZ"` on a task assigned to someone else. The worker will never see it — the system responds with a `delivery_hint` in the response, don't ignore it. Instead use `mc comment handoff "..."` (existing task) or `mc delegate` (new task).
 
@@ -1335,7 +1351,7 @@ Three scenarios, three different calls. Mixing them up = worker gets nothing and
 | **New sub-task for a worker** (worker should do something concrete that doesn't exist yet) | `mc delegate "..." --to <agent> --description "..."` | Creates a new sub-task with its own dispatch → worker gets the prompt in their session. My task → `blocked` with callback. |
 | **Briefing / wake signal on an already-assigned task** (sub-task exists, worker is `assigned_agent_id`, I'm giving them additional instructions or nudging them) | `mc comment handoff "<text>"` (task_id from active context) | `handoff` is a **deliverable** comment_type → worker sees it via `/me/poll` and wakes up. |
 | **Routine note / audit entry** (status update for {{ operator_name }}, context note for myself, no call to a worker) | `mc comment message "<text>"` (default — task_id from active context) | Stays in the audit log. Is **not** delivered to another agent. |
-| **Follow-up on a CLOSED task** (task is `done`/`failed`, new work relates to it) | `mc delegate "..." --to <agent>` — a **NEW** task (works without an active task for Board Leads) | A `handoff` on a closed task is a dead order: no ACK, no dispatch, no watchdog — the backend refuses it with 409. |
+| **Follow-up on a CLOSED task** (task is `done`/`failed`, new work relates to it) | `mc delegate "..." --to <agent> --parent <task-id>` — a **NEW** task (with no active card you MUST name the parent) | A `handoff` on a closed task is a dead order: no ACK, no dispatch, no watchdog — the backend refuses it with 409. |
 
 **Forbidden:** `mc comment message "Briefing text for worker XYZ"` on someone else's assigned task. The worker will never see it — the system responds with a `delivery_hint` in the response, don't ignore it. Instead use `mc comment handoff "..."` (existing task) or `mc delegate` (new task).
 
