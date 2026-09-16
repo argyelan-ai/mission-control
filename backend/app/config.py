@@ -336,6 +336,23 @@ class Settings(BaseSettings):
         / "Workspace" / "Projects" / "mission-control"
     )
 
+    # ── Plattenplatz ──────────────────────────────────────────────────────
+    # Bau-Preflight: ein Bau startet nur, wenn mindestens so viele GB frei
+    # sind. Am 2026-09-16 lief die Platte voll (75,8 GB Docker-Build-Cache,
+    # den Docker nie von selbst aufraeumt); `docker compose up --build` starb
+    # mitten im Layer-Schreiben mit einem rohen "no space left on device".
+    # Die Shell-Seite liest DIESELBE Variable (docker/shared/disk-preflight.sh)
+    # aus der Umgebung bzw. .env — ein Ort, zwei Sprachen.
+    build_min_free_gb: int = 15
+    # Obergrenze, auf die der Build-Cache NACH einem erfolgreichen Bau
+    # zurueckgestutzt wird (`docker builder prune --keep-storage`). Ohne sie
+    # ist der Cache unbegrenzt — genau das waren die 75,8 GB.
+    build_cache_keep_gb: int = 20
+    # Waechter: ab dieser Belegung wird gemeldet. MELDET NUR — es wird nie
+    # etwas geloescht und nie ein Status geaendert. 95 % ist die Fruehwarnung
+    # VOR dem Notfall, nicht der Notfall selbst.
+    disk_watchdog_percent: int = 95
+
     # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
     # In the container: /home/mcuser/free-code-projects (mounted from the host,
     # see docker-compose.override.example.yml)

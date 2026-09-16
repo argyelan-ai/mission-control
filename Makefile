@@ -13,17 +13,23 @@ setup: ## Generate .env with secure secrets (idempotent)
 	./setup.sh
 
 up: ## Build (if needed) and start the full stack
+	@. ./docker/shared/disk-preflight.sh && mc_disk_preflight
 	docker compose up --build -d
+	@. ./docker/shared/disk-preflight.sh && mc_build_cache_cleanup
 
 down: ## Stop the stack
 	docker compose down
 
 build: ## Build release images (backend + frontend)
+	@. ./docker/shared/disk-preflight.sh && mc_disk_preflight
 	docker compose build backend frontend
+	@. ./docker/shared/disk-preflight.sh && mc_build_cache_cleanup
 
 build-dev: ## Build dev-target images (hot reload, test extras)
+	@. ./docker/shared/disk-preflight.sh && mc_disk_preflight
 	docker build --target dev -t mc-backend:dev ./backend
 	docker build --target dev -t mc-frontend:dev ./frontend-v2
+	@. ./docker/shared/disk-preflight.sh && mc_build_cache_cleanup
 
 test: test-backend test-frontend ## Run all tests
 

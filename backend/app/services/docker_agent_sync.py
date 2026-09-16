@@ -41,6 +41,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+from app.services.disk_preflight import build_preflight_error as disk_build_preflight_error
 from app.services.template_renderer import build_agent_context, render_agent_file
 
 logger = logging.getLogger("mc.docker_agent_sync")
@@ -1002,6 +1003,22 @@ def restart_docker_agent_container(
             )
             return {
                 "status": f"error: {preflight}",
+                "container": container_name,
+                "mode": "recreate",
+            }
+
+        # Plattenplatz-Preflight. Der Recreate baut nichts (`--force-recreate`,
+        # kein `--build`), belegt aber ein neues beschreibbares Layer je
+        # Container — auf einer vollen Platte scheitert er mit genau dem rohen
+        # "no space left on device", das den Vorfall vom 2026-09-16
+        # undiagnostizierbar machte. Die Pruefung kostet ein `df`.
+        disk_error = disk_build_preflight_error()
+        if disk_error:
+            logger.error(
+                "force_recreate(%s) aborted — %s", container_name, disk_error
+            )
+            return {
+                "status": f"error: {disk_error}",
                 "container": container_name,
                 "mode": "recreate",
             }

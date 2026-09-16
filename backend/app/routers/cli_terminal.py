@@ -1863,6 +1863,20 @@ async def force_recreate_agent_container(
     if preflight:
         raise HTTPException(status_code=503, detail=preflight)
 
+    # Plattenplatz-Preflight — dieselbe Pruefung wie im Runtime-Switch-Weg
+    # (docker_agent_sync.restart_docker_agent_container). Ein Recreate baut
+    # nichts, belegt aber ein beschreibbares Layer; auf einer vollen Platte
+    # scheitert er mit dem rohen "no space left on device", das den Vorfall
+    # vom 2026-09-16 undiagnostizierbar machte. 507 (Insufficient Storage) ist
+    # hier die genaue Antwort: 503 waere "voruebergehend nicht verfuegbar",
+    # aber der Platz wird nicht von allein wiederkommen.
+    from app.services.disk_preflight import build_preflight_error as disk_build_preflight_error
+
+    disk_error = disk_build_preflight_error()
+    if disk_error:
+        logger.error("force-recreate aborted — %s", disk_error)
+        raise HTTPException(status_code=507, detail=disk_error)
+
     # Multiple --env-file flags: agents-compose references ${MC_TOKEN_*},
     # ${OPENAI_API_KEY_*} etc. — without .env.agents these are all empty and
     # the agent comes up without a token (mc CLI: 'MC_AGENT_TOKEN missing').

@@ -119,6 +119,13 @@ services:
       # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
       # wiederhergestellt, Flag-Zeile darueber ergaenzt, nicht ersetzt.
       CDP_BROWSER_URL: http://172.30.99.10:9223
+      # Plattenplatz: Bau-Preflight und Waechter. Wie bei Telegram muss JEDE
+      # Variable hier einzeln stehen — es gibt keine env_file-Direktive, die
+      # .env allein erreicht den Container nicht. Der Waechter laeuft im
+      # Worker, die Preflight-Pfade im API-Prozess: beide brauchen die Werte.
+      BUILD_MIN_FREE_GB: ${BUILD_MIN_FREE_GB:-15}
+      BUILD_CACHE_KEEP_GB: ${BUILD_CACHE_KEEP_GB:-20}
+      DISK_WATCHDOG_PERCENT: ${DISK_WATCHDOG_PERCENT:-95}
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
@@ -416,6 +423,14 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      # Plattenplatz: der Waechter laeuft hier (ENABLE_BACKGROUND_SERVICES),
+      # also muss mindestens DISK_WATCHDOG_PERCENT hier stehen — sonst laeuft
+      # er mit dem falschen Wert. Die beiden Bau-Schwellen stehen mit, weil
+      # der Regelkommentar oben "identische Env" verlangt und der
+      # Cache-Cleanup auch aus Worker-Kontext erreichbar ist.
+      BUILD_MIN_FREE_GB: ${BUILD_MIN_FREE_GB:-15}
+      BUILD_CACHE_KEEP_GB: ${BUILD_CACHE_KEEP_GB:-20}
+      DISK_WATCHDOG_PERCENT: ${DISK_WATCHDOG_PERCENT:-95}
       DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
