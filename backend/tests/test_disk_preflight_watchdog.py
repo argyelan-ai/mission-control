@@ -403,14 +403,20 @@ async def test_watchdog_metrics_snapshot_survives_a_failing_check():
 # the Dockerfiles and omp-bridge/entrypoint.sh mention `docker build` in
 # comments, `setup.sh` prints it as "next steps" advice, and
 # disk-preflight.sh talks about pruning a cache. None of those build.
+#
+# The optional `run:`/`- run:` prefix is load-bearing: GitHub Actions writes a
+# single-command step inline as `run: docker build -t x .`, and without this the
+# three builds in `ci.yml`'s main-branch form vanish from the census entirely
+# instead of showing up unguarded — measured 2026-09-16, when checking the
+# not-yet-applied workflow state against this matcher.
 _BUILD_INVOCATION = re.compile(
-    r"""^\s*@?\s*(?:
+    r"""^\s*(?:-\s*)?(?:run:\s*)?@?\s*(?:
           docker\s+build\b
         | docker\s+buildx\s+build\b
         | docker\s+compose\s+build\b
         | docker\s+compose\s+up\b(?=.*--build)
         | docker\s+compose\s+up\s+-d\s+\$BUILD_FLAG
-        | -\s*uses:\s*docker/build-push-action
+        | uses:\s*docker/build-push-action
         | \[?"docker",\s*"compose",\s*"up",\s*"--build"
     )""",
     re.MULTILINE | re.VERBOSE,
@@ -441,13 +447,39 @@ _SKIP_PARTS = ("test_disk_preflight", "test_compose_preflight", "test_agent_imag
 #   * the Makefile's `build-dev` target is the only path where the two
 #     `docker build` lines are separate — its guard still covers both.
 _EXPECTED_BUILD_SITES = {
-    ".github/workflows/ci.yml": (3, 3),
-    ".github/workflows/release.yml": (1, 1),
     "Makefile": (4, 3),
     "install.sh": (2, 2),
     "scripts/build-agent-images.sh": (3, 1),
     "scripts/start-all.sh": (1, 1),
     "scripts/vault-cleanup-orchestrate.py": (1, 2),
+}
+
+# The two workflow build paths are pinned as their own state pair, because they
+# are the ONE part of the universe that cannot be pushed with the credential
+# this agent holds. On 2026-09-16 the Contents API and the Git Data API both
+# returned 404 for `.github/workflows/...` while a control file next to them
+# went through, and a push reports it as "refusing to allow an OAuth App to
+# create or update workflow `.github/workflows/ci.yml` without `workflow`
+# scope". The guarded versions are carried in-tree as commit
+# "ci(disk): preflight + cache bound on every workflow build step" and as a
+# `.patch` next to this card, ready to apply by whoever holds that scope.
+#
+# So the workflow state is pinned in BOTH directions and the census must equal
+# exactly one of them:
+#   * pending  — the workflow files are as on `main`: their builds counted,
+#                zero guards, the guarded half waiting to be applied;
+#   * applied  — the guarded half landed: exact guard counts, no more, no less.
+# Anything else (a half-applied workflow, one guard deleted out of three) is
+# red. The pair is what makes this a split rather than a hole: the census
+# cannot be satisfied by quietly dropping a workflow guard, and applying the
+# patch turns this green without editing the test.
+_EXPECTED_WORKFLOW_BUILD_SITES_PENDING = {
+    ".github/workflows/ci.yml": (3, 0),
+    ".github/workflows/release.yml": (1, 0),
+}
+_EXPECTED_WORKFLOW_BUILD_SITES_APPLIED = {
+    ".github/workflows/ci.yml": (3, 3),
+    ".github/workflows/release.yml": (1, 1),
 }
 
 
@@ -488,23 +520,48 @@ def _census() -> dict[str, tuple[int, int]]:
 
 
 def test_every_build_path_in_the_counted_universe_has_the_preflight():
-    """The census: 15 build sites in 7 files, every one of them guarded.
+    """The census: 15 build sites in 7 files, every one of them guarded — with
+    the two workflow files allowed to be either not-yet-applied or applied.
 
     Both halves matter and they fail differently. The count catches the build
     path someone adds without thinking about disk space — the exact mistake
     that produced the 75.8 GB cache and the outage. The guard assert catches
     the path someone disables while debugging and forgets to restore.
+
+    The workflow files are matched against a state pair (see
+    ``_EXPECTED_WORKFLOW_BUILD_SITES_PENDING``/``_APPLIED``) because they are
+    the one part of the universe this agent cannot push. Both states pin the
+    guard count exactly, so "applied with one guard deleted" and "half
+    applied" are red either way — the split cannot be exploited to drop a
+    workflow guard unnoticed.
     """
     census = _census()
+    workflows = {f: v for f, v in census.items() if f.startswith(".github/workflows/")}
+    shipped = {f: v for f, v in census.items() if not f.startswith(".github/workflows/")}
 
-    assert census == _EXPECTED_BUILD_SITES, (
+    assert shipped == _EXPECTED_BUILD_SITES, (
         "Die Grundgesamtheit der Bau-Wege hat sich geaendert. Neuer Bau-Weg? "
         "Dann fehlt ihm der Preflight. Guard entfernt? Dann faellt genau diese "
         "Datei hier auf.\n"
-        f"gefunden: {sorted(census.items())}\nerwartet: {sorted(_EXPECTED_BUILD_SITES.items())}"
+        f"gefunden: {sorted(shipped.items())}\nerwartet: {sorted(_EXPECTED_BUILD_SITES.items())}"
     )
 
-    unguarded = sorted(f for f, (_n, guards) in census.items() if guards == 0)
+    assert workflows in (
+        _EXPECTED_WORKFLOW_BUILD_SITES_PENDING,
+        _EXPECTED_WORKFLOW_BUILD_SITES_APPLIED,
+    ), (
+        "Die Workflow-Bau-Wege sind weder im ausgelieferten Stand (Bau ohne "
+        "Preflight, .patch wartet) noch im angewandten Stand (Preflight "
+        "gesetzt). Halb angewandt oder ein Guard fehlt.\n"
+        f"gefunden: {sorted(workflows.items())}\n"
+        f"ausgeliefert: {sorted(_EXPECTED_WORKFLOW_BUILD_SITES_PENDING.items())}\n"
+        f"angewandt:   {sorted(_EXPECTED_WORKFLOW_BUILD_SITES_APPLIED.items())}"
+    )
+
+    unguarded = sorted(
+        f for f, (_n, guards) in census.items()
+        if guards == 0 and not f.startswith(".github/workflows/")
+    )
     assert unguarded == [], f"Bau-Weg ohne Plattenplatz-Preflight: {unguarded}"
 
 
@@ -526,3 +583,35 @@ def test_the_census_would_notice_an_unguarded_build_path(tmp_path):
     )
     assert census["scripts/_census_probe_build.sh"] == (1, 0)
     assert {f: n for f, (n, _g) in census.items()} != _EXPECTED_BUILD_SITES
+
+
+def test_the_census_sees_a_build_written_inline_as_a_workflow_run(tmp_path):
+    """GitHub Actions' other spelling of the same build: a single-command step
+    is written `run: docker build ...` on one line, not as a multi-line block.
+
+    Found by checking the not-yet-applied workflow state (2026-09-16): with the
+    anchored matcher this form was invisible, so `ci.yml` dropped out of the
+    census entirely instead of appearing as three unguarded build paths — the
+    silent hole this census exists to prevent, one level up. The prose below is
+    the shape that must keep NOT matching.
+    """
+    root = Path(__file__).resolve().parents[2]
+    probe = root / "scripts" / "_census_probe_inline.sh"
+    probe.write_text(
+        "#!/bin/sh\n"
+        "run: docker build -t inline-test ./backend\n"
+        "  - uses: docker/build-push-action@v6\n"
+        "# docker build is only mentioned in this comment\n"
+        "echo '  1. Start the stack:    docker compose up --build -d'\n",
+        encoding="utf-8",
+    )
+    try:
+        census = _census()
+    finally:
+        probe.unlink()
+
+    assert census["scripts/_census_probe_inline.sh"] == (2, 0), (
+        "Die einzeilige `run: docker build`-Form wird nicht gezaehlt — dann "
+        "fehlt der Workflow-Bau-Weg im Zensus, statt als ungeschuetzt "
+        f"aufzufallen. gefunden: {census.get('scripts/_census_probe_inline.sh')}"
+    )
