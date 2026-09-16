@@ -171,9 +171,12 @@ async def stop_plugins_shell(current_user=Depends(require_user)):
 async def plugins_shell_websocket(
     websocket: WebSocket,
     token: Optional[str] = None,
-    session: AsyncSession = Depends(get_session),
 ):
     """WebSocket proxy for the plugin shell."""
+    # No Depends(get_session) here: this handler never touches the DB, and
+    # a session dependency would pin a pool connection for the WebSocket's
+    # whole lifetime (FastAPI unwinds it only after the WS closes —
+    # finding 2026-09-16).
     # Auth check
     if not token:
         await websocket.close(code=4001)

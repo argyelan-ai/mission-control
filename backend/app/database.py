@@ -99,6 +99,39 @@ async def managed_session(
                 )
 
 
+async def release_session(session: AsyncSession, *, route: str = "?") -> None:
+    """Return the pooled connection EARLY — before a long-lived response.
+
+    FastAPI unwinds ``Depends(get_session)`` only AFTER ``await response(...)``
+    (fastapi/routing.py ``request_response``: the request-scoped
+    AsyncExitStack wraps the response await). On an SSE stream or WebSocket
+    proxy the response lives as long as the client stays connected, so the
+    session's implicit (autobegin) transaction and its pool connection are
+    pinned for the whole stream — measured 2026-09-16: holds up to 405 s,
+    13 pool warnings/hour (pool exhaustion → healthcheck 500 → container
+    restart, incident 2026-09-14). ``require_user`` hits the same trap for
+    every auth-protected stream via its own ``Depends(get_session)``.
+
+    Call once ALL DB work of a streaming / long-lived endpoint is done,
+    BEFORE returning the response (or entering the proxy loop). ``close()``
+    ends the transaction, returns the connection to the pool, and detaches
+    loaded instances WITHOUT expiring them (loaded column values stay
+    readable — verified against PostgreSQL 16: pool checkedout 1 → 0;
+    ``rollback()`` was rejected because it expires instances and the next
+    attribute access raises MissingGreenlet in async context). Idempotent:
+    the later ``managed_session`` teardown closes again, harmlessly. Any
+    accidental later use re-checks out a fresh connection (autobegin) —
+    which is exactly the hold this helper exists to prevent.
+    """
+    had_txn = session.in_transaction()
+    await session.close()
+    if had_txn:
+        logger.info(
+            "DB connection released early, open transaction ended (endpoint=%s)",
+            route,
+        )
+
+
 async def get_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
     route = request.url.path
     session = AsyncSession(engine, expire_on_commit=False)
