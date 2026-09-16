@@ -1286,12 +1286,21 @@ async def agent_delegate_task(
     # die Arbeit war wertlos. Eine Regel, die den Alltag blockiert, wird
     # umgangen — deshalb prueft der Waechter nur Fundstellen UND fehlende
     # Bindung, und bietet mit --no-repo-reason einen bewussten Ausweg.
-    from app.services.repo_binding import enforce_repo_binding
+    from app.services.repo_binding import enforce_repo_binding, project_binds_repo
+
+    # Eine geerbte `project_id` allein ist KEINE Bindung: es gibt Projekte
+    # ohne GitHub-Repo, und dort landet die Arbeit im gemeinsamen Ad-hoc-Klon.
+    # Deshalb wird das Projekt geladen und auf eine wirksame Bindung geprueft.
+    inherited_project = (
+        await session.get(Project, project_id) if project_id is not None else None
+    )
+    project_bound = project_binds_repo(inherited_project)
+    repo_bound = resolved_repo_id is not None or project_bound
 
     enforce_repo_binding(
         title=payload.title,
         description=payload.description,
-        repo_bound=resolved_repo_id is not None or project_id is not None,
+        repo_bound=repo_bound,
         waiver_reason=payload.no_repo_reason,
     )
 
@@ -1360,7 +1369,7 @@ async def agent_delegate_task(
     # nicht nur im Request. Beides muss zusammenkommen — Fundstelle UND
     # fehlende Bindung — sonst ist es keine Ausnahme und braucht keinen
     # Eintrag.
-    if payload.no_repo_reason and not resolved_repo_id and project_id is None:
+    if payload.no_repo_reason and not repo_bound:
         from app.services.repo_binding import find_file_references
 
         waived_refs = find_file_references(payload.title, payload.description)

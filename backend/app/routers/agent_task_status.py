@@ -1343,12 +1343,21 @@ async def agent_create_task(
     # (app/services/repo_binding.py). NACH der Projekt-Vererbung, weil erst
     # hier feststeht, ob die Karte ein Projekt traegt; vorher schluege der
     # Waechter auf jeder Karte mit Board-Default falsch an.
-    from app.services.repo_binding import enforce_repo_binding
+    from app.services.repo_binding import enforce_repo_binding, project_binds_repo
+
+    # Wie bei `mc delegate`: die geerbte `project_id` zaehlt nur, wenn das
+    # Projekt auch ein GitHub-Repo traegt — sonst bindet sie nichts.
+    inherited_project_id = task_data.get("project_id")
+    inherited_project = (
+        await session.get(Project, inherited_project_id)
+        if inherited_project_id is not None
+        else None
+    )
 
     enforce_repo_binding(
         title=payload.title,
         description=payload.description,
-        repo_bound=resolved_repo_id is not None or task_data.get("project_id") is not None,
+        repo_bound=resolved_repo_id is not None or project_binds_repo(inherited_project),
         waiver_reason=payload.no_repo_reason,
     )
 

@@ -329,3 +329,146 @@ def test_waiver_reason_may_not_be_empty_string():
             repo_bound=False,
             waiver_reason="",
         )
+
+
+# ── Wirksame Projekt-Bindung: ein Projekt OHNE GitHub-Repo bindet nichts ──
+#
+# Rex' Befund C: `repo_bound = resolved_repo_id is not None or project_id is
+# not None` zaehlte JEDE Projekt-Erbung als Bindung — auch bei Projekten ohne
+# GitHub-Repo. Dort landet die Arbeit aber genau im gemeinsamen Ad-hoc-Klon,
+# also im Fall, den der Waechter verhindern soll.
+
+
+async def _board_project_without_repo(board_id) -> "Project":
+    from app.models.board import Project
+
+    project = Project(
+        id=uuid.uuid4(),
+        board_id=board_id,
+        name=f"Proj-ohne-Repo-{uuid.uuid4().hex[:5]}",
+    )
+    await _mk([project])
+    return project
+
+
+@pytest.mark.asyncio
+async def test_delegate_into_project_without_github_repo_is_rejected(client, fake_redis):
+    """Delegation erbt ein Projekt OHNE GitHub-Repo und nennt eine Fundstelle
+    → 422. Ohne den Fix gilt die blosse project_id als Bindung und der Worker
+    landet im Ad-hoc-Klon."""
+    from app.models.board import Project  # noqa: F401 — Modell registrieren
+
+    board = Board(id=uuid.uuid4(), name="B", slug=f"b-{uuid.uuid4().hex[:6]}")
+    await _mk([board])
+    project = await _board_project_without_repo(board.id)
+    lead, lead_token = await _agent(board.id, is_board_lead=True)
+    worker, _ = await _agent(board.id, role="developer")
+
+    parent = Task(
+        id=uuid.uuid4(),
+        board_id=board.id,
+        project_id=project.id,
+        title="Parent im Projekt ohne Repo",
+        status="in_progress",
+        assigned_agent_id=lead.id,
+    )
+    await _mk([parent])
+    lead.current_task_id = parent.id
+    await _mk([lead])
+
+    p1, p2, p3 = _delegate_patches()
+    with p1, p2, p3:
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/delegate",
+            json={
+                "title": "Fix mit Fundstelle",
+                "description": "Der Fehler sitzt in backend/app/routers/agent_scoped.py:1289.",
+                "assigned_agent_id": str(worker.id),
+            },
+            headers={"Authorization": f"Bearer {lead_token}"},
+        )
+    assert resp.status_code == 422, resp.text
+    assert "agent_scoped.py:1289" in resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        leftovers = (await s.exec(select(Task).where(Task.board_id == board.id))).all()
+    assert [t.id for t in leftovers] == [parent.id], (
+        "abgelehnte Delegation darf keine Karte hinterlassen"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_create_task_into_project_without_github_repo_is_rejected(
+    client, fake_redis
+):
+    """Derselbe Fall am zweiten Anlege-Pfad (POST /tasks) — sonst waere die
+    Regel ueber den anderen Endpunkt umgehbar."""
+    board = Board(id=uuid.uuid4(), name="B", slug=f"b-{uuid.uuid4().hex[:6]}")
+    await _mk([board])
+    project = await _board_project_without_repo(board.id)
+    agent, token = await _agent(board.id, is_board_lead=True)
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board.id}/tasks",
+        json={
+            "title": "Karte mit Fundstelle",
+            "project_id": str(project.id),
+            "description": "Siehe frontend-v2/src/components/chat/Composer.tsx:610.",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "Composer.tsx:610" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_waiver_is_recorded_even_when_the_project_has_no_repo(client, fake_redis):
+    """Die Gegenprobe zur Ablehnung: eine Projekt-Bindung ohne Repo ist keine
+    Bindung — also muss `--no-repo-reason` hier eine dokumentierte Ausnahme
+    ergeben. Sonst waere der Ausweg genau dort unmoeglich, wo er gebraucht
+    wird, und der Kommentar-Check (`not resolved_repo_id and project_id is
+    None`) liefe der Ablehnung hinterher."""
+    from app.models.task import TaskComment
+
+    board = Board(id=uuid.uuid4(), name="B", slug=f"b-{uuid.uuid4().hex[:6]}")
+    await _mk([board])
+    project = await _board_project_without_repo(board.id)
+    lead, lead_token = await _agent(board.id, is_board_lead=True)
+    worker, _ = await _agent(board.id, role="researcher")
+
+    parent = Task(
+        id=uuid.uuid4(),
+        board_id=board.id,
+        project_id=project.id,
+        title="Parent im Projekt ohne Repo",
+        status="in_progress",
+        assigned_agent_id=lead.id,
+    )
+    await _mk([parent])
+    lead.current_task_id = parent.id
+    await _mk([lead])
+
+    p1, p2, p3 = _delegate_patches()
+    with p1, p2, p3:
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/delegate",
+            json={
+                "title": "Doku zur Fundstelle",
+                "description": "Beschreibe backend/app/routers/agent_scoped.py:1289 im Handbuch.",
+                "assigned_agent_id": str(worker.id),
+                "no_repo_reason": "Reine Doku, kein Code im Repo",
+            },
+            headers={"Authorization": f"Bearer {lead_token}"},
+        )
+    assert resp.status_code == 201, resp.text
+    subtask_id = uuid.UUID(resp.json()["subtask_id"])
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        comments = (
+            await s.exec(select(TaskComment).where(TaskComment.task_id == subtask_id))
+        ).all()
+    waiver = [c for c in comments if c.comment_type == "repo_binding_waiver"]
+    assert len(waiver) == 1, (
+        "eine Projekt-Bindung ohne GitHub-Repo ist keine Bindung — die "
+        "Ausnahme muss also dokumentiert sein"
+    )
