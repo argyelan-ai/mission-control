@@ -15,7 +15,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.database import get_session
+from app.database import get_session, release_session
 from app.utils import utcnow
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -129,11 +129,11 @@ def require_role(minimum_role: Role):
 
 # ── User Auth ────────────────────────────────────────────────────────────────
 
-async def require_user(
+async def _authenticate_user(
     request: Request,
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.user import User
 
@@ -249,6 +249,23 @@ async def require_user(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
+async def require_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Authenticate the operator and RELEASE the DB connection before the
+    endpoint runs. FastAPI unwinds ``Depends(get_session)`` only after the
+    response has fully streamed (SSE/WS live for minutes), so without this
+    release the auth lookup's implicit transaction pins a pool connection
+    for the whole stream — on every auth-protected stream endpoint at once
+    (13 pool warnings/hour, holds up to 405 s — finding 2026-09-16)."""
+    user = await _authenticate_user(request, session, credentials, token)
+    await release_session(session, route=request.url.path)
+    return user
+
+
 def _agent_route_match(app: object, path: str) -> str | None:
     """How the app's registered /api/v1/agent routes relate to `path`.
 
@@ -306,7 +323,11 @@ async def require_bench_view(
                 return payload
         except JWTError:
             pass
-    return await require_user(request, credentials, token, session)
+    user = await require_user(request, credentials, token, session)
+    # require_user already released; this covers the bench-token path where
+    # this dependency is the only DB user (release is idempotent).
+    await release_session(session, route=request.url.path)
+    return user
 
 
 # ── Agent Auth ────────────────────────────────────────────────────────────────
@@ -390,9 +411,9 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
     return None
 
 
-async def require_agent(
+async def _authenticate_agent(
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.agent import Agent  # noqa: F401 (for type hints)
 
@@ -415,11 +436,23 @@ async def require_agent(
     return agent
 
 
-async def require_user_or_agent(
+async def require_agent(
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent-token auth; releases the DB connection before returning (see
+    require_user — the dependency otherwise pins it until after the
+    response, i.e. for the whole stream on agent-authenticated streams)."""
+    agent = await _authenticate_agent(session, credentials)
+    await release_session(session)
+    return agent
+
+
+async def _authenticate_user_or_agent(
     request: Request,
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.user import User
 
@@ -481,6 +514,18 @@ async def require_user_or_agent(
         return {"type": "agent", "agent": agent}
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def require_user_or_agent(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Dual auth with early connection release (see require_user)."""
+    result = await _authenticate_user_or_agent(request, session, credentials, token)
+    await release_session(session, route=request.url.path)
+    return result
 
 
 # ── Aliases for semantic clarity ─────────────────────────────────────────

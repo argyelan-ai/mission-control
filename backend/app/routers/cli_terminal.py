@@ -13,7 +13,7 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from sqlmodel import select
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from app.auth import require_user, generate_agent_token
 from app.config import effective_host_ssh_user, settings
-from app.database import get_session
+from app.database import get_session, release_session
 from app.models.agent import Agent
 
 
@@ -312,6 +312,11 @@ async def _proxy_terminal_websocket(
     if not agent or getattr(agent, "agent_runtime", "openclaw") != "cli-bridge":
         await websocket.close(code=4004)
         return
+
+    # DB work done — release before the proxy loop pins the connection for
+    # the WebSocket's whole lifetime (FastAPI unwinds Depends(get_session)
+    # only after the WS closes; finding 2026-09-16).
+    await release_session(session, route=websocket.url.path)
 
     await websocket.accept()
 
@@ -624,6 +629,10 @@ async def agent_terminal_ws(
     if agent is None:
         await websocket.close(code=4004, reason="Agent not found")
         return
+
+    # DB work done — release before the PTY bridge runs for hours (see
+    # _proxy_terminal_websocket).
+    await release_session(session, route=websocket.url.path)
 
     container_name = f"mc-agent-{agent.name.lower().replace(' ', '-')}"
     tmux_session = agent.name.lower().replace(" ", "-")
@@ -951,6 +960,10 @@ async def host_agent_terminal_ws(
     if agent is None or agent.agent_runtime != "host":
         await websocket.close(code=4004, reason="Host agent not found")
         return
+
+    # DB work done — release before the upstream WS proxy runs (see
+    # _proxy_terminal_websocket).
+    await release_session(session, route=websocket.url.path)
 
     # 3. Upstream: custom host-pty-bridge (see docker/host-pty-bridge/) — raw bytes,
     # no ttyd frame protocol. Identical pattern to docker-exec PTY.
@@ -1481,6 +1494,7 @@ async def stop_host_agent(
 @router.post("/host-agents/{agent_id}/restart-process")
 async def restart_host_agent_process(
     agent_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -1491,6 +1505,11 @@ async def restart_host_agent_process(
     label unconditionally; returns 502 if no process is running afterward.
     """
     agent = await _resolve_host_agent(agent_id, session)
+    # The restart below is docker/launchd work measured in tens of seconds —
+    # no DB involved. Release the connection instead of holding the
+    # resolution transaction across it (guard warning "transaction held
+    # across a non-DB await", watchdog #594).
+    await release_session(session, route=request.url.path)
     result = await _host_agent_process_restart(agent)
     logger.info("Host-agent process restart: %s (orphans killed: %s)", agent.name, result["orphans_killed"])
     return result
