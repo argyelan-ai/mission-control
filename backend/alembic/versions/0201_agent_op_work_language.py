@@ -1,5 +1,5 @@
-"""Split agents.language into operator_language + work_language (Task
-8d039889, 2026-09-16).
+"""Split agents.language into operator_language + work_language — expand
+step only (Task 8d039889 / 993840da, 2026-09-16).
 
 One field steered two audiences at once: how an agent replies to the
 operator AND what it writes into cards (task comments, reflections,
@@ -17,13 +17,17 @@ Data mapping for every existing agent:
                        language changes on cutover)
   work_language      = "en" (the cutover itself)
 
-`language` itself is dropped — the two new columns fully replace it. Grep
-across backend/app before writing this migration found exactly three
-non-test call sites (dispatch_message_builder.py, template_renderer.py,
-template_seeder.py) and no frontend read/write path at all (the "rendered
-but no UI control" gap named in the task); all three call sites are
-updated in the same change as this migration, so nothing is left reading
-a column that no longer exists.
+Expand/contract split (993840da): this revision was originally written to
+also `DROP COLUMN language` in the same transaction. Rex verified that on
+a scratch DB, where it is correct — but the backend keeps serving reads
+and writes against `agents` while the migration runs, and the
+not-yet-restarted old code still reads `agents.language`. Between the
+DROP and the backend bounce, every query against `agents` fails, and
+fourteen agents hang off that table. So `language` stays for now: this
+revision is additive only (add the two columns, backfill
+`operator_language`, leave `language` untouched — the application code
+must not write to it). The drop moves to 0202, its own deploy, once the
+new code has been running.
 
 Checked for down_revision collisions before picking one: `alembic heads`
 showed a single head (0200_task_pr_reference) at branch time — no backlog
@@ -50,17 +54,11 @@ def upgrade() -> None:
         "agents",
         sa.Column("work_language", sa.String(length=16), nullable=False, server_default="en"),
     )
-    # Backfill BEFORE dropping `language` — this is the one moment both the
-    # old and the new column exist together.
+    # `language` stays present after this migration (see module docstring) —
+    # the drop is 0202, a separate deploy.
     op.execute("UPDATE agents SET operator_language = language")
-    op.drop_column("agents", "language")
 
 
 def downgrade() -> None:
-    op.add_column(
-        "agents",
-        sa.Column("language", sa.String(length=16), nullable=False, server_default="en"),
-    )
-    op.execute("UPDATE agents SET language = operator_language")
     op.drop_column("agents", "work_language")
     op.drop_column("agents", "operator_language")
