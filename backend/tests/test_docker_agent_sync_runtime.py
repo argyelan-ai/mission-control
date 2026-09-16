@@ -339,7 +339,16 @@ def test_restart_force_recreate_readable_compose_main_proceeds(tmp_path, monkeyp
         run_mock.return_value.stderr = ""
         result = restart_docker_agent_container(agent, force_recreate=True)
 
-    run_mock.assert_called_once()
+    # The assertion is on the COMPOSE invocation, not on the run count: the
+    # readability preflight and the disk preflight each shell out too (`df`),
+    # so `assert_called_once` here measures how many checks happen to run
+    # rather than whether the recreate was actually issued — it went red the
+    # day the disk preflight was added, for a change that was correct.
+    compose_calls = [
+        c for c in run_mock.call_args_list
+        if c.args and list(c.args[0])[:2] == ["docker", "compose"]
+    ]
+    assert len(compose_calls) == 1, f"erwartet genau ein compose-Aufruf: {run_mock.call_args_list}"
     assert result["status"] == "recreated"
 
 
