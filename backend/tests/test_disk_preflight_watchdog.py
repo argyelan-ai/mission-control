@@ -16,8 +16,10 @@ threshold is set through the project's config path (``settings.build_min_free_gb
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from contextlib import asynccontextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -379,3 +381,148 @@ async def test_watchdog_metrics_snapshot_survives_a_failing_check():
         svc = WatchdogService()
         async with _session() as session:
             await svc._collect_system_metrics(1.0, 1.0, session)  # must not raise
+
+
+# ── The universe: every build path is guarded ───────────────────────────
+#
+# The card's DoD says the build paths must be COUNTED, not waved away with
+# "grep found no further hits". A grep proves what is present, never what is
+# absent — the path that got missed is precisely the one nobody grepped for,
+# and it is the only one that matters when the disk fills up. So the census
+# below enumerates the executable roots, finds every statement that actually
+# invokes a build, and pins the result. It fails in three directions:
+#
+#   * a NEW build path in a file outside the pinned map  → the file shows up
+#   * a new build path in a file already listed          → the count moves
+#   * the guard removed from any listed file             → the guard assert
+#
+# The first two turn "we checked, there are no others" into a tested claim
+# that decays loudly instead of silently.
+
+# Anchored at the start of the line so it matches an INVOCATION, not prose:
+# the Dockerfiles and omp-bridge/entrypoint.sh mention `docker build` in
+# comments, `setup.sh` prints it as "next steps" advice, and
+# disk-preflight.sh talks about pruning a cache. None of those build.
+_BUILD_INVOCATION = re.compile(
+    r"""^\s*@?\s*(?:
+          docker\s+build\b
+        | docker\s+buildx\s+build\b
+        | docker\s+compose\s+build\b
+        | docker\s+compose\s+up\b(?=.*--build)
+        | docker\s+compose\s+up\s+-d\s+\$BUILD_FLAG
+        | -\s*uses:\s*docker/build-push-action
+        | \[?"docker",\s*"compose",\s*"up",\s*"--build"
+    )""",
+    re.MULTILINE | re.VERBOSE,
+)
+
+# The guard, in both spellings the repo uses: the shell library sourced by
+# every script/Makefile, and the Python module used by the two backend paths
+# plus the vault orchestrator.
+_GUARD = re.compile(r"mc_disk_preflight|build_preflight_error")
+
+# Roots that can hold an executable build path. `frontend-v2/` and
+# `backend/` are applications, not builders — nothing there invokes
+# `docker build` — so they are deliberately out of scope.
+_BUILD_ROOTS = ("Makefile", "install.sh", "setup.sh", "scripts", "docker", ".github/workflows")
+
+_SKIP_PARTS = ("test_disk_preflight", "test_compose_preflight", "test_agent_images",
+               ".venv", "node_modules", "__pycache__", ".git")
+# The counted universe as of this commit: file -> (build invocations, preflight
+# guards). Both numbers are pinned exactly, and the guards matter as much as the
+# builds: pinning only "this file has *a* guard" stays green when one of three
+# guards in the Makefile is deleted, which is the regression this census is for.
+# A change here is a deliberate act: add the new build path AND its preflight,
+# then update the number.
+#
+# The guard count is below the build count in two files on purpose:
+#   * build-agent-images.sh builds three images behind ONE guard (they share a
+#     failure mode, and three `df` calls in a row would measure the same disk);
+#   * the Makefile's `build-dev` target is the only path where the two
+#     `docker build` lines are separate — its guard still covers both.
+_EXPECTED_BUILD_SITES = {
+    ".github/workflows/ci.yml": (3, 3),
+    ".github/workflows/release.yml": (1, 1),
+    "Makefile": (4, 3),
+    "install.sh": (2, 2),
+    "scripts/build-agent-images.sh": (3, 1),
+    "scripts/start-all.sh": (1, 1),
+    "scripts/vault-cleanup-orchestrate.py": (1, 2),
+}
+
+
+def _census() -> dict[str, tuple[int, int]]:
+    """Map every file with a build invocation to (builds, guards).
+
+    Comments are stripped before counting: `release.yml` explains the preflight
+    in a comment that names `mc_disk_preflight`, and counting that prose as a
+    guard would let the real call be deleted with the census none the wiser.
+    """
+    root = Path(__file__).resolve().parents[2]
+    found: dict[str, tuple[int, int]] = {}
+    for entry in _BUILD_ROOTS:
+        p = root / entry
+        candidates = [p] if p.is_file() else [q for q in p.rglob("*") if q.is_file()]
+        for f in candidates:
+            rel = f.relative_to(root).as_posix()
+            # Component match, not substring: `.git` is a substring of
+            # `.github`, and a substring test would silently exclude every
+            # workflow — the two build paths CI actually runs.
+            names = set(rel.split("/"))
+            names |= {n.rsplit(".", 1)[0] for n in names}
+            if names & set(_SKIP_PARTS):
+                continue
+            if f.suffix not in (".sh", ".py", ".yml", ".yaml", ".mk", "") and f.name != "Makefile":
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            code = "\n".join(
+                line for line in text.splitlines() if not line.lstrip().startswith("#")
+            )
+            builds = len(_BUILD_INVOCATION.findall(code))
+            if builds:
+                found[rel] = (builds, len(_GUARD.findall(code)))
+    return found
+
+
+def test_every_build_path_in_the_counted_universe_has_the_preflight():
+    """The census: 15 build sites in 7 files, every one of them guarded.
+
+    Both halves matter and they fail differently. The count catches the build
+    path someone adds without thinking about disk space — the exact mistake
+    that produced the 75.8 GB cache and the outage. The guard assert catches
+    the path someone disables while debugging and forgets to restore.
+    """
+    census = _census()
+
+    assert census == _EXPECTED_BUILD_SITES, (
+        "Die Grundgesamtheit der Bau-Wege hat sich geaendert. Neuer Bau-Weg? "
+        "Dann fehlt ihm der Preflight. Guard entfernt? Dann faellt genau diese "
+        "Datei hier auf.\n"
+        f"gefunden: {sorted(census.items())}\nerwartet: {sorted(_EXPECTED_BUILD_SITES.items())}"
+    )
+
+    unguarded = sorted(f for f, (_n, guards) in census.items() if guards == 0)
+    assert unguarded == [], f"Bau-Weg ohne Plattenplatz-Preflight: {unguarded}"
+
+
+def test_the_census_would_notice_an_unguarded_build_path(tmp_path):
+    """Sabotage probe for the census itself — otherwise the test above is a
+    claim no one ever checked. A builder added in a NEW file, with no
+    preflight, must be seen."""
+    root = Path(__file__).resolve().parents[2]
+    probe = root / "scripts" / "_census_probe_build.sh"
+    probe.write_text("#!/bin/sh\ndocker build -t nope .\n", encoding="utf-8")
+    try:
+        census = _census()
+    finally:
+        probe.unlink()
+
+    assert "scripts/_census_probe_build.sh" in census, (
+        "Der Zensus uebersieht einen neuen Bau-Weg ohne Preflight — die "
+        "Grundgesamtheit ist damit nicht gezaehlt, nur behauptet."
+    )
+    assert census["scripts/_census_probe_build.sh"] == (1, 0)
+    assert {f: n for f, (n, _g) in census.items()} != _EXPECTED_BUILD_SITES
