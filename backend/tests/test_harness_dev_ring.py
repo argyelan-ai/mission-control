@@ -33,7 +33,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.services.harness_compat import HARNESS_CAPABILITIES  # noqa: E402
+from app.services.harness_compat import HARNESSES, HARNESS_CAPABILITIES  # noqa: E402
 from app.services import host_harness_adapter as hha  # noqa: E402
 
 # ── The counted capability universe ─────────────────────────────────────────
@@ -68,6 +68,7 @@ CAPABILITIES: dict[str, tuple[str, str]] = {
     "cli-task-state": ("B", "mc done/failed/blocked/hold/recover (status verbs)"),
     "cli-delegate": ("B", "mc delegate (orchestrator agents)"),
     "cli-docs": ("B", "mc docs/group-doc (shared knowledge)"),
+    "deliverable-get": ("B", "mc deliverable-get (read back a registered deliverable)"),
     # Layer C — host/container placement
     "ssh-push": ("C", "workflow-scope workaround: SSH remote push (rule 15)"),
     "container-place": ("C", "runs as mc-<harness>-agent container or host entrypoint"),
@@ -129,34 +130,6 @@ D: list[dict] = [
     dict(harness="claude", place="host", cap="heartbeat-context", status="da", proof="statusLine scrape (settings_extras); #606/#609 holder"),
     dict(harness="claude", place="host", cap="ssh-push", status="fehlt-bewusst", proof="workflow-scope lock on HTTPS (fork probe identical, 15.09.)", since="2026-09-15", recheck="gh auth status scope list of agent credential"),
     dict(harness="claude", place="host", cap="container-place", status="da", proof="ClaudeHostAdapter host_harness_adapter.py:180-187 (entrypoint.sh + plist)"),
-    dict(harness="openclaude", place="host", cap="dispatch-prompt", status="da", proof="OpenClaudeHostAdapter host_harness_adapter.py:326 (staged host adapter)"),
-    dict(harness="openclaude", place="host", cap="ack-transition", status="da", proof="agent_heartbeat agent_scoped.py:326 (poll.sh shared)"),
-    dict(harness="openclaude", place="host", cap="turn-signal", status="offen", proof="settings_extras=None (protocol-flexible, harness_compat.py:310) - hook wiring per runtime unproven"),
-    dict(harness="openclaude", place="host", cap="term-int-survival", status="da", proof="poll.sh:1615-1616 traps (shared poll.sh)"),
-    dict(harness="openclaude", place="host", cap="heartbeat-context", status="offen", proof="scrape heuristics per runtime unknown (PANE_UI_OVERRIDE is claude-family only)"),
-    dict(harness="openclaude", place="host", cap="ssh-push", status="fehlt-bewusst", proof="same credential as claude host path", since="2026-09-15", recheck="gh auth status scope list"),
-    dict(harness="openclaude", place="host", cap="container-place", status="fehlt-bewusst", proof="no docker/mc-openclaude-agent image in docker/", since="2026-09-16", recheck="ls docker/ for new image dir"),
-    dict(harness="openclaude", place="container", cap="dispatch-prompt", status="offen", proof="no dedicated image; mc-agent-base variant unproven"),
-    dict(harness="openclaude", place="container", cap="ack-transition", status="da", proof="agent_heartbeat agent_scoped.py:326 (endpoint harness-agnostic)"),
-    dict(harness="openclaude", place="container", cap="turn-signal", status="offen", proof="settings_extras=None - hooks not wired"),
-    dict(harness="openclaude", place="container", cap="term-int-survival", status="da", proof="poll.sh:1615-1616"),
-    dict(harness="openclaude", place="container", cap="heartbeat-context", status="offen", proof="no statusLine surface proven"),
-    dict(harness="openclaude", place="container", cap="ssh-push", status="fehlt-bewusst", proof="container credential lacks workflow scope (global lock, 15.09.)", since="2026-09-15", recheck="gh auth status scope list"),
-    dict(harness="openclaude", place="container", cap="container-place", status="fehlt-bewusst", proof="no docker/mc-openclaude-agent image", since="2026-09-16", recheck="ls docker/"),
-    dict(harness="omp", place="container", cap="dispatch-prompt", status="da", proof="docker/omp-bridge/bridge.py wrap_prompt:1140 + run_acp_once:4151"),
-    dict(harness="omp", place="container", cap="ack-transition", status="da", proof="bridge serve_loop heartbeater (start_heartbeater:1703)"),
-    dict(harness="omp", place="container", cap="turn-signal", status="da", proof="bridge control channel (_on_control) + poll nudge; settings_extras=False (harness_compat.py:315) - bridge-native"),
-    dict(harness="omp", place="container", cap="term-int-survival", status="da", proof="bridge acp-cancel watcher:4396 + entrypoint traps"),
-    dict(harness="omp", place="container", cap="heartbeat-context", status="da", proof="ACPContextPct holder #609 (bridge.py:1639-1655)"),
-    dict(harness="omp", place="container", cap="ssh-push", status="fehlt-bewusst", proof="container credential lacks workflow scope", since="2026-09-15", recheck="gh auth status scope list"),
-    dict(harness="omp", place="container", cap="container-place", status="da", proof="docker/omp-bridge/ (mc-omp-agent image)"),
-    dict(harness="omp", place="host", cap="dispatch-prompt", status="da", proof="OmpHostAdapter (HOST_ADAPTERS host_harness_adapter.py:446-454)"),
-    dict(harness="omp", place="host", cap="ack-transition", status="da", proof="agent_heartbeat agent_scoped.py:326"),
-    dict(harness="omp", place="host", cap="turn-signal", status="offen", proof="bridge-native control proven in container; host entrypoint wiring unproven"),
-    dict(harness="omp", place="host", cap="term-int-survival", status="da", proof="poll.sh traps on host path"),
-    dict(harness="omp", place="host", cap="heartbeat-context", status="da", proof="same bridge holder path"),
-    dict(harness="omp", place="host", cap="ssh-push", status="fehlt-bewusst", proof="same credential", since="2026-09-15", recheck="gh auth status scope list"),
-    dict(harness="omp", place="host", cap="container-place", status="da", proof="OmpHostAdapter in HOST_ADAPTERS host_harness_adapter.py:446-454"),
     dict(harness="kimi", place="host", cap="dispatch-prompt", status="da", proof="KimiHostAdapter host_harness_adapter.py:141; container docker/mc-kimi-agent/"),
     dict(harness="kimi", place="host", cap="ack-transition", status="da", proof="agent_heartbeat agent_scoped.py:326"),
     dict(harness="kimi", place="host", cap="turn-signal", status="da", proof="shared poll.sh turn-signal (kimi-host entrypoint, skill mc-cli-onboarding section 3)"),
@@ -384,10 +357,19 @@ D: list[dict] = [
     dict(harness="grok", place="container", cap="cli-delegate", status="fehlt-bewusst", proof="host-only harness (harness_compat.py:330-337)", since="2026-09-16", recheck="new container image appearing in docker/"),
     dict(harness="grok", place="host", cap="cli-docs", status="da", proof="mc CLI via host checkout scripts/mc-cli (host agents share ${HOME}/.mc, cli_bridge_runner.py:7)"),
     dict(harness="grok", place="container", cap="cli-docs", status="fehlt-bewusst", proof="host-only harness (harness_compat.py:330-337)", since="2026-09-16", recheck="new container image appearing in docker/"),
+    dict(harness="claude", place="container", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="claude", place="host", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="omp", place="container", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="omp", place="host", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="kimi", place="container", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="kimi", place="host", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="openclaude", place="container", cap="deliverable-get", status="fehlt-bewusst", proof="no container image for this harness yet (see container-place row)", since="2026-09-16", recheck="new container image appearing in docker/"),
+    dict(harness="openclaude", place="host", cap="deliverable-get", status="da", proof="mc deliverable-get CommandSpec (scripts/mc-cli/mc_cli/commands.py) in image or host checkout - harness-agnostic"),
+    dict(harness="hermes", place="host", cap="deliverable-get", status="da", proof="mc deliverable-get via host checkout scripts/mc-cli (cli_bridge_runner.py:7)"),
+    dict(harness="hermes", place="container", cap="deliverable-get", status="fehlt-bewusst", proof="host-only harness (harness_compat.py:330-337)", since="2026-09-16", recheck="new container image appearing in docker/"),
+    dict(harness="grok", place="host", cap="deliverable-get", status="da", proof="mc deliverable-get via host checkout scripts/mc-cli (cli_bridge_runner.py:7)"),
+    dict(harness="grok", place="container", cap="deliverable-get", status="fehlt-bewusst", proof="host-only harness (harness_compat.py:330-337)", since="2026-09-16", recheck="new container image appearing in docker/"),
 ]
-
-
-PLACE_PAIRS = [(h, p) for h in HARNESS_CAPABILITIES for p in ("container", "host")]
 
 
 def _decl(harness: str, place: str, cap: str) -> dict | None:
@@ -416,6 +398,35 @@ def test_declaration_shape(row: dict):
     if row["status"] == "fehlt-bewusst":
         assert row.get("since"), "fehlt-bewusst needs since=ISO date"
         assert row.get("recheck"), "fehlt-bewusst needs recheck= (how staleness would show)"
+
+
+# Every registry a harness can enter must be patrolled. HARNESS_CAPABILITIES
+# alone is not enough: runtimes.py iterates the cli-bridge matrix over
+# HARNESSES, and host_harness_adapter.HOST_ADAPTERS gates host offers — a
+# harness added to either without HARNESS_CAPABILITIES previously slipped
+# past the guard (Rex review 2026-09-16, bypass "phantom2").
+REGISTRY_SOURCES = {
+    "HARNESS_CAPABILITIES": set(HARNESS_CAPABILITIES),
+    "HARNESSES": set(HARNESSES),
+    "HOST_ADAPTERS": set(hha.HOST_ADAPTERS),
+}
+# jarvis is the voice worker (single-agent voice binding, no task loop) —
+# deliberate exemption, reason recorded here per ADR-084 discipline.
+REGISTRY_EXEMPT = {"jarvis": "voice-worker: no task loop, no memory surface"}
+
+
+def test_harness_registries_stay_in_sync():
+    """Direction 1b: no harness enters ANY registry without capabilities."""
+    caps = set(HARNESS_CAPABILITIES)
+    for source, members in REGISTRY_SOURCES.items():
+        unpatrolled = members - caps - set(REGISTRY_EXEMPT)
+        assert not unpatrolled, (
+            f"{source} contains harnesses without a HARNESS_CAPABILITIES entry: "
+            f"{sorted(unpatrolled)}. Add them to HARNESS_CAPABILITIES (or, only "
+            "with a recorded reason, to REGISTRY_EXEMPT)."
+        )
+    dead_exempt = set(REGISTRY_EXEMPT) - set().union(*REGISTRY_SOURCES.values()) if REGISTRY_SOURCES else set()
+    assert not dead_exempt, f"exemptions for harnesses in no registry: {dead_exempt}"
 
 
 def test_registry_and_declarations_stay_in_sync():
@@ -450,15 +461,26 @@ def test_stale_exceptions_ssh_scope_claim():
         if row["cap"] != "ssh-push" or row["status"] != "fehlt-bewusst":
             continue
         # The lock applies to HTTPS/OAuth pushes only; the SSH path exists.
-        # The claim is stale when the agent credential gains workflow scope —
-        # re-derived here from the repo's own config: the credential env name.
-        env = REPO_ROOT.parent / "docker" / ".env.agents.example"
-        text = env.read_text(encoding="utf-8") if env.exists() else ""
-        if "workflow" in text.lower():
+        # Re-derived from the TRACKED marker docs/credential-scope-notes.md —
+        # an untracked operator file made this check vacuous in CI (Rex review
+        # 2026-09-16): missing basis must FAIL, never pass silently.
+        marker = REPO_ROOT.parent / "docs" / "credential-scope-notes.md"
+        assert marker.exists(), (
+            "docs/credential-scope-notes.md (tracked basis of the ssh-push "
+            "fehlt-bewusst claim) is missing — restore it, the guard refuses "
+            "to run on an unprovable claim"
+        )
+        text = marker.read_text(encoding="utf-8")
+        # The marker must still record the canonical claim: agent credentials
+        # carry NO workflow scope. If the operator re-verified and the claim
+        # flipped, they update the marker's claim line — then this goes red
+        # and the declarations must follow.
+        if not re.search(r"carry[^\n]*\bno\b[^\n]*workflow", text, re.IGNORECASE):
             pytest.fail(
-                "stale exception: ssh-push fehlt-bewusst but .env.agents.example "
-                "now references workflow scope — re-verify the credential and "
-                "flip the declaration"
+                "stale exception: ssh-push fehlt-bewusst but docs/"
+                "credential-scope-notes.md no longer records 'agent "
+                "credentials carry no workflow scope' — re-verify the "
+                "credential and flip the ssh-push declarations to da"
             )
 
 

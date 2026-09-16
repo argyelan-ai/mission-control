@@ -44,10 +44,25 @@ pushen lassen — die workflow-Scope-Sperre gilt nur für HTTPS) und
 container-place (mc-<harness>-agent-Image bzw. Host-Adapter in
 HOST_ADAPTERS, host_harness_adapter.py:446-454).
 
-**Summe: 24 Fähigkeiten je (Harness, Ort)-Zelle.** Sechs Harnesses
-(HARNESS_CAPABILITIES, harness_compat.py:296-337) × zwei Orte = 12 Zellen,
-288 Aussagen im Vollausbau. Der Wächter zählt die Spalten nach — „gefällt
-mir" ist dort kein Argument, nur `da`/`fehlt-bewusst`/`offen` + Beweis.
+**Summe: 24 Fähigkeiten je (Harness, Ort)-Zelle** — 5 mechanisch + 17
+Task-Vertrag + 2 Ort; `deliverable-get` ist als eigene ID bewacht
+(Nacharbeit 16.09., Rex-Review: 23-falsch-zählung korrigiert). Sechs
+Harnesses (HARNESS_CAPABILITIES, harness_compat.py:296-337) × zwei Orte =
+12 Zellen, **288 eindeutige Aussagen** (die 28 Duplikatzeilen der ersten
+Fassung sind entfernt — `_decl()` nimmt die erste Zeile, ein Edit an einer
+Zweitkopie hätte still wirkungslos sein können). Der Wächter zählt die
+Spalten nach — „gefällt mir" ist dort kein Argument, nur
+`da`/`fehlt-bewusst`/`offen` + Beweis.
+
+**Registries sind gemeinsam bewacht** (Nacharbeit 16.09.): ein Harness, der
+nur in `HARNESSES` (runtimes.py iteriert die cli-bridge-Matrix darüber) oder
+nur in `HOST_ADAPTERS` auftaucht, ohne in `HARNESS_CAPABILITIES` zu stehen,
+macht `test_harness_registries_stay_in_sync` rot. Einzige Ausnahme:
+`jarvis` (Voice-Worker, kein Task-Loop — Grund im Test vermerkt). Der
+ssh-push-Claim wird gegen die **getrackte** Markierung
+`docs/credential-scope-notes.md` abgeleitet; fehlt sie oder dreht sie den
+Claim, wird der Test rot statt still grün (Nacharbeit: vacuous-in-CI
+geschlossen).
 
 ## Matrix (Ist-Stand, Seed: claude/container)
 
