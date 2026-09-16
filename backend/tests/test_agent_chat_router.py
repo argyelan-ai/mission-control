@@ -1812,6 +1812,11 @@ async def test_tailer_broadcasts_acp_preview_file_lines_as_volatile_events(
         "agent-acp-prev", session_file,
         _OmpStubAgent(agent_runtime="cli-bridge", slug="omp-agent"),
     )
+    # Der Kanal seedet am Dateiende (Nachlauf-Schutz, siehe
+    # test_tailer_preview_channel_skips_preexisting_snapshots): erst nach
+    # dem ersten Takt anhaengen, sonst ist die Zeile beim Seed schon drin
+    # und wird zu Recht nie gesendet.
+    await asyncio.sleep(0.1)
     try:
         with pfile.open("a") as fh:
             fh.write(
