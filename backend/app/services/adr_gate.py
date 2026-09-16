@@ -16,12 +16,26 @@ a specific way the rule can be dodged:
    approval invalidates it — otherwise "approve then rewrite" would be a
    one-line bypass.
 2. **The decision-document test is content-based** (`decision_docs.py`), so
-   relocating an ADR does not slip past a path filter.
-3. **The refusal is loud.** `AdrGateBlocked` is raised, never logged. All three
+   relocating an ADR does not slip past a path filter. That test runs on
+   *every* changed file — there is no path pre-filter, because one is what let
+   a decision document at a non-standard path through unexamined. A file that
+   is *named* like an ADR but no longer carries the signature, or that was
+   renamed out of `docs/decisions/`, counts as a change too: otherwise
+   "rewrite the heading out of `# ADR-NNN` form" would hide it.
+3. **The file list is paginated, not capped.** `gh pr view --json files`
+   returns exactly 100 entries and stops (measured on PR #537: 126 changed
+   files, 100 returned), so a decision document past that point was invisible —
+   hiding an ADR in a large commit was a one-command bypass. The gate reads
+   `/pulls/{n}/files` page by page instead, and takes `previous_filename` from
+   the same response so a renamed ADR stays visible.
+4. **The refusal is loud.** `AdrGateBlocked` is raised, never logged. All three
    merge call sites currently convert exceptions into
    `logger.warning("PR-Merge fehlgeschlagen")` — placing the gate *inside*
    those blocks would have created exactly the silent failure this task exists
    to remove. Callers must call this ahead of (or outside) that try-block.
+   The same applies to a PR whose head SHA cannot be determined: without a ref
+   every content read is skipped and *every* file looks like a non-ADR, so
+   that case raises rather than passing quietly.
 
 The GitHub access goes through the caller's `run_cmd` (`git_service._run_cmd`),
 so the guard uses the same authenticated `gh` binding as the merge it guards,
@@ -48,6 +62,10 @@ logger = logging.getLogger("mc.adr_gate")
 ADR_GATE_ACTION_TYPE = "adr_gate"
 
 DELETED_CONTENT_MARKER = "<deleted-or-unreadable>"
+
+# GitHub's `/pulls/{n}/files` page size. Fixed, not tunable: the stop rule is
+# "short page", so a page smaller than this is the end of the list.
+PR_FILES_PAGE_SIZE = 100
 
 
 class AdrGateBlocked(RuntimeError):
@@ -81,17 +99,49 @@ def adr_digest(entries: list[tuple[str, str | None]]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-async def fetch_pr_files(run_cmd, repo_full_name: str, pr_number: int) -> tuple[str, list[str]]:
-    """(head_sha, changed paths) for a PR. Raises if `gh` itself fails."""
-    raw = await run_cmd(
-        "gh", "pr", "view", str(pr_number),
-        "--repo", repo_full_name,
-        "--json", "files,headRefOid",
-    )
-    data = json.loads(raw)
-    head_sha = data.get("headRefOid") or ""
-    paths = [entry.get("path", "") for entry in data.get("files", []) if entry.get("path")]
-    return head_sha, paths
+async def fetch_pr_files(
+    run_cmd, repo_full_name: str, pr_number: int,
+) -> tuple[str, list[tuple[str, str | None]]]:
+    """(head_sha, [(path, previous_path)]) for a PR. Raises if `gh` fails.
+
+    Paginated on purpose: `gh pr view --json files` delivers exactly 100
+    entries and stops. Measured 2026-09-16 on PR #537 — 126 changed files in
+    the PR, 100 returned. An ADR behind that cap was invisible to the gate, so
+    "hide the decision document in a large commit" was a one-command bypass.
+
+    `previous_filename` arrives in the same response and costs nothing extra;
+    it is what keeps a *renamed* ADR visible to `collect_decision_docs`.
+    """
+    raw = await run_cmd("gh", "api", f"repos/{repo_full_name}/pulls/{pr_number}")
+    head_sha = (json.loads(raw).get("head") or {}).get("sha") or ""
+    if not head_sha:
+        # Without a ref every content read is skipped and *every* file looks
+        # like a non-ADR — a silent pass. Fail instead, so the caller's
+        # fail-open path makes it loud.
+        raise RuntimeError(
+            f"gh lieferte keinen head-SHA fuer PR #{pr_number} — "
+            "ADR-Pruefung nicht moeglich"
+        )
+
+    files: list[tuple[str, str | None]] = []
+    page = 1
+    while True:
+        raw = await run_cmd(
+            "gh", "api",
+            f"repos/{repo_full_name}/pulls/{pr_number}/files"
+            f"?per_page={PR_FILES_PAGE_SIZE}&page={page}",
+        )
+        batch = json.loads(raw)
+        for entry in batch:
+            path = entry.get("filename")
+            if path:
+                files.append((path, entry.get("previous_filename")))
+        # A short page is the last page; GitHub answers `[]` past the end.
+        if len(batch) < PR_FILES_PAGE_SIZE:
+            break
+        page += 1
+
+    return head_sha, files
 
 
 async def fetch_file_content(run_cmd, repo_full_name: str, path: str, ref: str) -> str | None:
@@ -117,17 +167,35 @@ async def collect_decision_docs(
     """The decision documents this PR would change, and the PR head SHA.
 
     Empty list ⇒ the merge is not an ADR change and must pass untouched.
+
+    Every changed file is judged by its content — there is deliberately NO
+    path pre-filter. `is_decision_doc` never got to run on a decision document
+    outside `docs/decisions/` (measured bypass: a PR adding only
+    `notes/decision.md` with `# ADR-085` passed the gate unexamined), and a
+    suffix whitelist is an extension blacklist, not a definition.
+
+    A path is *also* a candidate when it is ADR-*named* — at the head or, for
+    a rename, at `previous_path`. Signature loss at a known ADR path counts
+    like a deletion: otherwise "rewrite the first heading out of `# ADR-NNN`
+    form" makes the document vanish from the gate. Same for renaming an ADR
+    out of the folder without rewriting its heading. The digest covers the
+    text as it stands now, so an approval of the pre-strip text cannot unlock
+    the stripped version.
     """
-    head_sha, paths = await fetch_pr_files(run_cmd, repo_full_name, pr_number)
+    head_sha, files = await fetch_pr_files(run_cmd, repo_full_name, pr_number)
     entries: list[tuple[str, str | None]] = []
-    for path in paths:
-        # Cheap path pre-filter only; the verdict below is content-based.
-        if decision_doc_number(path) is None:
-            continue
-        content = await fetch_file_content(run_cmd, repo_full_name, path, head_sha) if head_sha else None
-        if is_decision_doc(content, path):
+    for path, previous_path in files:
+        content = await fetch_file_content(run_cmd, repo_full_name, path, head_sha)
+        if is_decision_doc(content, path) or _is_adr_named(path, previous_path):
             entries.append((path, content))
     return entries, head_sha
+
+
+def _is_adr_named(path: str, previous_path: str | None = None) -> bool:
+    """True when the file is named like an ADR — now or before a rename."""
+    return decision_doc_number(path) is not None or (
+        previous_path is not None and decision_doc_number(previous_path) is not None
+    )
 
 
 def describe_entries(entries: list[tuple[str, str | None]]) -> str:

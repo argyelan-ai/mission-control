@@ -107,12 +107,20 @@ recorded as a `Pending approval` of type `adr_gate`, before the card can reach
 `done`.
 
 What counts as a decision document is decided by its **content**, not its
-folder: `docs/decisions/NNN-slug.md` is only a fast pre-filter. The authority
-is the signature `# ADR-NNN` in the first non-empty line. So an ADR that lives
-at another path is still gated, a markdown file in `docs/decisions/` without
-that signature (`README.md`, `_template.md`) is not, and *deleting* an ADR is
-gated like editing one. If the signature contradicts the filename, the document
-is rejected as broken rather than silently re-targeting an approval.
+folder: the authority is the signature `# ADR-NNN` in the first non-empty line,
+and the gate asks that question about **every** changed file — there is no
+path pre-filter. So an ADR that lives at another path is still gated, and a
+markdown file in `docs/decisions/` without that signature (`README.md`,
+`_template.md`) is not. *Deleting* an ADR is gated like editing one, and so is
+**losing the signature**: a file *named* like an ADR (`docs/decisions/NNN-slug.md`)
+whose heading has been rewritten out of `# ADR-NNN` form, or that was renamed
+out of that folder, counts as a change too. If the signature contradicts the
+filename, the document is rejected as broken rather than silently re-targeting
+an approval.
+
+The file list is read page by page from GitHub, not via `gh pr view --json
+files`, which stops at 100 entries — a decision document hidden in a large
+commit was otherwise invisible to the gate.
 
 The approval is bound to the exact text: it stores a digest of the changed
 documents, so **editing the ADR after approving it invalidates the approval**.

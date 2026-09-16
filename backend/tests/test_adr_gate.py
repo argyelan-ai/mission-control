@@ -82,20 +82,52 @@ async def _card(board_id, project_id, *, pr_number: int = 602) -> Task:
     return task
 
 
-def _gh(files: dict[str, str | None], head: str = "headsha123"):
-    """Fake `_run_cmd`: bedient `gh pr view` und `gh api .../contents/...`.
+# GitHub liefert `gh pr view --json files` bei GENAU 100 Eintraegen ab — am
+# 2026-09-16 gegen PR #537 (126 Dateien) gemessen. Der Fake bildet diese Kappe
+# nach, sonst waere der Truncation-Bypass im Test nicht reproduzierbar.
+GH_PR_VIEW_FILE_CAP = 100
 
-    `files` bildet changed path → Inhalt am PR-Head ab (None = geloescht).
+
+def _gh(
+    files: dict[str, str | None],
+    head: str = "headsha123",
+    *,
+    previous: dict[str, str] | None = None,
+    page_size: int = 100,
+):
+    """Fake `_run_cmd`: bedient die drei `gh`-Formen, die der Gate nutzt.
+
+    `files` bildet changed path → Inhalt am PR-Head ab (None = geloescht), in
+    Einfuegereihenfolge; `previous` bildet head path → Pfad vor einer
+    Umbenennung ab.
+
+    Bedient werden:
+      - `gh pr view <n> --json files` — auf GH_PR_VIEW_FILE_CAP gekappt, wie
+        das echte `gh`.
+      - `gh api repos/<repo>/pulls/<n>/files?per_page=&page=` — seitenweise,
+        `[]` hinter der letzten Seite.
+      - `gh api repos/<repo>/pulls/<n>` — Metadaten (`head.sha`).
+      - `gh api repos/<repo>/contents/<pfad>?ref=` — Dateiinhalt.
     """
+    import json
+
+    rename_map = previous or {}
+    head_paths = list(files)
+
+    def _file_entry(path: str) -> dict:
+        return {
+            "filename": path,
+            "status": "renamed" if path in rename_map else "modified",
+            "previous_filename": rename_map.get(path),
+        }
 
     async def run_cmd(*args, **kwargs):
         if args[:3] == ("gh", "pr", "view"):
-            import json
-
+            capped = head_paths[:GH_PR_VIEW_FILE_CAP]
             return json.dumps(
                 {
                     "headRefOid": head,
-                    "files": [{"path": p} for p in files],
+                    "files": [{"path": p} for p in capped],
                 }
             )
         if args[:2] == ("gh", "api"):
@@ -105,6 +137,22 @@ def _gh(files: dict[str, str | None], head: str = "headsha123"):
                     if content is None:
                         raise RuntimeError(f"gh: Not Found ({path})")
                     return content
+            if "/files" in target and "/pulls/" in target:
+                import re
+
+                match = re.search(r"[?&]page=(\d+)", target)
+                page = int(match.group(1)) if match else 1
+                start = (page - 1) * page_size
+                window = head_paths[start : start + page_size]
+                return json.dumps([_file_entry(p) for p in window])
+            if "/pulls/" in target:
+                return json.dumps(
+                    {
+                        "changed_files": len(head_paths),
+                        "head": {"sha": head},
+                        "base": {"sha": "basesha456"},
+                    }
+                )
             raise RuntimeError(f"gh: Not Found ({target})")
         raise AssertionError(f"unerwarteter gh-Aufruf: {args}")
 
@@ -401,3 +449,148 @@ async def test_agent_patch_done_is_blocked_before_the_status_commits(client, fak
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         fresh = await s.get(Task, task.id)
     assert fresh.status == "review", "409 darf den Status nicht bereits gesetzt haben"
+
+
+# ── Rex-Befunde: die Umgehungen, die die Unit-Ebene nicht sieht ──────────
+#
+# Alle Tests hier laufen ueber `guard_adr_merge` (bzw. den PATCH-Endpunkt),
+# NICHT ueber `is_decision_doc`. Genau das war Rex' Befund: der Docstring
+# versprach eine Eigenschaft, die nur die Unit-Ebene hielt.
+
+
+ADR_ELSEWHERE = "notes/decision.md"
+ADR_ELSEWHERE_BODY = "# ADR-085 — Entscheidung ausserhalb des Ordners\n\nText.\n"
+ADR_STRIPPED_BODY = "# Rueckblick ARCHIV-084\n\nDie Ueberschrift ist weg.\n"
+
+
+@pytest.mark.asyncio
+async def test_missing_head_sha_passes_loudly_not_silently(fake_redis):
+    """Kein `head.sha` in der Metadaten-Antwort: ohne Ref wird JEDE Datei
+    uebersprungen und das Dokument am Nicht-ADR-Pfad waere unsichtbar.
+
+    Dieselbe Fehlerklasse wie der Befund — ein stiller Durchlauf. Der Test
+    pinnt, dass die Pruefung stattdessen laut scheitert: Warnung + Event."""
+    _board, task = await _seed_pair()
+
+    import json
+
+    async def gh_without_sha(*args, **kwargs):
+        target = args[2]
+        if "/files" in target:
+            return json.dumps([{"filename": ADR_ELSEWHERE, "previous_filename": None}])
+        if "/pulls/" in target:
+            return json.dumps({"changed_files": 1})  # kein head.sha
+        raise AssertionError(f"unerwarteter gh-Aufruf: {args}")
+
+    with patch(
+        "app.services.activity.emit_event", new_callable=AsyncMock,
+    ) as emit:
+        await _guard(task, gh_without_sha)
+
+    assert emit.await_count == 1
+    assert emit.await_args.args[1] == "adr_gate_check_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_adr_outside_the_decision_dir_is_blocked(fake_redis):
+    """Rex A: ein PR, der NUR `notes/decision.md` mit `# ADR-085` anlegt.
+
+    Der Pfad-Praefilter liess ihn ungeprueft durch — obwohl der Inhalt die
+    Signatur traegt, also genau das ist, was das Gate schuetzen soll."""
+    _board, task = await _seed_pair()
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _guard(task, _gh({ADR_ELSEWHERE: ADR_ELSEWHERE_BODY}))
+
+    assert exc.value.status_code == 409
+    assert "ADR-085" in exc.value.detail
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        pending = (
+            await s.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.action_type == ADR_GATE_ACTION_TYPE,
+                )
+            )
+        ).all()
+    assert len(pending) == 1
+    assert pending[0].payload["documents"] == [ADR_ELSEWHERE]
+    assert pending[0].payload["digest"] == adr_digest([(ADR_ELSEWHERE, ADR_ELSEWHERE_BODY)])
+
+
+@pytest.mark.asyncio
+async def test_adr_past_the_hundred_file_cap_is_blocked(fake_redis):
+    """A2: `gh pr view --json files` kappt bei 100 Eintraegen (am 2026-09-16
+    gegen PR #537 gemessen: 126 Dateien im PR, 100 geliefert).
+
+    Ein ADR hinter Position 100 war damit unsichtbar — ein PR kann den Gate
+    also umgehen, indem er ihn in ein grosses Commit versteckt."""
+    _board, task = await _seed_pair()
+
+    files: dict[str, str | None] = {
+        f"backend/app/services/mod_{i:03d}.py": f"x = {i}\n" for i in range(105)
+    }
+    files[ADR_CANDIDATE] = ADR_BODY_V1
+    assert list(files).index(ADR_CANDIDATE) >= GH_PR_VIEW_FILE_CAP, (
+        "der ADR muss hinter der Kappe liegen, sonst prueft der Test nichts"
+    )
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _guard(task, _gh(files))
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_stripped_adr_heading_is_still_a_decision_change(fake_redis):
+    """Rex B: die erste Ueberschrift aus der `# ADR-NNN`-Form bringen macht das
+    Dokument fuer das Gate unsichtbar.
+
+    Signatur-Verlust an einem bekannten ADR-Pfad zaehlt wie eine Loeschung:
+    wer eine Entscheidung umschreibt, muss sie auch freigeben lassen."""
+    _board, task = await _seed_pair()
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _guard(task, _gh({ADR_CANDIDATE: ADR_STRIPPED_BODY}))
+
+    assert exc.value.status_code == 409
+    assert ADR_CANDIDATE in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_approval_of_the_original_text_does_not_unlock_the_stripped_one(fake_redis):
+    """Die Freigabe haengt am TEXT, nicht am Pfad: wer den freigegebenen Text
+    danach umschreibt (hier: Ueberschrift entfernt), braucht eine neue."""
+    _board, task = await _seed_pair()
+    await _approve(task, adr_digest([(ADR_CANDIDATE, ADR_BODY_V1)]))
+    await _guard(task, _gh({ADR_CANDIDATE: ADR_BODY_V1}))  # deckt Fassung 1 ab
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _guard(task, _gh({ADR_CANDIDATE: ADR_STRIPPED_BODY}))
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_adr_renamed_out_of_the_dir_without_its_heading_is_blocked(fake_redis):
+    """Umbenennung + Signatur-Strip in einem Zug: der Head-Pfad ist kein
+    ADR-Pfad mehr und traegt keine Signatur — sichtbar bleibt die Umbenennung
+    (`previous_filename`) aus derselben API-Antwort."""
+    _board, task = await _seed_pair()
+    moved = "notes/archive-084.md"
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await _guard(
+            task,
+            _gh({moved: ADR_STRIPPED_BODY}, previous={moved: ADR_CANDIDATE}),
+        )
+    assert exc.value.status_code == 409

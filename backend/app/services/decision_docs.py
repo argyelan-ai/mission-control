@@ -20,11 +20,15 @@ half-written draft without the heading is not yet a decision).
 
 Measured ground truth at the incident revision (2026-09-16): 85 `.md` files
 under `docs/decisions/`, of which 83 carry the signature. The path rule and
-the content rule currently select **the same 83** — the path prefix is
-therefore used only as a fast pre-filter, never as the verdict. Zero documents
-with the signature exist anywhere else in the repo today, so keying on the
-body is not lossy; it is the constraint that keeps the rule correct if a
-decision document ever moves.
+the content rule currently select **the same 83**, but the path rule is NOT a
+filter: the gate asks `is_decision_doc` about every changed file, because a
+`# ADR-NNN` outside `docs/decisions/` (or under a non-`.md` name) also carries
+the rule's meaning. The path matters in one further case — a file *named* like
+an ADR whose signature is gone (heading rewritten, or renamed out of the
+folder) counts as a change, the same as a deletion. Zero documents with the
+signature exist anywhere else in the repo today, so keying on the body is not
+lossy; it is the constraint that keeps the rule correct if a decision document
+ever moves.
 
 An unreadable/deleted candidate still counts as a decision document: deleting
 an ADR is exactly as decision-relevant as adding one.
