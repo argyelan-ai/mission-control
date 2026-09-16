@@ -584,6 +584,11 @@ class AgentTaskCreate(BaseModel):
     # oder Name-Slug ("owner/name" bzw. nur "name"); Aufloesung + Aktiv-Check
     # server-seitig, siehe app.services.repo_registry.resolve_repo_ref.
     repo_id: str | None = None
+    # Bewusster Ausweg aus dem Repo-Bindungs-Waechter (app/services/repo_binding.py)
+    # — dieselbe Regel wie bei `mc delegate --no-repo-reason`: eine Karte, die
+    # konkrete Datei-Fundstellen nennt, aber kein Repo/Projekt bindet, wird
+    # abgelehnt. Der Grund dokumentiert die Ausnahme an der Karte.
+    no_repo_reason: str | None = None
     is_auto_created: bool = True
     auto_reason: str | None = None
     # Pre-dispatch gating (Phase 1) — agent input on work items is overridden server-side
@@ -1310,7 +1315,7 @@ async def agent_create_task(
             )
         resolved_repo_id = chosen_repo.id
 
-    task_data = payload.model_dump(exclude={"assigned_agent_id", "depends_on", "credentials", "source_task_id", "callback_agent_id", "repo_id"})
+    task_data = payload.model_dump(exclude={"assigned_agent_id", "depends_on", "credentials", "source_task_id", "callback_agent_id", "repo_id", "no_repo_reason"})
     task_data["repo_id"] = resolved_repo_id
     # phase_id and triggered_by_deliverable_id are automatically included via model_dump
 
@@ -1333,6 +1338,19 @@ async def agent_create_task(
             board_for_default = await session.get(Board, board_id)
             if board_for_default and board_for_default.default_project_id:
                 task_data["project_id"] = board_for_default.default_project_id
+
+    # Repo-Bindungs-Waechter — dieselbe Regel wie `mc delegate`
+    # (app/services/repo_binding.py). NACH der Projekt-Vererbung, weil erst
+    # hier feststeht, ob die Karte ein Projekt traegt; vorher schluege der
+    # Waechter auf jeder Karte mit Board-Default falsch an.
+    from app.services.repo_binding import enforce_repo_binding
+
+    enforce_repo_binding(
+        title=payload.title,
+        description=payload.description,
+        repo_bound=resolved_repo_id is not None or task_data.get("project_id") is not None,
+        waiver_reason=payload.no_repo_reason,
+    )
 
     # ── Duplicate Child Guard (PRE-COMMIT) ─────────────────
     # Prevents an agent from getting two active subtasks under the same parent.
@@ -2450,6 +2468,25 @@ async def agent_update_task(
         # After the commit above the session is fresh again; the task must be
         # reloaded for subsequent setattr/update actions.
         await session.refresh(task)
+
+    # ── ADR-Gate (PRE-MUTATION) ────────────────────────────────────
+    # A card that reaches `done` merges its PR (handle_done_pr_merge further
+    # down). If that PR changes a decision document, the merge needs the
+    # operator's approval of the ADR *text* — the prose rule PR #602
+    # (2026-09-16) violated by squash-merging ADR-084 on a green code verdict.
+    #
+    # Placed BEFORE the setattr loop, not merely before the commit: recording
+    # the approval goes through `enforce_autonomy`, which COMMITS this session.
+    # Run after the mutation and that commit flushes precisely the
+    # `status=done` transition the gate refuses — the 409 would be a lie while
+    # the card sat in `done` with an unresolvable review (the silent-failure
+    # class this whole task removes). See
+    # tests/test_adr_gate.py::test_agent_patch_done_is_blocked_before_the_status_commits.
+    if updates.get("status") == "done" and old_status != "done":
+        from app.services.adr_gate import guard_adr_merge
+        await guard_adr_merge(
+            session, task, agent_id=agent.id, board_id=board_id,
+        )
 
     # Don't set blocker-specific fields on the task model (only for the approval payload)
     for k, v in updates.items():
