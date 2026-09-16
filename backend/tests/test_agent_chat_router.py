@@ -487,6 +487,63 @@ async def test_tailer_seeds_offset_skips_preexisting_content(manager, fake_broad
     assert fake_broadcast[0][2]["text"] == "new after acquire"
 
 
+def _preview_line(text: str) -> str:
+    return json.dumps(
+        {"type": "custom_message", "content": text, "timestamp": "2026-09-16T21:41:00Z"}
+    )
+
+
+async def test_tailer_preview_channel_skips_preexisting_snapshots(
+    manager, fake_broadcast, tmp_path, monkeypatch
+):
+    """Durchrauschen beim Oeffnen (Operator, 16.09.2026): der frische Tailer
+    startete den ACP-Vorschau-Kanal bei Offset 0 und broadcastete die
+    KOMPLETTE previews/-Datei — der ganze letzte Zug lief beim Oeffnen des
+    Chats noch einmal durch. Der Transkript-Tail seedet am Dateiende
+    (``test_tailer_seeds_offset_skips_preexisting_content``); der Vorschau-
+    Kanal braucht dieselbe Regel: Snapshots, die VOR dem Verbinden
+    geschrieben wurden, sind Nachlauf einer beendeten Antwort, nie eine
+    laufende."""
+    import app.services.transcript_adapters as transcript_adapters
+
+    monkeypatch.setattr(
+        transcript_adapters,
+        "adapter_for",
+        lambda _agent: transcript_adapters._omp_adapter(),
+    )
+    sessions_root = tmp_path / "omp-sessions"
+    session_file = sessions_root / "--workspace--" / "sess1.jsonl"
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text("")
+    # Produktions-Layout: Previews liegen ZWEI Ebenen unter der Sessions-
+    # wurzel (<wurzel>/<cwd>/previews/) — find_active_session ('*/*.jsonl')
+    # darf sie nie als Session-Kandidaten sehen. Genau davor schuetzt das
+    # Unterverzeichnis (omp_chat._PREVIEWS_DIRNAME).
+    pdir = sessions_root / "--workspace--" / "previews"
+    pdir.mkdir()
+    preview_file = pdir / "t1_sess1_a1b2c9.jsonl"
+    preview_file.write_text(
+        _preview_line("Nachlauf alt 1") + "\n" + _preview_line("Nachlauf alt 2") + "\n"
+    )
+
+    await manager.acquire("agent-1", session_file)
+    try:
+        await asyncio.sleep(0.1)
+        published = [d for _c, _e, d in fake_broadcast if d.get("kind") == "preview"]
+        assert published == []
+
+        with preview_file.open("a") as f:
+            f.write(_preview_line("frisch nach dem Verbinden") + "\n")
+        assert await _wait_until(
+            lambda: any(d.get("kind") == "preview" for _c, _e, d in fake_broadcast)
+        )
+    finally:
+        await manager.release("agent-1")
+
+    texts = [d["text"] for _c, _e, d in fake_broadcast if d.get("kind") == "preview"]
+    assert texts == ["frisch nach dem Verbinden"]
+
+
 async def test_tailer_dedups_repeated_uuid(manager, fake_broadcast, tmp_path):
     session_file = tmp_path / "sess1.jsonl"
     session_file.write_text("")
