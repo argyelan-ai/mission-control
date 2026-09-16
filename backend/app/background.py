@@ -523,7 +523,7 @@ async def start_vault_services(app) -> dict:
         from app.redis_client import get_redis
         _redis_for_vault = await get_redis()
         vault_activity = VaultActivity(redis=_redis_for_vault)
-        vault_git = VaultGit(vault_path=vault_path, stub_mode=True)
+        vault_git = VaultGit(vault_path=vault_path, stub_mode=False)
 
         # M.2 (2026-05-14): real Spark DGX → Qdrant wiring (replaces the
         # M.1 no-op stub). VaultEmbeddings.upsert() now embeds vault file

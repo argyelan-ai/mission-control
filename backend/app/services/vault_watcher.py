@@ -63,13 +63,37 @@ class VaultWatcher:
         self._observer = Observer()
         self._observer.schedule(handler, str(self.vault), recursive=True)
         self._observer.start()
-        logger.info("VaultWatcher started on %s", self.vault)
+        # 30s batch timer — the module contract of VaultGit ("real git
+        # add/commit with 30s batching") was never wired: stage() alone
+        # accumulates the index without ever committing. flush_if_pending
+        # holds VaultGit's lock, so overlapping ticks are serialized.
+        self._commit_task = asyncio.create_task(self._commit_loop())
 
     async def stop(self) -> None:
+        task = getattr(self, "_commit_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # Final flush on shutdown so the last writes don't wait 30s in limbo.
+        try:
+            await self.git.flush_if_pending("shutdown")
+        except Exception:  # noqa: BLE001 — shutdown must not raise
+            logger.warning("Final vault commit on shutdown failed", exc_info=True)
         if self._observer:
             self._observer.stop()
             self._observer.join(timeout=5)
             logger.info("VaultWatcher stopped")
+
+    async def _commit_loop(self) -> None:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await self.git.flush_if_pending("batched")
+            except Exception:  # noqa: BLE001 — keep the loop alive on git hiccups
+                logger.warning("Vault batch commit failed", exc_info=True)
 
     def _is_excluded(self, file_path: Path) -> bool:
         rel = str(file_path.relative_to(self.vault))
