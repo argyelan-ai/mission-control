@@ -114,13 +114,18 @@ markdown file in `docs/decisions/` without that signature (`README.md`,
 `_template.md`) is not. *Deleting* an ADR is gated like editing one, and so is
 **losing the signature**: a file *named* like an ADR (`docs/decisions/NNN-slug.md`)
 whose heading has been rewritten out of `# ADR-NNN` form, or that was renamed
-out of that folder, counts as a change too. If the signature contradicts the
-filename, the document is rejected as broken rather than silently re-targeting
-an approval.
+out of that folder, counts as a change too. The gate also reads the **base**
+revision of every file its head-side test rejects, so a document that carried
+`# ADR-NNN` *before* this PR and lost it — heading rewritten, file deleted, or
+renamed and stripped — is caught at **any** path, not only under
+`docs/decisions/`. If the signature contradicts the filename, the document is
+rejected as broken rather than silently re-targeting an approval.
 
 The file list is read page by page from GitHub, not via `gh pr view --json
 files`, which stops at 100 entries — a decision document hidden in a large
-commit was otherwise invisible to the gate.
+commit was otherwise invisible to the gate. The list is then checked against
+the PR's own `changed_files` count, so a truncated response fails loudly rather
+than letting the gate judge a prefix and report "no decision document".
 
 The approval is bound to the exact text: it stores a digest of the changed
 documents, so **editing the ADR after approving it invalidates the approval**.
