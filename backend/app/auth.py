@@ -253,7 +253,10 @@ async def require_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
+    # use_cache=False: this session is the auth dep's OWN, not the shared
+    # one — require_user releases (closes) it, and a shared instance would
+    # detach ORM objects the endpoint still re-attaches via session.add().
+    session: AsyncSession = Depends(get_session, use_cache=False),
 ):
     """Authenticate the operator and RELEASE the DB connection before the
     endpoint runs. FastAPI unwinds ``Depends(get_session)`` only after the
@@ -440,12 +443,12 @@ async def require_agent(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent-token auth; releases the DB connection before returning (see
-    require_user — the dependency otherwise pins it until after the
-    response, i.e. for the whole stream on agent-authenticated streams)."""
-    agent = await _authenticate_agent(session, credentials)
-    await release_session(session)
-    return agent
+    """Agent-token auth. NOTE: deliberately NO release_session here —
+    no agent-authenticated stream endpoint exists (nothing to heal), and
+    agent endpoints legitimately re-attach the returned Agent row via
+    session.add(agent); closing the shared session would detach it and
+    break them (InvalidRequestError)."""
+    return await _authenticate_agent(session, credentials)
 
 
 async def _authenticate_user_or_agent(
@@ -520,7 +523,8 @@ async def require_user_or_agent(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
+    # use_cache=False — see require_user.
+    session: AsyncSession = Depends(get_session, use_cache=False),
 ):
     """Dual auth with early connection release (see require_user)."""
     result = await _authenticate_user_or_agent(request, session, credentials, token)

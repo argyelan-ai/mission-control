@@ -150,15 +150,24 @@ def test_guard_no_stream_endpoint_holds_session():
 
 
 def test_guard_auth_deps_release_session():
-    """require_user/require_agent/require_user_or_agent run on every stream
-    endpoint (auth lever); they must release the connection after
-    authenticating, otherwise EVERY protected stream pins a connection."""
+    """The user-facing auth deps run on EVERY stream endpoint (auth lever);
+    they must release the connection after authenticating, otherwise every
+    protected stream pins a connection for its whole lifetime.
+
+    Exempt: require_agent — no agent-authenticated stream endpoint exists,
+    and agent endpoints re-attach the returned Agent row via
+    session.add(agent), which a closed shared session would break. If an
+    agent-authenticated stream is ever added, give require_agent the same
+    treatment as require_user (own session via use_cache=False + release).
+    """
     tree = ast.parse(AUTH.read_text())
+    exempt = {"require_agent"}
     missing = [
         fn.name
         for fn in tree.body
         if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
         and fn.name.startswith("require_")
+        and fn.name not in exempt
         and _takes_session_dep(fn)
         and not _has_release_call(fn)
     ]
