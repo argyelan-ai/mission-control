@@ -480,6 +480,12 @@ async def test_pg_stat_activity_no_open_transaction_during_stream(
                 await broadcast("mc:events:approvals", "ping-test", {"n": 1})
 
             await stream.first_frame(publish)
+            # Hold the stream OPEN well past the warning threshold so a
+            # pinned transaction has time to AGE (the production finding was
+            # age up to 405 s; here 4 s suffice to cross the 1 s line).
+            for _ in range(8):
+                await asyncio.sleep(0.5)
+                await publish()
             ages = await open_txn_ages()
             stale = [a for a in ages if a > 1.0]
             # Measurement printout for the proof protocol (pytest -s).
