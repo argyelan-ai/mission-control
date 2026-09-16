@@ -905,6 +905,19 @@ async def execute_review_decision(
                     ),
                 )
 
+            # ── ADR-Gate (PRE-MUTATION) ────────────────────────────
+            # Approving the review is the second way a card reaches `done`,
+            # and `done` merges its PR. Must run BEFORE the status assignment
+            # below — `guard_adr_merge` → `enforce_autonomy` COMMITS this
+            # session, so a gate placed after the assignment would flush the
+            # very transition it refuses (409 as a lie, card left in `done`).
+            from app.services.adr_gate import guard_adr_merge
+            await guard_adr_merge(
+                session, task,
+                agent_id=actor_agent.id if actor_agent is not None else None,
+                board_id=board_id,
+            )
+
             task.status = "done"
             task.completed_at = utcnow()
             # Follow-up (PR #109 review, 2026-07-14): dispatch_intent is a
@@ -1256,6 +1269,14 @@ async def system_finalize_task_done(
     treat this as "not handled" and fall through to a stale-state fallback
     that fights a task that's already done (Critical fix, 2026-07-15 review).
     """
+    # ── ADR-Gate (PRE-COMMIT) ──────────────────────────────────────
+    # `lock_and_set` below persists status=done on its own. A vertical whose
+    # card produced a PR that changes a decision document must not reach
+    # `done` before the operator approved that ADR text — see
+    # app/services/adr_gate.py.
+    from app.services.adr_gate import guard_adr_merge
+    await guard_adr_merge(session, task, board_id=board_id)
+
     task, _ = await lock_and_set(session, task.id, "done", actor="system")
     task.completed_at = utcnow()
     task.dispatch_intent = "root"

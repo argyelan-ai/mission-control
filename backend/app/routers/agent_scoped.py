@@ -178,6 +178,14 @@ class DelegateCreate(BaseModel):
     # (app.services.repo_registry.resolve_repo_ref) — dieselbe Haerte wie
     # die Operator-Route: unbekannt/inaktiv lehnt ab statt still zu ignorieren.
     repo_id: str | None = None
+    # Bewusster Ausweg aus dem Repo-Bindungs-Waechter (Vorfall 2026-09: drei
+    # Karten ohne --repo mit konkreten Datei-Fundstellen in der Beschreibung,
+    # Worker landete im Ad-hoc-Klon statt im System-Repo). Ohne dieses Feld
+    # bliebe dem Aufrufer bei einer Recherche-Karte, die zufaellig eine
+    # Fundstelle zitiert, nur ein Dummy-Repo — die Regel wuerde umgangen statt
+    # befolgt. Der Grund wird als TaskComment dokumentiert, damit die
+    # Ausnahme pruefbar bleibt statt spurlos zu verschwinden.
+    no_repo_reason: str | None = None
 
 
 class DelegateResponse(BaseModel):
@@ -1268,6 +1276,34 @@ async def agent_delegate_task(
             project_id = board_row.default_project_id
         with_callback = False
 
+    # Repo-Bindungs-Waechter — NACH der Projekt-Vererbung, nicht davor: erst
+    # hier steht fest, ob die Karte ueberhaupt ein Projekt erbt. Vorher
+    # greifen hiesse, auf jeder Board-Karte mit default_project_id falsch
+    # anzuschlagen.
+    #
+    # Vorfall 2026-09: drei Karten ohne --repo, deren Beschreibungen konkrete
+    # Fundstellen nannten; der Worker landete im gemeinsamen Ad-hoc-Klon und
+    # die Arbeit war wertlos. Eine Regel, die den Alltag blockiert, wird
+    # umgangen — deshalb prueft der Waechter nur Fundstellen UND fehlende
+    # Bindung, und bietet mit --no-repo-reason einen bewussten Ausweg.
+    from app.services.repo_binding import enforce_repo_binding, project_binds_repo
+
+    # Eine geerbte `project_id` allein ist KEINE Bindung: es gibt Projekte
+    # ohne GitHub-Repo, und dort landet die Arbeit im gemeinsamen Ad-hoc-Klon.
+    # Deshalb wird das Projekt geladen und auf eine wirksame Bindung geprueft.
+    inherited_project = (
+        await session.get(Project, project_id) if project_id is not None else None
+    )
+    project_bound = project_binds_repo(inherited_project)
+    repo_bound = resolved_repo_id is not None or project_bound
+
+    enforce_repo_binding(
+        title=payload.title,
+        description=payload.description,
+        repo_bound=repo_bound,
+        waiver_reason=payload.no_repo_reason,
+    )
+
     # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
@@ -1328,6 +1364,33 @@ async def agent_delegate_task(
     #   same unflushed-subtask problem. Missed the first time round (#312):
     #   HTTP 500 on `mc delegate` with no active parent task.
     await session.flush()
+
+    # Die bewusste Ausnahme dokumentieren (s.o.): sichtbar an der Karte,
+    # nicht nur im Request. Beides muss zusammenkommen — Fundstelle UND
+    # fehlende Bindung — sonst ist es keine Ausnahme und braucht keinen
+    # Eintrag.
+    if payload.no_repo_reason and not repo_bound:
+        from app.services.repo_binding import find_file_references
+
+        waived_refs = find_file_references(payload.title, payload.description)
+        waiver_note = (
+            f"Bewusst ohne Repo-Bindung: {payload.no_repo_reason}"
+            + (
+                f"\n\nNennt trotzdem Fundstellen: {', '.join(waived_refs)}"
+                if waived_refs
+                else ""
+            )
+        )
+        session.add(
+            TaskComment(
+                id=uuid.uuid4(),
+                task_id=subtask.id,
+                author_type="agent",
+                author_agent_id=agent.id,
+                content=waiver_note,
+                comment_type="repo_binding_waiver",
+            )
+        )
 
     if with_callback and current_task is not None:
         current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")

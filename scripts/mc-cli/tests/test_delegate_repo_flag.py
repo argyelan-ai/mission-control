@@ -33,6 +33,7 @@ class _Args:
             title="Sub", to="d5c1e6f0-9c2a-4b1a-8f0a-000000000001",
             description="Do the concrete thing please",
             priority=None, no_callback=False, origin_thread=None, parent=None, repo=None,
+            no_repo_reason=None,
         )
         defaults.update(kw)
         self.__dict__.update(defaults)
@@ -71,3 +72,25 @@ def test_delegate_without_repo_omits_the_field():
     _cmd_delegate(args, client, _Cfg())
     body = client.calls[0][2]
     assert "repo_id" not in body
+
+
+def test_delegate_forwards_no_repo_reason():
+    """Bewusster Ausweg aus dem Repo-Bindungs-Waechter: der Grund muss im Body
+    landen, sonst lehnt der Server die Delegation ab."""
+    client = _Client()
+    args = _Args(no_repo_reason="Reine Recherche, kein Code")
+    rc = _cmd_delegate(args, client, _Cfg())
+    assert rc == 0
+    body = client.calls[0][2]
+    assert body["no_repo_reason"] == "Reine Recherche, kein Code"
+
+
+def test_delegate_without_waiver_omits_the_field():
+    """Der Ausweg darf NICHT stillschweigend mitgeschickt werden — sonst waere
+    der Waechter wirkungslos."""
+    client = _Client()
+    args = _Args()
+    _cmd_delegate(args, client, _Cfg())
+    body = client.calls[0][2]
+    assert "no_repo_reason" not in body
+
