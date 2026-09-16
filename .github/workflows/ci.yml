@@ -171,6 +171,15 @@ jobs:
           if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }
       - name: install.sh — the advertised one-liner IS the tested path
         # Baut + bootet den vollen Stack, laeuft Migrationen, wartet auf health.
+        #
+        # BUILD_MIN_FREE_GB hier (nicht auf Job-Ebene) gesetzt: GitHub-hosted
+        # Runner haben per Doku ~14 GB frei, die lokale 15-GB-Schwelle wuerde
+        # diesen Bau also garantiert und FALSCH verweigern. 5 GB ist die
+        # ehrliche Zahl fuer das, was dieser Stack wirklich braucht. Auf
+        # Job-Ebene gesetzt wuerde die Variable ausserdem in den
+        # Lib-Test-Step unten lecken und dort Test 7 (.env-Schwelle) verdecken.
+        env:
+          BUILD_MIN_FREE_GB: "5"
         run: ./install.sh --here
       - name: Register first admin + authenticated API call
         run: |
@@ -191,11 +200,46 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # Jeder `docker build` hier ist ein Bau-Weg und bekommt denselben
+      # Preflight wie jeder lokale Weg. BUILD_MIN_FREE_GB=5 statt der lokalen
+      # 15: GitHub-hosted Runner haben per Doku ~14 GB frei, die lokale
+      # Schwelle wuerde hier garantiert und FALSCH verweigern. Bewusst pro
+      # Step statt auf Job-Ebene — job-weit gesetzt leckt die Variable in die
+      # Lib-Test-Steps unten und verdeckt dort Test 7 (.env-Schwelle).
       - name: Build backend image
-        run: docker build -t mc-backend-test ./backend
+        env:
+          BUILD_MIN_FREE_GB: "5"
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_disk_preflight
+          docker build -t mc-backend-test ./backend
+
+      # Plattenplatz-Preflight (docker/shared/disk-preflight.sh). Two lanes,
+      # because the library is sourced by bash entry points AND by scripts
+      # running under BusyBox ash — a bashism that only shows up on alpine is
+      # exactly the class the context-detect lane below exists for. The host
+      # lane runs under /bin/sh (dash on ubuntu-latest), which catches the
+      # POSIX violations; the alpine lane pins the actual musl runtime.
+      - name: Disk preflight lib tests (host /bin/sh)
+        run: sh docker/shared/test_disk_preflight.sh
+
+      - name: Disk preflight lib tests (BusyBox/musl)
+        run: |
+          docker run --rm \
+            -v "$PWD/docker/shared/disk-preflight.sh:/lib.sh:ro" \
+            -v "$PWD/docker/shared/test_disk_preflight.sh:/t.sh:ro" \
+            alpine:3.20 sh -c '
+              apk add --no-cache bash >/dev/null &&
+              DISK_PREFLIGHT_BIN=/lib.sh sh /t.sh
+            '
 
       - name: Build frontend-v2 image
-        run: docker build -t mc-frontend-v2-test ./frontend-v2
+        env:
+          BUILD_MIN_FREE_GB: "5"
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_disk_preflight
+          docker build -t mc-frontend-v2-test ./frontend-v2
 
       # PR #544 review (W1): this image was never built in CI, so the one
       # line that could make the container PERMANENTLY unhealthy
@@ -210,7 +254,12 @@ jobs:
       # PR's review thread flagged conflating "CI green" with "runtime
       # proof" as exactly the kind of gap that let W1 slip through unnoticed.
       - name: Build cdp-browser image
-        run: docker build -t mc-cdp-browser-test ./docker/cdp-browser
+        env:
+          BUILD_MIN_FREE_GB: "5"
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_disk_preflight
+          docker build -t mc-cdp-browser-test ./docker/cdp-browser
 
       # Sabotage tests for the healthcheck's WS leg against a mock CDP
       # server (real websocat, real alpine/busybox — same runtime class as
@@ -236,3 +285,16 @@ jobs:
             -v "$PWD/docker/mc-agent-base/lib/context-detect.sh:/lib.sh:ro" \
             -v "$PWD/backend/tests/test_context_detect.sh:/t.sh:ro" \
             alpine:3.20 sh -c 'apk add --no-cache bash >/dev/null && bash /t.sh /lib.sh'
+
+      # Nachbehandlung wie in jedem lokalen Bau-Weg: Cache begrenzen statt
+      # unbegrenzt wachsen lassen. Laeuft nur, wenn alle Bild-Builds oben
+      # durch sind — ein Fehlschlag bricht den Job vorher ab und laesst den
+      # Layer-Cache fuer den Retry stehen. BUILD_CACHE_KEEP_GB hier hoeher als
+      # lokal (20), weil die Runner-Platte ohnehin fluechtig ist und die
+      # Cache-Trefferquote dieses Jobs wichtiger ist als 15 GB Platz.
+      - name: Bound the build cache
+        env:
+          BUILD_CACHE_KEEP_GB: "30"
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_build_cache_cleanup
