@@ -42,6 +42,26 @@ jobs:
         if: matrix.agent_prep == true
         run: ./scripts/build-agent-images.sh --sync-only
 
+      # Plattenplatz-Preflight vor jedem Image-Build dieses Matrix-Jobs.
+      #
+      # Warum ein eigener Step und nicht im Build selbst:
+      # docker/build-push-action ist eine Action, kein Shell-Skript — die
+      # Karte verlangt den Preflight aber in JEDEM Bau-Weg, und dieser Job ist
+      # einer (hier entstehen die veroeffentlichten Images). Die Lib wird
+      # gesourct und direkt aufgerufen; `mc_disk_preflight` gibt 1 zurueck und
+      # bricht den Step damit rot ab. Die Cache-Begrenzung folgt am Ende des
+      # Jobs.
+      - name: Disk preflight
+        # BUILD_MIN_FREE_GB=5: hosted Runner haben ~14 GB frei, die lokale
+        # 15-GB-Schwelle wuerde den Release-Bau garantiert und falsch
+        # verweigern. Kein Job-weites env — diese Workflow hat keinen
+        # Lib-Test-Step, aber die Bindung an den Build-Step bleibt richtig.
+        env:
+          BUILD_MIN_FREE_GB: "5"
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_disk_preflight
+
       - name: Read pinned CLI versions
         if: matrix.agent_prep == true
         id: cliversions
@@ -81,3 +101,13 @@ jobs:
             OPENCLAUDE_VERSION=${{ steps.cliversions.outputs.openclaude }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+      # Cache begrenzen — nur nach einem erfolgreichen Push (ein Fehlschlag
+      # oben bricht den Job vorher ab, der Layer-Cache bleibt fuer den Retry).
+      # Der Runner ist fluechtig; dieser Step existiert, damit der Bau-Weg
+      # dieselbe Nachbehandlung hat wie jeder lokale Weg, nicht weil hier ein
+      # Laufzeit-Cache zu retten waere.
+      - name: Bound the build cache
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_build_cache_cleanup

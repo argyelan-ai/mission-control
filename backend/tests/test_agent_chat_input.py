@@ -17,6 +17,8 @@ import uuid
 
 import json
 
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
 
@@ -536,17 +538,50 @@ async def test_send_text_boss_multiline_uses_bracketed_paste_like_docker(monkeyp
 
 
 async def test_send_text_boss_raises_when_bridge_acks_failure(monkeypatch):
-    """Ein Nein der Bridge (tmux-Fehler) wird zum Fehler des Aufrufers —
-    der Router macht daraus 502, der Chat nimmt das Echo zurueck. Nie mehr
-    204 fuer eine Nachricht, die nirgends angekommen ist."""
+    """Ein Nein der Bridge auf JEDEM Versuch (tmux-Fehler haelt an) wird zum
+    Fehler des Aufrufers — der Router macht daraus 502, der Chat nimmt das
+    Echo zurueck. Nie mehr 204 fuer eine Nachricht, die nirgends angekommen
+    ist. Alle ``_BOSS_KEY_DELIVERY_ATTEMPTS`` Acks sind hier bewusst ein
+    Fehler, sonst faellt ``_FakeWSConn.recv()`` nach dem Leeren der Liste auf
+    ihr "ok" Default zurueck und der Retry wuerde am Ende doch noch gruen."""
     from app.services import agent_chat_input
 
-    fake_client = _FakeWSClient(acks=['{"type":"ack","ok":false,"error":"no server running","sent":0}'])
+    fail_ack = '{"type":"ack","ok":false,"error":"no server running","sent":0}'
+    fake_client = _FakeWSClient(acks=[fail_ack] * agent_chat_input._BOSS_KEY_DELIVERY_ATTEMPTS)
     monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", AsyncMock())
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
     with pytest.raises(agent_chat_input.BossDeliveryError, match="no server running"):
         await agent_chat_input.send_text(agent, "deploy the thing")
+
+    # Every bounded attempt actually ran — not just the first.
+    assert len(fake_client.connected_urls) == agent_chat_input._BOSS_KEY_DELIVERY_ATTEMPTS
+
+
+async def test_send_text_boss_retries_and_recovers_from_transient_no_server(monkeypatch):
+    """16.09.2026 incident: a message landed exactly in the window where
+    boss-host's tmux server was between `kill-server` and the fresh
+    `new-session` a restart does, got the "no server running" ack once, and
+    was dropped for good. With the bounded retry, the SAME transient failure
+    must now succeed once the tmux server comes back up within the retry
+    window — this is the sabotage-probe companion: revert the retry loop to
+    a single attempt and this test goes red for the right reason (the first,
+    still-transient ack)."""
+    from app.services import agent_chat_input
+
+    fail_ack = '{"type":"ack","ok":false,"error":"no server running on .tmux.sock","sent":0}'
+    ok_ack = '{"type":"ack","ok":true,"sent":1}'
+    fake_client = _FakeWSClient(acks=[fail_ack, fail_ack, ok_ack])
+    monkeypatch.setattr(agent_chat_input, "ws_client", fake_client)
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", sleep_mock)
+
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    await agent_chat_input.send_text(agent, "deploy the thing")
+
+    assert len(fake_client.connected_urls) == 3
+    assert sleep_mock.await_count == 2  # one delay between each of the two failed attempts
 
 
 async def test_send_text_boss_raises_when_bridge_is_down(monkeypatch):
@@ -557,6 +592,7 @@ async def test_send_text_boss_raises_when_bridge_is_down(monkeypatch):
             raise OSError("connection refused")
 
     monkeypatch.setattr(agent_chat_input, "ws_client", _DeadClient())
+    monkeypatch.setattr(agent_chat_input.asyncio, "sleep", AsyncMock())
 
     agent = _StubAgent(slug="boss", agent_runtime="host")
     with pytest.raises(agent_chat_input.BossDeliveryError):
