@@ -619,7 +619,6 @@ async def test_explicit_parent_flag_attaches_child_to_named_parent(client, fake_
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["parent_task_id"] == str(data["parent_id"])
-    assert body["warning"] is None
 
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -655,37 +654,52 @@ async def test_explicit_parent_must_exist(client, fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_root_delegation_without_active_task_warns_explicitly(client, fake_redis):
-    """DoD #3: Board Lead ohne aktive Karte, ohne --parent -> Anlage klappt,
-    aber die Antwort weist ausdruecklich auf 'kein Parent, kein Callback' hin
-    (statt nur `your_status: no_task` ohne jeden Hinweis, wie im Incident)."""
+async def test_lead_without_active_task_and_without_parent_refuses_before_create(client, fake_redis):
+    """Task f8c9cdb9, point 3: a Board Lead with no active task and no --parent
+    must be refused LOUDLY BEFORE anything is created.
+
+    Pre-fix behaviour (the orphan factory): the endpoint answered 201, wrote a
+    parentless card, and only then put a `warning` string in the response — by
+    which time the orphan already existed. That is how b7d29be3/70d6b417
+    (2026-09-11) and 8d039889 were created.
+
+    Asserts the refusal AND the absence of the card, counted in the DB — not
+    just the status code, because "no orphan" is the actual requirement.
+    """
+    from app.models.task import Task
+    from sqlmodel import func, select
+
     data = await _setup_delegate_scenario_variant(
         current_task_id_set=False, is_board_lead=True,
     )
 
-    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
-        with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
-            resp = await client.post(
-                f"/api/v1/agent/boards/{data['board_id']}/delegate",
-                json={
-                    "title": "Sub",
-                    "description": "Root delegation, no active task, no --parent",
-                    "assigned_agent_id": str(data["researcher_id"]),
-                },
-                headers={"Authorization": f"Bearer {data['boss_token']}"},
-            )
-
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["your_status"] == "no_task"
-    assert body["parent_task_id"] is None
-    assert body["warning"], "Response MUSS explizit auf fehlenden Parent/Callback hinweisen"
-    assert "Parent" in body["warning"] and "Callback" in body["warning"]
-
-    from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        subtask = await s.get(Task, uuid.UUID(body["subtask_id"]))
-        assert subtask.parent_task_id is None
+        tasks_before = (await s.exec(select(func.count()).select_from(Task))).one()
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{data['board_id']}/delegate",
+        json={
+            "title": "Sub",
+            "description": "Root delegation, no active task, no --parent",
+            "assigned_agent_id": str(data["researcher_id"]),
+        },
+        headers={"Authorization": f"Bearer {data['boss_token']}"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "keine stillschweigende Waisenkarte" in detail
+    assert "--parent" in detail, (
+        "Die Ablehnung muss den Ausweg nennen, sonst steht der Lead wieder "
+        "ohne Weg da (live incident 2026-08-06)"
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        tasks_after = (await s.exec(select(func.count()).select_from(Task))).one()
+    assert tasks_after == tasks_before, (
+        "Refusal must happen BEFORE session.add() — a card created and then "
+        "merely complained about is exactly the orphan outcome the card forbids"
+    )
 
 
 @pytest.mark.asyncio

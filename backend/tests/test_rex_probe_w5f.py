@@ -100,15 +100,24 @@ async def test_probe_sabotage_no_card_no_comment(client, fake_redis, bad_status)
 
 
 @pytest.mark.asyncio
-async def test_probe_root_path_warns_explicitly(client, fake_redis):
-    """Wurzel-Pfad: Board Lead, keine aktive Karte, kein --parent.
-    Anlage klappt UND die Antwort sagt ausdruecklich 'kein Parent, kein
-    Callback' — nicht nur `no_task`."""
+async def test_probe_root_path_is_refused_without_creating_anything(client, fake_redis):
+    """Root-Pfad: Board Lead, keine aktive Karte, kein --parent.
+
+    The W5-F probe asserted "Anlage klappt UND die Antwort warnt". Task
+    f8c9cdb9 flipped that verdict: warn-after-create IS the orphan bug — by the
+    time the caller reads the warning, the parentless card is already a row.
+    Probe shape kept (same counters, same "count in the DB" discipline), the
+    assertion inverted: refuse, and prove nothing was written.
+    """
     from app.models.task import Task
+    from sqlmodel import func, select
 
     board = await _mk_board("Root")
     _, boss_token = await _mk_agent(board, "Boss", lead=True)
     worker_id, _ = await _mk_agent(board, "Researcher", lead=False)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t_before = (await s.exec(select(func.count()).select_from(Task))).one()
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
         with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
@@ -118,15 +127,16 @@ async def test_probe_root_path_warns_explicitly(client, fake_redis):
                       "assigned_agent_id": str(worker_id)},
                 headers={"Authorization": f"Bearer {boss_token}"},
             )
-    body = resp.json()
-    assert resp.status_code == 201
-    assert body["parent_task_id"] is None
-    w = body["warning"] or ""
-    assert "Parent" in w and "Callback" in w, "Warnung nennt Parent/Callback nicht"
+
+    assert resp.status_code == 409, resp.text
+    assert "keine stillschweigende Waisenkarte" in resp.json()["detail"]
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        sub = await s.get(Task, uuid.UUID(body["subtask_id"]))
-        assert sub.parent_task_id is None
+        t_after = (await s.exec(select(func.count()).select_from(Task))).one()
+    assert t_after == t_before, (
+        "Der Wurzel-Pfad hat trotz 409 eine Karte angelegt — genau die "
+        "stillschweigende Waisenkarte, die der Task verbietet"
+    )
 
 
 # ── Rot: die drei Befunde ────────────────────────────────────────────────
