@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getToken } from "./api";
+import { getToken, sseUrls } from "./api";
 
 interface SSEOptions {
   onEvent?: (event: string, data: Record<string, unknown>) => void;
@@ -157,16 +157,13 @@ export function useSSE(url: string, options: SSEOptions = {}) {
 }
 
 export function useAgentStream(onEvent: SSEOptions["onEvent"]) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  useSSE(`${BASE_URL}/api/v1/agents/stream`, { onEvent });
+  useSSE(sseUrls.agents(), { onEvent });
 }
 
 export function useActivityStream(onEvent: SSEOptions["onEvent"]) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  useSSE(`${BASE_URL}/api/v1/activity/stream`, { onEvent });
+  useSSE(sseUrls.activity(), { onEvent });
 }
 
 export function useApprovalStream(onEvent: SSEOptions["onEvent"]) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  useSSE(`${BASE_URL}/api/v1/approvals/stream`, { onEvent });
+  useSSE(sseUrls.approvals(), { onEvent });
 }
