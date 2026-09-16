@@ -694,6 +694,14 @@ export interface Agent {
   // rendered for such an agent; `?view=terminal` stays as a deep link.
   // Absent on older backends = not headless.
   headless_chat?: boolean;
+  // Split language fields (Migration 0201) — two audiences, two settings.
+  // operator_language: what the agent writes TO the operator (mc report/
+  // msg/ask, chat replies). work_language: agent-to-agent traffic (task
+  // comments, reflections, handoffs, checklist items, deliverable text).
+  // Both default "en"; older backends before this migration won't send
+  // either key, hence optional.
+  operator_language?: string;
+  work_language?: string;
   created_at: string;
   updated_at: string;
 }
