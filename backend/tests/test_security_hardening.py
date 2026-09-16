@@ -34,6 +34,9 @@ def test_valid_comment_types():
         # Fertige Karte, offene Menschen-Entscheidung (2026-09-11):
         # `mc finish --needs-decision "<Frage>"`
         "needs_decision",
+        # Bewusste Ausnahme von der Repo-Bindung (2026-09-16):
+        # `mc delegate --no-repo-reason "<Grund>"`
+        "repo_binding_waiver",
     }
 
 
