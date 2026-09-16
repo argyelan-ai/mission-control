@@ -25,11 +25,14 @@ uebrige 66 gar nichts. Wirksam gebunden sind also nur die 3 mit `repo_id`;
 **67** nennen eine Fundstelle ohne wirksame Bindung. Genau **eine** Karte ist
 heute allein ueber ein Projekt gebunden, dessen Projekt kein GitHub-Repo
 traegt — die Korrektur blockiert auf diesem Bestand also eine Karte, nicht
-keine. Die Projekt-Vererbung rettet dabei fast nichts: von den 52 Unterkarten
-unter den 67 binden nur 2 ueberhaupt ueber ein wirksames Eltern-Repo, die
-uebrigen 50 haengen an Eltern ohne jede Bindung. Von den 13 Projekten des
-Boards tragen 9 kein GitHub-Repo, und auf diesen 9 liegen 46 Karten — der
-Grund, warum "hat ein Projekt" nicht als Bindung durchgeht.
+keine. Die Projekt-Vererbung rettet dabei nichts: von den 52 Unterkarten
+unter den 67 ist keine einzige wirksam gebunden. Nur bei 2 Unterkarten traegt
+die Elternkarte ein Registry-`repo_id` — das die Unterkarte aber nicht erbt:
+`repo_id` hat keinen Vererbungskanal, vererbt wird allein `project_id` (siehe
+`agent_scoped.py`), und von den 7 Elternkarten traegt genau 1 ein `project_id`
+auf ein Projekt ohne GitHub-Repo. Von den 13 Projekten des Boards tragen 9
+kein GitHub-Repo, und auf diesen 9 liegen 46 Karten — der Grund, warum
+"hat ein Projekt" nicht als Bindung durchgeht.
 """
 
 from __future__ import annotations
