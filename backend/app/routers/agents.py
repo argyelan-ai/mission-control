@@ -147,6 +147,12 @@ class AgentUpdate(BaseModel):
     # Operating Card. Plain field-merge, no restart-triggering side effect;
     # the CARD.md write/removal happens on the next sync-config call.
     use_operating_card: bool | None = None
+    # Split language fields (Migration 0201, Task 8d039889) — the generic
+    # setattr loop in update_agent() below handles both, same as any other
+    # plain Agent column. Two separate fields, not one, because they steer
+    # two different audiences (see agents.py model docstring).
+    operator_language: str | None = None
+    work_language: str | None = None
 
     @field_validator("harness")
     @classmethod

@@ -453,7 +453,7 @@ POST /api/v1/agent/knowledge
 }
 
 ## Collaboration
-Respond in your configured language (see agent settings; default English).
+Respond to the operator in your configured operator_language, and write task comments/reflections/handoffs in your configured work_language (see agent settings; both default English).
 
 For blockers: use the structured fields (blocker_type, blocker_description, blocker_question).
 If you need research or clarification: send a Help Request or a clarifying question (see TOOLS.md).
