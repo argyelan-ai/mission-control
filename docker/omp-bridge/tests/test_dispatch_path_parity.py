@@ -527,7 +527,7 @@ def test_acp_context_pct_is_reported_via_shared_heartbeat():
         "priority in tests/test_acp_context_pct.py"
     )
     payload_ast = ast.parse(inspect.getsource(bridge._build_heartbeat_payload))
-    assert "_get_acp_context_pct" in ast.dump(payload_ast), (
+    assert "acp_context_pct" in ast.dump(payload_ast), (
         "G5 reopened — _build_heartbeat_payload no longer consults the ACP "
         "usage_update holder; the ACP context% report is dead"
     )

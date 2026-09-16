@@ -9,10 +9,13 @@ backend/app/routers/agents.py AgentHeartbeat.context_pct
 
 The ACP path has no TUI pane, so the capture_pane scrape yields nothing there.
 Fix: run_acp_once stamps omp's `usage_update` (size = window, used = tokens in
-use) into a module holder; _build_heartbeat_payload reports it as the SAME
+use) into a CALLER-OWNED ACPContextPct holder (serve_loop passes its
+per-loop holder); _build_heartbeat_payload reports it as the SAME
 context_pct field on the SAME heartbeat when the scrape produced nothing
 (fallback — a scrape hit still wins, native/Claude behaviour unchanged).
-No second field, no second endpoint, no frontend change.
+No second field, no second endpoint, no frontend change. No module global:
+the stamping acp-reader thread outlives its run, so a late stamp can only
+ever touch the holder its run was handed — never another test's state.
 
 Sabotage probes (both directions, as real mutations of bridge.py run in a
 subprocess): killing the usage_update stamp OR the payload fallback each
@@ -49,10 +52,11 @@ AGENTS_ROUTER = os.path.join(REPO_ROOT, "backend", "app", "routers", "agents.py"
 EXPECTED_PCT = 3.5
 
 
-def _payload_with_acp_holder(capture_pane=None) -> dict:
+def _payload_with_acp_holder(capture_pane=None, holder=None) -> dict:
     """Build a heartbeat payload the way the heartbeater does (capture_pane
     None on the ACP path — the scrape reads an empty/foreign pane there)."""
-    return bridge._build_heartbeat_payload("working", capture_pane)
+    return bridge._build_heartbeat_payload(
+        "working", capture_pane, holder.get if holder is not None else None)
 
 
 def test_acp_message_sequence_reports_context_pct():
@@ -60,20 +64,20 @@ def test_acp_message_sequence_reports_context_pct():
     context% value AT THE RECEIVER FORMAT: the heartbeat payload the bridge
     POSTs to /api/v1/agent/me/heartbeat carries `context_pct` as a float in
     0-100 — same field name, same type, same bounds as poll.sh's report."""
-    bridge._set_acp_context_pct(None)
-    try:
-        outcome, _ = taa.run_adapter(taa.FIXTURES["normal"])
-        assert outcome.final_stop_reason == "end_turn"
-        payload = _payload_with_acp_holder()
-        assert "context_pct" in payload, (
-            "ACP sequence with usage_update must yield context_pct in the "
-            "heartbeat payload"
-        )
-        assert payload["context_pct"] == EXPECTED_PCT
-        assert isinstance(payload["context_pct"], float)
-        assert 0.0 <= payload["context_pct"] <= 100.0
-    finally:
-        bridge._set_acp_context_pct(None)
+    holder = bridge.ACPContextPct()
+    outcome, _ = taa.run_adapter(taa.FIXTURES["normal"], context_pct=holder)
+    assert outcome.final_stop_reason == "end_turn"
+    assert holder.get() == EXPECTED_PCT, (
+        f"usage_update must stamp the caller's holder, got {holder.get()!r}"
+    )
+    payload = _payload_with_acp_holder(holder=holder)
+    assert "context_pct" in payload, (
+        "ACP sequence with usage_update must yield context_pct in the "
+        "heartbeat payload"
+    )
+    assert payload["context_pct"] == EXPECTED_PCT
+    assert isinstance(payload["context_pct"], float)
+    assert 0.0 <= payload["context_pct"] <= 100.0
     print("PASS test_acp_message_sequence_reports_context_pct")
 
 
@@ -95,28 +99,23 @@ def test_no_usage_update_means_no_reported_value():
     """Direction 1 of the sabotage probe, event-level: an ACP sequence WITHOUT
     usage_update (acp-silent-cancel) never invents a value — the holder stays
     empty and the payload carries no context_pct."""
-    bridge._set_acp_context_pct(None)
-    try:
-        outcome, _ = taa.run_adapter(taa.FIXTURES["silent"])
-        assert outcome.final_stop_reason == "cancelled"
-        payload = _payload_with_acp_holder()
-        assert "context_pct" not in payload, (
-            "no usage_update in the stream -> no context_pct may be reported"
-        )
-    finally:
-        bridge._set_acp_context_pct(None)
+    holder = bridge.ACPContextPct()
+    outcome, _ = taa.run_adapter(taa.FIXTURES["silent"], context_pct=holder)
+    assert outcome.final_stop_reason == "cancelled"
+    assert holder.get() is None, "no usage_update -> holder must stay empty"
+    payload = _payload_with_acp_holder(holder=holder)
+    assert "context_pct" not in payload, (
+        "no usage_update in the stream -> no context_pct may be reported"
+    )
     print("PASS test_no_usage_update_means_no_reported_value")
 
 
 def test_scrape_hit_still_wins_on_the_native_path():
     """Native/Claude behaviour byte-identical: when capture_pane scrape yields
     a value it wins and the ACP holder is not consulted."""
-    bridge._set_acp_context_pct(EXPECTED_PCT)
-    try:
-        payload = _payload_with_acp_holder(lambda: "ctx: 8")
-        assert payload == {"status": "working", "context_pct": 8.0}
-    finally:
-        bridge._set_acp_context_pct(None)
+    payload = _payload_with_acp_holder(
+        lambda: "ctx: 8", holder=bridge.ACPContextPct(EXPECTED_PCT))
+    assert payload == {"status": "working", "context_pct": 8.0}
     print("PASS test_scrape_hit_still_wins_on_the_native_path")
 
 
@@ -146,10 +145,11 @@ def _run_sabotage(mut_from: str, mut_to: str) -> None:
         "sys.path[:0] = [btests, broot]\n"
         "import test_acp_adapter as taa\n"
         "import bridge\n"
-        "outcome, _ = taa.run_adapter(taa.FIXTURES['normal'])\n"
+        "holder = bridge.ACPContextPct()\n"
+        "outcome, _ = taa.run_adapter(taa.FIXTURES['normal'], context_pct=holder)\n"
         "assert outcome.final_stop_reason == 'end_turn', "
         "'sabotage must not break the run itself'\n"
-        "payload = bridge._build_heartbeat_payload('working', None)\n"
+        "payload = bridge._build_heartbeat_payload('working', None, holder.get)\n"
         "print(json.dumps({'context_pct_in_payload': "
         "'context_pct' in payload}))\n"
         "assert 'context_pct' not in payload, (\n"
@@ -181,7 +181,7 @@ def test_sabotage_usage_update_stamp_removed_makes_report_vanish():
 def test_sabotage_payload_fallback_removed_makes_report_vanish():
     """Direction 2b — remove the new payload fallback: same expectation."""
     _run_sabotage(
-        'if "context_pct" not in payload:',
+        'if "context_pct" not in payload and acp_context_pct is not None:',
         'if False:  # sabotage G5b',
     )
     print("PASS test_sabotage_payload_fallback_removed_makes_report_vanish")
@@ -207,12 +207,13 @@ def test_bridge_wiring_pinned_positive():
     )
     payload_src = ast.dump(ast.parse(
         inspect.getsource(bridge._build_heartbeat_payload)))
-    assert "_get_acp_context_pct" in payload_src, (
-        "payload builder must consult the ACP holder (G5 report path)"
+    assert "acp_context_pct" in payload_src, (
+        "payload builder must consult the injected ACP holder getter "
+        "(G5 report path)"
     )
     adapter_src = inspect.getsource(bridge.run_acp_once)
-    assert '"usage_update"' in adapter_src and "_set_acp_context_pct" in adapter_src, (
-        "run_acp_once must stamp the holder from usage_update (G5 source)"
+    assert '"usage_update"' in adapter_src and "context_pct.set" in adapter_src, (
+        "run_acp_once must stamp the caller's holder from usage_update (G5 source)"
     )
     print("PASS test_bridge_wiring_pinned_positive")
 
@@ -281,10 +282,10 @@ def _run_garbage_probe(tree_root: str) -> int:
         "    tmp = tempfile.NamedTemporaryFile('w', suffix='.ndjson', delete=False, encoding='utf-8')\n"
         "    tmp.write('\\n'.join(lines) + '\\n')\n"
         "    tmp.close()\n"
-        "    bridge._set_acp_context_pct(42.0)\n"
+        "    holder = bridge.ACPContextPct(42.0)\n"
         "    try:\n"
-        "        taa.run_adapter(Path(tmp.name))\n"
-        "        if bridge._get_acp_context_pct() != 42.0:\n"
+        "        taa.run_adapter(Path(tmp.name), context_pct=holder)\n"
+        "        if holder.get() != 42.0:\n"
         "            bites += 1\n"
         "    except Exception:\n"
         "        bites += 1  # garbage reaching the stamp logic IS the bite\n"
@@ -311,48 +312,41 @@ def test_usage_update_garbage_is_rejected_field_by_field():
     actual production handler, no copied guard expression) and must leave
     the holder at its preset value. This is the test Rex demanded: the
     guard is exercised, not restated."""
-    bridge._set_acp_context_pct(None)
-    try:
-        for upd in _garbage_cases():
-            fixture = _fixture_with_usage_update(upd)
-            bridge._set_acp_context_pct(42.0)
-            outcome, _ = taa.run_adapter(fixture)
-            assert outcome.final_stop_reason == "cancelled", (
-                f"garbage usage_update {upd!r} broke the run itself "
-                f"(stop={outcome.final_stop_reason!r})"
-            )
-            got = bridge._get_acp_context_pct()
-            assert got == 42.0, (
-                f"garbage usage_update {upd!r} changed the holder to {got!r} "
-                "(reached the stamp logic past the guard)"
-            )
-            os.unlink(fixture)
-    finally:
-        bridge._set_acp_context_pct(None)
+    for upd in _garbage_cases():
+        fixture = _fixture_with_usage_update(upd)
+        holder = bridge.ACPContextPct(42.0)
+        outcome, _ = taa.run_adapter(fixture, context_pct=holder)
+        assert outcome.final_stop_reason == "cancelled", (
+            f"garbage usage_update {upd!r} broke the run itself "
+            f"(stop={outcome.final_stop_reason!r})"
+        )
+        got = holder.get()
+        assert got == 42.0, (
+            f"garbage usage_update {upd!r} changed the holder to {got!r} "
+            "(reached the stamp logic past the guard)"
+        )
+        os.unlink(fixture)
     print("PASS test_usage_update_garbage_is_rejected_field_by_field")
 
 
 def test_usage_update_valid_values_still_stamped():
     """W1 positive control over the REAL adapter: valid usage_updates stamp
     the expected value (golden fixture ratio, boundaries 0 and 100)."""
-    bridge._set_acp_context_pct(None)
-    try:
-        for upd, expected in [
-            ({"size": 500000, "used": 17395}, 3.5),
-            ({"size": 500000, "used": 0}, 0.0),
-            ({"size": 500000, "used": 500000}, 100.0),
-        ]:
-            fixture = _fixture_with_usage_update(upd)
-            outcome, _ = taa.run_adapter(fixture)
-            assert outcome.final_stop_reason == "cancelled"
-            got = bridge._get_acp_context_pct()
-            assert got == expected, (
-                f"{upd!r} -> holder {got!r}, expected {expected!r} "
-                "(valid value did not reach the holder)"
-            )
-            os.unlink(fixture)
-    finally:
-        bridge._set_acp_context_pct(None)
+    for upd, expected in [
+        ({"size": 500000, "used": 17395}, 3.5),
+        ({"size": 500000, "used": 0}, 0.0),
+        ({"size": 500000, "used": 500000}, 100.0),
+    ]:
+        fixture = _fixture_with_usage_update(upd)
+        holder = bridge.ACPContextPct()
+        outcome, _ = taa.run_adapter(fixture, context_pct=holder)
+        assert outcome.final_stop_reason == "cancelled"
+        got = holder.get()
+        assert got == expected, (
+            f"{upd!r} -> holder {got!r}, expected {expected!r} "
+            "(valid value did not reach the holder)"
+        )
+        os.unlink(fixture)
     print("PASS test_usage_update_valid_values_still_stamped")
 
 
@@ -370,7 +364,7 @@ def test_w1_sabotage_probe_bites_on_real_adapter():
       garbage through (probe bites, red because of GARBAGE, not because of
       a missing anchor string).
     - REGRESSED (anchor block byte-identical, but an UNVALIDATED write
-      `_set_acp_context_pct(-999.0)` added right before it): >= 1 bite —
+      `context_pct.set(-999.0)` added right before it): >= 1 bite —
       the behavioural pin catches a bypass that leaves the anchor text
       intact (Rex' Regression; the copied-guard version stayed 12/12 green
       here).
@@ -393,13 +387,15 @@ def test_w1_sabotage_probe_bites_on_real_adapter():
             '            size, used = upd.get("size"), upd.get("used")\n'
             "            if (isinstance(size, int) and size > 0\n"
             "                    and isinstance(used, int) and 0 <= used <= size):\n"
-            "                _set_acp_context_pct(round(used / size * 100.0, 1))"
+            "                if context_pct is not None:\n"
+            "                    context_pct.set(round(used / size * 100.0, 1))"
         )
         assert src.count(anchor) == 1, "guard anchor not found in bridge.py"
         replacement = (
             '            size, used = upd.get("size"), upd.get("used")\n'
             "            if True:  # sabotage W1: validation guard neutralized\n"
-            "                _set_acp_context_pct(round(used / size * 100.0, 1))"
+            "                if context_pct is not None:\n"
+            "                    context_pct.set(round(used / size * 100.0, 1))"
         )
         return src.replace(anchor, replacement, 1)
 
@@ -407,7 +403,7 @@ def test_w1_sabotage_probe_bites_on_real_adapter():
         anchor = """            size, used = upd.get("size"), upd.get("used")
             if (isinstance(size, int) and size > 0"""
         assert src.count(anchor) == 1, "regression anchor not found"
-        return src.replace(anchor, """            _set_acp_context_pct(-999.0)  # regression: unvalidated write path
+        return src.replace(anchor, """            context_pct.set(-999.0)  # regression: unvalidated write path
             size, used = upd.get("size"), upd.get("used")
             if (isinstance(size, int) and size > 0""", 1)
 
