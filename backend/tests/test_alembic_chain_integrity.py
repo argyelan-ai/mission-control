@@ -39,7 +39,22 @@ in files added on this branch):
   modified files (`--diff-filter=M`) and compares drop_column-status
   between the merge-base and HEAD versions of each.
 
-**Documented, not closed** — both are honest gaps, not silent ones:
+**A second counter-check (task ea7f0769) found two more bypasses:**
+
+- ``op.execute(text("ALTER TABLE ... DROP COLUMN ..."))`` — the SQLAlchemy
+  ``text(...)`` wrapper is idiomatic for raw SQL and passed both migration
+  guards green, because it's a `Call` node, not a string literal, and
+  `ast.literal_eval` only handles literals. **Closed**: `_string_literal`
+  now unwraps one argument of a `text(...)`/`sa.text(...)` call before
+  attempting the literal-eval.
+- a `git mv` rename that also carries a drop — invisible to both
+  `--diff-filter=A` and `--diff-filter=M`, because git classifies a rename
+  as `R`, neither added nor modified, even when the content changed too.
+  **Closed** by a third guard, `test_destructive_drop_not_hidden_behind_a_rename`,
+  which follows `--diff-filter=R` pairs and compares drop_column-status
+  between the OLD path at the merge-base and the NEW path at HEAD.
+
+**Documented, still open** — honest gaps, not silent ones:
 
 - a drop reached through a helper defined in a DIFFERENT module (an
   imported function, not a local one) is invisible to the call-graph walk.
@@ -47,12 +62,19 @@ in files added on this branch):
   risks false negatives from misresolved imports being mistaken for
   guarantees; not attempted.
 - SQL built from an f-string or a variable (`op.execute(f"...{col}...")`) is
-  invisible to `_is_raw_drop_column_execute`, which only evaluates
-  string-literal arguments (`ast.literal_eval`) — a dynamic string can't be
-  evaluated without actually running the migration. Closing this fully
-  would need a much fuzzier heuristic (e.g. flag ANY non-literal argument to
+  invisible to `_string_literal`, which only evaluates string literals (and
+  one literal wrapped in `text(...)`) — a dynamic string can't be evaluated
+  without actually running the migration. Closing this fully would need a
+  much fuzzier heuristic (e.g. flag ANY non-literal argument to
   `op.execute`), which trades a hard false-negative for a soft false-positive
   rate this module doesn't yet have data to tune; not attempted.
+
+**This list is not, and cannot be, exhaustive.** Every guard above is
+pattern-matching against an open-ended space of ways to write Python and SQL
+that has the same effect — there is no way to enumerate every bypass in
+advance, only to close the ones a counter-check actually finds and be
+explicit that the search stops here, not at some assumed boundary. Treat an
+absence from this list as "not yet found", never as "verified safe".
 
 **Probes must be committed.** Every guard below diffs HEAD against the
 merge-base with `origin/main` — an uncommitted file is invisible to `git
@@ -208,6 +230,41 @@ def _modified_migration_files() -> set[str] | None:
     return _changed_migration_files("M")
 
 
+def _renamed_migration_files() -> list[tuple[str, str]] | None:
+    """(old_name, new_name) pairs for migrations renamed on this branch
+    (`git mv`, with or without further edits) since the merge-base with
+    origin/main. Returns None when origin/main can't be diffed against.
+
+    A rename is invisible to both `_new_migration_files` (`--diff-filter=A`)
+    and `_modified_migration_files` (`--diff-filter=M`): git classifies it
+    as `R`, not `A` or `M`, even when the content changed too — a `git mv`
+    that also adds a drop sails straight through both of those guards.
+    """
+    base_sha = _merge_base_sha()
+    if base_sha is None:
+        return None
+    try:
+        diff = subprocess.run(
+            [
+                "git", "diff", "--name-status", "-M",
+                f"{base_sha}...HEAD", "--", "backend/alembic/versions/",
+            ],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if diff.returncode != 0:
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pairs = []
+    for line in diff.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[0].startswith("R"):
+            continue
+        _status, old_path, new_path = parts
+        pairs.append((Path(old_path).name, Path(new_path).name))
+    return pairs
+
+
 def _file_at_merge_base(name: str) -> str | None:
     """Source of alembic/versions/<name> as it stood at the merge-base with
     origin/main, or None if it can't be resolved (no merge-base, or the file
@@ -236,13 +293,35 @@ def _is_drop_column_call(node: ast.AST) -> bool:
     )
 
 
+def _string_literal(node: ast.AST) -> str | None:
+    """Best-effort literal string value of an `op.execute(...)` argument:
+    a plain string literal, or the first argument to SQLAlchemy's
+    `text(...)` / `sa.text(...)` wrapper (the idiomatic way to pass raw SQL
+    to `op.execute`, and otherwise invisible to `ast.literal_eval`, which
+    only handles literals — a `Call` node is neither). Anything else
+    (an f-string, a variable, a different wrapper) can't be evaluated
+    statically and returns None — a documented gap, not silently ignored;
+    see the module docstring.
+    """
+    if isinstance(node, ast.Call) and (
+        (isinstance(node.func, ast.Name) and node.func.id == "text")
+        or (isinstance(node.func, ast.Attribute) and node.func.attr == "text")
+    ):
+        if not node.args:
+            return None
+        node = node.args[0]
+    try:
+        value = ast.literal_eval(node)
+    except (ValueError, TypeError):
+        return None
+    return value if isinstance(value, str) else None
+
+
 def _is_raw_drop_column_execute(node: ast.AST) -> bool:
     """True for `op.execute("ALTER TABLE ... DROP COLUMN ...")` — raw SQL has
     no `op.drop_column(...)` call for the AST walk to find, so this looks
-    inside every `op.execute(...)`'s string-literal argument(s) instead.
-    Only literal strings are inspected (an f-string or a variable can't be
-    evaluated statically) — that's a documented gap, not silently ignored;
-    see the module docstring.
+    inside every `op.execute(...)`'s string-literal argument(s) instead,
+    including one wrapped in `text(...)` (see `_string_literal`).
     """
     if not (
         isinstance(node, ast.Call)
@@ -251,11 +330,8 @@ def _is_raw_drop_column_execute(node: ast.AST) -> bool:
     ):
         return False
     for arg in node.args:
-        try:
-            value = ast.literal_eval(arg)
-        except (ValueError, TypeError):
-            continue
-        if isinstance(value, str) and _DROP_COLUMN_SQL_RE.search(value):
+        value = _string_literal(arg)
+        if value is not None and _DROP_COLUMN_SQL_RE.search(value):
             return True
     return False
 
@@ -304,6 +380,43 @@ def _calls_drop_column(source: str) -> bool:
             ):
                 stack.append(functions[node.func.id])
     return False
+
+
+def test_calls_drop_column_detects_text_wrapped_raw_sql() -> None:
+    """`op.execute(text("ALTER TABLE ... DROP COLUMN ..."))` must be caught
+    the same as the plain-string form — the `text(...)` wrapper is the
+    idiomatic way to pass raw SQL to `op.execute` and previously slipped
+    past `_is_raw_drop_column_execute`, which called `ast.literal_eval`
+    directly on the `Call` node instead of unwrapping it first (task
+    ea7f0769). Exercises the real production function on real source, not a
+    hand-built AST — a revert of the `_string_literal` unwrap turns this red
+    while every other test in this module stays green.
+    """
+    source = (
+        "from alembic import op\n"
+        "from sqlalchemy import text\n"
+        "revision = 'x'\n"
+        "down_revision = None\n"
+        "def upgrade() -> None:\n"
+        "    op.execute(text('ALTER TABLE agents DROP COLUMN legacy'))\n"
+    )
+    assert _calls_drop_column(source) is True
+
+
+def test_calls_drop_column_still_ignores_dynamic_sql() -> None:
+    """An f-string or a variable passed to `op.execute` (with or without a
+    `text(...)` wrapper) stays a documented, open gap — this must NOT flip
+    to a false positive as a side effect of unwrapping `text(...)`."""
+    source = (
+        "from alembic import op\n"
+        "from sqlalchemy import text\n"
+        "revision = 'x'\n"
+        "down_revision = None\n"
+        "def upgrade() -> None:\n"
+        "    col = 'legacy'\n"
+        "    op.execute(text(f'ALTER TABLE agents DROP COLUMN {col}'))\n"
+    )
+    assert _calls_drop_column(source) is False
 
 
 def test_destructive_migration_not_introduced_alongside_its_own_expand_step() -> None:
@@ -409,6 +522,48 @@ def test_destructive_drop_not_added_to_an_existing_migration() -> None:
             "branch to newly introduce a column drop. An already-shipped "
             "migration's behavior must not change retroactively — put the "
             "drop in a new migration instead."
+        )
+
+    assert not violations, "\n".join(violations)
+
+
+def test_destructive_drop_not_hidden_behind_a_rename() -> None:
+    """A migration renamed on this branch (`git mv`) must not also newly
+    introduce a column drop in the same change.
+
+    Same failure family as test_destructive_drop_not_added_to_an_existing_migration
+    above, reached through the one file-status git assigns that neither
+    plain-status guard (`--diff-filter=A` or `=M`) inspects: `R`. Compares
+    drop_column-status of the file's content at the OLD path/merge-base
+    against its content at the NEW path/HEAD — a rename that carries no
+    behavior change (or that already existed at the merge-base) does not
+    fire.
+
+    Skips (does not fail) when origin/main can't be diffed against, same as
+    the guards above.
+    """
+    renames = _renamed_migration_files()
+    if renames is None:
+        pytest.skip("origin/main not reachable to diff against — no branch context to guard")
+    if not renames:
+        pytest.skip("no renamed migrations on this branch")
+
+    violations = []
+    for old_name, new_name in renames:
+        new_path = VERSIONS / new_name
+        if not new_path.exists():
+            continue
+        head_source = new_path.read_text(encoding="utf-8")
+        if not _calls_drop_column(head_source):
+            continue
+        base_source = _file_at_merge_base(old_name)
+        if base_source is not None and _calls_drop_column(base_source):
+            continue  # already destructive before this branch renamed it
+        violations.append(
+            f"{old_name!r} was renamed to {new_name!r} on this branch and "
+            "newly introduces a column drop in the same change — an "
+            "already-shipped migration's behavior must not change "
+            "retroactively. Put the drop in a new migration instead."
         )
 
     assert not violations, "\n".join(violations)
