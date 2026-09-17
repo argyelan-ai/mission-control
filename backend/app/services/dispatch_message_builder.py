@@ -737,16 +737,25 @@ def _format_dispatch_message(
         f"**Board ID:** {task.board_id}",
     ]))
 
-    # Response language (mandatory). Templates/prompts are English; the
-    # per-agent `language` field steers how the agent talks to the operator.
-    # Injected at dispatch time so it covers every agent kind — template-
-    # created (no Jinja2 pass), specialized, and pre-existing fleets.
-    lang = (getattr(agent, "language", "en") or "en").lower()
-    if lang != "en":
-        _add("language", (
-            f"**Language:** Respond to your operator in `{lang}` "
-            "(comments, reports, questions). Code and commits stay English."
-        ))
+    # Response language (mandatory). Templates/prompts are English; two
+    # per-agent fields steer two DIFFERENT audiences — operator_language
+    # (what the agent writes TO the operator: mc report/msg/ask, chat
+    # replies) and work_language (agent-to-agent: task comments,
+    # reflections, handoffs, checklist items, deliverable text). Kept as
+    # two explicit, labeled lines rather than one combined sentence so an
+    # agent never has to guess which one applies to a given piece of
+    # output. Injected at dispatch time so it covers every agent kind —
+    # template-created (no Jinja2 pass), specialized, and pre-existing
+    # fleets.
+    operator_lang = (getattr(agent, "operator_language", "en") or "en").lower()
+    work_lang = (getattr(agent, "work_language", "en") or "en").lower()
+    if operator_lang != "en" or work_lang != "en":
+        _add("language", "\n".join([
+            "**Language:**",
+            f"- To your operator (`mc report`, `mc msg`, `mc ask`, chat replies): respond in `{operator_lang}`.",
+            f"- Agent-to-agent work (task comments, reflections, handoffs, checklist items, deliverable text): write in `{work_lang}`.",
+            "Code, commits and identifiers stay English regardless of either setting.",
+        ]))
 
     # On re-dispatch: show reviewer feedback prominently (mandatory)
     if ctx.feedback_context:
