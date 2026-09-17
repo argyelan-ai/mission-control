@@ -18,10 +18,55 @@ Both failure modes here broke real deploys on 2026-07-28:
 
 No database needed: the files are parsed directly, so the failure lands in the
 offending PR.
+
+**Destructive-migration detection (task 40c484c6) — closed and open gaps.**
+Three ways were found to walk a column drop past the original AST scan
+(which only looked for `op.drop_column(...)` inside `upgrade()`'s own body,
+in files added on this branch):
+
+- raw SQL — ``op.execute("ALTER TABLE ... DROP COLUMN ...")`` has no
+  ``drop_column`` call for the walk to find. **Closed**: `_calls_drop_column`
+  now also inspects string-literal arguments to every `op.execute(...)` for
+  a `DROP COLUMN` pattern (case-insensitive).
+- a drop inside a module-level helper called from `upgrade()`.
+  **Closed**: `_calls_drop_column` walks the call graph from `upgrade()`
+  into locally-defined functions it calls (transitively), not just
+  `upgrade()`'s own body.
+- a drop added to an EXISTING main migration — the original guard's
+  `--diff-filter=A` only sees files ADDED on this branch, so editing an
+  already-shipped file never triggered it. **Closed** by a second guard,
+  `test_destructive_drop_not_added_to_an_existing_migration`, which diffs
+  modified files (`--diff-filter=M`) and compares drop_column-status
+  between the merge-base and HEAD versions of each.
+
+**Documented, not closed** — both are honest gaps, not silent ones:
+
+- a drop reached through a helper defined in a DIFFERENT module (an
+  imported function, not a local one) is invisible to the call-graph walk.
+  Closing this would mean statically resolving arbitrary imports, which
+  risks false negatives from misresolved imports being mistaken for
+  guarantees; not attempted.
+- SQL built from an f-string or a variable (`op.execute(f"...{col}...")`) is
+  invisible to `_is_raw_drop_column_execute`, which only evaluates
+  string-literal arguments (`ast.literal_eval`) — a dynamic string can't be
+  evaluated without actually running the migration. Closing this fully
+  would need a much fuzzier heuristic (e.g. flag ANY non-literal argument to
+  `op.execute`), which trades a hard false-negative for a soft false-positive
+  rate this module doesn't yet have data to tune; not attempted.
+
+**Probes must be committed.** Every guard below diffs HEAD against the
+merge-base with `origin/main` — an uncommitted file is invisible to `git
+diff`, so a sabotage/counter-check probe that only exists in the working tree
+will silently pass through every one of these checks. `git add` (or commit)
+the probe file before running pytest against it, or the run proves nothing
+(cost Sparky twenty minutes chasing a "the guard doesn't fire" ghost that was
+actually an uncommitted probe, task 3f249d2b).
 """
 from __future__ import annotations
 
 import ast
+import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -30,6 +75,7 @@ import pytest
 VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 32
+_DROP_COLUMN_SQL_RE = re.compile(r"drop\s+column", re.IGNORECASE)
 
 
 def _parse() -> list[tuple[str, str, tuple[str, ...]]]:
@@ -108,23 +154,37 @@ def test_revision_ids_fit_the_version_column(
     )
 
 
-def _new_migration_files() -> set[str] | None:
-    """Filenames under alembic/versions/ that exist on HEAD but not at the
-    merge-base with origin/main — i.e. new in this branch/PR. Returns None
-    (meaning: skip the caller) when origin/main isn't available to diff
-    against, e.g. a shallow clone or a sandbox with no remote configured.
+def _merge_base_sha() -> str | None:
+    """SHA of the merge-base with origin/main, or None when it can't be
+    resolved (shallow clone with no origin/main fetched, sandbox with no
+    remote configured, etc.) — the shared "can this guard even run here"
+    check every diff-based guard in this module goes through.
     """
     try:
         merge_base = subprocess.run(
             ["git", "merge-base", "HEAD", "origin/main"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
         )
-        if merge_base.returncode != 0:
+        if merge_base.returncode != 0 or not merge_base.stdout.strip():
             return None
-        base_sha = merge_base.stdout.strip()
+        return merge_base.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _changed_migration_files(diff_filter: str) -> set[str] | None:
+    """Filenames under alembic/versions/ changed between the merge-base with
+    origin/main and HEAD, restricted to `diff_filter` (git's --diff-filter,
+    e.g. "A" for added-only, "M" for modified-only). Returns None (meaning:
+    skip the caller) when origin/main isn't available to diff against.
+    """
+    base_sha = _merge_base_sha()
+    if base_sha is None:
+        return None
+    try:
         diff = subprocess.run(
             [
-                "git", "diff", "--name-only", "--diff-filter=A",
+                "git", "diff", "--name-only", f"--diff-filter={diff_filter}",
                 f"{base_sha}...HEAD", "--", "backend/alembic/versions/",
             ],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
@@ -136,27 +196,113 @@ def _new_migration_files() -> set[str] | None:
         return None
 
 
+def _new_migration_files() -> set[str] | None:
+    """Filenames added under alembic/versions/ on this branch (not present at
+    the merge-base with origin/main)."""
+    return _changed_migration_files("A")
+
+
+def _modified_migration_files() -> set[str] | None:
+    """Filenames under alembic/versions/ that already existed at the
+    merge-base with origin/main and were edited on this branch."""
+    return _changed_migration_files("M")
+
+
+def _file_at_merge_base(name: str) -> str | None:
+    """Source of alembic/versions/<name> as it stood at the merge-base with
+    origin/main, or None if it can't be resolved (no merge-base, or the file
+    didn't exist there — e.g. a rename this diff-filter doesn't track).
+    """
+    base_sha = _merge_base_sha()
+    if base_sha is None:
+        return None
+    try:
+        show = subprocess.run(
+            ["git", "show", f"{base_sha}:backend/alembic/versions/{name}"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if show.returncode != 0:
+            return None
+        return show.stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _is_drop_column_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "drop_column"
+    )
+
+
+def _is_raw_drop_column_execute(node: ast.AST) -> bool:
+    """True for `op.execute("ALTER TABLE ... DROP COLUMN ...")` — raw SQL has
+    no `op.drop_column(...)` call for the AST walk to find, so this looks
+    inside every `op.execute(...)`'s string-literal argument(s) instead.
+    Only literal strings are inspected (an f-string or a variable can't be
+    evaluated statically) — that's a documented gap, not silently ignored;
+    see the module docstring.
+    """
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "execute"
+    ):
+        return False
+    for arg in node.args:
+        try:
+            value = ast.literal_eval(arg)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, str) and _DROP_COLUMN_SQL_RE.search(value):
+            return True
+    return False
+
+
 def _calls_drop_column(source: str) -> bool:
-    """True if upgrade() calls op.drop_column(...) anywhere in its body.
+    """True if upgrade() drops a column — directly, via raw SQL passed to
+    op.execute(...), or via a module-level helper function upgrade() calls
+    (transitively).
+
+    Walks the call graph starting at upgrade() instead of only scanning its
+    own body: a drop hidden behind a local helper — a module-level
+    `def _drop_old_columns(): op.drop_column(...)` that `upgrade()` merely
+    calls — otherwise sails through untouched, since ast.walk(upgrade_fn)
+    alone never descends into a separately-defined function.
+
+    Deliberately does NOT follow calls into imported/library code (e.g.
+    op.* itself, or a helper imported from another module) — only functions
+    defined at module level in this same file. A drop hidden behind a
+    cross-module helper is a real gap; see the module docstring.
 
     AST, not a string search: a docstring or comment mentioning
     "drop_column" (as several migrations in this repo do, to explain why
     they deliberately DON'T) must not trip this.
     """
     tree = ast.parse(source)
-    upgrade_fn = next(
-        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "upgrade"),
-        None,
-    )
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    upgrade_fn = functions.get("upgrade")
     if upgrade_fn is None:
         return False
-    for node in ast.walk(upgrade_fn):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "drop_column"
-        ):
-            return True
+
+    seen: set[str] = set()
+    stack = [upgrade_fn]
+    while stack:
+        fn = stack.pop()
+        if fn.name in seen:
+            continue
+        seen.add(fn.name)
+        for node in ast.walk(fn):
+            if _is_drop_column_call(node) or _is_raw_drop_column_execute(node):
+                return True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in functions
+                and node.func.id not in seen
+            ):
+                stack.append(functions[node.func.id])
     return False
 
 
@@ -213,3 +359,89 @@ def test_destructive_migration_not_introduced_alongside_its_own_expand_step() ->
                 )
 
     assert not violations, "\n".join(violations)
+
+
+def test_destructive_drop_not_added_to_an_existing_migration() -> None:
+    """A migration file that already existed on origin/main must not be
+    edited on this branch to newly introduce a column drop — not via
+    op.drop_column(...), not via raw SQL, not via a helper function.
+
+    This is the same failure family as
+    test_destructive_migration_not_introduced_alongside_its_own_expand_step
+    above, reached a different way: that guard only looks at files ADDED on
+    this branch (`--diff-filter=A`), so editing an already-merged migration
+    to retroactively become destructive walks straight through it — the
+    file's revision id doesn't change, nothing marks it as newly dangerous,
+    and a database that already applied the old (non-destructive) version of
+    this revision picks up the drop silently on its next `alembic upgrade
+    head`.
+
+    Compares drop_column-status at the merge-base version of the file
+    against HEAD's version, not the raw diff text — only an edit that flips
+    the file from non-destructive to destructive is a violation. A file
+    that was already destructive at the merge-base (rare, but not this
+    guard's job to re-litigate) or an edit that leaves its drop_column
+    status unchanged (e.g. a comment fix) does not fire.
+
+    Skips (does not fail) when origin/main can't be diffed against, same as
+    the guard above — see this module's docstring for what that implies in
+    CI specifically.
+    """
+    modified_files = _modified_migration_files()
+    if modified_files is None:
+        pytest.skip("origin/main not reachable to diff against — no branch context to guard")
+    if not modified_files:
+        pytest.skip("no modified migrations on this branch")
+
+    violations = []
+    for name in sorted(modified_files):
+        head_path = VERSIONS / name
+        if not head_path.exists():
+            continue  # renamed/deleted on this branch — not this guard's shape
+        head_source = head_path.read_text(encoding="utf-8")
+        if not _calls_drop_column(head_source):
+            continue
+        base_source = _file_at_merge_base(name)
+        if base_source is not None and _calls_drop_column(base_source):
+            continue  # already destructive before this branch touched it
+        violations.append(
+            f"{name} already exists on origin/main and was edited on this "
+            "branch to newly introduce a column drop. An already-shipped "
+            "migration's behavior must not change retroactively — put the "
+            "drop in a new migration instead."
+        )
+
+    assert not violations, "\n".join(violations)
+
+
+def test_ci_cannot_silently_skip_the_destructive_migration_guards() -> None:
+    """In CI, `origin/main` must be resolvable via `git merge-base` —
+    otherwise the two destructive-migration guards above take their `skip`
+    branch instead of running, and the job goes green having checked
+    nothing. That is not a hypothetical: `actions/checkout@v4` without
+    `fetch-depth: 0` fetches only the PR's merge ref, `origin/main` is never
+    present locally, and the guards skip every single time (Sparky's
+    depth-1 repro, task 3f249d2b: 205 passed / 1 skipped / job green — CI
+    reads as fully green either way).
+
+    Gated on the `CI` env var (set to `"true"` on every GitHub Actions
+    runner) rather than always running: a local checkout with no `origin`
+    remote configured at all is a legitimate, unguarded context — this test
+    only asserts that the one place the guards are supposed to have teeth
+    (the CI job) actually gives them the history to work with.
+
+    Deliberately does not merely re-skip like the guards it's protecting —
+    a skip here would be the exact same silent-disable failure one level up.
+    If this fails, the fix is the CI checkout step's fetch-depth, not this
+    test.
+    """
+    if os.environ.get("CI") != "true":
+        pytest.skip("only meaningful in CI, where origin/main must be fetched")
+
+    assert _merge_base_sha() is not None, (
+        "origin/main is not resolvable via `git merge-base` in this CI job — "
+        "the destructive-migration guards in this module will silently SKIP "
+        "instead of running. Check the checkout step has `fetch-depth: 0` "
+        "(actions/checkout@v4's default is a shallow, single-ref clone, which "
+        "never fetches origin/main at all)."
+    )
