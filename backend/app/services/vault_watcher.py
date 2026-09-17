@@ -35,6 +35,16 @@ from app.services.vault_cache import publish_vault_event
 
 logger = logging.getLogger("mc.vault_watcher")
 
+# 30s batch-commit interval for VaultGit. Named constant so tests can pin
+# the wiring without waiting a wall-clock minute (and so the interval is
+# greppable next to the loop that consumes it).
+COMMIT_INTERVAL_SECONDS = 30
+# Grace period when draining in-flight handler coroutines on shutdown.
+# Watchdog handlers do parse/frontmatter/index/embeddings work; a batch
+# commit p95 is ~54ms (measured, PR #614), so a few seconds covers
+# pathological cases without stalling teardown.
+SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 5.0
+
 
 class VaultWatcher:
     def __init__(
@@ -54,6 +64,9 @@ class VaultWatcher:
         self.redis = redis
         self._observer: Observer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # In-flight handler futures (from _schedule) — drained on shutdown
+        # so a write racing the restart is not lost (Rex finding 2).
+        self._inflight: set = set()
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -77,6 +90,23 @@ class VaultWatcher:
                 await task
             except asyncio.CancelledError:
                 pass
+        # Drain in-flight handler coroutines before the final flush.
+        # _schedule() hands work to run_coroutine_threadsafe futures; a
+        # shutdown racing an in-flight handler (embeddings/index work can
+        # take hundreds of ms) used to lose that note's git.stage() — the
+        # final flush below would run on an empty index and the write
+        # would never be committed. Await pending futures (bounded) so the
+        # fleet's last write survives a restart.
+        pending = [f for f in self._inflight if not f.done()]
+        if pending:
+            try:
+                # run_coroutine_threadsafe yields concurrent.futures.Futures —
+                # wrap them so asyncio.wait can await them on this loop.
+                wrapped = [asyncio.wrap_future(f) for f in pending]
+                await asyncio.wait(wrapped, timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
+            except Exception:  # noqa: BLE001 — shutdown must not raise
+                logger.warning("Vault shutdown drain failed", exc_info=True)
+        self._inflight.clear()
         # Final flush on shutdown so the last writes don't wait 30s in limbo.
         try:
             await self.git.flush_if_pending("shutdown")
@@ -89,7 +119,7 @@ class VaultWatcher:
 
     async def _commit_loop(self) -> None:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(COMMIT_INTERVAL_SECONDS)
             try:
                 await self.git.flush_if_pending("batched")
             except Exception:  # noqa: BLE001 — keep the loop alive on git hiccups
@@ -181,7 +211,9 @@ class _Handler(FileSystemEventHandler):
             self.watcher._handle_create_or_modify(path),
             loop,
         )
+        self.watcher._inflight.add(fut)
         fut.add_done_callback(self._log_unhandled)
+        fut.add_done_callback(lambda f, w=self.watcher: w._inflight.discard(f))
 
     @staticmethod
     def _log_unhandled(fut) -> None:

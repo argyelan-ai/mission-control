@@ -108,3 +108,82 @@ async def test_trash_paths_not_reindexed(watcher, tmp_path, services):
     _make_valid_note(trashed)
     await watcher._handle_create_or_modify(trashed)
     services["index"].upsert.assert_not_called()
+
+
+class TestCommitTimerWiring:
+    """Guards the 30s batch-commit wiring (PR #614 rework, Rex finding 1).
+
+    Rex deleted the create_task from start() and the whole suite stayed
+    green — nothing caught the timer silently disappearing again. These
+    tests pin it: no timer task, no wiring.
+    """
+
+    @pytest.mark.asyncio
+    async def test_start_spawns_commit_timer_task(self, watcher, tmp_path, services):
+        assert getattr(watcher, "_commit_task", None) is None
+        await watcher.start()
+        try:
+            task = getattr(watcher, "_commit_task", None)
+            assert task is not None, (
+                "start() did not spawn the commit timer — vault writes would "
+                "stage forever without ever committing (the original defect)"
+            )
+            assert not task.done()
+            assert watcher._commit_loop.__name__ in repr(task.get_coro())
+        finally:
+            await watcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_commit_loop_flushes_with_interval(self, watcher, monkeypatch):
+        from app.services import vault_watcher as vw_mod
+
+        calls = []
+
+        async def fake_flush(author):
+            calls.append(author)
+            return False
+
+        monkeypatch.setattr(watcher.git, "flush_if_pending", fake_flush)
+        monkeypatch.setattr(vw_mod, "COMMIT_INTERVAL_SECONDS", 0.01)
+
+        task = asyncio.create_task(watcher._commit_loop())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(calls) >= 2, (
+            "commit loop did not flush repeatedly — interval wiring broken"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stop_drains_inflight_handler_before_flush(
+        self, watcher, tmp_path, services
+    ):
+        """Shutdown must wait for in-flight handlers, else the note's
+        stage() lands after the final flush and is lost (Rex finding 2)."""
+        flush_done = []
+
+        async def slow_flush(author):
+            flush_done.append(author)
+            return True
+
+        async def slow_embeddings(*a, **k):
+            await asyncio.sleep(0.05)
+            return {"ok": True}
+
+        services["git"].flush_if_pending = AsyncMock(side_effect=slow_flush)
+        services["embeddings"].upsert = AsyncMock(side_effect=slow_embeddings)
+
+        watcher._loop = asyncio.get_running_loop()
+        note = tmp_path / "agents" / "sparky" / "drain.md"
+        _make_valid_note(note)
+        fut = asyncio.run_coroutine_threadsafe(
+            watcher._handle_create_or_modify(note), watcher._loop
+        )
+        watcher._inflight.add(fut)
+        await asyncio.sleep(0)  # let the handler start, it's now in flight
+
+        await watcher.stop()
+
+        services["git"].stage.assert_called_with(note)  # handler finished
+        assert flush_done == ["shutdown"]  # flush ran AFTER the drain
