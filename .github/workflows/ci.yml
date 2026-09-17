@@ -42,7 +42,7 @@ jobs:
       # default shallow checkout, `origin/main` isn't fetched at all, the diff
       # can't run, and the destructive-migration guards below silently SKIP
       # instead of running — exactly the CI job where they're supposed to have
-      # teeth (task 40c484c6, Sparky's depth-1 repro on task 3f249d2b: 205
+      # teeth (task 40c484c6, a depth-1 repro on task 3f249d2b: 205
       # passed / 1 skipped / job green).
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

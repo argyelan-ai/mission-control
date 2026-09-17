@@ -59,7 +59,7 @@ merge-base with `origin/main` — an uncommitted file is invisible to `git
 diff`, so a sabotage/counter-check probe that only exists in the working tree
 will silently pass through every one of these checks. `git add` (or commit)
 the probe file before running pytest against it, or the run proves nothing
-(cost Sparky twenty minutes chasing a "the guard doesn't fire" ghost that was
+(cost twenty minutes chasing a "the guard doesn't fire" ghost that was
 actually an uncommitted probe, task 3f249d2b).
 """
 from __future__ import annotations
@@ -420,7 +420,7 @@ def test_ci_cannot_silently_skip_the_destructive_migration_guards() -> None:
     branch instead of running, and the job goes green having checked
     nothing. That is not a hypothetical: `actions/checkout@v4` without
     `fetch-depth: 0` fetches only the PR's merge ref, `origin/main` is never
-    present locally, and the guards skip every single time (Sparky's
+    present locally, and the guards skip every single time (a
     depth-1 repro, task 3f249d2b: 205 passed / 1 skipped / job green — CI
     reads as fully green either way).
 
