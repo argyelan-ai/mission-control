@@ -53,6 +53,22 @@ logger = logging.getLogger("mc.docker_agent_sync")
 _HOME_HOST = os.environ.get("HOME_HOST", os.path.expanduser("~"))
 AGENTS_DIR = Path(_HOME_HOST) / ".mc" / "agents"
 
+# The compose project name EVERY `docker compose` call in this stack must
+# pass explicitly (`-p mission-control`). Without it compose derives the
+# project from the compose files' directory (settings.mc_repo_path — "the
+# checkout may have any folder name") and does not recognise the running
+# mc-agent-* containers as its own; `up -d --force-recreate` then tries to
+# CREATE the service and dies with "Conflict. The container name
+# "/mc-agent-<slug>" is already in use" while the old container keeps
+# running the old image (incident 2026-09-17: harness switch to omp
+# reported success, chat showed a black terminal, failure only a WARNING).
+# The name is not free choice: docker-compose.yml pins the default network
+# to `name: mission-control_default` and the deploy path plus docs
+# (ADR-083, scripts/stt-server/README.md) invoke with the same literal.
+# This constant is the code-side carrier of that ONE convention — the only
+# place in backend code that builds a compose command.
+COMPOSE_PROJECT_NAME = "mission-control"
+
 
 def write_reference_docs(config_dir: Path, context: dict) -> dict[str, str]:
     """Writes docs/INDEX.md + docs/<topic>.md into an agent's claude-config.
@@ -946,7 +962,7 @@ def restart_docker_agent_container(
         the existing image. Used after a same-image runtime change.
 
     force_recreate=True (Phase 15):
-        `docker compose -f docker-compose.yml -f docker/docker-compose.agents.yml up -d --force-recreate <service>`
+        `docker compose -p mission-control -f docker-compose.yml -f docker/docker-compose.agents.yml up -d --force-recreate <service>`
         Caller is responsible for running compose_renderer.write_compose_agents()
         BEFORE calling this so the new image override is on disk. 90s timeout.
 
@@ -1027,7 +1043,7 @@ def restart_docker_agent_container(
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come
         # up with no auth token (mc CLI then dies with 'MC_AGENT_TOKEN missing').
-        cmd = ["docker", "compose"]
+        cmd = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
         for env_file in (env_main, env_agents, env_shared):
             if env_file.is_file():
                 cmd.extend(["--env-file", str(env_file)])
@@ -1139,6 +1155,35 @@ def _agent_container_running(container_name: str) -> bool | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() == "true"
+
+
+def inspect_container_image(container_name: str) -> str | None:
+    """Return the image the container actually runs, None if unreadable.
+
+    Structural post-switch verification (incident 2026-09-17): a recreate can
+    succeed in the database while the CONTAINER still runs the old image —
+    the switch verdict must be provable against the running container, not
+    against what compose was expected to do. Mirrors
+    :func:`_agent_container_running`'s inspect conventions.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Config.Image}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as e:
+        logger.warning(
+            "inspect_container_image(%s): inspect failed: %s", container_name, e
+        )
+        return None
+    if result.returncode != 0:
+        return None
+    image = result.stdout.strip()
+    return image or None
 
 
 def ensure_agent_container_started(agent: Agent) -> dict[str, str]:
