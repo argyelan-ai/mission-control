@@ -18,7 +18,10 @@ Flow on success:
   8. Restart the container (force_recreate=image_change).
   9. Wait for the container to be reachable.
  10. On any failure between (5) and (9): full rollback (DB + files + image
-     overlay + container) and raise SwitchHealthCheckFailed.
+     overlay + container) and raise SwitchHealthCheckFailed — or
+     SwitchContainerStepFailed when the container step itself failed or the
+     recreated container does not run the expected image (incident
+     2026-09-17: a failed switch must never surface as success).
  11. Publish `mc:agent:{id}:terminal:remount` so the Sessions WebSocket re-mounts.
  12. Emit `agent.runtime_switched` activity event.
  13. Release the lock.
@@ -32,9 +35,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, NoReturn
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -45,9 +49,11 @@ from app.services.activity import emit_event
 from app.services.discord import send_discord_notification
 from app.services.compose_renderer import (
     detect_image_change,
+    pick_image_for_harness,
     write_compose_agents,
 )
 from app.services.docker_agent_sync import (
+    inspect_container_image,
     restart_docker_agent_container,
     sync_docker_agent_files,
     wait_for_agent_healthy,
@@ -322,6 +328,14 @@ class AgentBusyError(RuntimeSwitchError):
 
 class SwitchHealthCheckFailed(RuntimeSwitchError):
     """Post-restart health check timed out — rollback was applied."""
+
+
+class SwitchContainerStepFailed(RuntimeSwitchError):
+    """Container step of the switch failed or verified against the wrong
+    image — rollback was applied. Incident 2026-09-17: a compose recreate
+    that died on a container-name conflict left the OLD container running
+    while the switch reported success; this verdict makes that state a
+    failed switch instead of a warning."""
 
 
 class RuntimeSwitchLockTimeout(RuntimeSwitchError):
@@ -610,7 +624,8 @@ async def switch_agent_runtime(
         RuntimeIncompatibleError: target runtime is disabled.
         AgentBusyError: agent has current_task_id and force is False.
         RuntimeSwitchLockTimeout: another switch is currently running.
-        SwitchHealthCheckFailed: post-restart health check timed out (rollback applied).
+        SwitchContainerStepFailed: container step failed or the recreated
+            container does not run the expected image (rollback applied).
     """
     started_at = time.monotonic()
     _ensure_agent_switchable(agent)
@@ -618,7 +633,6 @@ async def switch_agent_runtime(
     new_runtime = await session.get(Runtime, new_runtime_id)
     if new_runtime is None:
         raise RuntimeNotFoundError(f"Runtime {new_runtime_id} not found.")
-
     # ADR-064: a host agent with an adapter switches in place. The reload is
     # strictly sequential (kill → re-render agent.env → restart the single
     # session), so it never creates a parallel instance — the single_instance
@@ -950,6 +964,29 @@ async def switch_agent_runtime(
         health: dict[str, Any] = {}
         restart_failed = False
         restart_error: str | None = None
+
+        async def _fail_container_step(reason: str) -> NoReturn:
+            """Incident 2026-09-17 verdict: a container step that fails or
+            cannot prove the new image must produce a FAILED switch, never a
+            success-with-warning. The recreate dying left the OLD container
+            running while DB/config already said the new harness — the exact
+            lying state that showed up as a black terminal. Rollback restores
+            the binding that matches the still-running container."""
+            await _rollback(
+                session, agent, snapshot_old_runtime_id, image_change,
+                old_harness=snapshot_old_harness, old_model=snapshot_old_model,
+            )
+            await _emit_failure_event(
+                session, agent, old_runtime, new_runtime,
+                reason=reason,
+                elapsed_ms=int((time.monotonic() - started_at) * 1000),
+            )
+            await publish_switch_progress(agent.id, "rolled_back", error=reason)
+            raise SwitchContainerStepFailed(
+                f"Container-Schritt nach Switch fehlgeschlagen ({reason}) "
+                f"— Rollback ausgefuehrt."
+            )
+
         if skip_reason is None:
             await publish_switch_progress(agent.id, "restarting")
             restart_result = restart_docker_agent_container(
@@ -958,12 +995,20 @@ async def switch_agent_runtime(
                 respawn_window_only=(not image_change and effective_new_harness != "omp"),
             )
             status = restart_result.get("status", "")
+            if status.startswith("error") and image_change:
+                # A failed RECREATE is a failed switch (incident 2026-09-17):
+                # the old container keeps running the old image while DB/config
+                # already point at the new harness. Unlike the same-image
+                # restart failure below (Task #26 e), there is no state in
+                # which "switch committed + old container" is truthful.
+                await _fail_container_step(f"container recreate failed: {status}")
             if status.startswith("error"):
-                # Task #26 (e) — the restart COMMAND itself failing does not
-                # invalidate the switch: the DB/config already point at the
-                # new runtime, only the container bounce needs a retry.
-                # Report it instead of rolling back and skip the (pointless)
-                # health probe of a container we never restarted.
+                # Task #26 (e) — the same-image restart COMMAND itself failing
+                # does not invalidate the switch: the DB/config already point
+                # at the new runtime, the container still runs the same image,
+                # only the bounce needs a retry. Report it instead of rolling
+                # back and skip the (pointless) health probe of a container we
+                # never restarted.
                 restart_failed = True
                 restart_error = f"container restart failed: {status}"
                 logger.warning(
@@ -971,6 +1016,43 @@ async def switch_agent_runtime(
                     agent.name, status,
                 )
             else:
+                # Step 8.5 — prove the switch, do not trust it. After a
+                # recreate, compare the image the container ACTUALLY runs
+                # against the one the new harness requires; a mismatch means
+                # the switch failed whatever the database says.
+                #
+                # expected_image is None only when no image resolves for the
+                # target — and that cannot happen on this path:
+                #   * every harness of the cli-bridge switch matrix
+                #     (claude/openclaude/omp/kimi) maps to a concrete image
+                #     in HARNESS_IMAGES;
+                #   * host-only harnesses (hermes/grok/jarvis) leave through
+                #     the host path above and never reach the container step;
+                #   * the legacy NULL-harness arm (pick_image_for_runtime)
+                #     maps every runtime_type that runs in a container to a
+                #     concrete image; grok/hermes runtimes belong to agents
+                #     that postdate the harness column and always carry it,
+                #     so they cannot fall into the NULL arm.
+                # A None here would mean "verification skipped" — say that,
+                # never "the health probe covers it": liveness proves the
+                # process runs, not WHICH image it runs.
+                if image_change:
+                    expected_image = pick_image_for_harness(
+                        effective_new_harness, new_runtime
+                    )
+                    if expected_image:
+                        running_image = await asyncio.to_thread(
+                            inspect_container_image,
+                            restart_result.get("container", ""),
+                        )
+                        # An unreadable inspect (None) proves nothing either
+                        # way — it is not a mismatch and not a pass.
+                        if running_image is not None and running_image != expected_image:
+                            await _fail_container_step(
+                                f"image verification failed: container runs "
+                                f"{running_image!r}, expected {expected_image!r}"
+                            )
+
                 # Step 9 — wait for container to be reachable.
                 # D-12: respawn_mode delegates to tmux capture-pane polling instead of
                 # docker inspect, matching the respawn restart path above.
