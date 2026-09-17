@@ -139,7 +139,7 @@ def test_force_recreate_cmd_carries_project_flag(tmp_path, monkeypatch):
     (tmp_path / "docker" / "docker-compose.agents.yml").write_text("services: {}\n")
     monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
 
-    agent = Agent(name="Sparky", agent_runtime="cli-bridge")
+    agent = Agent(name="d035a498-switch-verdict", agent_runtime="cli-bridge")
 
     with patch("subprocess.run") as run_mock:
         run_mock.return_value.returncode = 0

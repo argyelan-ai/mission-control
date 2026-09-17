@@ -65,8 +65,10 @@ AGENTS_DIR = Path(_HOME_HOST) / ".mc" / "agents"
 # The name is not free choice: docker-compose.yml pins the default network
 # to `name: mission-control_default` and the deploy path plus docs
 # (ADR-083, scripts/stt-server/README.md) invoke with the same literal.
-# This constant is the code-side carrier of that ONE convention — the only
-# place in backend code that builds a compose command.
+# This constant is the code-side carrier of that convention. It is NOT the
+# only compose build site — backend/tests/test_compose_project_flag.py walks
+# every `docker compose` argv in backend/ and fails when a site skips `-p`,
+# so a second call site cannot silently repeat the incident.
 COMPOSE_PROJECT_NAME = "mission-control"
 
 

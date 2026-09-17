@@ -1019,9 +1019,23 @@ async def switch_agent_runtime(
                 # Step 8.5 — prove the switch, do not trust it. After a
                 # recreate, compare the image the container ACTUALLY runs
                 # against the one the new harness requires; a mismatch means
-                # the switch failed whatever the database says. Unreadable
-                # (None) is NOT a mismatch — the health probe below stays the
-                # safety net for that case.
+                # the switch failed whatever the database says.
+                #
+                # expected_image is None only when no image resolves for the
+                # target — and that cannot happen on this path:
+                #   * every harness of the cli-bridge switch matrix
+                #     (claude/openclaude/omp/kimi) maps to a concrete image
+                #     in HARNESS_IMAGES;
+                #   * host-only harnesses (hermes/grok/jarvis) leave through
+                #     the host path above and never reach the container step;
+                #   * the legacy NULL-harness arm (pick_image_for_runtime)
+                #     maps every runtime_type that runs in a container to a
+                #     concrete image; grok/hermes runtimes belong to agents
+                #     that postdate the harness column and always carry it,
+                #     so they cannot fall into the NULL arm.
+                # A None here would mean "verification skipped" — say that,
+                # never "the health probe covers it": liveness proves the
+                # process runs, not WHICH image it runs.
                 if image_change:
                     expected_image = pick_image_for_harness(
                         effective_new_harness, new_runtime
@@ -1031,6 +1045,8 @@ async def switch_agent_runtime(
                             inspect_container_image,
                             restart_result.get("container", ""),
                         )
+                        # An unreadable inspect (None) proves nothing either
+                        # way — it is not a mismatch and not a pass.
                         if running_image is not None and running_image != expected_image:
                             await _fail_container_step(
                                 f"image verification failed: container runs "
