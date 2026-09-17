@@ -128,6 +128,30 @@ jobs:
           OPENAI_MODEL: ci-test-model
         run: python3 -m pytest tests/ -q
 
+  mc-cli:
+    name: mc-cli Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # The suite is stdlib-only besides pytest (task 234, 2026-09-17:
+      # 234 test functions / 245 collected items, 245 passed in <1s under
+      # CI-like conditions — fresh clone, empty HOME, no MC_* env, no
+      # backend, no ~/.mc). tests/conftest.py redirects MC_CONTEXT_ENV_PATH
+      # per test, so the lane never touches a host-shared context file, and
+      # every HTTP client is mocked or a local stub server — no services
+      # needed. Blocking from day one: the suite measured 100% green before
+      # the lane was switched on.
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run mc-cli tests
+        run: python3 -m pytest scripts/mc-cli/tests -q --tb=short
+
   frontend-v2:
     name: Frontend Checks
     runs-on: ubuntu-latest
