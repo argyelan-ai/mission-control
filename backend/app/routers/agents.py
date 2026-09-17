@@ -1003,6 +1003,7 @@ async def update_agent(
             RuntimeIncompatibleError,
             RuntimeNotFoundError,
             RuntimeSwitchLockTimeout,
+            SwitchContainerStepFailed,
             SwitchHealthCheckFailed,
         )
         if do_runtime_switch:
@@ -1038,6 +1039,11 @@ async def update_agent(
         except RuntimeSwitchLockTimeout as e:
             raise HTTPException(status_code=409, detail=str(e))
         except SwitchHealthCheckFailed as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except SwitchContainerStepFailed as e:
+            # Incident 2026-09-17: a failed container step (recreate error,
+            # wrong image after recreate) is a FAILED switch — the operator
+            # must get an error verdict, not a 200 with a warning field.
             raise HTTPException(status_code=503, detail=str(e))
         await session.refresh(agent)
     elif harness_change_present and new_harness and agent.runtime_id is None:
