@@ -1949,11 +1949,27 @@ class ChatTailerManager:
                     )
                     if resolved != preview_file_path:
                         preview_file_path = resolved
-                        preview_file_state = (
-                            {"path": resolved, "offset": 0, "buffer": b""}
-                            if resolved is not None
-                            else None
-                        )
+                        if resolved is None:
+                            preview_file_state = None
+                        else:
+                            # Am Dateiende einsteigen, nicht bei Offset 0:
+                            # der frische Tailer (erster Client nach einer
+                            # Pause) darf die Snapshots der LETZten Antwort
+                            # nicht nachspielen — sie sind Nachlauf einer
+                            # beendeten Antwort, und beim Oeffnen rauschte
+                            # der komplette Puffer durch (Operator-Befund
+                            # 16.09.2026). Dieselbe Regel wie der Transkript-
+                            # Tail (``initial_offset`` in ``acquire``). Die
+                            # naechste Snapshot-Zeile eines laufenden Zugs
+                            # ist ein VOLLES Bild (replace-me-Slot) und
+                            # stellt den Stand ohne Verzoegerung wieder her.
+                            try:
+                                size = (await asyncio.to_thread(resolved.stat)).st_size
+                            except OSError:
+                                size = 0
+                            preview_file_state = {
+                                "path": resolved, "offset": size, "buffer": b"",
+                            }
                     if preview_file_state is not None:
                         p_events = await asyncio.to_thread(
                             _read_preview_channel, preview_file_state
