@@ -30,8 +30,25 @@ logger = logging.getLogger("mc.watchdog")
 # no agent turn and no non-system comment for this long is reported to the
 # Board Lead — never auto-moved. One notify per silent phase (DB, not Redis
 # TTL: a 1h key is what stacked identical watchdog_notify comments overnight).
+#
+# The threshold is per status, not an exception list: the status already
+# carries the intent ("waiting" = parked on purpose, "in_progress" = someone
+# should be working), so a deliberately parked card only alerts once the
+# park itself looks forgotten. A whitelist ("never alert on waiting") would
+# silence genuinely forgotten parked cards forever.
 SILENT_CARD_STATUSES = ("in_progress", "waiting")
-SILENT_CARD_THRESHOLD_MINUTES = 30
+SILENT_CARD_THRESHOLD_MINUTES = {
+    "in_progress": 30,
+    "waiting": 12 * 60,  # parked ≠ forgotten: alert after half a day
+}
+# A watched status missing from the map falls back to the STRICTEST
+# threshold in the map, never to "never alert": forgetting to add a status
+# must not re-create the whitelist through the back door. Worst case of the
+# fallback is an over-eager alert — loud, and a human sees it. A
+# quiet default would be the exact failure mode this check exists to catch.
+SILENT_CARD_FALLBACK_THRESHOLD_MINUTES = min(
+    SILENT_CARD_THRESHOLD_MINUTES.values()
+)
 
 # Second stage (_check_lead_notify_escalations below): a stage-1 lead
 # message that got NO lead reaction for this long is reported to the
@@ -1334,8 +1351,10 @@ class TaskMonitorMixin:
     async def _check_silent_cards(self, session: AsyncSession) -> None:
         """Report silent in_progress/waiting cards to the Board Lead.
 
-        A card is silent when, for SILENT_CARD_THRESHOLD_MINUTES, there has
-        been neither an agent turn on this card nor a non-system comment.
+        A card is silent when, for its status's threshold in
+        ``SILENT_CARD_THRESHOLD_MINUTES`` (a status missing from the map
+        falls back to the strictest listed threshold), there has been
+        neither an agent turn on this card nor a non-system comment.
         The watchdog posts exactly one ``watchdog_notify`` per silent phase
         (until real activity resumes) and does **not** change status.
 
@@ -1366,9 +1385,11 @@ class TaskMonitorMixin:
             return
 
         now = utcnow()
-        threshold = timedelta(minutes=SILENT_CARD_THRESHOLD_MINUTES)
 
         for task in candidates:
+            threshold = timedelta(minutes=SILENT_CARD_THRESHOLD_MINUTES.get(
+                task.status, SILENT_CARD_FALLBACK_THRESHOLD_MINUTES,
+            ))
             if not task.board_id:
                 continue
             if task.review_decision == "hold":
