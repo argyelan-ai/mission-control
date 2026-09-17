@@ -1041,6 +1041,53 @@ def test_preview_channel_resolves_the_newest_preview_file(tmp_path):
     assert preview_channel(session) == new
 
 
+def test_preview_channel_binds_to_the_sessions_own_file(tmp_path):
+    """Juengste Datei GEWINNT nur unter den eigenen: der Preview-Dateiname
+    traegt die Session-ID (``<ts>_<sessionId>_<uniq>.jsonl``,
+    ``acp_chat_events.PreviewEventSink``) — dieselbe ID, die auch den
+    Transkript-Dateinamen traegt (``ChatEventSink``). Eine fremde, juengere
+    Datei einer ANDEREN Session darf nie zum Kanal werden."""
+    import os
+    import time
+
+    session = tmp_path / "--workspace--" / "s1.jsonl"
+    session.parent.mkdir()
+    session.write_text("{}\n")
+    pdir = session.parent / "previews"
+    pdir.mkdir()
+    own = pdir / "t1_s1_a1b2c9.jsonl"
+    newer_foreign = pdir / "t2_s2_ffffff.jsonl"
+    own.write_text("{}\n")
+    newer_foreign.write_text("{}\n")
+    now = time.time()
+    os.utime(own, (now - 60, now - 60))
+    os.utime(newer_foreign, (now, now))
+    assert preview_channel(session) == own
+
+
+def test_preview_channel_never_resolves_a_foreign_sessions_file(tmp_path):
+    """Der Widerspruch im Sessions-Chat (Operator-Befund, 16.09.2026): der
+    Container-Neustart legte eine NEUE, leere Session an — der Verlauf zeigte
+    „No messages yet", waehrend LIVE PREVIEW den letzten Zug VOR dem
+    Neustart nachspielte. ``preview_channel`` waehlte die juengste Datei in
+    ``previews/``, ohne sie an die Session zu binden. Ohne Treffer fuer die
+    eigene Session gibt es keinen Kanal — fail-closed, eine Waise ohne
+    zugehoerige Antwort ist eine Luege."""
+    import os
+    import time
+
+    session = tmp_path / "--workspace--" / "s-new.jsonl"
+    session.parent.mkdir()
+    session.write_text("{}\n")
+    pdir = session.parent / "previews"
+    pdir.mkdir()
+    foreign = pdir / "t1_s-old_a1b2c9.jsonl"
+    foreign.write_text("{}\n")
+    now = time.time()
+    os.utime(foreign, (now, now))
+    assert preview_channel(session) is None
+
+
 def test_preview_channel_is_fail_closed_without_a_previews_dir(tmp_path):
     """Native Session, alter Stand, leerer Ordner — kein Kanal, kein Fehler."""
     session = tmp_path / "--workspace--" / "s1.jsonl"

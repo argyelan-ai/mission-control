@@ -269,17 +269,36 @@ def preview_channel(session_path: Path) -> Path | None:
     (Folge-PR zu #471) NICHT mehr in die Transkript-JSONL, sondern in eine
     Schwesterdatei unter ``previews/``. Diese Funktion leitet aus dem Pfad
     der getailten Transkript-Session die zugehoerige Vorschau-Datei her —
-    das juengste ``*.jsonl`` im ``previews/``-Ordner desselben cwd-Ordners.
+    das juengste ``*.jsonl`` im ``previews/``-Ordner desselben cwd-Ordners,
+    das DIESE Session traegt.
 
-    Fail-closed: fehlt der Ordner oder ist er leer (native Sitzung, alter
-    Stand), gibt es keine Vorschau ueber diesen Kanal — der Pane-Strom
-    bleibt unberuehrt.
+    Session-Bindung (Operator-Befund 16.09.2026): Transkript
+    (``<ts>_<sessionId>.jsonl``, ``ChatEventSink``) und Vorschau
+    (``<ts>_<sessionId>_<uniq>.jsonl``, ``PreviewEventSink``) tragen
+    dieselbe ACP-Session-ID. Ohne Bindung gewann nach einem Container-
+    neustart die juengste FREMDE Datei einer beendeten Session — der Verlauf
+    zeigte die neue, leere Session („No messages yet"), waehrend LIVE
+    PREVIEW den letzten Zug VOR dem Neustart nachspielte. Zwei Quellen, die
+    auseinanderlaufen. Sichtbarkeitsregel, die dadurch entsteht: eine
+    Vorschau existiert nur zu einer Session, deren Transkript der Tailer
+    gerade liest; beim Oeffnen eines ruhenden Agenten gibt es keine.
+
+    Fail-closed: fehlt der Ordner, ist er leer oder traegt keine Datei
+    diese Session (native Sitzung, alter Stand), gibt es keine Vorschau
+    ueber diesen Kanal — der Pane-Strom bleibt unberuehrt.
     """
     pdir = session_path.parent / _PREVIEWS_DIRNAME
+    stem = session_path.stem
+    # Der Transkript-Stem ist ``<ts>_<sessionId>`` — der Zeitstempel enthaelt
+    # keinen Unterstrich, die Session-ID ist also der Rest nach dem ersten.
+    session_id = stem.split("_", 1)[1] if "_" in stem else stem
+    own_file = re.compile(rf"(?:^|_){re.escape(session_id)}(?:_|\.)")
     try:
         newest: Path | None = None
         newest_mtime = -1.0
         for candidate in pdir.glob(f"*{_PREVIEW_SUFFIX}"):
+            if own_file.search(candidate.name) is None:
+                continue
             try:
                 mtime = candidate.stat().st_mtime
             except OSError:
