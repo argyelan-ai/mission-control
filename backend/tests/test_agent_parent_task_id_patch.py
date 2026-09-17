@@ -322,6 +322,83 @@ async def test_ancestor_cycle_refused(client, fake_redis):
 
 
 @pytest.mark.asyncio
+async def test_deep_ancestor_chain_refused_no_depth_bound(client, fake_redis):
+    """A chain DEEPER than the old 64-step cap must still be refused (task b410d705).
+
+    The cap made this guard unsound instead of safe: a 70-link chain was walked
+    only to step 64, the loop fell through, and the attach was WRITTEN — the
+    cycle landed in the DB (200, observed on the pre-fix head). Depth is the
+    wrong axis anyway: the walk carries `_seen`, every node has exactly one
+    parent pointer, so a revisit can only mean the chain loops and the walk
+    terminates on its own. This test fails the moment a depth bound is put
+    back in front of the set (it is the reintroduction detector — the whole
+    point of the change, so it is not just "a test for the fix").
+    """
+    board = await _mk_board("DeepChain")
+    lead_id, lead_token = await _mk_agent(board, "Boss", lead=True)
+
+    root = await _mk_task(board, "L0", assignee=lead_id)
+    node = root
+    for level in range(1, 70):
+        node = await _mk_task(board, f"L{level}", assignee=lead_id, parent=node)
+    deepest = node
+
+    with _BROADCAST_PATCH:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board}/tasks/{root}",
+            headers={"Authorization": f"Bearer {lead_token}"},
+            json={"parent_task_id": str(deepest)},
+        )
+
+    assert resp.status_code == 409, (
+        f"70er-Kette muss abgelehnt werden (Status {resp.status_code}) — "
+        f"ein Depth-Cap laesst sie durch und schreibt den Zyklus"
+    )
+    assert "Vorfahre" in resp.json()["detail"]
+    parent, _ = await _read_parent(root)
+    assert parent is None, "der Zyklus darf nicht geschrieben worden sein"
+
+
+@pytest.mark.asyncio
+async def test_preexisting_cycle_in_chain_refused_with_repair_hint(client, fake_redis):
+    """Damaged data must raise, not silent-pass (task b410d705).
+
+    Pre-fix the walk hit the second visit, `break`-ed, and then wrote the
+    attach — 200 with the row changed. A chain that already loops is exactly
+    where silent passage is worst: the new edge grafts a third card onto the
+    loop, and every other hierarchy walk in the codebase assumes no loop
+    exists. The refusal has to name the repair, not just say no.
+    """
+    board = await _mk_board("PreCycle")
+    lead_id, lead_token = await _mk_agent(board, "Boss", lead=True)
+
+    t = await _mk_task(board, "T", assignee=lead_id)
+    p = await _mk_task(board, "P", assignee=lead_id)
+    q = await _mk_task(board, "Q", assignee=lead_id, parent=p)
+    # Fabricated damaged state that no endpoint would produce: P -> Q -> P.
+    from app.models.task import Task
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        p_row = await s.get(Task, p)
+        p_row.parent_task_id = q
+        s.add(p_row)
+        await s.commit()
+
+    with _BROADCAST_PATCH:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board}/tasks/{t}",
+            headers={"Authorization": f"Bearer {lead_token}"},
+            json={"parent_task_id": str(p)},
+        )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "Zyklus" in detail, "der Befund muss den Zyklus benennen"
+    assert "repariert" in detail, "die Meldung muss die Reparatur nennen"
+    parent, _ = await _read_parent(t)
+    assert parent is None, "in kaputte Daten darf nicht hineingeschrieben werden"
+
+
+@pytest.mark.asyncio
 async def test_detach_via_explicit_null_makes_the_card_a_root_again(client, fake_redis):
     """`{"parent_task_id": null}` must detach, not silently no-op.
 

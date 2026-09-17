@@ -2197,12 +2197,27 @@ async def agent_update_task(
                 ),
             )
         # Ancestor-cycle guard: walk the proposed parent's chain upward and
-        # refuse if this task is anywhere in it. Bounded independently of the
-        # data so a pre-existing cycle in the DB cannot hang the request.
+        # refuse if this task is anywhere in it.
+        #
+        # NO depth bound (task b410d705). A `_depth < 64` cap used to sit here;
+        # it made the check unsound rather than safe: a chain deeper than the
+        # cap was walked only partially, the loop fell through, and the attach
+        # was WRITTEN — the exact corruption this guard exists to prevent (a
+        # 70-link chain returned 200 and stored the cycle). Depth is also the
+        # wrong axis: `_seen` already bounds the walk at the number of
+        # DISTINCT tasks above the parent, because every node has exactly one
+        # parent pointer and a revisit can only mean the chain loops. So the
+        # loop below always terminates on its own — the set is the bound, and
+        # it is the tight one (a chain that is genuinely 10^4 deep is walked
+        # in full, a cycle is caught at the first repeat).
+        #
+        # A revisit therefore means the DATA is already damaged. That is not a
+        # "stop walking and carry on" case: the write would graft this task
+        # onto a loop every other hierarchy walk in the codebase assumes
+        # cannot exist. Refuse, and say what to do about it.
         _seen: set[uuid.UUID] = {_new_parent.id}
         _cursor_id = _new_parent.parent_task_id
-        _depth = 0
-        while _cursor_id is not None and _depth < 64:
+        while _cursor_id is not None:
             if _cursor_id == task.id:
                 raise HTTPException(
                     status_code=409,
@@ -2213,13 +2228,22 @@ async def agent_update_task(
                     ),
                 )
             if _cursor_id in _seen:
-                break  # pre-existing cycle in the data — stop walking
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"parent_task_id: Die Parent-Kette von {_new_parent.id} "
+                        f"enthaelt bereits einen Zyklus — Task {_cursor_id} taucht "
+                        f"darin zweimal auf. Dieser Datenstand muss erst repariert "
+                        f"werden (parent_task_id der beteiligten Karte loesen, "
+                        f"z.B. per PATCH {{\"parent_task_id\": null}}); vorher kann "
+                        f"keine neue Verbindung gesetzt werden."
+                    ),
+                )
             _seen.add(_cursor_id)
             _cursor = await session.get(Task, _cursor_id)
             if _cursor is None:
                 break
             _cursor_id = _cursor.parent_task_id
-            _depth += 1
 
     # ── Review safeguard: detect contradiction ──────────────────────────
     # If the reviewer sets "in_progress" but its last comment says "Approved"
