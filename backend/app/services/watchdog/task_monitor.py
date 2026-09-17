@@ -44,6 +44,12 @@ LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES = 30
 # louder is ever told (incident 2026-09-12 07:16: 81 minutes, no reaction).
 LEAD_NOTIFY_COMMENT_TYPES = ("watchdog_notify", "blocker_lead_notify")
 
+# Retract path (candidate A, 2026-09-17): every comment type that can open a
+# silent-card alert (stage 1 AND stage 2). One shared retraction check covers
+# both — a card that moves again closes whichever alert is still open, up to
+# and including the operator-facing lead_escalation Approval.
+SILENT_CARD_ALERT_COMMENT_TYPES = (*LEAD_NOTIFY_COMMENT_TYPES, "lead_escalated_notify")
+
 _SILENT_CARD_OPEN_CHILD = frozenset({
     "inbox", "in_progress", "review", "waiting", "user_test", "blocked",
 })
@@ -1813,6 +1819,157 @@ class TaskMonitorMixin:
             logger.info(
                 "Lead notify escalated to operator: '%s' (lead %s, %dmin no reaction)",
                 (task.title or "")[:60], lead.name, minutes_waiting,
+            )
+
+    async def _check_silent_card_retractions(self, session: AsyncSession) -> None:
+        """Retract stage-1/stage-2 silent-card alerts once the card moves again.
+
+        A watchdog without a retract path degrades into noise: two
+        ``lead_escalation`` approvals from last night (18:49, 01:36) are
+        still sitting in the operator's pending list hours after the cards
+        they were about resumed. Nobody closes them, so Mark has to open
+        each one by hand and work out whether it still applies.
+
+        "Moves again" is deliberately NOT a status change — a status flip
+        can come from a watchdog, a reassign, or a human, none of which
+        prove a turn ran. Instead this reuses
+        :meth:`_silent_card_last_activity_at`, the exact same evidence
+        (a non-system comment, an agent turn recorded on THIS card, ack/
+        start, or a child completing) that :meth:`_check_silent_cards`
+        already uses to decide a card is silent. Symmetric definition:
+        whatever proves the card is quiet also proves it woke up.
+
+        Retraction is always visible: a ``watchdog_retract`` TaskComment on
+        the card naming the resolved alert and the activity timestamp that
+        closed it, plus — if a stage-2 ``lead_escalation`` Approval is
+        still pending — the Approval is superseded (never approved/
+        rejected: that stays the operator's own decision, same convention
+        as :mod:`app.services.approval_cleanup`) and the same channel that
+        pushed the escalation (Telegram/Slack) is told via
+        ``operator_approvals.update_resolved`` so it does not just vanish
+        from the pending list. Never touches ``task.status``.
+        """
+        from app.models.approval import Approval
+
+        result = await session.exec(
+            select(TaskComment)
+            .where(TaskComment.comment_type.in_(SILENT_CARD_ALERT_COMMENT_TYPES))  # type: ignore[union-attr]
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        )
+        alerts = result.all()
+        if not alerts:
+            return
+
+        latest_alert_by_task: dict[uuid.UUID, TaskComment] = {}
+        for comment in alerts:
+            if comment.task_id is None or comment.task_id in latest_alert_by_task:
+                continue  # first hit per task, in DESC order, is the newest alert
+            latest_alert_by_task[comment.task_id] = comment
+
+        for task_id, alert in latest_alert_by_task.items():
+            if alert.created_at is None:
+                continue
+            alert_at = ensure_aware(alert.created_at)
+
+            task = await session.get(Task, task_id)
+            if task is None:
+                continue
+
+            last_retract = (await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task_id,
+                    TaskComment.comment_type == "watchdog_retract",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            if (
+                last_retract is not None
+                and last_retract.created_at is not None
+                and ensure_aware(last_retract.created_at) >= alert_at
+            ):
+                continue  # this alert phase is already retracted
+
+            agent = None
+            if task.assigned_agent_id:
+                agent = await session.get(Agent, task.assigned_agent_id)
+            children = list((await session.exec(
+                select(Task).where(Task.parent_task_id == task.id)
+            )).all())
+
+            last_activity = await self._silent_card_last_activity_at(
+                session, task, agent, children,
+            )
+            if last_activity is None:
+                continue
+            last_activity = ensure_aware(last_activity)
+            if last_activity <= alert_at:
+                continue  # still silent — nothing moved after the alert
+
+            resolver_note = (
+                f"Karte bewegt sich wieder: echte Aktivitaet seit "
+                f"{last_activity.isoformat()} (Alarm vom {alert_at.isoformat()})."
+            )
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=(
+                    f"ALARM ZURUECKGEZOGEN: \"{task.title}\" — {resolver_note}\n\n"
+                    f"Task-ID: {task.id}"
+                ),
+                comment_type="watchdog_retract",
+            ))
+
+            pending_escalation = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.status == "pending",
+                    Approval.action_type == "lead_escalation",
+                )
+            )).first()
+            if pending_escalation is not None:
+                pending_escalation.status = "superseded"
+                pending_escalation.resolved_at = utcnow()
+                pending_escalation.resolver_note = resolver_note
+                session.add(pending_escalation)
+
+            await session.commit()
+
+            try:
+                await emit_event(
+                    session,
+                    "task.silent_card_retracted",
+                    f"Alarm zurueckgezogen: '{task.title}' bewegt sich seit "
+                    f"{last_activity.isoformat()} wieder",
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    severity="info",
+                    detail={
+                        "alert_at": alert_at.isoformat(),
+                        "last_activity_at": last_activity.isoformat(),
+                        "approval_closed": pending_escalation is not None,
+                        "source": "silent_card_retraction",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — retract comment already persisted
+                logger.debug("silent_card_retracted event emit failed: %s", e)
+
+            if pending_escalation is not None:
+                try:
+                    from app.services import operator_approvals
+                    await operator_approvals.update_resolved(
+                        pending_escalation.id, "superseded", resolver_note,
+                    )
+                except Exception as e:  # noqa: BLE001 — Approval is persisted either way
+                    logger.warning(
+                        "Retract operator push failed for '%s': %s",
+                        task.title, e,
+                    )
+
+            logger.info(
+                "Silent-card alert retracted for '%s' (active since %s)",
+                (task.title or "")[:60], last_activity.isoformat(),
             )
 
     async def _check_undispatched_tasks(self, session: AsyncSession) -> None:
