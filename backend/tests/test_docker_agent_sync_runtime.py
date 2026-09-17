@@ -238,7 +238,18 @@ def test_restart_default_uses_docker_restart():
 
 
 def test_restart_force_recreate_runs_docker_compose_up(tmp_path, monkeypatch):
-    """force_recreate=True: docker compose -f ... -f ... up -d --force-recreate <svc>."""
+    """force_recreate=True: docker compose -p mission-control -f ... up -d --force-recreate <svc>.
+
+    Incident 2026-09-17 regression: without `-p mission-control` compose
+    derives its project name from the checkout's directory name. The operator's
+    checkout was NOT named mission-control, so compose saw the running
+    mc-agent-<slug> container as foreign, tried to CREATE it and died with
+    "Conflict. The container name ... is already in use" — while the switch
+    reported success (black terminal). The tmp_path checkout below models that
+    foreign directory name; the flag must come from compose_renderer.
+    COMPOSE_PROJECT_NAME, the single source of truth shared with the deploy
+    path and the cli_terminal force-recreate endpoint.
+    """
     from app.config import settings
     from app.services.docker_agent_sync import restart_docker_agent_container
 
@@ -264,6 +275,10 @@ def test_restart_force_recreate_runs_docker_compose_up(tmp_path, monkeypatch):
     cmd = run_mock.call_args.args[0]
     assert cmd[0] == "docker"
     assert cmd[1] == "compose"
+    assert cmd[2:4] == ["-p", "mission-control"], (
+        f"compose MUST carry -p mission-control (incident 2026-09-17 name "
+        f"conflict), got: {cmd}"
+    )
     assert "-f" in cmd
     assert "up" in cmd
     assert "-d" in cmd
@@ -271,6 +286,37 @@ def test_restart_force_recreate_runs_docker_compose_up(tmp_path, monkeypatch):
     assert cmd[-1] == "mc-agent-sparky"
     # 90s timeout (Phase 15 contract)
     assert run_mock.call_args.kwargs.get("timeout") == 90
+
+
+def test_get_agent_container_image_returns_config_image():
+    """Happy path: parse `docker inspect -f {{.Config.Image}}` output."""
+    from app.services.docker_agent_sync import get_agent_container_image
+
+    with patch("subprocess.run") as run_mock:
+        run_mock.return_value.returncode = 0
+        run_mock.return_value.stdout = "mc-omp-agent:latest\n"
+        image = get_agent_container_image("mc-agent-sparky")
+
+    assert image == "mc-omp-agent:latest"
+    argv = run_mock.call_args.args[0]
+    assert argv[:3] == ["docker", "inspect", "-f"]
+    assert "{{.Config.Image}}" in argv
+    assert "mc-agent-sparky" in argv
+
+
+def test_get_agent_container_image_none_on_failure():
+    """Inspect error / missing container → None (caller falls back to the
+    health check); must never raise."""
+    from app.services.docker_agent_sync import get_agent_container_image
+
+    with patch("subprocess.run") as run_mock:
+        run_mock.return_value.returncode = 1
+        run_mock.return_value.stdout = ""
+        run_mock.return_value.stderr = "No such object: mc-agent-ghost"
+        assert get_agent_container_image("mc-agent-ghost") is None
+
+    with patch("subprocess.run", side_effect=OSError("docker down")):
+        assert get_agent_container_image("mc-agent-sparky") is None
 
 
 # ── B2.1: stale-mount preflight for force_recreate (cross-image switches) ──

@@ -330,3 +330,39 @@ async def test_force_recreate_uses_host_home(auth_client: AsyncClient, session, 
         "Bug 2026-05-12 hatte hier '/Users/testuser/Workspace' — mountete Container "
         "auf ${HOME}/.mc/... an einem anderen Pfad als start-all.sh."
     )
+
+
+@pytest.mark.anyio
+async def test_force_recreate_compose_carries_project_flag(
+    auth_client: AsyncClient, session
+):
+    """Incident 2026-09-17 regression (cli_terminal sibling of the switch
+    path): the compose argv must carry `-p mission-control`. Without it
+    compose derives the project from the checkout's directory name, does not
+    recognise the running mc-agent-* container as its own, and dies with
+    "Conflict. The container name ... is already in use" while the caller
+    reports success."""
+    agent = Agent(id=uuid.uuid4(), name="Proj Flag Agent", agent_runtime="cli-bridge")
+    session.add(agent)
+    await session.commit()
+
+    captured_args: list = []
+
+    async def capture_subprocess(*args, **kwargs):
+        captured_args.append(list(args))
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.returncode = 0
+        return proc
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=capture_subprocess)), \
+         patch("app.routers.cli_terminal._get_container_state", new=AsyncMock(return_value="running")):
+        resp = await auth_client.post(f"/api/v1/agents/{agent.id}/force-recreate")
+
+    assert resp.status_code == 200
+    assert captured_args, "docker compose was never invoked"
+    argv = captured_args[0]
+    assert argv[0] == "docker"
+    assert argv[1:4] == ["compose", "-p", "mission-control"], (
+        f"force-recreate compose MUST carry -p mission-control, got: {argv}"
+    )

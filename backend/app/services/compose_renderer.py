@@ -114,6 +114,19 @@ HARNESS_IMAGES: dict[str, str] = {
     "kimi": KIMI_IMAGE,
 }
 
+# Compose project name for EVERY compose invocation in this stack — the
+# documented hard rule (deploy path ADR-083, scripts, incident 2026-09-17):
+# always run `docker compose -p mission-control ...`. Without the flag compose
+# derives the project from the checkout's directory name (MC_REPO_PATH may be
+# any folder — e.g. a deploy worktree named deploy-main), does not recognise
+# the running mc-agent-* containers as its own, tries to CREATE them and dies
+# with "Conflict. The container name ... is already in use". Anchored to
+# ADR-023, which fixed the default network name to mission-control_default for
+# exactly the same "repo may be checked out under any name" reason. Single
+# source of truth: both compose call sites (docker_agent_sync force-recreate,
+# cli_terminal force-recreate endpoint) import this constant.
+COMPOSE_PROJECT_NAME = "mission-control"
+
 # Token isolation (fix/agent-token-env-file-leak, supersedes the earlier
 # "defense layer 1"): docker/.env.agents (symlink under ~/.mc/secrets/…) holds
 # the MC_TOKEN_<NAME> secret of EVERY agent.  Mounting it as env_file handed

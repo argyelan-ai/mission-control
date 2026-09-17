@@ -41,6 +41,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+from app.services.compose_renderer import COMPOSE_PROJECT_NAME
 from app.services.disk_preflight import build_preflight_error as disk_build_preflight_error
 from app.services.template_renderer import build_agent_context, render_agent_file
 
@@ -946,7 +947,7 @@ def restart_docker_agent_container(
         the existing image. Used after a same-image runtime change.
 
     force_recreate=True (Phase 15):
-        `docker compose -f docker-compose.yml -f docker/docker-compose.agents.yml up -d --force-recreate <service>`
+        `docker compose -p mission-control -f docker-compose.yml -f docker/docker-compose.agents.yml up -d --force-recreate <service>`
         Caller is responsible for running compose_renderer.write_compose_agents()
         BEFORE calling this so the new image override is on disk. 90s timeout.
 
@@ -1027,7 +1028,7 @@ def restart_docker_agent_container(
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come
         # up with no auth token (mc CLI then dies with 'MC_AGENT_TOKEN missing').
-        cmd = ["docker", "compose"]
+        cmd = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
         for env_file in (env_main, env_agents, env_shared):
             if env_file.is_file():
                 cmd.extend(["--env-file", str(env_file)])
@@ -1139,6 +1140,32 @@ def _agent_container_running(container_name: str) -> bool | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() == "true"
+
+
+def get_agent_container_image(container_name: str) -> str | None:
+    """Return the image a container runs (``docker inspect .Config.Image``).
+
+    None when the container is missing or the inspect fails — callers treat
+    that as "cannot verify" (a dead container is the health check's job). A
+    returned value that MISMATCHES the expected harness image is a hard
+    switch failure (incident 2026-09-17: the switch reported success while the
+    old container was still running on the old image).
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Config.Image}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as e:
+        logger.warning(
+            "get_agent_container_image(%s): inspect failed: %s", container_name, e
+        )
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def ensure_agent_container_started(agent: Agent) -> dict[str, str]:

@@ -15,9 +15,15 @@ Flow on success:
      overlay BEFORE we touch the container.
   6. Update `agent.runtime_id` in the DB (commit).
   7. Re-render claude-config files (sync_docker_agent_files).
-  8. Restart the container (force_recreate=image_change).
+  8. Restart the container (force_recreate=image_change). A failed restart
+     command is NOT a warning on a success result — it rolls back and raises
+     (incident 2026-09-17: compose recreate failed on a container-name
+     conflict, the switch still reported success, chat stayed black).
+  8b. Verify the outcome: the running container's image must match the image
+     the new harness requires (docker inspect), before the health probe.
   9. Wait for the container to be reachable.
- 10. On any failure between (5) and (9): full rollback (DB + files + image
+ 10. On any failure between (5) and (9) — restart command, image mismatch,
+     health check: full rollback (DB + files + image
      overlay + container) and raise SwitchHealthCheckFailed.
  11. Publish `mc:agent:{id}:terminal:remount` so the Sessions WebSocket re-mounts.
  12. Emit `agent.runtime_switched` activity event.
@@ -45,9 +51,11 @@ from app.services.activity import emit_event
 from app.services.discord import send_discord_notification
 from app.services.compose_renderer import (
     detect_image_change,
+    pick_image_for_harness,
     write_compose_agents,
 )
 from app.services.docker_agent_sync import (
+    get_agent_container_image,
     restart_docker_agent_container,
     sync_docker_agent_files,
     wait_for_agent_healthy,
@@ -610,7 +618,9 @@ async def switch_agent_runtime(
         RuntimeIncompatibleError: target runtime is disabled.
         AgentBusyError: agent has current_task_id and force is False.
         RuntimeSwitchLockTimeout: another switch is currently running.
-        SwitchHealthCheckFailed: post-restart health check timed out (rollback applied).
+        SwitchHealthCheckFailed: restart command failed, the running image
+            does not match the target harness image, or the post-restart
+            health check timed out (rollback applied in all three cases).
     """
     started_at = time.monotonic()
     _ensure_agent_switchable(agent)
@@ -948,8 +958,6 @@ async def switch_agent_runtime(
         # deferred (DB/config stay switched) instead of forced through.
         skip_reason = _restart_skip_reason(agent, restart_after_switch=restart_after_switch)
         health: dict[str, Any] = {}
-        restart_failed = False
-        restart_error: str | None = None
         if skip_reason is None:
             await publish_switch_progress(agent.id, "restarting")
             restart_result = restart_docker_agent_container(
@@ -959,18 +967,72 @@ async def switch_agent_runtime(
             )
             status = restart_result.get("status", "")
             if status.startswith("error"):
-                # Task #26 (e) — the restart COMMAND itself failing does not
-                # invalidate the switch: the DB/config already point at the
-                # new runtime, only the container bounce needs a retry.
-                # Report it instead of rolling back and skip the (pointless)
-                # health probe of a container we never restarted.
-                restart_failed = True
-                restart_error = f"container restart failed: {status}"
-                logger.warning(
-                    "container restart after runtime switch failed for %s: %s",
+                # Incident 2026-09-17 (omp harness switch → black terminal):
+                # the compose recreate failed (container-name conflict —
+                # compose ran without -p mission-control, saw the running
+                # container as foreign) and the switch STILL reported success;
+                # the operator learned of the failure only from the dead chat.
+                # A failed container step must not end in a success verdict:
+                # roll back to the last known-good binding and raise. This
+                # supersedes Task #26 item (e) for the docker path — a warning
+                # on a success result is not loud enough. (The host in-place
+                # path above keeps its own #26 semantics: no container, the
+                # adapter owns the process.)
+                reason = f"container restart failed: {status}"
+                logger.error(
+                    "container restart after runtime switch failed for %s: %s — rolling back",
                     agent.name, status,
                 )
+                await _rollback(
+                    session, agent, snapshot_old_runtime_id, image_change,
+                    old_harness=snapshot_old_harness, old_model=snapshot_old_model,
+                )
+                await _emit_failure_event(
+                    session, agent, old_runtime, new_runtime,
+                    reason=reason,
+                    elapsed_ms=int((time.monotonic() - started_at) * 1000),
+                )
+                await publish_switch_progress(agent.id, "rolled_back", error=reason)
+                raise SwitchHealthCheckFailed(
+                    f"Container-Restart nach Switch fehlgeschlagen ({status}) "
+                    f"— Rollback ausgefuehrt."
+                )
             else:
+                # Step 8b — prove the switch, do not trust it (incident
+                # 2026-09-17): compare the image the container actually runs
+                # against the image the new harness requires. A recreate that
+                # silently left the OLD container running (name conflict,
+                # compose targeting the wrong project) must fail the switch
+                # here — the DB says "switched", the runtime disagrees.
+                expected_image = pick_image_for_harness(
+                    effective_new_harness, new_runtime
+                )
+                _container = restart_result.get("container", "")
+                running_image = (
+                    get_agent_container_image(_container) if _container else None
+                )
+                if expected_image and running_image and running_image != expected_image:
+                    reason = (
+                        f"image verification failed: container {_container} runs "
+                        f"{running_image!r}, expected {expected_image!r} "
+                        f"(harness {effective_new_harness!r})"
+                    )
+                    logger.error("runtime switch %s: %s", agent.name, reason)
+                    await _rollback(
+                        session, agent, snapshot_old_runtime_id, image_change,
+                        old_harness=snapshot_old_harness, old_model=snapshot_old_model,
+                    )
+                    await _emit_failure_event(
+                        session, agent, old_runtime, new_runtime,
+                        reason=reason,
+                        elapsed_ms=int((time.monotonic() - started_at) * 1000),
+                    )
+                    await publish_switch_progress(agent.id, "rolled_back", error=reason)
+                    raise SwitchHealthCheckFailed(
+                        f"Image-Verifikation nach Switch fehlgeschlagen — "
+                        f"Container laeuft {running_image!r}, erwartet "
+                        f"{expected_image!r}. Rollback ausgefuehrt."
+                    )
                 # Step 9 — wait for container to be reachable.
                 # D-12: respawn_mode delegates to tmux capture-pane polling instead of
                 # docker inspect, matching the respawn restart path above.
@@ -1002,12 +1064,13 @@ async def switch_agent_runtime(
                     ready_signals=OMP_READY_SIGNALS if is_omp else None,
                 )
                 if not health.get("healthy"):
-                    # Unlike the restart-command failure above, this is the
-                    # existing (pre-#26) safety net: the container DID
-                    # restart but never came up healthy on the new runtime —
-                    # that is evidence the new runtime itself is broken, so
-                    # rolling back to the last known-good binding stays the
-                    # right call. Behaviour intentionally unchanged.
+                    # Unlike the restart-command failure and the image
+                    # verification above, this is the existing (pre-#26)
+                    # safety net: the container DID restart but never came up
+                    # healthy on the new runtime — that is evidence the new
+                    # runtime itself is broken, so rolling back to the last
+                    # known-good binding stays the right call. Behaviour
+                    # intentionally unchanged.
                     await _rollback(
                         session, agent, snapshot_old_runtime_id, image_change,
                         old_harness=snapshot_old_harness, old_model=snapshot_old_model,
@@ -1032,18 +1095,14 @@ async def switch_agent_runtime(
 
         if skip_reason:
             progress_step = "restart_skipped"
-        elif restart_failed:
-            progress_step = "restart_failed"
         else:
             progress_step = "done"
-        await publish_switch_progress(agent.id, progress_step, error=restart_error)
+        await publish_switch_progress(agent.id, progress_step)
 
         # Step 12 — success event.
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         if skip_reason:
             note = f" — Neustart übersprungen: {skip_reason}"
-        elif restart_failed:
-            note = f" — Neustart fehlgeschlagen (Switch bleibt gespeichert): {restart_error}"
         else:
             note = ""
         await emit_event(
@@ -1051,7 +1110,7 @@ async def switch_agent_runtime(
             "agent.runtime_switched",
             f"{agent.name}: "
             f"{old_runtime.slug if old_runtime else 'n/a'} → {new_runtime.slug}{note}",
-            severity="warning" if restart_failed else "info",
+            severity="info",
             agent_id=agent.id,
             board_id=agent.board_id,
             detail={
@@ -1062,8 +1121,6 @@ async def switch_agent_runtime(
                 "warnings": warnings,
                 "restart_skipped": skip_reason is not None,
                 "restart_skip_reason": skip_reason,
-                "restart_failed": restart_failed,
-                "restart_error": restart_error,
             },
         )
 
@@ -1078,7 +1135,6 @@ async def switch_agent_runtime(
             harness=effective_new_harness,
             restart_skipped=skip_reason is not None,
             restart_skip_reason=skip_reason,
-            restart_failed=restart_failed,
             old_harness=effective_old_harness,
         )
 

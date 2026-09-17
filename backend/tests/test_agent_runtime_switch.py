@@ -380,6 +380,115 @@ async def test_health_check_failure_rollback_restores_model(async_session):
     assert agent.model == original_model
 
 
+# ── 8c. Container restart failure → rollback + raise, NOT success ──────────
+#
+# Incident 2026-09-17: the compose recreate hit "Conflict. The container name
+# "/mc-agent-<slug>" is already in use" (compose ran without -p) and the
+# switch still returned success — the operator's chat stayed black. Sabotage
+# probe: restoring the old warn-and-succeed behaviour in
+# agent_runtime_switch.switch_agent_runtime makes exactly this test red.
+
+
+@pytest.mark.asyncio
+async def test_failed_container_restart_rolls_back_and_raises(async_session):
+    """A failed container step must produce a FAILED switch (rollback +
+    SwitchHealthCheckFailed), never a success verdict with a warning."""
+    rt_old = await _mk_runtime(async_session, slug="anthropic-claude-old", runtime_type="anthropic_api")
+    rt_new = await _mk_runtime(async_session, slug="new-oc", runtime_type="vllm_docker")  # cross-image
+    agent = await _mk_agent(async_session, runtime_id=rt_old.id, cli_plugins=[])
+
+    conflict_status = (
+        "error: Conflict. The container name \"/mc-agent-a-xxxx\" is already "
+        "in use by container abc123"
+    )
+
+    with patch("app.services.agent_runtime_switch.sync_docker_agent_files", AsyncMock(return_value={})), \
+         patch("app.services.agent_runtime_switch.restart_docker_agent_container",
+               side_effect=lambda a, **k: {"status": conflict_status, "container": "mc-agent-x", "mode": "recreate"}), \
+         patch("app.services.agent_runtime_switch.wait_for_agent_healthy", AsyncMock(return_value={"healthy": True, "reason": "ok"})), \
+         patch("app.services.agent_runtime_switch.write_compose_agents", AsyncMock(return_value={"changed": "true"})):
+        with pytest.raises(SwitchHealthCheckFailed) as exc:
+            await switch_agent_runtime(async_session, agent, rt_new.id)
+
+    assert "Container-Restart nach Switch fehlgeschlagen" in str(exc.value)
+    assert "Conflict" in str(exc.value)  # the incident's raw compose error
+    # The DB must be back on the old binding — no "switched" lie.
+    await async_session.refresh(agent)
+    assert agent.runtime_id == rt_old.id
+    # Failure event recorded (operator sees it in the activity feed).
+    events = (await async_session.exec(select(ActivityEvent))).all()
+    assert any(
+        e.event_type == "agent.runtime_switch_failed"
+        and "container restart failed" in (e.title or "")
+        for e in events
+    )
+
+
+# ── 8d. Post-switch image verification ─────────────────────────────────────
+#
+# The structural fix: a switch that verifies its own outcome cannot lie. If
+# the container still runs the OLD image after a cross-image switch (exactly
+# the silent recreate failure from the incident), the switch fails regardless
+# of what the database says — even when the health check would pass.
+
+
+@pytest.mark.asyncio
+async def test_image_mismatch_after_switch_rolls_back_and_raises(async_session):
+    rt_old = await _mk_runtime(async_session, slug="anthropic-claude-old", runtime_type="anthropic_api")
+    rt_new = await _mk_runtime(async_session, slug="omp-target", runtime_type="omp")  # cross-image
+    agent = await _mk_agent(async_session, runtime_id=rt_old.id, cli_plugins=[])
+
+    health_called: list = []
+
+    async def fake_health(*a, **k):
+        health_called.append(True)
+        return {"healthy": True, "reason": "ok"}
+
+    with patch("app.services.agent_runtime_switch.sync_docker_agent_files", AsyncMock(return_value={})), \
+         patch("app.services.agent_runtime_switch.restart_docker_agent_container",
+               side_effect=lambda a, **k: {"status": "recreated", "container": "mc-agent-x", "mode": "recreate"}), \
+         patch("app.services.agent_runtime_switch.get_agent_container_image",
+               return_value="mc-agent-base:latest"), \
+         patch("app.services.agent_runtime_switch.wait_for_agent_healthy", side_effect=fake_health), \
+         patch("app.services.agent_runtime_switch.write_compose_agents", AsyncMock(return_value={"changed": "true"})):
+        with pytest.raises(SwitchHealthCheckFailed) as exc:
+            await switch_agent_runtime(async_session, agent, rt_new.id)
+    assert "Image-Verifikation nach Switch fehlgeschlagen" in str(exc.value)
+    assert "mc-agent-base:latest" in str(exc.value)  # the OLD image the container still runs
+    # Verification fires BEFORE the health probe — a passing health check on
+    # the wrong image must not rescue the switch.
+    assert not health_called
+    await async_session.refresh(agent)
+    assert agent.runtime_id == rt_old.id
+    events = (await async_session.exec(select(ActivityEvent))).all()
+    assert any(e.event_type == "agent.runtime_switch_failed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_matching_image_passes_verification(async_session):
+    """Positive control: container already on the expected harness image →
+    the switch proceeds to the health check and succeeds."""
+    from app.services.compose_renderer import OMP_IMAGE
+
+    rt_old = await _mk_runtime(async_session, slug="anthropic-claude-old", runtime_type="anthropic_api")
+    rt_new = await _mk_runtime(async_session, slug="omp-target", runtime_type="omp")
+    agent = await _mk_agent(async_session, runtime_id=rt_old.id, cli_plugins=[])
+
+    with patch("app.services.agent_runtime_switch.sync_docker_agent_files", AsyncMock(return_value={})), \
+         patch("app.services.agent_runtime_switch.restart_docker_agent_container",
+               side_effect=lambda a, **k: {"status": "recreated", "container": "mc-agent-x", "mode": "recreate"}), \
+         patch("app.services.agent_runtime_switch.get_agent_container_image",
+               return_value=OMP_IMAGE), \
+         patch("app.services.agent_runtime_switch.wait_for_agent_healthy",
+               AsyncMock(return_value={"healthy": True, "reason": "ok"})), \
+         patch("app.services.agent_runtime_switch.write_compose_agents", AsyncMock(return_value={"changed": "true"})):
+        result = await switch_agent_runtime(async_session, agent, rt_new.id)
+
+    assert result.image_switched is True
+    await async_session.refresh(agent)
+    assert agent.runtime_id == rt_new.id
+
+
 # ── 9. Concurrent switch → lock timeout ────────────────────────────────────
 
 
