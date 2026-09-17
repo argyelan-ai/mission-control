@@ -5,6 +5,11 @@ on:
     branches: [main, "feature/*"]
   pull_request:
     branches: [main]
+  # Merge queue: queue builds check out gh-readonly-queue/... refs and run
+  # the SAME required checks on the speculative merge. Without this trigger
+  # the queue waits for checks that are never reported — the silent stall.
+  merge_group:
+    types: [checks_requested]
 
 jobs:
   leak-gate:
