@@ -119,7 +119,22 @@ class TestCommitTimerWiring:
     """
 
     @pytest.mark.asyncio
-    async def test_start_spawns_commit_timer_task(self, watcher, tmp_path, services):
+    async def test_start_spawns_commit_timer_task(
+        self, watcher, tmp_path, services, monkeypatch
+    ):
+        from app.services import vault_watcher as vw_mod
+
+        # The loop reads the interval each iteration; 0 makes its first
+        # flush reachable within a few event-loop yields.
+        monkeypatch.setattr(vw_mod, "COMMIT_INTERVAL_SECONDS", 0)
+        flushes = []
+
+        async def spy_flush(author):
+            flushes.append(author)
+            return False
+
+        services["git"].flush_if_pending = spy_flush
+
         assert getattr(watcher, "_commit_task", None) is None
         await watcher.start()
         try:
@@ -130,6 +145,18 @@ class TestCommitTimerWiring:
             )
             assert not task.done()
             assert watcher._commit_loop.__name__ in repr(task.get_coro())
+            # Yield point: done() only turns True after the loop's first
+            # step runs. Without yielding, a task that is created and dies
+            # at birth (cancelled immediately, or crashed before its first
+            # await) passes this test — "exists" is not "runs".
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if flushes:
+                    break
+            assert flushes, (
+                "commit timer never ran a step — a created-but-never-executed "
+                "task produces the same silence as no timer at all"
+            )
         finally:
             await watcher.stop()
 
@@ -180,7 +207,7 @@ class TestCommitTimerWiring:
         fut = asyncio.run_coroutine_threadsafe(
             watcher._handle_create_or_modify(note), watcher._loop
         )
-        watcher._inflight.add(fut)
+        watcher._inflight[fut] = str(note)
         await asyncio.sleep(0)  # let the handler start, it's now in flight
 
         await watcher.stop()

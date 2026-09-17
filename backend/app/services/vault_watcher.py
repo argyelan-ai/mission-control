@@ -65,8 +65,10 @@ class VaultWatcher:
         self._observer: Observer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # In-flight handler futures (from _schedule) — drained on shutdown
-        # so a write racing the restart is not lost (Rex finding 2).
-        self._inflight: set = set()
+        # so a write racing the restart is not lost (Rex finding 2). Maps
+        # future -> vault-relative path, so a drain overrun can name what
+        # it dropped instead of an opaque Future repr.
+        self._inflight: dict = {}
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -97,13 +99,31 @@ class VaultWatcher:
         # final flush below would run on an empty index and the write
         # would never be committed. Await pending futures (bounded) so the
         # fleet's last write survives a restart.
-        pending = [f for f in self._inflight if not f.done()]
-        if pending:
+        pairs = [(f, tag) for f, tag in self._inflight.items() if not f.done()]
+        if pairs:
             try:
                 # run_coroutine_threadsafe yields concurrent.futures.Futures —
                 # wrap them so asyncio.wait can await them on this loop.
-                wrapped = [asyncio.wrap_future(f) for f in pending]
-                await asyncio.wait(wrapped, timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
+                wrapped = [asyncio.wrap_future(f) for f, _tag in pairs]
+                _done, still_pending = await asyncio.wait(
+                    wrapped, timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+                )
+                if still_pending:
+                    # A bounded drain is a design choice; dropping the
+                    # remainder silently would be the shutdown race again,
+                    # wearing a timeout. Log count + per-note vault path so
+                    # the loss is traceable (which note may be uncommitted).
+                    pending_set = set(still_pending)
+                    lost = [
+                        tag for (_f, tag), w in zip(pairs, wrapped)
+                        if w in pending_set
+                    ]
+                    logger.warning(
+                        "Vault shutdown drain timed out after %ss: %d handler(s) "
+                        "still in flight, their writes may be uncommitted: %s",
+                        SHUTDOWN_DRAIN_TIMEOUT_SECONDS, len(lost),
+                        "; ".join(lost),
+                    )
             except Exception:  # noqa: BLE001 — shutdown must not raise
                 logger.warning("Vault shutdown drain failed", exc_info=True)
         self._inflight.clear()
@@ -211,9 +231,9 @@ class _Handler(FileSystemEventHandler):
             self.watcher._handle_create_or_modify(path),
             loop,
         )
-        self.watcher._inflight.add(fut)
+        self.watcher._inflight[fut] = str(path)
         fut.add_done_callback(self._log_unhandled)
-        fut.add_done_callback(lambda f, w=self.watcher: w._inflight.discard(f))
+        fut.add_done_callback(lambda f, w=self.watcher: w._inflight.pop(f, None))
 
     @staticmethod
     def _log_unhandled(fut) -> None:
