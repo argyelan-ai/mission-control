@@ -7,6 +7,12 @@ the operator's explicit decision).
 Two mechanisms:
 1. Immediate cleanup on task status change (called from agent_scoped/tasks)
 2. Watchdog reconciliation as a safety net (periodic)
+
+Special case ``lead_escalation``: closed on card close (done/archived) via
+LEAD_ESCALATION_CLOSE_ON_STATUS — see there. Deliberately NOT routed through
+APPROVAL_VALID_STATES: a mere status flip (review/blocked/...) must not close
+the escalation — that is the evidence-based retract path's job
+(task_monitor._check_silent_card_retractions).
 """
 
 import logging
@@ -47,6 +53,26 @@ APPROVAL_VALID_STATES: dict[str, set[str]] = {
     "dependency_zombie": {"inbox", "in_progress"},
 }
 
+# lead_escalation (silent-card watchdog, stage 2): a CLOSED card has no open
+# problem by definition, so its pending escalation closes with the card —
+# but only on done/archived. failed is deliberately NOT in this set: a card
+# closed with the problem still standing is exactly where an unanswered lead
+# question must remain visible in the operator's inbox. Treating all
+# closures alike would silently erase escalations whose problem is live.
+# The note ("closed-by-close (<status>)") marks these as closed-by-close so a
+# reader can tell them apart from an operator-answered escalation; the alert
+# comment on the card stays.
+LEAD_ESCALATION_CLOSE_ON_STATUS: frozenset[str] = frozenset({"done", "archived"})
+
+
+def _lead_escalation_close_note(action_type: str, status: str) -> str | None:
+    """Resolver note when a lead_escalation closes with its card, else None."""
+    if action_type != "lead_escalation":
+        return None
+    if status not in LEAD_ESCALATION_CLOSE_ON_STATUS:
+        return None
+    return f"closed-by-close ({status})"
+
 
 async def cleanup_obsolete_approvals(
     session: AsyncSession,
@@ -70,6 +96,30 @@ async def cleanup_obsolete_approvals(
     now = utcnow()
 
     for approval in pending:
+        close_note = _lead_escalation_close_note(
+            approval.action_type, new_status
+        )
+        if close_note is not None:
+            approval.status = "superseded"
+            approval.resolved_at = now
+            approval.resolver_note = close_note
+            session.add(approval)
+            superseded_count += 1
+
+            logger.info(
+                "Approval superseded (card closed): %s fuer Task %s (Task jetzt '%s')",
+                approval.action_type, task_id, new_status,
+            )
+
+            if board_id:
+                await emit_event(
+                    session, "approval.superseded",
+                    f"Approval '{approval.action_type}' geschlossen (Karte '{new_status}')",
+                    board_id=board_id, task_id=task_id, agent_id=approval.agent_id,
+                    detail={"approval_id": str(approval.id), "action_type": approval.action_type, "new_status": new_status},
+                )
+            continue
+
         valid_states = APPROVAL_VALID_STATES.get(approval.action_type)
         if valid_states is None:
             continue
@@ -119,10 +169,6 @@ async def reconcile_stale_approvals(session: AsyncSession) -> int:
         if not approval.task_id:
             continue
 
-        valid_states = APPROVAL_VALID_STATES.get(approval.action_type)
-        if valid_states is None:
-            continue
-
         task = await session.get(Task, approval.task_id)
         if not task:
             approval.status = "superseded"
@@ -130,6 +176,24 @@ async def reconcile_stale_approvals(session: AsyncSession) -> int:
             approval.resolver_note = "Superseded: Task existiert nicht mehr"
             session.add(approval)
             superseded_count += 1
+            continue
+
+        close_note = _lead_escalation_close_note(approval.action_type, task.status)
+        if close_note is not None:
+            approval.status = "superseded"
+            approval.resolved_at = now
+            approval.resolver_note = close_note
+            session.add(approval)
+            superseded_count += 1
+
+            logger.info(
+                "Reconciliation: Approval %s superseded (Karte '%s') fuer Task '%s'",
+                approval.action_type, task.status, task.title,
+            )
+            continue
+
+        valid_states = APPROVAL_VALID_STATES.get(approval.action_type)
+        if valid_states is None:
             continue
 
         if task.status not in valid_states:
