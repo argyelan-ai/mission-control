@@ -36,7 +36,17 @@ jobs:
       run:
         working-directory: backend
     steps:
+      # fetch-depth: 0 (full history, all branches) — not the v4 default of a
+      # shallow single-ref clone. test_alembic_chain_integrity.py diffs HEAD
+      # against `origin/main` to find migrations new on this branch; with the
+      # default shallow checkout, `origin/main` isn't fetched at all, the diff
+      # can't run, and the destructive-migration guards below silently SKIP
+      # instead of running — exactly the CI job where they're supposed to have
+      # teeth (task 40c484c6, a depth-1 repro on task 3f249d2b: 205
+      # passed / 1 skipped / job green).
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
