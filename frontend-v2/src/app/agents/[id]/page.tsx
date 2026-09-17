@@ -74,6 +74,13 @@ const HEARTBEAT_INTERVALS = [
   { value: "10m", label: "10m" },
 ];
 
+// operator_language / work_language (Migration 0201) — the fleet only runs
+// these two codes today; extend here if a third is ever configured.
+const LANGUAGE_OPTIONS = [
+  { value: "en", label: "EN" },
+  { value: "de", label: "DE" },
+];
+
 // ── Status Mapping ─────────────────────────────────────────────────────────────
 
 type DotStatus = "online" | "busy" | "idle" | "offline" | "error" | "warning";
@@ -1819,7 +1826,7 @@ export default function AgentDetailPage() {
   });
 
   const updateAgentMutation = useMutation({
-    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode">>) =>
+    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode" | "operator_language" | "work_language">>) =>
       api.agents.update(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
@@ -2011,6 +2018,34 @@ export default function AgentDetailPage() {
                     >
                       {HEARTBEAT_INTERVALS.map((hi) => (
                         <option key={hi.value} value={hi.value}>{hi.label}</option>
+                      ))}
+                    </select>
+                  </span>
+                  <span className="flex items-center gap-1" title={t("detail.operatorLanguageTitle")}>
+                    {t("detail.operatorLanguageLabel")}:{" "}
+                    <select
+                      value={agent.operator_language ?? "en"}
+                      onChange={(e) =>
+                        updateAgentMutation.mutate({ operator_language: e.target.value })
+                      }
+                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
+                    >
+                      {LANGUAGE_OPTIONS.map((lo) => (
+                        <option key={lo.value} value={lo.value}>{lo.label}</option>
+                      ))}
+                    </select>
+                  </span>
+                  <span className="flex items-center gap-1" title={t("detail.workLanguageTitle")}>
+                    {t("detail.workLanguageLabel")}:{" "}
+                    <select
+                      value={agent.work_language ?? "en"}
+                      onChange={(e) =>
+                        updateAgentMutation.mutate({ work_language: e.target.value })
+                      }
+                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
+                    >
+                      {LANGUAGE_OPTIONS.map((lo) => (
+                        <option key={lo.value} value={lo.value}>{lo.label}</option>
                       ))}
                     </select>
                   </span>
