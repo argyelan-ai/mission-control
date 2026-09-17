@@ -179,10 +179,13 @@ def build_agent_context(
         "reflection_required_fields": _reflection_fields(),
         "reflection_min_chars": _reflection_min_chars(),
         "reflection_charter": _reflection_charter(),
-        # Response language towards the operator (agents.language, default
-        # "en"). Templates are English; SOUL.md.j2 adds an explicit
-        # respond-in-<language> instruction when this is not "en".
-        "language": (getattr(agent, "language", "en") or "en").lower(),
+        # Two languages, two audiences (agents.operator_language /
+        # agents.work_language, both default "en"). Templates are English;
+        # SOUL.md.j2 adds explicit instructions for whichever of these is
+        # not "en" — operator_language for mc report/msg/ask + chat,
+        # work_language for task comments/reflections/handoffs/deliverables.
+        "operator_language": (getattr(agent, "operator_language", "en") or "en").lower(),
+        "work_language": (getattr(agent, "work_language", "en") or "en").lower(),
         # Interaction Model 2.0 — pilot opt-in (agents.comm_v2, Migration
         # 0160). Gates the "Messaging v2 (Pilot)" SOUL.md block below —
         # flattened here rather than passing the full agent object, same

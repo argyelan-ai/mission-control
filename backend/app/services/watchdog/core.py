@@ -147,6 +147,13 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             # blocker_lead_notify) with no lead reaction for 30 minutes is
             # reported to the operator — once per silent phase, report-only.
             await self._check_lead_notify_escalations(session)
+            # Retract path for both stages above: a card that demonstrably
+            # moves again (real activity after the alert, not a status
+            # flip) gets a visible resolution note, and a still-pending
+            # stage-2 Approval is closed instead of sitting stale. Runs
+            # after both alert checks so a phase that both fired and
+            # resolved within one tick still ends the tick retracted.
+            await self._check_silent_card_retractions(session)
 
             # Orphan recovery: tasks stuck in in_progress without agent heartbeat
             recovered = await self._recover_orphaned_tasks(session)
