@@ -187,10 +187,12 @@ async def test_silent_waiting_parent_all_children_done(
 ):
     """The 61/61 case: waiting parent, every child done, nobody closed it."""
     now = utcnow()
-    past = now - timedelta(minutes=45)
+    past = now - timedelta(minutes=730)  # children done long ago too
     _board, lead, worker, parent = await _make_silent_setup(
         make_board, make_agent, make_task,
         status="waiting",
+        silent_minutes=730,  # above the 12h waiting threshold
+        activity_age_minutes=730,
         bind_current_task=False,
     )
     for i in range(2):
@@ -240,8 +242,89 @@ async def test_parent_with_open_child_is_skipped(
     )
     async with _session() as s:
         await _run_check(s)
-
     assert await _comments(parent.id, "watchdog_notify") == []
+
+
+
+# ── Per-status threshold ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_waiting_below_threshold_not_reported(
+    make_board, make_agent, make_task,
+):
+    """Deliberately parked: 45min silent waiting is intent, not silence."""
+    _board, _lead, _worker, task = await _make_silent_setup(
+        make_board, make_agent, make_task,
+        status="waiting",
+        silent_minutes=45,
+    )
+    async with _session() as s:
+        await _run_check(s)
+
+    assert await _comments(task.id, "watchdog_notify") == []
+
+
+@pytest.mark.asyncio
+async def test_waiting_above_threshold_reported(
+    make_board, make_agent, make_task,
+):
+    """Parked ≠ forgotten: past 12h the waiting card alerts like any other."""
+    _board, lead, _worker, task = await _make_silent_setup(
+        make_board, make_agent, make_task,
+        status="waiting",
+        silent_minutes=730,
+        activity_age_minutes=730,
+    )
+    async with _session() as s:
+        await _run_check(s)
+
+    notes = await _comments(task.id, "watchdog_notify")
+    assert len(notes) == 1
+
+@pytest.mark.asyncio
+async def test_in_progress_below_threshold_not_reported(
+    make_board, make_agent, make_task,
+):
+    """The in_progress boundary itself is unchanged: under 30min → quiet."""
+    _board, _lead, _worker, task = await _make_silent_setup(
+        make_board, make_agent, make_task,
+        status="in_progress",
+        silent_minutes=20,
+    )
+    async with _session() as s:
+        await _run_check(s)
+
+    assert await _comments(task.id, "watchdog_notify") == []
+
+
+@pytest.mark.asyncio
+async def test_status_missing_from_map_falls_back_to_strictest(
+    make_board, make_agent, make_task, monkeypatch,
+):
+    """A watched status without a map entry must NOT mean 'never alert'.
+
+    Fallback is the strictest listed threshold (30min): forgetting to add
+    a status over-alerts (loud, a human sees it) instead of silencing the
+    card forever (the whitelist failure mode through the back door).
+    """
+    from app.services.watchdog import task_monitor
+
+    assert "review" not in task_monitor.SILENT_CARD_THRESHOLD_MINUTES
+    monkeypatch.setattr(
+        task_monitor, "SILENT_CARD_STATUSES",
+        (*task_monitor.SILENT_CARD_STATUSES, "review"),
+    )
+    _board, _lead, _worker, task = await _make_silent_setup(
+        make_board, make_agent, make_task,
+        status="review",
+        silent_minutes=45,  # > 30min fallback, < any listed threshold
+    )
+    async with _session() as s:
+        await _run_check(s)
+
+    notes = await _comments(task.id, "watchdog_notify")
+    assert len(notes) == 1, "unmapped status must alert at the strictest threshold"
 
 
 # ── Activity / dedup ────────────────────────────────────────────────────
@@ -445,6 +528,8 @@ async def test_never_creates_approval_or_flips_status(
 ):
     _board, _lead, _worker, task = await _make_silent_setup(
         make_board, make_agent, make_task, status="waiting",
+        silent_minutes=730,  # above the 12h waiting threshold
+        activity_age_minutes=730,
         bind_current_task=False,
     )
     async with _session() as s:
