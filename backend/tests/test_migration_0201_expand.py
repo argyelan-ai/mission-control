@@ -1,11 +1,20 @@
-"""Real-DB proof for the 0201/0202 expand/contract split (Task 993840da).
+"""Real-DB proof that 0201 is additive-only (Task 993840da / cab1bfdd).
 
 0201 used to add operator_language/work_language AND drop `language` in
 one transaction. On a scratch DB that is correct, but production keeps
 serving reads/writes against `agents` while the migration runs, and the
 not-yet-restarted old code still reads `language` — dropping it there
 breaks every query against `agents` between the DROP and the backend
-bounce. So 0201 is additive only; the drop moves to 0202, its own deploy.
+bounce. So 0201 is additive only.
+
+The contract step that drops `language` (originally 0202) is deliberately
+NOT in this branch/PR — see `deferred/0202-drop-agent-language` for its
+unchanged content. Task cab1bfdd: with 0202 on this branch it was the
+alembic head, and `docker-entrypoint.sh` runs `alembic upgrade head` on
+every deploy — the first deploy after merging would have run 0201 and
+0202 back to back and dropped the column anyway, defeating the whole
+point of the split. So the drop migration itself has to be a later,
+separate PR, not just a separate revision file sitting on this branch.
 
 This test does NOT use the shim-`op` pattern the older
 ``test_migration_0*.py`` files use (a no-op stand-in that never touches a
@@ -24,11 +33,11 @@ prove this card's point at all, because ``test_engine``'s schema is the
   runs the exact expressions `dispatch_message_builder.py` /
   `template_renderer.py` use, off the real loaded row — proving the
   current backend code tolerates the old column being present
-- runs the REAL 0202 upgrade() and proves `language` is gone
-- exercises both downgrade paths
+- exercises the 0201 downgrade path
 """
 from __future__ import annotations
 
+import ast
 import datetime
 import importlib.util
 import pathlib
@@ -96,8 +105,8 @@ async def _get_columns(engine, table_name):
         }
 
 
-async def test_0201_stays_additive_then_0202_drops_language(tmp_path):
-    db_path = tmp_path / "expand_contract_proof.db"
+async def test_0201_stays_additive(tmp_path):
+    db_path = tmp_path / "expand_proof.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 
     # ── scratch table shaped like TODAY's production `agents` table ──
@@ -166,36 +175,7 @@ async def test_0201_stays_additive_then_0202_drops_language(tmp_path):
         assert operator_lang == "de"
         assert work_lang == "en"
 
-    # ── REAL 0202 upgrade(): the contract step, its own deploy ──
-    mig0202 = _load_revision("0202_drop_agent_language")
-
-    def _run_0202_upgrade(sc):
-        mig0202.op = _RealOp(sc)
-        mig0202.upgrade()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(_run_0202_upgrade)
-
-    cols = await _get_columns(engine, "agents")
-    assert "language" not in cols
-    assert {"operator_language", "work_language"} <= cols
-
-    # ── downgrade paths, in reverse order ──
-    def _run_0202_downgrade(sc):
-        mig0202.op = _RealOp(sc)
-        mig0202.downgrade()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(_run_0202_downgrade)
-
-    cols = await _get_columns(engine, "agents")
-    assert "language" in cols
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT language, operator_language FROM agents WHERE name='Rex'"))
-        ).fetchone()
-    assert row.language == "de"  # restored, backfilled from operator_language
-
+    # ── 0201 downgrade path ──
     def _run_0201_downgrade(sc):
         mig0201.op = _RealOp(sc)
         mig0201.downgrade()
@@ -211,16 +191,49 @@ async def test_0201_stays_additive_then_0202_drops_language(tmp_path):
     await engine.dispose()
 
 
-def test_alembic_chain_0200_0201_0202_single_head():
-    """0201 revises 0200, 0202 revises 0201 — one head, no collision."""
-    mig0201 = _load_revision("0201_agent_op_work_language")
-    mig0202 = _load_revision("0202_drop_agent_language")
+def test_alembic_chain_0200_0201_single_head():
+    """0201 revises 0200 and is the current head — 0202 (the drop of
+    `language`) is deliberately not on this branch (task cab1bfdd); it
+    lives unchanged on `deferred/0202-drop-agent-language` until its own,
+    later PR.
 
+    Head-uniqueness across the *whole* chain is already covered by
+    ``test_alembic_chain_integrity.py::test_exactly_one_head`` (ast-based,
+    handles merge revisions with tuple ``down_revision``). This test only
+    adds the specific claim that mentioning 0202 doesn't belong here: the
+    one head is 0201, not 0202.
+    """
+    mig0201 = _load_revision("0201_agent_op_work_language")
     assert mig0201.revision == "0201_agent_op_work_language"
     assert mig0201.down_revision == "0200_task_pr_reference"
 
-    assert mig0202.revision == "0202_drop_agent_language"
-    assert mig0202.down_revision == "0201_agent_op_work_language"
+    assert not (VERSIONS_DIR / "0202_drop_agent_language.py").exists(), (
+        "0202 is back on this branch — task cab1bfdd took it off deliberately "
+        "(see deferred/0202-drop-agent-language)"
+    )
+
+    revs: set[str] = set()
+    parents: set[str] = set()
+    for f in VERSIONS_DIR.glob("*.py"):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+            elif isinstance(node, ast.Assign):
+                targets = node.targets
+            else:
+                continue
+            for target in targets:
+                name = getattr(target, "id", None)
+                if name == "revision":
+                    revs.add(ast.literal_eval(node.value))
+                elif name == "down_revision":
+                    val = ast.literal_eval(node.value)
+                    if val is None:
+                        continue
+                    parents.update([val] if isinstance(val, str) else val)
+    heads = revs - parents
+    assert heads == {"0201_agent_op_work_language"}, heads
 
 
 def test_0201_upgrade_does_not_drop_language():
@@ -229,10 +242,3 @@ def test_0201_upgrade_does_not_drop_language():
     """
     source = (VERSIONS_DIR / "0201_agent_op_work_language.py").read_text()
     assert 'drop_column("agents", "language")' not in source
-
-
-def test_0202_upgrade_only_drops_language():
-    """0202 is the contract step and does nothing else."""
-    source = (VERSIONS_DIR / "0202_drop_agent_language.py").read_text()
-    assert 'op.drop_column("agents", "language")' in source
-    assert "add_column" not in source.split("def downgrade")[0]
