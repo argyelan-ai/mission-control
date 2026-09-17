@@ -1870,7 +1870,25 @@ def _cmd_delegate(args, client, cfg):
     """
     import uuid as _uuid
 
-    board_id, _task_id = cfg.require_task_context()
+    # Board resolution (Task f8c9cdb9, 2026-09-16): `mc delegate` demanded
+    # TASK_ID+BOARD_ID up front via require_task_context(), which made
+    # `--parent <task-id>` unusable in exactly the situation it exists for — a
+    # Board Lead with no active task and therefore no dispatch context in the
+    # env. The parent is named explicitly, so the only thing actually needed is
+    # the board the delegation lands on: take it from the env when a dispatch
+    # context is present, otherwise from the caller's own /me record. The real
+    # guards (parent exists, same board, not closed, ownership) stay on the
+    # backend — this only removes the CLI's premature refusal.
+    board_id = cfg.board_id
+    if not board_id:
+        me = client.request("GET", "/api/v1/agent/me")
+        board_id = me.get("board_id") if isinstance(me, dict) else None
+        if not board_id:
+            raise UsageError(
+                "BOARD_ID ist nicht gesetzt und /api/v1/agent/me liefert kein "
+                "Board — `mc delegate` braucht ein Ziel-Board. Setze BOARD_ID "
+                "in der Env oder ordne den Agent einem Board zu."
+            )
 
     if not args.description or len(args.description.strip()) < 10:
         raise UsageError(
@@ -1926,9 +1944,6 @@ def _cmd_delegate(args, client, cfg):
     )
     _require_result(resp, verb="mc delegate")
     _emit(resp)
-    if isinstance(resp, dict) and resp.get("warning"):
-        import sys as _sys
-        print(f"WARNUNG: {resp['warning']}", file=_sys.stderr)
     return 0
 
 
@@ -1971,8 +1986,10 @@ def _add_delegate_args(p):
             "eigene aktive Karte. Nutze das, wenn du keine aktive Karte hast (kein "
             "409 'Kein aktiver Task') oder bewusst an einer ANDEREN Karte als deiner "
             "eigenen aktiven anhaengen willst. Ohne --parent UND ohne aktive Karte "
-            "entsteht eine Wurzelkarte ohne Parent/Callback (die Antwort weist "
-            "darauf explizit hin)."
+            "lehnt der Server mit 409 ab — es entsteht KEINE Wurzelkarte mehr. Ohne "
+            "aktiven Task ist --parent damit der einzige Weg zu delegieren, und "
+            "TASK_ID/BOARD_ID muessen dafuer nicht in der Env stehen (das Board "
+            "kommt notfalls aus /api/v1/agent/me)."
         ),
     )
     p.add_argument(

@@ -72,6 +72,28 @@ def _delegate_patches():
     )
 
 
+async def _open_card(board_id, agent) -> Task:
+    """A card the delegating lead owns/works on, to hang the delegation under.
+
+    Since task f8c9cdb9 `mc delegate` no longer opens a parentless card: with
+    no active task the caller must name a parent, otherwise the server refuses
+    with 409 before creating anything. These tests are about the repo-binding
+    guard, not about the parent rule, so they run from a lead with a real
+    active card — the shape the guard normally sees in production.
+    """
+    parent = Task(
+        id=uuid.uuid4(),
+        board_id=board_id,
+        title="Aktive Karte des Leads",
+        status="in_progress",
+        assigned_agent_id=agent.id,
+    )
+    await _mk([parent])
+    agent.current_task_id = parent.id
+    await _mk([agent])
+    return parent
+
+
 # ── Verbotener Fall: Fundstelle ohne Bindung ─────────────────────────────
 
 
@@ -83,6 +105,7 @@ async def test_delegate_with_file_reference_and_no_repo_is_rejected(client, fake
     await _mk([board])
     lead, lead_token = await _agent(board.id, is_board_lead=True)
     worker, _ = await _agent(board.id, role="researcher")
+    parent = await _open_card(board.id, lead)
 
     p1, p2, p3 = _delegate_patches()
     with p1, p2, p3:
@@ -105,7 +128,9 @@ async def test_delegate_with_file_reference_and_no_repo_is_rejected(client, fake
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         leftovers = (await s.exec(select(Task).where(Task.board_id == board.id))).all()
-    assert leftovers == [], "abgelehnte Delegation darf keine Karte hinterlassen"
+    assert [t.id for t in leftovers] == [parent.id], (
+        "abgelehnte Delegation darf keine Karte hinterlassen"
+    )
 
 
 @pytest.mark.asyncio
@@ -143,6 +168,7 @@ async def test_delegate_with_file_reference_and_repo_passes(client, fake_redis):
     await _mk([board, repo])
     lead, lead_token = await _agent(board.id, is_board_lead=True)
     worker, _ = await _agent(board.id, role="developer")
+    await _open_card(board.id, lead)
 
     p1, p2, p3 = _delegate_patches()
     with p1, p2, p3:
@@ -167,6 +193,7 @@ async def test_delegate_research_card_without_file_reference_passes(client, fake
     await _mk([board])
     lead, lead_token = await _agent(board.id, is_board_lead=True)
     worker, _ = await _agent(board.id, role="researcher")
+    await _open_card(board.id, lead)
 
     p1, p2, p3 = _delegate_patches()
     with p1, p2, p3:
@@ -195,6 +222,7 @@ async def test_delegate_waiver_records_reason_on_card(client, fake_redis):
     await _mk([board])
     lead, lead_token = await _agent(board.id, is_board_lead=True)
     worker, _ = await _agent(board.id, role="researcher")
+    await _open_card(board.id, lead)
 
     p1, p2, p3 = _delegate_patches()
     with p1, p2, p3:
