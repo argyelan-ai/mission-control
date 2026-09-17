@@ -658,6 +658,13 @@ class AgentTaskUpdate(BaseModel):
     # right PR instead of leaving the reviewer to fetch it by hand.
     pr_number: int | None = None
     pr_url: str | None = None
+    # Parent (re)attachment (Task f8c9cdb9, 2026-09-16): `mc delegate` without
+    # an active task used to create an orphan card, and attaching a parent
+    # afterwards was IMPOSSIBLE on this route — the field was not declared, so
+    # `PATCH {"parent_task_id": ...}` died on the fail-closed model_config with
+    # 422 extra_forbidden. Declared so the field reaches the handler;
+    # application + permission/cycle checks live in agent_update_task.
+    parent_task_id: uuid.UUID | None = None
 
 
 class ReviewDecisionBody(BaseModel):
@@ -2125,6 +2132,118 @@ async def agent_update_task(
             # Same value — nothing to reset, but still skip generic setattr so
             # the dispatched-cycle fields above are not bypassed for a no-op.
             updates.pop("assigned_agent_id", None)
+
+    # ── Parent (re)attachment (parent_task_id) — permission + cycle guard ──
+    # Task f8c9cdb9 (2026-09-16): the route could not attach a parent at all —
+    # `PATCH {"parent_task_id": ...}` answered 422 extra_forbidden because the
+    # field was missing from AgentTaskUpdate. Now declared, and this block is
+    # the guard set: same shape as agent_delegate_task's explicit-`--parent`
+    # branch, plus the cycle check that route gets for free (it creates a NEW
+    # card, so a cycle is impossible there — here it very much is not).
+    #
+    # Validation happens here (fail fast, before the review/report-back guards
+    # below); APPLICATION is left to the generic setattr loop at the end of the
+    # function so the field lands in the same commit as everything else. Doing
+    # it here would need its own commit (as the reassignment block above does
+    # via clear_dispatch_attempt_id) and would leave a parent attached even if
+    # a later guard in this function rejects the request.
+    #
+    # `updates` comes from model_dump(exclude_none=True), so an explicit
+    # `{"parent_task_id": null}` never reaches it — model_fields_set is what
+    # tells the two apart. Without that, a detach request would be the exact
+    # silent-200-no-op class this field's sibling bugs were about, so null is
+    # re-injected here to mean "make it a root card again".
+    if "parent_task_id" in payload.model_fields_set and "parent_task_id" not in updates:
+        updates["parent_task_id"] = None
+
+    _new_parent_id = updates.get("parent_task_id")
+    if "parent_task_id" in updates and _new_parent_id is not None:
+        if _new_parent_id == task.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"parent_task_id: Task {task.id} kann nicht sein eigener Parent sein.",
+            )
+        _new_parent = await session.get(Task, _new_parent_id)
+        if _new_parent is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"parent_task_id: Parent-Task {_new_parent_id} existiert nicht.",
+            )
+        if _new_parent.board_id != board_id:
+            raise HTTPException(
+                status_code=403,
+                detail="parent_task_id: Parent-Task gehoert nicht zu diesem Board.",
+            )
+        if _new_parent.status in ("done", "archived", "failed"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"parent_task_id: Parent-Task {_new_parent.id} hat Status "
+                    f"'{_new_parent.status}' — eine abgeschlossene Karte kann "
+                    f"keine neuen Kinder mehr aufnehmen."
+                ),
+            )
+        # Only a Board Lead may graft onto an arbitrary card; everyone else
+        # only onto a card they are themselves assigned to (parity with
+        # agent_delegate_task's B3 check).
+        if not agent.is_board_lead and _new_parent.assigned_agent_id != agent.id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"parent_task_id: Parent-Task {_new_parent.id} ist nicht deine "
+                    f"eigene Arbeit (assigned_agent_id stimmt nicht mit dir "
+                    f"ueberein). Nur Board-Leads duerfen beliebige Karten als "
+                    f"Parent setzen."
+                ),
+            )
+        # Ancestor-cycle guard: walk the proposed parent's chain upward and
+        # refuse if this task is anywhere in it.
+        #
+        # NO depth bound (task b410d705). A `_depth < 64` cap used to sit here;
+        # it made the check unsound rather than safe: a chain deeper than the
+        # cap was walked only partially, the loop fell through, and the attach
+        # was WRITTEN — the exact corruption this guard exists to prevent (a
+        # 70-link chain returned 200 and stored the cycle). Depth is also the
+        # wrong axis: `_seen` already bounds the walk at the number of
+        # DISTINCT tasks above the parent, because every node has exactly one
+        # parent pointer and a revisit can only mean the chain loops. So the
+        # loop below always terminates on its own — the set is the bound, and
+        # it is the tight one (a chain that is genuinely 10^4 deep is walked
+        # in full, a cycle is caught at the first repeat).
+        #
+        # A revisit therefore means the DATA is already damaged. That is not a
+        # "stop walking and carry on" case: the write would graft this task
+        # onto a loop every other hierarchy walk in the codebase assumes
+        # cannot exist. Refuse, and say what to do about it.
+        _seen: set[uuid.UUID] = {_new_parent.id}
+        _cursor_id = _new_parent.parent_task_id
+        while _cursor_id is not None:
+            if _cursor_id == task.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"parent_task_id: Task {task.id} ist bereits Vorfahre von "
+                        f"{_new_parent.id} — dieser Parent wuerde einen Zyklus "
+                        f"erzeugen."
+                    ),
+                )
+            if _cursor_id in _seen:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"parent_task_id: Die Parent-Kette von {_new_parent.id} "
+                        f"enthaelt bereits einen Zyklus — Task {_cursor_id} taucht "
+                        f"darin zweimal auf. Dieser Datenstand muss erst repariert "
+                        f"werden (parent_task_id der beteiligten Karte loesen, "
+                        f"z.B. per PATCH {{\"parent_task_id\": null}}); vorher kann "
+                        f"keine neue Verbindung gesetzt werden."
+                    ),
+                )
+            _seen.add(_cursor_id)
+            _cursor = await session.get(Task, _cursor_id)
+            if _cursor is None:
+                break
+            _cursor_id = _cursor.parent_task_id
 
     # ── Review safeguard: detect contradiction ──────────────────────────
     # If the reviewer sets "in_progress" but its last comment says "Approved"
