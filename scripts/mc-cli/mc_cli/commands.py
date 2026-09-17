@@ -14,11 +14,11 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from .client import Client
 from .config import Config
-from .errors import UsageError
+from .errors import ServerError, UsageError
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,25 @@ def _emit(data) -> None:
         print(data.get("id"))
         return
     print(json.dumps(data, indent=2, default=str))
+
+
+def _require_result(resp, *, verb: str) -> Any:
+    """Ein schreibendes Verb darf nicht ohne Beleg mit 0 enden.
+
+    Zweite Schicht zu `client._send` (siehe dessen Docstring): `_send` faellt
+    schon bei leerem 2xx-Body hart. Hier steht der Vertrag der Verben selbst
+    — `patch`/`review`/`delegate`/`group-doc` existieren WEGEN des Belegs
+    (neuer Status, Urteil, angelegte Karte). Kommt hier trotzdem `None` an,
+    ist die Wirkung unbelegt und ein Exit 0 waere eine Luege: genau die Form,
+    in der eine `mc delegate` ohne Karte nach Erfolg aussah (Live-Vorfall).
+    """
+    if resp is None:
+        raise ServerError(
+            f"{verb}: Server bestaetigt den Aufruf, liefert aber kein Ergebnis — "
+            f"die Wirkung ist unbelegt. Pruefe den Zustand mit `mc task` bzw. "
+            f"`mc detail`, bevor du den Aufruf wiederholst."
+        )
+    return resp
 
 
 def resolve_text_arg(value: str | None, *, verb: str) -> str:
@@ -92,7 +111,7 @@ def _patch_status(client: Client, cfg: Config, status: str, **extra) -> int:
     board_id, task_id = cfg.require_task_context()
     body = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
     resp = client.request("PATCH", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}", body=body)
-    _emit(resp)
+    _emit(_require_result(resp, verb=f"Statuswechsel nach '{status}'"))
     return 0
 
 
@@ -616,7 +635,7 @@ def _review_decision(args, client, cfg, *, decision: str, comment: str, verb: st
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
         body={"decision": decision, "comment": comment},
     )
-    _emit(resp)
+    _emit(_require_result(resp, verb=f"mc {verb}"))
     return 0
 
 
@@ -709,7 +728,7 @@ def _cmd_review_note(args, client, cfg):
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note",
         body={"decision": args.decision, "comment": feedback},
     )
-    _emit(resp)
+    _emit(_require_result(resp, verb="mc review-note"))
     return 0
 
 
@@ -1636,7 +1655,8 @@ def _cmd_group_doc(args, client, cfg):
         f"/api/v1/agent/groups/{args.group_id}/document",
         body={"content": content},
     )
-    _emit(resp)
+    _emit(_require_result(resp, verb="mc group-doc"))
+    return 0
 
 
 def _add_group_doc_args(p):
@@ -1914,12 +1934,15 @@ def _cmd_delegate(args, client, cfg):
         body["parent_task_id"] = args.parent
     if getattr(args, "repo", None):
         body["repo_id"] = args.repo
+    if getattr(args, "no_repo_reason", None):
+        body["no_repo_reason"] = args.no_repo_reason
 
     resp = client.request(
         "POST",
         f"/api/v1/agent/boards/{board_id}/delegate",
         body=body,
     )
+    _require_result(resp, verb="mc delegate")
     _emit(resp)
     return 0
 
@@ -1979,6 +2002,19 @@ def _add_delegate_args(p):
             "lehnt der Server ab. Jede Karte, die unsere eigene Codebasis "
             "anfasst, sollte das setzen — ohne Bindung landet ein Ad-hoc-Task "
             "(kein Projekt) im gemeinsamen Ad-hoc-Repo."
+        ),
+    )
+    p.add_argument(
+        "--no-repo-reason",
+        metavar="GRUND",
+        help=(
+            "Bewusst OHNE Repo-Bindung delegieren, mit Begruendung. Der Server "
+            "lehnt sonst jede Delegation ab, deren Titel/Beschreibung konkrete "
+            "Datei-Fundstellen nennt ('pfad/datei.py:123') und die weder --repo "
+            "noch ein Projekt traegt — solche Karten landeten sonst im "
+            "gemeinsamen Ad-hoc-Klon statt in der Codebasis. Nutze das fuer "
+            "Recherche/Doku oder Arbeit in einem anderen Repo; der Grund wird "
+            "als Kommentar an der Karte dokumentiert."
         ),
     )
 
