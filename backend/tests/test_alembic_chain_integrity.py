@@ -22,11 +22,13 @@ offending PR.
 from __future__ import annotations
 
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
 
 VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 32
 
 
@@ -104,3 +106,110 @@ def test_revision_ids_fit_the_version_column(
         f"(alembic_version.version_num is varchar(32); a fresh database cannot "
         "record it — see this module's docstring)."
     )
+
+
+def _new_migration_files() -> set[str] | None:
+    """Filenames under alembic/versions/ that exist on HEAD but not at the
+    merge-base with origin/main — i.e. new in this branch/PR. Returns None
+    (meaning: skip the caller) when origin/main isn't available to diff
+    against, e.g. a shallow clone or a sandbox with no remote configured.
+    """
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if merge_base.returncode != 0:
+            return None
+        base_sha = merge_base.stdout.strip()
+        diff = subprocess.run(
+            [
+                "git", "diff", "--name-only", "--diff-filter=A",
+                f"{base_sha}...HEAD", "--", "backend/alembic/versions/",
+            ],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+        )
+        if diff.returncode != 0:
+            return None
+        return {Path(line).name for line in diff.stdout.splitlines() if line.strip()}
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _calls_drop_column(source: str) -> bool:
+    """True if upgrade() calls op.drop_column(...) anywhere in its body.
+
+    AST, not a string search: a docstring or comment mentioning
+    "drop_column" (as several migrations in this repo do, to explain why
+    they deliberately DON'T) must not trip this.
+    """
+    tree = ast.parse(source)
+    upgrade_fn = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "upgrade"),
+        None,
+    )
+    if upgrade_fn is None:
+        return False
+    for node in ast.walk(upgrade_fn):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "drop_column"
+        ):
+            return True
+    return False
+
+
+def test_destructive_migration_not_introduced_alongside_its_own_expand_step() -> None:
+    """A migration that drops a column must not be new on this branch at the
+    same time as the migration it revises (its own `down_revision`, i.e. the
+    expand step it depends on) is ALSO new on this branch.
+
+    That combination is exactly what turned the 0201/0202 split (task
+    993840da) into a no-op (task cab1bfdd): 0202 (drop `agents.language`)
+    revised 0201 (add the replacement columns), both landed in the same PR,
+    0202 was the alembic head, and `docker-entrypoint.sh` runs `alembic
+    upgrade head` on every deploy — so the very first deploy ran both back
+    to back and dropped the column anyway. A destructive migration only
+    achieves anything as a *separate* deploy if the expand step it depends
+    on already shipped, which means that expand step must already be on
+    main — not introduced in the same branch.
+
+    Deliberately narrow: this does NOT forbid a destructive migration next
+    to unrelated new migrations, and does NOT forbid two expand-only
+    migrations landing together — either is fine. It only fires on the
+    specific shape that broke the 0201/0202 split: new destructive
+    migration + its own new parent, together.
+
+    Skips (does not fail) when origin/main can't be diffed against — this
+    guard only has meaning in a PR/branch context, not in a checkout with
+    no remote history.
+    """
+    new_files = _new_migration_files()
+    if new_files is None:
+        pytest.skip("origin/main not reachable to diff against — no branch context to guard")
+    if not new_files:
+        pytest.skip("no new migrations on this branch")
+
+    entries = {name: (rev, parents) for name, rev, parents in _parse()}
+    file_by_rev = {rev: name for name, (rev, _parents) in entries.items()}
+
+    violations = []
+    for name in sorted(new_files):
+        if name not in entries:
+            continue  # renamed away / not a versions file we can parse
+        rev, parents = entries[name]
+        source = (VERSIONS / name).read_text(encoding="utf-8")
+        if not _calls_drop_column(source):
+            continue
+        for parent_rev in parents:
+            parent_file = file_by_rev.get(parent_rev)
+            if parent_file is not None and parent_file in new_files:
+                violations.append(
+                    f"{name} drops a column and its own down_revision "
+                    f"{parent_file!r} is new on this branch too — both would "
+                    "run in the same `alembic upgrade head` deploy. Move the "
+                    "destructive migration to its own, later PR."
+                )
+
+    assert not violations, "\n".join(violations)
