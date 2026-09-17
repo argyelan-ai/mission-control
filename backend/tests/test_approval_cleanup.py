@@ -291,3 +291,118 @@ async def test_dependency_zombie_reconciliation_supersedes():
         approval = await s.get(Approval, ids["approval_id"])
         assert approval.status == "superseded"
         assert "reconciliation" in approval.resolver_note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing_status", ["done", "archived"])
+async def test_lead_escalation_superseded_when_card_closes(closing_status):
+    """lead_escalation → superseded when the card closes (done/archived).
+
+    A closed card has no open problem by definition — the pending escalation
+    leaves the operator's inbox with the card, marked closed-by-close so a
+    reader can tell it apart from an operator-answered escalation.
+    """
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], closing_status)
+        assert count == 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert approval.resolver_note == f"closed-by-close ({closing_status})"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_survives_failed_close():
+    """lead_escalation → NOT superseded when the card closes as failed.
+
+    failed is the opposite of done: the card closed with the problem still
+    standing — exactly where an unanswered lead question must remain visible
+    in the operator's inbox.
+    """
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "failed")
+        assert count == 0
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_survives_mere_status_flip():
+    """A status flip to a non-closing status does NOT close the escalation.
+
+    Load-bearing rule from the retract path (#617): a status flip alone is
+    not evidence that the lead reacted. Only a real card close does.
+    """
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    for flipped_status in ("review", "blocked", "waiting"):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            count = await cleanup_obsolete_approvals(s, ids["task_id"], flipped_status)
+            assert count == 0, flipped_status
+
+            from app.models.approval import Approval
+            approval = await s.get(Approval, ids["approval_id"])
+            assert approval.status == "pending", flipped_status
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_reconciliation_closes_on_done():
+    """The reconciliation safety net closes lead_escalation on a closed card."""
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "done"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await reconcile_stale_approvals(s)
+        assert count >= 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert approval.resolver_note == "closed-by-close (done)"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_reconciliation_keeps_failed():
+    """The reconciliation safety net does NOT close lead_escalation on failed."""
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "failed"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await reconcile_stale_approvals(s)
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_not_routed_through_valid_states():
+    """lead_escalation must stay OUT of APPROVAL_VALID_STATES.
+
+    Its semantics are the inverse of the generic mechanism: the generic
+    valid-states table supersedes when the task leaves the listed states,
+    which would close the escalation on ANY status change (including the
+    mere flips and failed). The close-on-close set + the evidence-based
+    retract path own this action_type exclusively.
+    """
+    from app.services.approval_cleanup import APPROVAL_VALID_STATES
+    assert "lead_escalation" not in APPROVAL_VALID_STATES
