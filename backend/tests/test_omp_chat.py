@@ -1066,7 +1066,7 @@ def test_preview_channel_binds_to_the_sessions_own_file(tmp_path):
 
 
 def test_preview_channel_never_resolves_a_foreign_sessions_file(tmp_path):
-    """Der Widerspruch im Sessions-Chat (Operator, 16.09.2026, Sparky): der
+    """Der Widerspruch im Sessions-Chat (Operator-Befund, 16.09.2026): der
     Container-Neustart legte eine NEUE, leere Session an — der Verlauf zeigte
     „No messages yet", waehrend LIVE PREVIEW den letzten Zug VOR dem
     Neustart nachspielte. ``preview_channel`` waehlte die juengste Datei in
