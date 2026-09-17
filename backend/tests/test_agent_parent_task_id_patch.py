@@ -224,6 +224,38 @@ async def test_non_lead_cannot_graft_onto_a_foreign_card(client, fake_redis):
     assert resp.status_code == 409, resp.text
     parent, _ = await _read_parent(task_id)
     assert parent is None
+    assert "Board-Lead" in resp.json()["detail"], (
+        "die Ablehnung muss die Ausnahme benennen, sonst ist 'nicht deine Arbeit' "
+        "von 'grundsaetzlich verboten' nicht zu unterscheiden"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lead_may_graft_onto_a_foreign_card(client, fake_redis):
+    """The other half of the role check: a Board Lead is the one role allowed
+    to hang a card under somebody else's (that is how an orphan gets repaired
+    under the lead's own structure). Without this case the guard is
+    indistinguishable from a blanket ownership ban — dropping `not
+    agent.is_board_lead` from it leaves every other test green."""
+    board = await _mk_board("LeadForeignGraft")
+    lead_id, lead_token = await _mk_agent(board, "Boss", lead=True)
+    owner_id, _ = await _mk_agent(board, "Owner")
+    foreign_parent = await _mk_task(board, "Owner's card", assignee=owner_id)
+    task_id = await _mk_task(board, "Lead card", assignee=lead_id)
+
+    with _BROADCAST_PATCH:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {lead_token}"},
+            json={"parent_task_id": str(foreign_parent)},
+        )
+
+    assert resp.status_code == 200, resp.text
+    parent, _ = await _read_parent(task_id)
+    assert parent == foreign_parent, (
+        "ein Board Lead muss auf eine fremde Karte pfropfen duerfen — genau das "
+        "ist der Reparaturweg fuer die Waisenkarten dieser Task"
+    )
 
 
 @pytest.mark.asyncio
