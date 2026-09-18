@@ -6,6 +6,13 @@ import { getToken, sseUrls } from "./api";
 interface SSEOptions {
   onEvent?: (event: string, data: Record<string, unknown>) => void;
   onError?: (error: Event) => void;
+  /** Fired every time `connect()` runs with a connection ALREADY in flight —
+   *  i.e. after a drop, a mobile resume, or a stale-stream reconnect, never on
+   *  the first mount. This is the only honest "the stream may have skipped
+   *  events" signal: the backend seeds a fresh tailer at EOF and never replays
+   *  what happened while we were away, so consumers must refetch. Do NOT turn
+   *  this into "every focus event": see the note on the chat-history query. */
+  onReconnect?: () => void;
   enabled?: boolean;
 }
 
@@ -42,10 +49,11 @@ const BACKOFF_MAX_MS = 30_000;
 const STALE_THRESHOLD_MS = 10_000; // reconnect if no message within this window after becoming visible
 
 export function useSSE(url: string, options: SSEOptions = {}) {
-  const { onEvent, onError, enabled = true } = options;
+  const { onEvent, onError, onReconnect, enabled = true } = options;
   const esRef = useRef<EventSource | null>(null);
   const onEventRef = useRef(onEvent);
   const onErrorRef = useRef(onError);
+  const onReconnectRef = useRef(onReconnect);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageAtRef = useRef<number>(Date.now());
@@ -54,6 +62,7 @@ export function useSSE(url: string, options: SSEOptions = {}) {
   useEffect(() => {
     onEventRef.current = onEvent;
     onErrorRef.current = onError;
+    onReconnectRef.current = onReconnect;
   });
 
   useEffect(() => {
@@ -122,6 +131,12 @@ export function useSSE(url: string, options: SSEOptions = {}) {
 
     function connect() {
       if (destroyedRef.current) return;
+      // A connection already in flight at entry means this is NOT the first
+      // mount: something dropped or was killed (iOS background, container
+      // restart, silent stall). Everything the backend broadcast in the
+      // meantime is gone — the tailer starts a fresh consumer at EOF and never
+      // replays — so this is the exact moment consumers must refetch.
+      const hadConnection = esRef.current !== null;
       if (esRef.current) {
         esRef.current.close();
         esRef.current = null;
@@ -129,6 +144,7 @@ export function useSSE(url: string, options: SSEOptions = {}) {
       const es = new EventSource(buildUrl(), { withCredentials: true });
       esRef.current = es;
       attachHandlers(es);
+      if (hadConnection) onReconnectRef.current?.();
     }
 
     // iOS M14: reconnect when tab becomes visible again and the connection is

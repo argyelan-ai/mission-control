@@ -1588,6 +1588,22 @@ describe("ChatView", () => {
     expect(screen.queryByText("beendet")).not.toBeInTheDocument();
   });
 
+  it("follows the LIVE state frame over a stale history session (badge must not freeze)", () => {
+    // Die Historien-Abfrage laedt bei Fokuswechsel nicht mehr neu (siehe
+    // useChatStream), die Sonde im Backend laeuft aber weiter und schickt
+    // jeden Wechsel als `state`-Frame — auch auf einem versteckten Tab. Ohne
+    // diesen Vorrang stuende der Badge dort fuer immer auf dem letzten Stand.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        state: { kind: "state", status: "idle", prompt: null, aliveness: "ended" },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "ended");
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+  });
+
   it("offers a Send (not a Stop) on an idle session — the morph follows the agent, not the session", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" } })

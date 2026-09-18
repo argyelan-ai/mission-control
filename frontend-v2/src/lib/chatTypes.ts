@@ -144,6 +144,10 @@ export interface StateEvent {
   kind: "state";
   status: "working" | "idle" | "waiting_input" | "permission_prompt" | "unknown";
   prompt: ChatPrompt | null;
+  /** The probe's liveness verdict, published with every `state` frame — also on
+   *  a hidden tab, since the backend probes regardless of focus. `null`/absent
+   *  from older backends; use `resolveSessionAliveness`, never read directly. */
+  aliveness?: ChatAliveness | null;
 }
 
 /** Emitted by the tailer when the newest `*.jsonl` under the agent's
@@ -238,6 +242,26 @@ export function resolveAliveness(session: ChatSession | null | undefined): ChatA
   if (!session) return "idle";
   if (session.aliveness) return session.aliveness;
   return session.live ? "active" : "idle";
+}
+
+/**
+ * The same verdict, but preferring the LIVE state frame over the history
+ * handshake — because the history query deliberately no longer refetches on
+ * window focus (`["chat-history", agentId]` in useChatStream), while the pane
+ * probe keeps publishing `state` frames on every change even on a hidden tab.
+ * Reading only `session` there would freeze the header badge at whatever the
+ * last history fetch said; reading the state frame keeps it honest without a
+ * single extra request.
+ *
+ * Precedence: state frame → history session → "idle". Both server fields come
+ * from the same `resolve_aliveness`; the state frame simply arrives later.
+ */
+export function resolveSessionAliveness(stream: {
+  state: StateEvent | null | undefined;
+  session: ChatSession | null | undefined;
+}): ChatAliveness {
+  if (stream.state?.aliveness) return stream.state.aliveness;
+  return resolveAliveness(stream.session);
 }
 
 /**
