@@ -243,6 +243,27 @@ def test_permission_request_and_decision_visible():
     assert "allow_once" in messages[1]["text"]
 
 
+def test_auto_approved_permission_is_written_but_not_displayed():
+    """`yolo`: nobody is actually being asked, so the request/decision pair
+    must not crowd the chat between every tool call (task 663f70fb) — but it
+    still has to reach the transcript file (`auto_approved=True` -> `display:
+    False`, the same gate `omp_chat._parse_custom_message` already honours
+    for `acp-preview`/silent notices, not a dropped entry)."""
+    mapper = acp_chat_events.ACPEventMapper()
+    params = {
+        "toolCall": {"toolCallId": "t9", "title": "rm -rf /tmp/x", "kind": "execute"},
+        "options": [{"optionId": "allow_once", "name": "Allow once"}],
+    }
+    lines = mapper.dump(mapper.map_permission_request(params, auto_approved=True))
+    lines += mapper.dump(mapper.map_permission_outcome(params, "allow_always", auto_approved=True))
+    joined = "\n".join(lines)
+    # written to the transcript file...
+    assert "acp-permission" in joined
+    assert "rm -rf /tmp/x" in joined
+    # ...but the reader the chat view uses renders nothing for it.
+    assert parse_all(lines) == []
+
+
 def test_bridge_run_transcribes_permission_roundtrip(tmp_path):
     """Integration: run_acp_once with a sink must write request + decision
     lines when a permission request crosses the wire, plus the streamed

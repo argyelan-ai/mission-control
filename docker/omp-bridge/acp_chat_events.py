@@ -262,10 +262,23 @@ class ACPEventMapper:
         if isinstance(usage, dict) and usage:
             self._prompt_usage = usage
 
-    def map_permission_request(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def map_permission_request(
+        self, params: dict[str, Any], *, auto_approved: bool = False
+    ) -> list[dict[str, Any]]:
         """`session/request_permission` -> a visible custom_message line
         (teammate role in the chat view): the operator sees WHAT asked and
-        which choices existed."""
+        which choices existed.
+
+        ``auto_approved`` (the caller's `yolo` policy: nobody is actually
+        being asked, `bridge._acp_permission_decision` answers on its own)
+        sets ``display: False`` instead of dropping the entry — the line
+        stays in the transcript file (still useful for a later `dump`/replay
+        read), but `omp_chat._parse_custom_message`'s existing `display is
+        False` gate (same one `acp-preview`/silent notices already rely on)
+        keeps it out of the chat the operator reads. Task 663f70fb: five of
+        these interleaved with every tool card crowded out the actual
+        conversation, and a policy that never asks has nothing to show.
+        """
         tool = params.get("toolCall") or {}
         title = self._tool_title_of(tool)
         kind = tool.get("kind") or "tool"
@@ -283,7 +296,7 @@ class ACPEventMapper:
                 "type": "custom_message",
                 "customType": "acp-permission",
                 "content": question,
-                "display": True,
+                "display": not auto_approved,
                 "attribution": "agent",
                 "id": self._next_id(),
                 "parentId": None,
@@ -291,8 +304,14 @@ class ACPEventMapper:
             }
         ]
 
-    def map_permission_outcome(self, params: dict[str, Any], choice: str) -> list[dict[str, Any]]:
-        """The decision taken on a permission request, as its own line."""
+    def map_permission_outcome(
+        self, params: dict[str, Any], choice: str, *, auto_approved: bool = False
+    ) -> list[dict[str, Any]]:
+        """The decision taken on a permission request, as its own line.
+
+        Same ``auto_approved`` -> ``display: False`` rule as
+        :meth:`map_permission_request` — see its docstring.
+        """
         tool = params.get("toolCall") or {}
         title = self._tool_title_of(tool)
         return [
@@ -300,7 +319,7 @@ class ACPEventMapper:
                 "type": "custom_message",
                 "customType": "acp-permission-decision",
                 "content": f"Freigabe entschieden: {choice} — {title}",
-                "display": True,
+                "display": not auto_approved,
                 "attribution": "agent",
                 "id": self._next_id(),
                 "parentId": None,

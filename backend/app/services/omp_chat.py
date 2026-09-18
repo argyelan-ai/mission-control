@@ -353,23 +353,41 @@ def build_tool_title(name: str, args: dict[str, Any]) -> str:
 
     omp-Werkzeuge heissen klein (``read``, ``bash``, ``edit``, …) und tragen
     ihre Argumente unter anderen Schluesseln als Claude Code (``path`` statt
-    ``file_path``, ``command``, ``pattern``). Zusaetzlich gibt es ``i`` — omps
-    eigene Kurzabsicht („Checking workspace layout"), die als Titel dient,
-    wenn das Werkzeug sonst kein sprechendes Argument hat.
+    ``file_path``, ``command``, ``pattern``). Zusaetzlich gibt es ``i`` — die
+    Kurzabsicht, die manche Treiber (z.B. `hermes acp`, docker/omp-bridge/
+    acp_chat_events.py `_tool_seed`) als EINZIGES Argument mitschicken, ohne
+    ``command``/``path``/``pattern`` ueberhaupt zu setzen. Ein Titel, der nur
+    auf dem sprechenden Argument aufbaut, wird dann leer (bzw. beim Bash-Titel
+    zum nackten ``"$"``) — jeder Zweig faellt deshalb selbst auf ``i`` zurueck,
+    bevor der Aufrufer ganz am Werkzeugnamen landet.
     """
+    intent = args.get("i")
+    intent = intent.strip() if isinstance(intent, str) else ""
+
     if name in _PATH_TOOLS:
-        title = f"{_PATH_TOOLS[name]} {_basename(args.get('path'))}".strip()
+        base = _basename(args.get("path"))
+        if base:
+            title = f"{_PATH_TOOLS[name]} {base}".strip()
+        else:
+            title = f"{_PATH_TOOLS[name]}: {intent}" if intent else ""
     elif name == "bash":
-        title = f"$ {args.get('command', '')}"
+        command = args.get("command")
+        if isinstance(command, str) and command.strip():
+            title = f"$ {command}"
+        else:
+            title = f"$ {intent}" if intent else ""
     elif name == "grep":
-        title = f'Search "{args.get("pattern", "")}"'
+        pattern = args.get("pattern")
+        if isinstance(pattern, str) and pattern.strip():
+            title = f'Search "{pattern}"'
+        else:
+            title = f"Search: {intent}" if intent else ""
     elif name == "browser":
         title = f"Browser {args.get('action', '')} {args.get('url', '')}".strip()
     elif name == "todo":
         title = f"Todo {args.get('op', '')}".strip()
     else:
-        intent = args.get("i")
-        title = f"{name}: {intent}" if isinstance(intent, str) and intent else name
+        title = f"{name}: {intent}" if intent else ""
 
     return _truncate_title(title.strip() or name)
 
