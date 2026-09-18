@@ -522,10 +522,44 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   const queryEnabled = enabled && !!agentId;
 
+  /* Diese Abfrage traegt den GANZEN Gespraechsverlauf — sie darf nicht als
+     billiger Listen-Abruf behandelt werden. Ohne eigene Angaben erbte sie die
+     globalen Vorgaben (`providers.tsx`: staleTime 5 s, refetchOnWindowFocus
+     true) und lud damit bei JEDEM Fokuswechsel neu, auch ohne dass irgendetwas
+     passiert war (Messung 18.09.2026: 2 von 5 Abrufen waren reine
+     Fokus-Refetches bei null Bedienung).
+
+     `staleTime: Infinity` ist hier korrekt und nicht bloss sparsam: Jeder
+     Anlass, der wirklich frische Daten braucht, hat seinen EIGENEN Ausloeser —
+     Mount und Agentenwechsel (queryKey), `session_changed` (Rollover),
+     `/model` (Faehigkeiten), und der Wiederaufbau des Live-Stroms
+     (`onReconnect` unten, der einzige Fall, in dem das Backend Ereignisse
+     verschluckt hat: der Tailer steigt am Dateiende ein und spielt nichts nach).
+
+     Merken: Ein pauschales `refetchOnWindowFocus: false` OHNE diesen
+     Reconnect-Refetch war schon einmal der Fehler — das Transkript blieb nach
+     "Handy sperren, entsperren" dauerhaft auf dem alten Stand (`seededAtRef`).
+     Die Fokus-Vorgabe faellt hier nur weg, weil der Reconnect sie praezise
+     ersetzt.
+
+     `refetchOnMount: "always"` schliesst die Luecke, die `staleTime: Infinity`
+     sonst reissen wuerde: Beim Verlassen eines Agenten wird dessen Tailer
+     abgeraeumt (`TailerManager.release` cancelt die Aufgabe), beim Zurueck-
+     kommen frisch am DATEIENDE aufgesetzt (`acquire` setzt den Start auf
+     `path.stat().st_size`) — alles, was in der Zwischenzeit geschrieben wurde,
+     kommt nie ueber den Strom. Die Historie ist die einzige Quelle dafuer.
+     Ohne dieses Neuladen zeigte ein zurueckgeholter Agent seinen Verlauf von
+     vor dem Wechsel dauerhaft, obwohl seither ein ganzes Gespraech lief
+     (Messung 18.09.2026: Schritt 7 der Harness blieb bei 2 Abrufen). Beim
+     ERSTEN Oeffnen kostet das nichts — der Cache ist dann leer, es bleibt bei
+     genau einem Abruf. */
   const historyQuery = useQuery({
     queryKey: ["chat-history", agentId],
     queryFn: () => api.chat.history(agentId as string),
     enabled: queryEnabled,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnMount: "always",
   });
 
   useEffect(() => {
@@ -739,10 +773,22 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   const onSSEError = useCallback(() => setConnected(false), []);
 
+  /* Der einzige verbliebene Anlass, die Historie neu zu laden, ohne dass der
+     Operator etwas getan hat — und der einzige, der ihn rechtfertigt: Beim
+     Wiederaufbau des Stroms ist das Backend bereits weitergelaufen. Ein
+     frischer Tailer steigt am DATEIENDE ein und spielt nichts nach (siehe
+     `acquire` in transcript_chat.py), ein zweiter Client an derselben Datei
+     bekommt nur den zwischengespeicherten Zustand. Alles, was waehrend des
+     Ausfalls geschah, ist allein ueber die Historie zurueckzuholen. */
+  const onSSEReconnect = useCallback(() => {
+    historyQuery.refetch();
+  }, [historyQuery]);
+
   useSSE(streamUrl, {
     enabled: queryEnabled && !!streamUrl,
     onEvent: onSSEEvent,
     onError: onSSEError,
+    onReconnect: onSSEReconnect,
   });
 
   return {

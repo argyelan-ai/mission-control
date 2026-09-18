@@ -26,7 +26,7 @@ import { C } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
-import { isAgentStartingError, isNoTranscriptError, resolveAliveness } from "@/lib/chatTypes";
+import { isAgentStartingError, isNoTranscriptError, resolveSessionAliveness } from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
@@ -651,9 +651,10 @@ export function ChatView({
   }
   const modelBadges = modelBadgeUuids(visibleEvents);
   const liveUuid = liveEventUuid(visibleEvents, stream.state?.status ?? null);
-  // Single source for how alive this session is — see resolveAliveness for why
-  // a missing server field must never be read as "ended".
-  const aliveness = resolveAliveness(stream.session);
+  // Single source for how alive this session is — the LIVE state frame wins
+  // over the history handshake, because the history query no longer refetches
+  // on focus while the pane probe keeps publishing (see resolveSessionAliveness).
+  const aliveness = resolveSessionAliveness(stream);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
   // Welches Abzeichen die Kopfzeile gerade zeigt — dieselbe Bedingung wie
   // unten im JSX, hier einmal als Wert, damit die Platzberechnung nicht raet.
