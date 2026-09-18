@@ -3109,7 +3109,16 @@ async def agent_poll(
     # bridge/poll.sh cross-check a delivered task's `assigned_agent_id`
     # against its own identity before pasting a dispatch, without needing
     # any new provisioning/env plumbing.
-    _poll_extra: dict = {"new_comments": new_comments, "my_agent_id": str(agent.id)}
+    # `is_board_lead`: poll.sh must never fire /clear on a Board Lead (incident
+    # 2026-09-18 — a Lead creates cards itself and works across card
+    # boundaries, so every self-created card looked like a "new task" and
+    # destroyed the running orchestration turn). The role is authoritative
+    # here and nowhere else: no agent-name matching on the client side.
+    _poll_extra: dict = {
+        "new_comments": new_comments,
+        "my_agent_id": str(agent.id),
+        "is_board_lead": bool(agent.is_board_lead),
+    }
     if getattr(agent, "comm_v2", False):
         acked: dict[str, int] = {}
         if acked_seq:
