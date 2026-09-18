@@ -143,24 +143,37 @@ def send_keys_argv(socket_path: str, session_name: str, item) -> list[str]:
     raise ValueError(f"invalid key item: {item!r}")
 
 
-async def run_tmux(argv: list[str]) -> None:
-    """Fuehrt einen tmux-Aufruf aus; RuntimeError mit stderr bei Exit != 0."""
+async def run_tmux(argv: list[str]) -> str:
+    """Fuehrt einen tmux-Aufruf aus; RuntimeError bei Exit != 0, sonst stdout."""
     proc = await asyncio.create_subprocess_exec(
         *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
-        _out, err = await asyncio.wait_for(proc.communicate(), TMUX_TIMEOUT)
+        out, err = await asyncio.wait_for(proc.communicate(), TMUX_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
         raise RuntimeError(f"tmux timed out after {TMUX_TIMEOUT}s")
     if proc.returncode != 0:
         raise RuntimeError(err.decode(errors="replace").strip() or f"tmux exit {proc.returncode}")
+    return out.decode(errors="replace")
+
+
+def pane_mode_argv(socket_path: str, session_name: str) -> list[str]:
+    """Copy-mode-Erkennung: leerer Output = kein Mode, sonst z. B. 'copy-mode'.
+    In copy-mode verschluckt tmux send-keys kommentarlos bei rc=0 — der Text
+    erreicht das TUI nie, die Bridge darf hier KEIN Erfolg-Ack schicken."""
+    return [
+        "tmux", "-S", socket_path, "display-message", "-p",
+        "-t", session_name, "#{pane_mode}",
+    ]
 
 
 async def keys_handler(ws, session_name: str, socket_path: str, run=run_tmux) -> None:
     """?mode=keys: pro Frame ein send_keys-Batch, pro Batch genau ein Ack.
     Bricht den Batch beim ersten tmux-Fehler ab — ein Enter ohne den Text
-    davor waere schlimmer als gar nichts."""
+    davor waere schlimmer als gar nichts. Lehnt den ganzen Batch ab, wenn das
+    Ziel-Pane in einem Mode steht (copy-mode): send-keys waere ein stilles
+    rc=0-Versehlucken, das Ack haette Erfolg gemeldet, wo nichts ankam."""
     async def ack(ok: bool, **fields) -> None:
         await ws.send(json.dumps({"type": "ack", "ok": ok, **fields}))
 
@@ -178,6 +191,15 @@ async def keys_handler(ws, session_name: str, socket_path: str, run=run_tmux) ->
         except ValueError as e:
             await ack(False, error=str(e))
             continue
+        try:
+            pane_mode = (await run(pane_mode_argv(socket_path, session_name))).strip()
+        except Exception:  # noqa: BLE001 — Probe unmoeglich: send-keys entscheidet selbst
+            pane_mode = ""
+        if pane_mode:
+            print(f"[bridge] send_keys refused: pane in {pane_mode!r} (session={session_name})", file=sys.stderr)
+            await ack(False, pane_mode=pane_mode,
+                      error=f"pane is in {pane_mode!r}; keys would be swallowed — leave copy-mode first")
+            continue
         sent = 0
         try:
             for argv in argvs:
@@ -187,7 +209,7 @@ async def keys_handler(ws, session_name: str, socket_path: str, run=run_tmux) ->
             print(f"[bridge] send_keys failed after {sent}/{len(argvs)} (session={session_name}): {e}", file=sys.stderr)
             await ack(False, error=str(e), sent=sent)
             continue
-        print(f"[bridge] send_keys: {sent} key(s) delivered (session={session_name})", file=sys.stderr)
+        print(f"[bridge] send_keys: {sent} key(s) delivered (session={session_name}, pane_mode={pane_mode!r})", file=sys.stderr)
         await ack(True, sent=sent)
 
 

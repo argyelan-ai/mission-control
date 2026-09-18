@@ -74,14 +74,57 @@ def test_keys_mode_runs_every_key_in_order_then_acks():
 
     async def fake_run(argv):
         calls.append(argv)
+        return ""  # leerer pane_mode: kein Mode aktiv
 
     ws = _FakeWS([json.dumps({"type": "send_keys", "keys": [
         {"literal": "hallo"}, {"named": "Enter"},
     ]})])
     _run(server.keys_handler(ws, "boss-host:0", SOCK, run=fake_run))
 
-    assert [c[-1] for c in calls] == ["hallo", "Enter"]
+    assert calls[0][-1] == "#{pane_mode}"       # Mode-Probe geht den Keys voraus
+    assert [c[-1] for c in calls[1:]] == ["hallo", "Enter"]
     assert ws.sent == [{"type": "ack", "ok": True, "sent": 2}]
+
+
+def test_keys_mode_refuses_the_batch_when_pane_is_in_copy_mode():
+    """Copy-mode verschluckt send-keys bei rc=0 still — die Bridge muss den
+    Batch ablehnen (ok:false, pane_mode), statt Erfolg zu melden. Der Chat
+    macht daraus 502, der Operator sieht den Fehler statt einer verschwundenen
+    Nachricht. Faellt der Check weg, laeuft dieser Test auf ok:true."""
+    calls = []
+
+    async def fake_run(argv):
+        calls.append(argv)
+        if "display-message" in argv:
+            return "copy-mode"
+        return ""
+
+    ws = _FakeWS([json.dumps({"type": "send_keys", "keys": [
+        {"literal": "hallo"}, {"named": "Enter"},
+    ]})])
+    _run(server.keys_handler(ws, "boss-host:0", SOCK, run=fake_run))
+
+    assert [c for c in calls if "send-keys" in c] == []   # keine Taste ging raus
+    assert ws.sent == [{"type": "ack", "ok": False, "pane_mode": "copy-mode",
+                        "error": "pane is in 'copy-mode'; keys would be swallowed — leave copy-mode first"}]
+
+
+def test_keys_mode_probe_failure_falls_through_to_send_keys():
+    """Schlaegt die Mode-Probe fehl (z. B. Server weg), entscheidet send-keys
+    selbst — dessen rc/Fehler landet eh im Ack."""
+    calls = []
+
+    async def fake_run(argv):
+        calls.append(argv)
+        if "display-message" in argv:
+            raise RuntimeError("no server running on /tmp/tmux-501/default")
+        return ""
+
+    ws = _FakeWS([json.dumps({"type": "send_keys", "keys": [{"named": "Enter"}]})])
+    _run(server.keys_handler(ws, "boss-host:0", SOCK, run=fake_run))
+
+    assert any("send-keys" in c for c in calls)
+    assert ws.sent == [{"type": "ack", "ok": True, "sent": 1}]
 
 
 def test_keys_mode_reports_tmux_failure_in_the_ack_and_stops_the_batch():
@@ -89,6 +132,8 @@ def test_keys_mode_reports_tmux_failure_in_the_ack_and_stops_the_batch():
 
     async def fake_run(argv):
         calls.append(argv)
+        if "display-message" in argv:
+            return ""   # Probe laeuft, erst send-keys faellt auf die Nase
         raise RuntimeError("no server running on /tmp/tmux-501/default")
 
     ws = _FakeWS([json.dumps({"type": "send_keys", "keys": [
@@ -96,7 +141,7 @@ def test_keys_mode_reports_tmux_failure_in_the_ack_and_stops_the_batch():
     ]})])
     _run(server.keys_handler(ws, "boss-host:0", SOCK, run=fake_run))
 
-    assert len(calls) == 1                      # Enter wird nach dem Fehler nicht mehr versucht
+    assert len(calls) == 2                      # Probe + erster send-keys; Enter wird nach dem Fehler nicht mehr versucht
     assert ws.sent[0]["type"] == "ack"
     assert ws.sent[0]["ok"] is False
     assert "no server running" in ws.sent[0]["error"]
