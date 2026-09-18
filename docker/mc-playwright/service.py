@@ -41,6 +41,7 @@ from media import (
     BrandingSpec,
     ComposeRequest,
     ComposeResponse,
+    LoginSpec,
     RecordRequest,
     RecordResponse,
     TranscodeRequest,
@@ -48,6 +49,7 @@ from media import (
     build_branded_compose_cmd,
     build_compose_cmd,
     build_pipe_encode_cmd,
+    build_storage_state,
     build_transcode_poster_cmd,
     build_transcode_video_cmd,
     clamp_poster_at_s,
@@ -66,9 +68,6 @@ app = FastAPI(title="mc-playwright visual verifier", version="1.1.0")
 # Shared Volume — Backend + dieser Service schreiben/lesen beide hier.
 SHARED_DELIVERABLES = Path(os.environ.get("SHARED_DELIVERABLES", "/shared-deliverables"))
 
-# LocalStorage-Key den das MC-Frontend nutzt (frontend-v2/src/lib/api.ts)
-MC_AUTH_STORAGE_KEY = "mc_auth_token"
-
 
 def _safe_filename(name: str) -> str:
     """URL- und pfad-sichere Filenames fuer Screenshots."""
@@ -84,37 +83,6 @@ def _task_dir(task_id: str) -> Path:
 # ──────────────────────────────────────────────────────────────────────────────
 # Pydantic Schemas
 # ──────────────────────────────────────────────────────────────────────────────
-
-
-class LoginSpec(BaseModel):
-    """Form-basierter Login.
-
-    Flow: navigate(url) → fill(user_selector, username) → fill(pass_selector, password)
-          → click(submit_selector) → wait for URL oder Selector.
-    """
-    url: str = Field(description="Login-Page URL (z.B. http://caddy/login)")
-    username: str
-    password: str
-    username_selector: str = Field(
-        default='input[type="email"], input[name="email"], input[name="username"]',
-        description="CSS-Selector fuer Username/Email-Feld",
-    )
-    password_selector: str = Field(
-        default='input[type="password"]',
-        description="CSS-Selector fuer Password-Feld",
-    )
-    submit_selector: str = Field(
-        default='button[type="submit"]',
-        description="CSS-Selector fuer Submit-Button",
-    )
-    wait_for_url: str | None = Field(
-        default=None,
-        description="Regex — wartet bis URL matcht. Alternative: wait_for_selector.",
-    )
-    wait_for_selector: str | None = Field(
-        default=None,
-        description="CSS-Selector — wartet bis sichtbar. Alternative zu wait_for_url.",
-    )
 
 
 class InteractionSpec(BaseModel):
@@ -183,30 +151,6 @@ class MetricsResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _build_storage_state(target_url: str, auth_token: str | None) -> dict | None:
-    """Baut storage_state dict fuer new_context — setzt localStorage[key]=token
-    fuer den Origin von target_url.
-
-    Wichtig: storage_state muss BEIM Context-Create uebergeben werden — das ist
-    race-frei (anders als `page.add_init_script` das bei navigation-timing
-    klemmen kann wenn Client-JS beim Hydrate localStorage schon liest).
-    """
-    if not auth_token:
-        return None
-    parsed = urlparse(target_url)
-    if not parsed.scheme or not parsed.netloc:
-        logger.warning("cannot build storage_state — invalid target_url: %s", target_url)
-        return None
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    return {
-        "cookies": [],
-        "origins": [{
-            "origin": origin,
-            "localStorage": [{"name": MC_AUTH_STORAGE_KEY, "value": auth_token}],
-        }],
-    }
-
-
 async def _new_context_with_auth(
     browser: Browser,
     viewport: dict,
@@ -219,7 +163,7 @@ async def _new_context_with_auth(
     irgendeine Page geladen wird im richtigen Origin. Fallback: wenn
     target_url keinen validen origin hat, wird ohne storage_state erstellt.
     """
-    state = _build_storage_state(target_url, auth_token)
+    state = build_storage_state(target_url, auth_token)
     if state is not None:
         logger.info(
             "auth_token pre-set via storage_state (origin=%s)",
