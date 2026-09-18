@@ -7,24 +7,23 @@ mask — the tester almost signed off a `visual_proof` card on the strength
 of a login page. Investigation found the login-injection machinery
 (auth_token → localStorage, credential_id → form-login) already fully
 built and, once actually exercised end to end against the live stack,
-working correctly — but with ZERO automated test coverage for the part
-that actually drives the browser. `test_visual_verify_endpoint.py`
-explicitly says "the real Playwright call is mocked — the mc-playwright
-container is covered by a separate live test", but that separate live test
-never existed. This file is the fast half of closing that gap; the actual
-browser-driven form-login is covered by test_login_live.py (opt-in, needs
-a running stack).
+that actually drives the browser. This file closes the pure-function half
+of that gap (LoginSpec defaults, storage-state building). The actual
+browser-driven form-login still has NO automated coverage — it is only
+exercised by hand against the live stack; do not claim otherwise here.
 
 Run (same pattern as test_media.py — no playwright needed, media.py is
 deliberately playwright-free):
     cd backend && python -m pytest ../docker/mc-playwright/tests/test_login.py -v
 """
+import re
+from pathlib import Path
+
 from media import (
     MC_AUTH_STORAGE_KEY,
     LoginSpec,
     build_storage_state,
 )
-
 
 # ── LoginSpec defaults match the REAL MC login form ─────────────────────────
 #
@@ -44,15 +43,68 @@ def test_login_spec_defaults_match_mc_login_form():
     input attributes drift apart, mc-playwright's default form-login goes
     silently blind again (this is the exact incident class — a login that
     LOOKS wired but never actually clicks anything, or clicks the wrong
-    thing)."""
+    thing).
+
+    This reads the REAL form source (frontend-v2/src/app/login/page.tsx)
+    and checks LoginSpec's selectors against the attributes actually found
+    there — hardcoded literals below are the expected contract (the ids
+    media.py's LoginSpec docstring names), the file is reality.
+    """
+    login_page = (
+        Path(__file__).resolve().parents[3]
+        / "frontend-v2" / "src" / "app" / "login" / "page.tsx"
+    )
+    src = login_page.read_text()
+
+    # Parse every <input .../> element: id + effective initial type.
+    # `type={showPassword ? "text" : "password"}` is a JSX expression —
+    # showPassword starts false, so the type Playwright sees on page load
+    # (before the eye toggle) is "password".
+    inputs: dict[str, str] = {}
+    for body in re.findall(r"<input\b(.*?)/>", src, re.S):
+        id_m = re.search(r'\bid="([\w-]+)"', body)
+        type_m = re.search(r'\btype="([\w-]+)"', body)
+        if type_m:
+            ftype = type_m.group(1)
+        else:
+            expr = re.search(r"\btype=\{([^}]*)\}", body)
+            ftype = "password" if expr and "password" in expr.group(1) else None
+        if id_m and ftype:
+            inputs[id_m.group(1)] = ftype
+
     spec = LoginSpec(url="http://caddy/login", username="x", password="y")
 
-    # id="email" type="email" — the login page's real markup.
-    assert 'input[type="email"]' in spec.username_selector
+    # The email field: the form's only type="email" input, and its id is
+    # the one media.py's LoginSpec docstring names ("email").
+    email_ids = [i for i, t in inputs.items() if t == "email"]
+    assert email_ids == ["email"], f"real form email input ids: {email_ids}"
+    assert _css_matches(spec.username_selector, "input", {"id": "email", "type": "email"})
     # id="password" type="password" (initial state before the eye toggle).
-    assert spec.password_selector == 'input[type="password"]'
+    assert inputs.get("password") == "password", "real form has no #password input"
+    assert _css_matches(spec.password_selector, "input", {"id": "password", "type": "password"})
     # <button type="submit"> — the only submit button on the login form.
-    assert spec.submit_selector == 'button[type="submit"]'
+    assert re.search(r'<button\b[^>]*type="submit"', src, re.S)
+    assert _css_matches(spec.submit_selector, "button", {"type": "submit"})
+
+
+def _css_matches(selector: str, tag: str, attrs: dict[str, str]) -> bool:
+    """Minimal CSS matcher (tag, #id, [attr="value"], comma alternatives) —
+    exactly the grammar LoginSpec's default selectors use."""
+    for alt in selector.split(","):
+        alt = alt.strip()
+        m = re.fullmatch(
+            r"(\w+)?(?:#([\w-]+))?(?:\[([\w-]+)=\"([^\"]*)\"\])?", alt
+        )
+        assert m is not None, f"selector grammar unsupported: {alt!r}"
+        sel_tag, sel_id, sel_attr, sel_val = m.groups()
+        if sel_tag and sel_tag != tag:
+            continue
+        if sel_id and attrs.get("id") != sel_id:
+            continue
+        if sel_attr and attrs.get(sel_attr) != sel_val:
+            continue
+        return True
+    return False
 
 
 def test_login_spec_requires_url_username_password():

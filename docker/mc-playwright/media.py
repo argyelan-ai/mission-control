@@ -610,4 +610,3 @@ def build_storage_state(target_url: str, auth_token: str | None) -> dict | None:
             "localStorage": [{"name": MC_AUTH_STORAGE_KEY, "value": auth_token}],
         }],
     }
-    return cmd

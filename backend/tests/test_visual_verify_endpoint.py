@@ -1,8 +1,11 @@
 """Tests for /agent/tasks/{id}/visual-verify endpoint + TelegramReports media group.
 
 Tests the integration layer between the MC backend and the mc-playwright service.
-The real Playwright call is mocked — the mc-playwright container is covered
-by a separate live test.
+The real Playwright call is mocked — the mc-playwright container's
+pure-function layer (login spec, storage state, request models, ffmpeg
+command builders) is covered by docker/mc-playwright/tests/{test_login,
+test_media}.py; the browser-driven form-login itself has no automated
+coverage and is only exercised by hand against the live stack.
 """
 
 import uuid
