@@ -187,6 +187,38 @@ _input_field_tail_lines() {
 # Dasselbe progressive Shrinking (full/50%/25%) + der last_line-Anker wie
 # verify_paste_landed. Kein Probe-Loop: der Aufrufer (paste_and_submit) steuert
 # Timing und Retries.
+#
+# _cpo_drop_last_lines N — stdin kopieren, ohne die letzten N Zeilen.
+#
+# Ersetzt das fruehere `head` mit NEGATIVER Zaehlung: GNU-head versteht sie
+# ("alles bis auf die letzten N"), BSD/macOS-head kennt sie nicht — er bricht
+# mit "illegal line count" auf stderr und rc 1 ab und gibt NICHTS aus. Das
+# trifft beide Aufrufstellen hier (body und body_markers) und damit die
+# Verlauf/Feld-Trennung. Gemessen mit BSD-Stub (backend/tests/
+# test_paste_classify.sh, Faelle C12/C12b): `body` und `body_markers` kamen
+# leer zurueck, der Verlauf-Match fiel aus und ein laengst ABGESENDETER Paste
+# meldete "1 = gar nicht angekommen" — sowohl beim Fingerprint im Verlauf als
+# auch beim Collapse-Marker im Verlauf. Der Aufrufer wiederholte darauf den
+# kompletten Paste gegen ein Pane, das den Text schon hatte (Doppel-
+# Zustellung). Kein CI-Rot: alle Lanes liefen auf GNU-head.
+#
+# Ein Durchlauf, EIN Leser: stdin ist hier eine Pipe und laesst sich nicht
+# zweimal lesen — ein vorangestelltes `wc -l` saugt sie leer und die Ausgabe
+# waere immer leer. awk haelt die Zeilen bis zur Entscheidung (Pane-Captures
+# sind durch PASTE_SCROLLBACK_LINES begrenzt) und beendet auch bei leerer
+# Eingabe mit rc 0; unter `set -euo pipefail` wuerde ein rc ungleich 0
+# ausgerechnet die Klassifikation abbrechen.
+_cpo_drop_last_lines() {
+    awk -v drop="$1" '
+        { lines[NR] = $0 }
+        END {
+            keep = NR - drop
+            if (keep < 0) keep = 0
+            for (i = 1; i <= keep; i++) print lines[i]
+        }
+    '
+}
+
 classify_paste_outcome() {
     local file="$1"
     local full
@@ -233,7 +265,7 @@ classify_paste_outcome() {
     fi
     # Alles OBERHALB des Eingabefelds ist Verlauf. Steht der Fingerprint hier,
     # hat die TUI die Nachricht gerendert — sie ist also abgesendet.
-    body=$(echo "$pane" | head -n -"$input_tail_lines")
+    body=$(echo "$pane" | _cpo_drop_last_lines "$input_tail_lines")
 
     # ── Collapse-Marker-Pfad ────────────────────────────────────────────
     # claude-cli >= 2.x faltet mehrzeilige Pastes zu `[Pasted text #N +M lines]`
@@ -260,7 +292,7 @@ classify_paste_outcome() {
     local window body_markers tail_markers
     window=$(printf '%s\n' "$pane" | tail -n "$collapse_tail")
     if _cpo_field_anchored "$pane"; then
-        body_markers=$(printf '%s\n' "$window" | head -n -"$input_tail_lines" | grep -cF '[Pasted text' 2>/dev/null || true)
+        body_markers=$(printf '%s\n' "$window" | _cpo_drop_last_lines "$input_tail_lines" | grep -cF '[Pasted text' 2>/dev/null || true)
         tail_markers=$(printf '%s\n' "$tail_pane" | grep -cF '[Pasted text' 2>/dev/null || true)
     else
         # Keine erkennbare Box: die Grenze waere geraten, ein Marker liesse sich
