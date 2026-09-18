@@ -910,10 +910,17 @@ run_task() {
     # state=new_task — this is defense in depth for whatever slips past it.
     # Missing fields (older backend without assigned_agent_id/my_agent_id)
     # fail OPEN — this must never become the reason a legit dispatch drops.
-    local task_status task_assigned_agent_id my_agent_id
+    local task_status task_assigned_agent_id my_agent_id is_board_lead
     task_status=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('status') or '')" 2>/dev/null || echo "")
     task_assigned_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('assigned_agent_id') or '')" 2>/dev/null || echo "")
     my_agent_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('my_agent_id') or '')" 2>/dev/null || echo "")
+    # Rolle fuer das /clear-Gate unten. Kommt AUSSCHLIESSLICH aus der Poll-
+    # Response (Top-Level-Key `is_board_lead`) — NIEMALS aus Agent-Namen
+    # ableiten: die Namenskonvention ist kein Vertrag, und ein umbenannter
+    # Lead wuerde seine laufende Orchestrierung verlieren. Alles ausser dem
+    # literalen `True` gilt als false; ein fehlender Key (aelteres Backend)
+    # darf den Dispatch nicht brechen.
+    is_board_lead=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('is_board_lead'))" 2>/dev/null || echo "")
     if [ "$task_status" = "done" ] || [ "$task_status" = "failed" ]; then
         log "GUARD 1: Task $task_id hat status=$task_status — Dispatch verweigert (erledigte Karte)"
         return
@@ -1042,11 +1049,41 @@ except Exception:
             if [ "$prev_status" = "in_progress" ]; then
                 log "WARNING: Task $task_id kam, aber vorheriger Task $LAST_DISPATCHED_TASK_ID ist noch in_progress — /clear UEBERSPRUNGEN (Context-Preservation, siehe dispatch _skip_busy)"
             else
-                tmux send-keys -t "${SESSION_NAME}:0" "/clear"
-                tmux_submit "${SESSION_NAME}:0"
-                sleep 2
-                reset_turn_signal   # W2.1: alten Turn-State nicht in neuen Task leaken
-                log "Task $task_id: context cleared (new task, previous: ${LAST_DISPATCHED_TASK_ID:-none}, prev_status=${prev_status:-unknown})"
+                # Zwei weitere Gruende, den Context NICHT wegzuwerfen. Beide
+                # sind unabhaengig vom Kartenwechsel: das /clear zerstoert in
+                # beiden Faellen laufende Arbeit, die niemand wiederherstellen
+                # kann. Der Grund wird geloggt, sonst sieht der Operator nur
+                # ein fehlendes /clear ohne Erklaerung.
+                #
+                # 1. Board Lead (Incident 2026-09-18): ein Lead legt seine
+                #    Karten SELBST an und arbeitet ueber Kartengrenzen hinweg.
+                #    Jede selbst erzeugte Karte sah damit wie ein "neuer Task"
+                #    aus und clearte die laufende Orchestrierung weg. Die Rolle
+                #    kommt aus der Poll-Response (siehe oben); der Lead-Pfad
+                #    gewinnt gegen den Turn-Check, weil er die Ursache benennt.
+                # 2. Laufender Turn: detect_turn_state=working heisst, die TUI
+                #    arbeitet gerade (z.B. der Lead hat diese Karte selbst
+                #    angelegt, waehrend sein Turn noch lief). Ein /clear
+                #    dazwischen loescht den Turn, bevor er fertig ist.
+                local clear_skip_reason=""
+                if [ "$is_board_lead" = "True" ]; then
+                    clear_skip_reason="Board Lead — orchestriert ueber Kartengrenzen hinweg"
+                else
+                    local turn_state
+                    turn_state=$(detect_turn_state "$SESSION_NAME" 2>/dev/null || echo "unknown")
+                    if [ "$turn_state" = "working" ]; then
+                        clear_skip_reason="Turn laeuft (detect_turn_state=working)"
+                    fi
+                fi
+                if [ -n "$clear_skip_reason" ]; then
+                    log "Task $task_id: /clear UEBERSPRUNGEN ($clear_skip_reason)"
+                else
+                    tmux send-keys -t "${SESSION_NAME}:0" "/clear"
+                    tmux_submit "${SESSION_NAME}:0"
+                    sleep 2
+                    reset_turn_signal   # W2.1: alten Turn-State nicht in neuen Task leaken
+                    log "Task $task_id: context cleared (new task, previous: ${LAST_DISPATCHED_TASK_ID:-none}, prev_status=${prev_status:-unknown})"
+                fi
             fi
         fi
 

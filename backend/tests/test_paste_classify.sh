@@ -259,6 +259,107 @@ PASTE_PRE_COLLAPSE_COUNT=0
 out=$(classify_paste_outcome "$msg_b1")
 [ "$out" = "0" ] || fail "case C11c: ohne Anker ist die alte Ganzfenster-Zaehlung erwartet (0), war '$out'"
 
+# ── BSD-head: keine negative Zaehlung (Incident 2026-09-18) ────────────────
+# Der Verlauf/Box-Schnitt lief ueber `head -n -N` — GNU-only. BSD/macOS-head
+# kennt die negative Zaehlung nicht: "illegal line count" auf stderr, rc 1 und
+# NICHTS auf stdout. `body` wurde damit leer, der Verlauf-Match fiel aus —
+# GEMESSEN (beide Schnittstellen, BSD-Stub):
+#     C5  Fingerprint im Verlauf  soll 0 -> alt 1
+#     C6  Fingerprint in der Box  soll 2 -> alt 2   (unveraendert)
+#     C11 Marker in der Box       soll 2 -> alt 2   (unveraendert)
+#     C11b Marker im Verlauf      soll 0 -> alt 1
+# Auf macOS meldete der Klassifikator also jeden ABGESENDETEN Paste als
+# "1 = gar nicht angekommen". Der Aufrufer (paste_and_submit) wiederholt den
+# kompletten Paste (load-buffer + paste-buffer + Enter) gegen ein Pane, das
+# den Text schon hat: Doppel-Zustellung, und der Fingerprint des zweiten
+# Pastes landet im Verlauf, waehrend ein dritter Retry auf demselben Pane
+# laeuft. Kein CI-Lane lief auf BSD-head, deshalb blieb es von c74acc2
+# (13.09.) bis zum Incident still.
+#
+# Der Stub unten bildet genau dieses BSD-Verhalten nach (negative Zaehlung →
+# Fehler + leere Ausgabe, alles andere ans echte head). Auf dem ALTEN Code
+# fallen die beiden Faelle unten rot aus; auf dem neuen Code schneidet awk,
+# head wird im Schnittpfad gar nicht mehr aufgerufen — nachgewiesen durch die
+# Zusatzprobe auf der Kopfzeile des capture-Aufrufs (C13).
+BSD_STUB_DIR="$TMUX_STUB_DIR/bsd-bin"
+mkdir -p "$BSD_STUB_DIR"
+BSD_HEAD_LOG="$TMUX_STUB_DIR/bsd-head.log"
+: > "$BSD_HEAD_LOG"
+REAL_HEAD=$(command -v head) || fail "case BSD-HEAD: kein echtes head im PATH gefunden"
+cat > "$BSD_STUB_DIR/head" <<BSDHEAD
+#!/usr/bin/env bash
+# BSD/macOS-head: negative Zaehlung ist unbekannt → stderr + rc 1, keine
+# Ausgabe. Positive Zaehlungen/Optionen gehen unveraendert ans echte head.
+# Jeder Aufruf wird protokolliert, damit der Test belegen kann, dass der
+# Schnittpfad gar nicht mehr beim negativen head ankommt (C13).
+i=1
+while [ "\$i" -le "\$#" ]; do
+    a="\${!i}"
+    case "\$a" in
+        -n)
+            i=\$((i + 1))
+            cur="\${!i:-}"
+            case "\$cur" in
+                -*)
+                    echo "NEG \$*" >> "$BSD_HEAD_LOG"
+                    echo "head: illegal line count -- \$cur" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+    esac
+    i=\$((i + 1))
+done
+exec "$REAL_HEAD" "\$@"
+BSDHEAD
+chmod +x "$BSD_STUB_DIR/head"
+
+# Guard: greift der Stub ueberhaupt? Sonst waeren die Faelle unten wertlos.
+if printf 'a\nb\nc\n' | PATH="$BSD_STUB_DIR:$PATH" head -n -1 >/dev/null 2>&1; then
+    fail "case BSD-HEAD: der BSD-Stub greift nicht — eine negative Zaehlung lief durch, der Test misst nichts"
+fi
+# Die Guard-Probe oben hat sich selbst ins Log geschrieben. Ab hier zaehlt nur
+# noch, was der Schnittpfad anfasst.
+: > "$BSD_HEAD_LOG"
+
+# Der Schnittpfad selbst laeuft ohne head und liefert rc 0 — auch bei leerer
+# Eingabe (poll.sh laeuft unter set -euo pipefail). Genau hier brach das alte
+# `head -n -N` mit rc 1 ab.
+if ! empty_out=$(printf '' | PATH="$BSD_STUB_DIR:$PATH" _cpo_drop_last_lines 5); then
+    fail "case BSD-HEAD: _cpo_drop_last_lines bricht bei leerer Eingabe unter set -euo pipefail ab"
+fi
+[ -z "$empty_out" ] || fail "case BSD-HEAD: leere Eingabe muss leere Ausgabe liefern, war '$empty_out'"
+
+# C12: abgesendeter Nudge (Echo im Verlauf, Box leer). Muss unter BSD-head "0"
+# bleiben — der Verlauf-Match darf nicht am negativen head sterben.
+export TMUX_STUB_PANE_FILE="$FIX_DIR/claude-24-submitted.txt"
+PASTE_PRE_COLLAPSE_COUNT=0
+out=$(PATH="$BSD_STUB_DIR:$PATH" classify_paste_outcome "$msg_b1")
+[ "$out" = "0" ] || fail "case BSD-HEAD: abgesendeter Nudge (Fingerprint im Verlauf) muss unter BSD-head 0 sein, war '$out' — der alte Code meldete hier 1 und hat den Paste neu zugestellt"
+
+# C12b: derselbe Paste in der Collapse-Marker-Form (Marker im Verlauf, Box
+# leer) — die zweite Schnittstelle im Marker-Pfad. Ohne sie bliebe der
+# `body_markers`-Aufruf ungeprueft; er lief im alten Code genauso in den
+# negativen head und lieferte dort "1" statt "0".
+pane_bsd_marker=$(mktemp)
+sed 's|^● Ich habe den Watchdog-Pfad.*|> [Pasted text #1 +6 lines]|; s|Weiter mit der Karte.*||' \
+    "$FIX_DIR/claude-24-unsubmitted.txt" > "$pane_bsd_marker"
+grep -qF '[Pasted text' "$pane_bsd_marker" \
+    || fail "case BSD-HEAD: Fixture-Aufbau kaputt — Marker nicht im Verlauf gelandet"
+export TMUX_STUB_PANE_FILE="$pane_bsd_marker"
+PASTE_PRE_COLLAPSE_COUNT=0
+out=$(PATH="$BSD_STUB_DIR:$PATH" classify_paste_outcome "$msg_b1")
+[ "$out" = "0" ] || fail "case BSD-HEAD: Collapse-Marker im Verlauf muss unter BSD-head 0 sein, war '$out' (alter Code: 1)"
+
+# C13: kein einziger negativer head-Aufruf darf den Schnittpfad erreicht
+# haben. Das unterscheidet "zufaellig gruen" von "head ist dort weg": das
+# alte `head -n -N` landete zweimal pro Klassifikation im Stub (body und
+# body_markers) und steht dann als NEG-Zeile im Log.
+neg_hits=$(grep -c '^NEG ' "$BSD_HEAD_LOG" 2>/dev/null || true)
+[ -n "$neg_hits" ] || neg_hits=0
+[ "$neg_hits" = "0" ] \
+    || fail "case BSD-HEAD: $neg_hits negative head-Aufrufe im Schnittpfad — die GNU-only Zaehlung ist zurueck: $(cat "$BSD_HEAD_LOG")"
+
 # ── pane_in_interrupted_dialog (sourced from poll.sh, functions only) ──────
 # poll.sh sources $POLL_LIB_DIR/{turn-state,ui-detect,context-detect}.sh even in
 # SOURCE_ONLY mode. Point POLL_LIB_DIR at the REAL mc-agent-base lib (so
